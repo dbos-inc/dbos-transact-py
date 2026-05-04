@@ -2980,6 +2980,7 @@ class SystemDatabase(ABC):
                     sa.select(sa.func.count())
                     .select_from(SystemSchema.workflow_status)
                     .where(SystemSchema.workflow_status.c.queue_name == queue.name)
+                    .where(SystemSchema.workflow_status.c.rate_limited.is_(True))
                     .where(
                         SystemSchema.workflow_status.c.status.notin_(
                             [
@@ -3063,13 +3064,10 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.queue_partition_key
                     == queue_partition_key
                 )
-            if queue._priority_enabled:
-                query = query.order_by(
-                    SystemSchema.workflow_status.c.priority.asc(),
-                    SystemSchema.workflow_status.c.created_at.asc(),
-                )
-            else:
-                query = query.order_by(SystemSchema.workflow_status.c.created_at.asc())
+            query = query.order_by(
+                SystemSchema.workflow_status.c.priority.asc(),
+                SystemSchema.workflow_status.c.created_at.asc(),
+            )
             if max_tasks != sys.maxsize:
                 query = query.limit(int(max_tasks))
 
@@ -3103,6 +3101,7 @@ class SystemDatabase(ABC):
                         application_version=app_version,
                         executor_id=executor_id,
                         started_at_epoch_ms=start_time_ms,
+                        rate_limited=queue._limiter is not None,
                         # If a timeout is set, set the deadline on dequeue
                         workflow_deadline_epoch_ms=sa.case(
                             (

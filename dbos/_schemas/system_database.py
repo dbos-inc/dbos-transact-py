@@ -15,7 +15,6 @@ from sqlalchemy import (
     String,
     Table,
     Text,
-    UniqueConstraint,
     text,
 )
 
@@ -89,14 +88,54 @@ class SystemSchema:
         Column("parent_workflow_id", Text()),
         Column("serialization", Text()),
         Column("delay_until_epoch_ms", BigInteger, nullable=True),
+        Column("rate_limited", Boolean, nullable=False, server_default="false"),
         Index("workflow_status_created_at_index", "created_at"),
-        Index("idx_workflow_status_delayed", "delay_until_epoch_ms"),
-        Index("workflow_status_executor_id_index", "executor_id"),
-        Index("workflow_status_status_index", "status"),
-        UniqueConstraint(
+        Index(
+            "idx_workflow_status_delayed",
+            "delay_until_epoch_ms",
+            postgresql_where=text("status = 'DELAYED'"),
+            sqlite_where=text("status = 'DELAYED'"),
+        ),
+        Index(
+            "idx_workflow_status_pending",
+            "created_at",
+            postgresql_where=text("status = 'PENDING'"),
+            sqlite_where=text("status = 'PENDING'"),
+        ),
+        Index(
+            "idx_workflow_status_failed",
+            "status",
+            "created_at",
+            postgresql_where=text(
+                "status IN ('ERROR', 'CANCELLED', 'MAX_RECOVERY_ATTEMPTS_EXCEEDED')"
+            ),
+            sqlite_where=text(
+                "status IN ('ERROR', 'CANCELLED', 'MAX_RECOVERY_ATTEMPTS_EXCEEDED')"
+            ),
+        ),
+        Index(
+            "idx_workflow_status_in_flight",
+            "queue_name",
+            "status",
+            "priority",
+            "created_at",
+            postgresql_where=text("status IN ('ENQUEUED', 'PENDING')"),
+            sqlite_where=text("status IN ('ENQUEUED', 'PENDING')"),
+        ),
+        Index(
+            "idx_workflow_status_rate_limited",
+            "queue_name",
+            "started_at_epoch_ms",
+            postgresql_where=text("rate_limited = TRUE"),
+            sqlite_where=text("rate_limited = TRUE"),
+        ),
+        Index(
+            "uq_workflow_status_dedup_id",
             "queue_name",
             "deduplication_id",
-            name="uq_workflow_status_queue_name_dedup_id",
+            unique=True,
+            postgresql_where=text("deduplication_id IS NOT NULL"),
+            sqlite_where=text("deduplication_id IS NOT NULL"),
         ),
     )
 
