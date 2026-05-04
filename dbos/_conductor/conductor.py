@@ -35,13 +35,18 @@ use_keepalive = ws_version < "15.0"
 class ConductorWebsocket(threading.Thread):
 
     def __init__(
-        self, dbos: "DBOS", conductor_url: str, conductor_key: str, evt: threading.Event
+        self,
+        dbos: "DBOS",
+        app_name: str,
+        conductor_url: str,
+        conductor_key: str,
+        evt: threading.Event,
     ):
         super().__init__(daemon=True)
         self.websocket: Optional[Connection] = None
         self.evt = evt
         self.dbos = dbos
-        self.app_name = dbos._config["name"]
+        self.app_name = app_name
         self.url = (
             conductor_url.rstrip("/") + f"/websocket/{self.app_name}/{conductor_key}"
         )

@@ -648,6 +648,7 @@ class DBOS:
                 dbos_logger.debug("Starting Conductor thread")
                 self.conductor_websocket = ConductorWebsocket(
                     self,
+                    app_name=self._config["name"],
                     conductor_url=self.conductor_url,
                     conductor_key=self.conductor_key,
                     evt=evt,
