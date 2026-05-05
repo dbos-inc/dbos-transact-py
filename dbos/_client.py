@@ -409,7 +409,14 @@ class DBOSClient:
 
     def delete_queue(self, name: str) -> None:
         """Delete a database-backed queue. Pending workflows on it are unrecoverable."""
+        _warn_sync_db_call_in_async_context(
+            "DBOSClient.delete_queue", "DBOSClient.delete_queue_async"
+        )
         self._sys_db.delete_queue(name)
+
+    async def delete_queue_async(self, name: str) -> None:
+        """Async version of :meth:`delete_queue`."""
+        await asyncio.to_thread(self.delete_queue, name)
 
     def retrieve_workflow(self, workflow_id: str) -> "WorkflowHandle[R]":
         status = get_workflow(self._sys_db, workflow_id)

@@ -376,12 +376,21 @@ async def test_queue_crud_async(dbos: DBOS) -> None:
     with pytest.raises(DBOSException):
         await legacy.set_concurrency_async(5)
 
-    # Sync DBOS.register_queue / retrieve_queue raise when called from a
-    # running event loop; async callers must use the *_async variants.
+    # Sync DBOS.register_queue / retrieve_queue / delete_queue raise when
+    # called from a running event loop; async callers must use the *_async
+    # variants.
     with pytest.raises(RuntimeError):
         DBOS.register_queue(queue_name)
     with pytest.raises(RuntimeError):
         DBOS.retrieve_queue(queue_name)
+    with pytest.raises(RuntimeError):
+        DBOS.delete_queue(queue_name)
+
+    # delete_queue_async removes the row; subsequent retrievals return None
+    # and deleting again is a harmless no-op.
+    await DBOS.delete_queue_async(queue_name)
+    assert await DBOS.retrieve_queue_async(queue_name) is None
+    await DBOS.delete_queue_async(queue_name)
 
 
 @pytest.mark.asyncio
@@ -423,7 +432,7 @@ async def test_client_queue_crud_async(dbos: DBOS, client: DBOSClient) -> None:
             queue_name, concurrency=1, on_conflict="update_if_latest_version"
         )
 
-    client.delete_queue(queue_name)
+    await client.delete_queue_async(queue_name)
     assert await client.retrieve_queue_async(queue_name) is None
 
 

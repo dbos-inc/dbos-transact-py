@@ -941,7 +941,13 @@ class DBOS:
     @classmethod
     def delete_queue(cls, name: str) -> None:
         """Delete a database-backed queue. Pending workflows on it are unrecoverable."""
+        check_async("delete_queue")
         _get_dbos_instance()._sys_db.delete_queue(name)
+
+    @classmethod
+    async def delete_queue_async(cls, name: str) -> None:
+        """Async version of :meth:`delete_queue`."""
+        await asyncio.to_thread(cls.delete_queue, name)
 
     # Decorators for DBOS functionality
     @classmethod
