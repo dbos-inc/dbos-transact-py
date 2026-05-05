@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import math
 import os
@@ -423,7 +424,7 @@ def test_client_fork(dbos: DBOS, client: DBOSClient) -> None:
 
 @pytest.mark.asyncio
 async def test_client_fork_async(dbos: DBOS, client: DBOSClient) -> None:
-    run_client_collateral()
+    await asyncio.to_thread(run_client_collateral)
 
     options: EnqueueOptions = {
         "queue_name": "test_queue",

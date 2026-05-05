@@ -531,7 +531,7 @@ async def test_workflow_timeout_async(dbos: DBOS) -> None:
 
 @pytest.mark.asyncio
 async def test_max_parallel_workflows(dbos: DBOS) -> None:
-    DBOS.register_queue("parallel_queue")
+    await DBOS.register_queue_async("parallel_queue")
 
     @DBOS.workflow()
     async def test_workflow(i: int) -> int:
@@ -578,7 +578,7 @@ async def test_main_loop(dbos: DBOS, config: DBOSConfig) -> None:
     dbos = DBOS(config=config)
     DBOS.launch()
 
-    DBOS.register_queue("queue")
+    await DBOS.register_queue_async("queue")
 
     @DBOS.workflow()
     async def test_workflow() -> int:

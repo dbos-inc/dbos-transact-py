@@ -817,7 +817,7 @@ def test_list_steps_errors(dbos: DBOS) -> None:
 
 @pytest.mark.asyncio
 async def test_list_steps_errors_async(dbos: DBOS) -> None:
-    DBOS.register_queue("test-queue")
+    await DBOS.register_queue_async("test-queue")
 
     @DBOS.step()
     async def failing_step() -> None:
