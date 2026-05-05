@@ -182,6 +182,12 @@ class Queue:
 
     def set_concurrency(self, value: Optional[int]) -> None:
         self._require_database_backed()
+        _warn_sync_db_call_in_async_context(
+            "Queue.set_concurrency", "Queue.set_concurrency_async"
+        )
+        # Refresh the local cache so the cross-field check below validates
+        # against the latest worker_concurrency stored in the database.
+        self._refresh_fields(self._read_from_db())
         if (
             value is not None
             and self._worker_concurrency is not None
@@ -190,9 +196,6 @@ class Queue:
             raise ValueError(
                 "worker_concurrency must be less than or equal to concurrency"
             )
-        _warn_sync_db_call_in_async_context(
-            "Queue.set_concurrency", "Queue.set_concurrency_async"
-        )
         self._write_to_db({"concurrency": value})
         self._concurrency = value
 
@@ -215,6 +218,12 @@ class Queue:
 
     def set_worker_concurrency(self, value: Optional[int]) -> None:
         self._require_database_backed()
+        _warn_sync_db_call_in_async_context(
+            "Queue.set_worker_concurrency", "Queue.set_worker_concurrency_async"
+        )
+        # Refresh the local cache so the cross-field check below validates
+        # against the latest concurrency stored in the database.
+        self._refresh_fields(self._read_from_db())
         if (
             value is not None
             and self._concurrency is not None
@@ -223,9 +232,6 @@ class Queue:
             raise ValueError(
                 "worker_concurrency must be less than or equal to concurrency"
             )
-        _warn_sync_db_call_in_async_context(
-            "Queue.set_worker_concurrency", "Queue.set_worker_concurrency_async"
-        )
         self._write_to_db({"worker_concurrency": value})
         self._worker_concurrency = value
 

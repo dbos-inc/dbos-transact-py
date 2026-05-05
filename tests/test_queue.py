@@ -233,6 +233,21 @@ def test_queue_dynamic_config(dbos: DBOS) -> None:
     assert q is not None
     assert q.limiter is None
 
+    # set_concurrency / set_worker_concurrency refresh from the database before
+    # cross-field validation, so a stale local cache cannot let a contradictory
+    # configuration slip through.
+    one = DBOS.retrieve_queue(queue_name)
+    two = DBOS.retrieve_queue(queue_name)
+    assert one is not None and two is not None
+    one.set_concurrency(10)
+    one.set_worker_concurrency(5)
+    # ``two`` still has the old cached values, but its setter must consult the
+    # database before rejecting an inconsistent change.
+    with pytest.raises(ValueError):
+        two.set_concurrency(2)
+    with pytest.raises(ValueError):
+        two.set_worker_concurrency(20)
+
     # In-memory queues read from their local fields, not the database.
     legacy = Queue(f"legacy_dyn_queue_{uuid.uuid4()}", concurrency=2)
     assert legacy.concurrency == 2
