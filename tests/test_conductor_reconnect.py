@@ -260,6 +260,7 @@ def test_conductor_reconnects_after_keepalive_timeout(
 
     cw = conductor_module.ConductorWebsocket(
         dbos=stub,  # type: ignore[arg-type]
+        app_name="test-app",
         conductor_url=f"ws://127.0.0.1:{server.port}",
         conductor_key="test-key",
         evt=evt,
