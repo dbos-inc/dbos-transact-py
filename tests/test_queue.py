@@ -376,6 +376,13 @@ async def test_queue_crud_async(dbos: DBOS) -> None:
     with pytest.raises(DBOSException):
         await legacy.set_concurrency_async(5)
 
+    # Sync DBOS.register_queue / retrieve_queue raise when called from a
+    # running event loop; async callers must use the *_async variants.
+    with pytest.raises(RuntimeError):
+        DBOS.register_queue(queue_name)
+    with pytest.raises(RuntimeError):
+        DBOS.retrieve_queue(queue_name)
+
 
 @pytest.mark.asyncio
 async def test_client_queue_crud_async(dbos: DBOS, client: DBOSClient) -> None:
