@@ -7,13 +7,11 @@ from dataclasses import dataclass
 from typing import Any, Callable, ClassVar, Coroutine, List, Tuple, Union, cast
 
 import pytest
-from sqlalchemy import text
 
 # Public API
 from dbos import DBOS, SetWorkflowID, StepInfo
 from dbos._dbos_config import DBOSConfig
 from dbos._error import DBOSNonExistentWorkflowError
-from tests.conftest import using_sqlite
 
 
 def test_concurrent_workflows(dbos: DBOS) -> None:
@@ -136,7 +134,7 @@ def compare_wf_runs(
 
 
 @pytest.mark.asyncio
-async def test_gather_manythings(dbos: DBOS) -> None:
+async def test_gather_manythings(dbos: DBOS, skip_with_sqlite: None) -> None:
     # Register a database-backed queue up-front so the workflow can enqueue
     # onto an already-existing queue.
     db_queue_name = f"gather_db_queue_{uuid.uuid4()}"
