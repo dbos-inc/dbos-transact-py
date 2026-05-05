@@ -157,19 +157,27 @@ class Queue:
     def _write_to_db(self, fields: dict[str, Any]) -> None:
         self._sys_db().update_queue(self.name, fields)
 
+    def _refresh_fields(self, latest: "Queue") -> None:
+        """Copy every cached configuration field from ``latest`` into ``self``."""
+        self._concurrency = latest._concurrency
+        self._worker_concurrency = latest._worker_concurrency
+        self._limiter = latest._limiter
+        self._priority_enabled = latest._priority_enabled
+        self._partition_queue = latest._partition_queue
+        self._polling_interval_sec = latest._polling_interval_sec
+
     @property
     def concurrency(self) -> Optional[int]:
         if self.database_backed_queue:
             _warn_sync_db_call_in_async_context(
                 "Queue.concurrency", "Queue.get_concurrency_async"
             )
-            self._concurrency = self._read_from_db()._concurrency
+            self._refresh_fields(self._read_from_db())
         return self._concurrency
 
     async def get_concurrency_async(self) -> Optional[int]:
         if self.database_backed_queue:
-            latest = await asyncio.to_thread(self._read_from_db)
-            self._concurrency = latest._concurrency
+            self._refresh_fields(await asyncio.to_thread(self._read_from_db))
         return self._concurrency
 
     def set_concurrency(self, value: Optional[int]) -> None:
@@ -197,13 +205,12 @@ class Queue:
             _warn_sync_db_call_in_async_context(
                 "Queue.worker_concurrency", "Queue.get_worker_concurrency_async"
             )
-            self._worker_concurrency = self._read_from_db()._worker_concurrency
+            self._refresh_fields(self._read_from_db())
         return self._worker_concurrency
 
     async def get_worker_concurrency_async(self) -> Optional[int]:
         if self.database_backed_queue:
-            latest = await asyncio.to_thread(self._read_from_db)
-            self._worker_concurrency = latest._worker_concurrency
+            self._refresh_fields(await asyncio.to_thread(self._read_from_db))
         return self._worker_concurrency
 
     def set_worker_concurrency(self, value: Optional[int]) -> None:
@@ -231,13 +238,12 @@ class Queue:
             _warn_sync_db_call_in_async_context(
                 "Queue.limiter", "Queue.get_limiter_async"
             )
-            self._limiter = self._read_from_db()._limiter
+            self._refresh_fields(self._read_from_db())
         return self._limiter
 
     async def get_limiter_async(self) -> Optional[QueueRateLimit]:
         if self.database_backed_queue:
-            latest = await asyncio.to_thread(self._read_from_db)
-            self._limiter = latest._limiter
+            self._refresh_fields(await asyncio.to_thread(self._read_from_db))
         return self._limiter
 
     def set_limiter(self, value: Optional[QueueRateLimit]) -> None:
@@ -266,13 +272,12 @@ class Queue:
             _warn_sync_db_call_in_async_context(
                 "Queue.priority_enabled", "Queue.get_priority_enabled_async"
             )
-            self._priority_enabled = self._read_from_db()._priority_enabled
+            self._refresh_fields(self._read_from_db())
         return self._priority_enabled
 
     async def get_priority_enabled_async(self) -> bool:
         if self.database_backed_queue:
-            latest = await asyncio.to_thread(self._read_from_db)
-            self._priority_enabled = latest._priority_enabled
+            self._refresh_fields(await asyncio.to_thread(self._read_from_db))
         return self._priority_enabled
 
     def set_priority_enabled(self, value: bool) -> None:
@@ -292,13 +297,12 @@ class Queue:
             _warn_sync_db_call_in_async_context(
                 "Queue.partition_queue", "Queue.get_partition_queue_async"
             )
-            self._partition_queue = self._read_from_db()._partition_queue
+            self._refresh_fields(self._read_from_db())
         return self._partition_queue
 
     async def get_partition_queue_async(self) -> bool:
         if self.database_backed_queue:
-            latest = await asyncio.to_thread(self._read_from_db)
-            self._partition_queue = latest._partition_queue
+            self._refresh_fields(await asyncio.to_thread(self._read_from_db))
         return self._partition_queue
 
     def set_partition_queue(self, value: bool) -> None:
@@ -319,13 +323,12 @@ class Queue:
                 "Queue.polling_interval_sec",
                 "Queue.get_polling_interval_sec_async",
             )
-            self._polling_interval_sec = self._read_from_db()._polling_interval_sec
+            self._refresh_fields(self._read_from_db())
         return self._polling_interval_sec
 
     async def get_polling_interval_sec_async(self) -> float:
         if self.database_backed_queue:
-            latest = await asyncio.to_thread(self._read_from_db)
-            self._polling_interval_sec = latest._polling_interval_sec
+            self._refresh_fields(await asyncio.to_thread(self._read_from_db))
         return self._polling_interval_sec
 
     def set_polling_interval_sec(self, value: float) -> None:
@@ -371,6 +374,8 @@ class Queue:
     ) -> "WorkflowHandle[R]":
         from ._dbos import _get_dbos_instance
 
+        if self.database_backed_queue:
+            self._refresh_fields(self._read_from_db())
         self._validate_enqueue(get_local_dbos_context())
         dbos = _get_dbos_instance()
         return start_workflow(
@@ -385,11 +390,15 @@ class Queue:
     ) -> "WorkflowHandleAsync[R]":
         from ._dbos import _get_dbos_instance
 
+        # To allow safe concurrent async operations, all context management
+        # must run synchronously before the first `await`.
         ctx = get_local_dbos_context()
-        self._validate_enqueue(ctx)
-        dbos = _get_dbos_instance()
         parent_ctx_copy = copy.copy(ctx)
         child_ctx = DBOSContext.create_start_workflow_child(ctx)
+        if self.database_backed_queue:
+            self._refresh_fields(await asyncio.to_thread(self._read_from_db))
+        self._validate_enqueue(ctx)
+        dbos = _get_dbos_instance()
         return await start_workflow_async(
             dbos,
             parent_ctx_copy,

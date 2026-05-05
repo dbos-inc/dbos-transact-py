@@ -1129,9 +1129,7 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
         """Enqueue a workflow on a database-backed queue, returning a handle to the ongoing execution."""
-        queue = cls.retrieve_queue(queue_name)
-        if queue is None:
-            raise DBOSException(f"Queue {queue_name} is not registered")
+        queue = Queue(queue_name, database_backed_queue=True)
         return queue.enqueue(func, *args, **kwargs)
 
     @classmethod
@@ -1143,9 +1141,7 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandleAsync[R]:
         """Async version of :meth:`enqueue_workflow`."""
-        queue = await cls.retrieve_queue_async(queue_name)
-        if queue is None:
-            raise DBOSException(f"Queue {queue_name} is not registered")
+        queue = Queue(queue_name, database_backed_queue=True)
         return await queue.enqueue_async(func, *args, **kwargs)
 
     @classmethod

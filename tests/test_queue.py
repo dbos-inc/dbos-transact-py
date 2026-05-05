@@ -1406,7 +1406,9 @@ async def test_timeout_queue_async(dbos: DBOS, config: DBOSConfig) -> None:
         assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
         return
 
-    DBOS.register_queue("test_queue_async", concurrency=1, polling_interval_sec=0.1)
+    await DBOS.register_queue_async(
+        "test_queue_async", concurrency=1, polling_interval_sec=0.1
+    )
 
     # Enqueue a few blocked workflows
     num_workflows = 3
@@ -1435,7 +1437,7 @@ async def test_timeout_queue_async(dbos: DBOS, config: DBOSConfig) -> None:
     # Verify if a parent called with a timeout enqueues a blocked child
     # the deadline propagates and the child is also cancelled.
     child_id = str(uuid.uuid4())
-    DBOS.register_queue("regular_queue_async", polling_interval_sec=0.1)
+    await DBOS.register_queue_async("regular_queue_async", polling_interval_sec=0.1)
 
     @DBOS.workflow()
     async def parent_workflow() -> None:
@@ -1474,7 +1476,9 @@ async def test_timeout_queue_async(dbos: DBOS, config: DBOSConfig) -> None:
     # never starts because the queue is blocked, the deadline propagates
     # and both parent and child are cancelled.
     child_id = str(uuid.uuid4())
-    DBOS.register_queue("stuck_queue_async", concurrency=1, polling_interval_sec=0.1)
+    await DBOS.register_queue_async(
+        "stuck_queue_async", concurrency=1, polling_interval_sec=0.1
+    )
 
     start_event = asyncio.Event()
     blocking_event = asyncio.Event()
@@ -1687,7 +1691,7 @@ async def test_simple_queue_async(dbos: DBOS) -> None:
         step_counter += 1
         return var + "d"
 
-    DBOS.register_queue("test_queue")
+    await DBOS.register_queue_async("test_queue")
 
     with SetWorkflowID(wfid):
         handle = await DBOS.enqueue_workflow_async(
@@ -1802,7 +1806,7 @@ def test_queue_deduplication_recovery(dbos: DBOS) -> None:
 @pytest.mark.asyncio
 async def test_queue_deduplication_async(dbos: DBOS) -> None:
     queue_name = "test_dedup_queue_async"
-    DBOS.register_queue(queue_name)
+    await DBOS.register_queue_async(queue_name)
     workflow_event = asyncio.Event()
 
     @DBOS.workflow()
@@ -1933,10 +1937,10 @@ def test_priority_queue(dbos: DBOS) -> None:
 @pytest.mark.asyncio
 async def test_priority_queue_async(dbos: DBOS) -> None:
     # Make sure that we can enqueue workflows with different priorities correctly
-    DBOS.register_queue(
+    await DBOS.register_queue_async(
         "test_queue_priority_async", concurrency=1, priority_enabled=True
     )
-    DBOS.register_queue("test_queue_child_async")
+    await DBOS.register_queue_async("test_queue_child_async")
 
     workflow_event = asyncio.Event()
     wf_priority_list = []
@@ -2006,10 +2010,10 @@ async def test_enqueue_async_validation(dbos: DBOS) -> None:
     async def noop_workflow() -> None:
         return
 
-    DBOS.register_queue("async_validation_no_priority")
-    DBOS.register_queue("async_validation_priority", priority_enabled=True)
-    DBOS.register_queue("async_validation_partition", partition_queue=True)
-    DBOS.register_queue("async_validation_no_partition")
+    await DBOS.register_queue_async("async_validation_no_priority")
+    await DBOS.register_queue_async("async_validation_priority", priority_enabled=True)
+    await DBOS.register_queue_async("async_validation_partition", partition_queue=True)
+    await DBOS.register_queue_async("async_validation_no_partition")
 
     # Priority on a non-priority queue
     with pytest.raises(Exception, match="Priority is not enabled for queue"):
@@ -2266,7 +2270,7 @@ async def test_enqueue_version_async(dbos: DBOS) -> None:
     async def workflow(x: int) -> int:
         return x
 
-    DBOS.register_queue("queue")
+    await DBOS.register_queue_async("queue")
     input = 5
 
     # Enqueue the app on a different version, verify it has that version

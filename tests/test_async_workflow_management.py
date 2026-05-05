@@ -186,7 +186,7 @@ async def test_list_workflows_async(dbos: DBOS) -> None:
 @pytest.mark.asyncio
 async def test_list_queued_workflows_async(dbos: DBOS) -> None:
     """Test async list_queued_workflows method."""
-    DBOS.register_queue("test_queue_async")
+    await DBOS.register_queue_async("test_queue_async")
     workflow_event = asyncio.Event()
 
     @DBOS.workflow()
