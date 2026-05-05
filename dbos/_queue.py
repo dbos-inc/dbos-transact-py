@@ -360,6 +360,8 @@ class Queue:
 
     def _validate_enqueue(self, ctx: Optional[DBOSContext]) -> None:
         self._require_dbos_bound()
+        if ctx and ctx.queue_partition_key and ctx.deduplication_id:
+            raise Exception("Deduplication is not supported for partitioned queues")
         # Skip validation for database-backed queues to avoid a roundtrip fetching the queue
         if self.database_backed_queue:
             return
@@ -375,8 +377,6 @@ class Queue:
             raise Exception(
                 f"You can only use a partition key on a partition-enabled queue. Key {ctx.queue_partition_key} was used with non-partitioned queue {self.name}"
             )
-        if ctx and ctx.queue_partition_key and ctx.deduplication_id:
-            raise Exception("Deduplication is not supported for partitioned queues")
 
     def enqueue(
         self, func: "Callable[P, R]", *args: P.args, **kwargs: P.kwargs
