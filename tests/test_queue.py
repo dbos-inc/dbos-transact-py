@@ -451,6 +451,27 @@ async def test_client_queue_crud_async(dbos: DBOS, client: DBOSClient) -> None:
     assert await client.retrieve_queue_async(queue_name) is None
 
 
+def test_enqueue_on_nonexistent_queue(dbos: DBOS) -> None:
+    """``DBOS.enqueue_workflow`` on a non-existent queue does not raise; the
+    workflow is recorded as ENQUEUED and starts running once the queue is
+    registered."""
+    queue_name = f"test_nonexistent_queue_{uuid.uuid4()}"
+
+    @DBOS.workflow()
+    def echo(x: int) -> int:
+        return x
+
+    handle = DBOS.enqueue_workflow(queue_name, echo, 7)
+
+    # Nothing dispatches the workflow yet — it stays ENQUEUED.
+    time.sleep(1.0)
+    assert handle.get_status().status == WorkflowStatusString.ENQUEUED.value
+
+    # Registering the queue brings up a worker that picks up the orphan.
+    DBOS.register_queue(queue_name, polling_interval_sec=0.1)
+    assert handle.get_result() == 7
+
+
 def test_queue_delete_and_recreate(dbos: DBOS) -> None:
     """Create a queue, run a workflow on it, delete it, recreate it, and verify
     the recreated queue still processes workflows."""
@@ -2035,51 +2056,49 @@ async def test_priority_queue_async(dbos: DBOS) -> None:
 
 @pytest.mark.asyncio
 async def test_enqueue_async_validation(dbos: DBOS) -> None:
-    """Same enqueue-time validation rules should fire for enqueue_async."""
+    """Enqueue-time validation rules fire for in-memory queues. Database-backed
+    queues skip these checks to avoid a per-enqueue DB round-trip, so the
+    assertions below intentionally exercise the in-memory queue path."""
 
     @DBOS.workflow()
     async def noop_workflow() -> None:
         return
 
-    await DBOS.register_queue_async("async_validation_no_priority")
-    await DBOS.register_queue_async("async_validation_priority", priority_enabled=True)
-    await DBOS.register_queue_async("async_validation_partition", partition_queue=True)
-    await DBOS.register_queue_async("async_validation_no_partition")
+    no_priority_q = Queue(f"async_validation_no_priority_{uuid.uuid4()}")
+    priority_q = Queue(
+        f"async_validation_priority_{uuid.uuid4()}", priority_enabled=True
+    )
+    partition_q = Queue(
+        f"async_validation_partition_{uuid.uuid4()}", partition_queue=True
+    )
+    no_partition_q = Queue(f"async_validation_no_partition_{uuid.uuid4()}")
 
     # Priority on a non-priority queue
     with pytest.raises(Exception, match="Priority is not enabled for queue"):
         with SetEnqueueOptions(priority=1):
-            await DBOS.enqueue_workflow_async(
-                "async_validation_no_priority", noop_workflow
-            )
+            await no_priority_q.enqueue_async(noop_workflow)
 
     # Partition queue requires a partition key
     with pytest.raises(Exception, match="without a partition key"):
-        await DBOS.enqueue_workflow_async("async_validation_partition", noop_workflow)
+        await partition_q.enqueue_async(noop_workflow)
 
     # Partition key on a non-partitioned queue
     with pytest.raises(
         Exception, match="only use a partition key on a partition-enabled queue"
     ):
         with SetEnqueueOptions(queue_partition_key="key"):
-            await DBOS.enqueue_workflow_async(
-                "async_validation_no_partition", noop_workflow
-            )
+            await no_partition_q.enqueue_async(noop_workflow)
 
     # Deduplication is not supported for partitioned queues
     with pytest.raises(
         Exception, match="Deduplication is not supported for partitioned queues"
     ):
         with SetEnqueueOptions(queue_partition_key="key", deduplication_id="dedupe"):
-            await DBOS.enqueue_workflow_async(
-                "async_validation_partition", noop_workflow
-            )
+            await partition_q.enqueue_async(noop_workflow)
 
-    # Sanity check: priority on a priority-enabled queue works
-    handle = await DBOS.enqueue_workflow_async(
-        "async_validation_priority", noop_workflow
-    )
-    await handle.get_result()
+    # Sanity check: priority on a priority-enabled in-memory queue works.
+    with SetEnqueueOptions(priority=1):
+        await priority_q.enqueue_async(noop_workflow)
 
 
 def test_worker_concurrency_across_versions(dbos: DBOS, client: DBOSClient) -> None:
@@ -2376,24 +2395,6 @@ def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
         }
     )
     assert client_handle.get_result()
-
-    # You can only enqueue on a partitioned queue with a partition key
-    with pytest.raises(Exception):
-        DBOS.enqueue_workflow("queue", normal_workflow)
-
-    # Deduplication is not supported for partitioned queues
-    with pytest.raises(Exception):
-        with SetEnqueueOptions(
-            queue_partition_key=normal_partition_key, deduplication_id="key"
-        ):
-            DBOS.enqueue_workflow("queue", normal_workflow)
-
-    # You can only enqueue with a partition key on a partitioned queue
-    DBOS.register_queue("partitionless-queue")
-
-    with pytest.raises(Exception):
-        with SetEnqueueOptions(queue_partition_key="test"):
-            DBOS.enqueue_workflow("partitionless-queue", normal_workflow)
 
 
 def test_polling_interval(dbos: DBOS) -> None:

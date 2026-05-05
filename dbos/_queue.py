@@ -360,6 +360,9 @@ class Queue:
 
     def _validate_enqueue(self, ctx: Optional[DBOSContext]) -> None:
         self._require_dbos_bound()
+        # Skip validation for database-backed queues to avoid a roundtrip fetching the queue
+        if self.database_backed_queue:
+            return
         if ctx is not None and ctx.priority is not None and not self._priority_enabled:
             raise Exception(
                 f"Priority is not enabled for queue {self.name}. Setting priority will not have any effect."
@@ -380,8 +383,6 @@ class Queue:
     ) -> "WorkflowHandle[R]":
         from ._dbos import _get_dbos_instance
 
-        if self.database_backed_queue:
-            self._refresh_fields(self._read_from_db())
         self._validate_enqueue(get_local_dbos_context())
         dbos = _get_dbos_instance()
         return start_workflow(
@@ -401,8 +402,6 @@ class Queue:
         ctx = get_local_dbos_context()
         parent_ctx_copy = copy.copy(ctx)
         child_ctx = DBOSContext.create_start_workflow_child(ctx)
-        if self.database_backed_queue:
-            self._refresh_fields(await asyncio.to_thread(self._read_from_db))
         self._validate_enqueue(ctx)
         dbos = _get_dbos_instance()
         return await start_workflow_async(
