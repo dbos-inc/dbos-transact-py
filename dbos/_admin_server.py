@@ -27,6 +27,7 @@ _garbage_collect_path = "/dbos-garbage-collect"
 _global_timeout_path = "/dbos-global-timeout"
 _queued_workflows_path = "/queues"
 _workflows_path = "/workflows"
+_conductor_path = "/conductor"
 # /workflows/:workflow_id/cancel
 # /workflows/:workflow_id/resume
 # /workflows/:workflow_id/restart
@@ -83,6 +84,10 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self._end_headers()
             self.wfile.write("deactivated".encode("utf-8"))
+        elif self.path == _conductor_path:
+            self.send_response(200)
+            self._end_headers()
+            self.wfile.write(json.dumps({"status": True}).encode("utf-8"))
         elif self.path == _workflow_queues_metadata_path:
             queue_metadata_array = []
             from ._dbos import _get_or_create_dbos_registry

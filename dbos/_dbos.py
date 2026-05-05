@@ -639,7 +639,28 @@ class DBOS:
             self._background_threads.append(bg_queue_thread)
 
             # Start the conductor thread if requested
-            if self.conductor_key is not None:
+            if GlobalParams.dbos_cloud:
+                cloud_app_name = os.environ.get("DBOS__CONDUCTOR_APP_NAME")
+                cloud_conductor_key = os.environ.get("DBOS__CONDUCTOR_KEY")
+                cloud_conductor_url = os.environ.get("DBOS__CONDUCTOR_URL")
+                if (
+                    cloud_app_name is not None
+                    and cloud_conductor_key is not None
+                    and cloud_conductor_url is not None
+                ):
+                    evt = threading.Event()
+                    self.background_thread_stop_events.append(evt)
+                    dbos_logger.debug("Starting Conductor thread (DBOS Cloud)")
+                    self.conductor_websocket = ConductorWebsocket(
+                        self,
+                        app_name=cloud_app_name,
+                        conductor_url=cloud_conductor_url,
+                        conductor_key=cloud_conductor_key,
+                        evt=evt,
+                    )
+                    self.conductor_websocket.start()
+                    self._background_threads.append(self.conductor_websocket)
+            elif self.conductor_key is not None:
                 if self.conductor_url is None:
                     dbos_domain = os.environ.get("DBOS_DOMAIN", "cloud.dbos.dev")
                     self.conductor_url = f"wss://{dbos_domain}/conductor/v1alpha1"
@@ -648,6 +669,7 @@ class DBOS:
                 dbos_logger.debug("Starting Conductor thread")
                 self.conductor_websocket = ConductorWebsocket(
                     self,
+                    app_name=self._config["name"],
                     conductor_url=self.conductor_url,
                     conductor_key=self.conductor_key,
                     evt=evt,
