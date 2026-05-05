@@ -859,6 +859,7 @@ class DBOS:
 
         :returns: A :class:`Queue` reflecting the persisted configuration.
         """
+        check_async("register_queue")
         Queue._validate_queue(
             concurrency=concurrency,
             worker_concurrency=worker_concurrency,
@@ -894,6 +895,33 @@ class DBOS:
         return queue
 
     @classmethod
+    async def register_queue_async(
+        cls,
+        name: str,
+        *,
+        worker_concurrency: Optional[int] = None,
+        concurrency: Optional[int] = None,
+        limiter: Optional[QueueRateLimit] = None,
+        priority_enabled: bool = False,
+        partition_queue: bool = False,
+        polling_interval_sec: float = 1.0,
+        on_conflict: QueueConflictResolution = "update_if_latest_version",
+    ) -> Queue:
+        """Async version of :meth:`register_queue`."""
+        return await asyncio.to_thread(
+            lambda: cls.register_queue(
+                name,
+                worker_concurrency=worker_concurrency,
+                concurrency=concurrency,
+                limiter=limiter,
+                priority_enabled=priority_enabled,
+                partition_queue=partition_queue,
+                polling_interval_sec=polling_interval_sec,
+                on_conflict=on_conflict,
+            )
+        )
+
+    @classmethod
     def retrieve_queue(cls, name: str) -> Optional[Queue]:
         """
         Retrieve a database-backed queue by name.
@@ -902,7 +930,13 @@ class DBOS:
         system database. The returned Queue is not added to the in-memory queue
         registry.
         """
+        check_async("retrieve_queue")
         return _get_dbos_instance()._sys_db.get_queue(name)
+
+    @classmethod
+    async def retrieve_queue_async(cls, name: str) -> Optional[Queue]:
+        """Async version of :meth:`retrieve_queue`."""
+        return await asyncio.to_thread(cls.retrieve_queue, name)
 
     @classmethod
     def delete_queue(cls, name: str) -> None:
@@ -1109,7 +1143,7 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandleAsync[R]:
         """Async version of :meth:`enqueue_workflow`."""
-        queue = cls.retrieve_queue(queue_name)
+        queue = await cls.retrieve_queue_async(queue_name)
         if queue is None:
             raise DBOSException(f"Queue {queue_name} is not registered")
         return await queue.enqueue_async(func, *args, **kwargs)

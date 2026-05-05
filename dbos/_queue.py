@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import random
 import threading
@@ -20,6 +21,25 @@ from ._core import P, R, execute_workflow_by_id, start_workflow, start_workflow_
 if TYPE_CHECKING:
     from ._dbos import DBOS, WorkflowHandle, WorkflowHandleAsync
     from ._sys_db import SystemDatabase
+
+
+def _warn_sync_db_call_in_async_context(
+    method_name: str, async_alternative: str
+) -> None:
+    """Log a warning when a synchronous method that reads or writes the system
+    database is called from a thread with a running asyncio event loop. Such
+    calls block the loop on a database round-trip; callers in async code
+    should use ``async_alternative`` instead.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    dbos_logger.warning(
+        f"Synchronous '{method_name}' was called from a running asyncio "
+        f"event loop. This blocks the loop on a database round-trip. Use "
+        f"'{async_alternative}' instead."
+    )
 
 
 class QueueRateLimit(TypedDict):
@@ -140,7 +160,16 @@ class Queue:
     @property
     def concurrency(self) -> Optional[int]:
         if self.database_backed_queue:
+            _warn_sync_db_call_in_async_context(
+                "Queue.concurrency", "Queue.get_concurrency_async"
+            )
             self._concurrency = self._read_from_db()._concurrency
+        return self._concurrency
+
+    async def get_concurrency_async(self) -> Optional[int]:
+        if self.database_backed_queue:
+            latest = await asyncio.to_thread(self._read_from_db)
+            self._concurrency = latest._concurrency
         return self._concurrency
 
     def set_concurrency(self, value: Optional[int]) -> None:
@@ -153,13 +182,28 @@ class Queue:
             raise ValueError(
                 "worker_concurrency must be less than or equal to concurrency"
             )
+        _warn_sync_db_call_in_async_context(
+            "Queue.set_concurrency", "Queue.set_concurrency_async"
+        )
         self._write_to_db({"concurrency": value})
         self._concurrency = value
+
+    async def set_concurrency_async(self, value: Optional[int]) -> None:
+        await asyncio.to_thread(self.set_concurrency, value)
 
     @property
     def worker_concurrency(self) -> Optional[int]:
         if self.database_backed_queue:
+            _warn_sync_db_call_in_async_context(
+                "Queue.worker_concurrency", "Queue.get_worker_concurrency_async"
+            )
             self._worker_concurrency = self._read_from_db()._worker_concurrency
+        return self._worker_concurrency
+
+    async def get_worker_concurrency_async(self) -> Optional[int]:
+        if self.database_backed_queue:
+            latest = await asyncio.to_thread(self._read_from_db)
+            self._worker_concurrency = latest._worker_concurrency
         return self._worker_concurrency
 
     def set_worker_concurrency(self, value: Optional[int]) -> None:
@@ -172,13 +216,28 @@ class Queue:
             raise ValueError(
                 "worker_concurrency must be less than or equal to concurrency"
             )
+        _warn_sync_db_call_in_async_context(
+            "Queue.set_worker_concurrency", "Queue.set_worker_concurrency_async"
+        )
         self._write_to_db({"worker_concurrency": value})
         self._worker_concurrency = value
+
+    async def set_worker_concurrency_async(self, value: Optional[int]) -> None:
+        await asyncio.to_thread(self.set_worker_concurrency, value)
 
     @property
     def limiter(self) -> Optional[QueueRateLimit]:
         if self.database_backed_queue:
+            _warn_sync_db_call_in_async_context(
+                "Queue.limiter", "Queue.get_limiter_async"
+            )
             self._limiter = self._read_from_db()._limiter
+        return self._limiter
+
+    async def get_limiter_async(self) -> Optional[QueueRateLimit]:
+        if self.database_backed_queue:
+            latest = await asyncio.to_thread(self._read_from_db)
+            self._limiter = latest._limiter
         return self._limiter
 
     def set_limiter(self, value: Optional[QueueRateLimit]) -> None:
@@ -187,6 +246,9 @@ class Queue:
             value.get("limit") is None or value.get("period") is None
         ):
             raise ValueError("limiter must specify both 'limit' and 'period'")
+        _warn_sync_db_call_in_async_context(
+            "Queue.set_limiter", "Queue.set_limiter_async"
+        )
         self._write_to_db(
             {
                 "rate_limit_max": value["limit"] if value else None,
@@ -195,40 +257,90 @@ class Queue:
         )
         self._limiter = value
 
+    async def set_limiter_async(self, value: Optional[QueueRateLimit]) -> None:
+        await asyncio.to_thread(self.set_limiter, value)
+
     @property
     def priority_enabled(self) -> bool:
         if self.database_backed_queue:
+            _warn_sync_db_call_in_async_context(
+                "Queue.priority_enabled", "Queue.get_priority_enabled_async"
+            )
             self._priority_enabled = self._read_from_db()._priority_enabled
+        return self._priority_enabled
+
+    async def get_priority_enabled_async(self) -> bool:
+        if self.database_backed_queue:
+            latest = await asyncio.to_thread(self._read_from_db)
+            self._priority_enabled = latest._priority_enabled
         return self._priority_enabled
 
     def set_priority_enabled(self, value: bool) -> None:
         self._require_database_backed()
+        _warn_sync_db_call_in_async_context(
+            "Queue.set_priority_enabled", "Queue.set_priority_enabled_async"
+        )
         self._write_to_db({"priority_enabled": value})
         self._priority_enabled = value
+
+    async def set_priority_enabled_async(self, value: bool) -> None:
+        await asyncio.to_thread(self.set_priority_enabled, value)
 
     @property
     def partition_queue(self) -> bool:
         if self.database_backed_queue:
+            _warn_sync_db_call_in_async_context(
+                "Queue.partition_queue", "Queue.get_partition_queue_async"
+            )
             self._partition_queue = self._read_from_db()._partition_queue
+        return self._partition_queue
+
+    async def get_partition_queue_async(self) -> bool:
+        if self.database_backed_queue:
+            latest = await asyncio.to_thread(self._read_from_db)
+            self._partition_queue = latest._partition_queue
         return self._partition_queue
 
     def set_partition_queue(self, value: bool) -> None:
         self._require_database_backed()
+        _warn_sync_db_call_in_async_context(
+            "Queue.set_partition_queue", "Queue.set_partition_queue_async"
+        )
         self._write_to_db({"partition_queue": value})
         self._partition_queue = value
+
+    async def set_partition_queue_async(self, value: bool) -> None:
+        await asyncio.to_thread(self.set_partition_queue, value)
 
     @property
     def polling_interval_sec(self) -> float:
         if self.database_backed_queue:
+            _warn_sync_db_call_in_async_context(
+                "Queue.polling_interval_sec",
+                "Queue.get_polling_interval_sec_async",
+            )
             self._polling_interval_sec = self._read_from_db()._polling_interval_sec
+        return self._polling_interval_sec
+
+    async def get_polling_interval_sec_async(self) -> float:
+        if self.database_backed_queue:
+            latest = await asyncio.to_thread(self._read_from_db)
+            self._polling_interval_sec = latest._polling_interval_sec
         return self._polling_interval_sec
 
     def set_polling_interval_sec(self, value: float) -> None:
         self._require_database_backed()
         if value <= 0.0:
             raise ValueError("polling_interval_sec must be positive")
+        _warn_sync_db_call_in_async_context(
+            "Queue.set_polling_interval_sec",
+            "Queue.set_polling_interval_sec_async",
+        )
         self._write_to_db({"polling_interval_sec": value})
         self._polling_interval_sec = value
+
+    async def set_polling_interval_sec_async(self, value: float) -> None:
+        await asyncio.to_thread(self.set_polling_interval_sec, value)
 
     def _require_dbos_bound(self) -> None:
         if self._client_system_database is not None:

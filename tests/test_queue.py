@@ -314,6 +314,112 @@ def test_client_queue_crud(dbos: DBOS, client: DBOSClient) -> None:
     client.delete_queue(queue_name)
 
 
+@pytest.mark.asyncio
+async def test_queue_crud_async(dbos: DBOS) -> None:
+    queue_name = f"test_crud_async_queue_{uuid.uuid4()}"
+
+    # retrieve_queue_async returns None when nothing is registered.
+    assert await DBOS.retrieve_queue_async(queue_name) is None
+
+    # register_queue_async persists a fully configured queue.
+    registered = await DBOS.register_queue_async(
+        queue_name,
+        concurrency=10,
+        limiter={"limit": 5, "period": 1.5},
+        worker_concurrency=2,
+        priority_enabled=True,
+        polling_interval_sec=2.5,
+    )
+    assert registered.name == queue_name
+    assert registered.database_backed_queue is True
+
+    retrieved = await DBOS.retrieve_queue_async(queue_name)
+    assert retrieved is not None
+    assert await retrieved.get_concurrency_async() == 10
+    assert await retrieved.get_worker_concurrency_async() == 2
+    assert await retrieved.get_limiter_async() == {"limit": 5, "period": 1.5}
+    assert await retrieved.get_priority_enabled_async() is True
+    assert await retrieved.get_polling_interval_sec_async() == 2.5
+
+    # Async setters write to the database; async getters see the change.
+    await retrieved.set_concurrency_async(8)
+    await retrieved.set_worker_concurrency_async(3)
+    await retrieved.set_limiter_async({"limit": 7, "period": 2.0})
+    await retrieved.set_priority_enabled_async(True)
+    await retrieved.set_partition_queue_async(True)
+    await retrieved.set_polling_interval_sec_async(0.5)
+
+    fresh = await DBOS.retrieve_queue_async(queue_name)
+    assert fresh is not None
+    assert await fresh.get_concurrency_async() == 8
+    assert await fresh.get_worker_concurrency_async() == 3
+    assert await fresh.get_limiter_async() == {"limit": 7, "period": 2.0}
+    assert await fresh.get_priority_enabled_async() is True
+    assert await fresh.get_partition_queue_async() is True
+    assert await fresh.get_polling_interval_sec_async() == 0.5
+
+    # Async setters validate. worker_concurrency cannot exceed concurrency.
+    with pytest.raises(ValueError):
+        await retrieved.set_worker_concurrency_async(100)
+    # polling_interval must be positive.
+    with pytest.raises(ValueError):
+        await retrieved.set_polling_interval_sec_async(0.0)
+
+    # Limiter can be cleared via async setter.
+    await retrieved.set_limiter_async(None)
+    cleared = await DBOS.retrieve_queue_async(queue_name)
+    assert cleared is not None
+    assert await cleared.get_limiter_async() is None
+
+    # In-memory queues do not support async setters either.
+    legacy = Queue(f"legacy_async_dyn_queue_{uuid.uuid4()}", concurrency=2)
+    with pytest.raises(DBOSException):
+        await legacy.set_concurrency_async(5)
+
+
+@pytest.mark.asyncio
+async def test_client_queue_crud_async(dbos: DBOS, client: DBOSClient) -> None:
+    queue_name = f"test_client_async_queue_{uuid.uuid4()}"
+
+    assert await client.retrieve_queue_async(queue_name) is None
+
+    queue = await client.register_queue_async(
+        queue_name,
+        concurrency=4,
+        limiter={"limit": 5, "period": 1.5},
+        worker_concurrency=2,
+        priority_enabled=True,
+        polling_interval_sec=2.5,
+    )
+    assert queue.name == queue_name
+    assert queue.database_backed_queue is True
+    assert queue._client_system_database is client._sys_db
+
+    retrieved = await client.retrieve_queue_async(queue_name)
+    assert retrieved is not None
+    assert retrieved._client_system_database is client._sys_db
+    assert await retrieved.get_concurrency_async() == 4
+    assert await retrieved.get_worker_concurrency_async() == 2
+    assert await retrieved.get_limiter_async() == {"limit": 5, "period": 1.5}
+    assert await retrieved.get_priority_enabled_async() is True
+    assert await retrieved.get_polling_interval_sec_async() == 2.5
+
+    await retrieved.set_concurrency_async(8)
+    fresh = await DBOS.retrieve_queue_async(queue_name)
+    assert fresh is not None
+    assert await fresh.get_concurrency_async() == 8
+
+    # Clients have no application version, so update_if_latest_version is
+    # rejected for the async API too.
+    with pytest.raises(DBOSException):
+        await client.register_queue_async(
+            queue_name, concurrency=1, on_conflict="update_if_latest_version"
+        )
+
+    client.delete_queue(queue_name)
+    assert await client.retrieve_queue_async(queue_name) is None
+
+
 def test_queue_delete_and_recreate(dbos: DBOS) -> None:
     """Create a queue, run a workflow on it, delete it, recreate it, and verify
     the recreated queue still processes workflows."""

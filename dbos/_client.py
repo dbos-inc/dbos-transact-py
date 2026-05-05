@@ -22,7 +22,13 @@ import sqlalchemy as sa
 
 from dbos._context import MaxPriority, MinPriority
 from dbos._core import DEFAULT_POLLING_INTERVAL
-from dbos._queue import Queue, QueueConflictResolution, QueueRateLimit, log_queue
+from dbos._queue import (
+    Queue,
+    QueueConflictResolution,
+    QueueRateLimit,
+    _warn_sync_db_call_in_async_context,
+    log_queue,
+)
 from dbos._sys_db import SystemDatabase
 from dbos._utils import generate_uuid
 
@@ -326,6 +332,9 @@ class DBOSClient:
 
         :returns: A :class:`Queue` bound to this client's system database.
         """
+        _warn_sync_db_call_in_async_context(
+            "DBOSClient.register_queue", "DBOSClient.register_queue_async"
+        )
         Queue._validate_queue(
             concurrency=concurrency,
             worker_concurrency=worker_concurrency,
@@ -361,9 +370,42 @@ class DBOSClient:
             log_queue(queue)
         return queue
 
+    async def register_queue_async(
+        self,
+        name: str,
+        *,
+        concurrency: Optional[int] = None,
+        limiter: Optional[QueueRateLimit] = None,
+        worker_concurrency: Optional[int] = None,
+        priority_enabled: bool = False,
+        partition_queue: bool = False,
+        polling_interval_sec: float = 1.0,
+        on_conflict: QueueConflictResolution = "always_update",
+    ) -> Queue:
+        """Async version of :meth:`register_queue`."""
+        return await asyncio.to_thread(
+            lambda: self.register_queue(
+                name,
+                concurrency=concurrency,
+                limiter=limiter,
+                worker_concurrency=worker_concurrency,
+                priority_enabled=priority_enabled,
+                partition_queue=partition_queue,
+                polling_interval_sec=polling_interval_sec,
+                on_conflict=on_conflict,
+            )
+        )
+
     def retrieve_queue(self, name: str) -> Optional[Queue]:
         """Retrieve a database-backed queue by name from the client."""
+        _warn_sync_db_call_in_async_context(
+            "DBOSClient.retrieve_queue", "DBOSClient.retrieve_queue_async"
+        )
         return self._sys_db.get_queue(name, client_system_database=self._sys_db)
+
+    async def retrieve_queue_async(self, name: str) -> Optional[Queue]:
+        """Async version of :meth:`retrieve_queue`."""
+        return await asyncio.to_thread(self.retrieve_queue, name)
 
     def delete_queue(self, name: str) -> None:
         """Delete a database-backed queue. Pending workflows on it are unrecoverable."""
