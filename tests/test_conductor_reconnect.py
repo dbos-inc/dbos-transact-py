@@ -36,7 +36,6 @@ import logging
 import socket
 import struct
 import threading
-import time
 from importlib.metadata import version
 from typing import Any, List, Optional
 
@@ -189,7 +188,7 @@ class _StubDBOS:
     def __init__(self, logger: logging.Logger) -> None:
         self._config = {"name": "regression-test-app"}
         self.logger = logger
-        self._conductor_executor_metadata: Optional[dict] = None
+        self._conductor_executor_metadata: Optional[dict[str, Any]] = None
 
 
 class _ReconnectLogProbe(logging.Handler):
@@ -220,26 +219,31 @@ def test_conductor_reconnects_after_keepalive_timeout(
     times out, the conductor's run() loop must still escape recv() and try
     to reconnect. On main this fails because recv() stays blocked."""
 
-    # Force the close window to be small so the test is quick. We do NOT
-    # touch ping_interval here — the conductor (post-fix) disables the
-    # library's keepalive by passing ping_interval=None, and we want to
-    # exercise that path. DBOS's own keepalive is shortened via
-    # cw.ping_interval / cw.ping_timeout below.
+    # Force the keepalive window to be small so the test runs in seconds.
     def fast_connect(*args: Any, **kwargs: Any) -> Any:
+        kwargs["ping_interval"] = 0.5
+        kwargs["ping_timeout"] = 0.5
         kwargs["close_timeout"] = 1.0
         return _real_connect(*args, **kwargs)
 
     monkeypatch.setattr(conductor_module, "connect", fast_connect)
 
-    # Simulate the production wedge: when the keepalive's close handshake
-    # times out, the websockets library's last resort is `close_socket()`,
-    # which does shutdown(SHUT_RDWR) + close() to unblock recv_events. In
-    # the prod incident the underlying socket was not cleanly torn down,
-    # so that path failed to wake recv_events. We force the same condition
-    # by neutralising `close_socket` — exposing the conductor's reliance
-    # on the library's forced-close working.
+    # Simulate the production wedge: the OS-level shutdown(SHUT_RDWR) +
+    # socket.close() in `Connection.close_socket` fail to wake the
+    # recv_events thread (kernel doesn't propagate the close to other
+    # threads' blocked recv()), so the user-level `websocket.recv()` in
+    # ConductorWebsocket.run() stays blocked. The pure-Python state
+    # transition that follows still runs, so `websocket.close_code`
+    # becomes observable — that's the signal a robust conductor must
+    # poll for. We patch `close_socket` to model exactly that: skip the
+    # OS calls, run the protocol state transition.
+    def wedged_close_socket(self: Any) -> None:
+        with self.protocol_mutex:
+            self.protocol.receive_eof()
+            self.terminate_pending_pings()
+
     monkeypatch.setattr(
-        ws_connection.Connection, "close_socket", lambda self: None
+        ws_connection.Connection, "close_socket", wedged_close_socket
     )
 
     server = _BlackHoleWSServer()
@@ -260,10 +264,6 @@ def test_conductor_reconnects_after_keepalive_timeout(
         conductor_key="test-key",
         evt=evt,
     )
-    # Shrink DBOS's own keepalive intervals so the pong-timeout warning fires
-    # well within the test window. Defaults are 20s / 15s.
-    cw.ping_interval = 0.5
-    cw.ping_timeout = 0.5
     cw.start()
 
     try:

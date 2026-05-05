@@ -29,12 +29,7 @@ if TYPE_CHECKING:
     from dbos import DBOS
 
 ws_version = version("websockets")
-# Always run our own keepalive thread. On websockets>=15.0 the library's
-# built-in keepalive can wedge: a ping timeout followed by a stuck close
-# handshake leaves the underlying socket open, recv_events blocked, and
-# our run() loop's recv() blocked forever — orphaning the executor from
-# the conductor with no reconnect.
-use_keepalive = True
+use_keepalive = ws_version < "15.0"
 
 
 class ConductorWebsocket(threading.Thread):
@@ -105,11 +100,6 @@ class ConductorWebsocket(threading.Thread):
                     close_timeout=5,
                     logger=self.dbos.logger,
                     max_size=None,
-                    # Disable the library's built-in keepalive — we run our
-                    # own (see use_keepalive). The library's keepalive can
-                    # wedge if the close handshake stalls, leaving recv()
-                    # blocked indefinitely.
-                    ping_interval=None,
                 ) as websocket:
                     self.websocket = websocket
                     if use_keepalive and self.keepalive_thread is None:
@@ -119,7 +109,19 @@ class ConductorWebsocket(threading.Thread):
                         )
                         self.keepalive_thread.start()
                     while not self.evt.is_set():
-                        message = websocket.recv()
+                        try:
+                            message = websocket.recv(timeout=5)
+                        except TimeoutError:
+                            # If the connection was torn down (e.g. the
+                            # library's keepalive timed out a ping and set
+                            # close_code) but the close didn't propagate
+                            # to recv() — exit the inner loop and reconnect.
+                            if websocket.close_code is not None:
+                                self.dbos.logger.warning(
+                                    f"Connection to conductor lost. Reconnecting: close_code={websocket.close_code}"
+                                )
+                                break
+                            continue
                         if not isinstance(message, str):
                             self.dbos.logger.warning(
                                 "Received unexpected non-str message"
