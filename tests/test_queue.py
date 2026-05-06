@@ -2424,7 +2424,8 @@ def test_listen_queue(dbos: DBOS, config: DBOSConfig) -> None:
         assert DBOS.workflow_id
         return DBOS.workflow_id
 
-    DBOS.listen_queues(["queue_one"])
+    queue_list = ["queue_one"]
+    DBOS.listen_queues(queue_list)
     DBOS.launch()
     DBOS.register_queue("queue_one")
     DBOS.register_queue("queue_two")
