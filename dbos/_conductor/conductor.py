@@ -50,7 +50,6 @@ class ConductorWebsocket(threading.Thread):
         self.url = (
             conductor_url.rstrip("/") + f"/websocket/{self.app_name}/{conductor_key}"
         )
-        # TODO: once we can upgrade to websockets>=15.0, we can always use the built-in keepalive
         self.ping_interval = 20  # Time between pings in seconds
         self.ping_timeout = 15  # Time to wait for a pong response in seconds
         self.keepalive_thread: Optional[threading.Thread] = None
@@ -110,7 +109,19 @@ class ConductorWebsocket(threading.Thread):
                         )
                         self.keepalive_thread.start()
                     while not self.evt.is_set():
-                        message = websocket.recv()
+                        try:
+                            message = websocket.recv(timeout=5)
+                        except TimeoutError:
+                            # If the connection was torn down (e.g. the
+                            # library's keepalive timed out a ping and set
+                            # close_code) but the close didn't propagate
+                            # to recv() — exit the inner loop and reconnect.
+                            if websocket.close_code is not None:
+                                self.dbos.logger.warning(
+                                    f"Connection to conductor lost. Reconnecting: close_code={websocket.close_code}"
+                                )
+                                break
+                            continue
                         if not isinstance(message, str):
                             self.dbos.logger.warning(
                                 "Received unexpected non-str message"
