@@ -909,6 +909,7 @@ class DBOS:
         on_conflict: QueueConflictResolution = "update_if_latest_version",
     ) -> Queue:
         """Async version of :meth:`register_queue`."""
+        await cls._configure_asyncio_thread_pool()
         return await asyncio.to_thread(
             lambda: cls.register_queue(
                 name,
@@ -937,6 +938,7 @@ class DBOS:
     @classmethod
     async def retrieve_queue_async(cls, name: str) -> Optional[Queue]:
         """Async version of :meth:`retrieve_queue`."""
+        await cls._configure_asyncio_thread_pool()
         return await asyncio.to_thread(cls.retrieve_queue, name)
 
     @classmethod
@@ -948,6 +950,7 @@ class DBOS:
     @classmethod
     async def delete_queue_async(cls, name: str) -> None:
         """Async version of :meth:`delete_queue`."""
+        await cls._configure_asyncio_thread_pool()
         await asyncio.to_thread(cls.delete_queue, name)
 
     # Decorators for DBOS functionality
@@ -1148,6 +1151,7 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandleAsync[R]:
         """Async version of :meth:`enqueue_workflow`."""
+        await cls._configure_asyncio_thread_pool()
         queue = Queue(queue_name, database_backed_queue=True)
         return await queue.enqueue_async(func, *args, **kwargs)
 

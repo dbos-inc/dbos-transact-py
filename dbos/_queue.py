@@ -166,6 +166,14 @@ class Queue:
         self._partition_queue = latest._partition_queue
         self._polling_interval_sec = latest._polling_interval_sec
 
+    async def _configure_thread_pool(self) -> None:
+        """Route ``asyncio.to_thread`` through DBOS's executor for DBOS-bound
+        queues. Client-bound queues use the loop's default executor."""
+        if self._client_system_database is None:
+            from ._dbos import DBOS
+
+            await DBOS._configure_asyncio_thread_pool()
+
     @property
     def concurrency(self) -> Optional[int]:
         if self.database_backed_queue:
@@ -177,6 +185,7 @@ class Queue:
 
     async def get_concurrency_async(self) -> Optional[int]:
         if self.database_backed_queue:
+            await self._configure_thread_pool()
             self._refresh_fields(await asyncio.to_thread(self._read_from_db))
         return self._concurrency
 
@@ -200,6 +209,7 @@ class Queue:
         self._concurrency = value
 
     async def set_concurrency_async(self, value: Optional[int]) -> None:
+        await self._configure_thread_pool()
         await asyncio.to_thread(self.set_concurrency, value)
 
     @property
@@ -213,6 +223,7 @@ class Queue:
 
     async def get_worker_concurrency_async(self) -> Optional[int]:
         if self.database_backed_queue:
+            await self._configure_thread_pool()
             self._refresh_fields(await asyncio.to_thread(self._read_from_db))
         return self._worker_concurrency
 
@@ -236,6 +247,7 @@ class Queue:
         self._worker_concurrency = value
 
     async def set_worker_concurrency_async(self, value: Optional[int]) -> None:
+        await self._configure_thread_pool()
         await asyncio.to_thread(self.set_worker_concurrency, value)
 
     @property
@@ -249,6 +261,7 @@ class Queue:
 
     async def get_limiter_async(self) -> Optional[QueueRateLimit]:
         if self.database_backed_queue:
+            await self._configure_thread_pool()
             self._refresh_fields(await asyncio.to_thread(self._read_from_db))
         return self._limiter
 
@@ -270,6 +283,7 @@ class Queue:
         self._limiter = value
 
     async def set_limiter_async(self, value: Optional[QueueRateLimit]) -> None:
+        await self._configure_thread_pool()
         await asyncio.to_thread(self.set_limiter, value)
 
     @property
@@ -283,6 +297,7 @@ class Queue:
 
     async def get_priority_enabled_async(self) -> bool:
         if self.database_backed_queue:
+            await self._configure_thread_pool()
             self._refresh_fields(await asyncio.to_thread(self._read_from_db))
         return self._priority_enabled
 
@@ -295,6 +310,7 @@ class Queue:
         self._priority_enabled = value
 
     async def set_priority_enabled_async(self, value: bool) -> None:
+        await self._configure_thread_pool()
         await asyncio.to_thread(self.set_priority_enabled, value)
 
     @property
@@ -308,6 +324,7 @@ class Queue:
 
     async def get_partition_queue_async(self) -> bool:
         if self.database_backed_queue:
+            await self._configure_thread_pool()
             self._refresh_fields(await asyncio.to_thread(self._read_from_db))
         return self._partition_queue
 
@@ -320,6 +337,7 @@ class Queue:
         self._partition_queue = value
 
     async def set_partition_queue_async(self, value: bool) -> None:
+        await self._configure_thread_pool()
         await asyncio.to_thread(self.set_partition_queue, value)
 
     @property
@@ -334,6 +352,7 @@ class Queue:
 
     async def get_polling_interval_sec_async(self) -> float:
         if self.database_backed_queue:
+            await self._configure_thread_pool()
             self._refresh_fields(await asyncio.to_thread(self._read_from_db))
         return self._polling_interval_sec
 
@@ -349,6 +368,7 @@ class Queue:
         self._polling_interval_sec = value
 
     async def set_polling_interval_sec_async(self, value: float) -> None:
+        await self._configure_thread_pool()
         await asyncio.to_thread(self.set_polling_interval_sec, value)
 
     def _require_dbos_bound(self) -> None:
@@ -404,6 +424,7 @@ class Queue:
         child_ctx = DBOSContext.create_start_workflow_child(ctx)
         self._validate_enqueue(ctx)
         dbos = _get_dbos_instance()
+        await self._configure_thread_pool()
         return await start_workflow_async(
             dbos,
             parent_ctx_copy,
