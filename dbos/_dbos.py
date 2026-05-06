@@ -26,6 +26,7 @@ from typing import (
     Literal,
     Optional,
     Protocol,
+    Sequence,
     Tuple,
     Type,
     TypedDict,
@@ -3092,7 +3093,7 @@ class DBOS:
         return dbos_tracer
 
     @classmethod
-    def listen_queues(cls, queues: List[Union[Queue, str]]) -> None:
+    def listen_queues(cls, queues: Sequence[Union[Queue, str]]) -> None:
         """
         Configure this DBOS process to only listen to (dequeue workflows from) specific queues.
 
