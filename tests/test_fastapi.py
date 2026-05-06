@@ -162,7 +162,7 @@ async def test_custom_lifespan(
     @app.get("/")
     @DBOS.workflow()
     async def resource_workflow() -> Any:
-        DBOS.register_queue("queue")
+        await DBOS.register_queue_async("queue")
         handle = await DBOS.enqueue_workflow_async("queue", queue_workflow)
         return {
             "resource": resource,

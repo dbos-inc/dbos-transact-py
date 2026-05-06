@@ -285,7 +285,7 @@ async def test_debouncer_client_async(dbos: DBOS, client: DBOSClient) -> None:
         return x
 
     first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
-    DBOS.register_queue("test-queue")
+    await DBOS.register_queue_async("test-queue")
 
     options: EnqueueOptions = {
         "workflow_name": workflow_async.__qualname__,

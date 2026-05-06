@@ -7,13 +7,11 @@ from dataclasses import dataclass
 from typing import Any, Callable, ClassVar, Coroutine, List, Tuple, Union, cast
 
 import pytest
-from sqlalchemy import text
 
 # Public API
 from dbos import DBOS, SetWorkflowID, StepInfo
 from dbos._dbos_config import DBOSConfig
 from dbos._error import DBOSNonExistentWorkflowError
-from tests.conftest import using_sqlite
 
 
 def test_concurrent_workflows(dbos: DBOS) -> None:
@@ -136,7 +134,12 @@ def compare_wf_runs(
 
 
 @pytest.mark.asyncio
-async def test_gather_manythings(dbos: DBOS) -> None:
+async def test_gather_manythings(dbos: DBOS, skip_with_sqlite: None) -> None:
+    # Register a database-backed queue up-front so the workflow can enqueue
+    # onto an already-existing queue.
+    db_queue_name = f"gather_db_queue_{uuid.uuid4()}"
+    await DBOS.register_queue_async(db_queue_name, polling_interval_sec=0.1)
+
     @DBOS.workflow()
     async def simple_wf() -> str:
         return "WF Ran"
@@ -276,6 +279,16 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             assert res is not None
             return cast(str, res)
 
+        async def t_enqueue_child() -> str:
+            with SetWorkflowID(f"{DBOS.workflow_id}-eqcwf"):
+                await DBOS.enqueue_workflow_async(db_queue_name, simple_wf)
+            return "enqueued"
+
+        async def t_get_enqueued_child_result() -> str:
+            res = await DBOS.get_result_async(f"{DBOS.workflow_id}-eqcwf")
+            assert res is not None
+            return cast(str, res)
+
         async def t_write_stream() -> str:
             await DBOS.write_stream_async("stream", "val")
             return "wrote"
@@ -306,6 +319,8 @@ async def test_gather_manythings(dbos: DBOS) -> None:
             Thing(func=simple_wf, expected="WF Ran"),
             Thing(func=t_start_child, expected="started"),
             Thing(func=t_get_child_result, expected="WF Ran"),
+            Thing(func=t_enqueue_child, expected="enqueued"),
+            Thing(func=t_get_enqueued_child_result, expected="WF Ran"),
             Thing(func=simple_step, expected="Step Ran"),
             Thing(func=t_write_stream, expected="wrote"),
             Thing(func=t_read_stream, expected="val"),

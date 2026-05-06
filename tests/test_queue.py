@@ -233,6 +233,21 @@ def test_queue_dynamic_config(dbos: DBOS) -> None:
     assert q is not None
     assert q.limiter is None
 
+    # set_concurrency / set_worker_concurrency refresh from the database before
+    # cross-field validation, so a stale local cache cannot let a contradictory
+    # configuration slip through.
+    one = DBOS.retrieve_queue(queue_name)
+    two = DBOS.retrieve_queue(queue_name)
+    assert one is not None and two is not None
+    one.set_concurrency(10)
+    one.set_worker_concurrency(5)
+    # ``two`` still has the old cached values, but its setter must consult the
+    # database before rejecting an inconsistent change.
+    with pytest.raises(ValueError):
+        two.set_concurrency(2)
+    with pytest.raises(ValueError):
+        two.set_worker_concurrency(20)
+
     # In-memory queues read from their local fields, not the database.
     legacy = Queue(f"legacy_dyn_queue_{uuid.uuid4()}", concurrency=2)
     assert legacy.concurrency == 2
@@ -312,6 +327,149 @@ def test_client_queue_crud(dbos: DBOS, client: DBOSClient) -> None:
     assert client.retrieve_queue(queue_name) is None
     assert DBOS.retrieve_queue(queue_name) is None
     client.delete_queue(queue_name)
+
+
+@pytest.mark.asyncio
+async def test_queue_crud_async(dbos: DBOS) -> None:
+    queue_name = f"test_crud_async_queue_{uuid.uuid4()}"
+
+    # retrieve_queue_async returns None when nothing is registered.
+    assert await DBOS.retrieve_queue_async(queue_name) is None
+
+    # register_queue_async persists a fully configured queue.
+    registered = await DBOS.register_queue_async(
+        queue_name,
+        concurrency=10,
+        limiter={"limit": 5, "period": 1.5},
+        worker_concurrency=2,
+        priority_enabled=True,
+        polling_interval_sec=2.5,
+    )
+    assert registered.name == queue_name
+    assert registered.database_backed_queue is True
+
+    retrieved = await DBOS.retrieve_queue_async(queue_name)
+    assert retrieved is not None
+    assert await retrieved.get_concurrency_async() == 10
+    assert await retrieved.get_worker_concurrency_async() == 2
+    assert await retrieved.get_limiter_async() == {"limit": 5, "period": 1.5}
+    assert await retrieved.get_priority_enabled_async() is True
+    assert await retrieved.get_polling_interval_sec_async() == 2.5
+
+    # Async setters write to the database; async getters see the change.
+    await retrieved.set_concurrency_async(8)
+    await retrieved.set_worker_concurrency_async(3)
+    await retrieved.set_limiter_async({"limit": 7, "period": 2.0})
+    await retrieved.set_priority_enabled_async(True)
+    await retrieved.set_partition_queue_async(True)
+    await retrieved.set_polling_interval_sec_async(0.5)
+
+    fresh = await DBOS.retrieve_queue_async(queue_name)
+    assert fresh is not None
+    assert await fresh.get_concurrency_async() == 8
+    assert await fresh.get_worker_concurrency_async() == 3
+    assert await fresh.get_limiter_async() == {"limit": 7, "period": 2.0}
+    assert await fresh.get_priority_enabled_async() is True
+    assert await fresh.get_partition_queue_async() is True
+    assert await fresh.get_polling_interval_sec_async() == 0.5
+
+    # Async setters validate. worker_concurrency cannot exceed concurrency.
+    with pytest.raises(ValueError):
+        await retrieved.set_worker_concurrency_async(100)
+    # polling_interval must be positive.
+    with pytest.raises(ValueError):
+        await retrieved.set_polling_interval_sec_async(0.0)
+
+    # Limiter can be cleared via async setter.
+    await retrieved.set_limiter_async(None)
+    cleared = await DBOS.retrieve_queue_async(queue_name)
+    assert cleared is not None
+    assert await cleared.get_limiter_async() is None
+
+    # In-memory queues do not support async setters either.
+    legacy = Queue(f"legacy_async_dyn_queue_{uuid.uuid4()}", concurrency=2)
+    with pytest.raises(DBOSException):
+        await legacy.set_concurrency_async(5)
+
+    # Sync DBOS.register_queue / retrieve_queue / delete_queue raise when
+    # called from a running event loop; async callers must use the *_async
+    # variants.
+    with pytest.raises(RuntimeError):
+        DBOS.register_queue(queue_name)
+    with pytest.raises(RuntimeError):
+        DBOS.retrieve_queue(queue_name)
+    with pytest.raises(RuntimeError):
+        DBOS.delete_queue(queue_name)
+
+    # delete_queue_async removes the row; subsequent retrievals return None
+    # and deleting again is a harmless no-op.
+    await DBOS.delete_queue_async(queue_name)
+    assert await DBOS.retrieve_queue_async(queue_name) is None
+    await DBOS.delete_queue_async(queue_name)
+
+
+@pytest.mark.asyncio
+async def test_client_queue_crud_async(dbos: DBOS, client: DBOSClient) -> None:
+    queue_name = f"test_client_async_queue_{uuid.uuid4()}"
+
+    assert await client.retrieve_queue_async(queue_name) is None
+
+    queue = await client.register_queue_async(
+        queue_name,
+        concurrency=4,
+        limiter={"limit": 5, "period": 1.5},
+        worker_concurrency=2,
+        priority_enabled=True,
+        polling_interval_sec=2.5,
+    )
+    assert queue.name == queue_name
+    assert queue.database_backed_queue is True
+    assert queue._client_system_database is client._sys_db
+
+    retrieved = await client.retrieve_queue_async(queue_name)
+    assert retrieved is not None
+    assert retrieved._client_system_database is client._sys_db
+    assert await retrieved.get_concurrency_async() == 4
+    assert await retrieved.get_worker_concurrency_async() == 2
+    assert await retrieved.get_limiter_async() == {"limit": 5, "period": 1.5}
+    assert await retrieved.get_priority_enabled_async() is True
+    assert await retrieved.get_polling_interval_sec_async() == 2.5
+
+    await retrieved.set_concurrency_async(8)
+    fresh = await DBOS.retrieve_queue_async(queue_name)
+    assert fresh is not None
+    assert await fresh.get_concurrency_async() == 8
+
+    # Clients have no application version, so update_if_latest_version is
+    # rejected for the async API too.
+    with pytest.raises(DBOSException):
+        await client.register_queue_async(
+            queue_name, concurrency=1, on_conflict="update_if_latest_version"
+        )
+
+    await client.delete_queue_async(queue_name)
+    assert await client.retrieve_queue_async(queue_name) is None
+
+
+def test_enqueue_on_nonexistent_queue(dbos: DBOS) -> None:
+    """``DBOS.enqueue_workflow`` on a non-existent queue does not raise; the
+    workflow is recorded as ENQUEUED and starts running once the queue is
+    registered."""
+    queue_name = f"test_nonexistent_queue_{uuid.uuid4()}"
+
+    @DBOS.workflow()
+    def echo(x: int) -> int:
+        return x
+
+    handle = DBOS.enqueue_workflow(queue_name, echo, 7)
+
+    # Nothing dispatches the workflow yet — it stays ENQUEUED.
+    time.sleep(1.0)
+    assert handle.get_status().status == WorkflowStatusString.ENQUEUED.value
+
+    # Registering the queue brings up a worker that picks up the orphan.
+    DBOS.register_queue(queue_name, polling_interval_sec=0.1)
+    assert handle.get_result() == 7
 
 
 def test_queue_delete_and_recreate(dbos: DBOS) -> None:
@@ -1300,7 +1458,9 @@ async def test_timeout_queue_async(dbos: DBOS, config: DBOSConfig) -> None:
         assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
         return
 
-    DBOS.register_queue("test_queue_async", concurrency=1, polling_interval_sec=0.1)
+    await DBOS.register_queue_async(
+        "test_queue_async", concurrency=1, polling_interval_sec=0.1
+    )
 
     # Enqueue a few blocked workflows
     num_workflows = 3
@@ -1329,7 +1489,7 @@ async def test_timeout_queue_async(dbos: DBOS, config: DBOSConfig) -> None:
     # Verify if a parent called with a timeout enqueues a blocked child
     # the deadline propagates and the child is also cancelled.
     child_id = str(uuid.uuid4())
-    DBOS.register_queue("regular_queue_async", polling_interval_sec=0.1)
+    await DBOS.register_queue_async("regular_queue_async", polling_interval_sec=0.1)
 
     @DBOS.workflow()
     async def parent_workflow() -> None:
@@ -1368,7 +1528,9 @@ async def test_timeout_queue_async(dbos: DBOS, config: DBOSConfig) -> None:
     # never starts because the queue is blocked, the deadline propagates
     # and both parent and child are cancelled.
     child_id = str(uuid.uuid4())
-    DBOS.register_queue("stuck_queue_async", concurrency=1, polling_interval_sec=0.1)
+    await DBOS.register_queue_async(
+        "stuck_queue_async", concurrency=1, polling_interval_sec=0.1
+    )
 
     start_event = asyncio.Event()
     blocking_event = asyncio.Event()
@@ -1581,7 +1743,7 @@ async def test_simple_queue_async(dbos: DBOS) -> None:
         step_counter += 1
         return var + "d"
 
-    DBOS.register_queue("test_queue")
+    await DBOS.register_queue_async("test_queue")
 
     with SetWorkflowID(wfid):
         handle = await DBOS.enqueue_workflow_async(
@@ -1696,7 +1858,7 @@ def test_queue_deduplication_recovery(dbos: DBOS) -> None:
 @pytest.mark.asyncio
 async def test_queue_deduplication_async(dbos: DBOS) -> None:
     queue_name = "test_dedup_queue_async"
-    DBOS.register_queue(queue_name)
+    await DBOS.register_queue_async(queue_name)
     workflow_event = asyncio.Event()
 
     @DBOS.workflow()
@@ -1827,10 +1989,10 @@ def test_priority_queue(dbos: DBOS) -> None:
 @pytest.mark.asyncio
 async def test_priority_queue_async(dbos: DBOS) -> None:
     # Make sure that we can enqueue workflows with different priorities correctly
-    DBOS.register_queue(
+    await DBOS.register_queue_async(
         "test_queue_priority_async", concurrency=1, priority_enabled=True
     )
-    DBOS.register_queue("test_queue_child_async")
+    await DBOS.register_queue_async("test_queue_child_async")
 
     workflow_event = asyncio.Event()
     wf_priority_list = []
@@ -1894,51 +2056,49 @@ async def test_priority_queue_async(dbos: DBOS) -> None:
 
 @pytest.mark.asyncio
 async def test_enqueue_async_validation(dbos: DBOS) -> None:
-    """Same enqueue-time validation rules should fire for enqueue_async."""
+    """Enqueue-time validation rules fire for in-memory queues. Database-backed
+    queues skip these checks to avoid a per-enqueue DB round-trip, so the
+    assertions below intentionally exercise the in-memory queue path."""
 
     @DBOS.workflow()
     async def noop_workflow() -> None:
         return
 
-    DBOS.register_queue("async_validation_no_priority")
-    DBOS.register_queue("async_validation_priority", priority_enabled=True)
-    DBOS.register_queue("async_validation_partition", partition_queue=True)
-    DBOS.register_queue("async_validation_no_partition")
+    no_priority_q = Queue(f"async_validation_no_priority_{uuid.uuid4()}")
+    priority_q = Queue(
+        f"async_validation_priority_{uuid.uuid4()}", priority_enabled=True
+    )
+    partition_q = Queue(
+        f"async_validation_partition_{uuid.uuid4()}", partition_queue=True
+    )
+    no_partition_q = Queue(f"async_validation_no_partition_{uuid.uuid4()}")
 
     # Priority on a non-priority queue
     with pytest.raises(Exception, match="Priority is not enabled for queue"):
         with SetEnqueueOptions(priority=1):
-            await DBOS.enqueue_workflow_async(
-                "async_validation_no_priority", noop_workflow
-            )
+            await no_priority_q.enqueue_async(noop_workflow)
 
     # Partition queue requires a partition key
     with pytest.raises(Exception, match="without a partition key"):
-        await DBOS.enqueue_workflow_async("async_validation_partition", noop_workflow)
+        await partition_q.enqueue_async(noop_workflow)
 
     # Partition key on a non-partitioned queue
     with pytest.raises(
         Exception, match="only use a partition key on a partition-enabled queue"
     ):
         with SetEnqueueOptions(queue_partition_key="key"):
-            await DBOS.enqueue_workflow_async(
-                "async_validation_no_partition", noop_workflow
-            )
+            await no_partition_q.enqueue_async(noop_workflow)
 
     # Deduplication is not supported for partitioned queues
     with pytest.raises(
         Exception, match="Deduplication is not supported for partitioned queues"
     ):
         with SetEnqueueOptions(queue_partition_key="key", deduplication_id="dedupe"):
-            await DBOS.enqueue_workflow_async(
-                "async_validation_partition", noop_workflow
-            )
+            await partition_q.enqueue_async(noop_workflow)
 
-    # Sanity check: priority on a priority-enabled queue works
-    handle = await DBOS.enqueue_workflow_async(
-        "async_validation_priority", noop_workflow
-    )
-    await handle.get_result()
+    # Sanity check: priority on a priority-enabled in-memory queue works.
+    with SetEnqueueOptions(priority=1):
+        await priority_q.enqueue_async(noop_workflow)
 
 
 def test_worker_concurrency_across_versions(dbos: DBOS, client: DBOSClient) -> None:
@@ -2160,7 +2320,7 @@ async def test_enqueue_version_async(dbos: DBOS) -> None:
     async def workflow(x: int) -> int:
         return x
 
-    DBOS.register_queue("queue")
+    await DBOS.register_queue_async("queue")
     input = 5
 
     # Enqueue the app on a different version, verify it has that version
@@ -2236,24 +2396,6 @@ def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
     )
     assert client_handle.get_result()
 
-    # You can only enqueue on a partitioned queue with a partition key
-    with pytest.raises(Exception):
-        DBOS.enqueue_workflow("queue", normal_workflow)
-
-    # Deduplication is not supported for partitioned queues
-    with pytest.raises(Exception):
-        with SetEnqueueOptions(
-            queue_partition_key=normal_partition_key, deduplication_id="key"
-        ):
-            DBOS.enqueue_workflow("queue", normal_workflow)
-
-    # You can only enqueue with a partition key on a partitioned queue
-    DBOS.register_queue("partitionless-queue")
-
-    with pytest.raises(Exception):
-        with SetEnqueueOptions(queue_partition_key="test"):
-            DBOS.enqueue_workflow("partitionless-queue", normal_workflow)
-
 
 def test_polling_interval(dbos: DBOS) -> None:
     DBOS.register_queue("queue", polling_interval_sec=0.1)
@@ -2282,7 +2424,8 @@ def test_listen_queue(dbos: DBOS, config: DBOSConfig) -> None:
         assert DBOS.workflow_id
         return DBOS.workflow_id
 
-    DBOS.listen_queues(["queue_one"])
+    queue_list = ["queue_one"]
+    DBOS.listen_queues(queue_list)
     DBOS.launch()
     DBOS.register_queue("queue_one")
     DBOS.register_queue("queue_two")
