@@ -29,7 +29,7 @@ class PostgresAsyncDatasource(AsyncDatasource):
                 ds_db_url.set(database="postgres"), **self._engine_kwargs
             )
             async with pg_ds_engine.connect() as conn:
-                conn.execution_options(isolation_level="AUTOCOMMIT")
+                await conn.execution_options(isolation_level="AUTOCOMMIT")
                 if not (
                     await conn.execute(
                         sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
@@ -42,7 +42,7 @@ class PostgresAsyncDatasource(AsyncDatasource):
                 f"Could not connect to postgres database to verify existence of {ds_db_url.database}. Continuing..."
             )
         finally:
-            pg_ds_engine.dispose()
+            await pg_ds_engine.dispose()
 
         async with self.engine.begin() as conn:
             await conn.execute(sa.text(f'CREATE SCHEMA "{self.schema}"'))

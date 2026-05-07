@@ -13,9 +13,15 @@ from typing import (
 )
 
 import sqlalchemy as sa
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+)
 from sqlalchemy.orm import Session, sessionmaker
 
+from dbos._app_db import RecordedResult
 from dbos._core import StepOptions
 from dbos._dbos import DBOS, IsolationLevel, check_async
 from dbos._error import DBOSException
@@ -120,6 +126,58 @@ class AsyncDatasource(ABC):
     def sql_session(cls) -> AsyncSession:
         raise NotImplementedError()
 
+    async def _check_execution(
+        self, workflow_id: str, step_id: int
+    ) -> None | RecordedResult:
+        async with self.engine.connect() as conn:
+            result = await conn.execute(
+                sa.select(
+                    DatasourceSchema.datasource_outputs.c.output,
+                    DatasourceSchema.datasource_outputs.c.error,
+                    DatasourceSchema.datasource_outputs.c.serialization,
+                ).where(
+                    DatasourceSchema.datasource_outputs.c.workflow_id == workflow_id,
+                    DatasourceSchema.datasource_outputs.c.step_id == step_id,
+                )
+            )
+            row = result.first()
+            return (
+                None
+                if row is None
+                else {"output": row[0], "error": row[1], "serialization": row[2]}
+            )
+
+    async def _record_error(
+        self,
+        workflow_id: str,
+        step_id: int,
+        error: str,
+        serialization: str | None,
+    ):
+        async with self.engine.begin() as conn:
+            await self._record_result(
+                conn, workflow_id, step_id, None, error, serialization
+            )
+
+    async def _record_result(
+        self,
+        conn: AsyncConnection,
+        workflow_id: str,
+        step_id: int,
+        output: str | None,
+        error: str | None,
+        serialization: str | None,
+    ):
+        await conn.execute(
+            sa.insert(DatasourceSchema.datasource_outputs).values(
+                workflow_id=workflow_id,
+                step_id=step_id,
+                output=output,
+                error=error,
+                serialization=serialization,
+            )
+        )
+
     @overload
     async def run_tx_async(
         self,
@@ -145,13 +203,17 @@ class AsyncDatasource(ABC):
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> R:
-        name = ds_options.name if ds_options.name is not None else func.__qualname__
+        name = (
+            ds_options["name"]
+            if ds_options and ds_options.get("name") is not None
+            else func.__qualname__
+        )
         isolation_level = (
-            ds_options.isolation_level
-            if ds_options.isolation_level is not None
+            ds_options["isolation_level"]
+            if ds_options and ds_options.get("isolation_level") is not None
             else "SERIALIZABLE"
         )
-        if inspect.iscoroutinefunction(func) == False:
+        if not inspect.iscoroutinefunction(func):
             raise DBOSException(
                 f"Function {name} is not a coroutine function, but AsyncDatasource.run_tx_async requires a coroutine functions"
             )
