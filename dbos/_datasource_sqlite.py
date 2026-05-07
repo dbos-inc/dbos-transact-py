@@ -44,14 +44,13 @@ class SqliteAsyncDatasource(AsyncDatasource):
     async def run_migrations(self) -> None:
         async with self.engine.begin() as conn:
             await conn.execute(sa.text("PRAGMA foreign_keys = ON"))
-            result = (
-                await conn.execute(
-                    sa.text(
-                        "SELECT name FROM sqlite_master WHERE type='table' AND name='dbos_datasource_outputs'"
-                    )
+            result = await conn.execute(
+                sa.text(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='dbos_datasource_outputs'"
                 )
-            ).fetchone()
-            if result is None:
+            )
+
+            if result.fetchone() is None:
                 await conn.execute(
                     sa.text(
                         f"""
@@ -106,8 +105,8 @@ class SqliteSyncDatasource(SyncDatasource):
                 sa.text(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name='dbos_datasource_outputs'"
                 )
-            ).fetchone()
-            if result is None:
+            )
+            if result.fetchone() is None:
                 conn.execute(
                     sa.text(
                         f"""
