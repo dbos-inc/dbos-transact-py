@@ -18,9 +18,32 @@ class PostgresAsyncDatasource(AsyncDatasource):
         self, database_url: str, engine_kwargs: Dict[str, Any]
     ) -> AsyncEngine:
         url = _make_url(database_url)
+        if engine_kwargs is None:
+            engine_kwargs = {}
         return create_async_engine(url, **engine_kwargs)
 
     async def run_migrations(self) -> None:
+        ds_db_url = self.engine.url
+        try:
+            pg_ds_engine = create_async_engine(
+                ds_db_url.set(database="postgres"), **self._engine_kwargs
+            )
+            async with pg_ds_engine.connect() as conn:
+                conn.execution_options(isolation_level="AUTOCOMMIT")
+                if not (
+                    await conn.execute(
+                        sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
+                        parameters={"db_name": ds_db_url.database},
+                    )
+                ).scalar():
+                    await conn.execute(sa.text(f"CREATE DATABASE {ds_db_url.database}"))
+        except Exception:
+            dbos_logger.warning(
+                f"Could not connect to postgres database to verify existence of {ds_db_url.database}. Continuing..."
+            )
+        finally:
+            pg_ds_engine.dispose()
+
         async with self.engine.begin() as conn:
             await conn.execute(sa.text(f'CREATE SCHEMA "{self.schema}"'))
             await conn.execute(
@@ -44,6 +67,8 @@ class PostgresSyncDatasource(SyncDatasource):
         self, database_url: str, engine_kwargs: Dict[str, Any]
     ) -> sa.Engine:
         url = _make_url(database_url)
+        if engine_kwargs is None:
+            engine_kwargs = {}
         return sa.create_engine(url, **engine_kwargs)
 
     def run_migrations(self) -> None:

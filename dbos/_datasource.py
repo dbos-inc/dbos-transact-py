@@ -1,3 +1,4 @@
+import inspect
 from abc import ABC, abstractmethod
 from typing import (
     Any,
@@ -12,10 +13,13 @@ from typing import (
 )
 
 import sqlalchemy as sa
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from dbos._core import StepOptions
 from dbos._dbos import DBOS, IsolationLevel, check_async
+from dbos._error import DBOSException
+from dbos._schemas.datasource_database import DatasourceSchema
 
 from ._logger import dbos_logger
 from ._serialization import Serializer
@@ -72,29 +76,25 @@ class AsyncDatasource(ABC):
         import sqlalchemy.dialects.sqlite as sq
 
         if engine:
-            dbos_logger.info("Initializing AsyncDatasource with custom engine")
+            dbos_logger.info("Initializing SyncDatasource with custom engine")
         else:
-            printable_db_url = sa.make_url(database_url).render_as_string(
+            printable_url = sa.make_url(database_url).render_as_string(
                 hide_password=True
             )
             dbos_logger.info(
-                f"Initializing DBOS AsyncDatasource with URL: {printable_db_url}"
+                f"Initializing DBOS SyncDatasource with URL: {printable_url}"
             )
-            if database_url.startswith("sqlite"):
+            if not database_url.startswith("sqlite"):
                 dbos_logger.info(
-                    f"Using SQLite as a AsyncDatasource. The SQLite AsyncDatasource is for development and testing. PostgreSQL is recommended for production use."
-                )
-            else:
-                dbos_logger.info(
-                    f"DBOS AsyncDatasource engine parameters: {engine_kwargs}"
+                    f"DBOS SyncDatasource engine parameters: {engine_kwargs}"
                 )
         self.dialect = sq if database_url.startswith("sqlite") else pg
-        self.serializer = serializer
         self.schema = (
             None
             if database_url.startswith("sqlite")
             else (schema if schema else "dbos")
         )
+        DatasourceSchema.datasource_outputs.schema = self.schema
         if engine:
             self.engine = engine
             self.created_engine = False
@@ -102,6 +102,8 @@ class AsyncDatasource(ABC):
             self.engine = self._create_engine(database_url, engine_kwargs)
             self.created_engine = True
         self._engine_kwargs = engine_kwargs
+        self.sessionmaker = async_sessionmaker(bind=self.engine)
+        self.serializer = serializer
 
     @abstractmethod
     def _create_engine(
@@ -114,6 +116,9 @@ class AsyncDatasource(ABC):
     async def run_migrations(self) -> None:
         """Run database migrations specific to the database type."""
         pass
+
+    def sql_session(cls) -> AsyncSession:
+        raise NotImplementedError()
 
     @overload
     async def run_tx_async(
@@ -140,6 +145,17 @@ class AsyncDatasource(ABC):
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> R:
+        name = ds_options.name if ds_options.name is not None else func.__qualname__
+        isolation_level = (
+            ds_options.isolation_level
+            if ds_options.isolation_level is not None
+            else "SERIALIZABLE"
+        )
+        if inspect.iscoroutinefunction(func) == False:
+            raise DBOSException(
+                f"Function {name} is not a coroutine function, but AsyncDatasource.run_tx_async requires a coroutine functions"
+            )
+
         raise NotImplementedError()
 
 
@@ -188,27 +204,23 @@ class SyncDatasource(ABC):
         if engine:
             dbos_logger.info("Initializing SyncDatasource with custom engine")
         else:
-            printable_db_url = sa.make_url(database_url).render_as_string(
+            printable_url = sa.make_url(database_url).render_as_string(
                 hide_password=True
             )
             dbos_logger.info(
-                f"Initializing DBOS SyncDatasource with URL: {printable_db_url}"
+                f"Initializing DBOS SyncDatasource with URL: {printable_url}"
             )
-            if database_url.startswith("sqlite"):
-                dbos_logger.info(
-                    f"Using SQLite as a SyncDatasource. The SQLite SyncDatasource is for development and testing. PostgreSQL is recommended for production use."
-                )
-            else:
+            if not database_url.startswith("sqlite"):
                 dbos_logger.info(
                     f"DBOS SyncDatasource engine parameters: {engine_kwargs}"
                 )
         self.dialect = sq if database_url.startswith("sqlite") else pg
-        self.serializer = serializer
         self.schema = (
             None
             if database_url.startswith("sqlite")
             else (schema if schema else "dbos")
         )
+        DatasourceSchema.datasource_outputs.schema = self.schema
         if engine:
             self.engine = engine
             self.created_engine = False
@@ -216,6 +228,8 @@ class SyncDatasource(ABC):
             self.engine = self._create_engine(database_url, engine_kwargs)
             self.created_engine = True
         self._engine_kwargs = engine_kwargs
+        self.sessionmaker = sessionmaker(bind=self.engine)
+        self.serializer = serializer
 
     @abstractmethod
     def _create_engine(
@@ -228,6 +242,9 @@ class SyncDatasource(ABC):
     def run_migrations(self) -> None:
         """Run database migrations specific to the database type."""
         pass
+
+    def sql_session(cls) -> Session:
+        raise NotImplementedError()
 
     @overload
     def run_tx(
