@@ -1,5 +1,5 @@
 import os
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Literal, Optional
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -14,6 +14,42 @@ if TYPE_CHECKING:
     from ._context import TracedAttributes
 
 
+# How span attribute names are emitted to OTLP.
+#
+# - "legacy"  : original DBOS names (e.g. operationUUID, applicationID).
+#               Default for backward compatibility with existing dashboards
+#               and the TypeScript Transact SDK.
+# - "semconv" : OpenTelemetry-style names under the dbos.* namespace
+#               (e.g. dbos.operation.uuid, dbos.application.id). Follows
+#               https://opentelemetry.io/docs/specs/semconv/general/attribute-naming/
+OtelAttributeFormat = Literal["legacy", "semconv"]
+
+
+# Legacy DBOS attribute name -> OpenTelemetry semconv-style equivalent.
+# Keys MUST match the field names in `TracedAttributes` in `_context.py`,
+# plus the few attributes set ad-hoc (`responseCode`,
+# `authenticatedUser*`).
+_LEGACY_TO_SEMCONV: dict[str, str] = {
+    "operationUUID": "dbos.operation.uuid",
+    "operationType": "dbos.operation.type",
+    "applicationID": "dbos.application.id",
+    "applicationVersion": "dbos.application.version",
+    "executorID": "dbos.executor.id",
+    "queueName": "dbos.queue.name",
+    "authenticatedUser": "dbos.user.name",
+    "authenticatedUserRoles": "dbos.user.roles",
+    "authenticatedUserAssumedRole": "dbos.user.assumed_role",
+    "requestID": "dbos.request.id",
+    "requestIP": "dbos.request.ip",
+    "requestURL": "dbos.request.url",
+    "requestMethod": "dbos.request.method",
+    "responseCode": "dbos.response.status_code",
+}
+
+
+_DEFAULT_OTEL_ATTRIBUTE_FORMAT: OtelAttributeFormat = "legacy"
+
+
 class DBOSTracer:
 
     otlp_attributes: dict[str, str] = {}
@@ -22,10 +58,16 @@ class DBOSTracer:
         self.app_id = os.environ.get("DBOS__APPID", None)
         self.provider: Optional[TracerProvider] = None
         self.disable_otlp: bool = False
+        self.otel_attribute_format: OtelAttributeFormat = (
+            _DEFAULT_OTEL_ATTRIBUTE_FORMAT
+        )
 
     def config(self, config: ConfigFile) -> None:
         self.otlp_attributes = config.get("telemetry", {}).get("otlp_attributes", {})  # type: ignore
         self.disable_otlp = config.get("telemetry", {}).get("disable_otlp", False)  # type: ignore
+        self.otel_attribute_format = config.get("telemetry", {}).get(  # type: ignore
+            "otel_attribute_format", _DEFAULT_OTEL_ATTRIBUTE_FORMAT
+        )
         otlp_traces_endpoints = (
             config.get("telemetry", {}).get("OTLPExporter", {}).get("tracesEndpoint")  # type: ignore
         )
@@ -73,6 +115,14 @@ class DBOSTracer:
     def set_provider(self, provider: "Optional[TracerProvider]") -> None:
         self.provider = provider
 
+    def _resolve_attribute_name(self, key: str) -> str:
+        """Map a legacy DBOS attribute name to the name that should be
+        emitted on the span, per `otel_attribute_format`. Returns the
+        original key for unknown attributes."""
+        if self.otel_attribute_format == "semconv":
+            return _LEGACY_TO_SEMCONV.get(key, key)
+        return key
+
     def start_span(
         self, attributes: "TracedAttributes", parent: "Optional[Span]" = None
     ) -> "Span":
@@ -90,8 +140,10 @@ class DBOSTracer:
         attributes["executorID"] = GlobalParams.executor_id
         for k, v in attributes.items():
             if k != "name" and v is not None and isinstance(v, (str, bool, int, float)):
-                span.set_attribute(k, v)
+                span.set_attribute(self._resolve_attribute_name(k), v)
         for k, v in self.otlp_attributes.items():
+            # User-provided custom attributes are passed through verbatim;
+            # they don't go through the legacy/semconv mapping.
             span.set_attribute(k, v)
         return span
 
