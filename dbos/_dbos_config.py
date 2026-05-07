@@ -1,7 +1,7 @@
 import os
 import re
 from importlib import resources
-from typing import Any, Dict, List, Optional, TypedDict, cast
+from typing import Any, Dict, List, Literal, Optional, TypedDict, cast
 
 import sqlalchemy as sa
 import yaml
@@ -47,6 +47,11 @@ class DBOSConfig(TypedDict, total=False):
         use_listen_notify (bool): Whether to use LISTEN/NOTIFY or polling to listen for notifications and events.  Defaults to True. As this affects migrations, may not be changed after the system database is first created.
         notification_listener_polling_interval_sec (float): Polling interval in seconds for the notification listener background process. Defaults to 1.0. Minimum value is 0.001. Lower values can speed up test execution.
         scheduler_polling_interval_sec (float): Polling interval in seconds for the scheduler thread to detect new workflow schedules. Defaults to 30.0.
+        otel_attribute_format (Literal["legacy", "semconv"]): How span attribute names are emitted to OTLP.
+            "legacy" (default) keeps DBOS's original names (e.g. operationUUID, applicationID) for backward
+            compatibility with existing dashboards and the TypeScript Transact SDK. "semconv" emits the
+            OpenTelemetry-style equivalents under the dbos.* namespace (e.g. dbos.operation.uuid,
+            dbos.application.id), per https://opentelemetry.io/docs/specs/semconv/general/attribute-naming/.
     """
 
     name: str
@@ -77,6 +82,7 @@ class DBOSConfig(TypedDict, total=False):
     max_executor_threads: Optional[int]
     notification_listener_polling_interval_sec: Optional[float]
     scheduler_polling_interval_sec: Optional[float]
+    otel_attribute_format: Optional[Literal["legacy", "semconv"]]
 
 
 class RuntimeConfig(TypedDict, total=False):
@@ -112,6 +118,7 @@ class TelemetryConfig(TypedDict, total=False):
     OTLPExporter: Optional[OTLPExporterConfig]
     otlp_attributes: Optional[dict[str, str]]
     disable_otlp: bool
+    otel_attribute_format: Optional[Literal["legacy", "semconv"]]
 
 
 class ConfigFile(TypedDict, total=False):
@@ -194,6 +201,7 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         "OTLPExporter": {"tracesEndpoint": [], "logsEndpoint": []},
         "otlp_attributes": config.get("otlp_attributes", {}),
         "disable_otlp": disable_otlp,
+        "otel_attribute_format": config.get("otel_attribute_format", "legacy"),
     }
     # For mypy
     assert telemetry["OTLPExporter"] is not None
