@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from dbos._core import StepOptions
-from dbos._dbos import DBOS, IsolationLevel
+from dbos._dbos import DBOS, IsolationLevel, check_async
 
 from ._logger import dbos_logger
 from ._serialization import Serializer
@@ -115,6 +115,33 @@ class AsyncDatasource(ABC):
         """Run database migrations specific to the database type."""
         pass
 
+    @overload
+    async def run_tx_async(
+        self,
+        ds_options: Optional[DatasourceOptions],
+        func: Callable[P, Coroutine[Any, Any, R]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R: ...
+
+    @overload
+    async def run_tx_async(
+        self,
+        ds_options: Optional[DatasourceOptions],
+        func: Callable[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R: ...
+
+    async def run_tx_async(
+        self,
+        ds_options: Optional[DatasourceOptions],
+        func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R:
+        raise NotImplementedError()
+
 
 class SyncDatasource(ABC):
     @staticmethod
@@ -201,3 +228,33 @@ class SyncDatasource(ABC):
     def run_migrations(self) -> None:
         """Run database migrations specific to the database type."""
         pass
+
+    @overload
+    def run_tx(
+        self,
+        ds_options: Optional[DatasourceOptions],
+        func: Callable[P, Coroutine[Any, Any, R]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R: ...
+
+    @overload
+    def run_tx(
+        self,
+        ds_options: Optional[DatasourceOptions],
+        func: Callable[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R: ...
+
+    def run_tx(
+        self,
+        ds_options: Optional[DatasourceOptions],
+        func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R:
+        """Invoke a step function and checkpoint its result."""
+        check_async("run_step")
+
+        raise NotImplementedError()
