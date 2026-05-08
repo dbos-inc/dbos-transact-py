@@ -45,11 +45,11 @@ class PostgresAsyncDatasource(AsyncDatasource):
             await pg_ds_engine.dispose()
 
         async with self.engine.begin() as conn:
-            await conn.execute(sa.text(f'CREATE SCHEMA "{self.schema}"'))
+            await conn.execute(sa.text(f'CREATE SCHEMA IF NOT EXISTS "{self.schema}"'))
             await conn.execute(
                 sa.text(
                     f"""
-                    CREATE TABLE IF NOT EXISTS {self.schema}".datasource_outputs (
+                    CREATE TABLE IF NOT EXISTS "{self.schema}".datasource_outputs (
                         workflow_id TEXT NOT NULL,
                         step_id INT NOT NULL,
                         output TEXT,
@@ -74,11 +74,11 @@ class PostgresSyncDatasource(SyncDatasource):
     def run_migrations(self) -> None:
         """Run database migrations specific to the database type."""
         with self.engine.begin() as conn:
-            conn.execute(sa.text(f'CREATE SCHEMA "{self.schema}"'))
+            conn.execute(sa.text(f'CREATE SCHEMA IF NOT EXISTS "{self.schema}"'))
             conn.execute(
                 sa.text(
                     f"""
-                    CREATE TABLE IF NOT EXISTS {self.schema}".datasource_outputs (
+                    CREATE TABLE IF NOT EXISTS "{self.schema}".datasource_outputs (
                         workflow_id TEXT NOT NULL,
                         step_id INT NOT NULL,
                         output TEXT,

@@ -55,14 +55,14 @@ class SqliteAsyncDatasource(AsyncDatasource):
                 await conn.execute(
                     sa.text(
                         f"""
-                        CREATE TABLE dbos_datasource_outputs (
+                        CREATE TABLE datasource_outputs (
                             workflow_id TEXT NOT NULL,
                             step_id INTEGER NOT NULL,
                             output TEXT,
                             error TEXT,
                             serialization TEXT,
                             created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
-                            PRIMARY KEY (workflow_uuid, function_id),
+                            PRIMARY KEY (workflow_id, step_id)
                         )"""
                     )
                 )
@@ -110,6 +110,7 @@ class SqliteSyncDatasource(SyncDatasource):
                             error TEXT,
                             serialization TEXT,
                             created_at BIGINT NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
+                            PRIMARY KEY (workflow_id, step_id)
                         )"""
                     )
                 )
