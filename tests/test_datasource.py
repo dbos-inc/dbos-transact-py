@@ -327,6 +327,46 @@ async def test_async_ds_decorator_bare_run(
 
 
 @pytest.mark.asyncio
+async def test_async_ds_decorator_with_options(
+    pg_ds_url: str, async_ds_schema: str
+) -> None:
+    """@ds.transaction accepts isolation_level and name options."""
+    ds = await AsyncDatasource.create(pg_ds_url, schema=async_ds_schema)
+    counter = {"n": 0}
+
+    @ds.transaction(isolation_level="SERIALIZABLE", name="my_step")
+    async def increment(amount: int) -> int:
+        counter["n"] += amount
+        return counter["n"]
+
+    try:
+        assert await increment(7) == 7
+    finally:
+        async with ds.engine.begin() as conn:
+            await conn.execute(
+                text(f'DROP SCHEMA IF EXISTS "{async_ds_schema}" CASCADE')
+            )
+        await ds.engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_async_ds_sql_session_outside_tx_raises(
+    pg_ds_url: str, async_ds_schema: str
+) -> None:
+    """sql_session() outside an async datasource transaction must raise."""
+    ds = await AsyncDatasource.create(pg_ds_url, schema=async_ds_schema)
+    try:
+        with pytest.raises(AssertionError):
+            ds.sql_session()
+    finally:
+        async with ds.engine.begin() as conn:
+            await conn.execute(
+                text(f'DROP SCHEMA IF EXISTS "{async_ds_schema}" CASCADE')
+            )
+        await ds.engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_async_ds_rejects_sync_func(pg_ds_url: str, async_ds_schema: str) -> None:
     """run_tx_step_async with a non-coroutine must raise."""
     ds = await AsyncDatasource.create(pg_ds_url, schema=async_ds_schema)
@@ -411,6 +451,43 @@ async def test_async_ds_oaoo(
 
 
 @pytest.mark.asyncio
+async def test_async_ds_decorator_oaoo(
+    require_pg: str, dbos: DBOS, pg_ds_url: str, async_ds_schema: str
+) -> None:
+    """@ds.transaction inside a workflow records and replays the result."""
+    ds = await AsyncDatasource.create(pg_ds_url, schema=async_ds_schema)
+    call_count = {"n": 0}
+
+    @ds.transaction
+    async def decorated_step(value: str) -> str:
+        call_count["n"] += 1
+        return f"decorated:{value}"
+
+    @DBOS.workflow()
+    async def my_workflow(value: str) -> str:
+        return await decorated_step(value)
+
+    wfid = str(uuid.uuid4())
+
+    try:
+        with SetWorkflowID(wfid):
+            result = await my_workflow("world")
+        assert result == "decorated:world"
+        assert call_count["n"] == 1
+
+        with SetWorkflowID(wfid):
+            result = await my_workflow("world")
+        assert result == "decorated:world"
+        assert call_count["n"] == 1
+    finally:
+        async with ds.engine.begin() as conn:
+            await conn.execute(
+                text(f'DROP SCHEMA IF EXISTS "{async_ds_schema}" CASCADE')
+            )
+        await ds.engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_async_ds_error_oaoo(
     require_pg: str, dbos: DBOS, pg_ds_url: str, async_ds_schema: str
 ) -> None:
@@ -438,6 +515,48 @@ async def test_async_ds_error_oaoo(
             with pytest.raises(Exception, match="async ds step failed"):
                 await my_workflow()
         assert call_count["n"] == 1  # Not called again
+    finally:
+        async with ds.engine.begin() as conn:
+            await conn.execute(
+                text(f'DROP SCHEMA IF EXISTS "{async_ds_schema}" CASCADE')
+            )
+        await ds.engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_async_ds_multiple_steps_in_workflow(
+    require_pg: str, dbos: DBOS, pg_ds_url: str, async_ds_schema: str
+) -> None:
+    """Multiple async datasource steps in one workflow each get their own step_id."""
+    ds = await AsyncDatasource.create(pg_ds_url, schema=async_ds_schema)
+    call_counts = {"a": 0, "b": 0}
+
+    async def step_a() -> str:
+        call_counts["a"] += 1
+        return "A"
+
+    async def step_b() -> str:
+        call_counts["b"] += 1
+        return "B"
+
+    @DBOS.workflow()
+    async def my_workflow() -> str:
+        r1 = await ds.run_tx_step_async(None, step_a)
+        r2 = await ds.run_tx_step_async(None, step_b)
+        return r1 + r2
+
+    wfid = str(uuid.uuid4())
+
+    try:
+        with SetWorkflowID(wfid):
+            result = await my_workflow()
+        assert result == "AB"
+
+        with SetWorkflowID(wfid):
+            result = await my_workflow()
+        assert result == "AB"
+        assert call_counts["a"] == 1
+        assert call_counts["b"] == 1
     finally:
         async with ds.engine.begin() as conn:
             await conn.execute(

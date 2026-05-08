@@ -42,6 +42,29 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
+def _parse_ds_options(
+    ds_options: Optional["DatasourceOptions"], func: Callable
+) -> "tuple[str, str]":
+    name = (ds_options.get("name") if ds_options else None) or func.__qualname__
+    isolation_level: str = (
+        ds_options.get("isolation_level") if ds_options else None
+    ) or "SERIALIZABLE"
+    return name, isolation_level
+
+
+def _replay_recorded(recorded: "RecordedResult", serializer: "Serializer") -> Any:
+    if recorded["error"]:
+        raise deserialize_exception(
+            recorded["error"], recorded["serialization"], serializer
+        )
+    elif recorded["output"] is not None:
+        return deserialize_value(
+            recorded["output"], recorded["serialization"], serializer
+        )
+    else:
+        raise DBOSException("Datasource recorded output and error are both None")
+
+
 class DatasourceOptions(TypedDict, total=False):
     name: Optional[str]
     isolation_level: Optional[IsolationLevel]
@@ -202,10 +225,7 @@ class AsyncDatasource(ABC):
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> R:
-        name = (ds_options.get("name") if ds_options else None) or func.__qualname__
-        isolation_level: str = (
-            ds_options.get("isolation_level") if ds_options else None
-        ) or "SERIALIZABLE"
+        name, isolation_level = _parse_ds_options(ds_options, func)
 
         if not inspect.iscoroutinefunction(func):
             raise DBOSException(
@@ -224,23 +244,7 @@ class AsyncDatasource(ABC):
             step_id = step_ctx.function_id
             recorded = await self._check_execution(workflow_id, step_id)
             if recorded is not None:
-                if recorded["error"]:
-                    raise deserialize_exception(
-                        recorded["error"], recorded["serialization"], self.serializer
-                    )
-                elif recorded["output"] is not None:
-                    return cast(
-                        R,
-                        deserialize_value(
-                            recorded["output"],
-                            recorded["serialization"],
-                            self.serializer,
-                        ),
-                    )
-                else:
-                    raise DBOSException(
-                        "Datasource recorded output and error are both None"
-                    )
+                return cast(R, _replay_recorded(recorded, self.serializer))
 
         output: R
         with DBOSContextEnsure() as exec_ctx:
@@ -462,10 +466,7 @@ class SyncDatasource(ABC):
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> R:
-        name = (ds_options.get("name") if ds_options else None) or func.__qualname__
-        isolation_level: str = (
-            ds_options.get("isolation_level") if ds_options else None
-        ) or "SERIALIZABLE"
+        name, isolation_level = _parse_ds_options(ds_options, func)
 
         if inspect.iscoroutinefunction(func):
             raise DBOSException(
@@ -484,23 +485,7 @@ class SyncDatasource(ABC):
             step_id = step_ctx.function_id
             recorded = self._check_execution(workflow_id, step_id)
             if recorded is not None:
-                if recorded["error"]:
-                    raise deserialize_exception(
-                        recorded["error"], recorded["serialization"], self.serializer
-                    )
-                elif recorded["output"] is not None:
-                    return cast(
-                        R,
-                        deserialize_value(
-                            recorded["output"],
-                            recorded["serialization"],
-                            self.serializer,
-                        ),
-                    )
-                else:
-                    raise DBOSException(
-                        "Datasource recorded output and error are both None"
-                    )
+                return cast(R, _replay_recorded(recorded, self.serializer))
 
         output: R
         with DBOSContextEnsure() as exec_ctx:
