@@ -12,7 +12,6 @@ dependencies = [
     "websockets>=14.0",
     "typer-slim>=0.17.4",
     "sqlalchemy>=2.0.43",
-    "aiosqlite>=0.20.0",
 ]
 requires-python = ">=3.10"
 readme = "README.md"
@@ -48,6 +47,9 @@ otel = [
 ]
 validation = [
     "pydantic>=2.0",
+]
+asyncsqlite = [
+    "aiosqlite>=0.20.0",
 ]
 [build-system]
 requires = ["pdm-backend"]
@@ -105,5 +107,6 @@ dev = [
     "fastapi>=0.121.0",
     "httpx>=0.28.1",
     "psycopg2-binary>=2.9.11",
+    "aiosqlite>=0.20.0",
     "sqlalchemy-cockroachdb>=2.0.3",
 ]
