@@ -99,7 +99,7 @@ class DatasourceOptions(TypedDict, total=False):
     isolation_level: Optional[IsolationLevel]
 
 
-class AsyncDatasource(ABC):
+class AsyncSQLAlchemyDatasource(ABC):
 
     def __init__(
         self,
@@ -136,7 +136,7 @@ class AsyncDatasource(ABC):
         engine: Optional[AsyncEngine] = None,
         schema: Optional[str] = None,
         serializer: Optional[Serializer] = None,
-    ) -> "AsyncDatasource":
+    ) -> "AsyncSQLAlchemyDatasource ":
         if serializer is None:
             serializer = DBOSDefaultSerializer
         if engine_kwargs is None:
@@ -144,7 +144,7 @@ class AsyncDatasource(ABC):
         if database_url.startswith("sqlite"):
             from ._datasource_sqlite import SqliteAsyncDatasource
 
-            instance: AsyncDatasource = SqliteAsyncDatasource(
+            instance: AsyncSQLAlchemyDatasource = SqliteAsyncDatasource(
                 database_url=database_url,
                 engine_kwargs=engine_kwargs,
                 engine=engine,
@@ -356,7 +356,7 @@ class AsyncDatasource(ABC):
         return decorator
 
 
-class SyncDatasource(ABC):
+class SQLAlchemyDatasource(ABC):
 
     def __init__(
         self,
@@ -393,7 +393,7 @@ class SyncDatasource(ABC):
         engine: Optional[sa.Engine] = None,
         schema: Optional[str] = None,
         serializer: Optional[Serializer] = None,
-    ) -> "SyncDatasource":
+    ) -> "SQLAlchemyDatasource ":
         if serializer is None:
             serializer = DBOSDefaultSerializer
         if engine_kwargs is None:
@@ -401,7 +401,7 @@ class SyncDatasource(ABC):
         if database_url.startswith("sqlite"):
             from ._datasource_sqlite import SqliteSyncDatasource
 
-            instance: SyncDatasource = SqliteSyncDatasource(
+            instance: SQLAlchemyDatasource = SqliteSyncDatasource(
                 database_url=database_url,
                 engine_kwargs=engine_kwargs,
                 engine=engine,

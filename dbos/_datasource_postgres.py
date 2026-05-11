@@ -4,7 +4,7 @@ import sqlalchemy as sa
 from sqlalchemy import URL
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from dbos._datasource import AsyncDatasource, SyncDatasource
+from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 
 from ._logger import dbos_logger
 
@@ -32,7 +32,7 @@ def _table_sql(schema: str) -> sa.TextClause:
     )
 
 
-class PostgresAsyncDatasource(AsyncDatasource):
+class PostgresAsyncDatasource(AsyncSQLAlchemyDatasource):
     def _create_engine(
         self, database_url: str, engine_kwargs: Dict[str, Any]
     ) -> AsyncEngine:
@@ -47,7 +47,7 @@ class PostgresAsyncDatasource(AsyncDatasource):
             await conn.execute(_table_sql(self.schema))
 
 
-class PostgresSyncDatasource(SyncDatasource):
+class PostgresSyncDatasource(SQLAlchemyDatasource):
     def _create_engine(
         self, database_url: str, engine_kwargs: Dict[str, Any]
     ) -> sa.Engine:

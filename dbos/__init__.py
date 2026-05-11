@@ -8,6 +8,7 @@ from ._context import (
     SetWorkflowTimeout,
 )
 from ._core import StepOptions
+from ._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 from ._dbos import (
     DBOS,
     DBOSConfiguredInstance,
@@ -69,4 +70,6 @@ __all__ = [
     "pydantic_args_validator",
     "make_pydantic_args_validator",
     "run_dbos_database_migrations",
+    "SQLAlchemyDatasource",
+    "AsyncSQLAlchemyDatasource",
 ]

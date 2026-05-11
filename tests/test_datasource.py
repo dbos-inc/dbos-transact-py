@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy import text
 
 from dbos import DBOS, SetWorkflowID
-from dbos._datasource import AsyncDatasource, SyncDatasource
+from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 from dbos._error import DBOSException
 from dbos._schemas.datasource_database import DatasourceSchema
 from dbos._schemas.system_database import SystemSchema
@@ -33,7 +33,9 @@ def _skip_if_pg_unreachable(raw_pg_url: str) -> None:
         pytest.skip("PostgreSQL not reachable")
 
 
-def _check_both_tables(ds: SyncDatasource, dbos_instance: DBOS, wfid: str) -> None:
+def _check_both_tables(
+    ds: SQLAlchemyDatasource, dbos_instance: DBOS, wfid: str
+) -> None:
     with ds.engine.connect() as conn:
         ds_row = conn.execute(
             sa.select(
@@ -58,7 +60,7 @@ def _check_both_tables(ds: SyncDatasource, dbos_instance: DBOS, wfid: str) -> No
 
 
 async def _async_check_both_tables(
-    ds: AsyncDatasource, dbos_instance: DBOS, wfid: str
+    ds: AsyncSQLAlchemyDatasource, dbos_instance: DBOS, wfid: str
 ) -> None:
     async with ds.engine.connect() as conn:
         ds_row = (
@@ -93,9 +95,9 @@ async def _async_check_both_tables(
 @pytest.fixture(params=["sqlite", "pg"])
 def sync_ds(
     request: pytest.FixtureRequest, tmp_path: Any
-) -> Generator[SyncDatasource, None, None]:
+) -> Generator[SQLAlchemyDatasource, None, None]:
     if request.param == "sqlite":
-        ds = SyncDatasource.create(f"sqlite:///{tmp_path}/ds_test.sqlite")
+        ds = SQLAlchemyDatasource.create(f"sqlite:///{tmp_path}/ds_test.sqlite")
         yield ds
         if ds.created_engine:
             ds.engine.dispose()
@@ -106,7 +108,7 @@ def sync_ds(
             pytest.skip("not a PostgreSQL environment")
         _skip_if_pg_unreachable(url)
         schema = f"ds_test_{uuid.uuid4().hex[:8]}"
-        ds = SyncDatasource.create(
+        ds = SQLAlchemyDatasource.create(
             url.replace("postgresql://", "postgresql+psycopg://"), schema=schema
         )
         yield ds
@@ -119,9 +121,9 @@ def sync_ds(
 @pytest_asyncio.fixture(params=["sqlite", "pg"])
 async def async_ds(
     request: pytest.FixtureRequest, tmp_path: Any
-) -> AsyncGenerator[AsyncDatasource, None]:
+) -> AsyncGenerator[AsyncSQLAlchemyDatasource, None]:
     if request.param == "sqlite":
-        ds = await AsyncDatasource.create(
+        ds = await AsyncSQLAlchemyDatasource.create(
             f"sqlite+aiosqlite:///{tmp_path}/async_ds_test.sqlite"
         )
         yield ds
@@ -133,7 +135,7 @@ async def async_ds(
             pytest.skip("not a PostgreSQL environment")
         _skip_if_pg_unreachable(url)
         schema = f"ds_test_{uuid.uuid4().hex[:8]}"
-        ds = await AsyncDatasource.create(
+        ds = await AsyncSQLAlchemyDatasource.create(
             url.replace("postgresql://", "postgresql+psycopg://"), schema=schema
         )
         yield ds
@@ -147,7 +149,7 @@ async def async_ds(
 # ---------------------------------------------------------------------------
 
 
-def test_sync_ds_bare_run(sync_ds: SyncDatasource) -> None:
+def test_sync_ds_bare_run(sync_ds: SQLAlchemyDatasource) -> None:
     """run_tx_step outside a workflow executes the function transactionally."""
     counter = {"n": 0}
 
@@ -163,7 +165,7 @@ def test_sync_ds_bare_run(sync_ds: SyncDatasource) -> None:
     assert result == 8
 
 
-def test_sync_ds_decorator_bare_run(sync_ds: SyncDatasource) -> None:
+def test_sync_ds_decorator_bare_run(sync_ds: SQLAlchemyDatasource) -> None:
     """@ds.transaction outside a workflow executes the function transactionally."""
     counter = {"n": 0}
 
@@ -178,7 +180,7 @@ def test_sync_ds_decorator_bare_run(sync_ds: SyncDatasource) -> None:
     assert increment(5) == 15
 
 
-def test_sync_ds_decorator_with_options(sync_ds: SyncDatasource) -> None:
+def test_sync_ds_decorator_with_options(sync_ds: SQLAlchemyDatasource) -> None:
     """@ds.transaction accepts isolation_level and name options."""
     counter = {"n": 0}
 
@@ -190,13 +192,13 @@ def test_sync_ds_decorator_with_options(sync_ds: SyncDatasource) -> None:
     assert increment(7) == 7
 
 
-def test_sync_ds_sql_session_outside_tx_raises(sync_ds: SyncDatasource) -> None:
+def test_sync_ds_sql_session_outside_tx_raises(sync_ds: SQLAlchemyDatasource) -> None:
     """sql_session() outside a datasource transaction must raise."""
     with pytest.raises(AssertionError):
         sync_ds.sql_session()
 
 
-def test_sync_ds_rejects_coroutine(sync_ds: SyncDatasource) -> None:
+def test_sync_ds_rejects_coroutine(sync_ds: SQLAlchemyDatasource) -> None:
     """run_tx_step with a coroutine function must raise immediately."""
 
     async def my_async_func() -> str:
@@ -207,7 +209,7 @@ def test_sync_ds_rejects_coroutine(sync_ds: SyncDatasource) -> None:
 
 
 def test_sync_ds_transaction_decorator_rejects_coroutine(
-    sync_ds: SyncDatasource,
+    sync_ds: SQLAlchemyDatasource,
 ) -> None:
     """@ds.transaction on a coroutine must raise at decoration time."""
     with pytest.raises(DBOSException, match="coroutine"):
@@ -222,7 +224,7 @@ def test_sync_ds_transaction_decorator_rejects_coroutine(
 # ---------------------------------------------------------------------------
 
 
-def test_sync_ds_oaoo(dbos: DBOS, sync_ds: SyncDatasource) -> None:
+def test_sync_ds_oaoo(dbos: DBOS, sync_ds: SQLAlchemyDatasource) -> None:
     """run_tx_step inside a workflow records the result and replays on retry."""
     call_count = {"n": 0}
 
@@ -247,7 +249,7 @@ def test_sync_ds_oaoo(dbos: DBOS, sync_ds: SyncDatasource) -> None:
     assert call_count["n"] == 1
 
 
-def test_sync_ds_decorator_oaoo(dbos: DBOS, sync_ds: SyncDatasource) -> None:
+def test_sync_ds_decorator_oaoo(dbos: DBOS, sync_ds: SQLAlchemyDatasource) -> None:
     """@ds.transaction inside a workflow records and replays the result."""
     call_count = {"n": 0}
 
@@ -273,7 +275,7 @@ def test_sync_ds_decorator_oaoo(dbos: DBOS, sync_ds: SyncDatasource) -> None:
     assert call_count["n"] == 1
 
 
-def test_sync_ds_error_oaoo(dbos: DBOS, sync_ds: SyncDatasource) -> None:
+def test_sync_ds_error_oaoo(dbos: DBOS, sync_ds: SQLAlchemyDatasource) -> None:
     """When a datasource step raises, the error is recorded and replayed."""
     call_count = {"n": 0}
 
@@ -299,7 +301,7 @@ def test_sync_ds_error_oaoo(dbos: DBOS, sync_ds: SyncDatasource) -> None:
 
 
 def test_sync_ds_multiple_steps_in_workflow(
-    dbos: DBOS, sync_ds: SyncDatasource
+    dbos: DBOS, sync_ds: SQLAlchemyDatasource
 ) -> None:
     """Multiple datasource steps in one workflow each get their own step_id."""
     call_counts = {"a": 0, "b": 0}
@@ -331,7 +333,7 @@ def test_sync_ds_multiple_steps_in_workflow(
     assert call_counts["b"] == 1
 
 
-def test_sync_ds_writes_both_tables(dbos: DBOS, sync_ds: SyncDatasource) -> None:
+def test_sync_ds_writes_both_tables(dbos: DBOS, sync_ds: SQLAlchemyDatasource) -> None:
     """Datasource step writes to both datasource_outputs and operation_outputs."""
 
     def step_fn() -> str:
@@ -348,7 +350,9 @@ def test_sync_ds_writes_both_tables(dbos: DBOS, sync_ds: SyncDatasource) -> None
     _check_both_tables(sync_ds, dbos, wfid)
 
 
-def test_sync_ds_recovers_from_sysdb_loss(dbos: DBOS, sync_ds: SyncDatasource) -> None:
+def test_sync_ds_recovers_from_sysdb_loss(
+    dbos: DBOS, sync_ds: SQLAlchemyDatasource
+) -> None:
     """datasource_outputs is the source of truth when the sysdb step record is lost.
 
     Simulates the crash window: datasource_outputs was written atomically inside
@@ -397,7 +401,7 @@ def test_sync_ds_recovers_from_sysdb_loss(dbos: DBOS, sync_ds: SyncDatasource) -
 
 
 @pytest.mark.asyncio
-async def test_async_ds_bare_run(async_ds: AsyncDatasource) -> None:
+async def test_async_ds_bare_run(async_ds: AsyncSQLAlchemyDatasource) -> None:
     """run_tx_step_async outside a workflow executes the function transactionally."""
     counter = {"n": 0}
 
@@ -414,7 +418,7 @@ async def test_async_ds_bare_run(async_ds: AsyncDatasource) -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_ds_decorator_bare_run(async_ds: AsyncDatasource) -> None:
+async def test_async_ds_decorator_bare_run(async_ds: AsyncSQLAlchemyDatasource) -> None:
     """@ds.transaction on an async function works outside a workflow."""
     counter = {"n": 0}
 
@@ -430,7 +434,9 @@ async def test_async_ds_decorator_bare_run(async_ds: AsyncDatasource) -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_ds_decorator_with_options(async_ds: AsyncDatasource) -> None:
+async def test_async_ds_decorator_with_options(
+    async_ds: AsyncSQLAlchemyDatasource,
+) -> None:
     """@ds.transaction accepts isolation_level and name options."""
     counter = {"n": 0}
 
@@ -444,7 +450,7 @@ async def test_async_ds_decorator_with_options(async_ds: AsyncDatasource) -> Non
 
 @pytest.mark.asyncio
 async def test_async_ds_sql_session_outside_tx_raises(
-    async_ds: AsyncDatasource,
+    async_ds: AsyncSQLAlchemyDatasource,
 ) -> None:
     """sql_session() outside an async datasource transaction must raise."""
     with pytest.raises(AssertionError):
@@ -452,7 +458,7 @@ async def test_async_ds_sql_session_outside_tx_raises(
 
 
 @pytest.mark.asyncio
-async def test_async_ds_rejects_sync_func(async_ds: AsyncDatasource) -> None:
+async def test_async_ds_rejects_sync_func(async_ds: AsyncSQLAlchemyDatasource) -> None:
     """run_tx_step_async with a non-coroutine must raise."""
 
     def sync_func() -> str:
@@ -464,7 +470,7 @@ async def test_async_ds_rejects_sync_func(async_ds: AsyncDatasource) -> None:
 
 @pytest.mark.asyncio
 async def test_async_ds_transaction_decorator_rejects_sync(
-    async_ds: AsyncDatasource,
+    async_ds: AsyncSQLAlchemyDatasource,
 ) -> None:
     """@ds.transaction on a sync function must raise at decoration time."""
     with pytest.raises(DBOSException, match="coroutine"):
@@ -480,7 +486,7 @@ async def test_async_ds_transaction_decorator_rejects_sync(
 
 
 @pytest.mark.asyncio
-async def test_async_ds_oaoo(dbos: DBOS, async_ds: AsyncDatasource) -> None:
+async def test_async_ds_oaoo(dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource) -> None:
     """run_tx_step_async inside a workflow records the result and replays on retry."""
     call_count = {"n": 0}
 
@@ -508,7 +514,9 @@ async def test_async_ds_oaoo(dbos: DBOS, async_ds: AsyncDatasource) -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_ds_decorator_oaoo(dbos: DBOS, async_ds: AsyncDatasource) -> None:
+async def test_async_ds_decorator_oaoo(
+    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource
+) -> None:
     """@ds.transaction inside a workflow records and replays the result."""
     call_count = {"n": 0}
 
@@ -535,7 +543,9 @@ async def test_async_ds_decorator_oaoo(dbos: DBOS, async_ds: AsyncDatasource) ->
 
 
 @pytest.mark.asyncio
-async def test_async_ds_error_oaoo(dbos: DBOS, async_ds: AsyncDatasource) -> None:
+async def test_async_ds_error_oaoo(
+    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource
+) -> None:
     """Async datasource step error is recorded and replayed without re-executing."""
     call_count = {"n": 0}
 
@@ -562,7 +572,7 @@ async def test_async_ds_error_oaoo(dbos: DBOS, async_ds: AsyncDatasource) -> Non
 
 @pytest.mark.asyncio
 async def test_async_ds_multiple_steps_in_workflow(
-    dbos: DBOS, async_ds: AsyncDatasource
+    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource
 ) -> None:
     """Multiple async datasource steps in one workflow each get their own step_id."""
     call_counts = {"a": 0, "b": 0}
@@ -596,7 +606,7 @@ async def test_async_ds_multiple_steps_in_workflow(
 
 @pytest.mark.asyncio
 async def test_async_ds_writes_both_tables(
-    dbos: DBOS, async_ds: AsyncDatasource
+    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource
 ) -> None:
     """Async datasource step writes to both datasource_outputs and operation_outputs."""
 
@@ -616,7 +626,7 @@ async def test_async_ds_writes_both_tables(
 
 @pytest.mark.asyncio
 async def test_async_ds_recovers_from_sysdb_loss(
-    dbos: DBOS, async_ds: AsyncDatasource
+    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource
 ) -> None:
     """datasource_outputs is the source of truth when the sysdb step record is lost.
 

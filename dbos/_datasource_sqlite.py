@@ -4,7 +4,7 @@ import sqlalchemy as sa
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from dbos._datasource import AsyncDatasource, SyncDatasource
+from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 from dbos._migration import get_sqlite_timestamp_expr
 from dbos._schemas.datasource_database import DatasourceSchema
 
@@ -45,7 +45,7 @@ def _filter_sqlite_kwargs(engine_kwargs: Dict[str, Any]) -> Dict[str, Any]:
     return kwargs
 
 
-class SqliteAsyncDatasource(AsyncDatasource):
+class SqliteAsyncDatasource(AsyncSQLAlchemyDatasource):
     def _create_engine(
         self, database_url: str, engine_kwargs: Dict[str, Any]
     ) -> AsyncEngine:
@@ -70,7 +70,7 @@ class SqliteAsyncDatasource(AsyncDatasource):
                 await conn.execute(_CREATE_TABLE_SQL)
 
 
-class SqliteSyncDatasource(SyncDatasource):
+class SqliteSyncDatasource(SQLAlchemyDatasource):
     def _create_engine(
         self, database_url: str, engine_kwargs: Dict[str, Any]
     ) -> sa.Engine:
