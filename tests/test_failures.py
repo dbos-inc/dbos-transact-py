@@ -351,6 +351,79 @@ def test_step_retries(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
+def test_step_retries_no_final_sleep(dbos: DBOS) -> None:
+    # Regression test for #667: the retry loop must not sleep after the
+    # final failed attempt — otherwise DBOSMaxStepRetriesExceeded is delayed
+    # by a full backoff interval for nothing.
+    max_attempts = 3
+    interval_seconds = 1.0
+    backoff_rate = 2.0
+    # Useful backoffs total interval * (1 + backoff_rate) = 3.0s; a wasted
+    # final sleep would add another backoff_rate**(max_attempts-1) = 4.0s.
+    expected_max_seconds = 3.5
+    step_counter = 0
+
+    @DBOS.step(
+        retries_allowed=True,
+        interval_seconds=interval_seconds,
+        backoff_rate=backoff_rate,
+        max_attempts=max_attempts,
+    )
+    def failing_step() -> None:
+        nonlocal step_counter
+        step_counter += 1
+        raise Exception("fail")
+
+    @DBOS.workflow()
+    def failing_workflow() -> None:
+        failing_step()
+
+    start = time.monotonic()
+    with pytest.raises(DBOSMaxStepRetriesExceeded):
+        failing_workflow()
+    elapsed = time.monotonic() - start
+    assert step_counter == max_attempts
+    assert elapsed < expected_max_seconds, (
+        f"Retry loop took {elapsed:.2f}s; expected < {expected_max_seconds}s "
+        "(a wasted final sleep would push this past 7s)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_step_retries_no_final_sleep_async(dbos: DBOS) -> None:
+    # Async variant of the #667 regression test (covers Pending._retry).
+    max_attempts = 3
+    interval_seconds = 1.0
+    backoff_rate = 2.0
+    expected_max_seconds = 3.5
+    step_counter = 0
+
+    @DBOS.step(
+        retries_allowed=True,
+        interval_seconds=interval_seconds,
+        backoff_rate=backoff_rate,
+        max_attempts=max_attempts,
+    )
+    async def failing_step_async() -> None:
+        nonlocal step_counter
+        step_counter += 1
+        raise Exception("fail")
+
+    @DBOS.workflow()
+    async def failing_workflow_async() -> None:
+        await failing_step_async()
+
+    start = time.monotonic()
+    with pytest.raises(DBOSMaxStepRetriesExceeded):
+        await failing_workflow_async()
+    elapsed = time.monotonic() - start
+    assert step_counter == max_attempts
+    assert elapsed < expected_max_seconds, (
+        f"Retry loop took {elapsed:.2f}s; expected < {expected_max_seconds}s "
+        "(a wasted final sleep would push this past 7s)"
+    )
+
+
 class ShouldRetryFatalError(Exception):
     pass
 
