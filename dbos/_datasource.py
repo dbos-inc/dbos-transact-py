@@ -65,6 +65,33 @@ def _replay_recorded(recorded: "RecordedResult", serializer: "Serializer") -> An
         raise DBOSException("Datasource recorded output and error are both None")
 
 
+def _row_to_result(row: Any) -> Optional[RecordedResult]:
+    return (
+        None
+        if row is None
+        else {"output": row[0], "error": row[1], "serialization": row[2]}
+    )
+
+
+def _log_datasource_init(
+    name: str,
+    database_url: str,
+    engine_kwargs: Dict[str, Any],
+    has_engine: bool,
+) -> None:
+    if has_engine:
+        dbos_logger.info(f"Initializing {name} with custom engine")
+    else:
+        printable_url = sa.make_url(database_url).render_as_string(hide_password=True)
+        dbos_logger.info(f"Initializing DBOS {name} with URL: {printable_url}")
+        if not database_url.startswith("sqlite"):
+            dbos_logger.info(f"DBOS {name} engine parameters: {engine_kwargs}")
+
+
+def _resolve_schema(database_url: str, schema: Optional[str]) -> Optional[str]:
+    return None if database_url.startswith("sqlite") else (schema or "dbos")
+
+
 class DatasourceOptions(TypedDict, total=False):
     name: Optional[str]
     isolation_level: Optional[IsolationLevel]
@@ -84,25 +111,11 @@ class AsyncDatasource(ABC):
         import sqlalchemy.dialects.postgresql as pg
         import sqlalchemy.dialects.sqlite as sq
 
-        if engine:
-            dbos_logger.info("Initializing AsyncDatasource with custom engine")
-        else:
-            printable_url = sa.make_url(database_url).render_as_string(
-                hide_password=True
-            )
-            dbos_logger.info(
-                f"Initializing DBOS AsyncDatasource with URL: {printable_url}"
-            )
-            if not database_url.startswith("sqlite"):
-                dbos_logger.info(
-                    f"DBOS AsyncDatasource engine parameters: {engine_kwargs}"
-                )
-        self.dialect = sq if database_url.startswith("sqlite") else pg
-        self.schema = (
-            None
-            if database_url.startswith("sqlite")
-            else (schema if schema else "dbos")
+        _log_datasource_init(
+            "AsyncDatasource", database_url, engine_kwargs, bool(engine)
         )
+        self.dialect = sq if database_url.startswith("sqlite") else pg
+        self.schema = _resolve_schema(database_url, schema)
         DatasourceSchema.datasource_outputs.schema = self.schema
         if engine:
             self.engine = engine
@@ -180,12 +193,7 @@ class AsyncDatasource(ABC):
                     DatasourceSchema.datasource_outputs.c.step_id == step_id,
                 )
             )
-            row = result.first()
-            return (
-                None
-                if row is None
-                else {"output": row[0], "error": row[1], "serialization": row[2]}
-            )
+            return _row_to_result(result.first())
 
     async def _record_error(
         self,
@@ -327,25 +335,11 @@ class SyncDatasource(ABC):
         import sqlalchemy.dialects.postgresql as pg
         import sqlalchemy.dialects.sqlite as sq
 
-        if engine:
-            dbos_logger.info("Initializing SyncDatasource with custom engine")
-        else:
-            printable_url = sa.make_url(database_url).render_as_string(
-                hide_password=True
-            )
-            dbos_logger.info(
-                f"Initializing DBOS SyncDatasource with URL: {printable_url}"
-            )
-            if not database_url.startswith("sqlite"):
-                dbos_logger.info(
-                    f"DBOS SyncDatasource engine parameters: {engine_kwargs}"
-                )
-        self.dialect = sq if database_url.startswith("sqlite") else pg
-        self.schema = (
-            None
-            if database_url.startswith("sqlite")
-            else (schema if schema else "dbos")
+        _log_datasource_init(
+            "SyncDatasource", database_url, engine_kwargs, bool(engine)
         )
+        self.dialect = sq if database_url.startswith("sqlite") else pg
+        self.schema = _resolve_schema(database_url, schema)
         DatasourceSchema.datasource_outputs.schema = self.schema
         if engine:
             self.engine = engine
@@ -423,12 +417,7 @@ class SyncDatasource(ABC):
                     DatasourceSchema.datasource_outputs.c.step_id == step_id,
                 )
             )
-            row = result.first()
-            return (
-                None
-                if row is None
-                else {"output": row[0], "error": row[1], "serialization": row[2]}
-            )
+            return _row_to_result(result.first())
 
     def _record_error(
         self,

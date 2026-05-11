@@ -1,13 +1,11 @@
 from sqlalchemy import (
     BigInteger,
     Column,
-    Index,
     Integer,
     MetaData,
     PrimaryKeyConstraint,
     Table,
     Text,
-    text,
 )
 
 
