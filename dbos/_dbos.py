@@ -1031,7 +1031,7 @@ class DBOS:
                 step should be retried. If it returns False (or an awaitable resolving
                 to False), the exception is re-raised immediately without further
                 retries. Async validators are only supported for async steps.
-            preemptible(bool): If true, cancel the (async) step if its workflow is cancelled.
+            preemptible(bool): If True, cancel the (async) step if its workflow is cancelled.
                 Only supported for async steps.
 
         """

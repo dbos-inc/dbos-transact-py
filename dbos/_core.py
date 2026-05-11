@@ -315,9 +315,8 @@ class StepOptions(TypedDict, total=False):
             only supported for async steps.
 
         preemptible:
-            If True, run the (async) step alongside a poller that watches
-            the workflow's status and cancels the step task if the
-            workflow is cancelled. Only supported for async steps.
+            If True, cancel the (async) step if its workflow is cancelled.
+            Only supported for async steps.
     """
 
     name: Optional[str]
