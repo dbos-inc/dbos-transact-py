@@ -953,6 +953,20 @@ class DBOS:
         await cls._configure_asyncio_thread_pool()
         await asyncio.to_thread(cls.delete_queue, name)
 
+    @classmethod
+    def list_queues(cls) -> List[Queue]:
+        """
+        List all database-backed queues registered in the system database.
+        """
+        check_async("list_queues")
+        return _get_dbos_instance()._sys_db.list_queues()
+
+    @classmethod
+    async def list_queues_async(cls) -> List[Queue]:
+        """Async version of :meth:`list_queues`."""
+        await cls._configure_asyncio_thread_pool()
+        return await asyncio.to_thread(cls.list_queues)
+
     # Decorators for DBOS functionality
     @classmethod
     def workflow(
