@@ -313,55 +313,32 @@ async def test_bulk_async_workflow_management(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
-async def test_preemptible_step_cancels_on_workflow_cancel(dbos: DBOS) -> None:
-    """A preemptible async step is cancelled when the workflow is cancelled."""
-    step_started = asyncio.Event()
-    step_completed = False
-    step_cancelled = False
-
-    @DBOS.step(preemptible=True)
-    async def long_running_step() -> None:
-        nonlocal step_completed, step_cancelled
-        step_started.set()
-        try:
-            await asyncio.sleep(60)
-            step_completed = True
-        except asyncio.CancelledError:
-            step_cancelled = True
-            raise
-
-    @DBOS.workflow()
-    async def wf() -> None:
-        await long_running_step()
-
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        handle = await DBOS.start_workflow_async(wf)
-
-    await step_started.wait()
-    await DBOS.cancel_workflow_async(wfid)
-
-    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
-        await handle.get_result()
-
-    assert step_cancelled
-    assert not step_completed
-
-
-@pytest.mark.asyncio
-async def test_preemptible_step_resumes_after_cancel(dbos: DBOS) -> None:
-    """After preemption cancels a step, resuming the workflow re-runs the step."""
+async def test_preemptible_step_cancellation_and_resume(dbos: DBOS) -> None:
+    """End-to-end preemption: a preemptible step is cancelled mid-flight when
+    the workflow is cancelled (CancelledError observed inside the step, no
+    retry storm even with retries_allowed=True), and on resume the step is
+    re-run from scratch and completes successfully."""
     invocation_count = 0
-    sleep_event = asyncio.Event()
+    step_started = asyncio.Event()
+    first_invocation_cancelled = False
 
-    @DBOS.step(preemptible=True)
+    @DBOS.step(
+        preemptible=True,
+        retries_allowed=True,
+        max_attempts=5,
+        interval_seconds=0.01,
+    )
     async def long_running_step() -> str:
-        nonlocal invocation_count
+        nonlocal invocation_count, first_invocation_cancelled
         invocation_count += 1
         if invocation_count == 1:
-            sleep_event.set()
-            await asyncio.sleep(60)
-            return "should-not-reach"
+            step_started.set()
+            try:
+                await asyncio.sleep(60)
+                return "should-not-reach"
+            except asyncio.CancelledError:
+                first_invocation_cancelled = True
+                raise
         return "done"
 
     @DBOS.workflow()
@@ -372,19 +349,83 @@ async def test_preemptible_step_resumes_after_cancel(dbos: DBOS) -> None:
     with SetWorkflowID(wfid):
         handle = await DBOS.start_workflow_async(wf)
 
-    await sleep_event.wait()
+    await step_started.wait()
     await DBOS.cancel_workflow_async(wfid)
+
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         await handle.get_result()
+    assert first_invocation_cancelled
+    # No retry storm: cancellation must bypass the retry layer.
+    assert invocation_count == 1
 
     resumed = await DBOS.resume_workflow_async(wfid)
     assert (await resumed.get_result()) == "done"
     assert invocation_count == 2
 
 
+@pytest.mark.asyncio
+async def test_preemptible_step_normal_paths(dbos: DBOS) -> None:
+    """preemptible=True doesn't break normal step semantics: normal
+    exceptions still propagate, success returns the value."""
+
+    @DBOS.step(preemptible=True)
+    async def add_one(x: int) -> int:
+        return x + 1
+
+    @DBOS.step(preemptible=True)
+    async def boom() -> None:
+        raise ValueError("boom")
+
+    @DBOS.workflow()
+    async def ok_wf(x: int) -> int:
+        return await add_one(x)
+
+    @DBOS.workflow()
+    async def err_wf() -> None:
+        await boom()
+
+    assert (await ok_wf(41)) == 42
+    with pytest.raises(ValueError, match="boom"):
+        await err_wf()
+
+
 def test_preemptible_rejected_for_sync_step(dbos: DBOS) -> None:
+    """preemptible=True on a sync step is rejected at decoration time."""
     with pytest.raises(DBOSException):
 
         @DBOS.step(preemptible=True)
         def sync_step() -> None:
             pass
+
+
+@pytest.mark.asyncio
+async def test_preemptible_step_no_leak_on_outer_cancel(dbos: DBOS) -> None:
+    """If the outer coroutine running _run_preemptible_step is cancelled,
+    the inner step task is also cancelled (no leak)."""
+    from dbos._core import _run_preemptible_step
+
+    step_started = asyncio.Event()
+    step_cancelled = asyncio.Event()
+
+    async def long_step() -> None:
+        step_started.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            step_cancelled.set()
+            raise
+
+    # A workflow id that doesn't exist — the poller's status query returns
+    # None each time, so cancellation in this test comes only from the outer
+    # task being cancelled.
+    fake_wfid = "test-no-leak-" + str(uuid.uuid4())
+    outer = asyncio.create_task(
+        _run_preemptible_step(dbos, fake_wfid, long_step, (), {})
+    )
+    await step_started.wait()
+    outer.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await outer
+
+    # If the step task leaked, this would time out.
+    await asyncio.wait_for(step_cancelled.wait(), timeout=5.0)

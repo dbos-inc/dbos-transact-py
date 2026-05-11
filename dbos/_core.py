@@ -1579,6 +1579,14 @@ async def _run_preemptible_step(
                 )
             raise
     finally:
+        # Cancel both tasks so neither leaks if the outer coroutine itself
+        # was cancelled (or the step task is somehow still running).
+        if not step_task.done():
+            step_task.cancel()
+            try:
+                await step_task
+            except BaseException:
+                pass
         if not poller_task.done():
             poller_task.cancel()
             try:
