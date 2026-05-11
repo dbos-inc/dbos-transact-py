@@ -362,6 +362,15 @@ async def test_preemptible_step_cancellation_and_resume(dbos: DBOS) -> None:
     assert (await resumed.get_result()) == "done"
     assert invocation_count == 2
 
+    # After resume, the step should be recorded exactly once with the
+    # successful output — no leftover error checkpoint from the preempted
+    # first invocation.
+    steps = await DBOS.list_workflow_steps_async(wfid)
+    step_entries = [s for s in steps if "long_running_step" in s["function_name"]]
+    assert len(step_entries) == 1
+    assert step_entries[0]["output"] == "done"
+    assert step_entries[0]["error"] is None
+
 
 @pytest.mark.asyncio
 async def test_preemptible_step_normal_paths(dbos: DBOS) -> None:
