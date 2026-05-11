@@ -1,60 +1,29 @@
 """Tests for SyncDatasource and AsyncDatasource."""
 
 import uuid
-from typing import Any, Generator
-from urllib.parse import quote
+from typing import Any, AsyncGenerator, Generator
 
 import pytest
+import pytest_asyncio
 import sqlalchemy as sa
 from sqlalchemy import text
 
 from dbos import DBOS, SetWorkflowID
-from dbos._datasource import AsyncDatasource, DatasourceOptions, SyncDatasource
+from dbos._datasource import AsyncDatasource, SyncDatasource
 from dbos._error import DBOSException
-from tests.conftest import default_config, using_sqlite
+from dbos._schemas.datasource_database import DatasourceSchema
+from dbos._schemas.system_database import SystemSchema
+from tests.conftest import default_config
 
 # ---------------------------------------------------------------------------
-# Sync SQLite fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture()
-def sync_ds(tmp_path: Any) -> Generator[SyncDatasource, None, None]:
-    db_url = f"sqlite:///{tmp_path}/ds_test.sqlite"
-    ds = SyncDatasource.create(db_url)
-    yield ds
-    if ds.created_engine:
-        ds.engine.dispose()
-
-
-# ---------------------------------------------------------------------------
-# Async PG fixture (skipped when using SQLite)
+# Helpers
 # ---------------------------------------------------------------------------
 
 
-def _pg_ds_url() -> str:
-    cfg = default_config()
-    assert cfg["application_database_url"] is not None
-    # Use the same PG host/port/credentials but the same database (schema isolates data)
-    return (
-        cfg["application_database_url"]
-        .replace("postgresql://", "postgresql+psycopg://")
-        .replace("sqlite:///", "")  # No-op if already PG
-    )
-
-
-@pytest.fixture()
-def require_pg() -> str:
-    """Skip the test if SQLite mode or PG is not reachable. Use as first fixture arg
-    in tests that need PG so the skip fires before heavier fixtures (e.g. dbos) run."""
-    cfg = default_config()
-    assert cfg["application_database_url"] is not None
-    url = cfg["application_database_url"]
-    if not url.startswith("postgresql"):
-        pytest.skip("Skipping test when testing SQLite")
+def _skip_if_pg_unreachable(raw_pg_url: str) -> None:
     try:
         engine = sa.create_engine(
-            sa.make_url(url).set(drivername="postgresql+psycopg2"),
+            sa.make_url(raw_pg_url).set(drivername="postgresql+psycopg2"),
             connect_args={"connect_timeout": 3},
         )
         with engine.connect():
@@ -62,18 +31,115 @@ def require_pg() -> str:
         engine.dispose()
     except Exception:
         pytest.skip("PostgreSQL not reachable")
-    return url
 
 
-@pytest.fixture()
-def pg_ds_url(require_pg: str) -> str:
-    """PostgreSQL URL for datasource tests (skips when SQLite or PG unavailable)."""
-    return require_pg
+def _check_both_tables(ds: SyncDatasource, dbos_instance: DBOS, wfid: str) -> None:
+    with ds.engine.connect() as conn:
+        ds_row = conn.execute(
+            sa.select(
+                DatasourceSchema.datasource_outputs.c.step_id,
+                DatasourceSchema.datasource_outputs.c.output,
+            ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+        ).first()
+    assert ds_row is not None, "datasource_outputs row missing"
+    assert ds_row.step_id == 1
+    assert ds_row.output is not None
+
+    with dbos_instance._sys_db.engine.connect() as conn:
+        sys_row = conn.execute(
+            sa.select(
+                SystemSchema.operation_outputs.c.function_id,
+                SystemSchema.operation_outputs.c.output,
+            ).where(SystemSchema.operation_outputs.c.workflow_uuid == wfid)
+        ).first()
+    assert sys_row is not None, "operation_outputs row missing"
+    assert sys_row.function_id == 1
+    assert sys_row.output is not None
 
 
-@pytest.fixture()
-def async_ds_schema() -> str:
-    return f"ds_test_{uuid.uuid4().hex[:8]}"
+async def _async_check_both_tables(
+    ds: AsyncDatasource, dbos_instance: DBOS, wfid: str
+) -> None:
+    async with ds.engine.connect() as conn:
+        ds_row = (
+            await conn.execute(
+                sa.select(
+                    DatasourceSchema.datasource_outputs.c.step_id,
+                    DatasourceSchema.datasource_outputs.c.output,
+                ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+            )
+        ).first()
+    assert ds_row is not None, "datasource_outputs row missing"
+    assert ds_row.step_id == 1
+    assert ds_row.output is not None
+
+    with dbos_instance._sys_db.engine.connect() as conn:
+        sys_row = conn.execute(
+            sa.select(
+                SystemSchema.operation_outputs.c.function_id,
+                SystemSchema.operation_outputs.c.output,
+            ).where(SystemSchema.operation_outputs.c.workflow_uuid == wfid)
+        ).first()
+    assert sys_row is not None, "operation_outputs row missing"
+    assert sys_row.function_id == 1
+    assert sys_row.output is not None
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(params=["sqlite", "pg"])
+def sync_ds(
+    request: pytest.FixtureRequest, tmp_path: Any
+) -> Generator[SyncDatasource, None, None]:
+    if request.param == "sqlite":
+        ds = SyncDatasource.create(f"sqlite:///{tmp_path}/ds_test.sqlite")
+        yield ds
+        if ds.created_engine:
+            ds.engine.dispose()
+    else:
+        cfg = default_config()
+        url = cfg.get("application_database_url") or ""
+        if not url.startswith("postgresql"):
+            pytest.skip("not a PostgreSQL environment")
+        _skip_if_pg_unreachable(url)
+        schema = f"ds_test_{uuid.uuid4().hex[:8]}"
+        ds = SyncDatasource.create(
+            url.replace("postgresql://", "postgresql+psycopg://"), schema=schema
+        )
+        yield ds
+        with ds.engine.begin() as conn:
+            conn.execute(sa.text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        if ds.created_engine:
+            ds.engine.dispose()
+
+
+@pytest_asyncio.fixture(params=["sqlite", "pg"])
+async def async_ds(
+    request: pytest.FixtureRequest, tmp_path: Any
+) -> AsyncGenerator[AsyncDatasource, None]:
+    if request.param == "sqlite":
+        ds = await AsyncDatasource.create(
+            f"sqlite+aiosqlite:///{tmp_path}/async_ds_test.sqlite"
+        )
+        yield ds
+        await ds.engine.dispose()
+    else:
+        cfg = default_config()
+        url = cfg.get("application_database_url") or ""
+        if not url.startswith("postgresql"):
+            pytest.skip("not a PostgreSQL environment")
+        _skip_if_pg_unreachable(url)
+        schema = f"ds_test_{uuid.uuid4().hex[:8]}"
+        ds = await AsyncDatasource.create(
+            url.replace("postgresql://", "postgresql+psycopg://"), schema=schema
+        )
+        yield ds
+        async with ds.engine.begin() as conn:
+            await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        await ds.engine.dispose()
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +153,7 @@ def test_sync_ds_bare_run(sync_ds: SyncDatasource) -> None:
 
     def increment(amount: int) -> int:
         session = sync_ds.sql_session()
-        session.execute(text("SELECT 1"))  # touch the session
+        session.execute(text("SELECT 1"))
         counter["n"] += amount
         return counter["n"]
 
@@ -175,11 +241,10 @@ def test_sync_ds_oaoo(dbos: DBOS, sync_ds: SyncDatasource) -> None:
     assert result == "result:hello"
     assert call_count["n"] == 1
 
-    # Second run with same wfid must replay from datasource_outputs
     with SetWorkflowID(wfid):
         result = my_workflow("hello")
     assert result == "result:hello"
-    assert call_count["n"] == 1  # Not called again
+    assert call_count["n"] == 1
 
 
 def test_sync_ds_decorator_oaoo(dbos: DBOS, sync_ds: SyncDatasource) -> None:
@@ -227,7 +292,6 @@ def test_sync_ds_error_oaoo(dbos: DBOS, sync_ds: SyncDatasource) -> None:
             my_workflow()
     assert call_count["n"] == 1
 
-    # Second run: error replayed without calling the function again
     with SetWorkflowID(wfid):
         with pytest.raises(Exception, match="ds step failed"):
             my_workflow()
@@ -263,202 +327,192 @@ def test_sync_ds_multiple_steps_in_workflow(
     with SetWorkflowID(wfid):
         result = my_workflow()
     assert result == "AB"
-    # Each step called exactly once
     assert call_counts["a"] == 1
     assert call_counts["b"] == 1
 
 
+def test_sync_ds_writes_both_tables(dbos: DBOS, sync_ds: SyncDatasource) -> None:
+    """Datasource step writes to both datasource_outputs and operation_outputs."""
+
+    def step_fn() -> str:
+        return "hello"
+
+    @DBOS.workflow()
+    def my_workflow() -> str:
+        return sync_ds.run_tx_step(None, step_fn)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "hello"
+
+    _check_both_tables(sync_ds, dbos, wfid)
+
+
+def test_sync_ds_recovers_from_sysdb_loss(dbos: DBOS, sync_ds: SyncDatasource) -> None:
+    """datasource_outputs is the source of truth when the sysdb step record is lost.
+
+    Simulates the crash window: datasource_outputs was written atomically inside
+    the user transaction, but the system crashed before operation_outputs was
+    persisted. On re-run, the step result must be recovered from datasource_outputs
+    without re-executing the step function.
+    """
+    call_count = {"n": 0}
+
+    def step_fn() -> str:
+        call_count["n"] += 1
+        return "recovered"
+
+    @DBOS.workflow()
+    def my_workflow() -> str:
+        return sync_ds.run_tx_step(None, step_fn)
+
+    wfid = str(uuid.uuid4())
+
+    # First run: writes both tables.
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "recovered"
+    assert call_count["n"] == 1
+
+    # Simulate crash: remove the workflow record from the system DB.
+    # The CASCADE on operation_outputs.workflow_uuid wipes the step record too,
+    # while datasource_outputs (in the app DB) is unaffected.
+    with dbos._sys_db.engine.begin() as conn:
+        conn.execute(
+            sa.delete(SystemSchema.workflow_status).where(
+                SystemSchema.workflow_status.c.workflow_uuid == wfid
+            )
+        )
+
+    # Re-run: DBOS treats this as a new workflow (no workflow_status row).
+    # run_step finds no operation_outputs entry, so it calls _body().
+    # _body() finds the datasource_outputs row and replays — step_fn not called.
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "recovered"
+    assert call_count["n"] == 1
+
+
 # ---------------------------------------------------------------------------
-# Async bare-run tests (PG only — aiosqlite not installed)
+# Async bare-run tests (no DBOS workflow needed)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_async_ds_bare_run(pg_ds_url: str, async_ds_schema: str) -> None:
+async def test_async_ds_bare_run(async_ds: AsyncDatasource) -> None:
     """run_tx_step_async outside a workflow executes the function transactionally."""
-    ds = await AsyncDatasource.create(pg_ds_url, schema=async_ds_schema)
-
     counter = {"n": 0}
 
     async def increment(amount: int) -> int:
-        session = ds.sql_session()
+        session = async_ds.sql_session()
         await session.execute(text("SELECT 1"))
         counter["n"] += amount
         return counter["n"]
 
-    try:
-        result = await ds.run_tx_step_async(None, increment, 5)
-        assert result == 5
-        result = await ds.run_tx_step_async(None, increment, 3)
-        assert result == 8
-    finally:
-        async with ds.engine.begin() as conn:
-            await conn.execute(
-                text(f'DROP SCHEMA IF EXISTS "{async_ds_schema}" CASCADE')
-            )
-        await ds.engine.dispose()
+    result = await async_ds.run_tx_step_async(None, increment, 5)
+    assert result == 5
+    result = await async_ds.run_tx_step_async(None, increment, 3)
+    assert result == 8
 
 
 @pytest.mark.asyncio
-async def test_async_ds_decorator_bare_run(
-    pg_ds_url: str, async_ds_schema: str
-) -> None:
+async def test_async_ds_decorator_bare_run(async_ds: AsyncDatasource) -> None:
     """@ds.transaction on an async function works outside a workflow."""
-    ds = await AsyncDatasource.create(pg_ds_url, schema=async_ds_schema)
-
     counter = {"n": 0}
 
-    @ds.transaction
+    @async_ds.transaction
     async def increment(amount: int) -> int:
-        session = ds.sql_session()
+        session = async_ds.sql_session()
         await session.execute(text("SELECT 1"))
         counter["n"] += amount
         return counter["n"]
 
-    try:
-        assert await increment(10) == 10
-        assert await increment(5) == 15
-    finally:
-        async with ds.engine.begin() as conn:
-            await conn.execute(
-                text(f'DROP SCHEMA IF EXISTS "{async_ds_schema}" CASCADE')
-            )
-        await ds.engine.dispose()
+    assert await increment(10) == 10
+    assert await increment(5) == 15
 
 
 @pytest.mark.asyncio
-async def test_async_ds_decorator_with_options(
-    pg_ds_url: str, async_ds_schema: str
-) -> None:
+async def test_async_ds_decorator_with_options(async_ds: AsyncDatasource) -> None:
     """@ds.transaction accepts isolation_level and name options."""
-    ds = await AsyncDatasource.create(pg_ds_url, schema=async_ds_schema)
     counter = {"n": 0}
 
-    @ds.transaction(isolation_level="SERIALIZABLE", name="my_step")
+    @async_ds.transaction(isolation_level="SERIALIZABLE", name="my_step")
     async def increment(amount: int) -> int:
         counter["n"] += amount
         return counter["n"]
 
-    try:
-        assert await increment(7) == 7
-    finally:
-        async with ds.engine.begin() as conn:
-            await conn.execute(
-                text(f'DROP SCHEMA IF EXISTS "{async_ds_schema}" CASCADE')
-            )
-        await ds.engine.dispose()
+    assert await increment(7) == 7
 
 
 @pytest.mark.asyncio
 async def test_async_ds_sql_session_outside_tx_raises(
-    pg_ds_url: str, async_ds_schema: str
+    async_ds: AsyncDatasource,
 ) -> None:
     """sql_session() outside an async datasource transaction must raise."""
-    ds = await AsyncDatasource.create(pg_ds_url, schema=async_ds_schema)
-    try:
-        with pytest.raises(AssertionError):
-            ds.sql_session()
-    finally:
-        async with ds.engine.begin() as conn:
-            await conn.execute(
-                text(f'DROP SCHEMA IF EXISTS "{async_ds_schema}" CASCADE')
-            )
-        await ds.engine.dispose()
+    with pytest.raises(AssertionError):
+        async_ds.sql_session()
 
 
 @pytest.mark.asyncio
-async def test_async_ds_rejects_sync_func(pg_ds_url: str, async_ds_schema: str) -> None:
+async def test_async_ds_rejects_sync_func(async_ds: AsyncDatasource) -> None:
     """run_tx_step_async with a non-coroutine must raise."""
-    ds = await AsyncDatasource.create(pg_ds_url, schema=async_ds_schema)
 
     def sync_func() -> str:
         return "oops"
 
-    try:
-        with pytest.raises(DBOSException, match="coroutine"):
-            await ds.run_tx_step_async(None, sync_func)  # type: ignore
-    finally:
-        async with ds.engine.begin() as conn:
-            await conn.execute(
-                text(f'DROP SCHEMA IF EXISTS "{async_ds_schema}" CASCADE')
-            )
-        await ds.engine.dispose()
+    with pytest.raises(DBOSException, match="coroutine"):
+        await async_ds.run_tx_step_async(None, sync_func)  # type: ignore
 
 
 @pytest.mark.asyncio
 async def test_async_ds_transaction_decorator_rejects_sync(
-    pg_ds_url: str, async_ds_schema: str
+    async_ds: AsyncDatasource,
 ) -> None:
     """@ds.transaction on a sync function must raise at decoration time."""
-    ds = await AsyncDatasource.create(pg_ds_url, schema=async_ds_schema)
+    with pytest.raises(DBOSException, match="coroutine"):
 
-    try:
-        with pytest.raises(DBOSException, match="coroutine"):
-
-            @ds.transaction
-            def bad() -> str:
-                return "nope"
-
-    finally:
-        async with ds.engine.begin() as conn:
-            await conn.execute(
-                text(f'DROP SCHEMA IF EXISTS "{async_ds_schema}" CASCADE')
-            )
-        await ds.engine.dispose()
+        @async_ds.transaction
+        def bad() -> str:
+            return "nope"
 
 
 # ---------------------------------------------------------------------------
-# Async OAOO tests (PG only, inside a DBOS workflow)
+# Async OAOO tests (inside a DBOS workflow)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_async_ds_oaoo(
-    require_pg: str, dbos: DBOS, pg_ds_url: str, async_ds_schema: str
-) -> None:
+async def test_async_ds_oaoo(dbos: DBOS, async_ds: AsyncDatasource) -> None:
     """run_tx_step_async inside a workflow records the result and replays on retry."""
-    ds = await AsyncDatasource.create(pg_ds_url, schema=async_ds_schema)
     call_count = {"n": 0}
 
     async def expensive_step(value: str) -> str:
         call_count["n"] += 1
-        session = ds.sql_session()
+        session = async_ds.sql_session()
         await session.execute(text("SELECT 1"))
         return f"async:{value}"
 
     @DBOS.workflow()
     async def my_workflow(value: str) -> str:
-        return await ds.run_tx_step_async(None, expensive_step, value)
+        return await async_ds.run_tx_step_async(None, expensive_step, value)
 
     wfid = str(uuid.uuid4())
 
-    try:
-        with SetWorkflowID(wfid):
-            result = await my_workflow("hello")
-        assert result == "async:hello"
-        assert call_count["n"] == 1
+    with SetWorkflowID(wfid):
+        result = await my_workflow("hello")
+    assert result == "async:hello"
+    assert call_count["n"] == 1
 
-        with SetWorkflowID(wfid):
-            result = await my_workflow("hello")
-        assert result == "async:hello"
-        assert call_count["n"] == 1  # Not called again
-    finally:
-        async with ds.engine.begin() as conn:
-            await conn.execute(
-                text(f'DROP SCHEMA IF EXISTS "{async_ds_schema}" CASCADE')
-            )
-        await ds.engine.dispose()
+    with SetWorkflowID(wfid):
+        result = await my_workflow("hello")
+    assert result == "async:hello"
+    assert call_count["n"] == 1
 
 
 @pytest.mark.asyncio
-async def test_async_ds_decorator_oaoo(
-    require_pg: str, dbos: DBOS, pg_ds_url: str, async_ds_schema: str
-) -> None:
+async def test_async_ds_decorator_oaoo(dbos: DBOS, async_ds: AsyncDatasource) -> None:
     """@ds.transaction inside a workflow records and replays the result."""
-    ds = await AsyncDatasource.create(pg_ds_url, schema=async_ds_schema)
     call_count = {"n": 0}
 
-    @ds.transaction
+    @async_ds.transaction
     async def decorated_step(value: str) -> str:
         call_count["n"] += 1
         return f"decorated:{value}"
@@ -469,30 +523,20 @@ async def test_async_ds_decorator_oaoo(
 
     wfid = str(uuid.uuid4())
 
-    try:
-        with SetWorkflowID(wfid):
-            result = await my_workflow("world")
-        assert result == "decorated:world"
-        assert call_count["n"] == 1
+    with SetWorkflowID(wfid):
+        result = await my_workflow("world")
+    assert result == "decorated:world"
+    assert call_count["n"] == 1
 
-        with SetWorkflowID(wfid):
-            result = await my_workflow("world")
-        assert result == "decorated:world"
-        assert call_count["n"] == 1
-    finally:
-        async with ds.engine.begin() as conn:
-            await conn.execute(
-                text(f'DROP SCHEMA IF EXISTS "{async_ds_schema}" CASCADE')
-            )
-        await ds.engine.dispose()
+    with SetWorkflowID(wfid):
+        result = await my_workflow("world")
+    assert result == "decorated:world"
+    assert call_count["n"] == 1
 
 
 @pytest.mark.asyncio
-async def test_async_ds_error_oaoo(
-    require_pg: str, dbos: DBOS, pg_ds_url: str, async_ds_schema: str
-) -> None:
+async def test_async_ds_error_oaoo(dbos: DBOS, async_ds: AsyncDatasource) -> None:
     """Async datasource step error is recorded and replayed without re-executing."""
-    ds = await AsyncDatasource.create(pg_ds_url, schema=async_ds_schema)
     call_count = {"n": 0}
 
     async def failing_step() -> str:
@@ -501,34 +545,26 @@ async def test_async_ds_error_oaoo(
 
     @DBOS.workflow()
     async def my_workflow() -> str:
-        return await ds.run_tx_step_async(None, failing_step)
+        return await async_ds.run_tx_step_async(None, failing_step)
 
     wfid = str(uuid.uuid4())
 
-    try:
-        with SetWorkflowID(wfid):
-            with pytest.raises(Exception, match="async ds step failed"):
-                await my_workflow()
-        assert call_count["n"] == 1
+    with SetWorkflowID(wfid):
+        with pytest.raises(Exception, match="async ds step failed"):
+            await my_workflow()
+    assert call_count["n"] == 1
 
-        with SetWorkflowID(wfid):
-            with pytest.raises(Exception, match="async ds step failed"):
-                await my_workflow()
-        assert call_count["n"] == 1  # Not called again
-    finally:
-        async with ds.engine.begin() as conn:
-            await conn.execute(
-                text(f'DROP SCHEMA IF EXISTS "{async_ds_schema}" CASCADE')
-            )
-        await ds.engine.dispose()
+    with SetWorkflowID(wfid):
+        with pytest.raises(Exception, match="async ds step failed"):
+            await my_workflow()
+    assert call_count["n"] == 1
 
 
 @pytest.mark.asyncio
 async def test_async_ds_multiple_steps_in_workflow(
-    require_pg: str, dbos: DBOS, pg_ds_url: str, async_ds_schema: str
+    dbos: DBOS, async_ds: AsyncDatasource
 ) -> None:
     """Multiple async datasource steps in one workflow each get their own step_id."""
-    ds = await AsyncDatasource.create(pg_ds_url, schema=async_ds_schema)
     call_counts = {"a": 0, "b": 0}
 
     async def step_a() -> str:
@@ -541,25 +577,84 @@ async def test_async_ds_multiple_steps_in_workflow(
 
     @DBOS.workflow()
     async def my_workflow() -> str:
-        r1 = await ds.run_tx_step_async(None, step_a)
-        r2 = await ds.run_tx_step_async(None, step_b)
+        r1 = await async_ds.run_tx_step_async(None, step_a)
+        r2 = await async_ds.run_tx_step_async(None, step_b)
         return r1 + r2
 
     wfid = str(uuid.uuid4())
 
-    try:
-        with SetWorkflowID(wfid):
-            result = await my_workflow()
-        assert result == "AB"
+    with SetWorkflowID(wfid):
+        result = await my_workflow()
+    assert result == "AB"
 
-        with SetWorkflowID(wfid):
-            result = await my_workflow()
-        assert result == "AB"
-        assert call_counts["a"] == 1
-        assert call_counts["b"] == 1
-    finally:
-        async with ds.engine.begin() as conn:
-            await conn.execute(
-                text(f'DROP SCHEMA IF EXISTS "{async_ds_schema}" CASCADE')
+    with SetWorkflowID(wfid):
+        result = await my_workflow()
+    assert result == "AB"
+    assert call_counts["a"] == 1
+    assert call_counts["b"] == 1
+
+
+@pytest.mark.asyncio
+async def test_async_ds_writes_both_tables(
+    dbos: DBOS, async_ds: AsyncDatasource
+) -> None:
+    """Async datasource step writes to both datasource_outputs and operation_outputs."""
+
+    async def step_fn() -> str:
+        return "world"
+
+    @DBOS.workflow()
+    async def my_workflow() -> str:
+        return await async_ds.run_tx_step_async(None, step_fn)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "world"
+
+    await _async_check_both_tables(async_ds, dbos, wfid)
+
+
+@pytest.mark.asyncio
+async def test_async_ds_recovers_from_sysdb_loss(
+    dbos: DBOS, async_ds: AsyncDatasource
+) -> None:
+    """datasource_outputs is the source of truth when the sysdb step record is lost.
+
+    Simulates the crash window: datasource_outputs was written atomically inside
+    the user transaction, but the system crashed before operation_outputs was
+    persisted. On re-run, the step result must be recovered from datasource_outputs
+    without re-executing the step function.
+    """
+    call_count = {"n": 0}
+
+    async def step_fn() -> str:
+        call_count["n"] += 1
+        return "recovered"
+
+    @DBOS.workflow()
+    async def my_workflow() -> str:
+        return await async_ds.run_tx_step_async(None, step_fn)
+
+    wfid = str(uuid.uuid4())
+
+    # First run: writes both tables.
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "recovered"
+    assert call_count["n"] == 1
+
+    # Simulate crash: remove the workflow record from the system DB.
+    # The CASCADE on operation_outputs.workflow_uuid wipes the step record too,
+    # while datasource_outputs (in the app DB) is unaffected.
+    with dbos._sys_db.engine.begin() as conn:
+        conn.execute(
+            sa.delete(SystemSchema.workflow_status).where(
+                SystemSchema.workflow_status.c.workflow_uuid == wfid
             )
-        await ds.engine.dispose()
+        )
+
+    # Re-run: DBOS treats this as a new workflow (no workflow_status row).
+    # run_step finds no operation_outputs entry, so it calls _body().
+    # _body() finds the datasource_outputs row and replays — step_fn not called.
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "recovered"
+    assert call_count["n"] == 1

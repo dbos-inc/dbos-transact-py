@@ -10,6 +10,7 @@ from typing import (
     ParamSpec,
     TypedDict,
     TypeVar,
+    Union,
     cast,
 )
 
@@ -209,7 +210,7 @@ class AsyncDatasource(ABC):
 
     async def _record_result(
         self,
-        conn: AsyncConnection,
+        conn: Union[AsyncConnection, AsyncSession],
         workflow_id: str,
         step_id: int,
         output: Optional[str],
@@ -241,55 +242,72 @@ class AsyncDatasource(ABC):
             )
 
         ctx = get_local_dbos_context()
-        in_workflow = ctx is not None and ctx.is_within_workflow()
+        in_wf = ctx is not None and ctx.is_workflow()
 
-        workflow_id: str = ""
-        step_id: int = -1
+        async def _body() -> R:
+            workflow_id: str = ""
+            step_id: int = -1
 
-        if in_workflow:
-            step_ctx = ctx.snapshot_step_ctx()
-            workflow_id = step_ctx.workflow_id
-            step_id = step_ctx.function_id
-            recorded = await self._check_execution(workflow_id, step_id)
-            if recorded is not None:
-                return cast(R, _replay_recorded(recorded, self.serializer))
+            if in_wf:
+                inner_ctx = get_local_dbos_context()
+                assert inner_ctx is not None
+                workflow_id = inner_ctx.workflow_id
+                step_id = inner_ctx.curr_step_function_id
+                recorded = await self._check_execution(workflow_id, step_id)
+                if recorded is not None:
+                    return cast(R, _replay_recorded(recorded, self.serializer))
 
-        output: R
-        with DBOSContextEnsure() as exec_ctx:
-            async with self.sessionmaker() as session:
-                exec_ctx.start_async_ds_transaction(session)
-                try:
-                    async with session.begin():
-                        await session.connection(
-                            execution_options={"isolation_level": isolation_level}
-                        )
-                        output = await func(*args, **kwargs)
-                    if in_workflow:
-                        serialized, serialization = serialize_value(
-                            output, None, self.serializer
-                        )
-                        async with self.engine.begin() as conn:
-                            await self._record_result(
-                                conn,
-                                workflow_id,
-                                step_id,
-                                serialized,
-                                None,
-                                serialization,
+            output: R
+            with DBOSContextEnsure() as exec_ctx:
+                async with self.sessionmaker() as session:
+                    exec_ctx.start_async_ds_transaction(session)
+                    try:
+                        async with session.begin():
+                            await session.connection(
+                                execution_options={"isolation_level": isolation_level}
                             )
-                except Exception as e:
-                    if in_workflow:
-                        serialized_e, serialization = serialize_exception(
-                            e, None, self.serializer
-                        )
-                        await self._record_error(
-                            workflow_id, step_id, serialized_e, serialization
-                        )
-                    raise
-                finally:
-                    exec_ctx.end_async_ds_transaction()
+                            output = await func(*args, **kwargs)
+                            if in_wf:
+                                serialized, serialization = serialize_value(
+                                    output, None, self.serializer
+                                )
+                                await self._record_result(
+                                    session,
+                                    workflow_id,
+                                    step_id,
+                                    serialized,
+                                    None,
+                                    serialization,
+                                )
+                    except Exception as e:
+                        if in_wf:
+                            serialized_e, serialization = serialize_exception(
+                                e, None, self.serializer
+                            )
+                            await self._record_error(
+                                workflow_id, step_id, serialized_e, serialization
+                            )
+                        raise
+                    finally:
+                        exec_ctx.end_async_ds_transaction()
 
-        return output
+            return output
+
+        if in_wf:
+            from dbos._core import StepOptions, run_step_async
+            from dbos._dbos import _get_dbos_instance
+
+            assert ctx is not None
+            step_options: StepOptions = {"name": name}
+            return await run_step_async(
+                _get_dbos_instance(),
+                ctx.snapshot_step_ctx(),
+                _body,
+                step_options,
+                (),
+                {},
+            )
+        return await _body()
 
     def transaction(
         self,
@@ -431,7 +449,7 @@ class SyncDatasource(ABC):
 
     def _record_result(
         self,
-        conn: sa.Connection,
+        conn: Union[sa.Connection, Session],
         workflow_id: str,
         step_id: int,
         output: Optional[str],
@@ -463,55 +481,64 @@ class SyncDatasource(ABC):
             )
 
         ctx = get_local_dbos_context()
-        in_workflow = ctx is not None and ctx.is_within_workflow()
+        in_wf = ctx is not None and ctx.is_workflow()
 
-        workflow_id: str = ""
-        step_id: int = -1
+        def _body() -> R:
+            workflow_id: str = ""
+            step_id: int = -1
 
-        if in_workflow:
-            step_ctx = ctx.snapshot_step_ctx()
-            workflow_id = step_ctx.workflow_id
-            step_id = step_ctx.function_id
-            recorded = self._check_execution(workflow_id, step_id)
-            if recorded is not None:
-                return cast(R, _replay_recorded(recorded, self.serializer))
+            if in_wf:
+                inner_ctx = get_local_dbos_context()
+                assert inner_ctx is not None
+                workflow_id = inner_ctx.workflow_id
+                step_id = inner_ctx.curr_step_function_id
+                recorded = self._check_execution(workflow_id, step_id)
+                if recorded is not None:
+                    return cast(R, _replay_recorded(recorded, self.serializer))
 
-        output: R
-        with DBOSContextEnsure() as exec_ctx:
-            with self.sessionmaker() as session:
-                exec_ctx.start_sync_ds_transaction(session)
-                try:
-                    with session.begin():
-                        session.connection(
-                            execution_options={"isolation_level": isolation_level}
-                        )
-                        output = func(*args, **kwargs)
-                    if in_workflow:
-                        serialized, serialization = serialize_value(
-                            output, None, self.serializer
-                        )
-                        with self.engine.begin() as conn:
-                            self._record_result(
-                                conn,
-                                workflow_id,
-                                step_id,
-                                serialized,
-                                None,
-                                serialization,
+            output: R
+            with DBOSContextEnsure() as exec_ctx:
+                with self.sessionmaker() as session:
+                    exec_ctx.start_sync_ds_transaction(session)
+                    try:
+                        with session.begin():
+                            session.connection(
+                                execution_options={"isolation_level": isolation_level}
                             )
-                except Exception as e:
-                    if in_workflow:
-                        serialized_e, serialization = serialize_exception(
-                            e, None, self.serializer
-                        )
-                        self._record_error(
-                            workflow_id, step_id, serialized_e, serialization
-                        )
-                    raise
-                finally:
-                    exec_ctx.end_sync_ds_transaction()
+                            output = func(*args, **kwargs)
+                            if in_wf:
+                                serialized, serialization = serialize_value(
+                                    output, None, self.serializer
+                                )
+                                self._record_result(
+                                    session,
+                                    workflow_id,
+                                    step_id,
+                                    serialized,
+                                    None,
+                                    serialization,
+                                )
+                    except Exception as e:
+                        if in_wf:
+                            serialized_e, serialization = serialize_exception(
+                                e, None, self.serializer
+                            )
+                            self._record_error(
+                                workflow_id, step_id, serialized_e, serialization
+                            )
+                        raise
+                    finally:
+                        exec_ctx.end_sync_ds_transaction()
 
-        return output
+            return output
+
+        if in_wf:
+            from dbos._core import StepOptions, run_step
+            from dbos._dbos import _get_dbos_instance
+
+            step_options: StepOptions = {"name": name}
+            return run_step(_get_dbos_instance(), _body, step_options, (), {})
+        return _body()
 
     def transaction(
         self,

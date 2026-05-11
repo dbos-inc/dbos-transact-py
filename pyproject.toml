@@ -12,6 +12,7 @@ dependencies = [
     "websockets>=14.0",
     "typer-slim>=0.17.4",
     "sqlalchemy>=2.0.43",
+    "aiosqlite>=0.20.0",
 ]
 requires-python = ">=3.10"
 readme = "README.md"
