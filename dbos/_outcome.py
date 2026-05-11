@@ -145,6 +145,8 @@ class Immediate(Outcome[T]):
                 if should_retry is not None and not should_retry(exp):
                     raise
                 errors.append(exp)
+                if i == attempts - 1:
+                    break
                 wait_time = on_exception(i, exp)
                 time.sleep(wait_time)
 
@@ -278,6 +280,8 @@ class Pending(Outcome[T]):
                     if not result:
                         raise
                 errors.append(exp)
+                if i == attempts - 1:
+                    break
                 wait_time = on_exception(i, exp)
                 await asyncio.sleep(wait_time)
 
