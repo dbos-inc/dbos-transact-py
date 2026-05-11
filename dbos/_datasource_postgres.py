@@ -41,6 +41,7 @@ class PostgresAsyncDatasource(AsyncDatasource):
         return create_async_engine(_make_url(database_url), **engine_kwargs)
 
     async def run_migrations(self) -> None:
+        assert self.schema is not None
         async with self.engine.begin() as conn:
             await conn.execute(_schema_sql(self.schema))
             await conn.execute(_table_sql(self.schema))
@@ -55,6 +56,7 @@ class PostgresSyncDatasource(SyncDatasource):
         return sa.create_engine(_make_url(database_url), **engine_kwargs)
 
     def run_migrations(self) -> None:
+        assert self.schema is not None
         with self.engine.begin() as conn:
             conn.execute(_schema_sql(self.schema))
             conn.execute(_table_sql(self.schema))

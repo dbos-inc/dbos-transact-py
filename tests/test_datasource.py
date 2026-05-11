@@ -469,7 +469,7 @@ async def test_async_ds_transaction_decorator_rejects_sync(
     """@ds.transaction on a sync function must raise at decoration time."""
     with pytest.raises(DBOSException, match="coroutine"):
 
-        @async_ds.transaction
+        @async_ds.transaction  # type: ignore[arg-type]
         def bad() -> str:
             return "nope"
 

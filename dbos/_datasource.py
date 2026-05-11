@@ -12,6 +12,7 @@ from typing import (
     TypeVar,
     Union,
     cast,
+    overload,
 )
 
 import sqlalchemy as sa
@@ -44,7 +45,7 @@ R = TypeVar("R")
 
 
 def _parse_ds_options(
-    ds_options: Optional["DatasourceOptions"], func: Callable
+    ds_options: Optional["DatasourceOptions"], func: Callable[..., Any]
 ) -> "tuple[str, str]":
     name = (ds_options.get("name") if ds_options else None) or func.__qualname__
     isolation_level: str = (
@@ -309,12 +310,28 @@ class AsyncDatasource(ABC):
             )
         return await _body()
 
+    @overload
+    def transaction(
+        self, func: Callable[P, Coroutine[Any, Any, R]]
+    ) -> Callable[P, Coroutine[Any, Any, R]]: ...
+
+    @overload
     def transaction(
         self,
-        func: Optional[Callable] = None,
+        func: None = None,
         *,
         name: Optional[str] = None,
-        isolation_level: str = "SERIALIZABLE",
+        isolation_level: IsolationLevel = "SERIALIZABLE",
+    ) -> Callable[
+        [Callable[P, Coroutine[Any, Any, R]]], Callable[P, Coroutine[Any, Any, R]]
+    ]: ...
+
+    def transaction(
+        self,
+        func: Optional[Callable[..., Any]] = None,
+        *,
+        name: Optional[str] = None,
+        isolation_level: IsolationLevel = "SERIALIZABLE",
     ) -> Any:
         def decorator(
             f: Callable[..., Coroutine[Any, Any, Any]],
@@ -540,12 +557,24 @@ class SyncDatasource(ABC):
             return run_step(_get_dbos_instance(), _body, step_options, (), {})
         return _body()
 
+    @overload
+    def transaction(self, func: Callable[P, R]) -> Callable[P, R]: ...
+
+    @overload
     def transaction(
         self,
-        func: Optional[Callable] = None,
+        func: None = None,
         *,
         name: Optional[str] = None,
-        isolation_level: str = "SERIALIZABLE",
+        isolation_level: IsolationLevel = "SERIALIZABLE",
+    ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
+
+    def transaction(
+        self,
+        func: Optional[Callable[..., Any]] = None,
+        *,
+        name: Optional[str] = None,
+        isolation_level: IsolationLevel = "SERIALIZABLE",
     ) -> Any:
         def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
             if inspect.iscoroutinefunction(f):
