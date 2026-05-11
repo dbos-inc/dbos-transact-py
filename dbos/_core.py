@@ -338,8 +338,6 @@ DEFAULT_STEP_OPTIONS: StepOptions = {
     "preemptible": False,
 }
 
-PREEMPTION_POLL_INTERVAL_SEC = 1.0
-
 
 def normalize_step_options(opts: Optional[StepOptions]) -> StepOptions:
     return {**DEFAULT_STEP_OPTIONS, **(opts or {})}
@@ -1545,7 +1543,6 @@ async def _run_preemptible_step(
     func: Callable[..., Coroutine[Any, Any, R]],
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
-    poll_interval_sec: float,
 ) -> R:
     step_task: asyncio.Task[R] = asyncio.create_task(func(*args, **kwargs))
     poller_cancelled_step = False
@@ -1553,7 +1550,7 @@ async def _run_preemptible_step(
     async def poller() -> None:
         nonlocal poller_cancelled_step
         while True:
-            await asyncio.sleep(poll_interval_sec)
+            await asyncio.sleep(1.0)
             try:
                 status = await asyncio.to_thread(
                     dbos._sys_db.get_workflow_status, workflow_id
@@ -1726,7 +1723,6 @@ def invoke_step(
                 async_func,
                 args,
                 kwargs,
-                PREEMPTION_POLL_INTERVAL_SEC,
             )
         )
     else:
