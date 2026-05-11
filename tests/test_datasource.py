@@ -23,7 +23,7 @@ from tests.conftest import default_config
 def _skip_if_pg_unreachable(raw_pg_url: str) -> None:
     try:
         engine = sa.create_engine(
-            sa.make_url(raw_pg_url).set(drivername="postgresql+psycopg2"),
+            sa.make_url(raw_pg_url).set(drivername="postgresql+psycopg"),
             connect_args={"connect_timeout": 3},
         )
         with engine.connect():

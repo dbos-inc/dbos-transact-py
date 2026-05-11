@@ -106,7 +106,7 @@ dev = [
     "uvicorn>=0.35.0",
     "fastapi>=0.121.0",
     "httpx>=0.28.1",
-    "psycopg2-binary>=2.9.11",
+
     "aiosqlite>=0.20.0",
     "sqlalchemy-cockroachdb>=2.0.3",
 ]
