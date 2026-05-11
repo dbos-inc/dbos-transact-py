@@ -374,28 +374,48 @@ async def test_preemptible_step_cancellation_and_resume(dbos: DBOS) -> None:
 
 @pytest.mark.asyncio
 async def test_preemptible_step_normal_paths(dbos: DBOS) -> None:
-    """preemptible=True doesn't break normal step semantics: normal
-    exceptions still propagate, success returns the value."""
+    """preemptible=True doesn't break normal step semantics (exceptions
+    propagate), and DBOS.run_step_async with preemptible=True in
+    StepOptions actually triggers preemption when the workflow is
+    cancelled."""
 
-    @DBOS.step(preemptible=True)
-    async def add_one(x: int) -> int:
-        return x + 1
-
+    # Normal exception still propagates.
     @DBOS.step(preemptible=True)
     async def boom() -> None:
         raise ValueError("boom")
 
     @DBOS.workflow()
-    async def ok_wf(x: int) -> int:
-        return await add_one(x)
-
-    @DBOS.workflow()
     async def err_wf() -> None:
         await boom()
 
-    assert (await ok_wf(41)) == 42
     with pytest.raises(ValueError, match="boom"):
         await err_wf()
+
+    # Preemptible passed via StepOptions to run_step_async actually preempts.
+    step_started = asyncio.Event()
+    step_cancelled = False
+
+    async def long_step() -> None:
+        nonlocal step_cancelled
+        step_started.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            step_cancelled = True
+            raise
+
+    @DBOS.workflow()
+    async def cancel_wf() -> None:
+        await DBOS.run_step_async({"preemptible": True}, long_step)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(cancel_wf)
+    await step_started.wait()
+    await DBOS.cancel_workflow_async(wfid)
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        await handle.get_result()
+    assert step_cancelled
 
 
 def test_preemptible_rejected_for_sync_step(dbos: DBOS) -> None:

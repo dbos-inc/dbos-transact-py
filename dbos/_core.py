@@ -1544,13 +1544,14 @@ async def _run_preemptible_step(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
 ) -> R:
+    PREEMPTIBLE_POLL_INTERVAL_SEC = 1.0
     step_task: asyncio.Task[R] = asyncio.create_task(func(*args, **kwargs))
     poller_cancelled_step = False
 
     async def poller() -> None:
         nonlocal poller_cancelled_step
         while True:
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(PREEMPTIBLE_POLL_INTERVAL_SEC)
             try:
                 status = await asyncio.to_thread(
                     dbos._sys_db.get_workflow_status, workflow_id
