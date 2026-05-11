@@ -313,6 +313,11 @@ class StepOptions(TypedDict, total=False):
             an awaitable resolving to False), the exception is re-raised
             immediately without further retries. Async validators are
             only supported for async steps.
+
+        preemptible:
+            If True, run the (async) step alongside a poller that watches
+            the workflow's status and cancels the step task if the
+            workflow is cancelled. Only supported for async steps.
     """
 
     name: Optional[str]
@@ -321,6 +326,7 @@ class StepOptions(TypedDict, total=False):
     max_attempts: int
     backoff_rate: float
     should_retry: Optional[Callable[[BaseException], Union[bool, Awaitable[bool]]]]
+    preemptible: bool
 
 
 DEFAULT_STEP_OPTIONS: StepOptions = {
@@ -330,7 +336,10 @@ DEFAULT_STEP_OPTIONS: StepOptions = {
     "max_attempts": 3,
     "backoff_rate": 2.0,
     "should_retry": None,
+    "preemptible": False,
 }
+
+PREEMPTION_POLL_INTERVAL_SEC = 1.0
 
 
 def normalize_step_options(opts: Optional[StepOptions]) -> StepOptions:
@@ -1531,6 +1540,57 @@ def decorate_transaction(
     return decorator
 
 
+async def _run_preemptible_step(
+    dbos: "DBOS",
+    workflow_id: str,
+    func: Callable[..., Coroutine[Any, Any, R]],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    poll_interval_sec: float,
+) -> R:
+    step_task: asyncio.Task[R] = asyncio.create_task(func(*args, **kwargs))
+    poller_cancelled_step = False
+
+    async def poller() -> None:
+        nonlocal poller_cancelled_step
+        while True:
+            await asyncio.sleep(poll_interval_sec)
+            try:
+                status = await asyncio.to_thread(
+                    dbos._sys_db.get_workflow_status, workflow_id
+                )
+            except Exception as e:
+                dbos.logger.warning(
+                    f"Error polling status for preemptible step in workflow {workflow_id}: {e}"
+                )
+                continue
+            if (
+                status is not None
+                and status["status"] == WorkflowStatusString.CANCELLED.value
+            ):
+                poller_cancelled_step = True
+                step_task.cancel()
+                return
+
+    poller_task = asyncio.create_task(poller())
+    try:
+        try:
+            return await step_task
+        except asyncio.CancelledError:
+            if poller_cancelled_step:
+                raise DBOSWorkflowCancelledError(
+                    f"Workflow {workflow_id} is cancelled. Aborting preemptible step."
+                )
+            raise
+    finally:
+        if not poller_task.done():
+            poller_task.cancel()
+            try:
+                await poller_task
+            except BaseException:
+                pass
+
+
 def invoke_step(
     dbos: "DBOS",
     step_ctx: DBOSContext,
@@ -1546,6 +1606,7 @@ def invoke_step(
     should_retry: Optional[
         Callable[[BaseException], Union[bool, Awaitable[bool]]]
     ] = None,
+    preemptible: bool = False,
 ) -> R | Coroutine[Any, Any, R]:
     if (
         should_retry is not None
@@ -1555,6 +1616,11 @@ def invoke_step(
         raise DBOSException(
             f"Step {step_name} is sync but should_retry is async. "
             f"Use an async step to pair with an async validator."
+        )
+    if preemptible and not inspect.iscoroutinefunction(func):
+        raise DBOSException(
+            f"Step {step_name} is sync but preemptible=True. "
+            f"Preemption is only supported for async steps."
         )
 
     attributes: TracedAttributes = {
@@ -1600,6 +1666,10 @@ def invoke_step(
 
         try:
             output = func()
+        except DBOSWorkflowCancelledError:
+            # The step was preempted by workflow cancellation. Don't record
+            # an outcome — let the step be re-run on resume.
+            raise
         except Exception as error:
             serialized_e, serialization = serialize_exception(
                 error, None, dbos._serializer
@@ -1647,7 +1717,22 @@ def invoke_step(
             )
             return NoResult()
 
-    stepOutcome = Outcome[R].make(functools.partial(func, *args, **kwargs))
+    if preemptible:
+        async_func = cast(Callable[..., Coroutine[Any, Any, R]], func)
+        step_partial: Callable[[], Union[R, Coroutine[Any, Any, R]]] = (
+            functools.partial(
+                _run_preemptible_step,
+                dbos,
+                step_ctx.workflow_id,
+                async_func,
+                args,
+                kwargs,
+                PREEMPTION_POLL_INTERVAL_SEC,
+            )
+        )
+    else:
+        step_partial = functools.partial(func, *args, **kwargs)
+    stepOutcome = Outcome[R].make(step_partial)
     if retries_allowed:
         stepOutcome = stepOutcome.retry(
             max_attempts,
@@ -1688,6 +1773,7 @@ def run_step(
             max_attempts=options["max_attempts"],
             backoff_rate=options["backoff_rate"],
             should_retry=options["should_retry"],
+            preemptible=options["preemptible"],
         )
         if inspect.iscoroutinefunction(func):
             return dbos._background_event_loop.submit_coroutine(
@@ -1732,6 +1818,7 @@ async def run_step_async(
             max_attempts=options["max_attempts"],
             backoff_rate=options["backoff_rate"],
             should_retry=options["should_retry"],
+            preemptible=options["preemptible"],
         )
         if inspect.iscoroutinefunction(func):
             return await cast(Coroutine[Any, Any, R], outcome)
@@ -1759,8 +1846,14 @@ def decorate_step(
     should_retry: Optional[
         Callable[[BaseException], Union[bool, Awaitable[bool]]]
     ] = None,
+    preemptible: bool = False,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     def decorator(func: Callable[P, R]) -> Callable[P, R]:
+        if preemptible and not inspect.iscoroutinefunction(func):
+            raise DBOSException(
+                f"Step {name or func.__qualname__} is sync but preemptible=True. "
+                f"Preemption is only supported for async steps."
+            )
 
         step_name = name if name is not None else func.__qualname__
 
@@ -1790,6 +1883,7 @@ def decorate_step(
                         max_attempts=max_attempts,
                         backoff_rate=backoff_rate,
                         should_retry=should_retry,
+                        preemptible=preemptible,
                     )
             else:
                 return func(*args, **kwargs)

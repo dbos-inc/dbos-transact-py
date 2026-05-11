@@ -5,7 +5,7 @@ from typing import List
 import pytest
 
 from dbos import DBOS, Queue, SetWorkflowID
-from dbos._error import DBOSAwaitedWorkflowCancelledError
+from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSException
 from dbos._sys_db import StepInfo, WorkflowStatus
 from dbos._utils import INTERNAL_QUEUE_NAME
 from tests.conftest import queue_entries_are_cleaned_up
@@ -310,3 +310,81 @@ async def test_bulk_async_workflow_management(dbos: DBOS) -> None:
         assert await DBOS.get_workflow_status_async(did) is None
 
     assert queue_entries_are_cleaned_up(dbos)
+
+
+@pytest.mark.asyncio
+async def test_preemptible_step_cancels_on_workflow_cancel(dbos: DBOS) -> None:
+    """A preemptible async step is cancelled when the workflow is cancelled."""
+    step_started = asyncio.Event()
+    step_completed = False
+    step_cancelled = False
+
+    @DBOS.step(preemptible=True)
+    async def long_running_step() -> None:
+        nonlocal step_completed, step_cancelled
+        step_started.set()
+        try:
+            await asyncio.sleep(60)
+            step_completed = True
+        except asyncio.CancelledError:
+            step_cancelled = True
+            raise
+
+    @DBOS.workflow()
+    async def wf() -> None:
+        await long_running_step()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(wf)
+
+    await step_started.wait()
+    await DBOS.cancel_workflow_async(wfid)
+
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        await handle.get_result()
+
+    assert step_cancelled
+    assert not step_completed
+
+
+@pytest.mark.asyncio
+async def test_preemptible_step_resumes_after_cancel(dbos: DBOS) -> None:
+    """After preemption cancels a step, resuming the workflow re-runs the step."""
+    invocation_count = 0
+    sleep_event = asyncio.Event()
+
+    @DBOS.step(preemptible=True)
+    async def long_running_step() -> str:
+        nonlocal invocation_count
+        invocation_count += 1
+        if invocation_count == 1:
+            sleep_event.set()
+            await asyncio.sleep(60)
+            return "should-not-reach"
+        return "done"
+
+    @DBOS.workflow()
+    async def wf() -> str:
+        return await long_running_step()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(wf)
+
+    await sleep_event.wait()
+    await DBOS.cancel_workflow_async(wfid)
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        await handle.get_result()
+
+    resumed = await DBOS.resume_workflow_async(wfid)
+    assert (await resumed.get_result()) == "done"
+    assert invocation_count == 2
+
+
+def test_preemptible_rejected_for_sync_step(dbos: DBOS) -> None:
+    with pytest.raises(DBOSException):
+
+        @DBOS.step(preemptible=True)
+        def sync_step() -> None:
+            pass
