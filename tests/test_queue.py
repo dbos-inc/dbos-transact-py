@@ -124,6 +124,8 @@ def test_queue_crud(dbos: DBOS) -> None:
 
     # retrieve_queue returns None when nothing is registered.
     assert DBOS.retrieve_queue(queue_name) is None
+    # list_queues returns no rows when nothing is registered.
+    assert DBOS.list_queues() == []
 
     # register_queue persists a fully configured queue.
     registered = DBOS.register_queue(
@@ -151,6 +153,18 @@ def test_queue_crud(dbos: DBOS) -> None:
     assert retrieved.polling_interval_sec == 2.5
     assert retrieved.database_backed_queue is True
     assert queue_name not in dbos._registry.queue_info_map
+
+    # list_queues includes the registered queue with the same configuration.
+    listed = DBOS.list_queues()
+    assert [q.name for q in listed] == [queue_name]
+    only = listed[0]
+    assert only.database_backed_queue is True
+    assert only.concurrency == 10
+    assert only.worker_concurrency == 2
+    assert only.limiter == {"limit": 5, "period": 1.5}
+    assert only.priority_enabled is True
+    assert only.partition_queue is False
+    assert only.polling_interval_sec == 2.5
 
     # on_conflict="never_update" leaves the existing row alone.
     DBOS.register_queue(queue_name, concurrency=99, on_conflict="never_update")
@@ -261,6 +275,8 @@ def test_client_queue_crud(dbos: DBOS, client: DBOSClient) -> None:
 
     # retrieve_queue returns None for an unknown queue.
     assert client.retrieve_queue(queue_name) is None
+    # list_queues returns no rows when nothing is registered.
+    assert client.list_queues() == []
 
     # register_queue persists configuration without depending on the DBOS
     # singleton's _sys_db.
@@ -285,6 +301,17 @@ def test_client_queue_crud(dbos: DBOS, client: DBOSClient) -> None:
     assert retrieved.limiter == {"limit": 5, "period": 1.5}
     assert retrieved.priority_enabled is True
     assert retrieved.polling_interval_sec == 2.5
+
+    # list_queues returns queues bound to the client's SystemDatabase.
+    listed = client.list_queues()
+    assert [q.name for q in listed] == [queue_name]
+    only = listed[0]
+    assert only._client_system_database is client._sys_db
+    assert only.concurrency == 4
+    assert only.worker_concurrency == 2
+    assert only.limiter == {"limit": 5, "period": 1.5}
+    assert only.priority_enabled is True
+    assert only.polling_interval_sec == 2.5
 
     # Setters write through the client's SystemDatabase too.
     retrieved.set_concurrency(8)
@@ -335,6 +362,8 @@ async def test_queue_crud_async(dbos: DBOS) -> None:
 
     # retrieve_queue_async returns None when nothing is registered.
     assert await DBOS.retrieve_queue_async(queue_name) is None
+    # list_queues_async returns no rows when nothing is registered.
+    assert await DBOS.list_queues_async() == []
 
     # register_queue_async persists a fully configured queue.
     registered = await DBOS.register_queue_async(
@@ -355,6 +384,17 @@ async def test_queue_crud_async(dbos: DBOS) -> None:
     assert await retrieved.get_limiter_async() == {"limit": 5, "period": 1.5}
     assert await retrieved.get_priority_enabled_async() is True
     assert await retrieved.get_polling_interval_sec_async() == 2.5
+
+    # list_queues_async includes the registered queue.
+    listed = await DBOS.list_queues_async()
+    assert [q.name for q in listed] == [queue_name]
+    only = listed[0]
+    assert only.database_backed_queue is True
+    assert await only.get_concurrency_async() == 10
+    assert await only.get_worker_concurrency_async() == 2
+    assert await only.get_limiter_async() == {"limit": 5, "period": 1.5}
+    assert await only.get_priority_enabled_async() is True
+    assert await only.get_polling_interval_sec_async() == 2.5
 
     # Async setters write to the database; async getters see the change.
     await retrieved.set_concurrency_async(8)
@@ -391,15 +431,17 @@ async def test_queue_crud_async(dbos: DBOS) -> None:
     with pytest.raises(DBOSException):
         await legacy.set_concurrency_async(5)
 
-    # Sync DBOS.register_queue / retrieve_queue / delete_queue raise when
-    # called from a running event loop; async callers must use the *_async
-    # variants.
+    # Sync DBOS.register_queue / retrieve_queue / delete_queue / list_queues
+    # raise when called from a running event loop; async callers must use the
+    # *_async variants.
     with pytest.raises(RuntimeError):
         DBOS.register_queue(queue_name)
     with pytest.raises(RuntimeError):
         DBOS.retrieve_queue(queue_name)
     with pytest.raises(RuntimeError):
         DBOS.delete_queue(queue_name)
+    with pytest.raises(RuntimeError):
+        DBOS.list_queues()
 
     # delete_queue_async removes the row; subsequent retrievals return None
     # and deleting again is a harmless no-op.
@@ -413,6 +455,7 @@ async def test_client_queue_crud_async(dbos: DBOS, client: DBOSClient) -> None:
     queue_name = f"test_client_async_queue_{uuid.uuid4()}"
 
     assert await client.retrieve_queue_async(queue_name) is None
+    assert await client.list_queues_async() == []
 
     queue = await client.register_queue_async(
         queue_name,
@@ -434,6 +477,17 @@ async def test_client_queue_crud_async(dbos: DBOS, client: DBOSClient) -> None:
     assert await retrieved.get_limiter_async() == {"limit": 5, "period": 1.5}
     assert await retrieved.get_priority_enabled_async() is True
     assert await retrieved.get_polling_interval_sec_async() == 2.5
+
+    # list_queues_async returns queues bound to the client's SystemDatabase.
+    listed = await client.list_queues_async()
+    assert [q.name for q in listed] == [queue_name]
+    only = listed[0]
+    assert only._client_system_database is client._sys_db
+    assert await only.get_concurrency_async() == 4
+    assert await only.get_worker_concurrency_async() == 2
+    assert await only.get_limiter_async() == {"limit": 5, "period": 1.5}
+    assert await only.get_priority_enabled_async() is True
+    assert await only.get_polling_interval_sec_async() == 2.5
 
     await retrieved.set_concurrency_async(8)
     fresh = await DBOS.retrieve_queue_async(queue_name)
