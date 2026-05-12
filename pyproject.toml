@@ -48,7 +48,7 @@ otel = [
 validation = [
     "pydantic>=2.0",
 ]
-asyncsqlite = [
+aiosqlite = [
     "aiosqlite>=0.20.0",
 ]
 [build-system]
