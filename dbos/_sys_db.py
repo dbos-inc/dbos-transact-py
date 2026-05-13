@@ -1776,6 +1776,7 @@ class SystemDatabase(ABC):
                     ),
                 ).label("time_bucket")
             else:
+                # In Postgres, use "date_trunc" instead of "strftime" - faster and more compact
                 time_bucket_col = func.date_trunc(
                     group_by_time,
                     func.to_timestamp(created_at / sa.literal(1000.0)),
