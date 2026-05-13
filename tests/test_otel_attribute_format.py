@@ -62,6 +62,7 @@ def test_legacy_attributes_default_emitted_on_span(
     assert "executorID" in attrs
     assert "dbos.application.version" not in attrs
     assert "dbos.executor.id" not in attrs
+    DBOS.destroy(destroy_registry=True)
 
 
 def test_semconv_attributes_emitted_on_span(
@@ -96,3 +97,4 @@ def test_semconv_attributes_emitted_on_span(
     # Legacy names must not also appear when semconv is selected.
     assert "applicationVersion" not in attrs
     assert "executorID" not in attrs
+    DBOS.destroy(destroy_registry=True)
