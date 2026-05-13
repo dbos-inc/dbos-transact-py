@@ -1438,3 +1438,40 @@ def test_get_workflow_aggregates(dbos: DBOS) -> None:
     # No group_by flags should raise
     with pytest.raises(ValueError, match="At least one group_by flag must be set"):
         dbos._sys_db.get_workflow_aggregates()
+
+    # group_by_time alone
+    import datetime as _dt
+
+    results = dbos._sys_db.get_workflow_aggregates(group_by_time="hour")
+    assert len(results) >= 1 and len(results) <= 2
+    # Each bucket value must be a valid ISO datetime truncated to the hour
+    for r in results:
+        time_bucket = r["group"]["time_bucket"]
+        assert time_bucket is not None
+        parsed = _dt.datetime.fromisoformat(time_bucket)
+        assert parsed.minute == 0 and parsed.second == 0
+    # Total count across all buckets equals total workflows run so far
+    assert sum(r["count"] for r in results) >= 7  # 3 + 2 + 2 prefix runs
+
+    # group_by_time combined with group_by_status
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_time="hour", group_by_status=True
+    )
+    success_total = sum(
+        r["count"] for r in results if r["group"]["status"] == "SUCCESS"
+    )
+    error_total = sum(r["count"] for r in results if r["group"]["status"] == "ERROR")
+    assert success_total >= 5
+    assert error_total == 2
+
+    # group_by_time with a status filter
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_time="minute", status=["ERROR"]
+    )
+    assert len(results) >= 1
+    assert all(r["group"]["time_bucket"] is not None for r in results)
+    assert sum(r["count"] for r in results) == 2
+
+    # invalid group_by_time value should raise
+    with pytest.raises(ValueError, match="group_by_time must be one of"):
+        dbos._sys_db.get_workflow_aggregates(group_by_time="week")

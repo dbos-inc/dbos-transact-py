@@ -1716,6 +1716,7 @@ class SystemDatabase(ABC):
         group_by_queue_name: bool = False,
         group_by_executor_id: bool = False,
         group_by_application_version: bool = False,
+        group_by_time: Optional[str] = None,
         status: Optional[List[str]] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
@@ -1725,6 +1726,12 @@ class SystemDatabase(ABC):
         queue_name: Optional[List[str]] = None,
         workflow_id_prefix: Optional[List[str]] = None,
     ) -> List[WorkflowAggregateRow]:
+        _valid_time_units = {"day", "hour", "minute", "second"}
+        if group_by_time is not None and group_by_time not in _valid_time_units:
+            raise ValueError(
+                f"group_by_time must be one of {sorted(_valid_time_units)}, got {group_by_time!r}"
+            )
+
         # Build group_by columns from boolean flags
         group_by_flags = [
             ("status", group_by_status, SystemSchema.workflow_status.c.status),
@@ -1751,6 +1758,17 @@ class SystemDatabase(ABC):
             if enabled:
                 group_names.append(col_name)
                 group_columns.append(col)
+
+        if group_by_time is not None:
+            # created_at is stored as epoch milliseconds; convert to timestamp first
+            ts_expr = func.to_timestamp(
+                SystemSchema.workflow_status.c.created_at / sa.literal(1000.0)
+            )
+            time_bucket_col = func.date_trunc(group_by_time, ts_expr).label(
+                "time_bucket"
+            )
+            group_names.append("time_bucket")
+            group_columns.append(time_bucket_col)
 
         if not group_columns:
             raise ValueError("At least one group_by flag must be set to True")
@@ -1803,7 +1821,12 @@ class SystemDatabase(ABC):
 
         results: List[WorkflowAggregateRow] = []
         for row in rows:
-            group = {group_names[i]: row[i] for i in range(len(group_names))}
+            group: Dict[str, Optional[str]] = {}
+            for i, col_name in enumerate(group_names):
+                val = row[i]
+                if isinstance(val, datetime.datetime):
+                    val = val.isoformat()
+                group[col_name] = val
             results.append(
                 WorkflowAggregateRow(group=group, count=row[len(group_names)])
             )
