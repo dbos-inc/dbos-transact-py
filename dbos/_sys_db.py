@@ -1752,8 +1752,8 @@ class SystemDatabase(ABC):
                 SystemSchema.workflow_status.c.application_version,
             ),
         ]
-        group_names = []
-        group_columns = []
+        group_names: List[str] = []
+        group_columns: List[sa.sql.ColumnElement[Any]] = []
         for col_name, enabled, col in group_by_flags:
             if enabled:
                 group_names.append(col_name)

@@ -744,6 +744,7 @@ class GetWorkflowAggregatesBody(TypedDict, total=False):
     group_by_queue_name: bool
     group_by_executor_id: bool
     group_by_application_version: bool
+    group_by_time: str
     status: Optional[List[str]]
     start_time: Optional[str]
     end_time: Optional[str]
