@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 #               Default for backward compatibility with existing dashboards
 #               and the TypeScript Transact SDK.
 # - "semconv" : OpenTelemetry-style names under the dbos.* namespace
-#               (e.g. dbos.operation.uuid, dbos.application.id). Follows
+#               (e.g. dbos.operation.workflow_id, dbos.application.id). Follows
 #               https://opentelemetry.io/docs/specs/semconv/general/attribute-naming/
 OtelAttributeFormat = Literal["legacy", "semconv"]
 

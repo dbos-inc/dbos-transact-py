@@ -50,7 +50,7 @@ class DBOSConfig(TypedDict, total=False):
         otel_attribute_format (Literal["legacy", "semconv"]): How span attribute names are emitted to OTLP.
             "legacy" (default) keeps DBOS's original names (e.g. operationUUID, applicationID) for backward
             compatibility with existing dashboards and the TypeScript Transact SDK. "semconv" emits the
-            OpenTelemetry-style equivalents under the dbos.* namespace (e.g. dbos.operation.uuid,
+            OpenTelemetry-style equivalents under the dbos.* namespace (e.g. dbos.operation.workflow_id,
             dbos.application.id), per https://opentelemetry.io/docs/specs/semconv/general/attribute-naming/.
     """
 
