@@ -48,6 +48,9 @@ otel = [
 validation = [
     "pydantic>=2.0",
 ]
+aiosqlite = [
+    "aiosqlite>=0.20.0",
+]
 [build-system]
 requires = ["pdm-backend"]
 build-backend = "pdm.backend"
@@ -105,4 +108,5 @@ dev = [
     "httpx>=0.28.1",
     "psycopg2-binary>=2.9.11",
     "sqlalchemy-cockroachdb>=2.0.3",
+    "aiosqlite>=0.20.0",
 ]
