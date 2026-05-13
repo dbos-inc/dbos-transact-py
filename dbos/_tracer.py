@@ -30,7 +30,7 @@ OtelAttributeFormat = Literal["legacy", "semconv"]
 # plus the few attributes set ad-hoc (`responseCode`,
 # `authenticatedUser*`).
 _LEGACY_TO_SEMCONV: dict[str, str] = {
-    "operationUUID": "dbos.operation.uuid",
+    "operationUUID": "dbos.operation.workflow_id",
     "operationType": "dbos.operation.type",
     "applicationID": "dbos.application.id",
     "applicationVersion": "dbos.application.version",
@@ -58,9 +58,7 @@ class DBOSTracer:
         self.app_id = os.environ.get("DBOS__APPID", None)
         self.provider: Optional[TracerProvider] = None
         self.disable_otlp: bool = False
-        self.otel_attribute_format: OtelAttributeFormat = (
-            _DEFAULT_OTEL_ATTRIBUTE_FORMAT
-        )
+        self.otel_attribute_format: OtelAttributeFormat = _DEFAULT_OTEL_ATTRIBUTE_FORMAT
 
     def config(self, config: ConfigFile) -> None:
         self.otlp_attributes = config.get("telemetry", {}).get("otlp_attributes", {})  # type: ignore

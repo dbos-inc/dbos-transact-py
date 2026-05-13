@@ -5,7 +5,10 @@ use their original camelCase names. When `otel_attribute_format="semconv"`,
 they're emitted under the OTel-style `dbos.*` namespace.
 """
 
+import uuid
+
 from dbos import DBOS, DBOSConfig
+from dbos._context import SetWorkflowID
 from dbos._tracer import _LEGACY_TO_SEMCONV, DBOSTracer
 from tests.conftest import TestOtelType
 
@@ -28,7 +31,7 @@ def test_resolve_attribute_name_unknown_passes_through() -> None:
     """Unknown attribute names are unaffected by the format flag."""
     for fmt in ("legacy", "semconv"):
         tracer = DBOSTracer()
-        tracer.otel_attribute_format = fmt  # type: ignore[assignment]
+        tracer.otel_attribute_format = fmt
         assert tracer._resolve_attribute_name("custom.user.attribute") == (
             "custom.user.attribute"
         )
@@ -79,11 +82,15 @@ def test_semconv_attributes_emitted_on_span(
         pass
 
     exporter.clear()
-    w()
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        w()
 
     spans = exporter.get_finished_spans()
     assert spans, "expected at least one span"
     attrs = spans[-1].attributes or {}
+    assert "dbos.operation.workflow_id" in attrs
+    assert attrs["dbos.operation.workflow_id"] == wfid
     assert "dbos.application.version" in attrs
     assert "dbos.executor.id" in attrs
     # Legacy names must not also appear when semconv is selected.
