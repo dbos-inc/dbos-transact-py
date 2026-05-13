@@ -1439,17 +1439,9 @@ def test_get_workflow_aggregates(dbos: DBOS) -> None:
     with pytest.raises(ValueError, match="At least one group_by flag must be set"):
         dbos._sys_db.get_workflow_aggregates()
 
-    import datetime as _dt
-
-    now = _dt.datetime.now(_dt.timezone.utc)
-    t_start = (now - _dt.timedelta(hours=1)).isoformat()
-    t_end = (now + _dt.timedelta(hours=1)).isoformat()
-
     # time_bucket_size_ms alone (1-hour buckets = 3_600_000 ms)
     one_hour_ms = 3_600_000
-    results = dbos._sys_db.get_workflow_aggregates(
-        time_bucket_size_ms=one_hour_ms, start_time=t_start, end_time=t_end
-    )
+    results = dbos._sys_db.get_workflow_aggregates(time_bucket_size_ms=one_hour_ms)
     assert len(results) >= 1
     # Each bucket value must be a multiple of the bucket size
     for r in results:
@@ -1461,10 +1453,7 @@ def test_get_workflow_aggregates(dbos: DBOS) -> None:
 
     # time_bucket_size_ms combined with group_by_status
     results = dbos._sys_db.get_workflow_aggregates(
-        time_bucket_size_ms=one_hour_ms,
-        group_by_status=True,
-        start_time=t_start,
-        end_time=t_end,
+        time_bucket_size_ms=one_hour_ms, group_by_status=True
     )
     success_total = sum(
         r["count"] for r in results if r["group"]["status"] == "SUCCESS"
@@ -1476,10 +1465,7 @@ def test_get_workflow_aggregates(dbos: DBOS) -> None:
     # time_bucket_size_ms with a status filter (1-minute buckets = 60_000 ms)
     one_minute_ms = 60_000
     results = dbos._sys_db.get_workflow_aggregates(
-        time_bucket_size_ms=one_minute_ms,
-        status=["ERROR"],
-        start_time=t_start,
-        end_time=t_end,
+        time_bucket_size_ms=one_minute_ms, status=["ERROR"]
     )
     assert len(results) >= 1
     for r in results:
@@ -1487,24 +1473,6 @@ def test_get_workflow_aggregates(dbos: DBOS) -> None:
         assert r["group"]["time_bucket"] % one_minute_ms == 0
     assert sum(r["count"] for r in results) == 2
 
-    # must specify start_time and end_time when time_bucket_size_ms is set
-    with pytest.raises(ValueError, match="start_time and end_time must be specified"):
-        dbos._sys_db.get_workflow_aggregates(time_bucket_size_ms=one_hour_ms)
-    with pytest.raises(ValueError, match="start_time and end_time must be specified"):
-        dbos._sys_db.get_workflow_aggregates(
-            time_bucket_size_ms=one_hour_ms, start_time=t_start
-        )
-
     # must be > 0
     with pytest.raises(ValueError, match="time_bucket_size_ms must be > 0"):
-        dbos._sys_db.get_workflow_aggregates(
-            time_bucket_size_ms=0, start_time=t_start, end_time=t_end
-        )
-
-    # too many buckets
-    with pytest.raises(ValueError, match="10M buckets"):
-        dbos._sys_db.get_workflow_aggregates(
-            time_bucket_size_ms=1,
-            start_time=(now - _dt.timedelta(days=200)).isoformat(),
-            end_time=t_end,
-        )
+        dbos._sys_db.get_workflow_aggregates(time_bucket_size_ms=0)
