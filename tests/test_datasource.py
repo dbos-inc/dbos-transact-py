@@ -1,5 +1,7 @@
 """Tests for SyncDatasource and AsyncDatasource."""
 
+import base64
+import pickle
 import uuid
 from typing import Any, AsyncGenerator, Generator
 
@@ -8,8 +10,7 @@ import pytest_asyncio
 import sqlalchemy as sa
 from sqlalchemy import text
 
-from dbos import DBOS, SetWorkflowID
-from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
+from dbos import DBOS, AsyncSQLAlchemyDatasource, SetWorkflowID, SQLAlchemyDatasource
 from dbos._error import DBOSException
 from dbos._schemas.datasource_database import DatasourceSchema
 from dbos._schemas.system_database import SystemSchema
@@ -350,6 +351,68 @@ def test_sync_ds_writes_both_tables(dbos: DBOS, sync_ds: SQLAlchemyDatasource) -
     _check_both_tables(sync_ds, dbos, wfid)
 
 
+def test_sync_ds_step_recorded_with_name(
+    dbos: DBOS, sync_ds: SQLAlchemyDatasource
+) -> None:
+    """Datasource step appears in list_workflow_steps with the right name and output."""
+
+    def my_step() -> str:
+        return "run_tx_result"
+
+    @sync_ds.transaction
+    def unnamed_step() -> str:
+        return "unnamed_result"
+
+    @sync_ds.transaction(name="my_named_step")
+    def named_step() -> str:
+        return "named_result"
+
+    @DBOS.workflow()
+    def my_workflow() -> tuple[str, str, str]:
+        r1 = sync_ds.run_tx_step(None, my_step)
+        r2 = unnamed_step()
+        r3 = named_step()
+        return r1, r2, r3
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert my_workflow() == ("run_tx_result", "unnamed_result", "named_result")
+
+    steps = DBOS.list_workflow_steps(wfid)
+    assert len(steps) == 3
+    assert steps[0]["function_id"] == 1
+    assert steps[0]["function_name"].endswith("my_step")
+    assert steps[0]["output"] == "run_tx_result"
+    assert steps[1]["function_id"] == 2
+    assert steps[1]["function_name"].endswith("unnamed_step")
+    assert steps[1]["output"] == "unnamed_result"
+    assert steps[2]["function_id"] == 3
+    assert steps[2]["function_name"] == "my_named_step"
+    assert steps[2]["output"] == "named_result"
+
+    with sync_ds.engine.connect() as conn:
+        ds_rows = conn.execute(
+            sa.select(
+                DatasourceSchema.datasource_outputs.c.step_id,
+                DatasourceSchema.datasource_outputs.c.output,
+                DatasourceSchema.datasource_outputs.c.error,
+                DatasourceSchema.datasource_outputs.c.serialization,
+            )
+            .where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+            .order_by(DatasourceSchema.datasource_outputs.c.step_id)
+        ).fetchall()
+    assert len(ds_rows) == 3
+    for row in ds_rows:
+        assert row.error is None
+        assert row.serialization == "py_pickle"
+    assert ds_rows[0].step_id == 1
+    assert pickle.loads(base64.b64decode(ds_rows[0].output)) == "run_tx_result"
+    assert ds_rows[1].step_id == 2
+    assert pickle.loads(base64.b64decode(ds_rows[1].output)) == "unnamed_result"
+    assert ds_rows[2].step_id == 3
+    assert pickle.loads(base64.b64decode(ds_rows[2].output)) == "named_result"
+
+
 def test_sync_ds_recovers_from_sysdb_loss(
     dbos: DBOS, sync_ds: SQLAlchemyDatasource
 ) -> None:
@@ -622,6 +685,75 @@ async def test_async_ds_writes_both_tables(
         assert await my_workflow() == "world"
 
     await _async_check_both_tables(async_ds, dbos, wfid)
+
+
+@pytest.mark.asyncio
+async def test_async_ds_step_recorded_with_name(
+    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource
+) -> None:
+    """Async datasource step appears in list_workflow_steps with the right name and output."""
+
+    async def my_step() -> str:
+        return "run_tx_result"
+
+    @async_ds.transaction
+    async def unnamed_step() -> str:
+        return "unnamed_result"
+
+    @async_ds.transaction(name="my_named_async_step")
+    async def named_step() -> str:
+        return "named_result"
+
+    @DBOS.workflow()
+    async def my_workflow() -> tuple[str, str, str]:
+        r1 = await async_ds.run_tx_step_async(None, my_step)
+        r2 = await unnamed_step()
+        r3 = await named_step()
+        return r1, r2, r3
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == (
+            "run_tx_result",
+            "unnamed_result",
+            "named_result",
+        )
+
+    steps = await DBOS.list_workflow_steps_async(wfid)
+    assert len(steps) == 3
+    assert steps[0]["function_id"] == 1
+    assert steps[0]["function_name"].endswith("my_step")
+    assert steps[0]["output"] == "run_tx_result"
+    assert steps[1]["function_id"] == 2
+    assert steps[1]["function_name"].endswith("unnamed_step")
+    assert steps[1]["output"] == "unnamed_result"
+    assert steps[2]["function_id"] == 3
+    assert steps[2]["function_name"] == "my_named_async_step"
+    assert steps[2]["output"] == "named_result"
+
+    async with async_ds.engine.connect() as conn:
+        ds_rows = (
+            await conn.execute(
+                sa.select(
+                    DatasourceSchema.datasource_outputs.c.step_id,
+                    DatasourceSchema.datasource_outputs.c.output,
+                    DatasourceSchema.datasource_outputs.c.error,
+                    DatasourceSchema.datasource_outputs.c.serialization,
+                )
+                .where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+                .order_by(DatasourceSchema.datasource_outputs.c.step_id)
+            )
+        ).fetchall()
+    assert len(ds_rows) == 3
+    for row in ds_rows:
+        assert row.error is None
+        assert row.serialization == "py_pickle"
+    assert ds_rows[0].step_id == 1
+    assert pickle.loads(base64.b64decode(ds_rows[0].output)) == "run_tx_result"
+    assert ds_rows[1].step_id == 2
+    assert pickle.loads(base64.b64decode(ds_rows[1].output)) == "unnamed_result"
+    assert ds_rows[2].step_id == 3
+    assert pickle.loads(base64.b64decode(ds_rows[2].output)) == "named_result"
 
 
 @pytest.mark.asyncio
