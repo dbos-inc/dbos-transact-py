@@ -1732,6 +1732,7 @@ class SystemDatabase(ABC):
         group_by_queue_name: bool = False,
         group_by_executor_id: bool = False,
         group_by_application_version: bool = False,
+        time_bucket_size_ms: Optional[int] = None,
         status: Optional[List[str]] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
@@ -1741,6 +1742,9 @@ class SystemDatabase(ABC):
         queue_name: Optional[List[str]] = None,
         workflow_id_prefix: Optional[List[str]] = None,
     ) -> List[WorkflowAggregateRow]:
+        if time_bucket_size_ms is not None and time_bucket_size_ms <= 0:
+            raise ValueError("time_bucket_size_ms must be > 0")
+
         # Build group_by columns from boolean flags
         group_by_flags = [
             ("status", group_by_status, SystemSchema.workflow_status.c.status),
@@ -1761,12 +1765,21 @@ class SystemDatabase(ABC):
                 SystemSchema.workflow_status.c.application_version,
             ),
         ]
-        group_names = []
-        group_columns = []
+        group_names: List[str] = []
+        group_columns: List[sa.sql.ColumnElement[Any]] = []
         for col_name, enabled, col in group_by_flags:
             if enabled:
                 group_names.append(col_name)
                 group_columns.append(col)
+
+        if time_bucket_size_ms is not None:
+            created_at = SystemSchema.workflow_status.c.created_at
+            bucket = sa.literal(time_bucket_size_ms)
+            time_bucket_col = (
+                sa.cast(func.floor(created_at / bucket), sa.BigInteger) * bucket
+            ).label("time_bucket")
+            group_names.append("time_bucket")
+            group_columns.append(time_bucket_col)
 
         if not group_columns:
             raise ValueError("At least one group_by flag must be set to True")
@@ -1812,14 +1825,17 @@ class SystemDatabase(ABC):
                 )
             )
 
-        query = query.group_by(*group_columns)
+        query = query.group_by(*group_columns).limit(10_000_000)
 
         with self.engine.begin() as c:
             rows = c.execute(query).fetchall()
 
         results: List[WorkflowAggregateRow] = []
         for row in rows:
-            group = {group_names[i]: row[i] for i in range(len(group_names))}
+            group: Dict[str, Optional[str]] = {
+                group_names[i]: str(row[i]) if row[i] is not None else None
+                for i in range(len(group_names))
+            }
             results.append(
                 WorkflowAggregateRow(group=group, count=row[len(group_names)])
             )
