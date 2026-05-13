@@ -418,6 +418,17 @@ class DBOSClient:
         """Async version of :meth:`delete_queue`."""
         await asyncio.to_thread(self.delete_queue, name)
 
+    def list_queues(self) -> List[Queue]:
+        """List all database-backed queues registered in the system database."""
+        _warn_sync_db_call_in_async_context(
+            "DBOSClient.list_queues", "DBOSClient.list_queues_async"
+        )
+        return self._sys_db.list_queues(client_system_database=self._sys_db)
+
+    async def list_queues_async(self) -> List[Queue]:
+        """Async version of :meth:`list_queues`."""
+        return await asyncio.to_thread(self.list_queues)
+
     def retrieve_workflow(self, workflow_id: str) -> "WorkflowHandle[R]":
         status = get_workflow(self._sys_db, workflow_id)
         if status is None:
