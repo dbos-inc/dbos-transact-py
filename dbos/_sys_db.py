@@ -487,13 +487,14 @@ class SystemDatabase(ABC):
 
         # Log system database connection information
         if engine:
-            dbos_logger.info("Initializing DBOS system database with custom engine")
+            printable_sys_db_url = engine.url.render_as_string(hide_password=True)
+            dbos_logger.info(f"Initializing DBOS system database with custom engine: {printable_sys_db_url} (schema: {schema})")
         else:
             printable_sys_db_url = sa.make_url(system_database_url).render_as_string(
                 hide_password=True
             )
             dbos_logger.info(
-                f"Initializing DBOS system database with URL: {printable_sys_db_url}"
+                f"Initializing DBOS system database with URL: {printable_sys_db_url} (schema: {schema})"
             )
             if system_database_url.startswith("sqlite"):
                 dbos_logger.info(
