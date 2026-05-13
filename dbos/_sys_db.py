@@ -1726,8 +1726,20 @@ class SystemDatabase(ABC):
         queue_name: Optional[List[str]] = None,
         workflow_id_prefix: Optional[List[str]] = None,
     ) -> List[WorkflowAggregateRow]:
-        if time_bucket_size_ms is not None and time_bucket_size_ms <= 0:
-            raise ValueError("time_bucket_size_ms must be > 0")
+        if time_bucket_size_ms is not None:
+            if time_bucket_size_ms <= 0:
+                raise ValueError("time_bucket_size_ms must be > 0")
+            if start_time is None or end_time is None:
+                raise ValueError(
+                    "start_time and end_time must be specified when time_bucket_size_ms is set"
+                )
+            start_ms = datetime.datetime.fromisoformat(start_time).timestamp() * 1000
+            end_ms = datetime.datetime.fromisoformat(end_time).timestamp() * 1000
+            num_buckets = (end_ms - start_ms) / time_bucket_size_ms
+            if num_buckets > 10_000_000:
+                raise ValueError(
+                    f"time range divided by time_bucket_size_ms would exceed 10M buckets ({num_buckets:.0f})"
+                )
 
         # Build group_by columns from boolean flags
         group_by_flags = [
