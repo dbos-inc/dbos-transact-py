@@ -330,7 +330,7 @@ class StepInfo(TypedDict):
 
 
 class WorkflowAggregateRow(TypedDict):
-    group: Dict[str, Any]
+    group: Dict[str, Optional[str]]
     count: int
 
 
@@ -1759,8 +1759,9 @@ class SystemDatabase(ABC):
         if time_bucket_size_ms is not None:
             created_at = SystemSchema.workflow_status.c.created_at
             bucket = sa.literal(time_bucket_size_ms)
-            time_bucket_col = (
-                sa.cast(func.floor(created_at / bucket), sa.BigInteger) * bucket
+            time_bucket_col = sa.cast(
+                sa.cast(func.floor(created_at / bucket), sa.BigInteger) * bucket,
+                sa.String,
             ).label("time_bucket")
             group_names.append("time_bucket")
             group_columns.append(time_bucket_col)
@@ -1816,7 +1817,7 @@ class SystemDatabase(ABC):
 
         results: List[WorkflowAggregateRow] = []
         for row in rows:
-            group: Dict[str, Any] = {
+            group: Dict[str, Optional[str]] = {
                 group_names[i]: row[i] for i in range(len(group_names))
             }
             results.append(

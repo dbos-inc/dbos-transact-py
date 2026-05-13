@@ -1446,8 +1446,8 @@ def test_get_workflow_aggregates(dbos: DBOS) -> None:
     # Each bucket value must be a multiple of the bucket size
     for r in results:
         tb = r["group"]["time_bucket"]
-        assert isinstance(tb, int)
-        assert tb % one_hour_ms == 0
+        assert isinstance(tb, str)
+        assert int(tb) % one_hour_ms == 0
     # Total count across all buckets equals total workflows run so far
     assert sum(r["count"] for r in results) >= 7  # 3 + 2 + 2 prefix runs
 
@@ -1469,8 +1469,8 @@ def test_get_workflow_aggregates(dbos: DBOS) -> None:
     )
     assert len(results) >= 1
     for r in results:
-        assert isinstance(r["group"]["time_bucket"], int)
-        assert r["group"]["time_bucket"] % one_minute_ms == 0
+        assert isinstance(r["group"]["time_bucket"], str)
+        assert int(r["group"]["time_bucket"]) % one_minute_ms == 0
     assert sum(r["count"] for r in results) == 2
 
     # must be > 0
