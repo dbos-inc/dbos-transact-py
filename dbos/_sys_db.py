@@ -1760,13 +1760,26 @@ class SystemDatabase(ABC):
                 group_columns.append(col)
 
         if group_by_time is not None:
-            # created_at is stored as epoch milliseconds; convert to timestamp first
-            ts_expr = func.to_timestamp(
-                SystemSchema.workflow_status.c.created_at / sa.literal(1000.0)
-            )
-            time_bucket_col = func.date_trunc(group_by_time, ts_expr).label(
-                "time_bucket"
-            )
+            # created_at is stored as epoch milliseconds
+            created_at = SystemSchema.workflow_status.c.created_at
+            if "sqlite" in self.engine.dialect.name:
+                _sqlite_fmt = {
+                    "day": "%Y-%m-%d 00:00:00",
+                    "hour": "%Y-%m-%d %H:00:00",
+                    "minute": "%Y-%m-%d %H:%M:00",
+                    "second": "%Y-%m-%d %H:%M:%S",
+                }
+                time_bucket_col = func.strftime(
+                    _sqlite_fmt[group_by_time],
+                    func.datetime(
+                        created_at / sa.literal(1000), sa.literal("unixepoch")
+                    ),
+                ).label("time_bucket")
+            else:
+                time_bucket_col = func.date_trunc(
+                    group_by_time,
+                    func.to_timestamp(created_at / sa.literal(1000.0)),
+                ).label("time_bucket")
             group_names.append("time_bucket")
             group_columns.append(time_bucket_col)
 
