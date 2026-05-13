@@ -15,6 +15,7 @@ from dbos._serialization import WorkflowSerializationFormat
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from dbos._utils import GlobalParams, generate_uuid
@@ -105,6 +106,8 @@ class DBOSContext:
         self.curr_step_function_id: int = -1
         self.curr_tx_function_id: int = -1
         self.sql_session: Optional[Session] = None
+        self.sync_ds_session: Optional[Session] = None
+        self.async_ds_session: Optional[AsyncSession] = None
         self.context_spans: list[ContextSpan] = []
 
         self.authenticated_user: Optional[str] = None
@@ -268,6 +271,18 @@ class DBOSContext:
         self.sql_session = None
         self.curr_tx_function_id = -1
         self._end_span(exc_value)
+
+    def start_sync_ds_transaction(self, ses: Session) -> None:
+        self.sync_ds_session = ses
+
+    def end_sync_ds_transaction(self) -> None:
+        self.sync_ds_session = None
+
+    def start_async_ds_transaction(self, ses: AsyncSession) -> None:
+        self.async_ds_session = ses
+
+    def end_async_ds_transaction(self) -> None:
+        self.async_ds_session = None
 
     def start_handler(self, attributes: TracedAttributes) -> None:
         self._start_span(attributes)
