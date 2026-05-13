@@ -1757,7 +1757,7 @@ class SystemDatabase(ABC):
             created_at = SystemSchema.workflow_status.c.created_at
             bucket = sa.literal(time_bucket_size)
             time_bucket_col = (
-                sa.cast(created_at / bucket, sa.BigInteger) * bucket
+                sa.cast(func.floor(created_at / bucket), sa.BigInteger) * bucket
             ).label("time_bucket")
             group_names.append("time_bucket")
             group_columns.append(time_bucket_col)
