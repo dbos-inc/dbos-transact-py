@@ -8,6 +8,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from . import DBOS
 from ._context import EnterDBOSHandler, OperationType, SetWorkflowID, TracedAttributes
 from ._error import DBOSException
+from ._tracer import dbos_tracer
 from ._utils import generate_uuid, request_id_header
 
 
@@ -88,5 +89,8 @@ def setup_fastapi_middleware(app: FastAPI, dbos: DBOS) -> None:
                 and hasattr(response, "status_code")
             ):
                 if DBOS.span is not None:
-                    DBOS.span.set_attribute("responseCode", response.status_code)
+                    DBOS.span.set_attribute(
+                        dbos_tracer._resolve_attribute_name("responseCode"),
+                        response.status_code,
+                    )
         return response
