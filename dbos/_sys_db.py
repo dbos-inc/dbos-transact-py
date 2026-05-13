@@ -1716,7 +1716,7 @@ class SystemDatabase(ABC):
         group_by_queue_name: bool = False,
         group_by_executor_id: bool = False,
         group_by_application_version: bool = False,
-        time_bucket_size: Optional[int] = None,
+        time_bucket_size_ms: Optional[int] = None,
         status: Optional[List[str]] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
@@ -1726,6 +1726,9 @@ class SystemDatabase(ABC):
         queue_name: Optional[List[str]] = None,
         workflow_id_prefix: Optional[List[str]] = None,
     ) -> List[WorkflowAggregateRow]:
+        if time_bucket_size_ms is not None and time_bucket_size_ms <= 0:
+            raise ValueError("time_bucket_size_ms must be > 0")
+
         # Build group_by columns from boolean flags
         group_by_flags = [
             ("status", group_by_status, SystemSchema.workflow_status.c.status),
@@ -1753,9 +1756,9 @@ class SystemDatabase(ABC):
                 group_names.append(col_name)
                 group_columns.append(col)
 
-        if time_bucket_size is not None:
+        if time_bucket_size_ms is not None:
             created_at = SystemSchema.workflow_status.c.created_at
-            bucket = sa.literal(time_bucket_size)
+            bucket = sa.literal(time_bucket_size_ms)
             time_bucket_col = (
                 sa.cast(func.floor(created_at / bucket), sa.BigInteger) * bucket
             ).label("time_bucket")
