@@ -121,9 +121,7 @@ class _BlackHoleWSServer:
                 return
             self._conns.append(conn)
             self.connection_count += 1
-            t = threading.Thread(
-                target=self._handle, args=(conn,), daemon=True
-            )
+            t = threading.Thread(target=self._handle, args=(conn,), daemon=True)
             t.start()
 
     def _handle(self, conn: socket.socket) -> None:
@@ -242,9 +240,7 @@ def test_conductor_reconnects_after_keepalive_timeout(
             self.protocol.receive_eof()
             self.terminate_pending_pings()
 
-    monkeypatch.setattr(
-        ws_connection.Connection, "close_socket", wedged_close_socket
-    )
+    monkeypatch.setattr(ws_connection.Connection, "close_socket", wedged_close_socket)
 
     server = _BlackHoleWSServer()
     server.start()
