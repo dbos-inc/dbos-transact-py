@@ -488,7 +488,9 @@ class SystemDatabase(ABC):
         # Log system database connection information
         if engine:
             printable_sys_db_url = engine.url.render_as_string(hide_password=True)
-            dbos_logger.info(f"Initializing DBOS system database with custom engine: {printable_sys_db_url} (schema: {schema})")
+            dbos_logger.info(
+                f"Initializing DBOS system database with custom engine: {printable_sys_db_url} (schema: {schema})"
+            )
         else:
             printable_sys_db_url = sa.make_url(system_database_url).render_as_string(
                 hide_password=True
@@ -1760,9 +1762,8 @@ class SystemDatabase(ABC):
         if time_bucket_size_ms is not None:
             created_at = SystemSchema.workflow_status.c.created_at
             bucket = sa.literal(time_bucket_size_ms)
-            time_bucket_col = sa.cast(
-                sa.cast(func.floor(created_at / bucket), sa.BigInteger) * bucket,
-                sa.String,
+            time_bucket_col = (
+                sa.cast(func.floor(created_at / bucket), sa.BigInteger) * bucket
             ).label("time_bucket")
             group_names.append("time_bucket")
             group_columns.append(time_bucket_col)
@@ -1819,7 +1820,8 @@ class SystemDatabase(ABC):
         results: List[WorkflowAggregateRow] = []
         for row in rows:
             group: Dict[str, Optional[str]] = {
-                group_names[i]: row[i] for i in range(len(group_names))
+                group_names[i]: str(row[i]) if row[i] is not None else None
+                for i in range(len(group_names))
             }
             results.append(
                 WorkflowAggregateRow(group=group, count=row[len(group_names)])
