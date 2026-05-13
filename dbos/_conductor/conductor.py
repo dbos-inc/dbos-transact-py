@@ -907,7 +907,9 @@ class ConductorWebsocket(threading.Thread):
                                     group_by_application_version=agg_body.get(
                                         "group_by_application_version", False
                                     ),
-                                    group_by_time=agg_body.get("group_by_time", None),
+                                    time_bucket_size=agg_body.get(
+                                        "time_bucket_size", None
+                                    ),
                                     status=agg_body.get("status", None),
                                     start_time=agg_body.get("start_time", None),
                                     end_time=agg_body.get("end_time", None),

@@ -330,7 +330,7 @@ class StepInfo(TypedDict):
 
 
 class WorkflowAggregateRow(TypedDict):
-    group: Dict[str, Optional[str]]
+    group: Dict[str, Any]
     count: int
 
 
@@ -1716,7 +1716,7 @@ class SystemDatabase(ABC):
         group_by_queue_name: bool = False,
         group_by_executor_id: bool = False,
         group_by_application_version: bool = False,
-        group_by_time: Optional[str] = None,
+        time_bucket_size: Optional[int] = None,
         status: Optional[List[str]] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
@@ -1726,12 +1726,6 @@ class SystemDatabase(ABC):
         queue_name: Optional[List[str]] = None,
         workflow_id_prefix: Optional[List[str]] = None,
     ) -> List[WorkflowAggregateRow]:
-        _valid_time_units = {"day", "hour", "minute", "second"}
-        if group_by_time is not None and group_by_time not in _valid_time_units:
-            raise ValueError(
-                f"group_by_time must be one of {sorted(_valid_time_units)}, got {group_by_time!r}"
-            )
-
         # Build group_by columns from boolean flags
         group_by_flags = [
             ("status", group_by_status, SystemSchema.workflow_status.c.status),
@@ -1759,28 +1753,12 @@ class SystemDatabase(ABC):
                 group_names.append(col_name)
                 group_columns.append(col)
 
-        if group_by_time is not None:
-            # created_at is stored as epoch milliseconds
+        if time_bucket_size is not None:
             created_at = SystemSchema.workflow_status.c.created_at
-            if "sqlite" in self.engine.dialect.name:
-                _sqlite_fmt = {
-                    "day": "%Y-%m-%d 00:00:00",
-                    "hour": "%Y-%m-%d %H:00:00",
-                    "minute": "%Y-%m-%d %H:%M:00",
-                    "second": "%Y-%m-%d %H:%M:%S",
-                }
-                time_bucket_col = func.strftime(
-                    _sqlite_fmt[group_by_time],
-                    func.datetime(
-                        created_at / sa.literal(1000), sa.literal("unixepoch")
-                    ),
-                ).label("time_bucket")
-            else:
-                # In Postgres, use "date_trunc" instead of "strftime" - faster and more compact
-                time_bucket_col = func.date_trunc(
-                    group_by_time,
-                    func.to_timestamp(created_at / sa.literal(1000.0)),
-                ).label("time_bucket")
+            bucket = sa.literal(time_bucket_size)
+            time_bucket_col = (
+                sa.cast(created_at / bucket, sa.BigInteger) * bucket
+            ).label("time_bucket")
             group_names.append("time_bucket")
             group_columns.append(time_bucket_col)
 
@@ -1835,12 +1813,9 @@ class SystemDatabase(ABC):
 
         results: List[WorkflowAggregateRow] = []
         for row in rows:
-            group: Dict[str, Optional[str]] = {}
-            for i, col_name in enumerate(group_names):
-                val = row[i]
-                if isinstance(val, datetime.datetime):
-                    val = val.isoformat()
-                group[col_name] = val
+            group: Dict[str, Any] = {
+                group_names[i]: row[i] for i in range(len(group_names))
+            }
             results.append(
                 WorkflowAggregateRow(group=group, count=row[len(group_names)])
             )
