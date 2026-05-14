@@ -5,7 +5,7 @@ import psycopg
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
 
-from dbos._migration import ensure_dbos_schema, run_dbos_migrations
+from dbos._migration import ensure_dbos_schema, run_dbos_migrations, should_migrate
 
 from ._logger import dbos_logger
 from ._sys_db import SystemDatabase
@@ -52,6 +52,11 @@ class PostgresSystemDatabase(SystemDatabase):
                 conn.execute(sa.text("SELECT 1"))
 
         assert self.schema
+        # Skip the advisory lock and migration work entirely if the schema
+        # and dbos_migrations table already exist and are at the latest version.
+        if not should_migrate(self.engine, self.schema, self.use_listen_notify):
+            return
+
         # Use an advisory lock to serialize concurrent migrations.
         # Try to acquire the lock for up to 30 seconds. If we can't, log a
         # warning and proceed to run migrations without it, rather than

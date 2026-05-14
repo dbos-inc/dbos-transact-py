@@ -65,6 +65,43 @@ def _bump_migration_version(
             )
 
 
+def should_migrate(engine: sa.Engine, schema: str, use_listen_notify: bool) -> bool:
+    """Return True if the schema or dbos_migrations table is missing, or if
+    the recorded migration version is behind the latest. Postgres-only."""
+    with engine.begin() as conn:
+        schema_exists = conn.execute(
+            sa.text(
+                "SELECT 1 FROM information_schema.schemata WHERE schema_name = :schema"
+            ),
+            {"schema": schema},
+        ).fetchone()
+        if schema_exists is None:
+            return True
+
+        table_exists = conn.execute(
+            sa.text(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = :schema AND table_name = 'dbos_migrations'"
+            ),
+            {"schema": schema},
+        ).fetchone()
+        if table_exists is None:
+            return True
+
+        current_version_row = conn.execute(
+            sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+        ).fetchone()
+        current_version = current_version_row[0] if current_version_row else 0
+
+        version_str = conn.execute(sa.text("SELECT version()")).scalar() or ""
+        is_cockroach = "cockroachdb" in version_str.lower()
+
+        latest_version = len(
+            get_dbos_migrations(schema, use_listen_notify, is_cockroach)
+        )
+        return current_version < latest_version
+
+
 def ensure_dbos_schema(engine: sa.Engine, schema: str) -> None:
     """
     True if using DBOS migrations (DBOS schema and migrations table already exist or were created)

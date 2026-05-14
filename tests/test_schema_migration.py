@@ -534,6 +534,46 @@ def test_version_not_bumped_on_migration_failure(
         assert version == final_version
 
 
+def test_should_migrate(dbos: DBOS, skip_with_sqlite: None) -> None:
+    """should_migrate must return True when the schema is missing, the
+    dbos_migrations table is missing, or the recorded version is behind the
+    latest; and False once the schema is fully migrated."""
+    from dbos._migration import should_migrate
+
+    engine = dbos._sys_db.engine
+    schema = "dbos"
+    latest_version = len(get_dbos_migrations(schema, True))
+
+    # A freshly-migrated dbos fixture should be up to date
+    assert should_migrate(engine, schema, use_listen_notify=True) is False
+
+    # Rewinding the version makes migrations pending again
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(f'UPDATE "{schema}".dbos_migrations SET version = :v'),
+            {"v": latest_version - 1},
+        )
+    assert should_migrate(engine, schema, use_listen_notify=True) is True
+
+    # Restore version, then drop the migrations table to simulate a partially
+    # initialized schema. should_migrate must report True.
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(f'UPDATE "{schema}".dbos_migrations SET version = :v'),
+            {"v": latest_version},
+        )
+    assert should_migrate(engine, schema, use_listen_notify=True) is False
+
+    with engine.begin() as conn:
+        conn.execute(sa.text(f'DROP TABLE "{schema}".dbos_migrations'))
+    assert should_migrate(engine, schema, use_listen_notify=True) is True
+
+    # A schema name that does not exist at all must also report True
+    assert (
+        should_migrate(engine, "nonexistent_schema_xyz", use_listen_notify=True) is True
+    )
+
+
 def test_runner_resumes_after_invalid_index(dbos: DBOS, skip_with_sqlite: None) -> None:
     """Simulate a CREATE INDEX CONCURRENTLY that crashed mid-build (leaving an
     INVALID index) and verify the runner cleans it up and re-runs the
