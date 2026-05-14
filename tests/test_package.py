@@ -212,10 +212,21 @@ def test_workflow_commands(config: DBOSConfig) -> None:
         try:
             session = requests.Session()
 
-            def hit_queue() -> None:
-                session.get("http://localhost:8000/queue", timeout=2).raise_for_status()
+            # Wait for the server to come up by hitting the fast static
+            # homepage endpoint.
+            def ping_root() -> None:
+                session.get("http://localhost:8000/", timeout=2).raise_for_status()
 
-            retry_until_success(hit_queue, interval=1, max_attempts=30)
+            retry_until_success(ping_root, interval=1, max_attempts=30)
+
+            # Trigger /queue. Its handler enqueues 10 workflows on
+            # example-queue and then awaits them; each queued step sleeps
+            # 5s, so we use a short read timeout so we kill the server
+            # while the enqueued workflows are still PENDING.
+            try:
+                session.get("http://localhost:8000/queue", timeout=1)
+            except requests.exceptions.Timeout:
+                pass
             time.sleep(1)  # So the queued workflows can start
         finally:
             # Because the toolbox steps sleep for 5 seconds, all the steps should be PENDING
