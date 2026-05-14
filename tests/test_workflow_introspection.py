@@ -1438,3 +1438,41 @@ def test_get_workflow_aggregates(dbos: DBOS) -> None:
     # No group_by flags should raise
     with pytest.raises(ValueError, match="At least one group_by flag must be set"):
         dbos._sys_db.get_workflow_aggregates()
+
+    # time_bucket_size_ms alone (1-hour buckets = 3_600_000 ms)
+    one_hour_ms = 3_600_000
+    results = dbos._sys_db.get_workflow_aggregates(time_bucket_size_ms=one_hour_ms)
+    assert len(results) >= 1
+    # Each bucket value must be a multiple of the bucket size
+    for r in results:
+        tb = r["group"]["time_bucket"]
+        assert isinstance(tb, str)
+        assert int(tb) % one_hour_ms == 0
+    # Total count across all buckets equals total workflows run so far
+    assert sum(r["count"] for r in results) >= 7  # 3 + 2 + 2 prefix runs
+
+    # time_bucket_size_ms combined with group_by_status
+    results = dbos._sys_db.get_workflow_aggregates(
+        time_bucket_size_ms=one_hour_ms, group_by_status=True
+    )
+    success_total = sum(
+        r["count"] for r in results if r["group"]["status"] == "SUCCESS"
+    )
+    error_total = sum(r["count"] for r in results if r["group"]["status"] == "ERROR")
+    assert success_total >= 5
+    assert error_total == 2
+
+    # time_bucket_size_ms with a status filter (1-minute buckets = 60_000 ms)
+    one_minute_ms = 60_000
+    results = dbos._sys_db.get_workflow_aggregates(
+        time_bucket_size_ms=one_minute_ms, status=["ERROR"]
+    )
+    assert len(results) >= 1
+    for r in results:
+        assert isinstance(r["group"]["time_bucket"], str)
+        assert int(r["group"]["time_bucket"]) % one_minute_ms == 0
+    assert sum(r["count"] for r in results) == 2
+
+    # must be > 0
+    with pytest.raises(ValueError, match="time_bucket_size_ms must be > 0"):
+        dbos._sys_db.get_workflow_aggregates(time_bucket_size_ms=0)
