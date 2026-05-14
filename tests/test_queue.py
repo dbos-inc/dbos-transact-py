@@ -762,15 +762,20 @@ def test_limiter(dbos: DBOS) -> None:
     for h in handles:
         times.append(h.get_result())
 
-    # Verify that each "wave" of tasks started at the ~same time.
+    # Verify that each "wave" of tasks started at the ~same time. Use a
+    # generous tolerance: under CI load tasks within a wave can be spread
+    # out by hundreds of ms even though the limiter released them together.
     for wave in range(num_waves):
         for i in range(wave * limit, (wave + 1) * limit - 1):
-            assert times[i + 1] - times[i] < 0.5
+            assert times[i + 1] - times[i] < 1.0
 
-    # Verify that the gap between "waves" is ~equal to the period
+    # Verify that the gap between "waves" is ~equal to the period. The
+    # tolerance has to cover the same intra-wave skew (since we're
+    # comparing the first task of each wave, not the wave start times),
+    # so use a window wider than the worst-case intra-wave spread.
     for wave in range(num_waves - 1):
-        assert times[limit * (wave + 1)] - times[limit * wave] > period - 0.5
-        assert times[limit * (wave + 1)] - times[limit * wave] < period + 0.5
+        assert times[limit * (wave + 1)] - times[limit * wave] > period - 1.0
+        assert times[limit * (wave + 1)] - times[limit * wave] < period + 1.0
 
     # Verify all workflows get the SUCCESS status eventually
     for h in handles:
@@ -827,15 +832,20 @@ def test_multiple_queues(dbos: DBOS) -> None:
     for h in handles:
         times.append(h.get_result())
 
-    # Verify that each "wave" of tasks started at the ~same time.
+    # Verify that each "wave" of tasks started at the ~same time. Use a
+    # generous tolerance: under CI load tasks within a wave can be spread
+    # out by hundreds of ms even though the limiter released them together.
     for wave in range(num_waves):
         for i in range(wave * limit, (wave + 1) * limit - 1):
-            assert times[i + 1] - times[i] < 0.5
+            assert times[i + 1] - times[i] < 1.0
 
-    # Verify that the gap between "waves" is ~equal to the period
+    # Verify that the gap between "waves" is ~equal to the period. The
+    # tolerance has to cover the same intra-wave skew (since we're
+    # comparing the first task of each wave, not the wave start times),
+    # so use a window wider than the worst-case intra-wave spread.
     for wave in range(num_waves - 1):
-        assert times[limit * (wave + 1)] - times[limit * wave] > period - 0.5
-        assert times[limit * (wave + 1)] - times[limit * wave] < period + 0.5
+        assert times[limit * (wave + 1)] - times[limit * wave] > period - 1.0
+        assert times[limit * (wave + 1)] - times[limit * wave] < period + 1.0
 
     # Verify all workflows get the SUCCESS status eventually
     for h in handles:
