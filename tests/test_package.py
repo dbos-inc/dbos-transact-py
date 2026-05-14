@@ -8,14 +8,16 @@ import time
 import urllib.error
 import urllib.request
 
+import pytest
 import requests
 import sqlalchemy as sa
 import yaml
 
 from dbos._dbos_config import DBOSConfig
-from tests.conftest import using_sqlite
+from tests.conftest import retry_until_success, using_sqlite
 
 
+@pytest.mark.timeout(600)
 def test_package(
     build_wheel: str, db_engine: sa.Engine, skip_with_sqlite: None
 ) -> None:
@@ -180,6 +182,7 @@ def test_reset(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
             assert result == 0
 
 
+@pytest.mark.timeout(300)
 def test_workflow_commands(config: DBOSConfig) -> None:
     assert config["application_database_url"] is not None
     assert config["system_database_url"] is not None
@@ -208,19 +211,11 @@ def test_workflow_commands(config: DBOSConfig) -> None:
         process = subprocess.Popen(["python3", "main.py"], cwd=temp_path, env=env)
         try:
             session = requests.Session()
-            for i in range(10):
-                try:
-                    session.get(
-                        "http://localhost:8000/queue", timeout=1
-                    ).raise_for_status()
-                    break
-                except requests.exceptions.Timeout:
-                    break
-                except requests.exceptions.ConnectionError as e:
-                    if i == 9:
-                        raise
-                    print(f"Attempt {i+1} failed: {e}. Retrying in 1 second...")
-                    time.sleep(1)
+
+            def hit_queue() -> None:
+                session.get("http://localhost:8000/queue", timeout=2).raise_for_status()
+
+            retry_until_success(hit_queue, interval=1, max_attempts=30)
             time.sleep(1)  # So the queued workflows can start
         finally:
             # Because the toolbox steps sleep for 5 seconds, all the steps should be PENDING

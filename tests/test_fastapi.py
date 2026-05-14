@@ -181,7 +181,12 @@ async def test_custom_lifespan(
 
     # Run server in background task
     server_task = asyncio.create_task(server.serve())
-    await asyncio.sleep(0.2)  # Give server time to start
+    for _ in range(100):
+        if server.started:
+            break
+        await asyncio.sleep(0.1)
+    else:
+        raise RuntimeError("uvicorn server failed to start within 10 seconds")
 
     async with httpx.AsyncClient() as client:
         r = await client.get(f"http://127.0.0.1:{port}")
