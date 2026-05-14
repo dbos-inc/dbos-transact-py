@@ -348,6 +348,7 @@ _dbos_stream_closed_sentinel = "__DBOS_STREAM_CLOSED__"
 class EventCount(TypedDict):
     event: threading.Event
     count: int
+    components: Tuple[str, str]
 
 
 class ThreadSafeEventDict:
@@ -361,14 +362,19 @@ class ThreadSafeEventDict:
                 return None
             return self._dict[key]["event"]
 
-    def set(self, key: str, value: threading.Event) -> tuple[bool, threading.Event]:
+    def set(
+        self,
+        key: str,
+        value: threading.Event,
+        components: Tuple[str, str],
+    ) -> tuple[bool, threading.Event]:
         with self._lock:
             if key in self._dict:
                 # Key already exists, do not overwrite. Increment the wait count.
                 ec = self._dict[key]
                 ec["count"] += 1
                 return False, ec["event"]
-            self._dict[key] = EventCount(event=value, count=1)
+            self._dict[key] = EventCount(event=value, count=1, components=components)
             return True, value
 
     def pop(self, key: str) -> None:
@@ -380,6 +386,13 @@ class ThreadSafeEventDict:
                     del self._dict[key]
             else:
                 dbos_logger.warning(f"Key {key} not found in event dictionary.")
+
+    def snapshot(self) -> List[Tuple[str, Tuple[str, str], threading.Event]]:
+        """Return a snapshot of (key, components, event) for every entry."""
+        with self._lock:
+            return [
+                (key, ec["components"], ec["event"]) for key, ec in self._dict.items()
+            ]
 
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -2212,7 +2225,7 @@ class SystemDatabase(ABC):
         # Insert an event to the notifications map, so the listener can signal it when a message is received.
         payload = f"{workflow_uuid}::{topic}"
         event = threading.Event()
-        success, _ = self.notifications_map.set(payload, event)
+        success, _ = self.notifications_map.set(payload, event, (workflow_uuid, topic))
         if not success:
             # This should not happen, but if it does, it means the workflow is executed concurrently.
             raise DBOSWorkflowConflictIDError(workflow_uuid)
@@ -2408,28 +2421,17 @@ class SystemDatabase(ABC):
     def _notification_listener_polling(self) -> None:
         """Poll for notifications and workflow events"""
 
-        def split_payload(payload: str) -> Tuple[str, Optional[str]]:
-            """Split payload into components (first::second format)."""
-            if "::" in payload:
-                parts = payload.split("::", 1)
-                return parts[0], parts[1]
-            return payload, None
-
-        def signal_event(event_map: ThreadSafeEventDict, payload: str) -> None:
-            """Signal an event if it exists."""
-            event = event_map.get(payload)
-            if event:
-                event.set()
-                dbos_logger.debug(f"Signaled event for {payload}")
-
         while self._run_background_processes:
             try:
                 # Poll at the configured interval
                 time.sleep(self._notification_listener_polling_interval_sec)
 
-                # Check all payloads in the notifications_map
-                for payload in list(self.notifications_map._dict.keys()):
-                    dest_uuid, topic = split_payload(payload)
+                # Check all entries in the notifications_map
+                for (
+                    payload,
+                    (dest_uuid, topic),
+                    event,
+                ) in self.notifications_map.snapshot():
                     with self.engine.begin() as conn:
                         result = conn.execute(
                             sa.select(sa.literal(1))
@@ -2442,11 +2444,15 @@ class SystemDatabase(ABC):
                             .limit(1)
                         )
                         if result.fetchone():
-                            signal_event(self.notifications_map, payload)
+                            event.set()
+                            dbos_logger.debug(f"Signaled event for {payload}")
 
-                # Check all payloads in the workflow_events_map
-                for payload in list(self.workflow_events_map._dict.keys()):
-                    workflow_uuid, key = split_payload(payload)
+                # Check all entries in the workflow_events_map
+                for (
+                    payload,
+                    (workflow_uuid, key),
+                    event,
+                ) in self.workflow_events_map.snapshot():
                     with self.engine.begin() as conn:
                         result = conn.execute(
                             sa.select(sa.literal(1))
@@ -2458,7 +2464,8 @@ class SystemDatabase(ABC):
                             .limit(1)
                         )
                         if result.fetchone():
-                            signal_event(self.workflow_events_map, payload)
+                            event.set()
+                            dbos_logger.debug(f"Signaled event for {payload}")
 
             except Exception as e:
                 if self._run_background_processes:
@@ -2769,7 +2776,9 @@ class SystemDatabase(ABC):
 
         payload = f"{target_uuid}::{key}"
         event = threading.Event()
-        success, existing_event = self.workflow_events_map.set(payload, event)
+        success, existing_event = self.workflow_events_map.set(
+            payload, event, (target_uuid, key)
+        )
         if not success:
             # Key already exists, wait on the existing event
             event = existing_event

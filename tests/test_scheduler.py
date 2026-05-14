@@ -530,9 +530,7 @@ def test_backfill_naive_datetime(dbos: DBOS) -> None:
     for h in handles:
         h.get_result()
 
-    expected = [
-        datetime(2025, 1, 1, h, 0, 0, tzinfo=timezone.utc) for h in range(1, 4)
-    ]
+    expected = [datetime(2025, 1, 1, h, 0, 0, tzinfo=timezone.utc) for h in range(1, 4)]
     assert sorted(received) == expected
 
     # Mixed (aware start, naive end) should also work
