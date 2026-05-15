@@ -238,7 +238,11 @@ def test_conductor_reconnects_after_keepalive_timeout(
     def wedged_close_socket(self: Any) -> None:
         with self.protocol_mutex:
             self.protocol.receive_eof()
-            self.terminate_pending_pings()
+            # terminate_pending_pings was added in websockets 16.0; older versions
+            # don't have it. Be tolerant so the test runs against either.
+            terminate = getattr(self, "terminate_pending_pings", None)
+            if terminate is not None:
+                terminate()
 
     monkeypatch.setattr(ws_connection.Connection, "close_socket", wedged_close_socket)
 

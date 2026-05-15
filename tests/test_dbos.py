@@ -1870,8 +1870,13 @@ def test_workflow_timeout(dbos: DBOS) -> None:
         assert assert_current_dbos_context().workflow_timeout_ms == 1000
     assert get_local_dbos_context() is None
 
-    # Verify all timeout tasks completed
-    assert len(dbos._timeout_tasks) == 0
+    # Verify all timeout tasks completed. Tasks remove themselves from the set via
+    # an add_done_callback, which is scheduled on the background event loop rather
+    # than running synchronously, so poll briefly instead of asserting immediately.
+    def assert_timeout_tasks_empty() -> None:
+        assert len(dbos._timeout_tasks) == 0
+
+    retry_until_success(assert_timeout_tasks_empty, interval=0.1, max_attempts=50)
 
 
 def test_timeout_cleanup_on_destroy(dbos: DBOS, config: DBOSConfig) -> None:
