@@ -302,6 +302,17 @@ class AsyncSQLAlchemyDatasource(ABC):
                             if retriable_postgres_exception(
                                 dbapi_error
                             ) or self._is_serialization_error(dbapi_error):
+                                inner_ctx = get_local_dbos_context()
+                                span = (
+                                    inner_ctx.get_current_dbos_span()
+                                    if inner_ctx is not None
+                                    else None
+                                )
+                                if span:
+                                    span.add_event(
+                                        "Transaction Failure",
+                                        {"retry_wait_seconds": retry_wait_seconds},
+                                    )
                                 await asyncio.sleep(retry_wait_seconds)
                                 retry_wait_seconds = min(
                                     retry_wait_seconds * _RETRY_BACKOFF_FACTOR,
@@ -585,6 +596,17 @@ class SQLAlchemyDatasource(ABC):
                             if retriable_postgres_exception(
                                 dbapi_error
                             ) or self._is_serialization_error(dbapi_error):
+                                inner_ctx = get_local_dbos_context()
+                                span = (
+                                    inner_ctx.get_current_dbos_span()
+                                    if inner_ctx is not None
+                                    else None
+                                )
+                                if span:
+                                    span.add_event(
+                                        "Transaction Failure",
+                                        {"retry_wait_seconds": retry_wait_seconds},
+                                    )
                                 time.sleep(retry_wait_seconds)
                                 retry_wait_seconds = min(
                                     retry_wait_seconds * _RETRY_BACKOFF_FACTOR,
