@@ -1,12 +1,30 @@
 from typing import Any, Dict
 
+import psycopg
 import sqlalchemy as sa
 from sqlalchemy import URL
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 
 from ._logger import dbos_logger
+
+
+def _is_postgres_serialization_error(error: Exception) -> bool:
+    """Check if the error is a retryable PostgreSQL serialization/concurrency error.
+
+    40001: serialization_failure (MVCC conflict)
+    40P01: deadlock_detected
+    """
+    if not isinstance(error, DBAPIError):
+        return False
+    driver_error = error.orig
+    return (
+        driver_error is not None
+        and isinstance(driver_error, psycopg.OperationalError)
+        and driver_error.sqlstate in ("40001", "40P01")
+    )
 
 
 def _make_url(database_url: str) -> URL:
@@ -46,6 +64,9 @@ class PostgresAsyncDatasource(AsyncSQLAlchemyDatasource):
             await conn.execute(_schema_sql(self.schema))
             await conn.execute(_table_sql(self.schema))
 
+    def _is_serialization_error(self, error: Exception) -> bool:
+        return _is_postgres_serialization_error(error)
+
 
 class PostgresSyncDatasource(SQLAlchemyDatasource):
     def _create_engine(
@@ -60,3 +81,6 @@ class PostgresSyncDatasource(SQLAlchemyDatasource):
         with self.engine.begin() as conn:
             conn.execute(_schema_sql(self.schema))
             conn.execute(_table_sql(self.schema))
+
+    def _is_serialization_error(self, error: Exception) -> bool:
+        return _is_postgres_serialization_error(error)
