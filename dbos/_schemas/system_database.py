@@ -137,6 +137,12 @@ class SystemSchema:
             sqlite_where=text("completed_at IS NOT NULL"),
         ),
         Index(
+            "idx_workflow_status_started_at",
+            "started_at_epoch_ms",
+            postgresql_where=text("started_at_epoch_ms IS NOT NULL"),
+            sqlite_where=text("started_at_epoch_ms IS NOT NULL"),
+        ),
+        Index(
             "uq_workflow_status_dedup_id",
             "queue_name",
             "deduplication_id",

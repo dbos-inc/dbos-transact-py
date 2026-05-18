@@ -1434,6 +1434,8 @@ class SystemDatabase(ABC):
         end_time: Optional[str] = None,
         completed_after: Optional[str] = None,
         completed_before: Optional[str] = None,
+        dequeued_after: Optional[str] = None,
+        dequeued_before: Optional[str] = None,
         name: Optional[str | list[str]] = None,
         app_version: Optional[str | list[str]] = None,
         forked_from: Optional[str | list[str]] = None,
@@ -1549,6 +1551,16 @@ class SystemDatabase(ABC):
             query = query.where(
                 SystemSchema.workflow_status.c.completed_at
                 <= datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
+            )
+        if dequeued_after:
+            query = query.where(
+                SystemSchema.workflow_status.c.started_at_epoch_ms
+                >= datetime.datetime.fromisoformat(dequeued_after).timestamp() * 1000
+            )
+        if dequeued_before:
+            query = query.where(
+                SystemSchema.workflow_status.c.started_at_epoch_ms
+                <= datetime.datetime.fromisoformat(dequeued_before).timestamp() * 1000
             )
         if status_list:
             query = query.where(SystemSchema.workflow_status.c.status.in_(status_list))
