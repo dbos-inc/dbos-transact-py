@@ -196,6 +196,7 @@ def test_workflow_commands(config: DBOSConfig) -> None:
         )
     with tempfile.TemporaryDirectory() as temp_path:
         env = os.environ.copy()
+        env["DBOS_DATABASE_URL"] = db_url
         env["DBOS_SYSTEM_DATABASE_URL"] = db_url
         subprocess.check_call(
             ["dbos", "init", "--template", "dbos-toolbox"],
@@ -204,6 +205,9 @@ def test_workflow_commands(config: DBOSConfig) -> None:
         )
         subprocess.check_call(
             ["dbos", "reset", "-y", "--sys-db-url", db_url], cwd=temp_path
+        )
+        subprocess.check_call(
+            ["dbos", "migrate", "--sys-db-url", db_url], cwd=temp_path, env=env
         )
 
         schema = "dbos"
