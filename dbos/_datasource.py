@@ -1,4 +1,6 @@
+import asyncio
 import inspect
+import time
 from abc import ABC, abstractmethod
 from functools import wraps
 from typing import (
@@ -16,6 +18,7 @@ from typing import (
 )
 
 import sqlalchemy as sa
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import (
     AsyncConnection,
     AsyncEngine,
@@ -37,8 +40,13 @@ from dbos._serialization import (
     serialize_exception,
     serialize_value,
 )
+from dbos._utils import retriable_postgres_exception
 
 from ._logger import dbos_logger
+
+_INITIAL_RETRY_WAIT_SECONDS = 0.001
+_RETRY_BACKOFF_FACTOR = 1.5
+_MAX_RETRY_WAIT_SECONDS = 2.0
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -174,6 +182,11 @@ class AsyncSQLAlchemyDatasource(ABC):
     async def run_migrations(self) -> None:
         pass
 
+    @abstractmethod
+    def _is_serialization_error(self, error: Exception) -> bool:
+        """Return True if the error is a retryable serialization/concurrency error."""
+        pass
+
     def sql_session(self) -> AsyncSession:
         ctx = get_local_dbos_context()
         assert (
@@ -259,38 +272,61 @@ class AsyncSQLAlchemyDatasource(ABC):
                     return cast(R, _replay_recorded(recorded, self.serializer))
 
             output: R
+            retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
             with DBOSContextEnsure() as exec_ctx:
-                async with self.sessionmaker() as session:
-                    exec_ctx.start_async_ds_transaction(session)
-                    try:
-                        async with session.begin():
-                            await session.connection(
-                                execution_options={"isolation_level": isolation_level}
-                            )
-                            output = await func(*args, **kwargs)
+                while True:
+                    async with self.sessionmaker() as session:
+                        exec_ctx.start_async_ds_transaction(session)
+                        try:
+                            async with session.begin():
+                                await session.connection(
+                                    execution_options={
+                                        "isolation_level": isolation_level
+                                    }
+                                )
+                                output = await func(*args, **kwargs)
+                                if in_wf:
+                                    serialized, serialization = serialize_value(
+                                        output, None, self.serializer
+                                    )
+                                    await self._record_result(
+                                        session,
+                                        workflow_id,
+                                        step_id,
+                                        serialized,
+                                        None,
+                                        serialization,
+                                    )
+                            break
+                        except DBAPIError as dbapi_error:
+                            if retriable_postgres_exception(
+                                dbapi_error
+                            ) or self._is_serialization_error(dbapi_error):
+                                await asyncio.sleep(retry_wait_seconds)
+                                retry_wait_seconds = min(
+                                    retry_wait_seconds * _RETRY_BACKOFF_FACTOR,
+                                    _MAX_RETRY_WAIT_SECONDS,
+                                )
+                                continue
                             if in_wf:
-                                serialized, serialization = serialize_value(
-                                    output, None, self.serializer
+                                serialized_e, serialization = serialize_exception(
+                                    dbapi_error, None, self.serializer
                                 )
-                                await self._record_result(
-                                    session,
-                                    workflow_id,
-                                    step_id,
-                                    serialized,
-                                    None,
-                                    serialization,
+                                await self._record_error(
+                                    workflow_id, step_id, serialized_e, serialization
                                 )
-                    except Exception as e:
-                        if in_wf:
-                            serialized_e, serialization = serialize_exception(
-                                e, None, self.serializer
-                            )
-                            await self._record_error(
-                                workflow_id, step_id, serialized_e, serialization
-                            )
-                        raise
-                    finally:
-                        exec_ctx.end_async_ds_transaction()
+                            raise
+                        except Exception as e:
+                            if in_wf:
+                                serialized_e, serialization = serialize_exception(
+                                    e, None, self.serializer
+                                )
+                                await self._record_error(
+                                    workflow_id, step_id, serialized_e, serialization
+                                )
+                            raise
+                        finally:
+                            exec_ctx.end_async_ds_transaction()
 
             return output
 
@@ -431,6 +467,11 @@ class SQLAlchemyDatasource(ABC):
     def run_migrations(self) -> None:
         pass
 
+    @abstractmethod
+    def _is_serialization_error(self, error: Exception) -> bool:
+        """Return True if the error is a retryable serialization/concurrency error."""
+        pass
+
     def sql_session(self) -> Session:
         ctx = get_local_dbos_context()
         assert (
@@ -514,38 +555,61 @@ class SQLAlchemyDatasource(ABC):
                     return cast(R, _replay_recorded(recorded, self.serializer))
 
             output: R
+            retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
             with DBOSContextEnsure() as exec_ctx:
-                with self.sessionmaker() as session:
-                    exec_ctx.start_sync_ds_transaction(session)
-                    try:
-                        with session.begin():
-                            session.connection(
-                                execution_options={"isolation_level": isolation_level}
-                            )
-                            output = func(*args, **kwargs)
+                while True:
+                    with self.sessionmaker() as session:
+                        exec_ctx.start_sync_ds_transaction(session)
+                        try:
+                            with session.begin():
+                                session.connection(
+                                    execution_options={
+                                        "isolation_level": isolation_level
+                                    }
+                                )
+                                output = func(*args, **kwargs)
+                                if in_wf:
+                                    serialized, serialization = serialize_value(
+                                        output, None, self.serializer
+                                    )
+                                    self._record_result(
+                                        session,
+                                        workflow_id,
+                                        step_id,
+                                        serialized,
+                                        None,
+                                        serialization,
+                                    )
+                            break
+                        except DBAPIError as dbapi_error:
+                            if retriable_postgres_exception(
+                                dbapi_error
+                            ) or self._is_serialization_error(dbapi_error):
+                                time.sleep(retry_wait_seconds)
+                                retry_wait_seconds = min(
+                                    retry_wait_seconds * _RETRY_BACKOFF_FACTOR,
+                                    _MAX_RETRY_WAIT_SECONDS,
+                                )
+                                continue
                             if in_wf:
-                                serialized, serialization = serialize_value(
-                                    output, None, self.serializer
+                                serialized_e, serialization = serialize_exception(
+                                    dbapi_error, None, self.serializer
                                 )
-                                self._record_result(
-                                    session,
-                                    workflow_id,
-                                    step_id,
-                                    serialized,
-                                    None,
-                                    serialization,
+                                self._record_error(
+                                    workflow_id, step_id, serialized_e, serialization
                                 )
-                    except Exception as e:
-                        if in_wf:
-                            serialized_e, serialization = serialize_exception(
-                                e, None, self.serializer
-                            )
-                            self._record_error(
-                                workflow_id, step_id, serialized_e, serialization
-                            )
-                        raise
-                    finally:
-                        exec_ctx.end_sync_ds_transaction()
+                            raise
+                        except Exception as e:
+                            if in_wf:
+                                serialized_e, serialization = serialize_exception(
+                                    e, None, self.serializer
+                                )
+                                self._record_error(
+                                    workflow_id, step_id, serialized_e, serialization
+                                )
+                            raise
+                        finally:
+                            exec_ctx.end_sync_ds_transaction()
 
             return output
 

@@ -8,9 +8,12 @@ from typing import Any, AsyncGenerator, Generator
 import pytest
 import pytest_asyncio
 import sqlalchemy as sa
+from psycopg.errors import SerializationFailure
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 from dbos import DBOS, AsyncSQLAlchemyDatasource, SetWorkflowID, SQLAlchemyDatasource
+from dbos._datasource_postgres import PostgresAsyncDatasource, PostgresSyncDatasource
 from dbos._error import DBOSException
 from dbos._schemas.datasource_database import DatasourceSchema
 from dbos._schemas.system_database import SystemSchema
@@ -299,6 +302,52 @@ def test_sync_ds_error_oaoo(dbos: DBOS, sync_ds: SQLAlchemyDatasource) -> None:
         with pytest.raises(Exception, match="ds step failed"):
             my_workflow()
     assert call_count["n"] == 1
+
+
+def test_sync_ds_retries_on_serialization_error(
+    dbos: DBOS, sync_ds: SQLAlchemyDatasource
+) -> None:
+    """A SQLSTATE 40001 raised inside the txn body must be retried, not recorded."""
+    if not isinstance(sync_ds, PostgresSyncDatasource):
+        pytest.skip("manual serialization error is psycopg-specific")
+
+    call_count = {"n": 0}
+    max_retries = 3
+
+    def flaky_step() -> str:
+        call_count["n"] += 1
+        if call_count["n"] <= max_retries:
+            raise OperationalError(
+                "Serialization test error", {}, SerializationFailure()
+            )
+        return "success"
+
+    @DBOS.workflow()
+    def my_workflow() -> str:
+        return sync_ds.run_tx_step(None, flaky_step)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "success"
+    # First max_retries calls raised, the (max_retries + 1)-th succeeded.
+    assert call_count["n"] == max_retries + 1
+
+    # The successful result, not an error, must be in datasource_outputs.
+    with sync_ds.engine.connect() as conn:
+        row = conn.execute(
+            sa.select(
+                DatasourceSchema.datasource_outputs.c.output,
+                DatasourceSchema.datasource_outputs.c.error,
+            ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+        ).first()
+    assert row is not None
+    assert row.error is None
+    assert row.output is not None
+
+    # Replay must not re-execute the step.
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "success"
+    assert call_count["n"] == max_retries + 1
 
 
 def test_sync_ds_multiple_steps_in_workflow(
@@ -629,6 +678,85 @@ async def test_async_ds_error_oaoo(
 
     with SetWorkflowID(wfid):
         with pytest.raises(Exception, match="async ds step failed"):
+            await my_workflow()
+    assert call_count["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_async_ds_retries_on_serialization_error(
+    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource
+) -> None:
+    """A SQLSTATE 40001 raised inside the async txn body must be retried, not recorded."""
+    if not isinstance(async_ds, PostgresAsyncDatasource):
+        pytest.skip("manual serialization error is psycopg-specific")
+
+    call_count = {"n": 0}
+    max_retries = 3
+
+    async def flaky_step() -> str:
+        call_count["n"] += 1
+        if call_count["n"] <= max_retries:
+            raise OperationalError(
+                "Serialization test error", {}, SerializationFailure()
+            )
+        return "success"
+
+    @DBOS.workflow()
+    async def my_workflow() -> str:
+        return await async_ds.run_tx_step_async(None, flaky_step)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "success"
+    assert call_count["n"] == max_retries + 1
+
+    async with async_ds.engine.connect() as conn:
+        row = (
+            await conn.execute(
+                sa.select(
+                    DatasourceSchema.datasource_outputs.c.output,
+                    DatasourceSchema.datasource_outputs.c.error,
+                ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+            )
+        ).first()
+    assert row is not None
+    assert row.error is None
+    assert row.output is not None
+
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "success"
+    assert call_count["n"] == max_retries + 1
+
+
+@pytest.mark.asyncio
+async def test_async_ds_non_retryable_error_records_and_replays(
+    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource
+) -> None:
+    """A DBAPIError that is not a serialization failure must be recorded, not retried."""
+    if not isinstance(async_ds, PostgresAsyncDatasource):
+        pytest.skip("manual DBAPIError is psycopg-specific")
+
+    call_count = {"n": 0}
+
+    async def failing_step() -> str:
+        call_count["n"] += 1
+        # Syntax error (42601) — DBAPIError but not retryable.
+        await async_ds.sql_session().execute(sa.text("selct abc from c;"))
+        return "unreached"
+
+    @DBOS.workflow()
+    async def my_workflow() -> str:
+        return await async_ds.run_tx_step_async(None, failing_step)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        with pytest.raises(Exception):
+            await my_workflow()
+    assert call_count["n"] == 1
+
+    # Replay must not re-execute the step; the recorded error is re-raised.
+    with SetWorkflowID(wfid):
+        with pytest.raises(Exception):
             await my_workflow()
     assert call_count["n"] == 1
 

@@ -2,6 +2,7 @@ from typing import Any, Dict
 
 import sqlalchemy as sa
 from sqlalchemy import event
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
@@ -9,6 +10,15 @@ from dbos._migration import get_sqlite_timestamp_expr
 from dbos._schemas.datasource_database import DatasourceSchema
 
 from ._logger import dbos_logger
+
+
+def _is_sqlite_serialization_error(error: Exception) -> bool:
+    """Check if the error is a retryable SQLite busy/locked error."""
+    if not isinstance(error, DBAPIError):
+        return False
+    msg = str(error.orig).lower()
+    return "database is locked" in msg or "database table is locked" in msg
+
 
 _PG_ONLY_CONNECT_ARGS = frozenset(("application_name", "connect_timeout"))
 
@@ -69,6 +79,9 @@ class SqliteAsyncDatasource(AsyncSQLAlchemyDatasource):
             if result.fetchone() is None:
                 await conn.execute(_CREATE_TABLE_SQL)
 
+    def _is_serialization_error(self, error: Exception) -> bool:
+        return _is_sqlite_serialization_error(error)
+
 
 class SqliteSyncDatasource(SQLAlchemyDatasource):
     def _create_engine(
@@ -83,3 +96,6 @@ class SqliteSyncDatasource(SQLAlchemyDatasource):
             result = conn.execute(_CHECK_TABLE_SQL)
             if result.fetchone() is None:
                 conn.execute(_CREATE_TABLE_SQL)
+
+    def _is_serialization_error(self, error: Exception) -> bool:
+        return _is_sqlite_serialization_error(error)
