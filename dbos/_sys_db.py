@@ -179,6 +179,9 @@ class WorkflowStatus:
     dequeued_at: Optional[int]
     # The UNIX epoch timestamp before which the workflow should not be dequeued
     delay_until_epoch_ms: Optional[int]
+    # The UNIX epoch timestamp at which the workflow completed (SUCCESS, ERROR,
+    # or CANCELLED). None if the workflow has not completed.
+    completed_at: Optional[int]
 
     # INTERNAL FIELDS
 
@@ -747,6 +750,7 @@ class SystemDatabase(ABC):
         output: Optional[str] = None,
         error: Optional[str] = None,
     ) -> None:
+        now_ms = int(time.time() * 1000)
         with self.engine.begin() as c:
             c.execute(
                 sa.update(SystemSchema.workflow_status)
@@ -756,7 +760,8 @@ class SystemDatabase(ABC):
                     error=error,
                     # As the workflow is complete, remove its deduplication ID
                     deduplication_id=None,
-                    updated_at=func.extract("epoch", func.now()) * 1000,
+                    updated_at=now_ms,
+                    completed_at=now_ms,
                 )
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
             )
@@ -765,6 +770,7 @@ class SystemDatabase(ABC):
         self,
         workflow_ids: list[str],
     ) -> None:
+        now_ms = int(time.time() * 1000)
         with self.engine.begin() as c:
             # Set the workflows' status to CANCELLED and remove them from any queue,
             # but only if the workflow is not already complete.
@@ -784,7 +790,8 @@ class SystemDatabase(ABC):
                     queue_name=None,
                     deduplication_id=None,
                     started_at_epoch_ms=None,
-                    updated_at=func.extract("epoch", func.now()) * 1000,
+                    updated_at=now_ms,
+                    completed_at=now_ms,
                 )
             )
 
@@ -818,6 +825,7 @@ class SystemDatabase(ABC):
                     deduplication_id=None,
                     started_at_epoch_ms=None,
                     updated_at=func.extract("epoch", func.now()) * 1000,
+                    completed_at=None,
                 )
             )
 
@@ -1424,6 +1432,8 @@ class SystemDatabase(ABC):
         status: Optional[str | list[str]] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
+        completed_after: Optional[str] = None,
+        completed_before: Optional[str] = None,
         name: Optional[str | list[str]] = None,
         app_version: Optional[str | list[str]] = None,
         forked_from: Optional[str | list[str]] = None,
@@ -1488,6 +1498,7 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.started_at_epoch_ms,
             SystemSchema.workflow_status.c.delay_until_epoch_ms,
             SystemSchema.workflow_status.c.was_forked_from,
+            SystemSchema.workflow_status.c.completed_at,
         ]
         if load_input:
             load_columns.append(SystemSchema.workflow_status.c.inputs)
@@ -1528,6 +1539,16 @@ class SystemDatabase(ABC):
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
                 <= datetime.datetime.fromisoformat(end_time).timestamp() * 1000
+            )
+        if completed_after:
+            query = query.where(
+                SystemSchema.workflow_status.c.completed_at
+                >= datetime.datetime.fromisoformat(completed_after).timestamp() * 1000
+            )
+        if completed_before:
+            query = query.where(
+                SystemSchema.workflow_status.c.completed_at
+                <= datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
             )
         if status_list:
             query = query.where(SystemSchema.workflow_status.c.status.in_(status_list))
@@ -1619,8 +1640,9 @@ class SystemDatabase(ABC):
             info.dequeued_at = row[22]
             info.delay_until_epoch_ms = row[23]
             info.was_forked_from = row[24]
+            info.completed_at = row[25]
 
-            idx = 25
+            idx = 26
             raw_input = row[idx] if load_input else None
             if load_input:
                 idx += 1

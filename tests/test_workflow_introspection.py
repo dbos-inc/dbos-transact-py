@@ -244,6 +244,79 @@ def test_list_workflow_prefix(dbos: DBOS) -> None:
     assert len(output) == 0
 
 
+def test_list_workflow_completed_at(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        return
+
+    @DBOS.workflow()
+    def failing_workflow() -> None:
+        raise RuntimeError("boom")
+
+    @DBOS.workflow()
+    def pending_workflow() -> None:
+        time.sleep(60)
+
+    # Successful workflow gets completed_at set.
+    before_success = datetime.now().isoformat()
+    simple_workflow()
+    after_success = datetime.now().isoformat()
+
+    [success_status] = DBOS.list_workflows(name=simple_workflow.__qualname__)
+    assert success_status.status == "SUCCESS"
+    assert success_status.completed_at is not None
+    assert success_status.completed_at >= success_status.created_at  # type: ignore[operator]
+
+    # Errored workflow gets completed_at set.
+    with pytest.raises(RuntimeError):
+        failing_workflow()
+    [error_status] = DBOS.list_workflows(name=failing_workflow.__qualname__)
+    assert error_status.status == "ERROR"
+    assert error_status.completed_at is not None
+
+    # Cancelled workflow gets completed_at set; resumed workflow clears it.
+    cancel_id = str(uuid.uuid4())
+    with SetWorkflowID(cancel_id):
+        DBOS.start_workflow(pending_workflow)
+    DBOS.cancel_workflow(cancel_id)
+    cancelled = DBOS.get_workflow_status(cancel_id)
+    assert cancelled is not None
+    assert cancelled.status == "CANCELLED"
+    assert cancelled.completed_at is not None
+
+    DBOS.resume_workflow(cancel_id)
+    resumed = DBOS.get_workflow_status(cancel_id)
+    assert resumed is not None
+    assert resumed.completed_at is None
+
+    # completed_before/completed_after only match terminal workflows in range.
+    in_range = DBOS.list_workflows(
+        completed_after=before_success, completed_before=after_success
+    )
+    ids_in_range = {w.workflow_id for w in in_range}
+    assert success_status.workflow_id in ids_in_range
+    # The error and the resumed-pending workflows complete outside this window.
+    assert error_status.workflow_id not in ids_in_range
+    assert cancel_id not in ids_in_range
+
+    # completed_after alone excludes never-completed workflows.
+    only_completed = DBOS.list_workflows(completed_after=before_success)
+    completed_ids = {w.workflow_id for w in only_completed}
+    assert success_status.workflow_id in completed_ids
+    assert error_status.workflow_id in completed_ids
+    assert cancel_id not in completed_ids
+
+    # A window before any work happened matches nothing.
+    far_past = (datetime.now() - timedelta(days=1)).isoformat()
+    none_yet = DBOS.list_workflows(completed_before=far_past)
+    assert len(none_yet) == 0
+
+    # Cleanup: cancel the still-pending workflow.
+    DBOS.cancel_workflow(cancel_id)
+
+
 def test_list_workflow_end_times_positive(
     dbos: DBOS, skip_with_sqlite_imprecise_time: None
 ) -> None:

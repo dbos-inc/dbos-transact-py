@@ -707,6 +707,15 @@ def get_dbos_migration_thirtyfive(schema: str, is_cockroach: bool) -> str:
     return f'DROP INDEX {c} IF EXISTS "{schema}"."idx_workflow_status_queue_status_started"'
 
 
+def get_dbos_migration_thirtysix(schema: str) -> str:
+    # ADD COLUMN with no default is catalog-only; the partial index built in
+    # the same transaction covers zero rows, so no CONCURRENTLY is needed.
+    return f"""
+ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "completed_at" BIGINT;
+CREATE INDEX IF NOT EXISTS "idx_workflow_status_completed_at" ON "{schema}"."workflow_status" ("completed_at") WHERE "completed_at" IS NOT NULL;
+"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -746,6 +755,7 @@ def get_dbos_migrations(
         get_dbos_migration_thirtythree(schema),
         get_dbos_migration_thirtyfour(schema, is_cockroach),
         get_dbos_migration_thirtyfive(schema, is_cockroach),
+        get_dbos_migration_thirtysix(schema),
     ]
 
 
@@ -985,6 +995,11 @@ sqlite_migration_thirtyfive = (
     'DROP INDEX IF EXISTS "idx_workflow_status_queue_status_started"'
 )
 
+sqlite_migration_thirtysix = """
+ALTER TABLE workflow_status ADD COLUMN "completed_at" BIGINT;
+CREATE INDEX IF NOT EXISTS "idx_workflow_status_completed_at" ON "workflow_status" ("completed_at") WHERE "completed_at" IS NOT NULL;
+"""
+
 sqlite_migrations = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -1020,4 +1035,5 @@ sqlite_migrations = [
     sqlite_migration_thirtythree,
     sqlite_migration_thirtyfour,
     sqlite_migration_thirtyfive,
+    sqlite_migration_thirtysix,
 ]
