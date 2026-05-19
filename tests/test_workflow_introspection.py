@@ -1549,3 +1549,71 @@ def test_get_workflow_aggregates(dbos: DBOS) -> None:
     # must be > 0
     with pytest.raises(ValueError, match="time_bucket_size_ms must be > 0"):
         dbos._sys_db.get_workflow_aggregates(time_bucket_size_ms=0)
+
+
+def test_get_workflow_aggregates_completed_dequeued(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
+    @DBOS.workflow()
+    def workflow_ok() -> None:
+        return
+
+    @DBOS.workflow()
+    def workflow_fail() -> None:
+        raise Exception("fail")
+
+    @DBOS.workflow()
+    def workflow_queued() -> str:
+        return "done"
+
+    queue = Queue(f"agg_test_queue_{uuid.uuid4()}")
+
+    before_all = datetime.now().isoformat()
+
+    # Three SUCCESS, two ERROR — all run synchronously so started_at_epoch_ms is NULL.
+    for _ in range(3):
+        workflow_ok()
+    for _ in range(2):
+        with pytest.raises(Exception):
+            workflow_fail()
+
+    after_sync = datetime.now().isoformat()
+
+    # One enqueued workflow — gets started_at_epoch_ms populated on dequeue.
+    handle = queue.enqueue(workflow_queued)
+    assert handle.get_result() == "done"
+
+    after_all = datetime.now().isoformat()
+
+    # completed_after/completed_before: window covers all six completions.
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_status=True,
+        completed_after=before_all,
+        completed_before=after_all,
+    )
+    status_map = {r["group"]["status"]: r["count"] for r in results}
+    assert status_map.get("SUCCESS") == 4  # 3 sync + 1 queued
+    assert status_map.get("ERROR") == 2
+
+    # completed_before before any work: matches nothing.
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_status=True, completed_before=before_all
+    )
+    assert all(r["count"] == 0 for r in results) or results == []
+
+    # dequeued_after/dequeued_before: only the queued workflow has started_at_epoch_ms.
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_status=True,
+        dequeued_after=before_all,
+        dequeued_before=after_all,
+    )
+    status_map = {r["group"]["status"]: r["count"] for r in results}
+    assert status_map == {"SUCCESS": 1}
+
+    # dequeued window strictly before the enqueue: matches nothing.
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_status=True,
+        dequeued_after=before_all,
+        dequeued_before=after_sync,
+    )
+    assert results == []

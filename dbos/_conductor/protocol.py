@@ -165,6 +165,10 @@ class ListWorkflowsBody(TypedDict, total=False):
     authenticated_user: Optional[Union[str, List[str]]]
     start_time: Optional[str]
     end_time: Optional[str]
+    completed_after: Optional[str]
+    completed_before: Optional[str]
+    dequeued_after: Optional[str]
+    dequeued_before: Optional[str]
     status: Optional[Union[str, List[str]]]
     application_version: Optional[Union[str, List[str]]]
     forked_from: Optional[Union[str, List[str]]]
@@ -210,6 +214,7 @@ class WorkflowsOutput:
     ParentWorkflowID: Optional[str]
     DequeuedAt: Optional[str]
     DelayUntilEpochMS: Optional[str]
+    CompletedAt: Optional[str]
 
     @classmethod
     def from_workflow_information(cls, info: WorkflowStatus) -> "WorkflowsOutput":
@@ -243,6 +248,9 @@ class WorkflowsOutput:
             if info.delay_until_epoch_ms is not None
             else None
         )
+        completed_at_str = (
+            str(info.completed_at) if info.completed_at is not None else None
+        )
 
         return cls(
             WorkflowUUID=info.workflow_id,
@@ -271,6 +279,7 @@ class WorkflowsOutput:
             ParentWorkflowID=info.parent_workflow_id,
             DequeuedAt=dequeued_at_str,
             DelayUntilEpochMS=delay_until_epoch_ms_str,
+            CompletedAt=completed_at_str,
         )
 
 
@@ -326,6 +335,10 @@ class ListQueuedWorkflowsBody(TypedDict, total=False):
     authenticated_user: Optional[Union[str, List[str]]]
     start_time: Optional[str]
     end_time: Optional[str]
+    completed_after: Optional[str]
+    completed_before: Optional[str]
+    dequeued_after: Optional[str]
+    dequeued_before: Optional[str]
     status: Optional[Union[str, List[str]]]
     application_version: Optional[Union[str, List[str]]]
     forked_from: Optional[Union[str, List[str]]]
@@ -748,6 +761,10 @@ class GetWorkflowAggregatesBody(TypedDict, total=False):
     status: Optional[List[str]]
     start_time: Optional[str]
     end_time: Optional[str]
+    completed_after: Optional[str]
+    completed_before: Optional[str]
+    dequeued_after: Optional[str]
+    dequeued_before: Optional[str]
     name: Optional[List[str]]
     app_version: Optional[List[str]]
     executor_id: Optional[List[str]]

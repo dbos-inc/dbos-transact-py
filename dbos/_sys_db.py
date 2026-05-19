@@ -1770,6 +1770,10 @@ class SystemDatabase(ABC):
         status: Optional[List[str]] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
+        completed_after: Optional[str] = None,
+        completed_before: Optional[str] = None,
+        dequeued_after: Optional[str] = None,
+        dequeued_before: Optional[str] = None,
         name: Optional[List[str]] = None,
         app_version: Optional[List[str]] = None,
         executor_id: Optional[List[str]] = None,
@@ -1832,6 +1836,26 @@ class SystemDatabase(ABC):
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
                 <= datetime.datetime.fromisoformat(end_time).timestamp() * 1000
+            )
+        if completed_after:
+            query = query.where(
+                SystemSchema.workflow_status.c.completed_at
+                >= datetime.datetime.fromisoformat(completed_after).timestamp() * 1000
+            )
+        if completed_before:
+            query = query.where(
+                SystemSchema.workflow_status.c.completed_at
+                <= datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
+            )
+        if dequeued_after:
+            query = query.where(
+                SystemSchema.workflow_status.c.started_at_epoch_ms
+                >= datetime.datetime.fromisoformat(dequeued_after).timestamp() * 1000
+            )
+        if dequeued_before:
+            query = query.where(
+                SystemSchema.workflow_status.c.started_at_epoch_ms
+                <= datetime.datetime.fromisoformat(dequeued_before).timestamp() * 1000
             )
         if name:
             query = query.where(SystemSchema.workflow_status.c.name.in_(name))
