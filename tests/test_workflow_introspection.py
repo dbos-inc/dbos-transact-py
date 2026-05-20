@@ -244,6 +244,82 @@ def test_list_workflow_prefix(dbos: DBOS) -> None:
     assert len(output) == 0
 
 
+def test_list_workflow_completed_at(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
+    release = threading.Event()
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        return
+
+    @DBOS.workflow()
+    def failing_workflow() -> None:
+        raise RuntimeError("boom")
+
+    @DBOS.workflow()
+    def pending_workflow() -> None:
+        release.wait()
+
+    # Successful workflow gets completed_at set.
+    before_success = datetime.now().isoformat()
+    simple_workflow()
+    after_success = datetime.now().isoformat()
+
+    [success_status] = DBOS.list_workflows(name=simple_workflow.__qualname__)
+    assert success_status.status == "SUCCESS"
+    assert success_status.completed_at is not None
+    assert success_status.completed_at >= success_status.created_at  # type: ignore[operator]
+
+    # Errored workflow gets completed_at set.
+    with pytest.raises(RuntimeError):
+        failing_workflow()
+    [error_status] = DBOS.list_workflows(name=failing_workflow.__qualname__)
+    assert error_status.status == "ERROR"
+    assert error_status.completed_at is not None
+
+    # Cancelled workflow gets completed_at set; resumed workflow clears it.
+    cancel_id = str(uuid.uuid4())
+    with SetWorkflowID(cancel_id):
+        DBOS.start_workflow(pending_workflow)
+    DBOS.cancel_workflow(cancel_id)
+    cancelled = DBOS.get_workflow_status(cancel_id)
+    assert cancelled is not None
+    assert cancelled.status == "CANCELLED"
+    assert cancelled.completed_at is not None
+
+    resumed_handle = DBOS.resume_workflow(cancel_id)
+    resumed = DBOS.get_workflow_status(cancel_id)
+    assert resumed is not None
+    assert resumed.completed_at is None
+
+    # completed_before/completed_after only match terminal workflows in range.
+    in_range = DBOS.list_workflows(
+        completed_after=before_success, completed_before=after_success
+    )
+    ids_in_range = {w.workflow_id for w in in_range}
+    assert success_status.workflow_id in ids_in_range
+    # The error and the resumed-pending workflows complete outside this window.
+    assert error_status.workflow_id not in ids_in_range
+    assert cancel_id not in ids_in_range
+
+    # completed_after alone excludes never-completed workflows.
+    only_completed = DBOS.list_workflows(completed_after=before_success)
+    completed_ids = {w.workflow_id for w in only_completed}
+    assert success_status.workflow_id in completed_ids
+    assert error_status.workflow_id in completed_ids
+    assert cancel_id not in completed_ids
+
+    # A window before any work happened matches nothing.
+    far_past = (datetime.now() - timedelta(days=1)).isoformat()
+    none_yet = DBOS.list_workflows(completed_before=far_past)
+    assert len(none_yet) == 0
+
+    # Release the resumed workflow and wait for it to finish.
+    release.set()
+    resumed_handle.get_result()
+
+
 def test_list_workflow_end_times_positive(
     dbos: DBOS, skip_with_sqlite_imprecise_time: None
 ) -> None:
@@ -1476,3 +1552,71 @@ def test_get_workflow_aggregates(dbos: DBOS) -> None:
     # must be > 0
     with pytest.raises(ValueError, match="time_bucket_size_ms must be > 0"):
         dbos._sys_db.get_workflow_aggregates(time_bucket_size_ms=0)
+
+
+def test_get_workflow_aggregates_completed_dequeued(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
+    @DBOS.workflow()
+    def workflow_ok() -> None:
+        return
+
+    @DBOS.workflow()
+    def workflow_fail() -> None:
+        raise Exception("fail")
+
+    @DBOS.workflow()
+    def workflow_queued() -> str:
+        return "done"
+
+    queue = Queue(f"agg_test_queue_{uuid.uuid4()}")
+
+    before_all = datetime.now().isoformat()
+
+    # Three SUCCESS, two ERROR — all run synchronously so started_at_epoch_ms is NULL.
+    for _ in range(3):
+        workflow_ok()
+    for _ in range(2):
+        with pytest.raises(Exception):
+            workflow_fail()
+
+    after_sync = datetime.now().isoformat()
+
+    # One enqueued workflow — gets started_at_epoch_ms populated on dequeue.
+    handle = queue.enqueue(workflow_queued)
+    assert handle.get_result() == "done"
+
+    after_all = datetime.now().isoformat()
+
+    # completed_after/completed_before: window covers all six completions.
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_status=True,
+        completed_after=before_all,
+        completed_before=after_all,
+    )
+    status_map = {r["group"]["status"]: r["count"] for r in results}
+    assert status_map.get("SUCCESS") == 4  # 3 sync + 1 queued
+    assert status_map.get("ERROR") == 2
+
+    # completed_before before any work: matches nothing.
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_status=True, completed_before=before_all
+    )
+    assert results == []
+
+    # dequeued_after/dequeued_before: only the queued workflow has started_at_epoch_ms.
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_status=True,
+        dequeued_after=before_all,
+        dequeued_before=after_all,
+    )
+    status_map = {r["group"]["status"]: r["count"] for r in results}
+    assert status_map == {"SUCCESS": 1}
+
+    # dequeued window strictly before the enqueue: matches nothing.
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_status=True,
+        dequeued_after=before_all,
+        dequeued_before=after_sync,
+    )
+    assert results == []

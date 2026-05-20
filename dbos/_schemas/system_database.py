@@ -89,6 +89,7 @@ class SystemSchema:
         Column("serialization", Text()),
         Column("delay_until_epoch_ms", BigInteger, nullable=True),
         Column("rate_limited", Boolean, nullable=False, server_default="false"),
+        Column("completed_at", BigInteger, nullable=True),
         Index("workflow_status_created_at_index", "created_at"),
         Index(
             "idx_workflow_status_delayed",
@@ -128,6 +129,18 @@ class SystemSchema:
             "started_at_epoch_ms",
             postgresql_where=text("rate_limited = TRUE"),
             sqlite_where=text("rate_limited = TRUE"),
+        ),
+        Index(
+            "idx_workflow_status_completed_at",
+            "completed_at",
+            postgresql_where=text("completed_at IS NOT NULL"),
+            sqlite_where=text("completed_at IS NOT NULL"),
+        ),
+        Index(
+            "idx_workflow_status_started_at",
+            "started_at_epoch_ms",
+            postgresql_where=text("started_at_epoch_ms IS NOT NULL"),
+            sqlite_where=text("started_at_epoch_ms IS NOT NULL"),
         ),
         Index(
             "uq_workflow_status_dedup_id",

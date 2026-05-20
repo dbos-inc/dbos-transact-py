@@ -328,6 +328,10 @@ class ConductorWebsocket(threading.Thread):
                                     user=body.get("authenticated_user", None),
                                     start_time=body.get("start_time", None),
                                     end_time=body.get("end_time", None),
+                                    completed_after=body.get("completed_after", None),
+                                    completed_before=body.get("completed_before", None),
+                                    dequeued_after=body.get("dequeued_after", None),
+                                    dequeued_before=body.get("dequeued_before", None),
                                     status=body.get("status", None),
                                     app_version=body.get("application_version", None),
                                     forked_from=body.get("forked_from", None),
@@ -375,6 +379,12 @@ class ConductorWebsocket(threading.Thread):
                                     user=q_body.get("authenticated_user", None),
                                     start_time=q_body.get("start_time", None),
                                     end_time=q_body.get("end_time", None),
+                                    completed_after=q_body.get("completed_after", None),
+                                    completed_before=q_body.get(
+                                        "completed_before", None
+                                    ),
+                                    dequeued_after=q_body.get("dequeued_after", None),
+                                    dequeued_before=q_body.get("dequeued_before", None),
                                     status=q_body.get("status", None),
                                     app_version=q_body.get("application_version", None),
                                     forked_from=q_body.get("forked_from", None),
@@ -913,6 +923,16 @@ class ConductorWebsocket(threading.Thread):
                                     status=agg_body.get("status", None),
                                     start_time=agg_body.get("start_time", None),
                                     end_time=agg_body.get("end_time", None),
+                                    completed_after=agg_body.get(
+                                        "completed_after", None
+                                    ),
+                                    completed_before=agg_body.get(
+                                        "completed_before", None
+                                    ),
+                                    dequeued_after=agg_body.get("dequeued_after", None),
+                                    dequeued_before=agg_body.get(
+                                        "dequeued_before", None
+                                    ),
                                     name=agg_body.get("name", None),
                                     app_version=agg_body.get("app_version", None),
                                     executor_id=agg_body.get("executor_id", None),

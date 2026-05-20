@@ -8,7 +8,7 @@ from ._logger import dbos_logger
 # autocommit (CREATE/DROP INDEX CONCURRENTLY cannot run inside a transaction
 # block on Postgres). On CockroachDB, schema changes are inherently online,
 # so this set is ignored and the regular transactional path is used.
-_ONLINE_MIGRATIONS = {22, 23, 24, 25, 26, 27, 29, 30, 31, 32, 34, 35}
+_ONLINE_MIGRATIONS = {22, 23, 24, 25, 26, 27, 29, 30, 31, 32, 34, 35, 37}
 
 
 def _concurrently(is_cockroach: bool) -> str:
@@ -707,6 +707,20 @@ def get_dbos_migration_thirtyfive(schema: str, is_cockroach: bool) -> str:
     return f'DROP INDEX {c} IF EXISTS "{schema}"."idx_workflow_status_queue_status_started"'
 
 
+def get_dbos_migration_thirtysix(schema: str) -> str:
+    # ADD COLUMN with no default is catalog-only; the partial index built in
+    # the same transaction covers zero rows, so no CONCURRENTLY is needed.
+    return f"""
+ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "completed_at" BIGINT;
+CREATE INDEX IF NOT EXISTS "idx_workflow_status_completed_at" ON "{schema}"."workflow_status" ("completed_at") WHERE "completed_at" IS NOT NULL;
+"""
+
+
+def get_dbos_migration_thirtyseven(schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_started_at" ON "{schema}"."workflow_status" ("started_at_epoch_ms") WHERE "started_at_epoch_ms" IS NOT NULL'
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -746,6 +760,8 @@ def get_dbos_migrations(
         get_dbos_migration_thirtythree(schema),
         get_dbos_migration_thirtyfour(schema, is_cockroach),
         get_dbos_migration_thirtyfive(schema, is_cockroach),
+        get_dbos_migration_thirtysix(schema),
+        get_dbos_migration_thirtyseven(schema, is_cockroach),
     ]
 
 
@@ -985,6 +1001,13 @@ sqlite_migration_thirtyfive = (
     'DROP INDEX IF EXISTS "idx_workflow_status_queue_status_started"'
 )
 
+sqlite_migration_thirtysix = """
+ALTER TABLE workflow_status ADD COLUMN "completed_at" BIGINT;
+CREATE INDEX IF NOT EXISTS "idx_workflow_status_completed_at" ON "workflow_status" ("completed_at") WHERE "completed_at" IS NOT NULL;
+"""
+
+sqlite_migration_thirtyseven = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_started_at" ON "workflow_status" ("started_at_epoch_ms") WHERE "started_at_epoch_ms" IS NOT NULL'
+
 sqlite_migrations = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -1020,4 +1043,6 @@ sqlite_migrations = [
     sqlite_migration_thirtythree,
     sqlite_migration_thirtyfour,
     sqlite_migration_thirtyfive,
+    sqlite_migration_thirtysix,
+    sqlite_migration_thirtyseven,
 ]
