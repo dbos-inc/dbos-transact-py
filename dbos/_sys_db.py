@@ -577,6 +577,14 @@ class SystemDatabase(ABC):
         """Clean up database-specific connections."""
         pass
 
+    def _now_ms_sql(self) -> Any:
+        # SQLite's CURRENT_TIMESTAMP is second-precision; use unixepoch('subsec') for ms.
+        if self.engine.dialect.name == "sqlite":
+            if sys.version_info >= (3, 12):
+                return sa.func.unixepoch("subsec") * 1000
+            return sa.func.strftime("%s", "now") * 1000
+        return sa.func.extract("epoch", sa.func.now()) * 1000
+
     def _insert_workflow_status(
         self,
         status: WorkflowStatusInternal,
@@ -750,8 +758,8 @@ class SystemDatabase(ABC):
         output: Optional[str] = None,
         error: Optional[str] = None,
     ) -> None:
-        now_ms = int(time.time() * 1000)
         with self.engine.begin() as c:
+            now_ms = self._now_ms_sql()
             c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .values(
@@ -770,8 +778,8 @@ class SystemDatabase(ABC):
         self,
         workflow_ids: list[str],
     ) -> None:
-        now_ms = int(time.time() * 1000)
         with self.engine.begin() as c:
+            now_ms = self._now_ms_sql()
             # Set the workflows' status to CANCELLED and remove them from any queue,
             # but only if the workflow is not already complete.
             c.execute(
@@ -801,7 +809,6 @@ class SystemDatabase(ABC):
         *,
         queue_name: Optional[str] = None,
     ) -> None:
-        now_ms = int(time.time() * 1000)
         with self.engine.begin() as c:
             # Set the workflows' status to ENQUEUED and clear recovery attempts and deadline,
             # but only if the workflow is not already complete.
@@ -825,7 +832,7 @@ class SystemDatabase(ABC):
                     workflow_deadline_epoch_ms=None,
                     deduplication_id=None,
                     started_at_epoch_ms=None,
-                    updated_at=now_ms,
+                    updated_at=self._now_ms_sql(),
                     completed_at=None,
                 )
             )
