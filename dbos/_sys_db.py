@@ -750,8 +750,8 @@ class SystemDatabase(ABC):
         output: Optional[str] = None,
         error: Optional[str] = None,
     ) -> None:
-        now_ms = int(time.time() * 1000)
         with self.engine.begin() as c:
+            now_ms = func.extract("epoch", func.now()) * 1000
             c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .values(
@@ -770,8 +770,8 @@ class SystemDatabase(ABC):
         self,
         workflow_ids: list[str],
     ) -> None:
-        now_ms = int(time.time() * 1000)
         with self.engine.begin() as c:
+            now_ms = func.extract("epoch", func.now()) * 1000
             # Set the workflows' status to CANCELLED and remove them from any queue,
             # but only if the workflow is not already complete.
             c.execute(
@@ -801,7 +801,6 @@ class SystemDatabase(ABC):
         *,
         queue_name: Optional[str] = None,
     ) -> None:
-        now_ms = int(time.time() * 1000)
         with self.engine.begin() as c:
             # Set the workflows' status to ENQUEUED and clear recovery attempts and deadline,
             # but only if the workflow is not already complete.
@@ -825,7 +824,7 @@ class SystemDatabase(ABC):
                     workflow_deadline_epoch_ms=None,
                     deduplication_id=None,
                     started_at_epoch_ms=None,
-                    updated_at=now_ms,
+                    updated_at=func.extract("epoch", func.now()) * 1000,
                     completed_at=None,
                 )
             )
