@@ -801,6 +801,7 @@ class SystemDatabase(ABC):
         *,
         queue_name: Optional[str] = None,
     ) -> None:
+        now_ms = int(time.time() * 1000)
         with self.engine.begin() as c:
             # Set the workflows' status to ENQUEUED and clear recovery attempts and deadline,
             # but only if the workflow is not already complete.
@@ -824,7 +825,7 @@ class SystemDatabase(ABC):
                     workflow_deadline_epoch_ms=None,
                     deduplication_id=None,
                     started_at_epoch_ms=None,
-                    updated_at=func.extract("epoch", func.now()) * 1000,
+                    updated_at=now_ms,
                     completed_at=None,
                 )
             )
