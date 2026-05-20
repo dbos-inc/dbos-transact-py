@@ -247,6 +247,8 @@ def test_list_workflow_prefix(dbos: DBOS) -> None:
 def test_list_workflow_completed_at(
     dbos: DBOS, skip_with_sqlite_imprecise_time: None
 ) -> None:
+    release = threading.Event()
+
     @DBOS.workflow()
     def simple_workflow() -> None:
         return
@@ -257,7 +259,7 @@ def test_list_workflow_completed_at(
 
     @DBOS.workflow()
     def pending_workflow() -> None:
-        time.sleep(60)
+        release.wait()
 
     # Successful workflow gets completed_at set.
     before_success = datetime.now().isoformat()
@@ -286,7 +288,7 @@ def test_list_workflow_completed_at(
     assert cancelled.status == "CANCELLED"
     assert cancelled.completed_at is not None
 
-    DBOS.resume_workflow(cancel_id)
+    resumed_handle = DBOS.resume_workflow(cancel_id)
     resumed = DBOS.get_workflow_status(cancel_id)
     assert resumed is not None
     assert resumed.completed_at is None
@@ -313,8 +315,9 @@ def test_list_workflow_completed_at(
     none_yet = DBOS.list_workflows(completed_before=far_past)
     assert len(none_yet) == 0
 
-    # Cleanup: cancel the still-pending workflow.
-    DBOS.cancel_workflow(cancel_id)
+    # Release the resumed workflow and wait for it to finish.
+    release.set()
+    resumed_handle.get_result()
 
 
 def test_list_workflow_end_times_positive(
@@ -1599,7 +1602,7 @@ def test_get_workflow_aggregates_completed_dequeued(
     results = dbos._sys_db.get_workflow_aggregates(
         group_by_status=True, completed_before=before_all
     )
-    assert all(r["count"] == 0 for r in results) or results == []
+    assert results == []
 
     # dequeued_after/dequeued_before: only the queued workflow has started_at_epoch_ms.
     results = dbos._sys_db.get_workflow_aggregates(

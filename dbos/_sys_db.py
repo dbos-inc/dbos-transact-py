@@ -1552,6 +1552,8 @@ class SystemDatabase(ABC):
                 SystemSchema.workflow_status.c.completed_at
                 <= datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
             )
+        # dequeued_after/before filter on started_at_epoch_ms: that column is
+        # populated on dequeue and surfaced as WorkflowStatus.dequeued_at.
         if dequeued_after:
             query = query.where(
                 SystemSchema.workflow_status.c.started_at_epoch_ms
@@ -1847,6 +1849,8 @@ class SystemDatabase(ABC):
                 SystemSchema.workflow_status.c.completed_at
                 <= datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
             )
+        # dequeued_after/before filter on started_at_epoch_ms: that column is
+        # populated on dequeue and surfaced as WorkflowStatus.dequeued_at.
         if dequeued_after:
             query = query.where(
                 SystemSchema.workflow_status.c.started_at_epoch_ms
