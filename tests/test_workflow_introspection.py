@@ -1948,14 +1948,16 @@ def test_get_step_aggregates_completed_window_and_max(
     by_fn = {r["group"]["function_name"]: r for r in results}
 
     # Real steps: both timestamps set → max_duration_ms populated.
-    assert by_fn[quick_step.__qualname__]["count"] == 1
-    assert by_fn[quick_step.__qualname__]["max_duration_ms"] is not None
-    assert by_fn[quick_step.__qualname__]["max_duration_ms"] >= 0
+    quick_row = by_fn[quick_step.__qualname__]
+    assert quick_row["count"] == 1
+    assert quick_row["max_duration_ms"] is not None
+    assert quick_row["max_duration_ms"] >= 0
 
-    assert by_fn[slow_step.__qualname__]["count"] == 1
-    assert by_fn[slow_step.__qualname__]["max_duration_ms"] is not None
+    slow_row = by_fn[slow_step.__qualname__]
+    assert slow_row["count"] == 1
+    assert slow_row["max_duration_ms"] is not None
     # slow_step sleeps 50ms — the recorded duration should reflect that.
-    assert by_fn[slow_step.__qualname__]["max_duration_ms"] >= 40
+    assert slow_row["max_duration_ms"] >= 40
 
     # Bookkeeping rows are NOT present in the completed-window result.
     assert child.__qualname__ not in by_fn
