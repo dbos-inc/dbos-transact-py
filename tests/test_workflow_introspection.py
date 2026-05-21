@@ -1716,7 +1716,7 @@ def test_get_workflow_aggregates_select_min_created_at(dbos: DBOS) -> None:
     assert results[0]["min_created_at"] == q_first_created_at
 
 
-def test_get_workflow_aggregates_select_avg_durations(
+def test_get_workflow_aggregates_select_max_durations(
     dbos: DBOS, skip_with_sqlite_imprecise_time: None
 ) -> None:
     @DBOS.workflow()
@@ -1727,63 +1727,65 @@ def test_get_workflow_aggregates_select_avg_durations(
     def workflow_queued() -> str:
         return "done"
 
-    queue = Queue(f"agg_avg_q_{uuid.uuid4()}")
+    queue = Queue(f"agg_max_q_{uuid.uuid4()}")
 
     # Two sync workflows: started_at_epoch_ms is NULL, so they are excluded
-    # from avg_queue_wait_ms but included in avg_total_latency_ms.
+    # from max_queue_wait_ms but included in max_total_latency_ms.
     for _ in range(2):
         workflow_sync()
 
     # Two queued workflows: started_at_epoch_ms is populated, so they
-    # contribute to both averages.
+    # contribute to both maxes.
     qh1 = queue.enqueue(workflow_queued)
     assert qh1.get_result() == "done"
     qh2 = queue.enqueue(workflow_queued)
     assert qh2.get_result() == "done"
 
-    # Only averages selected — counts and timestamps must be None.
+    # Only maxes selected — counts and timestamps must be None.
     results = dbos._sys_db.get_workflow_aggregates(
         group_by_status=True,
         status=["SUCCESS"],
-        select_avg_queue_wait_ms=True,
-        select_avg_total_latency_ms=True,
+        select_max_queue_wait_ms=True,
+        select_max_total_latency_ms=True,
     )
     assert len(results) == 1
     r = results[0]
     assert r["count"] is None
     assert r["min_created_at"] is None
     # Both queued workflows have a non-negative wait; sync workflows are
-    # NULL-skipped by AVG.
-    assert r["avg_queue_wait_ms"] is not None
-    assert r["avg_queue_wait_ms"] >= 0
+    # NULL-skipped by MAX.
+    assert r["max_queue_wait_ms"] is not None
+    assert r["max_queue_wait_ms"] >= 0
     # All four SUCCESS workflows have completed_at - created_at >= 0.
-    assert r["avg_total_latency_ms"] is not None
-    assert r["avg_total_latency_ms"] >= 0
+    assert r["max_total_latency_ms"] is not None
+    assert r["max_total_latency_ms"] >= 0
 
-    # Grouped by name: sync group has no avg_queue_wait_ms (all rows NULL on
+    # Grouped by name: sync group has no max_queue_wait_ms (all rows NULL on
     # started_at), but does have a total latency. Queued group has both.
     results = dbos._sys_db.get_workflow_aggregates(
         group_by_name=True,
         select_count=True,
-        select_avg_queue_wait_ms=True,
-        select_avg_total_latency_ms=True,
+        select_max_queue_wait_ms=True,
+        select_max_total_latency_ms=True,
     )
     by_name = {r["group"]["name"]: r for r in results}
 
     sync_row = by_name[workflow_sync.__qualname__]
     assert sync_row["count"] == 2
-    assert sync_row["avg_queue_wait_ms"] is None  # all NULL → AVG is NULL
-    assert sync_row["avg_total_latency_ms"] is not None
-    assert sync_row["avg_total_latency_ms"] >= 0
+    assert sync_row["max_queue_wait_ms"] is None  # all NULL → MAX is NULL
+    assert sync_row["max_total_latency_ms"] is not None
+    assert sync_row["max_total_latency_ms"] >= 0
 
     queued_row = by_name[workflow_queued.__qualname__]
     assert queued_row["count"] == 2
-    assert queued_row["avg_queue_wait_ms"] is not None
-    assert queued_row["avg_queue_wait_ms"] >= 0
-    assert queued_row["avg_total_latency_ms"] is not None
-    # Total latency must be at least as large as queue wait, since
-    # total = wait + execution.
-    assert queued_row["avg_total_latency_ms"] >= queued_row["avg_queue_wait_ms"]
+    assert queued_row["max_queue_wait_ms"] is not None
+    assert queued_row["max_queue_wait_ms"] >= 0
+    assert queued_row["max_total_latency_ms"] is not None
+    # For any individual row, total_latency >= queue_wait (since
+    # total = wait + execution). Therefore MAX(total) >= MAX(wait):
+    # the row producing MAX(wait) has total >= its wait, and MAX(total)
+    # is at least that row's total.
+    assert queued_row["max_total_latency_ms"] >= queued_row["max_queue_wait_ms"]
 
 
 def test_get_step_aggregates(dbos: DBOS) -> None:
@@ -1905,7 +1907,7 @@ def test_get_step_aggregates(dbos: DBOS) -> None:
         assert int(tb) % one_hour_ms == 0
 
 
-def test_get_step_aggregates_completed_window_and_avg(
+def test_get_step_aggregates_completed_window_and_max(
     dbos: DBOS, skip_with_sqlite_imprecise_time: None
 ) -> None:
     @DBOS.step()
@@ -1923,7 +1925,7 @@ def test_get_step_aggregates_completed_window_and_avg(
     @DBOS.workflow()
     def parent() -> None:
         # child workflow markers and DBOS.getResult are bookkeeping rows
-        # with NULL timestamps — they should drop out of avg_duration_ms.
+        # with NULL timestamps — they should drop out of max_duration_ms.
         child()
         quick_step()
         slow_step()
@@ -1935,44 +1937,44 @@ def test_get_step_aggregates_completed_window_and_avg(
     # completed_after/completed_before: window covers all step rows that have
     # a completed_at_epoch_ms set. Bookkeeping rows (child-workflow markers,
     # DBOS.getResult) have NULL completed_at_epoch_ms, so they're filtered
-    # out by the WHERE clause itself — not by the AVG NULL-skipping.
+    # out by the WHERE clause itself — not by the MAX NULL-skipping.
     results = dbos._sys_db.get_step_aggregates(
         group_by_function_name=True,
         completed_after=before_all,
         completed_before=after_all,
         select_count=True,
-        select_avg_duration_ms=True,
+        select_max_duration_ms=True,
     )
     by_fn = {r["group"]["function_name"]: r for r in results}
 
-    # Real steps: both timestamps set → avg_duration_ms populated.
+    # Real steps: both timestamps set → max_duration_ms populated.
     assert by_fn[quick_step.__qualname__]["count"] == 1
-    assert by_fn[quick_step.__qualname__]["avg_duration_ms"] is not None
-    assert by_fn[quick_step.__qualname__]["avg_duration_ms"] >= 0
+    assert by_fn[quick_step.__qualname__]["max_duration_ms"] is not None
+    assert by_fn[quick_step.__qualname__]["max_duration_ms"] >= 0
 
     assert by_fn[slow_step.__qualname__]["count"] == 1
-    assert by_fn[slow_step.__qualname__]["avg_duration_ms"] is not None
+    assert by_fn[slow_step.__qualname__]["max_duration_ms"] is not None
     # slow_step sleeps 50ms — the recorded duration should reflect that.
-    assert by_fn[slow_step.__qualname__]["avg_duration_ms"] >= 40
+    assert by_fn[slow_step.__qualname__]["max_duration_ms"] >= 40
 
     # Bookkeeping rows are NOT present in the completed-window result.
     assert child.__qualname__ not in by_fn
     assert "DBOS.getResult" not in by_fn
 
     # Without the completed_at filter, bookkeeping rows show up with NULL
-    # avg_duration_ms (their started/completed timestamps are NULL).
+    # max_duration_ms (their started/completed timestamps are NULL).
     results = dbos._sys_db.get_step_aggregates(
         group_by_function_name=True,
         select_count=True,
-        select_avg_duration_ms=True,
+        select_max_duration_ms=True,
     )
     by_fn = {r["group"]["function_name"]: r for r in results}
     child_wf_row = by_fn[child.__qualname__]
     assert child_wf_row["count"] == 1
-    assert child_wf_row["avg_duration_ms"] is None
+    assert child_wf_row["max_duration_ms"] is None
     get_result_row = by_fn["DBOS.getResult"]
     assert get_result_row["count"] == 1
-    assert get_result_row["avg_duration_ms"] is None
+    assert get_result_row["max_duration_ms"] is None
 
     # completed_before before any work: matches nothing.
     results = dbos._sys_db.get_step_aggregates(
@@ -1982,14 +1984,14 @@ def test_get_step_aggregates_completed_window_and_avg(
     )
     assert results == []
 
-    # select_avg_duration_ms alone — counts must be None.
+    # select_max_duration_ms alone — counts must be None.
     results = dbos._sys_db.get_step_aggregates(
         group_by_function_name=True,
         function_name=[quick_step.__qualname__, slow_step.__qualname__],
-        select_avg_duration_ms=True,
+        select_max_duration_ms=True,
     )
     by_fn = {r["group"]["function_name"]: r for r in results}
     assert by_fn[quick_step.__qualname__]["count"] is None
-    assert by_fn[quick_step.__qualname__]["avg_duration_ms"] is not None
+    assert by_fn[quick_step.__qualname__]["max_duration_ms"] is not None
     assert by_fn[slow_step.__qualname__]["count"] is None
-    assert by_fn[slow_step.__qualname__]["avg_duration_ms"] is not None
+    assert by_fn[slow_step.__qualname__]["max_duration_ms"] is not None

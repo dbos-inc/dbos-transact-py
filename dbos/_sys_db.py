@@ -336,14 +336,14 @@ class WorkflowAggregateRow(TypedDict):
     group: Dict[str, Optional[str]]
     count: Optional[int]
     min_created_at: Optional[int]
-    avg_queue_wait_ms: Optional[float]
-    avg_total_latency_ms: Optional[float]
+    max_queue_wait_ms: Optional[int]
+    max_total_latency_ms: Optional[int]
 
 
 class StepAggregateRow(TypedDict):
     group: Dict[str, Optional[str]]
     count: Optional[int]
-    avg_duration_ms: Optional[float]
+    max_duration_ms: Optional[int]
 
 
 class NotificationInfo(TypedDict):
@@ -1787,8 +1787,8 @@ class SystemDatabase(ABC):
         group_by_application_version: bool = False,
         select_count: bool = False,
         select_min_created_at: bool = False,
-        select_avg_queue_wait_ms: bool = False,
-        select_avg_total_latency_ms: bool = False,
+        select_max_queue_wait_ms: bool = False,
+        select_max_total_latency_ms: bool = False,
         time_bucket_size_ms: Optional[int] = None,
         status: Optional[List[str]] = None,
         start_time: Optional[str] = None,
@@ -1845,9 +1845,9 @@ class SystemDatabase(ABC):
         if not group_columns:
             raise ValueError("At least one group_by flag must be set to True")
 
-        # Build select columns from boolean flags. AVG ignores NULLs, so rows
+        # Build select columns from boolean flags. MAX ignores NULLs, so rows
         # missing started_at_epoch_ms or completed_at naturally drop out of the
-        # latency averages.
+        # latency maxes.
         select_flags: List[Tuple[str, bool, sa.sql.ColumnElement[Any]]] = [
             ("count", select_count, func.count()),
             (
@@ -1856,17 +1856,17 @@ class SystemDatabase(ABC):
                 func.min(SystemSchema.workflow_status.c.created_at),
             ),
             (
-                "avg_queue_wait_ms",
-                select_avg_queue_wait_ms,
-                func.avg(
+                "max_queue_wait_ms",
+                select_max_queue_wait_ms,
+                func.max(
                     SystemSchema.workflow_status.c.started_at_epoch_ms
                     - SystemSchema.workflow_status.c.created_at
                 ),
             ),
             (
-                "avg_total_latency_ms",
-                select_avg_total_latency_ms,
-                func.avg(
+                "max_total_latency_ms",
+                select_max_total_latency_ms,
+                func.max(
                     SystemSchema.workflow_status.c.completed_at
                     - SystemSchema.workflow_status.c.created_at
                 ),
@@ -1966,21 +1966,21 @@ class SystemDatabase(ABC):
             if (i := select_idx.get("min_created_at")) is not None:
                 v = row[group_offset + i]
                 min_created_at_val = int(v) if v is not None else None
-            avg_queue_wait_val: Optional[float] = None
-            if (i := select_idx.get("avg_queue_wait_ms")) is not None:
+            max_queue_wait_val: Optional[int] = None
+            if (i := select_idx.get("max_queue_wait_ms")) is not None:
                 v = row[group_offset + i]
-                avg_queue_wait_val = float(v) if v is not None else None
-            avg_total_latency_val: Optional[float] = None
-            if (i := select_idx.get("avg_total_latency_ms")) is not None:
+                max_queue_wait_val = int(v) if v is not None else None
+            max_total_latency_val: Optional[int] = None
+            if (i := select_idx.get("max_total_latency_ms")) is not None:
                 v = row[group_offset + i]
-                avg_total_latency_val = float(v) if v is not None else None
+                max_total_latency_val = int(v) if v is not None else None
             results.append(
                 WorkflowAggregateRow(
                     group=group,
                     count=count_val,
                     min_created_at=min_created_at_val,
-                    avg_queue_wait_ms=avg_queue_wait_val,
-                    avg_total_latency_ms=avg_total_latency_val,
+                    max_queue_wait_ms=max_queue_wait_val,
+                    max_total_latency_ms=max_total_latency_val,
                 )
             )
         return results
@@ -1991,7 +1991,7 @@ class SystemDatabase(ABC):
         group_by_function_name: bool = False,
         group_by_status: bool = False,
         select_count: bool = False,
-        select_avg_duration_ms: bool = False,
+        select_max_duration_ms: bool = False,
         time_bucket_size_ms: Optional[int] = None,
         status: Optional[List[str]] = None,
         function_name: Optional[List[str]] = None,
@@ -2044,15 +2044,15 @@ class SystemDatabase(ABC):
         if not group_columns:
             raise ValueError("At least one group_by flag must be set to True")
 
-        # Build select columns from boolean flags. AVG ignores NULLs, so rows
+        # Build select columns from boolean flags. MAX ignores NULLs, so rows
         # without start/complete timestamps (child-workflow and getResult
-        # markers) drop out of the duration average.
+        # markers) drop out of the duration max.
         select_flags: List[Tuple[str, bool, sa.sql.ColumnElement[Any]]] = [
             ("count", select_count, func.count()),
             (
-                "avg_duration_ms",
-                select_avg_duration_ms,
-                func.avg(
+                "max_duration_ms",
+                select_max_duration_ms,
+                func.max(
                     SystemSchema.operation_outputs.c.completed_at_epoch_ms
                     - SystemSchema.operation_outputs.c.started_at_epoch_ms
                 ),
@@ -2116,15 +2116,15 @@ class SystemDatabase(ABC):
             if (i := select_idx.get("count")) is not None:
                 v = row[group_offset + i]
                 count_val = int(v) if v is not None else None
-            avg_duration_val: Optional[float] = None
-            if (i := select_idx.get("avg_duration_ms")) is not None:
+            max_duration_val: Optional[int] = None
+            if (i := select_idx.get("max_duration_ms")) is not None:
                 v = row[group_offset + i]
-                avg_duration_val = float(v) if v is not None else None
+                max_duration_val = int(v) if v is not None else None
             results.append(
                 StepAggregateRow(
                     group=group,
                     count=count_val,
-                    avg_duration_ms=avg_duration_val,
+                    max_duration_ms=max_duration_val,
                 )
             )
         return results

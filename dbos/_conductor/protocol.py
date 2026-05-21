@@ -759,8 +759,8 @@ class GetWorkflowAggregatesBody(TypedDict, total=False):
     group_by_application_version: bool
     select_count: bool
     select_min_created_at: bool
-    select_avg_queue_wait_ms: bool
-    select_avg_total_latency_ms: bool
+    select_max_queue_wait_ms: bool
+    select_max_total_latency_ms: bool
     time_bucket_size_ms: int
     status: Optional[List[str]]
     start_time: Optional[str]
@@ -786,8 +786,8 @@ class WorkflowAggregateOutput:
     group: Dict[str, Optional[str]]
     count: Optional[int] = None
     min_created_at: Optional[int] = None
-    avg_queue_wait_ms: Optional[float] = None
-    avg_total_latency_ms: Optional[float] = None
+    max_queue_wait_ms: Optional[int] = None
+    max_total_latency_ms: Optional[int] = None
 
 
 @dataclass
