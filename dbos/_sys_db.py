@@ -1945,7 +1945,7 @@ class SystemDatabase(ABC):
                 )
             )
 
-        query = query.group_by(*group_columns).limit(10_000_000)
+        query = query.group_by(*group_columns)
 
         with self.engine.begin() as c:
             rows = c.execute(query).fetchall()
@@ -2099,7 +2099,7 @@ class SystemDatabase(ABC):
                 <= datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
             )
 
-        query = query.group_by(*group_columns).limit(10_000_000)
+        query = query.group_by(*group_columns)
 
         with self.engine.begin() as c:
             rows = c.execute(query).fetchall()
