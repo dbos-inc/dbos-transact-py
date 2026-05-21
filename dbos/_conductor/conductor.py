@@ -902,6 +902,14 @@ class ConductorWebsocket(threading.Thread):
                             )
                             agg_body = agg_message.body
                             agg_output: list[p.WorkflowAggregateOutput] = []
+                            # Backwards compat: older clients send no select_*
+                            # flags and expect counts.
+                            select_count = agg_body.get("select_count", False)
+                            select_min_created_at = agg_body.get(
+                                "select_min_created_at", False
+                            )
+                            if not select_count and not select_min_created_at:
+                                select_count = True
                             try:
                                 agg_rows = self.dbos._sys_db.get_workflow_aggregates(
                                     group_by_status=agg_body.get(
@@ -917,6 +925,8 @@ class ConductorWebsocket(threading.Thread):
                                     group_by_application_version=agg_body.get(
                                         "group_by_application_version", False
                                     ),
+                                    select_count=select_count,
+                                    select_min_created_at=select_min_created_at,
                                     time_bucket_size_ms=agg_body.get(
                                         "time_bucket_size_ms", None
                                     ),
@@ -943,7 +953,9 @@ class ConductorWebsocket(threading.Thread):
                                 )
                                 agg_output = [
                                     p.WorkflowAggregateOutput(
-                                        group=r["group"], count=r["count"]
+                                        group=r["group"],
+                                        count=r["count"],
+                                        min_created_at=r["min_created_at"],
                                     )
                                     for r in agg_rows
                                 ]

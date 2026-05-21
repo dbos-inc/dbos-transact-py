@@ -757,6 +757,8 @@ class GetWorkflowAggregatesBody(TypedDict, total=False):
     group_by_queue_name: bool
     group_by_executor_id: bool
     group_by_application_version: bool
+    select_count: bool
+    select_min_created_at: bool
     time_bucket_size_ms: int
     status: Optional[List[str]]
     start_time: Optional[str]
@@ -780,7 +782,8 @@ class GetWorkflowAggregatesRequest(BaseMessage):
 @dataclass
 class WorkflowAggregateOutput:
     group: Dict[str, Optional[str]]
-    count: int
+    count: Optional[int] = None
+    min_created_at: Optional[int] = None
 
 
 @dataclass

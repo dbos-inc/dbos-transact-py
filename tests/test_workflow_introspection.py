@@ -1455,20 +1455,24 @@ def test_get_workflow_aggregates(dbos: DBOS) -> None:
             workflow_b()
 
     # Group by status
-    results = dbos._sys_db.get_workflow_aggregates(group_by_status=True)
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_status=True, select_count=True
+    )
     status_map = {r["group"]["status"]: r["count"] for r in results}
     assert status_map["SUCCESS"] == 3
     assert status_map["ERROR"] == 2
 
     # Group by name
-    results = dbos._sys_db.get_workflow_aggregates(group_by_name=True)
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_name=True, select_count=True
+    )
     name_map = {r["group"]["name"]: r["count"] for r in results}
     assert name_map[workflow_a.__qualname__] == 3
     assert name_map[workflow_b.__qualname__] == 2
 
     # Group by both status and name
     results = dbos._sys_db.get_workflow_aggregates(
-        group_by_status=True, group_by_name=True
+        group_by_status=True, group_by_name=True, select_count=True
     )
     combo_map = {
         (r["group"]["status"], r["group"]["name"]): r["count"] for r in results
@@ -1478,7 +1482,7 @@ def test_get_workflow_aggregates(dbos: DBOS) -> None:
 
     # Filter by status
     results = dbos._sys_db.get_workflow_aggregates(
-        group_by_name=True, status=["SUCCESS"]
+        group_by_name=True, status=["SUCCESS"], select_count=True
     )
     assert len(results) == 1
     assert results[0]["group"]["name"] == workflow_a.__qualname__
@@ -1486,7 +1490,7 @@ def test_get_workflow_aggregates(dbos: DBOS) -> None:
 
     # Filter by name
     results = dbos._sys_db.get_workflow_aggregates(
-        group_by_status=True, name=[workflow_b.__qualname__]
+        group_by_status=True, name=[workflow_b.__qualname__], select_count=True
     )
     assert len(results) == 1
     assert results[0]["group"]["status"] == "ERROR"
@@ -1500,24 +1504,32 @@ def test_get_workflow_aggregates(dbos: DBOS) -> None:
         workflow_a()
 
     results = dbos._sys_db.get_workflow_aggregates(
-        group_by_name=True, workflow_id_prefix=["agg-prefix"]
+        group_by_name=True, workflow_id_prefix=["agg-prefix"], select_count=True
     )
     assert len(results) == 1
     assert results[0]["group"]["name"] == workflow_a.__qualname__
     assert results[0]["count"] == 2
 
     results = dbos._sys_db.get_workflow_aggregates(
-        group_by_status=True, workflow_id_prefix=["nonexistent-prefix"]
+        group_by_status=True,
+        workflow_id_prefix=["nonexistent-prefix"],
+        select_count=True,
     )
     assert len(results) == 0
 
     # No group_by flags should raise
     with pytest.raises(ValueError, match="At least one group_by flag must be set"):
-        dbos._sys_db.get_workflow_aggregates()
+        dbos._sys_db.get_workflow_aggregates(select_count=True)
+
+    # No select_ flags should raise
+    with pytest.raises(ValueError, match="At least one select_ flag must be set"):
+        dbos._sys_db.get_workflow_aggregates(group_by_status=True)
 
     # time_bucket_size_ms alone (1-hour buckets = 3_600_000 ms)
     one_hour_ms = 3_600_000
-    results = dbos._sys_db.get_workflow_aggregates(time_bucket_size_ms=one_hour_ms)
+    results = dbos._sys_db.get_workflow_aggregates(
+        time_bucket_size_ms=one_hour_ms, select_count=True
+    )
     assert len(results) >= 1
     # Each bucket value must be a multiple of the bucket size
     for r in results:
@@ -1525,33 +1537,35 @@ def test_get_workflow_aggregates(dbos: DBOS) -> None:
         assert isinstance(tb, str)
         assert int(tb) % one_hour_ms == 0
     # Total count across all buckets equals total workflows run so far
-    assert sum(r["count"] for r in results) >= 7  # 3 + 2 + 2 prefix runs
+    assert sum(r["count"] or 0 for r in results) >= 7  # 3 + 2 + 2 prefix runs
 
     # time_bucket_size_ms combined with group_by_status
     results = dbos._sys_db.get_workflow_aggregates(
-        time_bucket_size_ms=one_hour_ms, group_by_status=True
+        time_bucket_size_ms=one_hour_ms, group_by_status=True, select_count=True
     )
     success_total = sum(
-        r["count"] for r in results if r["group"]["status"] == "SUCCESS"
+        r["count"] or 0 for r in results if r["group"]["status"] == "SUCCESS"
     )
-    error_total = sum(r["count"] for r in results if r["group"]["status"] == "ERROR")
+    error_total = sum(
+        r["count"] or 0 for r in results if r["group"]["status"] == "ERROR"
+    )
     assert success_total >= 5
     assert error_total == 2
 
     # time_bucket_size_ms with a status filter (1-minute buckets = 60_000 ms)
     one_minute_ms = 60_000
     results = dbos._sys_db.get_workflow_aggregates(
-        time_bucket_size_ms=one_minute_ms, status=["ERROR"]
+        time_bucket_size_ms=one_minute_ms, status=["ERROR"], select_count=True
     )
     assert len(results) >= 1
     for r in results:
         assert isinstance(r["group"]["time_bucket"], str)
         assert int(r["group"]["time_bucket"]) % one_minute_ms == 0
-    assert sum(r["count"] for r in results) == 2
+    assert sum(r["count"] or 0 for r in results) == 2
 
     # must be > 0
     with pytest.raises(ValueError, match="time_bucket_size_ms must be > 0"):
-        dbos._sys_db.get_workflow_aggregates(time_bucket_size_ms=0)
+        dbos._sys_db.get_workflow_aggregates(time_bucket_size_ms=0, select_count=True)
 
 
 def test_get_workflow_aggregates_completed_dequeued(
@@ -1593,6 +1607,7 @@ def test_get_workflow_aggregates_completed_dequeued(
         group_by_status=True,
         completed_after=before_all,
         completed_before=after_all,
+        select_count=True,
     )
     status_map = {r["group"]["status"]: r["count"] for r in results}
     assert status_map.get("SUCCESS") == 4  # 3 sync + 1 queued
@@ -1600,7 +1615,7 @@ def test_get_workflow_aggregates_completed_dequeued(
 
     # completed_before before any work: matches nothing.
     results = dbos._sys_db.get_workflow_aggregates(
-        group_by_status=True, completed_before=before_all
+        group_by_status=True, completed_before=before_all, select_count=True
     )
     assert results == []
 
@@ -1609,6 +1624,7 @@ def test_get_workflow_aggregates_completed_dequeued(
         group_by_status=True,
         dequeued_after=before_all,
         dequeued_before=after_all,
+        select_count=True,
     )
     status_map = {r["group"]["status"]: r["count"] for r in results}
     assert status_map == {"SUCCESS": 1}
@@ -1618,5 +1634,83 @@ def test_get_workflow_aggregates_completed_dequeued(
         group_by_status=True,
         dequeued_after=before_all,
         dequeued_before=after_sync,
+        select_count=True,
     )
     assert results == []
+
+
+def test_get_workflow_aggregates_select_min_created_at(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def workflow_a() -> None:
+        return
+
+    @DBOS.workflow()
+    def workflow_b() -> None:
+        return
+
+    # Three workflow_a runs with a small gap so min(created_at) is unambiguous,
+    # then one workflow_b.
+    h1 = DBOS.start_workflow(workflow_a)
+    h1.get_result()
+    a_first_created_at = DBOS.get_workflow_status(h1.workflow_id).created_at  # type: ignore[union-attr]
+
+    time.sleep(0.05)
+    h2 = DBOS.start_workflow(workflow_a)
+    h2.get_result()
+    time.sleep(0.05)
+    h3 = DBOS.start_workflow(workflow_a)
+    h3.get_result()
+
+    time.sleep(0.05)
+    h4 = DBOS.start_workflow(workflow_b)
+    h4.get_result()
+    b_created_at = DBOS.get_workflow_status(h4.workflow_id).created_at  # type: ignore[union-attr]
+
+    # select_min_created_at alone — count must be None on every row.
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_name=True, select_min_created_at=True
+    )
+    by_name = {r["group"]["name"]: r for r in results}
+    assert by_name[workflow_a.__qualname__]["count"] is None
+    assert by_name[workflow_b.__qualname__]["count"] is None
+    assert by_name[workflow_a.__qualname__]["min_created_at"] == a_first_created_at
+    assert by_name[workflow_b.__qualname__]["min_created_at"] == b_created_at
+
+    # Both flags together — both fields populated on every row.
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_name=True, select_count=True, select_min_created_at=True
+    )
+    by_name = {r["group"]["name"]: r for r in results}
+    assert by_name[workflow_a.__qualname__]["count"] == 3
+    assert by_name[workflow_a.__qualname__]["min_created_at"] == a_first_created_at
+    assert by_name[workflow_b.__qualname__]["count"] == 1
+    assert by_name[workflow_b.__qualname__]["min_created_at"] == b_created_at
+
+    # select_count alone — min_created_at must be None on every row.
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_name=True, select_count=True
+    )
+    by_name = {r["group"]["name"]: r for r in results}
+    assert by_name[workflow_a.__qualname__]["count"] == 3
+    assert by_name[workflow_a.__qualname__]["min_created_at"] is None
+    assert by_name[workflow_b.__qualname__]["min_created_at"] is None
+
+    # Queue-oldest-item pattern: group by queue_name with a status filter.
+    queue = Queue(f"agg_min_q_{uuid.uuid4()}")
+    qh1 = queue.enqueue(workflow_a)
+    qh1.get_result()
+    q_first_created_at = DBOS.get_workflow_status(qh1.workflow_id).created_at  # type: ignore[union-attr]
+    time.sleep(0.05)
+    qh2 = queue.enqueue(workflow_a)
+    qh2.get_result()
+
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_queue_name=True,
+        queue_name=[queue.name],
+        select_count=True,
+        select_min_created_at=True,
+    )
+    assert len(results) == 1
+    assert results[0]["group"]["queue_name"] == queue.name
+    assert results[0]["count"] == 2
+    assert results[0]["min_created_at"] == q_first_created_at

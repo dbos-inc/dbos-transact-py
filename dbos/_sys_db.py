@@ -334,7 +334,8 @@ class StepInfo(TypedDict):
 
 class WorkflowAggregateRow(TypedDict):
     group: Dict[str, Optional[str]]
-    count: int
+    count: Optional[int]
+    min_created_at: Optional[int]
 
 
 class NotificationInfo(TypedDict):
@@ -1776,6 +1777,8 @@ class SystemDatabase(ABC):
         group_by_queue_name: bool = False,
         group_by_executor_id: bool = False,
         group_by_application_version: bool = False,
+        select_count: bool = False,
+        select_min_created_at: bool = False,
         time_bucket_size_ms: Optional[int] = None,
         status: Optional[List[str]] = None,
         start_time: Optional[str] = None,
@@ -1832,7 +1835,26 @@ class SystemDatabase(ABC):
         if not group_columns:
             raise ValueError("At least one group_by flag must be set to True")
 
-        query = sa.select(*group_columns, func.count().label("count"))
+        # Build select columns from boolean flags
+        select_flags: List[Tuple[str, bool, sa.sql.ColumnElement[Any]]] = [
+            ("count", select_count, func.count()),
+            (
+                "min_created_at",
+                select_min_created_at,
+                func.min(SystemSchema.workflow_status.c.created_at),
+            ),
+        ]
+        select_names: List[str] = []
+        select_columns: List[sa.sql.ColumnElement[Any]] = []
+        for select_name, enabled, agg in select_flags:
+            if enabled:
+                select_names.append(select_name)
+                select_columns.append(agg.label(select_name))
+
+        if not select_columns:
+            raise ValueError("At least one select_ flag must be set to True")
+
+        query = sa.select(*group_columns, *select_columns)
 
         # Apply filters
         if status:
@@ -1901,13 +1923,27 @@ class SystemDatabase(ABC):
             rows = c.execute(query).fetchall()
 
         results: List[WorkflowAggregateRow] = []
+        group_offset = len(group_names)
+        select_idx = {name: i for i, name in enumerate(select_names)}
         for row in rows:
             group: Dict[str, Optional[str]] = {
                 group_names[i]: str(row[i]) if row[i] is not None else None
                 for i in range(len(group_names))
             }
+            count_val: Optional[int] = None
+            if (i := select_idx.get("count")) is not None:
+                v = row[group_offset + i]
+                count_val = int(v) if v is not None else None
+            min_created_at_val: Optional[int] = None
+            if (i := select_idx.get("min_created_at")) is not None:
+                v = row[group_offset + i]
+                min_created_at_val = int(v) if v is not None else None
             results.append(
-                WorkflowAggregateRow(group=group, count=row[len(group_names)])
+                WorkflowAggregateRow(
+                    group=group,
+                    count=count_val,
+                    min_created_at=min_created_at_val,
+                )
             )
         return results
 
