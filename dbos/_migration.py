@@ -723,11 +723,11 @@ def get_dbos_migration_thirtyseven(schema: str, is_cockroach: bool) -> str:
 
 def get_dbos_migration_thirtyeight(schema: str, is_cockroach: bool) -> str:
     migration = f"""
-DROP FUNCTION "{schema}".enqueue_workflow(
+DROP FUNCTION IF EXISTS "{schema}".enqueue_workflow(
     TEXT, TEXT, JSON[], JSON, TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, INTEGER, TEXT
 );
 
-CREATE FUNCTION "{schema}".enqueue_workflow(
+CREATE OR REPLACE FUNCTION "{schema}".enqueue_workflow(
     workflow_name TEXT,
     queue_name TEXT,
     positional_args JSON[] DEFAULT ARRAY[]::JSON[],
