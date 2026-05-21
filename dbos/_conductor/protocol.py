@@ -46,6 +46,7 @@ class MessageType(str, Enum):
     GET_WORKFLOW_NOTIFICATIONS = "get_workflow_notifications"
     GET_WORKFLOW_STREAMS = "get_workflow_streams"
     GET_WORKFLOW_AGGREGATES = "get_workflow_aggregates"
+    GET_STEP_AGGREGATES = "get_step_aggregates"
     FORK_FROM_FAILURE = "fork_from_failure"
     LIST_QUEUES = "list_queues"
     GET_QUEUE = "get_queue"
@@ -793,6 +794,37 @@ class WorkflowAggregateOutput:
 @dataclass
 class GetWorkflowAggregatesResponse(BaseMessage):
     output: List[WorkflowAggregateOutput]
+    error_message: Optional[str] = None
+
+
+class GetStepAggregatesBody(TypedDict, total=False):
+    group_by_function_name: bool
+    group_by_status: bool
+    select_count: bool
+    select_max_duration_ms: bool
+    time_bucket_size_ms: int
+    status: Optional[List[str]]
+    function_name: Optional[List[str]]
+    workflow_id_prefix: Optional[List[str]]
+    completed_after: Optional[str]
+    completed_before: Optional[str]
+
+
+@dataclass
+class GetStepAggregatesRequest(BaseMessage):
+    body: GetStepAggregatesBody
+
+
+@dataclass
+class StepAggregateOutput:
+    group: Dict[str, Optional[str]]
+    count: Optional[int] = None
+    max_duration_ms: Optional[int] = None
+
+
+@dataclass
+class GetStepAggregatesResponse(BaseMessage):
+    output: List[StepAggregateOutput]
     error_message: Optional[str] = None
 
 
