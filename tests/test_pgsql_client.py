@@ -603,16 +603,11 @@ def test_pgsql_enqueue_with_auth_metadata(
         },
     )
 
-    row = _execute_sql(
-        engine,
-        f'SELECT authenticated_user, authenticated_roles FROM "{schema}".workflow_status WHERE workflow_uuid = :wfid',
-        {"wfid": wfid},
-    )
-    assert row is not None
-    assert row[0] == user
-    assert json.loads(row[1]) == roles
-
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
+    status = handle.get_status()
+    assert status.authenticated_user == user
+    assert status.authenticated_roles == roles
+
     assert handle.get_result() == "auth-test"
 
 
@@ -649,14 +644,10 @@ def test_pgsql_enqueue_with_delay(
         },
     )
 
-    row = _execute_sql(
-        engine,
-        f'SELECT status, delay_until_epoch_ms FROM "{schema}".workflow_status WHERE workflow_uuid = :wfid',
-        {"wfid": wfid},
-    )
-    assert row is not None
-    assert row[0] == "DELAYED"
-    assert row[1] == delay_until
+    handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
+    status = handle.get_status()
+    assert status.status == "DELAYED"
+    assert status.delay_until_epoch_ms == delay_until
 
     DBOS.cancel_workflow(wfid)
 
