@@ -336,6 +336,8 @@ class WorkflowAggregateRow(TypedDict):
     group: Dict[str, Optional[str]]
     count: Optional[int]
     min_created_at: Optional[int]
+    avg_queue_wait_ms: Optional[float]
+    avg_total_latency_ms: Optional[float]
 
 
 class NotificationInfo(TypedDict):
@@ -1779,6 +1781,8 @@ class SystemDatabase(ABC):
         group_by_application_version: bool = False,
         select_count: bool = False,
         select_min_created_at: bool = False,
+        select_avg_queue_wait_ms: bool = False,
+        select_avg_total_latency_ms: bool = False,
         time_bucket_size_ms: Optional[int] = None,
         status: Optional[List[str]] = None,
         start_time: Optional[str] = None,
@@ -1835,13 +1839,31 @@ class SystemDatabase(ABC):
         if not group_columns:
             raise ValueError("At least one group_by flag must be set to True")
 
-        # Build select columns from boolean flags
+        # Build select columns from boolean flags. AVG ignores NULLs, so rows
+        # missing started_at_epoch_ms or completed_at naturally drop out of the
+        # latency averages.
         select_flags: List[Tuple[str, bool, sa.sql.ColumnElement[Any]]] = [
             ("count", select_count, func.count()),
             (
                 "min_created_at",
                 select_min_created_at,
                 func.min(SystemSchema.workflow_status.c.created_at),
+            ),
+            (
+                "avg_queue_wait_ms",
+                select_avg_queue_wait_ms,
+                func.avg(
+                    SystemSchema.workflow_status.c.started_at_epoch_ms
+                    - SystemSchema.workflow_status.c.created_at
+                ),
+            ),
+            (
+                "avg_total_latency_ms",
+                select_avg_total_latency_ms,
+                func.avg(
+                    SystemSchema.workflow_status.c.completed_at
+                    - SystemSchema.workflow_status.c.created_at
+                ),
             ),
         ]
         select_names: List[str] = []
@@ -1938,11 +1960,21 @@ class SystemDatabase(ABC):
             if (i := select_idx.get("min_created_at")) is not None:
                 v = row[group_offset + i]
                 min_created_at_val = int(v) if v is not None else None
+            avg_queue_wait_val: Optional[float] = None
+            if (i := select_idx.get("avg_queue_wait_ms")) is not None:
+                v = row[group_offset + i]
+                avg_queue_wait_val = float(v) if v is not None else None
+            avg_total_latency_val: Optional[float] = None
+            if (i := select_idx.get("avg_total_latency_ms")) is not None:
+                v = row[group_offset + i]
+                avg_total_latency_val = float(v) if v is not None else None
             results.append(
                 WorkflowAggregateRow(
                     group=group,
                     count=count_val,
                     min_created_at=min_created_at_val,
+                    avg_queue_wait_ms=avg_queue_wait_val,
+                    avg_total_latency_ms=avg_total_latency_val,
                 )
             )
         return results

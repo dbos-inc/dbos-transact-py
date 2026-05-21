@@ -908,7 +908,18 @@ class ConductorWebsocket(threading.Thread):
                             select_min_created_at = agg_body.get(
                                 "select_min_created_at", False
                             )
-                            if not select_count and not select_min_created_at:
+                            select_avg_queue_wait_ms = agg_body.get(
+                                "select_avg_queue_wait_ms", False
+                            )
+                            select_avg_total_latency_ms = agg_body.get(
+                                "select_avg_total_latency_ms", False
+                            )
+                            if not (
+                                select_count
+                                or select_min_created_at
+                                or select_avg_queue_wait_ms
+                                or select_avg_total_latency_ms
+                            ):
                                 select_count = True
                             try:
                                 agg_rows = self.dbos._sys_db.get_workflow_aggregates(
@@ -927,6 +938,8 @@ class ConductorWebsocket(threading.Thread):
                                     ),
                                     select_count=select_count,
                                     select_min_created_at=select_min_created_at,
+                                    select_avg_queue_wait_ms=select_avg_queue_wait_ms,
+                                    select_avg_total_latency_ms=select_avg_total_latency_ms,
                                     time_bucket_size_ms=agg_body.get(
                                         "time_bucket_size_ms", None
                                     ),
@@ -956,6 +969,8 @@ class ConductorWebsocket(threading.Thread):
                                         group=r["group"],
                                         count=r["count"],
                                         min_created_at=r["min_created_at"],
+                                        avg_queue_wait_ms=r["avg_queue_wait_ms"],
+                                        avg_total_latency_ms=r["avg_total_latency_ms"],
                                     )
                                     for r in agg_rows
                                 ]

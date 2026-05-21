@@ -1714,3 +1714,73 @@ def test_get_workflow_aggregates_select_min_created_at(dbos: DBOS) -> None:
     assert results[0]["group"]["queue_name"] == queue.name
     assert results[0]["count"] == 2
     assert results[0]["min_created_at"] == q_first_created_at
+
+
+def test_get_workflow_aggregates_select_avg_durations(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
+    @DBOS.workflow()
+    def workflow_sync() -> None:
+        return
+
+    @DBOS.workflow()
+    def workflow_queued() -> str:
+        return "done"
+
+    queue = Queue(f"agg_avg_q_{uuid.uuid4()}")
+
+    # Two sync workflows: started_at_epoch_ms is NULL, so they are excluded
+    # from avg_queue_wait_ms but included in avg_total_latency_ms.
+    for _ in range(2):
+        workflow_sync()
+
+    # Two queued workflows: started_at_epoch_ms is populated, so they
+    # contribute to both averages.
+    qh1 = queue.enqueue(workflow_queued)
+    assert qh1.get_result() == "done"
+    qh2 = queue.enqueue(workflow_queued)
+    assert qh2.get_result() == "done"
+
+    # Only averages selected — counts and timestamps must be None.
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_status=True,
+        status=["SUCCESS"],
+        select_avg_queue_wait_ms=True,
+        select_avg_total_latency_ms=True,
+    )
+    assert len(results) == 1
+    r = results[0]
+    assert r["count"] is None
+    assert r["min_created_at"] is None
+    # Both queued workflows have a non-negative wait; sync workflows are
+    # NULL-skipped by AVG.
+    assert r["avg_queue_wait_ms"] is not None
+    assert r["avg_queue_wait_ms"] >= 0
+    # All four SUCCESS workflows have completed_at - created_at >= 0.
+    assert r["avg_total_latency_ms"] is not None
+    assert r["avg_total_latency_ms"] >= 0
+
+    # Grouped by name: sync group has no avg_queue_wait_ms (all rows NULL on
+    # started_at), but does have a total latency. Queued group has both.
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_name=True,
+        select_count=True,
+        select_avg_queue_wait_ms=True,
+        select_avg_total_latency_ms=True,
+    )
+    by_name = {r["group"]["name"]: r for r in results}
+
+    sync_row = by_name[workflow_sync.__qualname__]
+    assert sync_row["count"] == 2
+    assert sync_row["avg_queue_wait_ms"] is None  # all NULL → AVG is NULL
+    assert sync_row["avg_total_latency_ms"] is not None
+    assert sync_row["avg_total_latency_ms"] >= 0
+
+    queued_row = by_name[workflow_queued.__qualname__]
+    assert queued_row["count"] == 2
+    assert queued_row["avg_queue_wait_ms"] is not None
+    assert queued_row["avg_queue_wait_ms"] >= 0
+    assert queued_row["avg_total_latency_ms"] is not None
+    # Total latency must be at least as large as queue wait, since
+    # total = wait + execution.
+    assert queued_row["avg_total_latency_ms"] >= queued_row["avg_queue_wait_ms"]
