@@ -566,3 +566,119 @@ def test_pgsql_enqueue_with_priority(
     # Verify workflow completes
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
     assert handle.get_result() == "priority-test"
+
+
+def test_pgsql_enqueue_with_auth_metadata(
+    dbos: DBOS, config: DBOSConfig, skip_with_sqlite: None
+) -> None:
+    """Test enqueue_workflow persists authenticated_user and authenticated_roles."""
+    run_client_collateral()
+
+    engine = _get_db_connection(config)
+    schema = _get_schema_name(config)
+
+    wfid = str(uuid.uuid4())
+    user = "alice"
+    roles = ["admin", "reader"]
+
+    sql = f"""
+    SELECT "{schema}".enqueue_workflow(
+        workflow_name => 'retrieve_test',
+        queue_name => 'test_queue',
+        positional_args => ARRAY[:arg1]::json[],
+        workflow_id => :wfid,
+        authenticated_user => :user,
+        authenticated_roles => :roles
+    )
+    """
+
+    _execute_sql(
+        engine,
+        sql,
+        {
+            "arg1": json.dumps("auth-test"),
+            "wfid": wfid,
+            "user": user,
+            "roles": json.dumps(roles),
+        },
+    )
+
+    row = _execute_sql(
+        engine,
+        f'SELECT authenticated_user, authenticated_roles FROM "{schema}".workflow_status WHERE workflow_uuid = :wfid',
+        {"wfid": wfid},
+    )
+    assert row is not None
+    assert row[0] == user
+    assert json.loads(row[1]) == roles
+
+    handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
+    assert handle.get_result() == "auth-test"
+
+
+def test_pgsql_enqueue_with_delay(
+    dbos: DBOS, config: DBOSConfig, skip_with_sqlite: None
+) -> None:
+    """Test enqueue_workflow with delay_until_epoch_ms sets DELAYED status."""
+    run_client_collateral()
+
+    engine = _get_db_connection(config)
+    schema = _get_schema_name(config)
+
+    wfid = str(uuid.uuid4())
+    # Far enough in the future that the workflow won't be promoted during the test
+    delay_until = int(time.time() * 1000) + 60_000
+
+    sql = f"""
+    SELECT "{schema}".enqueue_workflow(
+        workflow_name => 'retrieve_test',
+        queue_name => 'test_queue',
+        positional_args => ARRAY[:arg1]::json[],
+        workflow_id => :wfid,
+        delay_until_epoch_ms => :delay_until
+    )
+    """
+
+    _execute_sql(
+        engine,
+        sql,
+        {
+            "arg1": json.dumps("delay-test"),
+            "wfid": wfid,
+            "delay_until": delay_until,
+        },
+    )
+
+    row = _execute_sql(
+        engine,
+        f'SELECT status, delay_until_epoch_ms FROM "{schema}".workflow_status WHERE workflow_uuid = :wfid',
+        {"wfid": wfid},
+    )
+    assert row is not None
+    assert row[0] == "DELAYED"
+    assert row[1] == delay_until
+
+    DBOS.cancel_workflow(wfid)
+
+
+def test_pgsql_enqueue_negative_delay_rejected(
+    dbos: DBOS, config: DBOSConfig, skip_with_sqlite: None
+) -> None:
+    """Test enqueue_workflow rejects a negative delay_until_epoch_ms."""
+    run_client_collateral()
+
+    engine = _get_db_connection(config)
+    schema = _get_schema_name(config)
+
+    wfid = str(uuid.uuid4())
+    sql = f"""
+    SELECT "{schema}".enqueue_workflow(
+        workflow_name => 'retrieve_test',
+        queue_name => 'test_queue',
+        workflow_id => :wfid,
+        delay_until_epoch_ms => -1
+    )
+    """
+
+    with pytest.raises(Exception, match="delay_until_epoch_ms must be >= 0"):
+        _execute_sql(engine, sql, {"wfid": wfid})
