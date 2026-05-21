@@ -1784,3 +1784,212 @@ def test_get_workflow_aggregates_select_avg_durations(
     # Total latency must be at least as large as queue wait, since
     # total = wait + execution.
     assert queued_row["avg_total_latency_ms"] >= queued_row["avg_queue_wait_ms"]
+
+
+def test_get_step_aggregates(dbos: DBOS) -> None:
+    @DBOS.step()
+    def step_ok() -> None:
+        return
+
+    @DBOS.step()
+    def step_fail() -> None:
+        raise Exception("step error")
+
+    @DBOS.workflow()
+    def wf_ok() -> None:
+        step_ok()
+
+    @DBOS.workflow()
+    def wf_two_steps() -> None:
+        step_ok()
+        step_ok()
+
+    @DBOS.workflow()
+    def wf_fail() -> None:
+        step_fail()
+
+    # 3 wf_ok runs → 3 step_ok rows.
+    for _ in range(3):
+        wf_ok()
+    # 1 wf_two_steps run → 2 more step_ok rows (5 total).
+    wf_two_steps()
+    # 2 wf_fail runs → 2 step_fail rows with error set.
+    for _ in range(2):
+        with pytest.raises(Exception):
+            wf_fail()
+
+    # Group by function_name + select_count
+    results = dbos._sys_db.get_step_aggregates(
+        group_by_function_name=True, select_count=True
+    )
+    by_fn = {r["group"]["function_name"]: r["count"] for r in results}
+    assert by_fn[step_ok.__qualname__] == 5
+    assert by_fn[step_fail.__qualname__] == 2
+
+    # Group by status (derived from `error IS NULL`)
+    results = dbos._sys_db.get_step_aggregates(group_by_status=True, select_count=True)
+    by_status = {r["group"]["status"]: r["count"] for r in results}
+    assert by_status["SUCCESS"] == 5
+    assert by_status["ERROR"] == 2
+
+    # Group by both function_name and status
+    results = dbos._sys_db.get_step_aggregates(
+        group_by_function_name=True, group_by_status=True, select_count=True
+    )
+    combo = {
+        (r["group"]["function_name"], r["group"]["status"]): r["count"] for r in results
+    }
+    assert combo[(step_ok.__qualname__, "SUCCESS")] == 5
+    assert combo[(step_fail.__qualname__, "ERROR")] == 2
+
+    # Filter by status
+    results = dbos._sys_db.get_step_aggregates(
+        group_by_function_name=True, status=["ERROR"], select_count=True
+    )
+    assert len(results) == 1
+    assert results[0]["group"]["function_name"] == step_fail.__qualname__
+    assert results[0]["count"] == 2
+
+    # Filter by function_name
+    results = dbos._sys_db.get_step_aggregates(
+        group_by_status=True,
+        function_name=[step_ok.__qualname__],
+        select_count=True,
+    )
+    assert len(results) == 1
+    assert results[0]["group"]["status"] == "SUCCESS"
+    assert results[0]["count"] == 5
+
+    # Filter by workflow_id_prefix
+    with SetWorkflowID("step-agg-prefix-1"):
+        wf_ok()
+    with SetWorkflowID("step-agg-prefix-2"):
+        wf_ok()
+    results = dbos._sys_db.get_step_aggregates(
+        group_by_function_name=True,
+        workflow_id_prefix=["step-agg-prefix"],
+        select_count=True,
+    )
+    assert len(results) == 1
+    assert results[0]["group"]["function_name"] == step_ok.__qualname__
+    assert results[0]["count"] == 2
+
+    results = dbos._sys_db.get_step_aggregates(
+        group_by_function_name=True,
+        workflow_id_prefix=["nonexistent-prefix"],
+        select_count=True,
+    )
+    assert len(results) == 0
+
+    # No group_by flags should raise
+    with pytest.raises(ValueError, match="At least one group_by flag must be set"):
+        dbos._sys_db.get_step_aggregates(select_count=True)
+
+    # No select_ flags should raise
+    with pytest.raises(ValueError, match="At least one select_ flag must be set"):
+        dbos._sys_db.get_step_aggregates(group_by_function_name=True)
+
+    # time_bucket_size_ms <= 0 should raise
+    with pytest.raises(ValueError, match="time_bucket_size_ms must be > 0"):
+        dbos._sys_db.get_step_aggregates(time_bucket_size_ms=0, select_count=True)
+
+    # time_bucket_size_ms alone (1-hour buckets)
+    one_hour_ms = 3_600_000
+    results = dbos._sys_db.get_step_aggregates(
+        time_bucket_size_ms=one_hour_ms, select_count=True
+    )
+    assert len(results) >= 1
+    for r in results:
+        tb = r["group"]["time_bucket"]
+        assert isinstance(tb, str)
+        assert int(tb) % one_hour_ms == 0
+
+
+def test_get_step_aggregates_completed_window_and_avg(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
+    @DBOS.step()
+    def quick_step() -> None:
+        return
+
+    @DBOS.step()
+    def slow_step() -> None:
+        time.sleep(0.05)
+
+    @DBOS.workflow()
+    def child() -> None:
+        return
+
+    @DBOS.workflow()
+    def parent() -> None:
+        # child workflow markers and DBOS.getResult are bookkeeping rows
+        # with NULL timestamps — they should drop out of avg_duration_ms.
+        child()
+        quick_step()
+        slow_step()
+
+    before_all = datetime.now().isoformat()
+    parent()
+    after_all = datetime.now().isoformat()
+
+    # completed_after/completed_before: window covers all step rows that have
+    # a completed_at_epoch_ms set. Bookkeeping rows (child-workflow markers,
+    # DBOS.getResult) have NULL completed_at_epoch_ms, so they're filtered
+    # out by the WHERE clause itself — not by the AVG NULL-skipping.
+    results = dbos._sys_db.get_step_aggregates(
+        group_by_function_name=True,
+        completed_after=before_all,
+        completed_before=after_all,
+        select_count=True,
+        select_avg_duration_ms=True,
+    )
+    by_fn = {r["group"]["function_name"]: r for r in results}
+
+    # Real steps: both timestamps set → avg_duration_ms populated.
+    assert by_fn[quick_step.__qualname__]["count"] == 1
+    assert by_fn[quick_step.__qualname__]["avg_duration_ms"] is not None
+    assert by_fn[quick_step.__qualname__]["avg_duration_ms"] >= 0
+
+    assert by_fn[slow_step.__qualname__]["count"] == 1
+    assert by_fn[slow_step.__qualname__]["avg_duration_ms"] is not None
+    # slow_step sleeps 50ms — the recorded duration should reflect that.
+    assert by_fn[slow_step.__qualname__]["avg_duration_ms"] >= 40
+
+    # Bookkeeping rows are NOT present in the completed-window result.
+    assert child.__qualname__ not in by_fn
+    assert "DBOS.getResult" not in by_fn
+
+    # Without the completed_at filter, bookkeeping rows show up with NULL
+    # avg_duration_ms (their started/completed timestamps are NULL).
+    results = dbos._sys_db.get_step_aggregates(
+        group_by_function_name=True,
+        select_count=True,
+        select_avg_duration_ms=True,
+    )
+    by_fn = {r["group"]["function_name"]: r for r in results}
+    child_wf_row = by_fn[child.__qualname__]
+    assert child_wf_row["count"] == 1
+    assert child_wf_row["avg_duration_ms"] is None
+    get_result_row = by_fn["DBOS.getResult"]
+    assert get_result_row["count"] == 1
+    assert get_result_row["avg_duration_ms"] is None
+
+    # completed_before before any work: matches nothing.
+    results = dbos._sys_db.get_step_aggregates(
+        group_by_function_name=True,
+        completed_before=before_all,
+        select_count=True,
+    )
+    assert results == []
+
+    # select_avg_duration_ms alone — counts must be None.
+    results = dbos._sys_db.get_step_aggregates(
+        group_by_function_name=True,
+        function_name=[quick_step.__qualname__, slow_step.__qualname__],
+        select_avg_duration_ms=True,
+    )
+    by_fn = {r["group"]["function_name"]: r for r in results}
+    assert by_fn[quick_step.__qualname__]["count"] is None
+    assert by_fn[quick_step.__qualname__]["avg_duration_ms"] is not None
+    assert by_fn[slow_step.__qualname__]["count"] is None
+    assert by_fn[slow_step.__qualname__]["avg_duration_ms"] is not None
