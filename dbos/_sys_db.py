@@ -334,7 +334,16 @@ class StepInfo(TypedDict):
 
 class WorkflowAggregateRow(TypedDict):
     group: Dict[str, Optional[str]]
-    count: int
+    count: Optional[int]
+    min_created_at: Optional[int]
+    max_queue_wait_ms: Optional[int]
+    max_total_latency_ms: Optional[int]
+
+
+class StepAggregateRow(TypedDict):
+    group: Dict[str, Optional[str]]
+    count: Optional[int]
+    max_duration_ms: Optional[int]
 
 
 class NotificationInfo(TypedDict):
@@ -1776,6 +1785,10 @@ class SystemDatabase(ABC):
         group_by_queue_name: bool = False,
         group_by_executor_id: bool = False,
         group_by_application_version: bool = False,
+        select_count: bool = False,
+        select_min_created_at: bool = False,
+        select_max_queue_wait_ms: bool = False,
+        select_max_total_latency_ms: bool = False,
         time_bucket_size_ms: Optional[int] = None,
         status: Optional[List[str]] = None,
         start_time: Optional[str] = None,
@@ -1832,7 +1845,44 @@ class SystemDatabase(ABC):
         if not group_columns:
             raise ValueError("At least one group_by flag must be set to True")
 
-        query = sa.select(*group_columns, func.count().label("count"))
+        # Build select columns from boolean flags. MAX ignores NULLs, so rows
+        # missing started_at_epoch_ms or completed_at naturally drop out of the
+        # latency maxes.
+        select_flags: List[Tuple[str, bool, sa.sql.ColumnElement[Any]]] = [
+            ("count", select_count, func.count()),
+            (
+                "min_created_at",
+                select_min_created_at,
+                func.min(SystemSchema.workflow_status.c.created_at),
+            ),
+            (
+                "max_queue_wait_ms",
+                select_max_queue_wait_ms,
+                func.max(
+                    SystemSchema.workflow_status.c.started_at_epoch_ms
+                    - SystemSchema.workflow_status.c.created_at
+                ),
+            ),
+            (
+                "max_total_latency_ms",
+                select_max_total_latency_ms,
+                func.max(
+                    SystemSchema.workflow_status.c.completed_at
+                    - SystemSchema.workflow_status.c.created_at
+                ),
+            ),
+        ]
+        select_names: List[str] = []
+        select_columns: List[sa.sql.ColumnElement[Any]] = []
+        for select_name, enabled, agg in select_flags:
+            if enabled:
+                select_names.append(select_name)
+                select_columns.append(agg.label(select_name))
+
+        if not select_columns:
+            raise ValueError("At least one select_ flag must be set to True")
+
+        query = sa.select(*group_columns, *select_columns)
 
         # Apply filters
         if status:
@@ -1895,19 +1945,187 @@ class SystemDatabase(ABC):
                 )
             )
 
-        query = query.group_by(*group_columns).limit(10_000_000)
+        query = query.group_by(*group_columns)
 
         with self.engine.begin() as c:
             rows = c.execute(query).fetchall()
 
         results: List[WorkflowAggregateRow] = []
+        group_offset = len(group_names)
+        select_idx = {name: i for i, name in enumerate(select_names)}
         for row in rows:
             group: Dict[str, Optional[str]] = {
                 group_names[i]: str(row[i]) if row[i] is not None else None
                 for i in range(len(group_names))
             }
+            count_val: Optional[int] = None
+            if (i := select_idx.get("count")) is not None:
+                v = row[group_offset + i]
+                count_val = int(v) if v is not None else None
+            min_created_at_val: Optional[int] = None
+            if (i := select_idx.get("min_created_at")) is not None:
+                v = row[group_offset + i]
+                min_created_at_val = int(v) if v is not None else None
+            max_queue_wait_val: Optional[int] = None
+            if (i := select_idx.get("max_queue_wait_ms")) is not None:
+                v = row[group_offset + i]
+                max_queue_wait_val = int(v) if v is not None else None
+            max_total_latency_val: Optional[int] = None
+            if (i := select_idx.get("max_total_latency_ms")) is not None:
+                v = row[group_offset + i]
+                max_total_latency_val = int(v) if v is not None else None
             results.append(
-                WorkflowAggregateRow(group=group, count=row[len(group_names)])
+                WorkflowAggregateRow(
+                    group=group,
+                    count=count_val,
+                    min_created_at=min_created_at_val,
+                    max_queue_wait_ms=max_queue_wait_val,
+                    max_total_latency_ms=max_total_latency_val,
+                )
+            )
+        return results
+
+    def get_step_aggregates(
+        self,
+        *,
+        group_by_function_name: bool = False,
+        group_by_status: bool = False,
+        select_count: bool = False,
+        select_max_duration_ms: bool = False,
+        time_bucket_size_ms: Optional[int] = None,
+        status: Optional[List[str]] = None,
+        function_name: Optional[List[str]] = None,
+        workflow_id_prefix: Optional[List[str]] = None,
+        completed_after: Optional[str] = None,
+        completed_before: Optional[str] = None,
+    ) -> List[StepAggregateRow]:
+        if time_bucket_size_ms is not None and time_bucket_size_ms <= 0:
+            raise ValueError("time_bucket_size_ms must be > 0")
+
+        # operation_outputs has no explicit status column; derive it from
+        # whether `error` is populated. Bookkeeping rows from record_child_workflow
+        # and DBOS.getResult have NULL error and NULL output, so they appear
+        # as SUCCESS here — callers can filter them by function_name.
+        status_expr = sa.case(
+            (
+                SystemSchema.operation_outputs.c.error.is_(None),
+                sa.literal("SUCCESS"),
+            ),
+            else_=sa.literal("ERROR"),
+        )
+
+        # Build group_by columns from boolean flags
+        group_by_flags: List[Tuple[str, bool, sa.sql.ColumnElement[Any]]] = [
+            (
+                "function_name",
+                group_by_function_name,
+                SystemSchema.operation_outputs.c.function_name,
+            ),
+            ("status", group_by_status, status_expr),
+        ]
+        group_names: List[str] = []
+        group_columns: List[sa.sql.ColumnElement[Any]] = []
+        for group_col_name, enabled, group_col in group_by_flags:
+            if enabled:
+                group_names.append(group_col_name)
+                group_columns.append(group_col.label(group_col_name))
+
+        if time_bucket_size_ms is not None:
+            # Bucket on completed_at_epoch_ms — it's the indexed timestamp on
+            # this table.
+            completed_at = SystemSchema.operation_outputs.c.completed_at_epoch_ms
+            bucket = sa.literal(time_bucket_size_ms)
+            time_bucket_col = (
+                sa.cast(func.floor(completed_at / bucket), sa.BigInteger) * bucket
+            ).label("time_bucket")
+            group_names.append("time_bucket")
+            group_columns.append(time_bucket_col)
+
+        if not group_columns:
+            raise ValueError("At least one group_by flag must be set to True")
+
+        # Build select columns from boolean flags. MAX ignores NULLs, so rows
+        # without start/complete timestamps (child-workflow and getResult
+        # markers) drop out of the duration max.
+        select_flags: List[Tuple[str, bool, sa.sql.ColumnElement[Any]]] = [
+            ("count", select_count, func.count()),
+            (
+                "max_duration_ms",
+                select_max_duration_ms,
+                func.max(
+                    SystemSchema.operation_outputs.c.completed_at_epoch_ms
+                    - SystemSchema.operation_outputs.c.started_at_epoch_ms
+                ),
+            ),
+        ]
+        select_names: List[str] = []
+        select_columns: List[sa.sql.ColumnElement[Any]] = []
+        for select_name, enabled, agg in select_flags:
+            if enabled:
+                select_names.append(select_name)
+                select_columns.append(agg.label(select_name))
+
+        if not select_columns:
+            raise ValueError("At least one select_ flag must be set to True")
+
+        query = sa.select(*group_columns, *select_columns)
+
+        # Apply filters
+        if status:
+            query = query.where(status_expr.in_(status))
+        if function_name:
+            query = query.where(
+                SystemSchema.operation_outputs.c.function_name.in_(function_name)
+            )
+        if workflow_id_prefix:
+            query = query.where(
+                sa.or_(
+                    *[
+                        SystemSchema.operation_outputs.c.workflow_uuid.startswith(
+                            p, autoescape=True
+                        )
+                        for p in workflow_id_prefix
+                    ]
+                )
+            )
+        if completed_after:
+            query = query.where(
+                SystemSchema.operation_outputs.c.completed_at_epoch_ms
+                >= datetime.datetime.fromisoformat(completed_after).timestamp() * 1000
+            )
+        if completed_before:
+            query = query.where(
+                SystemSchema.operation_outputs.c.completed_at_epoch_ms
+                <= datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
+            )
+
+        query = query.group_by(*group_columns)
+
+        with self.engine.begin() as c:
+            rows = c.execute(query).fetchall()
+
+        results: List[StepAggregateRow] = []
+        group_offset = len(group_names)
+        select_idx = {name: i for i, name in enumerate(select_names)}
+        for row in rows:
+            group: Dict[str, Optional[str]] = {
+                group_names[i]: str(row[i]) if row[i] is not None else None
+                for i in range(len(group_names))
+            }
+            count_val: Optional[int] = None
+            if (i := select_idx.get("count")) is not None:
+                v = row[group_offset + i]
+                count_val = int(v) if v is not None else None
+            max_duration_val: Optional[int] = None
+            if (i := select_idx.get("max_duration_ms")) is not None:
+                v = row[group_offset + i]
+                max_duration_val = int(v) if v is not None else None
+            results.append(
+                StepAggregateRow(
+                    group=group,
+                    count=count_val,
+                    max_duration_ms=max_duration_val,
+                )
             )
         return results
 
