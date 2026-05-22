@@ -1568,7 +1568,12 @@ async def test_timeout_queue_async(dbos: DBOS, config: DBOSConfig) -> None:
             )
         await handle.get_result()
 
-    with SetWorkflowTimeout(1.0):
+    # Use a generous timeout: when the parent is enqueued (not started
+    # directly), the deadline clock starts before the queue poller picks
+    # it up. Under CI load, polling + scheduling jitter can consume most
+    # of a 1s window and the parent's body would be cancelled before it
+    # could enqueue the child row.
+    with SetWorkflowTimeout(5.0):
         handle = await DBOS.enqueue_workflow_async(
             "regular_queue_async", parent_workflow
         )

@@ -902,6 +902,25 @@ class ConductorWebsocket(threading.Thread):
                             )
                             agg_body = agg_message.body
                             agg_output: list[p.WorkflowAggregateOutput] = []
+                            # Backwards compat: older clients send no select_*
+                            # flags and expect counts.
+                            select_count = agg_body.get("select_count", False)
+                            select_min_created_at = agg_body.get(
+                                "select_min_created_at", False
+                            )
+                            select_max_queue_wait_ms = agg_body.get(
+                                "select_max_queue_wait_ms", False
+                            )
+                            select_max_total_latency_ms = agg_body.get(
+                                "select_max_total_latency_ms", False
+                            )
+                            if not (
+                                select_count
+                                or select_min_created_at
+                                or select_max_queue_wait_ms
+                                or select_max_total_latency_ms
+                            ):
+                                select_count = True
                             try:
                                 agg_rows = self.dbos._sys_db.get_workflow_aggregates(
                                     group_by_status=agg_body.get(
@@ -917,6 +936,10 @@ class ConductorWebsocket(threading.Thread):
                                     group_by_application_version=agg_body.get(
                                         "group_by_application_version", False
                                     ),
+                                    select_count=select_count,
+                                    select_min_created_at=select_min_created_at,
+                                    select_max_queue_wait_ms=select_max_queue_wait_ms,
+                                    select_max_total_latency_ms=select_max_total_latency_ms,
                                     time_bucket_size_ms=agg_body.get(
                                         "time_bucket_size_ms", None
                                     ),
@@ -943,7 +966,11 @@ class ConductorWebsocket(threading.Thread):
                                 )
                                 agg_output = [
                                     p.WorkflowAggregateOutput(
-                                        group=r["group"], count=r["count"]
+                                        group=r["group"],
+                                        count=r["count"],
+                                        min_created_at=r["min_created_at"],
+                                        max_queue_wait_ms=r["max_queue_wait_ms"],
+                                        max_total_latency_ms=r["max_total_latency_ms"],
                                     )
                                     for r in agg_rows
                                 ]
@@ -955,6 +982,66 @@ class ConductorWebsocket(threading.Thread):
                                     type=p.MessageType.GET_WORKFLOW_AGGREGATES,
                                     request_id=base_message.request_id,
                                     output=agg_output,
+                                    error_message=error_message,
+                                ).to_json()
+                            )
+                        elif msg_type == p.MessageType.GET_STEP_AGGREGATES:
+                            step_agg_message = p.GetStepAggregatesRequest.from_json(
+                                message
+                            )
+                            step_agg_body = step_agg_message.body
+                            step_agg_output: list[p.StepAggregateOutput] = []
+                            # Backwards compat: older clients send no select_*
+                            # flags and expect counts.
+                            step_select_count = step_agg_body.get("select_count", False)
+                            step_select_max_duration_ms = step_agg_body.get(
+                                "select_max_duration_ms", False
+                            )
+                            if not (step_select_count or step_select_max_duration_ms):
+                                step_select_count = True
+                            try:
+                                step_agg_rows = self.dbos._sys_db.get_step_aggregates(
+                                    group_by_function_name=step_agg_body.get(
+                                        "group_by_function_name", False
+                                    ),
+                                    group_by_status=step_agg_body.get(
+                                        "group_by_status", False
+                                    ),
+                                    select_count=step_select_count,
+                                    select_max_duration_ms=step_select_max_duration_ms,
+                                    time_bucket_size_ms=step_agg_body.get(
+                                        "time_bucket_size_ms", None
+                                    ),
+                                    status=step_agg_body.get("status", None),
+                                    function_name=step_agg_body.get(
+                                        "function_name", None
+                                    ),
+                                    workflow_id_prefix=step_agg_body.get(
+                                        "workflow_id_prefix", None
+                                    ),
+                                    completed_after=step_agg_body.get(
+                                        "completed_after", None
+                                    ),
+                                    completed_before=step_agg_body.get(
+                                        "completed_before", None
+                                    ),
+                                )
+                                step_agg_output = [
+                                    p.StepAggregateOutput(
+                                        group=r["group"],
+                                        count=r["count"],
+                                        max_duration_ms=r["max_duration_ms"],
+                                    )
+                                    for r in step_agg_rows
+                                ]
+                            except Exception:
+                                error_message = f"Exception encountered when getting step aggregates: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                            websocket.send(
+                                p.GetStepAggregatesResponse(
+                                    type=p.MessageType.GET_STEP_AGGREGATES,
+                                    request_id=base_message.request_id,
+                                    output=step_agg_output,
                                     error_message=error_message,
                                 ).to_json()
                             )
