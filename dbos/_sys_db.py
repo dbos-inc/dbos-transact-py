@@ -2373,7 +2373,7 @@ class SystemDatabase(ABC):
         messages: List[SendMessage],
         *,
         serialization_type: Optional["WorkflowSerializationFormat"],
-        workflow_uuid: Optional[str],
+        workflow_id: Optional[str],
         function_id: Optional[int],
         function_name: str,
     ) -> None:
@@ -2412,10 +2412,10 @@ class SystemDatabase(ABC):
             )
 
         with self.engine.begin() as c:
-            if workflow_uuid is not None:
+            if workflow_id is not None:
                 assert function_id is not None
                 recorded_output = self._check_operation_execution_txn(
-                    workflow_uuid, function_id, function_name, conn=c
+                    workflow_id, function_id, function_name, conn=c
                 )
                 if recorded_output is not None:
                     dbos_logger.debug(
@@ -2446,10 +2446,10 @@ class SystemDatabase(ABC):
                     )
                 raise
 
-            if workflow_uuid is not None:
+            if workflow_id is not None:
                 assert function_id is not None
                 output: OperationResultInternal = {
-                    "workflow_uuid": workflow_uuid,
+                    "workflow_uuid": workflow_id,
                     "function_id": function_id,
                     "function_name": function_name,
                     "started_at_epoch_ms": start_time,

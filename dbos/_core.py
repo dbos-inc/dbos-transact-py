@@ -1954,7 +1954,7 @@ def send_bulk(
             dbos._sys_db.send_bulk(
                 messages,
                 serialization_type=serialization_type,
-                workflow_uuid=ctx.workflow_id,
+                workflow_id=ctx.workflow_id,
                 function_id=ctx.curr_step_function_id,
                 function_name=function_name,
             )
@@ -1962,7 +1962,7 @@ def send_bulk(
         dbos._sys_db.send_bulk(
             messages,
             serialization_type=serialization_type,
-            workflow_uuid=None,
+            workflow_id=None,
             function_id=None,
             function_name=function_name,
         )
