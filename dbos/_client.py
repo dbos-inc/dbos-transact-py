@@ -48,6 +48,7 @@ from dbos._serialization import (
 )
 from dbos._sys_db import (
     ClientScheduleInput,
+    SendMessage,
     StepInfo,
     SystemDatabase,
     VersionInfo,
@@ -521,6 +522,35 @@ class DBOSClient:
             message,
             topic,
             idempotency_key,
+            serialization_type=serialization_type,
+        )
+
+    def send_bulk(
+        self,
+        messages: List[SendMessage],
+        *,
+        serialization_type: Optional[
+            WorkflowSerializationFormat
+        ] = WorkflowSerializationFormat.DEFAULT,
+    ) -> None:
+        """Send many messages to workflow executions in a single transaction."""
+        self._sys_db.send_bulk(
+            messages,
+            serialization_type=serialization_type,
+        )
+
+    async def send_bulk_async(
+        self,
+        messages: List[SendMessage],
+        *,
+        serialization_type: Optional[
+            WorkflowSerializationFormat
+        ] = WorkflowSerializationFormat.DEFAULT,
+    ) -> None:
+        """Send many messages to workflow executions in a single transaction."""
+        return await asyncio.to_thread(
+            self.send_bulk,
+            messages,
             serialization_type=serialization_type,
         )
 

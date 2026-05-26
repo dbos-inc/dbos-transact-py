@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -355,6 +356,16 @@ class NotificationInfo(TypedDict):
 
 _dbos_null_topic = "__null__topic__"
 _dbos_stream_closed_sentinel = "__DBOS_STREAM_CLOSED__"
+
+
+@dataclass
+class SendMessage:
+    """A single message to send as part of a bulk send operation."""
+
+    destination_id: str
+    message: Any
+    topic: Optional[str] = None
+    idempotency_key: Optional[str] = None
 
 
 class EventCount(TypedDict):
@@ -2472,6 +2483,98 @@ class SystemDatabase(ABC):
                     "`send` destination", destination_uuid
                 )
             raise
+
+    @db_retry()
+    def send_bulk(
+        self,
+        messages: List[SendMessage],
+        *,
+        serialization_type: Optional["WorkflowSerializationFormat"],
+        workflow_uuid: Optional[str] = None,
+        function_id: Optional[int] = None,
+    ) -> None:
+        """Send many messages in a single transaction.
+
+        Shared by `DBOS.send_bulk` (both inside and outside a workflow) and
+        `DBOSClient.send_bulk`. When called from a workflow, `workflow_uuid` and
+        `function_id` identify the single step recording the bulk send, which
+        makes the whole operation idempotent on replay. Each message provides
+        its own idempotency via the primary key constraint on `message_uuid`.
+        """
+        function_name = "DBOS.send_bulk"
+        start_time = int(time.time() * 1000)
+
+        rows = []
+        for m in messages:
+            message_uuid = (
+                m.idempotency_key
+                if m.idempotency_key is not None
+                else str(generate_uuid())
+            )
+            serval, serialization = serialize_value(
+                m.message,
+                serialization_type,
+                self.serializer,
+            )
+            rows.append(
+                {
+                    "destination_uuid": m.destination_id,
+                    "topic": m.topic if m.topic is not None else _dbos_null_topic,
+                    "message": serval,
+                    "message_uuid": message_uuid,
+                    "serialization": serialization,
+                }
+            )
+
+        with self.engine.begin() as c:
+            if workflow_uuid is not None:
+                assert function_id is not None
+                recorded_output = self._check_operation_execution_txn(
+                    workflow_uuid, function_id, function_name, conn=c
+                )
+                if recorded_output is not None:
+                    dbos_logger.debug(
+                        f"Replaying send_bulk, id: {function_id}, messages: {len(rows)}"
+                    )
+                    return  # Already sent before
+                else:
+                    dbos_logger.debug(
+                        f"Running send_bulk, id: {function_id}, messages: {len(rows)}"
+                    )
+
+            try:
+                if rows:
+                    c.execute(
+                        self.dialect.insert(SystemSchema.notifications)
+                        .values(rows)
+                        .on_conflict_do_nothing(
+                            index_elements=[
+                                SystemSchema.notifications.c.message_uuid,
+                            ]
+                        )
+                    )
+            except DBAPIError as dbapi_error:
+                if self._is_foreign_key_violation(dbapi_error):
+                    raise DBOSNonExistentWorkflowError(
+                        "`send_bulk` destination",
+                        ", ".join(sorted({m.destination_id for m in messages})),
+                    )
+                raise
+
+            if workflow_uuid is not None:
+                assert function_id is not None
+                output: OperationResultInternal = {
+                    "workflow_uuid": workflow_uuid,
+                    "function_id": function_id,
+                    "function_name": function_name,
+                    "started_at_epoch_ms": start_time,
+                    "output": None,
+                    "error": None,
+                    "serialization": None,
+                }
+                self._record_operation_result_txn(
+                    output, int(time.time() * 1000), conn=c
+                )
 
     @db_retry()
     def recv_setup(

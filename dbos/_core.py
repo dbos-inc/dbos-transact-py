@@ -84,6 +84,7 @@ from ._serialization import (
 from ._sys_db import (
     EnqueueOptionsInternal,
     OperationResultInternal,
+    SendMessage,
     WorkflowStatus,
     WorkflowStatusInternal,
     WorkflowStatusString,
@@ -1964,6 +1965,42 @@ def send(
             message,
             topic,
             message_uuid=idempotency_key,
+            serialization_type=serialization_type,
+        )
+
+
+def send_bulk(
+    dbos: "DBOS",
+    cur_ctx: Optional["DBOSContext"],
+    messages: List[SendMessage],
+    *,
+    serialization_type: Optional[WorkflowSerializationFormat],
+) -> None:
+    if (
+        serialization_type is None
+        or serialization_type == WorkflowSerializationFormat.DEFAULT
+    ):
+        serialization_type = (
+            cur_ctx.serialization_type
+            if cur_ctx is not None
+            else WorkflowSerializationFormat.DEFAULT
+        )
+
+    if cur_ctx and cur_ctx.is_workflow():
+        # Inside a workflow, the entire bulk send is recorded as a single step.
+        attributes: TracedAttributes = {
+            "name": "send_bulk",
+        }
+        with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
+            dbos._sys_db.send_bulk(
+                messages,
+                serialization_type=serialization_type,
+                workflow_uuid=ctx.workflow_id,
+                function_id=ctx.curr_step_function_id,
+            )
+    else:
+        dbos._sys_db.send_bulk(
+            messages,
             serialization_type=serialization_type,
         )
 

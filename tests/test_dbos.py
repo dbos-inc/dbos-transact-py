@@ -17,6 +17,7 @@ from sqlalchemy.exc import OperationalError
 from dbos import (
     DBOS,
     DBOSConfig,
+    SendMessage,
     SetWorkflowID,
     SetWorkflowTimeout,
     WorkflowHandle,
@@ -1099,6 +1100,128 @@ def test_send_idempotency_key(dbos: DBOS) -> None:
     send_from_step_idem_wf()
     # The second recv times out (returns None), proving only one message was delivered.
     assert handle4.get_result() == "hello_step-None"
+
+
+def test_send_bulk(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def recv_three() -> str:
+        msg1 = DBOS.recv("t", timeout_seconds=10)
+        msg2 = DBOS.recv("t", timeout_seconds=10)
+        msg3 = DBOS.recv(timeout_seconds=10)
+        return f"{msg1}-{msg2}-{msg3}"
+
+    # Test 1: Bulk send to a single destination across topics, from outside a workflow.
+    dest_uuid = str(uuid.uuid4())
+    with SetWorkflowID(dest_uuid):
+        handle = dbos.start_workflow(recv_three)
+
+    DBOS.send_bulk(
+        [
+            SendMessage(dest_uuid, "a", "t"),
+            SendMessage(dest_uuid, "b", "t"),
+            SendMessage(dest_uuid, "c"),
+        ]
+    )
+    assert handle.get_result() == "a-b-c"
+
+    # Test 2: Bulk send to multiple destinations in one transaction.
+    dest_a = str(uuid.uuid4())
+    dest_b = str(uuid.uuid4())
+
+    @DBOS.workflow()
+    def recv_one() -> str:
+        return str(DBOS.recv(timeout_seconds=10))
+
+    with SetWorkflowID(dest_a):
+        handle_a = dbos.start_workflow(recv_one)
+    with SetWorkflowID(dest_b):
+        handle_b = dbos.start_workflow(recv_one)
+
+    DBOS.send_bulk(
+        [
+            SendMessage(dest_a, "to_a"),
+            SendMessage(dest_b, "to_b"),
+        ]
+    )
+    assert handle_a.get_result() == "to_a"
+    assert handle_b.get_result() == "to_b"
+
+    # Test 3: A bulk send including a non-existent destination is atomic - nothing is sent.
+    dest_real = str(uuid.uuid4())
+    with SetWorkflowID(dest_real):
+        handle_real = dbos.start_workflow(recv_one)
+    dest_fake = str(uuid.uuid4())
+
+    with pytest.raises(Exception) as exc_info:
+        DBOS.send_bulk(
+            [
+                SendMessage(dest_real, "should_not_arrive"),
+                SendMessage(dest_fake, "to_nowhere"),
+            ]
+        )
+    assert "Non-existent `send_bulk` destination" in str(exc_info.value)
+    # Because the transaction rolled back, no message was delivered: the recv
+    # times out and returns None (stringified by recv_one).
+    assert handle_real.get_result() == "None"
+
+
+def test_send_bulk_from_workflow(dbos: DBOS) -> None:
+    send_counter = 0
+
+    @DBOS.workflow()
+    def recv_two() -> str:
+        msg1 = DBOS.recv(timeout_seconds=10)
+        msg2 = DBOS.recv(timeout_seconds=10)
+        return f"{msg1}-{msg2}"
+
+    dest_uuid = str(uuid.uuid4())
+    with SetWorkflowID(dest_uuid):
+        handle = dbos.start_workflow(recv_two)
+
+    @DBOS.workflow()
+    def send_bulk_wf(dest: str) -> None:
+        nonlocal send_counter
+        send_counter += 1
+        DBOS.send_bulk(
+            [
+                SendMessage(dest, "one"),
+                SendMessage(dest, "two"),
+            ]
+        )
+
+    send_uuid = str(uuid.uuid4())
+    with SetWorkflowID(send_uuid):
+        send_bulk_wf(dest_uuid)
+    assert handle.get_result() == "one-two"
+    assert send_counter == 1
+
+    # Re-invoking with the same workflow ID replays the recorded result without
+    # re-running the body, so the bulk send is not executed a second time.
+    with SetWorkflowID(send_uuid):
+        send_bulk_wf(dest_uuid)
+    assert send_counter == 1
+
+
+def test_send_bulk_idempotency_key(dbos: DBOS) -> None:
+    recv_event = threading.Event()
+
+    @DBOS.workflow()
+    def recv_two() -> str:
+        msg1 = DBOS.recv(timeout_seconds=10)
+        recv_event.set()
+        msg2 = DBOS.recv(timeout_seconds=2)
+        return f"{msg1}-{msg2}"
+
+    dest_uuid = str(uuid.uuid4())
+    with SetWorkflowID(dest_uuid):
+        handle = dbos.start_workflow(recv_two)
+
+    idem_key = str(uuid.uuid4())
+    DBOS.send_bulk([SendMessage(dest_uuid, "hello", idempotency_key=idem_key)])
+    recv_event.wait()
+    # A later bulk send reusing a message's idempotency key is silently deduplicated.
+    DBOS.send_bulk([SendMessage(dest_uuid, "duplicate", idempotency_key=idem_key)])
+    assert handle.get_result() == "hello-None"
 
 
 def test_set_get_events(

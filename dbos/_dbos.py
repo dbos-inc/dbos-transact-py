@@ -67,6 +67,7 @@ from ._core import (
     run_step,
     run_step_async,
     send,
+    send_bulk,
     set_event,
     start_workflow,
     start_workflow_async,
@@ -101,6 +102,7 @@ from ._scheduler import (
 from ._scheduler_decorator import DecoratedScheduledWorkflow, scheduled
 from ._sys_db import (
     GetEventWorkflowContext,
+    SendMessage,
     StepInfo,
     SystemDatabase,
     VersionInfo,
@@ -1466,6 +1468,44 @@ class DBOS:
             topic,
             serialization_type=serialization_type,
             idempotency_key=idempotency_key,
+        )
+
+    @classmethod
+    def send_bulk(
+        cls,
+        messages: List[SendMessage],
+        *,
+        serialization_type: Optional[
+            WorkflowSerializationFormat
+        ] = WorkflowSerializationFormat.DEFAULT,
+    ) -> None:
+        """Send many messages to workflow executions in a single transaction."""
+        check_async("send_bulk")
+        return send_bulk(
+            _get_dbos_instance(),
+            snapshot_step_context(),
+            messages,
+            serialization_type=serialization_type,
+        )
+
+    @classmethod
+    async def send_bulk_async(
+        cls,
+        messages: List[SendMessage],
+        *,
+        serialization_type: Optional[
+            WorkflowSerializationFormat
+        ] = WorkflowSerializationFormat.DEFAULT,
+    ) -> None:
+        """Send many messages to workflow executions in a single transaction."""
+        ctx = snapshot_step_context()
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(
+            send_bulk,
+            _get_dbos_instance(),
+            ctx,
+            messages,
+            serialization_type=serialization_type,
         )
 
     @classmethod
