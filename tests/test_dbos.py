@@ -1621,7 +1621,7 @@ def test_debug_logging(
     )
     assert "Running sleep" in caplog.text
     assert "Running set_event" in caplog.text
-    assert "Running send" in caplog.text
+    assert "Running DBOS.send" in caplog.text
 
     result2 = dest_handle.get_result()
     assert result2 == "event_value, test_message"
