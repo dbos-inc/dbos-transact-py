@@ -1381,6 +1381,43 @@ def test_send_bulk_send_to_forks_idempotency_key(dbos: DBOS) -> None:
     assert _notification_destinations(dbos, message_uuids=True) == uuids_after_first
 
 
+def test_send_bulk_send_to_forks_multiple_destinations(dbos: DBOS) -> None:
+    """A single bulk send to several destinations resolves all of their forks in
+    one go, and each destination only fans out to its own fork subtree."""
+
+    @DBOS.step()
+    def step_a() -> int:
+        return 1
+
+    @DBOS.workflow()
+    def forkable() -> int:
+        return step_a()
+
+    def make_workflow_with_fork() -> tuple[str, str]:
+        wfid = str(uuid.uuid4())
+        with SetWorkflowID(wfid):
+            assert forkable() == 1
+        fork = DBOS.fork_workflow(wfid, 1)
+        assert fork.get_result() == 1
+        return wfid, fork.workflow_id
+
+    wf_a, fork_a = make_workflow_with_fork()
+    wf_b, fork_b = make_workflow_with_fork()
+    # An unrelated workflow (and its fork) that is not a send target.
+    wf_c, fork_c = make_workflow_with_fork()
+
+    DBOS.send_bulk(
+        [SendMessage(wf_a, "to_a"), SendMessage(wf_b, "to_b")],
+        send_to_forks=True,
+    )
+
+    dests = _notification_destinations(dbos)
+    assert {wf_a, fork_a, wf_b, fork_b} <= dests
+    # wf_c's subtree is untouched - each destination only reaches its own forks.
+    assert wf_c not in dests
+    assert fork_c not in dests
+
+
 def test_set_get_events(
     dbos: DBOS, config: DBOSConfig, skip_with_sqlite_imprecise_time: None
 ) -> None:

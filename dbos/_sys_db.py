@@ -2369,29 +2369,51 @@ class SystemDatabase(ABC):
             )
 
     def _find_fork_descendants_txn(
-        self, workflow_id: str, conn: sa.Connection
-    ) -> Set[str]:
-        """Return every workflow recursively forked from `workflow_id`.
+        self, workflow_ids: List[str], conn: sa.Connection
+    ) -> Dict[str, Set[str]]:
+        """Return every workflow recursively forked from each of `workflow_ids`.
 
-        Walks the `forked_from` chain breadth-first, so it includes direct forks,
-        forks of those forks, and so on. The starting workflow itself is not
-        included. Self-references and cycles (which should not occur) are ignored.
+        Resolves all of the given roots together: one query per level of the fork
+        forest covers every root at once, rather than a separate traversal per
+        root. The `forked_from` edges discovered are accumulated into an adjacency
+        map, then each root's descendant set (direct forks, forks of forks, ...,
+        excluding the root itself) is computed in memory. Self-references and
+        cycles (which should not occur) are ignored.
         """
-        descendants: Set[str] = set()
-        frontier = [workflow_id]
+        # Bulk breadth-first walk over the union of all roots, recording the
+        # parent -> children edges of every reachable fork.
+        children: Dict[str, List[str]] = {}
+        seen: Set[str] = set(workflow_ids)
+        frontier = list(dict.fromkeys(workflow_ids))
         while frontier:
             rows = conn.execute(
-                sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
-                    SystemSchema.workflow_status.c.forked_from.in_(frontier)
-                )
+                sa.select(
+                    SystemSchema.workflow_status.c.workflow_uuid,
+                    SystemSchema.workflow_status.c.forked_from,
+                ).where(SystemSchema.workflow_status.c.forked_from.in_(frontier))
             ).all()
             next_frontier = []
-            for (forked_id,) in rows:
-                if forked_id != workflow_id and forked_id not in descendants:
-                    descendants.add(forked_id)
+            for forked_id, forked_from in rows:
+                children.setdefault(forked_from, []).append(forked_id)
+                if forked_id not in seen:
+                    seen.add(forked_id)
                     next_frontier.append(forked_id)
             frontier = next_frontier
-        return descendants
+
+        # Compute each root's descendants in memory from the adjacency map.
+        result: Dict[str, Set[str]] = {}
+        for root in workflow_ids:
+            if root in result:
+                continue
+            descendants: Set[str] = set()
+            stack = list(children.get(root, []))
+            while stack:
+                node = stack.pop()
+                if node != root and node not in descendants:
+                    descendants.add(node)
+                    stack.extend(children.get(node, []))
+            result[root] = descendants
+        return result
 
     @db_retry()
     def send_bulk(
@@ -2454,15 +2476,21 @@ class SystemDatabase(ABC):
                     )
 
             # Expand each message to its destination set (the workflow itself plus,
-            # if requested, every workflow recursively forked from it). Fork
-            # resolution happens inside the transaction so the recipient set is
-            # consistent with the insert.
+            # if requested, every workflow recursively forked from it). Forks for
+            # all destinations are resolved in a single bulk walk, inside the
+            # transaction so the recipient set is consistent with the insert.
+            fork_descendants: Dict[str, Set[str]] = {}
+            if send_to_forks:
+                fork_descendants = self._find_fork_descendants_txn(
+                    [m.destination_id for m, _, _ in prepared], c
+                )
+
             rows = []
             for m, serval, serialization in prepared:
                 destinations = [m.destination_id]
                 if send_to_forks:
                     destinations.extend(
-                        sorted(self._find_fork_descendants_txn(m.destination_id, c))
+                        sorted(fork_descendants.get(m.destination_id, set()))
                     )
                 for dest in destinations:
                     if m.idempotency_key is None:
