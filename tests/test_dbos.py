@@ -1159,7 +1159,7 @@ def test_send_bulk(dbos: DBOS) -> None:
                 SendMessage(dest_fake, "to_nowhere"),
             ]
         )
-    assert "Non-existent `send_bulk` destination" in str(exc_info.value)
+    assert "Non-existent `send` destination" in str(exc_info.value)
     # Because the transaction rolled back, no message was delivered: the recv
     # times out and returns None (stringified by recv_one).
     assert handle_real.get_result() == "None"

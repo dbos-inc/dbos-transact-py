@@ -1921,61 +1921,20 @@ def decorate_step(
     return decorator
 
 
-def send(
-    dbos: "DBOS",
-    cur_ctx: Optional["DBOSContext"],
-    destination_id: str,
-    message: Any,
-    topic: Optional[str] = None,
-    *,
-    serialization_type: Optional[WorkflowSerializationFormat],
-    idempotency_key: Optional[str] = None,
-) -> None:
-    if (
-        serialization_type is None
-        or serialization_type == WorkflowSerializationFormat.DEFAULT
-    ):
-        serialization_type = (
-            cur_ctx.serialization_type
-            if cur_ctx is not None
-            else WorkflowSerializationFormat.DEFAULT
-        )
-
-    def do_send(destination_id: str, message: Any, topic: Optional[str]) -> None:
-        assert cur_ctx is not None
-        attributes: TracedAttributes = {
-            "name": "send",
-        }
-        with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
-            dbos._sys_db.send(
-                ctx.workflow_id,
-                ctx.curr_step_function_id,
-                destination_id,
-                message,
-                topic,
-                serialization_type=serialization_type,
-                message_uuid=idempotency_key,
-            )
-
-    if cur_ctx and cur_ctx.is_workflow():
-        return do_send(destination_id, message, topic)
-    else:
-        dbos._sys_db.send_direct(
-            destination_id,
-            message,
-            topic,
-            message_uuid=idempotency_key,
-            serialization_type=serialization_type,
-        )
-
-
 def send_bulk(
     dbos: "DBOS",
     cur_ctx: Optional["DBOSContext"],
     messages: List[SendMessage],
     *,
     serialization_type: Optional[WorkflowSerializationFormat],
+    function_name: str = "DBOS.send_bulk",
+    span_name: str = "send_bulk",
 ) -> None:
+    """Send one or more messages, optionally as a step within a workflow.
+
+    Underlies both `DBOS.send` (a single message) and `DBOS.send_bulk` (many),
+    which differ only in the `function_name`/`span_name` they record.
+    """
     if (
         serialization_type is None
         or serialization_type == WorkflowSerializationFormat.DEFAULT
@@ -1987,9 +1946,9 @@ def send_bulk(
         )
 
     if cur_ctx and cur_ctx.is_workflow():
-        # Inside a workflow, the entire bulk send is recorded as a single step.
+        # Inside a workflow, the entire send is recorded as a single step.
         attributes: TracedAttributes = {
-            "name": "send_bulk",
+            "name": span_name,
         }
         with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
             dbos._sys_db.send_bulk(
@@ -1997,11 +1956,13 @@ def send_bulk(
                 serialization_type=serialization_type,
                 workflow_uuid=ctx.workflow_id,
                 function_id=ctx.curr_step_function_id,
+                function_name=function_name,
             )
     else:
         dbos._sys_db.send_bulk(
             messages,
             serialization_type=serialization_type,
+            function_name=function_name,
         )
 
 

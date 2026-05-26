@@ -2368,123 +2368,6 @@ class SystemDatabase(ABC):
             )
 
     @db_retry()
-    def send(
-        self,
-        workflow_uuid: str,
-        function_id: int,
-        destination_uuid: str,
-        message: Any,
-        topic: Optional[str],
-        *,
-        serialization_type: Optional["WorkflowSerializationFormat"],
-        message_uuid: Optional[str],
-    ) -> None:
-        function_name = "DBOS.send"
-        start_time = int(time.time() * 1000)
-        topic = topic if topic is not None else _dbos_null_topic
-        if message_uuid is None:
-            message_uuid = str(generate_uuid())
-        serval, serialization = serialize_value(
-            message,
-            serialization_type,
-            self.serializer,
-        )
-        with self.engine.begin() as c:
-            recorded_output = self._check_operation_execution_txn(
-                workflow_uuid, function_id, function_name, conn=c
-            )
-            if recorded_output is not None:
-                dbos_logger.debug(
-                    f"Replaying send, id: {function_id}, destination_uuid: {destination_uuid}, topic: {topic}"
-                )
-                return  # Already sent before
-            else:
-                dbos_logger.debug(
-                    f"Running send, id: {function_id}, destination_uuid: {destination_uuid}, topic: {topic}"
-                )
-
-            try:
-                c.execute(
-                    self.dialect.insert(SystemSchema.notifications)
-                    .values(
-                        destination_uuid=destination_uuid,
-                        topic=topic,
-                        message=serval,
-                        message_uuid=message_uuid,
-                        serialization=serialization,
-                    )
-                    .on_conflict_do_nothing(
-                        index_elements=[
-                            SystemSchema.notifications.c.message_uuid,
-                        ]
-                    )
-                )
-            except DBAPIError as dbapi_error:
-                if self._is_foreign_key_violation(dbapi_error):
-                    raise DBOSNonExistentWorkflowError(
-                        "`send` destination", destination_uuid
-                    )
-                raise
-            output: OperationResultInternal = {
-                "workflow_uuid": workflow_uuid,
-                "function_id": function_id,
-                "function_name": function_name,
-                "started_at_epoch_ms": start_time,
-                "output": None,
-                "error": None,
-                "serialization": None,
-            }
-            self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
-
-    @db_retry()
-    def send_direct(
-        self,
-        destination_uuid: str,
-        message: Any,
-        topic: Optional[str] = None,
-        message_uuid: Optional[str] = None,
-        *,
-        serialization_type: Optional["WorkflowSerializationFormat"] = None,
-    ) -> None:
-        """Send a message without requiring a workflow context.
-
-        Idempotency is provided by the primary key constraint on message_uuid.
-        On duplicate message_uuid, silently returns (idempotent replay).
-        """
-
-        topic = topic if topic is not None else _dbos_null_topic
-        if message_uuid is None:
-            message_uuid = str(generate_uuid())
-        serval, serialization = serialize_value(
-            message,
-            serialization_type,
-            self.serializer,
-        )
-        try:
-            with self.engine.begin() as c:
-                c.execute(
-                    self.dialect.insert(SystemSchema.notifications)
-                    .values(
-                        destination_uuid=destination_uuid,
-                        topic=topic,
-                        message=serval,
-                        message_uuid=message_uuid,
-                        serialization=serialization,
-                    )
-                    .on_conflict_do_nothing(
-                        index_elements=[
-                            SystemSchema.notifications.c.message_uuid,
-                        ]
-                    )
-                )
-        except DBAPIError as dbapi_error:
-            if self._is_foreign_key_violation(dbapi_error):
-                raise DBOSNonExistentWorkflowError(
-                    "`send` destination", destination_uuid
-                )
-            raise
-
-    @db_retry()
     def send_bulk(
         self,
         messages: List[SendMessage],
@@ -2492,16 +2375,18 @@ class SystemDatabase(ABC):
         serialization_type: Optional["WorkflowSerializationFormat"],
         workflow_uuid: Optional[str] = None,
         function_id: Optional[int] = None,
+        function_name: str = "DBOS.send_bulk",
     ) -> None:
-        """Send many messages in a single transaction.
+        """Send one or more messages in a single transaction.
 
-        Shared by `DBOS.send_bulk` (both inside and outside a workflow) and
-        `DBOSClient.send_bulk`. When called from a workflow, `workflow_uuid` and
-        `function_id` identify the single step recording the bulk send, which
-        makes the whole operation idempotent on replay. Each message provides
-        its own idempotency via the primary key constraint on `message_uuid`.
+        This is the single implementation underlying both `DBOS.send`/`send_bulk`
+        (inside and outside a workflow) and `DBOSClient.send`/`send_bulk`. When
+        called from a workflow, `workflow_uuid` and `function_id` identify the
+        single step recording the operation, which makes it idempotent on replay;
+        `function_name` is the name recorded for that step. Each message also
+        provides its own idempotency via the primary key constraint on
+        `message_uuid`.
         """
-        function_name = "DBOS.send_bulk"
         start_time = int(time.time() * 1000)
 
         rows = []
@@ -2534,12 +2419,12 @@ class SystemDatabase(ABC):
                 )
                 if recorded_output is not None:
                     dbos_logger.debug(
-                        f"Replaying send_bulk, id: {function_id}, messages: {len(rows)}"
+                        f"Replaying {function_name}, id: {function_id}, messages: {len(rows)}"
                     )
                     return  # Already sent before
                 else:
                     dbos_logger.debug(
-                        f"Running send_bulk, id: {function_id}, messages: {len(rows)}"
+                        f"Running {function_name}, id: {function_id}, messages: {len(rows)}"
                     )
 
             try:
@@ -2556,7 +2441,7 @@ class SystemDatabase(ABC):
             except DBAPIError as dbapi_error:
                 if self._is_foreign_key_violation(dbapi_error):
                     raise DBOSNonExistentWorkflowError(
-                        "`send_bulk` destination",
+                        "`send` destination",
                         ", ".join(sorted({m.destination_id for m in messages})),
                     )
                 raise

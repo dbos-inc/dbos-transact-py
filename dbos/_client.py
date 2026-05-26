@@ -497,12 +497,10 @@ class DBOSClient:
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
     ) -> None:
-        self._sys_db.send_direct(
-            destination_id,
-            message,
-            topic,
-            message_uuid=idempotency_key,
+        self._sys_db.send_bulk(
+            [SendMessage(destination_id, message, topic, idempotency_key)],
             serialization_type=serialization_type,
+            function_name="DBOS.send",
         )
 
     async def send_async(

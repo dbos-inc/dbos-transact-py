@@ -66,7 +66,6 @@ from ._core import (
     record_sleep,
     run_step,
     run_step_async,
-    send,
     send_bulk,
     set_event,
     start_workflow,
@@ -1434,14 +1433,13 @@ class DBOS:
     ) -> None:
         """Send a message to a workflow execution."""
         check_async("send")
-        return send(
+        return send_bulk(
             _get_dbos_instance(),
             snapshot_step_context(),
-            destination_id,
-            message,
-            topic,
+            [SendMessage(destination_id, message, topic, idempotency_key)],
             serialization_type=serialization_type,
-            idempotency_key=idempotency_key,
+            function_name="DBOS.send",
+            span_name="send",
         )
 
     @classmethod
@@ -1460,14 +1458,13 @@ class DBOS:
         ctx = snapshot_step_context()
         await cls._configure_asyncio_thread_pool()
         await asyncio.to_thread(
-            send,
+            send_bulk,
             _get_dbos_instance(),
             ctx,
-            destination_id,
-            message,
-            topic,
+            [SendMessage(destination_id, message, topic, idempotency_key)],
             serialization_type=serialization_type,
-            idempotency_key=idempotency_key,
+            function_name="DBOS.send",
+            span_name="send",
         )
 
     @classmethod
