@@ -829,8 +829,6 @@ ALTER FUNCTION "{schema}".enqueue_workflow(
 def get_dbos_migration_thirtynine(
     schema: str, use_listen_notify: bool, is_cockroach: bool
 ) -> str:
-    # CockroachDB does not support LISTEN/NOTIFY, so it always uses the polling
-    # fallback and never installs this trigger.
     if not use_listen_notify:
         return ""
     return f"""
