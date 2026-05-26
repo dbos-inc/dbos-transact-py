@@ -113,6 +113,41 @@ def test_stream_concurrent_write_read(dbos: DBOS) -> None:
     assert read_values == expected_values
 
 
+def test_stream_low_latency_delivery(dbos: DBOS) -> None:
+    """Values should reach a blocked reader promptly via LISTEN/NOTIFY rather
+    than after a fixed polling interval. Each value carries the wall-clock time
+    it was written; the reader asserts it received the value shortly after."""
+    stream_key = "latency_stream"
+    num_values = 5
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for _ in range(num_values):
+            # Capture the write time as close to the write as possible, then
+            # pause so the reader is genuinely blocked waiting for the next one.
+            DBOS.write_stream(stream_key, time.time())
+            DBOS.sleep(1.0)
+        DBOS.close_stream(stream_key)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(writer_workflow)
+
+    max_latency = 0.0
+    count = 0
+    for written_at in DBOS.read_stream(wfid, stream_key):
+        latency = time.time() - written_at
+        max_latency = max(max_latency, latency)
+        count += 1
+
+    handle.get_result()
+
+    assert count == num_values
+    # NOTIFY delivery is single-digit milliseconds; a 1s polling fallback would
+    # average ~0.5s and frequently exceed this across several values.
+    assert max_latency < 0.5, f"max delivery latency {max_latency:.3f}s too high"
+
+
 def test_stream_multiple_keys(dbos: DBOS) -> None:
     """Test multiple streams with different keys in the same workflow."""
 

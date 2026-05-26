@@ -553,6 +553,7 @@ class SystemDatabase(ABC):
 
         self.notifications_map = ThreadSafeEventDict()
         self.workflow_events_map = ThreadSafeEventDict()
+        self.streams_map = ThreadSafeEventDict()
         self.executor_id = executor_id
         self._notification_listener_polling_interval_sec = (
             notification_listener_polling_interval_sec
@@ -2755,6 +2756,27 @@ class SystemDatabase(ABC):
                             event.set()
                             dbos_logger.debug(f"Signaled event for {payload}")
 
+                # Check all entries in the streams_map. A stream reader re-reads
+                # at its own offset on wakeup, so any row for (workflow_uuid, key)
+                # is a sufficient hint to re-check.
+                for (
+                    payload,
+                    (workflow_uuid, key),
+                    event,
+                ) in self.streams_map.snapshot():
+                    with self.engine.begin() as conn:
+                        result = conn.execute(
+                            sa.select(sa.literal(1))
+                            .where(
+                                SystemSchema.streams.c.workflow_uuid == workflow_uuid,
+                                SystemSchema.streams.c.key == key,
+                            )
+                            .limit(1)
+                        )
+                        if result.fetchone():
+                            event.set()
+                            dbos_logger.debug(f"Signaled event for {payload}")
+
             except Exception as e:
                 if self._run_background_processes:
                     dbos_logger.warning(f"Notification poller error: {e}")
@@ -3742,6 +3764,25 @@ class SystemDatabase(ABC):
             _dbos_stream_closed_sentinel,
             serialization_type=WorkflowSerializationFormat.PORTABLE,
         )
+
+    def register_stream_listener(
+        self, workflow_uuid: str, key: str
+    ) -> Tuple[threading.Event, str]:
+        """Register an event for the listener to signal when the stream is written.
+
+        Returns the event to wait on and the payload key to unregister later.
+        Must be called before reading so a notification arriving between a read
+        and the wait is not lost.
+        """
+        payload = f"{workflow_uuid}::{key}"
+        _, event = self.streams_map.set(
+            payload, threading.Event(), (workflow_uuid, key)
+        )
+        return event, payload
+
+    def unregister_stream_listener(self, payload: str) -> None:
+        """Drop a previously registered stream listener event."""
+        self.streams_map.pop(payload)
 
     @db_retry()
     def read_stream(self, workflow_uuid: str, key: str, offset: int) -> Any:

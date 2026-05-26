@@ -826,9 +826,10 @@ ALTER FUNCTION "{schema}".enqueue_workflow(
     return migration
 
 
-def get_dbos_migration_thirtynine(
-    schema: str, use_listen_notify: bool, is_cockroach: bool
-) -> str:
+def get_dbos_migration_thirtynine(schema: str, use_listen_notify: bool) -> str:
+    # Gated on use_listen_notify only, matching the notifications/workflow_events
+    # triggers in migration one. Deployments without LISTEN/NOTIFY (e.g.
+    # CockroachDB) set use_listen_notify=False and use the polling fallback.
     if not use_listen_notify:
         return ""
     return f"""
@@ -894,7 +895,7 @@ def get_dbos_migrations(
         get_dbos_migration_thirtysix(schema),
         get_dbos_migration_thirtyseven(schema, is_cockroach),
         get_dbos_migration_thirtyeight(schema, is_cockroach),
-        get_dbos_migration_thirtynine(schema, use_listen_notify, is_cockroach),
+        get_dbos_migration_thirtynine(schema, use_listen_notify),
     ]
 
 
