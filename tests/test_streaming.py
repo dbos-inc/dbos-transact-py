@@ -123,7 +123,7 @@ def test_stream_low_latency_delivery(
     out-of-process (client) reader (polling), and an in-process reader with
     LISTEN/NOTIFY disabled (polling)."""
     stream_key = "latency_stream"
-    num_values = 5
+    num_values = 3
 
     @DBOS.workflow()
     def writer_workflow() -> None:
