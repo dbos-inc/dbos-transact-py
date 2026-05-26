@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 # Public API
-from dbos import DBOS, SetWorkflowID
+from dbos import DBOS, DBOSConfig, SetWorkflowID
 from dbos._client import DBOSClient
 
 
@@ -113,11 +113,15 @@ def test_stream_concurrent_write_read(dbos: DBOS) -> None:
     assert read_values == expected_values
 
 
-def test_stream_low_latency_delivery(dbos: DBOS, client: DBOSClient) -> None:
+def test_stream_low_latency_delivery(
+    config: DBOSConfig, dbos: DBOS, client: DBOSClient
+) -> None:
     """Values should reach a blocked reader promptly via LISTEN/NOTIFY rather
     than after a fixed polling interval. Each value carries the wall-clock time
     it was written; the reader asserts it received the value shortly after.
-    Verified for both the in-process (DBOS) and out-of-process (client) readers."""
+    Verified for the in-process (DBOS) reader with LISTEN/NOTIFY, the
+    out-of-process (client) reader (polling), and an in-process reader with
+    LISTEN/NOTIFY disabled (polling)."""
     stream_key = "latency_stream"
     num_values = 5
 
@@ -160,6 +164,25 @@ def test_stream_low_latency_delivery(dbos: DBOS, client: DBOSClient) -> None:
     client_handle.get_result()
     assert count == num_values
     assert max_latency < 2.0, f"client delivery latency {max_latency:.3f}s too high"
+
+    # Recreate the in-process DBOS with LISTEN/NOTIFY disabled and confirm the
+    # reader still receives every value via the polling fallback. The trigger
+    # installed earlier harmlessly fires notifications that nobody listens for;
+    # the reader is woken by the polling listener thread instead.
+    DBOS.destroy(destroy_registry=False)
+    config["use_listen_notify"] = False
+    DBOS(config=config)
+    DBOS.launch()
+
+    poll_wfid = str(uuid.uuid4())
+    with SetWorkflowID(poll_wfid):
+        poll_handle = DBOS.start_workflow(writer_workflow)
+    count, max_latency = measure(DBOS.read_stream(poll_wfid, stream_key))
+    poll_handle.get_result()
+    assert count == num_values
+    assert (
+        max_latency < 2.0
+    ), f"polling DBOS delivery latency {max_latency:.3f}s too high"
 
 
 def test_stream_multiple_keys(dbos: DBOS) -> None:
