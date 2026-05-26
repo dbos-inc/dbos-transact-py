@@ -1273,53 +1273,9 @@ def _notification_destinations(dbos: DBOS, message_uuids: bool = False) -> Set[s
 
 
 def test_send_bulk_send_to_forks(dbos: DBOS) -> None:
-    """send_to_forks fans a message out to the workflow and all of its forks,
-    recursively (forks of forks included)."""
-
-    @DBOS.step()
-    def step_a() -> int:
-        return 1
-
-    @DBOS.step()
-    def step_b() -> int:
-        return 2
-
-    @DBOS.workflow()
-    def forkable() -> int:
-        return step_a() + step_b()
-
-    # Original workflow.
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        assert forkable() == 3
-
-    # A fork of the original, and a fork of that fork.
-    fork1 = DBOS.fork_workflow(wfid, 1)
-    fork1_id = fork1.workflow_id
-    assert fork1.get_result() == 3
-    assert fork1.get_status().forked_from == wfid
-
-    fork2 = DBOS.fork_workflow(fork1_id, 1)
-    fork2_id = fork2.workflow_id
-    assert fork2.get_result() == 3
-    assert fork2.get_status().forked_from == fork1_id
-
-    # An unrelated workflow that must not receive the message.
-    other_id = str(uuid.uuid4())
-    with SetWorkflowID(other_id):
-        assert forkable() == 3
-
-    DBOS.send_bulk([SendMessage(wfid, "hello")], send_to_forks=True)
-
-    dests = _notification_destinations(dbos)
-    assert wfid in dests
-    assert fork1_id in dests  # direct fork
-    assert fork2_id in dests  # fork of a fork (recursive)
-    assert other_id not in dests
-
-
-def test_send_bulk_send_to_forks_disabled(dbos: DBOS) -> None:
-    """Without send_to_forks, only the named destination receives the message."""
+    """send_to_forks fans each message out to its destination plus every workflow
+    recursively forked from it. A single bulk send resolves all destinations at
+    once, each reaching only its own fork subtree."""
 
     @DBOS.step()
     def step_a() -> int:
@@ -1329,93 +1285,56 @@ def test_send_bulk_send_to_forks_disabled(dbos: DBOS) -> None:
     def forkable() -> int:
         return step_a()
 
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        assert forkable() == 1
-    fork = DBOS.fork_workflow(wfid, 1)
-    fork_id = fork.workflow_id
-    assert fork.get_result() == 1
-
-    DBOS.send_bulk([SendMessage(wfid, "hello")])
-
-    dests = _notification_destinations(dbos)
-    assert wfid in dests
-    assert fork_id not in dests
-
-
-def test_send_bulk_send_to_forks_idempotency_key(dbos: DBOS) -> None:
-    """With an idempotency key, fanning out to forks derives a distinct
-    message_uuid per recipient, and the whole send stays idempotent on repeat."""
-
-    @DBOS.step()
-    def step_a() -> int:
-        return 1
-
-    @DBOS.workflow()
-    def forkable() -> int:
-        return step_a()
-
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        assert forkable() == 1
-    fork = DBOS.fork_workflow(wfid, 1)
-    fork_id = fork.workflow_id
-    assert fork.get_result() == 1
-
-    key = str(uuid.uuid4())
-
-    def do_send() -> None:
-        DBOS.send_bulk(
-            [SendMessage(wfid, "hello", idempotency_key=key)],
-            send_to_forks=True,
-        )
-
-    do_send()
-    uuids_after_first = _notification_destinations(dbos, message_uuids=True)
-    # One distinct message_uuid per recipient (original + fork).
-    assert f"{key}::{wfid}" in uuids_after_first
-    assert f"{key}::{fork_id}" in uuids_after_first
-
-    # Re-sending with the same key delivers nothing new (idempotent).
-    do_send()
-    assert _notification_destinations(dbos, message_uuids=True) == uuids_after_first
-
-
-def test_send_bulk_send_to_forks_multiple_destinations(dbos: DBOS) -> None:
-    """A single bulk send to several destinations resolves all of their forks in
-    one go, and each destination only fans out to its own fork subtree."""
-
-    @DBOS.step()
-    def step_a() -> int:
-        return 1
-
-    @DBOS.workflow()
-    def forkable() -> int:
-        return step_a()
-
-    def make_workflow_with_fork() -> tuple[str, str]:
+    def run_root() -> str:
         wfid = str(uuid.uuid4())
         with SetWorkflowID(wfid):
             assert forkable() == 1
-        fork = DBOS.fork_workflow(wfid, 1)
-        assert fork.get_result() == 1
-        return wfid, fork.workflow_id
+        return wfid
 
-    wf_a, fork_a = make_workflow_with_fork()
-    wf_b, fork_b = make_workflow_with_fork()
-    # An unrelated workflow (and its fork) that is not a send target.
-    wf_c, fork_c = make_workflow_with_fork()
+    def fork(wfid: str) -> str:
+        handle = DBOS.fork_workflow(wfid, 1)
+        assert handle.get_result() == 1
+        assert handle.get_status().forked_from == wfid
+        return handle.workflow_id
 
+    # Destination A: a fork and a fork-of-a-fork (recursive).
+    a = run_root()
+    a_fork = fork(a)
+    a_fork_fork = fork(a_fork)
+    # Destination B: a single fork.
+    b = run_root()
+    b_fork = fork(b)
+    # Unrelated workflow C with a fork: never a send target.
+    c = run_root()
+    c_fork = fork(c)
+
+    # One bulk send to A and B, with an idempotency key on A.
+    key = str(uuid.uuid4())
     DBOS.send_bulk(
-        [SendMessage(wf_a, "to_a"), SendMessage(wf_b, "to_b")],
+        [SendMessage(a, "to_a", idempotency_key=key), SendMessage(b, "to_b")],
         send_to_forks=True,
     )
 
     dests = _notification_destinations(dbos)
-    assert {wf_a, fork_a, wf_b, fork_b} <= dests
-    # wf_c's subtree is untouched - each destination only reaches its own forks.
-    assert wf_c not in dests
-    assert fork_c not in dests
+    # A and B each reach their full (recursive) fork subtree...
+    assert {a, a_fork, a_fork_fork, b, b_fork} <= dests
+    # ...while C's subtree is untouched: each destination only reaches its own forks.
+    assert c not in dests and c_fork not in dests
+
+    # A's idempotency key derives one distinct message_uuid per recipient.
+    uuids = _notification_destinations(dbos, message_uuids=True)
+    assert {f"{key}::{a}", f"{key}::{a_fork}", f"{key}::{a_fork_fork}"} <= uuids
+
+    # Re-sending A with the same key is idempotent: nothing new appears.
+    DBOS.send_bulk([SendMessage(a, "x", idempotency_key=key)], send_to_forks=True)
+    assert _notification_destinations(dbos, message_uuids=True) == uuids
+
+    # Without send_to_forks, only the named destination is reached.
+    d = run_root()
+    d_fork = fork(d)
+    DBOS.send_bulk([SendMessage(d, "to_d")])
+    dests = _notification_destinations(dbos)
+    assert d in dests and d_fork not in dests
 
 
 def test_set_get_events(
