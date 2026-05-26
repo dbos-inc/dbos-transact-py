@@ -185,6 +185,9 @@ class DBOSClient:
             schema=dbos_system_schema,
             serializer=serializer,
             executor_id=None,
+            # The client does not run a notification listener thread, so stream
+            # reads cannot be woken by LISTEN/NOTIFY and instead poll the offset.
+            use_listen_notify=False,
         )
         self._sys_db.check_connection()
 
@@ -969,9 +972,7 @@ class DBOSClient:
                         break
                     if not workflow_is_active(status.status):
                         break
-                    event.wait(
-                        timeout=self._sys_db._notification_fallback_polling_interval
-                    )
+                    event.wait(timeout=self._sys_db._stream_poll_timeout)
         finally:
             self._sys_db.unregister_stream_listener(payload)
 
@@ -1016,10 +1017,7 @@ class DBOSClient:
                         break
                     if not workflow_is_active(status.status):
                         break
-                    deadline = (
-                        time.time()
-                        + self._sys_db._notification_fallback_polling_interval
-                    )
+                    deadline = time.time() + self._sys_db._stream_poll_timeout
                     while not event.is_set():
                         remaining = deadline - time.time()
                         if remaining <= 0:

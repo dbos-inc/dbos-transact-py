@@ -2627,6 +2627,20 @@ class SystemDatabase(ABC):
     # The interval that recv and get_event poll on as a fallback to catch dropped notifications
     _notification_fallback_polling_interval: float = 60.0
 
+    @property
+    def _stream_poll_timeout(self) -> float:
+        """How long a blocked stream reader waits before re-reading its offset.
+
+        With LISTEN/NOTIFY a notification wakes the reader sooner and this is
+        only the fallback for dropped notifications. Without a listener (e.g. the
+        client), the wait itself is the poll, so use the shorter polling interval.
+        """
+        return (
+            self._notification_fallback_polling_interval
+            if self.use_listen_notify
+            else self._notification_listener_polling_interval_sec
+        )
+
     def recv(
         self,
         workflow_uuid: str,

@@ -3043,7 +3043,7 @@ class DBOS:
                     status = cls.retrieve_workflow(workflow_id).get_status().status
                     if not workflow_is_active(status):
                         break
-                    event.wait(timeout=sys_db._notification_fallback_polling_interval)
+                    event.wait(timeout=sys_db._stream_poll_timeout)
         finally:
             sys_db.unregister_stream_listener(payload)
 

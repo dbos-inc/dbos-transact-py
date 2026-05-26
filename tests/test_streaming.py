@@ -113,10 +113,11 @@ def test_stream_concurrent_write_read(dbos: DBOS) -> None:
     assert read_values == expected_values
 
 
-def test_stream_low_latency_delivery(dbos: DBOS) -> None:
+def test_stream_low_latency_delivery(dbos: DBOS, client: DBOSClient) -> None:
     """Values should reach a blocked reader promptly via LISTEN/NOTIFY rather
     than after a fixed polling interval. Each value carries the wall-clock time
-    it was written; the reader asserts it received the value shortly after."""
+    it was written; the reader asserts it received the value shortly after.
+    Verified for both the in-process (DBOS) and out-of-process (client) readers."""
     stream_key = "latency_stream"
     num_values = 5
 
@@ -129,23 +130,36 @@ def test_stream_low_latency_delivery(dbos: DBOS) -> None:
             DBOS.sleep(1.0)
         DBOS.close_stream(stream_key)
 
+    def measure(read_iter: Any) -> tuple[int, float]:
+        max_latency = 0.0
+        count = 0
+        for written_at in read_iter:
+            max_latency = max(max_latency, time.time() - written_at)
+            count += 1
+        return count, max_latency
+
+    # In-process DBOS reader: woken by LISTEN/NOTIFY, so delivery is single-digit
+    # milliseconds. A 1s polling fallback would average ~0.5s and frequently
+    # exceed this across several values.
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         handle = DBOS.start_workflow(writer_workflow)
-
-    max_latency = 0.0
-    count = 0
-    for written_at in DBOS.read_stream(wfid, stream_key):
-        latency = time.time() - written_at
-        max_latency = max(max_latency, latency)
-        count += 1
-
+    count, max_latency = measure(DBOS.read_stream(wfid, stream_key))
     handle.get_result()
-
     assert count == num_values
-    # NOTIFY delivery is single-digit milliseconds; a 1s polling fallback would
-    # average ~0.5s and frequently exceed this across several values.
-    assert max_latency < 0.5, f"max delivery latency {max_latency:.3f}s too high"
+    assert max_latency < 0.5, f"DBOS delivery latency {max_latency:.3f}s too high"
+
+    # Out-of-process client: no notification listener thread, so it polls the
+    # offset at ~1s. Verify it still delivers every value, bounded well under
+    # the 60s dropped-notification fallback (i.e. it is actually polling, not
+    # stuck waiting on a notification that never arrives).
+    client_wfid = str(uuid.uuid4())
+    with SetWorkflowID(client_wfid):
+        client_handle = DBOS.start_workflow(writer_workflow)
+    count, max_latency = measure(client.read_stream(client_wfid, stream_key))
+    client_handle.get_result()
+    assert count == num_values
+    assert max_latency < 2.0, f"client delivery latency {max_latency:.3f}s too high"
 
 
 def test_stream_multiple_keys(dbos: DBOS) -> None:
