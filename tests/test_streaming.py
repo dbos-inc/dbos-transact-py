@@ -185,6 +185,80 @@ def test_stream_low_latency_delivery(
     ), f"polling DBOS delivery latency {max_latency:.3f}s too high"
 
 
+@pytest.mark.asyncio
+async def test_stream_low_latency_delivery_async(
+    config: DBOSConfig, dbos: DBOS, client: DBOSClient
+) -> None:
+    """Async counterpart of test_stream_low_latency_delivery, exercising the
+    read_stream_async paths for the in-process (DBOS) reader with LISTEN/NOTIFY,
+    the out-of-process (client) reader (polling), and an in-process reader with
+    LISTEN/NOTIFY disabled (polling)."""
+    stream_key = "latency_stream_async"
+    num_values = 3
+
+    @DBOS.workflow()
+    async def writer_workflow() -> None:
+        for _ in range(num_values):
+            # Capture the write time as close to the write as possible, then
+            # pause so the reader is genuinely blocked waiting for the next one.
+            await DBOS.write_stream_async(stream_key, time.time())
+            await DBOS.sleep_async(1.0)
+        await DBOS.close_stream_async(stream_key)
+
+    async def measure(read_aiter: Any) -> tuple[int, float]:
+        max_latency = 0.0
+        count = 0
+        async for written_at in read_aiter:
+            max_latency = max(max_latency, time.time() - written_at)
+            count += 1
+        return count, max_latency
+
+    # In-process DBOS reader woken by LISTEN/NOTIFY. Force a long polling
+    # interval so low latency can only come from a notification, not the poll.
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(writer_workflow)
+    count, max_latency = await measure(
+        DBOS.read_stream_async(wfid, stream_key, polling_interval_sec=60.0)
+    )
+    await handle.get_result()
+    assert count == num_values
+    assert max_latency < 0.5, f"DBOS delivery latency {max_latency:.3f}s too high"
+
+    # Out-of-process client: no notification listener thread, so it polls the
+    # offset at ~1s. Verify it still delivers every value, bounded well under
+    # the 60s dropped-notification fallback (i.e. it is actually polling, not
+    # stuck waiting on a notification that never arrives).
+    client_wfid = str(uuid.uuid4())
+    with SetWorkflowID(client_wfid):
+        client_handle = await DBOS.start_workflow_async(writer_workflow)
+    count, max_latency = await measure(
+        client.read_stream_async(client_wfid, stream_key)
+    )
+    await client_handle.get_result()
+    assert count == num_values
+    assert max_latency < 2.0, f"client delivery latency {max_latency:.3f}s too high"
+
+    # Recreate the in-process DBOS with LISTEN/NOTIFY disabled and confirm the
+    # reader still receives every value via the polling fallback. The trigger
+    # installed earlier harmlessly fires notifications that nobody listens for;
+    # the reader is woken by the polling listener thread instead.
+    DBOS.destroy(destroy_registry=False)
+    config["use_listen_notify"] = False
+    DBOS(config=config)
+    DBOS.launch()
+
+    poll_wfid = str(uuid.uuid4())
+    with SetWorkflowID(poll_wfid):
+        poll_handle = await DBOS.start_workflow_async(writer_workflow)
+    count, max_latency = await measure(DBOS.read_stream_async(poll_wfid, stream_key))
+    await poll_handle.get_result()
+    assert count == num_values
+    assert (
+        max_latency < 2.0
+    ), f"polling DBOS delivery latency {max_latency:.3f}s too high"
+
+
 def test_stream_multiple_keys(dbos: DBOS) -> None:
     """Test multiple streams with different keys in the same workflow."""
 
