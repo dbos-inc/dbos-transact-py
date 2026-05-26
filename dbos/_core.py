@@ -1927,8 +1927,8 @@ def send_bulk(
     messages: List[SendMessage],
     *,
     serialization_type: Optional[WorkflowSerializationFormat],
-    function_name: str = "DBOS.send_bulk",
-    span_name: str = "send_bulk",
+    function_name: str,
+    span_name: str,
 ) -> None:
     """Send one or more messages, optionally as a step within a workflow.
 
@@ -1962,6 +1962,8 @@ def send_bulk(
         dbos._sys_db.send_bulk(
             messages,
             serialization_type=serialization_type,
+            workflow_uuid=None,
+            function_id=None,
             function_name=function_name,
         )
 

@@ -2373,9 +2373,9 @@ class SystemDatabase(ABC):
         messages: List[SendMessage],
         *,
         serialization_type: Optional["WorkflowSerializationFormat"],
-        workflow_uuid: Optional[str] = None,
-        function_id: Optional[int] = None,
-        function_name: str = "DBOS.send_bulk",
+        workflow_uuid: Optional[str],
+        function_id: Optional[int],
+        function_name: str,
     ) -> None:
         """Send one or more messages in a single transaction.
 

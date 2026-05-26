@@ -1483,6 +1483,8 @@ class DBOS:
             snapshot_step_context(),
             messages,
             serialization_type=serialization_type,
+            function_name="DBOS.send_bulk",
+            span_name="send_bulk",
         )
 
     @classmethod
@@ -1503,6 +1505,8 @@ class DBOS:
             ctx,
             messages,
             serialization_type=serialization_type,
+            function_name="DBOS.send_bulk",
+            span_name="send_bulk",
         )
 
     @classmethod

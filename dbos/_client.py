@@ -500,6 +500,8 @@ class DBOSClient:
         self._sys_db.send_bulk(
             [SendMessage(destination_id, message, topic, idempotency_key)],
             serialization_type=serialization_type,
+            workflow_uuid=None,
+            function_id=None,
             function_name="DBOS.send",
         )
 
@@ -535,6 +537,9 @@ class DBOSClient:
         self._sys_db.send_bulk(
             messages,
             serialization_type=serialization_type,
+            workflow_uuid=None,
+            function_id=None,
+            function_name="DBOS.send_bulk",
         )
 
     async def send_bulk_async(
