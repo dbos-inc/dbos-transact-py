@@ -1224,6 +1224,44 @@ def test_send_bulk_idempotency_key(dbos: DBOS) -> None:
     assert handle.get_result() == "hello-None"
 
 
+def test_send_bulk_duplicate_key_within_batch(dbos: DBOS) -> None:
+    """Two messages sharing an idempotency key in a single bulk call is rejected
+    before the transaction starts, so nothing is delivered."""
+
+    @DBOS.workflow()
+    def recv_one() -> str:
+        return str(DBOS.recv(timeout_seconds=3))
+
+    dest_uuid = str(uuid.uuid4())
+    with SetWorkflowID(dest_uuid):
+        handle = dbos.start_workflow(recv_one)
+
+    key = str(uuid.uuid4())
+    with pytest.raises(Exception) as exc_info:
+        DBOS.send_bulk(
+            [
+                SendMessage(dest_uuid, "first", idempotency_key=key),
+                SendMessage(dest_uuid, "second", idempotency_key=key),
+            ]
+        )
+    assert "duplicate idempotency keys" in str(exc_info.value)
+    assert key in str(exc_info.value)
+    # Nothing was sent: the recv times out and returns None.
+    assert handle.get_result() == "None"
+
+
+def test_send_bulk_empty(dbos: DBOS) -> None:
+    """An empty bulk send is a no-op and must not raise, in or out of a workflow."""
+    DBOS.send_bulk([])
+
+    @DBOS.workflow()
+    def send_empty_wf() -> str:
+        DBOS.send_bulk([])
+        return "ok"
+
+    assert send_empty_wf() == "ok"
+
+
 def test_set_get_events(
     dbos: DBOS, config: DBOSConfig, skip_with_sqlite_imprecise_time: None
 ) -> None:

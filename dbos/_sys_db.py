@@ -2381,13 +2381,23 @@ class SystemDatabase(ABC):
 
         This is the single implementation underlying both `DBOS.send`/`send_bulk`
         (inside and outside a workflow) and `DBOSClient.send`/`send_bulk`. When
-        called from a workflow, `workflow_uuid` and `function_id` identify the
+        called from a workflow, `workflow_id` and `function_id` identify the
         single step recording the operation, which makes it idempotent on replay;
         `function_name` is the name recorded for that step. Each message also
         provides its own idempotency via the primary key constraint on
         `message_uuid`.
         """
         start_time = int(time.time() * 1000)
+
+        # Reject duplicate idempotency keys
+        provided_keys = [m.idempotency_key for m in messages if m.idempotency_key]
+        if len(provided_keys) != len(set(provided_keys)):
+            duplicates = sorted(
+                {k for k in provided_keys if provided_keys.count(k) > 1}
+            )
+            raise DBOSException(
+                f"send_bulk received duplicate idempotency keys: {', '.join(duplicates)}"
+            )
 
         rows = []
         for m in messages:
