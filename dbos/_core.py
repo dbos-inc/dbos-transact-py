@@ -1929,11 +1929,14 @@ def send_bulk(
     serialization_type: Optional[WorkflowSerializationFormat],
     function_name: str,
     span_name: str,
+    send_to_forks: bool,
 ) -> None:
     """Send one or more messages, optionally as a step within a workflow.
 
     Underlies both `DBOS.send` (a single message) and `DBOS.send_bulk` (many),
-    which differ only in the `function_name`/`span_name` they record.
+    which differ only in the `function_name`/`span_name` they record. When
+    `send_to_forks` is set, each message also reaches every workflow recursively
+    forked from its destination.
     """
     if (
         serialization_type is None
@@ -1957,6 +1960,7 @@ def send_bulk(
                 workflow_id=ctx.workflow_id,
                 function_id=ctx.curr_step_function_id,
                 function_name=function_name,
+                send_to_forks=send_to_forks,
             )
     else:
         dbos._sys_db.send_bulk(
@@ -1965,6 +1969,7 @@ def send_bulk(
             workflow_id=None,
             function_id=None,
             function_name=function_name,
+            send_to_forks=send_to_forks,
         )
 
 

@@ -1430,8 +1430,13 @@ class DBOS:
         serialization_type: Optional[
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
+        send_to_forks: bool = False,
     ) -> None:
-        """Send a message to a workflow execution."""
+        """Send a message to a workflow execution.
+
+        If `send_to_forks` is set, the message is also delivered to all workflows
+        recursively forked from `destination_id`.
+        """
         check_async("send")
         return send_bulk(
             _get_dbos_instance(),
@@ -1440,6 +1445,7 @@ class DBOS:
             serialization_type=serialization_type,
             function_name="DBOS.send",
             span_name="send",
+            send_to_forks=send_to_forks,
         )
 
     @classmethod
@@ -1453,8 +1459,13 @@ class DBOS:
         serialization_type: Optional[
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
+        send_to_forks: bool = False,
     ) -> None:
-        """Send a message to a workflow execution."""
+        """Send a message to a workflow execution.
+
+        If `send_to_forks` is set, the message is also delivered to all workflows
+        recursively forked from `destination_id`.
+        """
         ctx = snapshot_step_context()
         await cls._configure_asyncio_thread_pool()
         await asyncio.to_thread(
@@ -1465,6 +1476,7 @@ class DBOS:
             serialization_type=serialization_type,
             function_name="DBOS.send",
             span_name="send",
+            send_to_forks=send_to_forks,
         )
 
     @classmethod
@@ -1475,8 +1487,13 @@ class DBOS:
         serialization_type: Optional[
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
+        send_to_forks: bool = False,
     ) -> None:
-        """Send many messages to workflow executions in a single transaction."""
+        """Send many messages to workflow executions in a single transaction.
+
+        If `send_to_forks` is set, every message is also delivered to all
+        workflows recursively forked from its destination.
+        """
         check_async("send_bulk")
         return send_bulk(
             _get_dbos_instance(),
@@ -1485,6 +1502,7 @@ class DBOS:
             serialization_type=serialization_type,
             function_name="DBOS.send_bulk",
             span_name="send_bulk",
+            send_to_forks=send_to_forks,
         )
 
     @classmethod
@@ -1495,8 +1513,13 @@ class DBOS:
         serialization_type: Optional[
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
+        send_to_forks: bool = False,
     ) -> None:
-        """Send many messages to workflow executions in a single transaction."""
+        """Send many messages to workflow executions in a single transaction.
+
+        If `send_to_forks` is set, every message is also delivered to all
+        workflows recursively forked from its destination.
+        """
         ctx = snapshot_step_context()
         await cls._configure_asyncio_thread_pool()
         await asyncio.to_thread(
@@ -1507,6 +1530,7 @@ class DBOS:
             serialization_type=serialization_type,
             function_name="DBOS.send_bulk",
             span_name="send_bulk",
+            send_to_forks=send_to_forks,
         )
 
     @classmethod

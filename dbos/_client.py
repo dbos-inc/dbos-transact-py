@@ -496,6 +496,7 @@ class DBOSClient:
         serialization_type: Optional[
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
+        send_to_forks: bool = False,
     ) -> None:
         self._sys_db.send_bulk(
             [SendMessage(destination_id, message, topic, idempotency_key)],
@@ -503,6 +504,7 @@ class DBOSClient:
             workflow_id=None,
             function_id=None,
             function_name="DBOS.send",
+            send_to_forks=send_to_forks,
         )
 
     async def send_async(
@@ -515,6 +517,7 @@ class DBOSClient:
         serialization_type: Optional[
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
+        send_to_forks: bool = False,
     ) -> None:
         return await asyncio.to_thread(
             self.send,
@@ -523,6 +526,7 @@ class DBOSClient:
             topic,
             idempotency_key,
             serialization_type=serialization_type,
+            send_to_forks=send_to_forks,
         )
 
     def send_bulk(
@@ -532,14 +536,20 @@ class DBOSClient:
         serialization_type: Optional[
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
+        send_to_forks: bool = False,
     ) -> None:
-        """Send many messages to workflow executions in a single transaction."""
+        """Send many messages to workflow executions in a single transaction.
+
+        If `send_to_forks` is set, every message is also delivered to all
+        workflows recursively forked from its destination.
+        """
         self._sys_db.send_bulk(
             messages,
             serialization_type=serialization_type,
             workflow_id=None,
             function_id=None,
             function_name="DBOS.send_bulk",
+            send_to_forks=send_to_forks,
         )
 
     async def send_bulk_async(
@@ -549,12 +559,18 @@ class DBOSClient:
         serialization_type: Optional[
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
+        send_to_forks: bool = False,
     ) -> None:
-        """Send many messages to workflow executions in a single transaction."""
+        """Send many messages to workflow executions in a single transaction.
+
+        If `send_to_forks` is set, every message is also delivered to all
+        workflows recursively forked from its destination.
+        """
         return await asyncio.to_thread(
             self.send_bulk,
             messages,
             serialization_type=serialization_type,
+            send_to_forks=send_to_forks,
         )
 
     def get_event(self, workflow_id: str, key: str, timeout_seconds: float = 60) -> Any:

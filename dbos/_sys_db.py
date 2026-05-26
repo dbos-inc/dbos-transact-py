@@ -18,6 +18,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Set,
     Tuple,
     TypedDict,
     TypeVar,
@@ -2367,6 +2368,31 @@ class SystemDatabase(ABC):
                 workflow_id, function_id, function_name, c
             )
 
+    def _find_fork_descendants_txn(
+        self, workflow_id: str, conn: sa.Connection
+    ) -> Set[str]:
+        """Return every workflow recursively forked from `workflow_id`.
+
+        Walks the `forked_from` chain breadth-first, so it includes direct forks,
+        forks of those forks, and so on. The starting workflow itself is not
+        included. Self-references and cycles (which should not occur) are ignored.
+        """
+        descendants: Set[str] = set()
+        frontier = [workflow_id]
+        while frontier:
+            rows = conn.execute(
+                sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
+                    SystemSchema.workflow_status.c.forked_from.in_(frontier)
+                )
+            ).all()
+            next_frontier = []
+            for (forked_id,) in rows:
+                if forked_id != workflow_id and forked_id not in descendants:
+                    descendants.add(forked_id)
+                    next_frontier.append(forked_id)
+            frontier = next_frontier
+        return descendants
+
     @db_retry()
     def send_bulk(
         self,
@@ -2376,6 +2402,7 @@ class SystemDatabase(ABC):
         workflow_id: Optional[str],
         function_id: Optional[int],
         function_name: str,
+        send_to_forks: bool,
     ) -> None:
         """Send one or more messages in a single transaction.
 
@@ -2386,6 +2413,10 @@ class SystemDatabase(ABC):
         `function_name` is the name recorded for that step. Each message also
         provides its own idempotency via the primary key constraint on
         `message_uuid`.
+
+        When `send_to_forks` is set, every message is delivered not only to its
+        `destination_id` but also to every workflow recursively forked from it
+        (forks, forks of forks, ...) that exists at send time.
         """
         start_time = int(time.time() * 1000)
 
@@ -2399,27 +2430,12 @@ class SystemDatabase(ABC):
                 f"send_bulk received duplicate idempotency keys: {', '.join(duplicates)}"
             )
 
-        rows = []
-        for m in messages:
-            message_uuid = (
-                m.idempotency_key
-                if m.idempotency_key is not None
-                else str(generate_uuid())
-            )
-            serval, serialization = serialize_value(
-                m.message,
-                serialization_type,
-                self.serializer,
-            )
-            rows.append(
-                {
-                    "destination_uuid": m.destination_id,
-                    "topic": m.topic if m.topic is not None else _dbos_null_topic,
-                    "message": serval,
-                    "message_uuid": message_uuid,
-                    "serialization": serialization,
-                }
-            )
+        # Serialize each message once (independent of how many destinations it
+        # fans out to once forks are resolved).
+        prepared = [
+            (m, *serialize_value(m.message, serialization_type, self.serializer))
+            for m in messages
+        ]
 
         with self.engine.begin() as c:
             if workflow_id is not None:
@@ -2429,12 +2445,45 @@ class SystemDatabase(ABC):
                 )
                 if recorded_output is not None:
                     dbos_logger.debug(
-                        f"Replaying {function_name}, id: {function_id}, messages: {len(rows)}"
+                        f"Replaying {function_name}, id: {function_id}, messages: {len(messages)}"
                     )
                     return  # Already sent before
                 else:
                     dbos_logger.debug(
-                        f"Running {function_name}, id: {function_id}, messages: {len(rows)}"
+                        f"Running {function_name}, id: {function_id}, messages: {len(messages)}"
+                    )
+
+            # Expand each message to its destination set (the workflow itself plus,
+            # if requested, every workflow recursively forked from it). Fork
+            # resolution happens inside the transaction so the recipient set is
+            # consistent with the insert.
+            rows = []
+            for m, serval, serialization in prepared:
+                destinations = [m.destination_id]
+                if send_to_forks:
+                    destinations.extend(
+                        sorted(self._find_fork_descendants_txn(m.destination_id, c))
+                    )
+                for dest in destinations:
+                    if m.idempotency_key is None:
+                        message_uuid = str(generate_uuid())
+                    elif send_to_forks:
+                        # One key fans out to many recipients; derive a distinct,
+                        # deterministic message_uuid per destination so each gets
+                        # the message while replays stay idempotent.
+                        message_uuid = f"{m.idempotency_key}::{dest}"
+                    else:
+                        message_uuid = m.idempotency_key
+                    rows.append(
+                        {
+                            "destination_uuid": dest,
+                            "topic": (
+                                m.topic if m.topic is not None else _dbos_null_topic
+                            ),
+                            "message": serval,
+                            "message_uuid": message_uuid,
+                            "serialization": serialization,
+                        }
                     )
 
             try:
