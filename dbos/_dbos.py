@@ -3115,7 +3115,7 @@ class DBOS:
         polling_interval = (
             polling_interval_sec
             if polling_interval_sec is not None
-            else dbos_instance._notification_listener_polling_interval_sec
+            else sys_db._stream_poll_timeout
         )
 
         event, payload = sys_db.register_stream_listener(workflow_id, key)
