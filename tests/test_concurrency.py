@@ -708,3 +708,47 @@ async def test_high_async_concurrency(dbos: DBOS, config: DBOSConfig) -> None:
         and peak_threads < config["max_executor_threads"] + 10
     )
     assert elapsed < 60
+
+
+@pytest.mark.asyncio
+async def test_gather_distinct_steps_deterministic_order(dbos: DBOS) -> None:
+    # Regression test for https://github.com/dbos-inc/dbos-transact-py/issues/688
+    # asyncio.gather() of distinct @DBOS.step decorators must assign function IDs
+    # in the order the steps appear in the gather call, NOT in the order they
+    # happen to finish on the event loop. Otherwise a replay on another worker
+    # observes a different ordering and raises DBOSUnexpectedStepError.
+
+    @DBOS.step()
+    async def step_a(pn: str) -> str:
+        # Finishes last so completion order differs from gather order.
+        await asyncio.sleep(0.05)
+        return "a"
+
+    @DBOS.step()
+    async def step_b(pn: str) -> str:
+        # Finishes first.
+        await asyncio.sleep(0.001)
+        return "b"
+
+    @DBOS.step()
+    async def step_c(pn: str) -> str:
+        await asyncio.sleep(0.02)
+        return "c"
+
+    @DBOS.workflow()
+    async def my_workflow(pn: str) -> dict[str, str]:
+        a, b, c = await asyncio.gather(step_a(pn), step_b(pn), step_c(pn))
+        return {"a": a, "b": b, "c": c}
+
+    # Run many times: the function ID assigned to each step must be stable across
+    # executions even though the steps finish in a different (b, c, a) order.
+    for _ in range(25):
+        wfid = str(uuid.uuid4())
+        with SetWorkflowID(wfid):
+            assert await my_workflow("x") == {"a": "a", "b": "b", "c": "c"}
+
+        # Steps are returned ordered by function ID, so this asserts the IDs
+        # were assigned in gather order rather than completion order (b, c, a).
+        steps = await DBOS.list_workflow_steps_async(wfid)
+        names = [s["function_name"].rsplit(".", 1)[-1] for s in steps]
+        assert names == ["step_a", "step_b", "step_c"]
