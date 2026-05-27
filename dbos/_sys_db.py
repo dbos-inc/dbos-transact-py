@@ -2495,13 +2495,14 @@ class SystemDatabase(ABC):
                 for dest in destinations:
                     if m.idempotency_key is None:
                         message_uuid = str(generate_uuid())
-                    elif send_to_forks:
-                        # One key fans out to many recipients; derive a distinct,
-                        # deterministic message_uuid per destination so each gets
-                        # the message while replays stay idempotent.
-                        message_uuid = f"{m.idempotency_key}::{dest}"
                     else:
-                        message_uuid = m.idempotency_key
+                        # An idempotency key is scoped per destination: suffix it
+                        # with the recipient's workflow ID. This gives each recipient
+                        # a distinct, deterministic message_uuid (so a single key can
+                        # fan out across forks) while replays stay idempotent, and
+                        # makes the message_uuid independent of whether the send fanned
+                        # out to forks.
+                        message_uuid = f"{m.idempotency_key}::{dest}"
                     rows.append(
                         {
                             "destination_uuid": dest,
