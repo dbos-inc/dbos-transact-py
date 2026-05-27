@@ -966,13 +966,17 @@ class DBOSClient:
                     offset += 1
                 except ValueError:
                     # No value yet: stop if the workflow is done, else wait for a
-                    # notification (with a fallback timeout to catch dropped ones).
+                    # notification. A stream write wakes us immediately via
+                    # LISTEN/NOTIFY, but a workflow finishing without writing or
+                    # closing the stream fires none, so poll to notice termination.
                     status = get_workflow(self._sys_db, workflow_id)
                     if status is None:
                         break
                     if not workflow_is_active(status.status):
                         break
-                    event.wait(timeout=self._sys_db._stream_poll_timeout)
+                    event.wait(
+                        timeout=self._sys_db._notification_listener_polling_interval_sec
+                    )
         finally:
             self._sys_db.unregister_stream_listener(payload)
 
@@ -1017,7 +1021,10 @@ class DBOSClient:
                         break
                     if not workflow_is_active(status.status):
                         break
-                    deadline = time.time() + self._sys_db._stream_poll_timeout
+                    deadline = (
+                        time.time()
+                        + self._sys_db._notification_listener_polling_interval_sec
+                    )
                     while not event.is_set():
                         remaining = deadline - time.time()
                         if remaining <= 0:

@@ -3039,11 +3039,15 @@ class DBOS:
                     offset += 1
                 except ValueError:
                     # No value yet: stop if the workflow is done, else wait for a
-                    # notification (with a fallback timeout to catch dropped ones).
+                    # notification. A stream write wakes us immediately via
+                    # LISTEN/NOTIFY, but a workflow finishing without writing or
+                    # closing the stream fires none, so poll to notice termination.
                     status = cls.retrieve_workflow(workflow_id).get_status().status
                     if not workflow_is_active(status):
                         break
-                    event.wait(timeout=sys_db._stream_poll_timeout)
+                    event.wait(
+                        timeout=sys_db._notification_listener_polling_interval_sec
+                    )
         finally:
             sys_db.unregister_stream_listener(payload)
 
@@ -3115,7 +3119,7 @@ class DBOS:
         polling_interval = (
             polling_interval_sec
             if polling_interval_sec is not None
-            else sys_db._stream_poll_timeout
+            else sys_db._notification_listener_polling_interval_sec
         )
 
         event, payload = sys_db.register_stream_listener(workflow_id, key)
