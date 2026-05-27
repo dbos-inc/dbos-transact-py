@@ -78,6 +78,33 @@ def test_unclosed_stream(dbos: DBOS) -> None:
     assert read_values == test_values
 
 
+def test_stream_termination_while_reader_blocked(dbos: DBOS) -> None:
+    """A reader that catches up to an open stream while the writer is still
+    running must terminate promptly once the workflow completes, even though no
+    value or close marker wakes it. Unlike the other unclosed-stream tests, which
+    read only after the workflow finished, this forces the blocking wait path."""
+    stream_key = "termination_latency_stream"
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        # Write once, then stay alive without writing or closing, so the reader
+        # catches up and blocks waiting for the workflow to terminate.
+        DBOS.write_stream(stream_key, "only_value")
+        DBOS.sleep(2.0)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(writer_workflow)
+
+    start = time.time()
+    read_values = list(DBOS.read_stream(wfid, stream_key))
+    elapsed = time.time() - start
+
+    handle.get_result()
+    assert read_values == ["only_value"]
+    assert elapsed < 10.0, f"reader took {elapsed:.1f}s to notice termination"
+
+
 def test_stream_concurrent_write_read(dbos: DBOS) -> None:
     """Test reading from a stream while it's being written to."""
     stream_key = "concurrent_stream"
@@ -667,6 +694,35 @@ async def test_unclosed_stream_async(dbos: DBOS) -> None:
         read_values.append(value)
 
     assert read_values == test_values
+
+
+@pytest.mark.asyncio
+async def test_stream_termination_while_reader_blocked_async(dbos: DBOS) -> None:
+    """Async counterpart of test_stream_termination_while_reader_blocked,
+    exercising the read_stream_async termination path."""
+    stream_key = "termination_latency_stream_async"
+
+    @DBOS.workflow()
+    async def writer_workflow() -> None:
+        # Write once, then stay alive without writing or closing, so the reader
+        # catches up and blocks waiting for the workflow to terminate.
+        await DBOS.write_stream_async(stream_key, "only_value")
+        await DBOS.sleep_async(2.0)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(writer_workflow)
+
+    start = time.time()
+    read_values = []
+    async for value in DBOS.read_stream_async(wfid, stream_key):
+        read_values.append(value)
+    elapsed = time.time() - start
+
+    await handle.get_result()
+    assert read_values == ["only_value"]
+    # Far below the 60s fallback the buggy implementation waited out.
+    assert elapsed < 10.0, f"reader took {elapsed:.1f}s to notice termination"
 
 
 def test_client_read_stream(dbos: DBOS, client: DBOSClient) -> None:

@@ -3039,9 +3039,8 @@ class DBOS:
                     offset += 1
                 except ValueError:
                     # No value yet: stop if the workflow is done, else wait for a
-                    # notification. A stream write wakes us immediately via
-                    # LISTEN/NOTIFY, but a workflow finishing without writing or
-                    # closing the stream fires none, so poll to notice termination.
+                    # notification. Workflow completion fires none, so the wait
+                    # is bounded by the polling interval to notice termination.
                     status = cls.retrieve_workflow(workflow_id).get_status().status
                     if not workflow_is_active(status):
                         break
