@@ -180,10 +180,11 @@ def test_stream_low_latency_delivery(
     assert count == num_values
     assert max_latency < 0.5, f"DBOS delivery latency {max_latency:.3f}s too high"
 
-    # Out-of-process client: no notification listener thread, so it polls the
-    # offset at ~1s. Verify it still delivers every value, bounded well under
-    # the 60s dropped-notification fallback (i.e. it is actually polling, not
-    # stuck waiting on a notification that never arrives).
+    # Out-of-process client: no notification listener thread, so its event is
+    # never signaled and each read falls back to re-reading the offset once
+    # event.wait times out (notification_listener_polling_interval_sec, ~1s by
+    # default). Verify it still delivers every value, confirming it actually
+    # polls rather than blocking forever on a notification that never arrives.
     client_wfid = str(uuid.uuid4())
     with SetWorkflowID(client_wfid):
         client_handle = DBOS.start_workflow(writer_workflow)
@@ -252,10 +253,11 @@ async def test_stream_low_latency_delivery_async(
     assert count == num_values
     assert max_latency < 0.5, f"DBOS delivery latency {max_latency:.3f}s too high"
 
-    # Out-of-process client: no notification listener thread, so it polls the
-    # offset at ~1s. Verify it still delivers every value, bounded well under
-    # the 60s dropped-notification fallback (i.e. it is actually polling, not
-    # stuck waiting on a notification that never arrives).
+    # Out-of-process client: no notification listener thread, so its event is
+    # never signaled and each read falls back to re-reading the offset once
+    # event.wait times out (notification_listener_polling_interval_sec, ~1s by
+    # default). Verify it still delivers every value, confirming it actually
+    # polls rather than blocking forever on a notification that never arrives.
     client_wfid = str(uuid.uuid4())
     with SetWorkflowID(client_wfid):
         client_handle = await DBOS.start_workflow_async(writer_workflow)
@@ -721,7 +723,9 @@ async def test_stream_termination_while_reader_blocked_async(dbos: DBOS) -> None
 
     await handle.get_result()
     assert read_values == ["only_value"]
-    # Far below the 60s fallback the buggy implementation waited out.
+    # Termination fires no notification, so the reader only notices once its
+    # event.wait times out and re-checks the workflow status (one polling
+    # interval, ~1s by default); comfortably under the 10s bound.
     assert elapsed < 10.0, f"reader took {elapsed:.1f}s to notice termination"
 
 
