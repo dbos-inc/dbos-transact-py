@@ -28,6 +28,7 @@ from ._serialization import (
 )
 from ._sys_db import (
     ClientScheduleInput,
+    SendMessage,
     StepInfo,
     VersionInfo,
     WorkflowSchedule,
@@ -52,6 +53,7 @@ __all__ = [
     "SetWorkflowID",
     "SetWorkflowTimeout",
     "SetEnqueueOptions",
+    "SendMessage",
     "StepInfo",
     "StepOptions",
     "WorkflowHandle",

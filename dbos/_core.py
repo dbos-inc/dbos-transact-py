@@ -84,6 +84,7 @@ from ._serialization import (
 from ._sys_db import (
     EnqueueOptionsInternal,
     OperationResultInternal,
+    SendMessage,
     WorkflowStatus,
     WorkflowStatusInternal,
     WorkflowStatusString,
@@ -1920,16 +1921,23 @@ def decorate_step(
     return decorator
 
 
-def send(
+def send_bulk(
     dbos: "DBOS",
     cur_ctx: Optional["DBOSContext"],
-    destination_id: str,
-    message: Any,
-    topic: Optional[str] = None,
+    messages: List[SendMessage],
     *,
     serialization_type: Optional[WorkflowSerializationFormat],
-    idempotency_key: Optional[str] = None,
+    function_name: str,
+    span_name: str,
+    send_to_forks: bool,
 ) -> None:
+    """Send one or more messages, optionally as a step within a workflow.
+
+    Underlies both `DBOS.send` (a single message) and `DBOS.send_bulk` (many),
+    which differ only in the `function_name`/`span_name` they record. When
+    `send_to_forks` is set, each message also reaches every workflow recursively
+    forked from its destination.
+    """
     if (
         serialization_type is None
         or serialization_type == WorkflowSerializationFormat.DEFAULT
@@ -1940,31 +1948,28 @@ def send(
             else WorkflowSerializationFormat.DEFAULT
         )
 
-    def do_send(destination_id: str, message: Any, topic: Optional[str]) -> None:
-        assert cur_ctx is not None
+    if cur_ctx and cur_ctx.is_workflow():
+        # Inside a workflow, the entire send is recorded as a single step.
         attributes: TracedAttributes = {
-            "name": "send",
+            "name": span_name,
         }
         with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
-            dbos._sys_db.send(
-                ctx.workflow_id,
-                ctx.curr_step_function_id,
-                destination_id,
-                message,
-                topic,
+            dbos._sys_db.send_bulk(
+                messages,
                 serialization_type=serialization_type,
-                message_uuid=idempotency_key,
+                workflow_id=ctx.workflow_id,
+                function_id=ctx.curr_step_function_id,
+                function_name=function_name,
+                send_to_forks=send_to_forks,
             )
-
-    if cur_ctx and cur_ctx.is_workflow():
-        return do_send(destination_id, message, topic)
     else:
-        dbos._sys_db.send_direct(
-            destination_id,
-            message,
-            topic,
-            message_uuid=idempotency_key,
+        dbos._sys_db.send_bulk(
+            messages,
             serialization_type=serialization_type,
+            workflow_id=None,
+            function_id=None,
+            function_name=function_name,
+            send_to_forks=send_to_forks,
         )
 
 

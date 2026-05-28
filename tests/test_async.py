@@ -11,6 +11,7 @@ from dbos import (
     DBOS,
     DBOSConfig,
     Queue,
+    SendMessage,
     SetWorkflowID,
     SetWorkflowTimeout,
     WorkflowHandleAsync,
@@ -225,6 +226,45 @@ async def test_send_recv_async(dbos: DBOS) -> None:
     with pytest.raises(Exception) as exc_info:
         await dbos.recv_async("test1")
     assert "recv() must be called from within a workflow" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_send_bulk_async(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    async def recv_two() -> str:
+        msg1 = await dbos.recv_async(timeout_seconds=10)
+        msg2 = await dbos.recv_async(timeout_seconds=10)
+        return f"{msg1}-{msg2}"
+
+    # Bulk send from outside a workflow.
+    dest_uuid = str(uuid.uuid4())
+    with SetWorkflowID(dest_uuid):
+        handle = await dbos.start_workflow_async(recv_two)
+
+    await DBOS.send_bulk_async(
+        [
+            SendMessage(dest_uuid, "a"),
+            SendMessage(dest_uuid, "b"),
+        ]
+    )
+    assert (await handle.get_result()) == "a-b"
+
+    # Bulk send from within a workflow, recorded as a single step.
+    dest_uuid2 = str(uuid.uuid4())
+    with SetWorkflowID(dest_uuid2):
+        handle2 = await dbos.start_workflow_async(recv_two)
+
+    @DBOS.workflow()
+    async def send_bulk_wf(dest: str) -> None:
+        await DBOS.send_bulk_async(
+            [
+                SendMessage(dest, "c"),
+                SendMessage(dest, "d"),
+            ]
+        )
+
+    await send_bulk_wf(dest_uuid2)
+    assert (await handle2.get_result()) == "c-d"
 
 
 @pytest.mark.asyncio
