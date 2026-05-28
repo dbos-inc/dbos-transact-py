@@ -13,7 +13,14 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
 
-from dbos import DBOS, DBOSClient, DBOSConfig, EnqueueOptions, SetWorkflowID
+from dbos import (
+    DBOS,
+    DBOSClient,
+    DBOSConfig,
+    EnqueueOptions,
+    SendMessage,
+    SetWorkflowID,
+)
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 from tests import client_collateral
 from tests.client_collateral import event_test, retrieve_test, send_test
@@ -244,6 +251,33 @@ def test_client_send_no_topic(client: DBOSClient, dbos: DBOS) -> None:
 
     result = handle.get_result()
     assert result == message
+
+
+def test_client_send_bulk(client: DBOSClient, dbos: DBOS) -> None:
+
+    from tests.client_collateral import send_test
+
+    run_client_collateral()
+
+    now = time.time_ns()
+    topic = f"test-topic-{now}"
+
+    wfid_a = str(uuid.uuid4())
+    wfid_b = str(uuid.uuid4())
+    with SetWorkflowID(wfid_a):
+        handle_a = DBOS.start_workflow(send_test, topic)
+    with SetWorkflowID(wfid_b):
+        handle_b = DBOS.start_workflow(send_test, topic)
+
+    client.send_bulk(
+        [
+            SendMessage(wfid_a, f"to_a {now}", topic),
+            SendMessage(wfid_b, f"to_b {now}", topic),
+        ]
+    )
+
+    assert handle_a.get_result() == f"to_a {now}"
+    assert handle_b.get_result() == f"to_b {now}"
 
 
 def run_send_worker(wfid: str, topic: Optional[str], app_ver: str) -> None:

@@ -7,7 +7,7 @@ import os
 import threading
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any, Optional, Set
 
 import pytest
 import sqlalchemy as sa
@@ -17,6 +17,7 @@ from sqlalchemy.exc import OperationalError
 from dbos import (
     DBOS,
     DBOSConfig,
+    SendMessage,
     SetWorkflowID,
     SetWorkflowTimeout,
     WorkflowHandle,
@@ -1101,6 +1102,241 @@ def test_send_idempotency_key(dbos: DBOS) -> None:
     assert handle4.get_result() == "hello_step-None"
 
 
+def test_send_bulk(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def recv_three() -> str:
+        msg1 = DBOS.recv("t", timeout_seconds=10)
+        msg2 = DBOS.recv("t", timeout_seconds=10)
+        msg3 = DBOS.recv(timeout_seconds=10)
+        return f"{msg1}-{msg2}-{msg3}"
+
+    # Test 1: Bulk send to a single destination across topics, from outside a workflow.
+    dest_uuid = str(uuid.uuid4())
+    with SetWorkflowID(dest_uuid):
+        handle = dbos.start_workflow(recv_three)
+
+    DBOS.send_bulk(
+        [
+            SendMessage(dest_uuid, "a", "t"),
+            SendMessage(dest_uuid, "b", "t"),
+            SendMessage(dest_uuid, "c"),
+        ]
+    )
+    assert handle.get_result() == "a-b-c"
+
+    # Test 2: Bulk send to multiple destinations in one transaction.
+    dest_a = str(uuid.uuid4())
+    dest_b = str(uuid.uuid4())
+
+    @DBOS.workflow()
+    def recv_one() -> str:
+        return str(DBOS.recv(timeout_seconds=10))
+
+    with SetWorkflowID(dest_a):
+        handle_a = dbos.start_workflow(recv_one)
+    with SetWorkflowID(dest_b):
+        handle_b = dbos.start_workflow(recv_one)
+
+    DBOS.send_bulk(
+        [
+            SendMessage(dest_a, "to_a"),
+            SendMessage(dest_b, "to_b"),
+        ]
+    )
+    assert handle_a.get_result() == "to_a"
+    assert handle_b.get_result() == "to_b"
+
+    # Test 3: A bulk send including a non-existent destination is atomic - nothing is sent.
+    dest_real = str(uuid.uuid4())
+    with SetWorkflowID(dest_real):
+        handle_real = dbos.start_workflow(recv_one)
+    dest_fake = str(uuid.uuid4())
+
+    with pytest.raises(Exception) as exc_info:
+        DBOS.send_bulk(
+            [
+                SendMessage(dest_real, "should_not_arrive"),
+                SendMessage(dest_fake, "to_nowhere"),
+            ]
+        )
+    assert "Non-existent `send` destination" in str(exc_info.value)
+    # Because the transaction rolled back, no message was delivered: the recv
+    # times out and returns None (stringified by recv_one).
+    assert handle_real.get_result() == "None"
+
+
+def test_send_bulk_from_workflow(dbos: DBOS) -> None:
+    send_counter = 0
+
+    @DBOS.workflow()
+    def recv_two() -> str:
+        msg1 = DBOS.recv(timeout_seconds=10)
+        msg2 = DBOS.recv(timeout_seconds=10)
+        return f"{msg1}-{msg2}"
+
+    dest_uuid = str(uuid.uuid4())
+    with SetWorkflowID(dest_uuid):
+        handle = dbos.start_workflow(recv_two)
+
+    @DBOS.workflow()
+    def send_bulk_wf(dest: str) -> None:
+        nonlocal send_counter
+        send_counter += 1
+        DBOS.send_bulk(
+            [
+                SendMessage(dest, "one"),
+                SendMessage(dest, "two"),
+            ]
+        )
+
+    send_uuid = str(uuid.uuid4())
+    with SetWorkflowID(send_uuid):
+        send_bulk_wf(dest_uuid)
+    assert handle.get_result() == "one-two"
+    assert send_counter == 1
+
+    # Re-invoking with the same workflow ID replays the recorded result without
+    # re-running the body, so the bulk send is not executed a second time.
+    with SetWorkflowID(send_uuid):
+        send_bulk_wf(dest_uuid)
+    assert send_counter == 1
+
+
+def test_send_bulk_idempotency_key(dbos: DBOS) -> None:
+    recv_event = threading.Event()
+
+    @DBOS.workflow()
+    def recv_two() -> str:
+        msg1 = DBOS.recv(timeout_seconds=10)
+        recv_event.set()
+        msg2 = DBOS.recv(timeout_seconds=2)
+        return f"{msg1}-{msg2}"
+
+    dest_uuid = str(uuid.uuid4())
+    with SetWorkflowID(dest_uuid):
+        handle = dbos.start_workflow(recv_two)
+
+    idem_key = str(uuid.uuid4())
+    DBOS.send_bulk([SendMessage(dest_uuid, "hello", idempotency_key=idem_key)])
+    recv_event.wait()
+    # A later bulk send reusing a message's idempotency key is silently deduplicated.
+    DBOS.send_bulk([SendMessage(dest_uuid, "duplicate", idempotency_key=idem_key)])
+    assert handle.get_result() == "hello-None"
+
+
+def test_send_bulk_duplicate_key_within_batch(dbos: DBOS) -> None:
+    """Two messages sharing an idempotency key in a single bulk call is rejected
+    before the transaction starts, so nothing is delivered."""
+
+    @DBOS.workflow()
+    def recv_one() -> str:
+        return str(DBOS.recv(timeout_seconds=3))
+
+    dest_uuid = str(uuid.uuid4())
+    with SetWorkflowID(dest_uuid):
+        handle = dbos.start_workflow(recv_one)
+
+    key = str(uuid.uuid4())
+    with pytest.raises(Exception) as exc_info:
+        DBOS.send_bulk(
+            [
+                SendMessage(dest_uuid, "first", idempotency_key=key),
+                SendMessage(dest_uuid, "second", idempotency_key=key),
+            ]
+        )
+    assert "duplicate idempotency keys" in str(exc_info.value)
+    assert key in str(exc_info.value)
+    # Nothing was sent: the recv times out and returns None.
+    assert handle.get_result() == "None"
+
+
+def test_send_bulk_empty(dbos: DBOS) -> None:
+    """An empty bulk send is a no-op and must not raise, in or out of a workflow."""
+    DBOS.send_bulk([])
+
+    @DBOS.workflow()
+    def send_empty_wf() -> str:
+        DBOS.send_bulk([])
+        return "ok"
+
+    assert send_empty_wf() == "ok"
+
+
+def _notification_destinations(dbos: DBOS, message_uuids: bool = False) -> Set[str]:
+    col = (
+        SystemSchema.notifications.c.message_uuid
+        if message_uuids
+        else SystemSchema.notifications.c.destination_uuid
+    )
+    with dbos._sys_db.engine.begin() as c:
+        return {r[0] for r in c.execute(sa.select(col)).all()}
+
+
+def test_send_bulk_send_to_forks(dbos: DBOS) -> None:
+    """send_to_forks fans each message out to its destination plus every workflow
+    recursively forked from it. A single bulk send resolves all destinations at
+    once, each reaching only its own fork subtree."""
+
+    @DBOS.step()
+    def step_a() -> int:
+        return 1
+
+    @DBOS.workflow()
+    def forkable() -> int:
+        return step_a()
+
+    def run_root() -> str:
+        wfid = str(uuid.uuid4())
+        with SetWorkflowID(wfid):
+            assert forkable() == 1
+        return wfid
+
+    def fork(wfid: str) -> str:
+        handle = DBOS.fork_workflow(wfid, 1)
+        assert handle.get_result() == 1
+        assert handle.get_status().forked_from == wfid
+        return handle.workflow_id
+
+    # Destination A: a fork and a fork-of-a-fork (recursive).
+    a = run_root()
+    a_fork = fork(a)
+    a_fork_fork = fork(a_fork)
+    # Destination B: a single fork.
+    b = run_root()
+    b_fork = fork(b)
+    # Unrelated workflow C with a fork: never a send target.
+    c = run_root()
+    c_fork = fork(c)
+
+    # One bulk send to A and B, with an idempotency key on A.
+    key = str(uuid.uuid4())
+    DBOS.send_bulk(
+        [SendMessage(a, "to_a", idempotency_key=key), SendMessage(b, "to_b")],
+        send_to_forks=True,
+    )
+
+    dests = _notification_destinations(dbos)
+    # A and B each reach their full (recursive) fork subtree...
+    assert {a, a_fork, a_fork_fork, b, b_fork} <= dests
+    # ...while C's subtree is untouched: each destination only reaches its own forks.
+    assert c not in dests and c_fork not in dests
+
+    # A's idempotency key derives one distinct message_uuid per recipient.
+    uuids = _notification_destinations(dbos, message_uuids=True)
+    assert {f"{key}::{a}", f"{key}::{a_fork}", f"{key}::{a_fork_fork}"} <= uuids
+
+    # Re-sending A with the same key is idempotent: nothing new appears.
+    DBOS.send_bulk([SendMessage(a, "x", idempotency_key=key)], send_to_forks=True)
+    assert _notification_destinations(dbos, message_uuids=True) == uuids
+
+    # Without send_to_forks, only the named destination is reached.
+    d = run_root()
+    d_fork = fork(d)
+    DBOS.send_bulk([SendMessage(d, "to_d")])
+    dests = _notification_destinations(dbos)
+    assert d in dests and d_fork not in dests
+
+
 def test_set_get_events(
     dbos: DBOS, config: DBOSConfig, skip_with_sqlite_imprecise_time: None
 ) -> None:
@@ -1385,7 +1621,7 @@ def test_debug_logging(
     )
     assert "Running sleep" in caplog.text
     assert "Running set_event" in caplog.text
-    assert "Running send" in caplog.text
+    assert "Running DBOS.send" in caplog.text
 
     result2 = dest_handle.get_result()
     assert result2 == "event_value, test_message"

@@ -66,7 +66,7 @@ from ._core import (
     record_sleep,
     run_step,
     run_step_async,
-    send,
+    send_bulk,
     set_event,
     start_workflow,
     start_workflow_async,
@@ -101,6 +101,7 @@ from ._scheduler import (
 from ._scheduler_decorator import DecoratedScheduledWorkflow, scheduled
 from ._sys_db import (
     GetEventWorkflowContext,
+    SendMessage,
     StepInfo,
     SystemDatabase,
     VersionInfo,
@@ -1429,17 +1430,22 @@ class DBOS:
         serialization_type: Optional[
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
+        send_to_forks: bool = False,
     ) -> None:
-        """Send a message to a workflow execution."""
+        """Send a message to a workflow execution.
+
+        If `send_to_forks` is set, the message is also delivered to all workflows
+        recursively forked from `destination_id`.
+        """
         check_async("send")
-        return send(
+        return send_bulk(
             _get_dbos_instance(),
             snapshot_step_context(),
-            destination_id,
-            message,
-            topic,
+            [SendMessage(destination_id, message, topic, idempotency_key)],
             serialization_type=serialization_type,
-            idempotency_key=idempotency_key,
+            function_name="DBOS.send",
+            span_name="send",
+            send_to_forks=send_to_forks,
         )
 
     @classmethod
@@ -1453,19 +1459,78 @@ class DBOS:
         serialization_type: Optional[
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
+        send_to_forks: bool = False,
     ) -> None:
-        """Send a message to a workflow execution."""
+        """Send a message to a workflow execution.
+
+        If `send_to_forks` is set, the message is also delivered to all workflows
+        recursively forked from `destination_id`.
+        """
         ctx = snapshot_step_context()
         await cls._configure_asyncio_thread_pool()
         await asyncio.to_thread(
-            send,
+            send_bulk,
             _get_dbos_instance(),
             ctx,
-            destination_id,
-            message,
-            topic,
+            [SendMessage(destination_id, message, topic, idempotency_key)],
             serialization_type=serialization_type,
-            idempotency_key=idempotency_key,
+            function_name="DBOS.send",
+            span_name="send",
+            send_to_forks=send_to_forks,
+        )
+
+    @classmethod
+    def send_bulk(
+        cls,
+        messages: List[SendMessage],
+        *,
+        serialization_type: Optional[
+            WorkflowSerializationFormat
+        ] = WorkflowSerializationFormat.DEFAULT,
+        send_to_forks: bool = False,
+    ) -> None:
+        """Send many messages to workflow executions in a single transaction.
+
+        If `send_to_forks` is set, every message is also delivered to all
+        workflows recursively forked from its destination.
+        """
+        check_async("send_bulk")
+        return send_bulk(
+            _get_dbos_instance(),
+            snapshot_step_context(),
+            messages,
+            serialization_type=serialization_type,
+            function_name="DBOS.send_bulk",
+            span_name="send_bulk",
+            send_to_forks=send_to_forks,
+        )
+
+    @classmethod
+    async def send_bulk_async(
+        cls,
+        messages: List[SendMessage],
+        *,
+        serialization_type: Optional[
+            WorkflowSerializationFormat
+        ] = WorkflowSerializationFormat.DEFAULT,
+        send_to_forks: bool = False,
+    ) -> None:
+        """Send many messages to workflow executions in a single transaction.
+
+        If `send_to_forks` is set, every message is also delivered to all
+        workflows recursively forked from its destination.
+        """
+        ctx = snapshot_step_context()
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(
+            send_bulk,
+            _get_dbos_instance(),
+            ctx,
+            messages,
+            serialization_type=serialization_type,
+            function_name="DBOS.send_bulk",
+            span_name="send_bulk",
+            send_to_forks=send_to_forks,
         )
 
     @classmethod
