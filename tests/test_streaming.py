@@ -40,6 +40,88 @@ def test_basic_stream_write_read(dbos: DBOS) -> None:
     assert read_values == test_values
 
 
+def test_stream_read_offset(dbos: DBOS) -> None:
+    """Test reading a stream starting from a non-zero offset."""
+    stream_key = "offset_stream"
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for i in range(5):
+            DBOS.write_stream(stream_key, i)
+        DBOS.close_stream(stream_key)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        writer_workflow()
+
+    # The default offset of 0 reads the whole stream
+    assert list(DBOS.read_stream(wfid, stream_key)) == [0, 1, 2, 3, 4]
+    assert list(DBOS.read_stream(wfid, stream_key, offset=0)) == [0, 1, 2, 3, 4]
+
+    # A non-zero offset skips earlier values
+    assert list(DBOS.read_stream(wfid, stream_key, offset=2)) == [2, 3, 4]
+    assert list(DBOS.read_stream(wfid, stream_key, offset=4)) == [4]
+
+    # An offset at or past the close sentinel yields nothing
+    assert list(DBOS.read_stream(wfid, stream_key, offset=5)) == []
+    assert list(DBOS.read_stream(wfid, stream_key, offset=100)) == []
+
+
+@pytest.mark.asyncio
+async def test_stream_read_offset_async(dbos: DBOS) -> None:
+    """Test async reading a stream starting from a non-zero offset."""
+    stream_key = "offset_stream_async"
+
+    @DBOS.workflow()
+    async def writer_workflow() -> None:
+        for i in range(5):
+            await DBOS.write_stream_async(stream_key, i)
+        await DBOS.close_stream_async(stream_key)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        await writer_workflow()
+
+    values = [v async for v in DBOS.read_stream_async(wfid, stream_key, offset=3)]
+    assert values == [3, 4]
+
+
+def test_client_read_stream_offset(dbos: DBOS, client: DBOSClient) -> None:
+    """Test reading a stream from a client starting from a non-zero offset."""
+    stream_key = "client_offset_stream"
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for i in range(5):
+            DBOS.write_stream(stream_key, i)
+        DBOS.close_stream(stream_key)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        writer_workflow()
+
+    assert list(client.read_stream(wfid, stream_key, offset=2)) == [2, 3, 4]
+
+
+@pytest.mark.asyncio
+async def test_client_read_stream_offset_async(dbos: DBOS, client: DBOSClient) -> None:
+    """Test async reading a stream from a client starting from a non-zero offset."""
+    stream_key = "client_offset_stream_async"
+
+    @DBOS.workflow()
+    async def writer_workflow() -> None:
+        for i in range(5):
+            await DBOS.write_stream_async(stream_key, i)
+        await DBOS.close_stream_async(stream_key)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        await writer_workflow()
+
+    values = [v async for v in client.read_stream_async(wfid, stream_key, offset=3)]
+    assert values == [3, 4]
+
+
 def test_unclosed_stream(dbos: DBOS) -> None:
     """Test that reading from a stream stops when the workflow terminates."""
     test_values = ["hello", 42, {"key": "value"}, [1, 2, 3], None]

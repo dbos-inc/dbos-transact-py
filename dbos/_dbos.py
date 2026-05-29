@@ -3071,7 +3071,9 @@ class DBOS:
         close_stream(_get_dbos_instance(), ctx, key)
 
     @classmethod
-    def read_stream(cls, workflow_id: str, key: str) -> Generator[Any, Any, None]:
+    def read_stream(
+        cls, workflow_id: str, key: str, *, offset: int = 0
+    ) -> Generator[Any, Any, None]:
         """
         Read values from a stream as a generator.
 
@@ -3081,13 +3083,13 @@ class DBOS:
         Args:
             workflow_id(str): The workflow instance ID that owns the stream
             key(str): The stream key / name within the workflow
+            offset(int): The offset to start reading from (defaults to 0, the start of the stream)
 
         Yields:
             Any: Each value in the stream until the stream is closed
 
         """
         check_async("read_stream")
-        offset = 0
         sys_db = _get_dbos_instance()._sys_db
 
         event, payload = sys_db.register_stream_listener(workflow_id, key)
@@ -3158,7 +3160,12 @@ class DBOS:
 
     @classmethod
     async def read_stream_async(
-        cls, workflow_id: str, key: str, *, polling_interval_sec: Optional[float] = None
+        cls,
+        workflow_id: str,
+        key: str,
+        *,
+        offset: int = 0,
+        polling_interval_sec: Optional[float] = None,
     ) -> AsyncGenerator[Any, None]:
         """
         Read values from a stream as an async generator.
@@ -3169,6 +3176,7 @@ class DBOS:
         Args:
             workflow_id(str): The workflow instance ID that owns the stream
             key(str): The stream key / name within the workflow
+            offset(int): The offset to start reading from (defaults to 0, the start of the stream)
             polling_interval_sec(float, optional): Polling interval in seconds when waiting for new values when not using LISTEN/NOTIFY.
                 Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
 
@@ -3177,7 +3185,6 @@ class DBOS:
 
         """
         await cls._configure_asyncio_thread_pool()
-        offset = 0
         dbos_instance = _get_dbos_instance()
         sys_db = dbos_instance._sys_db
         polling_interval = (
