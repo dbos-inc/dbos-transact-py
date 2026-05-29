@@ -987,7 +987,9 @@ class DBOSClient:
         )
         return WorkflowHandleClientAsyncPolling[Any](forked_workflow_id, self._sys_db)
 
-    def read_stream(self, workflow_id: str, key: str) -> Generator[Any, Any, None]:
+    def read_stream(
+        self, workflow_id: str, key: str, *, offset: int = 0
+    ) -> Generator[Any, Any, None]:
         """
         Read values from a stream as a generator.
         This function reads values from a stream identified by the workflow_id and key,
@@ -996,11 +998,11 @@ class DBOSClient:
         Args:
             workflow_id: The ID of the workflow that wrote to the stream
             key: The stream key to read from
+            offset: The offset to start reading from (defaults to 0, the start of the stream)
 
         Yields:
             The values written to the stream in order
         """
-        offset = 0
         event, payload = self._sys_db.register_stream_listener(workflow_id, key)
         try:
             while True:
@@ -1029,7 +1031,7 @@ class DBOSClient:
             self._sys_db.unregister_stream_listener(payload)
 
     async def read_stream_async(
-        self, workflow_id: str, key: str
+        self, workflow_id: str, key: str, *, offset: int = 0
     ) -> AsyncGenerator[Any, None]:
         """
         Read values from a stream as an async generator.
@@ -1039,11 +1041,11 @@ class DBOSClient:
         Args:
             workflow_id: The ID of the workflow that wrote to the stream
             key: The stream key to read from
+            offset: The offset to start reading from (defaults to 0, the start of the stream)
 
         Yields:
             The values written to the stream in order
         """
-        offset = 0
         event, payload = self._sys_db.register_stream_listener(workflow_id, key)
         try:
             while True:
