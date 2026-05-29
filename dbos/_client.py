@@ -186,6 +186,9 @@ class DBOSClient:
             schema=dbos_system_schema,
             serializer=serializer,
             executor_id=None,
+            # The client does not run a notification listener thread, so stream
+            # reads cannot be woken by LISTEN/NOTIFY and instead poll the offset.
+            use_listen_notify=False,
         )
         self._sys_db.check_connection()
 
@@ -998,22 +1001,32 @@ class DBOSClient:
             The values written to the stream in order
         """
         offset = 0
-        while True:
-            try:
-                value = self._sys_db.read_stream(workflow_id, key, offset)
-                if value == _dbos_stream_closed_sentinel:
-                    break
-                yield value
-                offset += 1
-            except ValueError:
-                # Poll the offset until a value arrives or the workflow terminates
-                status = get_workflow(self._sys_db, workflow_id)
-                if status is None:
-                    break
-                if not workflow_is_active(status.status):
-                    break
-                time.sleep(1.0)
-                continue
+        event, payload = self._sys_db.register_stream_listener(workflow_id, key)
+        try:
+            while True:
+                # Clear before reading so a notification arriving after the read
+                # leaves the event set and the wait below returns immediately.
+                event.clear()
+                try:
+                    value = self._sys_db.read_stream(workflow_id, key, offset)
+                    if value == _dbos_stream_closed_sentinel:
+                        break
+                    yield value
+                    offset += 1
+                except ValueError:
+                    # No value yet: stop if the workflow is done, else wait for a
+                    # notification. Workflow completion fires none, so the wait
+                    # is bounded by the polling interval to notice termination.
+                    status = get_workflow(self._sys_db, workflow_id)
+                    if status is None:
+                        break
+                    if not workflow_is_active(status.status):
+                        break
+                    event.wait(
+                        timeout=self._sys_db._notification_listener_polling_interval_sec
+                    )
+        finally:
+            self._sys_db.unregister_stream_listener(payload)
 
     async def read_stream_async(
         self, workflow_id: str, key: str
@@ -1031,26 +1044,42 @@ class DBOSClient:
             The values written to the stream in order
         """
         offset = 0
-        while True:
-            try:
-                value = await asyncio.to_thread(
-                    self._sys_db.read_stream, workflow_id, key, offset
-                )
-                if value == _dbos_stream_closed_sentinel:
-                    break
-                yield value
-                offset += 1
-            except ValueError:
-                # Poll the offset until a value arrives or the workflow terminates
-                status = await asyncio.to_thread(
-                    get_workflow, self._sys_db, workflow_id
-                )
-                if status is None:
-                    break
-                if not workflow_is_active(status.status):
-                    break
-                await asyncio.sleep(1.0)
-                continue
+        event, payload = self._sys_db.register_stream_listener(workflow_id, key)
+        try:
+            while True:
+                # Clear before reading so a notification arriving after the read
+                # leaves the event set and the wait below returns immediately.
+                event.clear()
+                try:
+                    value = await asyncio.to_thread(
+                        self._sys_db.read_stream, workflow_id, key, offset
+                    )
+                    if value == _dbos_stream_closed_sentinel:
+                        break
+                    yield value
+                    offset += 1
+                except ValueError:
+                    # No value yet: stop if the workflow is done, else wait for a
+                    # notification. Poll the event with short asyncio sleeps (no
+                    # held thread), bounded by the fallback re-check interval.
+                    status = await asyncio.to_thread(
+                        get_workflow, self._sys_db, workflow_id
+                    )
+                    if status is None:
+                        break
+                    if not workflow_is_active(status.status):
+                        break
+                    deadline = (
+                        time.time()
+                        + self._sys_db._notification_listener_polling_interval_sec
+                    )
+                    while not event.is_set():
+                        remaining = deadline - time.time()
+                        if remaining <= 0:
+                            break
+                        await asyncio.sleep(min(remaining, 0.1))
+        finally:
+            self._sys_db.unregister_stream_listener(payload)
 
     # ── Schedule API ──────────────────────────────────────────────
 

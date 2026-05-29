@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 # Public API
-from dbos import DBOS, SetWorkflowID
+from dbos import DBOS, DBOSConfig, SetWorkflowID
 from dbos._client import DBOSClient
 
 
@@ -78,6 +78,33 @@ def test_unclosed_stream(dbos: DBOS) -> None:
     assert read_values == test_values
 
 
+def test_stream_termination_while_reader_blocked(dbos: DBOS) -> None:
+    """A reader that catches up to an open stream while the writer is still
+    running must terminate promptly once the workflow completes, even though no
+    value or close marker wakes it. Unlike the other unclosed-stream tests, which
+    read only after the workflow finished, this forces the blocking wait path."""
+    stream_key = "termination_latency_stream"
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        # Write once, then stay alive without writing or closing, so the reader
+        # catches up and blocks waiting for the workflow to terminate.
+        DBOS.write_stream(stream_key, "only_value")
+        DBOS.sleep(2.0)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(writer_workflow)
+
+    start = time.time()
+    read_values = list(DBOS.read_stream(wfid, stream_key))
+    elapsed = time.time() - start
+
+    handle.get_result()
+    assert read_values == ["only_value"]
+    assert elapsed < 10.0, f"reader took {elapsed:.1f}s to notice termination"
+
+
 def test_stream_concurrent_write_read(dbos: DBOS) -> None:
     """Test reading from a stream while it's being written to."""
     stream_key = "concurrent_stream"
@@ -111,6 +138,154 @@ def test_stream_concurrent_write_read(dbos: DBOS) -> None:
     # Verify all values were read
     expected_values = [f"value_{i}" for i in range(num_values)]
     assert read_values == expected_values
+
+
+def test_stream_low_latency_delivery(
+    config: DBOSConfig, dbos: DBOS, client: DBOSClient
+) -> None:
+    """Values should reach a blocked reader promptly via LISTEN/NOTIFY rather
+    than after a fixed polling interval. Each value carries the wall-clock time
+    it was written; the reader asserts it received the value shortly after.
+    Verified for the in-process (DBOS) reader with LISTEN/NOTIFY, the
+    out-of-process (client) reader (polling), and an in-process reader with
+    LISTEN/NOTIFY disabled (polling)."""
+    stream_key = "latency_stream"
+    num_values = 3
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for _ in range(num_values):
+            # Capture the write time as close to the write as possible, then
+            # pause so the reader is genuinely blocked waiting for the next one.
+            DBOS.write_stream(stream_key, time.time())
+            DBOS.sleep(1.0)
+        DBOS.close_stream(stream_key)
+
+    def measure(read_iter: Any) -> tuple[int, float]:
+        max_latency = 0.0
+        count = 0
+        for written_at in read_iter:
+            max_latency = max(max_latency, time.time() - written_at)
+            count += 1
+        return count, max_latency
+
+    # In-process DBOS reader: woken by LISTEN/NOTIFY, so delivery is single-digit
+    # milliseconds. A 1s polling fallback would average ~0.5s and frequently
+    # exceed this across several values.
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(writer_workflow)
+    count, max_latency = measure(DBOS.read_stream(wfid, stream_key))
+    handle.get_result()
+    assert count == num_values
+    assert max_latency < 0.5, f"DBOS delivery latency {max_latency:.3f}s too high"
+
+    # Out-of-process client: no notification listener thread, so its event is
+    # never signaled and each read falls back to re-reading the offset once
+    # event.wait times out (notification_listener_polling_interval_sec, ~1s by
+    # default). Verify it still delivers every value, confirming it actually
+    # polls rather than blocking forever on a notification that never arrives.
+    client_wfid = str(uuid.uuid4())
+    with SetWorkflowID(client_wfid):
+        client_handle = DBOS.start_workflow(writer_workflow)
+    count, max_latency = measure(client.read_stream(client_wfid, stream_key))
+    client_handle.get_result()
+    assert count == num_values
+    assert max_latency < 2.0, f"client delivery latency {max_latency:.3f}s too high"
+
+    # Recreate the in-process DBOS with LISTEN/NOTIFY disabled and confirm the
+    # reader still receives every value via the polling fallback. The trigger
+    # installed earlier harmlessly fires notifications that nobody listens for;
+    # the reader is woken by the polling listener thread instead.
+    DBOS.destroy(destroy_registry=False)
+    config["use_listen_notify"] = False
+    DBOS(config=config)
+    DBOS.launch()
+
+    poll_wfid = str(uuid.uuid4())
+    with SetWorkflowID(poll_wfid):
+        poll_handle = DBOS.start_workflow(writer_workflow)
+    count, max_latency = measure(DBOS.read_stream(poll_wfid, stream_key))
+    poll_handle.get_result()
+    assert count == num_values
+    assert (
+        max_latency < 2.0
+    ), f"polling DBOS delivery latency {max_latency:.3f}s too high"
+
+
+@pytest.mark.asyncio
+async def test_stream_low_latency_delivery_async(
+    config: DBOSConfig, dbos: DBOS, client: DBOSClient
+) -> None:
+    """Async counterpart of test_stream_low_latency_delivery, exercising the
+    read_stream_async paths for the in-process (DBOS) reader with LISTEN/NOTIFY,
+    the out-of-process (client) reader (polling), and an in-process reader with
+    LISTEN/NOTIFY disabled (polling)."""
+    stream_key = "latency_stream_async"
+    num_values = 3
+
+    @DBOS.workflow()
+    async def writer_workflow() -> None:
+        for _ in range(num_values):
+            # Capture the write time as close to the write as possible, then
+            # pause so the reader is genuinely blocked waiting for the next one.
+            await DBOS.write_stream_async(stream_key, time.time())
+            await DBOS.sleep_async(1.0)
+        await DBOS.close_stream_async(stream_key)
+
+    async def measure(read_aiter: Any) -> tuple[int, float]:
+        max_latency = 0.0
+        count = 0
+        async for written_at in read_aiter:
+            max_latency = max(max_latency, time.time() - written_at)
+            count += 1
+        return count, max_latency
+
+    # In-process DBOS reader woken by LISTEN/NOTIFY. Force a long polling
+    # interval so low latency can only come from a notification, not the poll.
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(writer_workflow)
+    count, max_latency = await measure(
+        DBOS.read_stream_async(wfid, stream_key, polling_interval_sec=60.0)
+    )
+    await handle.get_result()
+    assert count == num_values
+    assert max_latency < 0.5, f"DBOS delivery latency {max_latency:.3f}s too high"
+
+    # Out-of-process client: no notification listener thread, so its event is
+    # never signaled and each read falls back to re-reading the offset once
+    # event.wait times out (notification_listener_polling_interval_sec, ~1s by
+    # default). Verify it still delivers every value, confirming it actually
+    # polls rather than blocking forever on a notification that never arrives.
+    client_wfid = str(uuid.uuid4())
+    with SetWorkflowID(client_wfid):
+        client_handle = await DBOS.start_workflow_async(writer_workflow)
+    count, max_latency = await measure(
+        client.read_stream_async(client_wfid, stream_key)
+    )
+    await client_handle.get_result()
+    assert count == num_values
+    assert max_latency < 2.0, f"client delivery latency {max_latency:.3f}s too high"
+
+    # Recreate the in-process DBOS with LISTEN/NOTIFY disabled and confirm the
+    # reader still receives every value via the polling fallback. The trigger
+    # installed earlier harmlessly fires notifications that nobody listens for;
+    # the reader is woken by the polling listener thread instead.
+    DBOS.destroy(destroy_registry=False)
+    config["use_listen_notify"] = False
+    DBOS(config=config)
+    DBOS.launch()
+
+    poll_wfid = str(uuid.uuid4())
+    with SetWorkflowID(poll_wfid):
+        poll_handle = await DBOS.start_workflow_async(writer_workflow)
+    count, max_latency = await measure(DBOS.read_stream_async(poll_wfid, stream_key))
+    await poll_handle.get_result()
+    assert count == num_values
+    assert (
+        max_latency < 2.0
+    ), f"polling DBOS delivery latency {max_latency:.3f}s too high"
 
 
 def test_stream_multiple_keys(dbos: DBOS) -> None:
@@ -521,6 +696,37 @@ async def test_unclosed_stream_async(dbos: DBOS) -> None:
         read_values.append(value)
 
     assert read_values == test_values
+
+
+@pytest.mark.asyncio
+async def test_stream_termination_while_reader_blocked_async(dbos: DBOS) -> None:
+    """Async counterpart of test_stream_termination_while_reader_blocked,
+    exercising the read_stream_async termination path."""
+    stream_key = "termination_latency_stream_async"
+
+    @DBOS.workflow()
+    async def writer_workflow() -> None:
+        # Write once, then stay alive without writing or closing, so the reader
+        # catches up and blocks waiting for the workflow to terminate.
+        await DBOS.write_stream_async(stream_key, "only_value")
+        await DBOS.sleep_async(2.0)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(writer_workflow)
+
+    start = time.time()
+    read_values = []
+    async for value in DBOS.read_stream_async(wfid, stream_key):
+        read_values.append(value)
+    elapsed = time.time() - start
+
+    await handle.get_result()
+    assert read_values == ["only_value"]
+    # Termination fires no notification, so the reader only notices once its
+    # event.wait times out and re-checks the workflow status (one polling
+    # interval, ~1s by default); comfortably under the 10s bound.
+    assert elapsed < 10.0, f"reader took {elapsed:.1f}s to notice termination"
 
 
 def test_client_read_stream(dbos: DBOS, client: DBOSClient) -> None:

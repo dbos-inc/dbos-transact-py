@@ -3090,20 +3090,30 @@ class DBOS:
         offset = 0
         sys_db = _get_dbos_instance()._sys_db
 
-        while True:
-            try:
-                value = sys_db.read_stream(workflow_id, key, offset)
-                if value == _dbos_stream_closed_sentinel:
-                    break
-                yield value
-                offset += 1
-            except ValueError:
-                # Poll the offset until a value arrives or the workflow terminates
-                status = cls.retrieve_workflow(workflow_id).get_status().status
-                if not workflow_is_active(status):
-                    break
-                time.sleep(1.0)
-                continue
+        event, payload = sys_db.register_stream_listener(workflow_id, key)
+        try:
+            while True:
+                # Clear before reading so a notification arriving after the read
+                # leaves the event set and the wait below returns immediately.
+                event.clear()
+                try:
+                    value = sys_db.read_stream(workflow_id, key, offset)
+                    if value == _dbos_stream_closed_sentinel:
+                        break
+                    yield value
+                    offset += 1
+                except ValueError:
+                    # No value yet: stop if the workflow is done, else wait for a
+                    # notification. Workflow completion fires none, so the wait
+                    # is bounded by the polling interval to notice termination.
+                    status = cls.retrieve_workflow(workflow_id).get_status().status
+                    if not workflow_is_active(status):
+                        break
+                    event.wait(
+                        timeout=sys_db._notification_listener_polling_interval_sec
+                    )
+        finally:
+            sys_db.unregister_stream_listener(payload)
 
     @classmethod
     async def write_stream_async(
@@ -3159,7 +3169,7 @@ class DBOS:
         Args:
             workflow_id(str): The workflow instance ID that owns the stream
             key(str): The stream key / name within the workflow
-            polling_interval_sec(float, optional): Polling interval in seconds when waiting for new values.
+            polling_interval_sec(float, optional): Polling interval in seconds when waiting for new values when not using LISTEN/NOTIFY.
                 Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
 
         Yields:
@@ -3173,28 +3183,41 @@ class DBOS:
         polling_interval = (
             polling_interval_sec
             if polling_interval_sec is not None
-            else dbos_instance._notification_listener_polling_interval_sec
+            else sys_db._notification_listener_polling_interval_sec
         )
 
-        while True:
-            try:
-                value = await asyncio.to_thread(
-                    sys_db.read_stream, workflow_id, key, offset
-                )
-                if value == _dbos_stream_closed_sentinel:
-                    break
-                yield value
-                offset += 1
-            except ValueError:
-                # Poll the offset until a value arrives or the workflow terminates
-                handle: WorkflowHandleAsync[Any] = await cls.retrieve_workflow_async(
-                    workflow_id
-                )
-                status = await handle.get_status()
-                if not workflow_is_active(status.status):
-                    break
-                await asyncio.sleep(polling_interval)
-                continue
+        event, payload = sys_db.register_stream_listener(workflow_id, key)
+        try:
+            while True:
+                # Clear before reading so a notification arriving after the read
+                # leaves the event set and the wait below returns immediately.
+                event.clear()
+                try:
+                    value = await asyncio.to_thread(
+                        sys_db.read_stream, workflow_id, key, offset
+                    )
+                    if value == _dbos_stream_closed_sentinel:
+                        break
+                    yield value
+                    offset += 1
+                except ValueError:
+                    # No value yet: stop if the workflow is done, else wait for a
+                    # notification. Poll the event with short asyncio sleeps (no
+                    # held thread), bounded by the fallback re-check interval.
+                    handle: WorkflowHandleAsync[Any] = (
+                        await cls.retrieve_workflow_async(workflow_id)
+                    )
+                    status = await handle.get_status()
+                    if not workflow_is_active(status.status):
+                        break
+                    deadline = time.time() + polling_interval
+                    while not event.is_set():
+                        remaining = deadline - time.time()
+                        if remaining <= 0:
+                            break
+                        await asyncio.sleep(min(remaining, 0.1))
+        finally:
+            sys_db.unregister_stream_listener(payload)
 
     @classmethod
     def patch(cls, patch_name: str) -> bool:

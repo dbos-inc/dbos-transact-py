@@ -826,6 +826,33 @@ ALTER FUNCTION "{schema}".enqueue_workflow(
     return migration
 
 
+def get_dbos_migration_thirtynine(schema: str, use_listen_notify: bool) -> str:
+    # Gated on use_listen_notify only, matching the notifications/workflow_events
+    # triggers in migration one. Deployments without LISTEN/NOTIFY (e.g.
+    # CockroachDB) set use_listen_notify=False and use the polling fallback.
+    if not use_listen_notify:
+        return ""
+    return f"""
+-- Create streams notification function
+CREATE OR REPLACE FUNCTION "{schema}".streams_function() RETURNS TRIGGER AS $$
+DECLARE
+    payload text := NEW.workflow_uuid || '::' || NEW.key;
+BEGIN
+    PERFORM pg_notify('dbos_streams_channel', payload);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+ALTER FUNCTION "{schema}".streams_function() SET search_path = pg_catalog, pg_temp;
+
+-- Create streams trigger
+DROP TRIGGER IF EXISTS dbos_streams_trigger ON "{schema}".streams;
+CREATE TRIGGER dbos_streams_trigger
+AFTER INSERT ON "{schema}".streams
+FOR EACH ROW EXECUTE FUNCTION "{schema}".streams_function();
+"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -868,6 +895,7 @@ def get_dbos_migrations(
         get_dbos_migration_thirtysix(schema),
         get_dbos_migration_thirtyseven(schema, is_cockroach),
         get_dbos_migration_thirtyeight(schema, is_cockroach),
+        get_dbos_migration_thirtynine(schema, use_listen_notify),
     ]
 
 
