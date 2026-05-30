@@ -44,6 +44,7 @@ from dbos._serialization import (
     DefaultSerializer,
     Serializer,
     WorkflowSerializationFormat,
+    deserialize_schedule_context,
     serialize_args,
 )
 from dbos._sys_db import (
@@ -1157,15 +1158,17 @@ class DBOSClient:
             schedule_name_prefix=schedule_name_prefix,
         )
         for s in schedules:
-            s["context"] = self._sys_db.serializer.deserialize(s["context"])
+            s["context"] = deserialize_schedule_context(
+                self._sys_db.serializer, s["context"]
+            )
         return schedules
 
     def get_schedule(self, name: str) -> Optional[WorkflowSchedule]:
         """Return the schedule with the given name, or ``None`` if it does not exist."""
         schedule = self._sys_db.get_schedule(name)
         if schedule is not None:
-            schedule["context"] = self._sys_db.serializer.deserialize(
-                schedule["context"]
+            schedule["context"] = deserialize_schedule_context(
+                self._sys_db.serializer, schedule["context"]
             )
         return schedule
 

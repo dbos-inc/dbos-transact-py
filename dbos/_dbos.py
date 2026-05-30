@@ -42,6 +42,7 @@ from dbos._serialization import (
     DefaultSerializer,
     Serializer,
     WorkflowSerializationFormat,
+    deserialize_schedule_context,
     deserialize_value,
     serialize_value,
 )
@@ -2641,7 +2642,9 @@ class DBOS:
                 schedule_name_prefix=schedule_name_prefix,
             )
         for s in schedules:
-            s["context"] = dbos._sys_db.serializer.deserialize(s["context"])
+            s["context"] = deserialize_schedule_context(
+                dbos._sys_db.serializer, s["context"]
+            )
         return schedules
 
     @classmethod
@@ -2660,8 +2663,8 @@ class DBOS:
         else:
             schedule = dbos._sys_db.get_schedule(name)
         if schedule is not None:
-            schedule["context"] = dbos._sys_db.serializer.deserialize(
-                schedule["context"]
+            schedule["context"] = deserialize_schedule_context(
+                dbos._sys_db.serializer, schedule["context"]
             )
         return schedule
 

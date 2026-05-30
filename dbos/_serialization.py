@@ -90,6 +90,13 @@ class Serializer(ABC):
         return "custom_serializer"
 
 
+def deserialize_schedule_context(serializer: "Serializer", context: str) -> Any:
+    try:
+        return serializer.deserialize(context)
+    except Exception as e:
+        return f"<error deserializing context: {e}>"
+
+
 class DefaultSerializer(Serializer):
 
     def serialize(self, data: Any) -> str:

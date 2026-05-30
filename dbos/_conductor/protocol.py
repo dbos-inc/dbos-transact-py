@@ -3,7 +3,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Dict, List, Optional, Type, TypedDict, TypeVar, Union
 
-from dbos._serialization import Serializer
+from dbos._serialization import Serializer, deserialize_schedule_context
 from dbos._sys_db import (
     NotificationInfo,
     StepInfo,
@@ -546,8 +546,10 @@ class ScheduleOutput:
         *,
         load_context: bool = True,
     ) -> "ScheduleOutput":
-        context_str = (
-            str(serializer.deserialize(s["context"])) if load_context else None
+        context_str: Optional[str] = (
+            str(deserialize_schedule_context(serializer, s["context"]))
+            if load_context
+            else None
         )
         return cls(
             schedule_id=s["schedule_id"],
