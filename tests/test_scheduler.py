@@ -158,7 +158,6 @@ def test_list_schedules_undeserializable_context(
     monkeypatch.delattr(sys.modules[__name__], "_StaleContext")
 
     schedules = DBOS.list_schedules()
-    print(schedules)
     assert len(schedules) == 2
     by_name = {s["schedule_name"]: s for s in schedules}
     assert by_name["good-schedule"]["context"] == {"env": "test"}
