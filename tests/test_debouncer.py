@@ -1,3 +1,4 @@
+import time
 import uuid
 
 import pytest
@@ -13,8 +14,39 @@ from dbos import (
 )
 from dbos._client import EnqueueOptions
 from dbos._context import SetEnqueueOptions, SetWorkflowTimeout
+from dbos._core import DEBOUNCER_WORKFLOW_NAME
 from dbos._queue import Queue
+from dbos._sys_db import WorkflowStatus
 from dbos._utils import GlobalParams
+
+from .conftest import retry_until_success
+
+
+def _create_newer_application_version(dbos: DBOS) -> str:
+    newer_version = f"newer-{uuid.uuid4()}"
+    dbos._sys_db.create_application_version(newer_version)
+    dbos._sys_db.update_application_version_timestamp(
+        newer_version, int(time.time() * 1000) + 1_000_000
+    )
+    return newer_version
+
+
+def _get_debouncer_workflow_for_user_workflow(
+    user_workflow_id: str,
+) -> WorkflowStatus:
+    workflows = DBOS.list_workflows(
+        name=DEBOUNCER_WORKFLOW_NAME,
+        status="ENQUEUED",
+        load_output=False,
+    )
+    matching_workflows = [
+        workflow
+        for workflow in workflows
+        if workflow.input is not None
+        and workflow.input["args"][1]["workflow_id"] == user_workflow_id
+    ]
+    assert len(matching_workflows) == 1
+    return matching_workflows[0]
 
 
 def test_debouncer(dbos: DBOS) -> None:
@@ -68,6 +100,39 @@ def test_debouncer(dbos: DBOS) -> None:
     # Rerun the workflow, verify it looks up by name and still works
     dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
     dbos._execute_workflow_id(wfid).get_result()
+
+
+def test_debouncer_uses_latest_application_version(dbos: DBOS) -> None:
+    original_version = GlobalParams.app_version
+    newer_version = _create_newer_application_version(dbos)
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    debouncer = Debouncer.create(workflow)
+    handle = debouncer.debounce(f"key-{uuid.uuid4()}", 0.1, 1)
+
+    try:
+        def check_debouncer_enqueued_on_latest_version() -> None:
+            debouncer_workflow = _get_debouncer_workflow_for_user_workflow(
+                handle.workflow_id
+            )
+            assert debouncer_workflow.app_version == newer_version
+            assert debouncer_workflow.input is not None
+            assert debouncer_workflow.input["args"][1]["app_version"] == newer_version
+
+        retry_until_success(
+            check_debouncer_enqueued_on_latest_version,
+            interval=0.1,
+            max_attempts=20,
+        )
+
+        GlobalParams.app_version = newer_version
+        assert handle.get_result() == 1
+        assert handle.get_status().app_version == newer_version
+    finally:
+        GlobalParams.app_version = original_version
 
 
 def test_debouncer_timeout(dbos: DBOS) -> None:
@@ -179,14 +244,18 @@ def test_debouncer_queue(dbos: DBOS) -> None:
 
     # Test SetEnqueueOptions works
     test_version = "test_version"
-    GlobalParams.app_version = test_version
-    with SetEnqueueOptions(
-        priority=1, deduplication_id="test", app_version=test_version
-    ):
-        handle = debouncer.debounce("key", debounce_period_sec, first_value)
-    assert handle.get_result() == first_value
-    assert handle.get_status().queue_name == queue.name
-    assert handle.get_status().app_version == test_version
+    original_version = GlobalParams.app_version
+    try:
+        GlobalParams.app_version = test_version
+        with SetEnqueueOptions(
+            priority=1, deduplication_id="test", app_version=test_version
+        ):
+            handle = debouncer.debounce("key", debounce_period_sec, first_value)
+        assert handle.get_result() == first_value
+        assert handle.get_status().queue_name == queue.name
+        assert handle.get_status().app_version == test_version
+    finally:
+        GlobalParams.app_version = original_version
 
     # The queue argument also accepts a queue name as a string.
     debouncer_by_name = Debouncer.create(workflow, queue=queue.name)
@@ -275,6 +344,47 @@ def test_debouncer_client(dbos: DBOS, client: DBOSClient) -> None:
     )
     assert handle.workflow_id == wfid
     assert handle.get_result() == first_value
+
+
+def test_debouncer_client_uses_latest_application_version(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    original_version = GlobalParams.app_version
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    DBOS.register_queue("test-queue")
+    newer_version = _create_newer_application_version(dbos)
+
+    options: EnqueueOptions = {
+        "workflow_name": workflow.__qualname__,
+        "queue_name": "test-queue",
+    }
+    debouncer = DebouncerClient(client, options)
+    handle: WorkflowHandle[int] = debouncer.debounce(f"key-{uuid.uuid4()}", 0.1, 1)
+
+    try:
+        def check_debouncer_enqueued_on_latest_version() -> None:
+            debouncer_workflow = _get_debouncer_workflow_for_user_workflow(
+                handle.workflow_id
+            )
+            assert debouncer_workflow.app_version == newer_version
+            assert debouncer_workflow.input is not None
+            assert debouncer_workflow.input["args"][1]["app_version"] == newer_version
+
+        retry_until_success(
+            check_debouncer_enqueued_on_latest_version,
+            interval=0.1,
+            max_attempts=20,
+        )
+
+        GlobalParams.app_version = newer_version
+        assert handle.get_result() == 1
+        assert handle.get_status().app_version == newer_version
+    finally:
+        GlobalParams.app_version = original_version
 
 
 @pytest.mark.asyncio
