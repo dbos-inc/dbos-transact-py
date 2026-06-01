@@ -114,6 +114,7 @@ class RecoveryResponse(BaseMessage):
 @dataclass
 class CancelRequest(BaseMessage):
     workflow_id: str
+    cancel_children: bool = False
     workflow_ids: Optional[List[str]] = None
 
 

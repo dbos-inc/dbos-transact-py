@@ -168,7 +168,10 @@ class ConductorWebsocket(threading.Thread):
                             ]
                             success = True
                             try:
-                                self.dbos.cancel_workflows(cancel_ids)
+                                self.dbos.cancel_workflows(
+                                    cancel_ids,
+                                    cancel_children=cancel_message.cancel_children,
+                                )
                             except Exception as e:
                                 error_message = f"Exception encountered when cancelling workflow(s) {cancel_ids}: {traceback.format_exc()}"
                                 self.dbos.logger.error(error_message)
