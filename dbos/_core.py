@@ -739,21 +739,18 @@ def execute_workflow_by_id(
             "<NONE>",
             f"{wf_func.__name__} is not a registered workflow function",
         )
-    # The portable serializer encodes datetime/date as ISO strings and can't
-    # recover the native type on deserialize. Restore it against the workflow's
-    # type hints so callers (e.g. scheduled workflows) see the declared type.
-    # Skipped when validate_args is configured, since that already coerces.
-    # The args are portable if explicitly tagged, or if they fell through to a
-    # configured portable serializer (serialization left unset, as the scheduler does).
-    used_portable = status["serialization"] == DBOSPortableJSON.name() or (
+    # Type-coerce arguments whose type is lost to portable JSON serialization.
+    using_portable_serialization = status[
+        "serialization"
+    ] == DBOSPortableJSON.name() or (
         status["serialization"] is None
         and dbos._serializer.name() == DBOSPortableJSON.name()
     )
-    if inputs is not None and fi.validate_args is None and used_portable:
+    if using_portable_serialization and inputs is not None and fi.validate_args is None:
         inputs = coerce_portable_args_to_hints(
             wf_func,
             inputs,
-            skip_self=fi.func_type in (DBOSFuncType.Class, DBOSFuncType.Instance),
+            has_class_param=fi.func_type in (DBOSFuncType.Class, DBOSFuncType.Instance),
         )
     # Run argument validation if configured on the workflow
     if fi.validate_args is not None and inputs is not None:

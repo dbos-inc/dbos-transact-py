@@ -301,19 +301,13 @@ def deserialize_args(
 def coerce_portable_args_to_hints(
     wf_func: Callable[..., Any],
     inputs: WorkflowInputs,
-    skip_self: bool = False,
+    has_class_param: bool = False,
 ) -> WorkflowInputs:
-    """Restore datetime/date arguments lost to portable JSON serialization.
+    """Type-coerce arguments whose type is lost to portable JSON serialization.
 
-    The portable serializer encodes datetime/date as ISO strings (see
-    ``_to_rfc3339_utc``) and cannot recover the native type on deserialize. When a
-    workflow parameter is annotated ``datetime``/``date`` but the deserialized value
-    is a string, coerce it back so callers see the declared type regardless of how
-    the workflow was invoked. This makes scheduled workflows (whose first argument
-    is the scheduled time) consistent whether run directly, by cron, or after
-    recovery. Unparseable values are left untouched.
+    Currently only supports datetime/date.
 
-    ``skip_self`` drops the leading self/cls parameter for class/instance methods,
+    ``has_class_param`` drops the leading self/cls parameter for class/instance methods,
     whose stored arguments don't include the bound class argument.
     """
 
@@ -339,7 +333,7 @@ def coerce_portable_args_to_hints(
         params = list(inspect.signature(wf_func).parameters.values())
     except (TypeError, ValueError):
         return inputs
-    if skip_self:
+    if has_class_param:
         params = params[1:]
 
     args = list(inputs["args"])
