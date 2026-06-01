@@ -608,9 +608,7 @@ class DBOSClient:
         self, workflow_ids: List[str], *, cancel_children: bool = False
     ) -> None:
         await asyncio.to_thread(
-            self._sys_db.cancel_workflows,
-            workflow_ids,
-            cancel_children,
+            self.cancel_workflows, workflow_ids, cancel_children=cancel_children
         )
 
     def delete_workflow(
