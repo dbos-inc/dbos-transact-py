@@ -301,15 +301,12 @@ def deserialize_args(
 def coerce_portable_args_to_hints(
     wf_func: Callable[..., Any],
     inputs: WorkflowInputs,
-    has_class_param: bool = False,
 ) -> WorkflowInputs:
     """Type-coerce arguments whose type is lost to portable JSON serialization.
 
     Currently only supports datetime/date.
-
-    ``has_class_param`` drops the leading self/cls parameter for class/instance methods,
-    whose stored arguments don't include the bound class argument.
     """
+    from ._registrations import DBOSFuncType, get_func_info
 
     def coerce(value: Any, hint: Any) -> Any:
         if not isinstance(value, str):
@@ -333,7 +330,10 @@ def coerce_portable_args_to_hints(
         params = list(inspect.signature(wf_func).parameters.values())
     except (TypeError, ValueError):
         return inputs
-    if has_class_param:
+    # Drop the leading self/cls parameter for class/instance methods, whose stored
+    # arguments don't include the bound class argument.
+    fi = get_func_info(wf_func)
+    if fi is not None and fi.func_type in (DBOSFuncType.Class, DBOSFuncType.Instance):
         params = params[1:]
 
     args = list(inputs["args"])
