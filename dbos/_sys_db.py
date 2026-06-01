@@ -831,15 +831,12 @@ class SystemDatabase(ABC):
             _cancel_workflows(workflow_ids)
             return
 
-        # Cascade level by level to remain TOCTOU-safe at arbitrary depth: cancel a
-        # level first so its (now-cancelled) members can no longer enqueue new
-        # children, and only then look up that level's children. This guarantees a
-        # live descendant cannot enqueue a grandchild that escapes the sweep.
+        # Cascade child workflows level by level
         visited: set[str] = set(workflow_ids)
         frontier: list[str] = list(workflow_ids)
         while frontier:
             _cancel_workflows(frontier)
-            children = self.get_child_workflows(frontier)
+            children = self._get_direct_children(frontier)
             frontier = [c for c in children if c not in visited]
             visited.update(frontier)
 
@@ -4072,7 +4069,7 @@ class SystemDatabase(ABC):
             ).scalar()
             return checkpoint_name == patch_name
 
-    def get_child_workflows(self, workflow_ids: list[str]) -> list[str]:
+    def _get_direct_children(self, workflow_ids: list[str]) -> list[str]:
         """
         Get the immediate (one-level) child workflow IDs for a set of workflows.
 
@@ -4103,31 +4100,13 @@ class SystemDatabase(ABC):
         Returns:
             A list of all child (and grandchild, etc.) workflow IDs
         """
-        children: set[str] = set()
-        to_process: list[str] = [workflow_id]
-
-        with self.engine.begin() as c:
-            while to_process:
-                current_id = to_process.pop()
-                # Find all child workflows for the current workflow
-                child_rows = c.execute(
-                    sa.select(SystemSchema.operation_outputs.c.child_workflow_id).where(
-                        (SystemSchema.operation_outputs.c.workflow_uuid == current_id)
-                        & (
-                            SystemSchema.operation_outputs.c.child_workflow_id.isnot(
-                                None
-                            )
-                        )
-                    )
-                ).fetchall()
-
-                for row in child_rows:
-                    child_id = row[0]
-                    if child_id not in children:
-                        children.add(child_id)
-                        to_process.append(child_id)
-
-        return list(children)
+        descendants: set[str] = set()
+        frontier: list[str] = [workflow_id]
+        while frontier:
+            children = self._get_direct_children(frontier)
+            frontier = [c for c in children if c not in descendants]
+            descendants.update(frontier)
+        return list(descendants)
 
     def export_workflow(
         self, workflow_id: str, *, export_children: bool
