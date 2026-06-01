@@ -156,10 +156,9 @@ def debouncer_workflow(
                         func, *workflow_inputs["args"], **workflow_inputs["kwargs"]
                     )
             else:
-                with SetEnqueueOptions(app_version=ctx["app_version"]):
-                    DBOS.start_workflow(
-                        func, *workflow_inputs["args"], **workflow_inputs["kwargs"]
-                    )
+                DBOS.start_workflow(
+                    func, *workflow_inputs["args"], **workflow_inputs["kwargs"]
+                )
 
 
 class Debouncer(Generic[P, R]):
@@ -241,11 +240,7 @@ class Debouncer(Generic[P, R]):
             ctx.is_within_set_workflow_id_block = False
             ctxOptions: ContextOptions = {
                 "workflow_id": user_workflow_id,
-                "app_version": (
-                    ctx.app_version
-                    if ctx.app_version is not None
-                    else dbos._sys_db.get_latest_application_version()["version_name"]
-                ),
+                "app_version": ctx.app_version,
                 "deduplication_id": ctx.deduplication_id,
                 "priority": ctx.priority,
                 "workflow_timeout_sec": (
@@ -258,10 +253,7 @@ class Debouncer(Generic[P, R]):
             try:
                 # Attempt to enqueue a debouncer for this workflow.
                 deduplication_id = f"{self.options['workflow_name']}-{debounce_key}"
-                with SetEnqueueOptions(
-                    deduplication_id=deduplication_id,
-                    app_version=ctxOptions["app_version"],
-                ):
+                with SetEnqueueOptions(deduplication_id=deduplication_id):
                     with SetWorkflowTimeout(None):
                         internal_queue.enqueue(
                             debouncer_workflow,
@@ -348,18 +340,13 @@ class DebouncerClient:
         self, debounce_key: str, debounce_period_sec: float, *args: Any, **kwargs: Any
     ) -> "WorkflowHandle[R]":
 
-        target_app_version = self.workflow_options.get("app_version")
-        if target_app_version is None:
-            target_app_version = self.client.get_latest_application_version()[
-                "version_name"
-            ]
         ctxOptions: ContextOptions = {
             "workflow_id": (
                 self.workflow_options["workflow_id"]
                 if self.workflow_options.get("workflow_id")
                 else generate_uuid()
             ),
-            "app_version": target_app_version,
+            "app_version": self.workflow_options.get("app_version"),
             "deduplication_id": self.workflow_options.get("deduplication_id"),
             "priority": self.workflow_options.get("priority"),
             "workflow_timeout_sec": self.workflow_options.get("workflow_timeout"),
@@ -375,7 +362,6 @@ class DebouncerClient:
                     "workflow_name": DEBOUNCER_WORKFLOW_NAME,
                     "queue_name": INTERNAL_QUEUE_NAME,
                     "deduplication_id": deduplication_id,
-                    "app_version": target_app_version,
                 }
                 self.client.enqueue(
                     debouncer_options,
