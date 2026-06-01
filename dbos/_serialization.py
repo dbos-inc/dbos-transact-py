@@ -90,13 +90,6 @@ class Serializer(ABC):
         return "custom_serializer"
 
 
-def deserialize_schedule_context(serializer: "Serializer", context: str) -> Any:
-    try:
-        return serializer.deserialize(context)
-    except Exception as e:
-        return f"<error deserializing context: {e}>"
-
-
 class DefaultSerializer(Serializer):
 
     def serialize(self, data: Any) -> str:
@@ -442,3 +435,25 @@ def safe_deserialize(
         )
         exception = serialized_exception  # type: ignore
     return input, output, exception
+
+
+def safe_deserialize_schedule_context(
+    serializer: Serializer,
+    schedule_name: str,
+    *,
+    serialized_context: str,
+) -> Any:
+    """
+    This function safely deserializes a schedule's recorded context.
+    If it is not deserializable, it logs a warning and returns a string instead of throwing an exception.
+
+    This function is used in schedule introspection methods (list_schedules and get_schedule)
+    to ensure errors related to nondeserializable objects are observable.
+    """
+    try:
+        return serializer.deserialize(serialized_context)
+    except Exception as e:
+        dbos_logger.warning(
+            f"Warning: context object could not be deserialized for schedule {schedule_name}, returning as string: {e}"
+        )
+        return serialized_context

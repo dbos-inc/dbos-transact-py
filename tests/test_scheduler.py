@@ -130,8 +130,8 @@ def test_list_schedules_undeserializable_context(
     # Regression: a schedule's context is serialized application data. If the
     # application code changes so the context can no longer be deserialized (e.g. a
     # class it was pickled against is removed/renamed), listing schedules must not
-    # fail for *all* schedules. The bad one carries an error marker; others come
-    # through intact.
+    # fail for *all* schedules. The bad one comes back as its raw serialized string
+    # (and logs a warning); others come through intact.
     @DBOS.workflow()
     def my_workflow(scheduled_at: datetime, ctx: Any) -> None:
         pass
@@ -153,6 +153,10 @@ def test_list_schedules_undeserializable_context(
         ]
     )
 
+    # The raw serialized form we expect the bad context to fall back to (captured
+    # before the class is removed, since we can no longer construct it afterward).
+    expected_raw = dbos._sys_db.serializer.serialize(_StaleContext(region="us"))
+
     # Simulate the application code changing: the class the context was pickled
     # against no longer exists in its module, so pickle.loads can't resolve it.
     monkeypatch.delattr(sys.modules[__name__], "_StaleContext")
@@ -161,9 +165,10 @@ def test_list_schedules_undeserializable_context(
     assert len(schedules) == 2
     by_name = {s["schedule_name"]: s for s in schedules}
     assert by_name["good-schedule"]["context"] == {"env": "test"}
-    assert str(by_name["bad-schedule"]["context"]).startswith(
-        "<error deserializing context:"
-    )
+    # The undeserializable context falls back to its raw serialized string.
+    bad_context = by_name["bad-schedule"]["context"]
+    assert isinstance(bad_context, str)
+    assert bad_context == expected_raw
 
 
 def test_apply_schedules(dbos: DBOS) -> None:
