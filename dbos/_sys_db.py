@@ -4077,16 +4077,15 @@ class SystemDatabase(ABC):
             workflow_ids: The workflow UUIDs to get the direct children of
 
         Returns:
-            A list of the distinct direct child workflow IDs
+            A list of the direct child workflow IDs
         """
         if not workflow_ids:
             return []
         with self.engine.begin() as c:
             child_rows = c.execute(
-                sa.select(SystemSchema.operation_outputs.c.child_workflow_id)
-                .where(SystemSchema.operation_outputs.c.workflow_uuid.in_(workflow_ids))
-                .where(SystemSchema.operation_outputs.c.child_workflow_id.isnot(None))
-                .distinct()
+                sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
+                    SystemSchema.workflow_status.c.parent_workflow_id.in_(workflow_ids)
+                )
             ).fetchall()
         return [row[0] for row in child_rows]
 
