@@ -109,4 +109,5 @@ dev = [
     "psycopg2-binary>=2.9.11",
     "sqlalchemy-cockroachdb>=2.0.3",
     "aiosqlite>=0.20.0",
+    "types-python-dateutil>=2.9.0.20260518",
 ]

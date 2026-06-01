@@ -23,7 +23,7 @@ from typing import (
     get_type_hints,
 )
 
-from dateutil.parser import isoparse  # type: ignore[import-untyped]
+from dateutil.parser import isoparse
 
 from ._logger import dbos_logger
 
