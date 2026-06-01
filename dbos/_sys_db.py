@@ -3394,7 +3394,7 @@ class SystemDatabase(ABC):
                     sa.select(sa.func.count())
                     .select_from(SystemSchema.workflow_status)
                     .where(SystemSchema.workflow_status.c.queue_name == queue.name)
-                    .where(SystemSchema.workflow_status.c.rate_limited.is_(True))
+                    .where(SystemSchema.workflow_status.c.rate_limited == True)
                     .where(
                         SystemSchema.workflow_status.c.status.notin_(
                             [
