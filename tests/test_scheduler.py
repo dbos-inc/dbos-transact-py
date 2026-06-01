@@ -1402,6 +1402,8 @@ def test_schedule_with_queue_name(dbos: DBOS) -> None:
     assert sched is not None
     assert sched["queue_name"] is None
 
+    DBOS.delete_schedule("no-queue-schedule")
+
 
 def test_scheduled_workflow_datetime_with_portable_serializer(
     config: DBOSConfig, cleanup_test_databases: None
@@ -1446,4 +1448,3 @@ def test_scheduled_workflow_datetime_with_portable_serializer(
         DBOS.delete_schedule("portable-schedule")
     finally:
         DBOS.destroy(destroy_registry=True)
-    DBOS.delete_schedule("no-queue-schedule")
