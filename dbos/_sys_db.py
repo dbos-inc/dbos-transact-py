@@ -799,31 +799,49 @@ class SystemDatabase(ABC):
     def cancel_workflows(
         self,
         workflow_ids: list[str],
+        cancel_children: bool = False,
     ) -> None:
-        with self.engine.begin() as c:
-            now_ms = self._now_ms_sql()
-            # Set the workflows' status to CANCELLED and remove them from any queue,
-            # but only if the workflow is not already complete.
-            c.execute(
-                sa.update(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids))
-                .where(
-                    SystemSchema.workflow_status.c.status.notin_(
-                        [
-                            WorkflowStatusString.SUCCESS.value,
-                            WorkflowStatusString.ERROR.value,
-                        ]
+        def _cancel_workflows(ids: list[str]) -> None:
+            with self.engine.begin() as c:
+                now_ms = self._now_ms_sql()
+                # Set the workflows' status to CANCELLED and remove them from any
+                # queue, but only if the workflow is not already complete.
+                c.execute(
+                    sa.update(SystemSchema.workflow_status)
+                    .where(SystemSchema.workflow_status.c.workflow_uuid.in_(ids))
+                    .where(
+                        SystemSchema.workflow_status.c.status.notin_(
+                            [
+                                WorkflowStatusString.SUCCESS.value,
+                                WorkflowStatusString.ERROR.value,
+                            ]
+                        )
+                    )
+                    .values(
+                        status=WorkflowStatusString.CANCELLED.value,
+                        queue_name=None,
+                        deduplication_id=None,
+                        started_at_epoch_ms=None,
+                        updated_at=now_ms,
+                        completed_at=now_ms,
                     )
                 )
-                .values(
-                    status=WorkflowStatusString.CANCELLED.value,
-                    queue_name=None,
-                    deduplication_id=None,
-                    started_at_epoch_ms=None,
-                    updated_at=now_ms,
-                    completed_at=now_ms,
-                )
-            )
+
+        if not cancel_children:
+            _cancel_workflows(workflow_ids)
+            return
+
+        # Cascade level by level to remain TOCTOU-safe at arbitrary depth: cancel a
+        # level first so its (now-cancelled) members can no longer enqueue new
+        # children, and only then look up that level's children. This guarantees a
+        # live descendant cannot enqueue a grandchild that escapes the sweep.
+        visited: set[str] = set(workflow_ids)
+        frontier: list[str] = list(workflow_ids)
+        while frontier:
+            _cancel_workflows(frontier)
+            children = self.get_child_workflows(frontier)
+            frontier = [c for c in children if c not in visited]
+            visited.update(frontier)
 
     def resume_workflows(
         self,
@@ -4053,6 +4071,27 @@ class SystemDatabase(ABC):
                 )
             ).scalar()
             return checkpoint_name == patch_name
+
+    def get_child_workflows(self, workflow_ids: list[str]) -> list[str]:
+        """
+        Get the immediate (one-level) child workflow IDs for a set of workflows.
+
+        Args:
+            workflow_ids: The workflow UUIDs to get the direct children of
+
+        Returns:
+            A list of the distinct direct child workflow IDs
+        """
+        if not workflow_ids:
+            return []
+        with self.engine.begin() as c:
+            child_rows = c.execute(
+                sa.select(SystemSchema.operation_outputs.c.child_workflow_id)
+                .where(SystemSchema.operation_outputs.c.workflow_uuid.in_(workflow_ids))
+                .where(SystemSchema.operation_outputs.c.child_workflow_id.isnot(None))
+                .distinct()
+            ).fetchall()
+        return [row[0] for row in child_rows]
 
     def get_workflow_children(self, workflow_id: str) -> list[str]:
         """

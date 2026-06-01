@@ -1871,37 +1871,55 @@ class DBOS:
         return recover_pending_workflows(_get_dbos_instance(), executor_ids)
 
     @classmethod
-    def cancel_workflow(cls, workflow_id: str) -> None:
+    def cancel_workflow(
+        cls, workflow_id: str, *, cancel_children: bool = False
+    ) -> None:
         """Cancel a workflow by ID."""
-        cls.cancel_workflows([workflow_id])
+        cls.cancel_workflows([workflow_id], cancel_children=cancel_children)
 
     @classmethod
-    async def cancel_workflow_async(cls, workflow_id: str) -> None:
+    async def cancel_workflow_async(
+        cls, workflow_id: str, *, cancel_children: bool = False
+    ) -> None:
         """Cancel a workflow by ID."""
-        await cls.cancel_workflows_async([workflow_id])
+        await cls.cancel_workflows_async([workflow_id], cancel_children=cancel_children)
 
     @classmethod
-    def cancel_workflows(cls, workflow_ids: List[str]) -> None:
-        """Cancel multiple workflows by ID."""
+    def cancel_workflows(
+        cls, workflow_ids: List[str], *, cancel_children: bool = False
+    ) -> None:
+        """Cancel multiple workflows by ID.
+
+        If cancel_children is True, also cancels all child workflows recursively.
+        """
         check_async("cancel_workflows")
 
         def fn() -> None:
             dbos_logger.info(f"Cancelling workflow(s): {workflow_ids}")
-            _get_dbos_instance()._sys_db.cancel_workflows(workflow_ids)
+            _get_dbos_instance()._sys_db.cancel_workflows(
+                workflow_ids, cancel_children=cancel_children
+            )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
             fn, "DBOS.cancelWorkflow", snapshot_step_context(reserve_sleep_id=False)
         )
 
     @classmethod
-    async def cancel_workflows_async(cls, workflow_ids: List[str]) -> None:
-        """Cancel multiple workflows by ID."""
+    async def cancel_workflows_async(
+        cls, workflow_ids: List[str], *, cancel_children: bool = False
+    ) -> None:
+        """Cancel multiple workflows by ID.
+
+        If cancel_children is True, also cancels all child workflows recursively.
+        """
         step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
 
         def fn() -> None:
             dbos_logger.info(f"Cancelling workflow(s): {workflow_ids}")
-            _get_dbos_instance()._sys_db.cancel_workflows(workflow_ids)
+            _get_dbos_instance()._sys_db.cancel_workflows(
+                workflow_ids, cancel_children=cancel_children
+            )
 
         return await asyncio.to_thread(
             _get_dbos_instance()._sys_db.call_function_as_step,

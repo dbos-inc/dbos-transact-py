@@ -587,17 +587,31 @@ class DBOSClient:
             self.get_event, workflow_id, key, timeout_seconds
         )
 
-    def cancel_workflow(self, workflow_id: str) -> None:
-        self._sys_db.cancel_workflows([workflow_id])
+    def cancel_workflow(
+        self, workflow_id: str, *, cancel_children: bool = False
+    ) -> None:
+        self._sys_db.cancel_workflows([workflow_id], cancel_children=cancel_children)
 
-    async def cancel_workflow_async(self, workflow_id: str) -> None:
-        await asyncio.to_thread(self.cancel_workflow, workflow_id)
+    async def cancel_workflow_async(
+        self, workflow_id: str, *, cancel_children: bool = False
+    ) -> None:
+        await asyncio.to_thread(
+            self.cancel_workflow, workflow_id, cancel_children=cancel_children
+        )
 
-    def cancel_workflows(self, workflow_ids: List[str]) -> None:
-        self._sys_db.cancel_workflows(workflow_ids)
+    def cancel_workflows(
+        self, workflow_ids: List[str], *, cancel_children: bool = False
+    ) -> None:
+        self._sys_db.cancel_workflows(workflow_ids, cancel_children=cancel_children)
 
-    async def cancel_workflows_async(self, workflow_ids: List[str]) -> None:
-        await asyncio.to_thread(self._sys_db.cancel_workflows, workflow_ids)
+    async def cancel_workflows_async(
+        self, workflow_ids: List[str], *, cancel_children: bool = False
+    ) -> None:
+        await asyncio.to_thread(
+            self._sys_db.cancel_workflows,
+            workflow_ids,
+            cancel_children,
+        )
 
     def delete_workflow(
         self, workflow_id: str, *, delete_children: bool = False
