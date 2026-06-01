@@ -1,3 +1,4 @@
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -114,6 +115,61 @@ def test_schedule_crud(dbos: DBOS) -> None:
     DBOS.delete_schedule("test-schedule")
     assert DBOS.get_schedule("test-schedule") is None
     assert len(DBOS.list_schedules()) == 0
+
+
+class _StaleContext:
+    """Module-level so it can be pickled into a schedule's context, then removed
+    to simulate the application class no longer existing at deserialization time."""
+
+    def __init__(self, region: str) -> None:
+        self.region = region
+
+
+def test_list_schedules_undeserializable_context(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression: a schedule's context is serialized application data. If the
+    # application code changes so the context can no longer be deserialized (e.g. a
+    # class it was pickled against is removed/renamed), listing schedules must not
+    # fail for *all* schedules. The bad one comes back as its raw serialized string
+    # (and logs a warning); others come through intact.
+    @DBOS.workflow()
+    def my_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    DBOS.apply_schedules(
+        [
+            {
+                "schedule_name": "good-schedule",
+                "workflow_fn": my_workflow,
+                "schedule": "* * * * *",
+                "context": {"env": "test"},
+            },
+            {
+                "schedule_name": "bad-schedule",
+                "workflow_fn": my_workflow,
+                "schedule": "* * * * *",
+                "context": _StaleContext(region="us"),
+            },
+        ]
+    )
+
+    # The raw serialized form we expect the bad context to fall back to (captured
+    # before the class is removed, since we can no longer construct it afterward).
+    expected_raw = dbos._sys_db.serializer.serialize(_StaleContext(region="us"))
+
+    # Simulate the application code changing: the class the context was pickled
+    # against no longer exists in its module, so pickle.loads can't resolve it.
+    monkeypatch.delattr(sys.modules[__name__], "_StaleContext")
+
+    schedules = DBOS.list_schedules()
+    assert len(schedules) == 2
+    by_name = {s["schedule_name"]: s for s in schedules}
+    assert by_name["good-schedule"]["context"] == {"env": "test"}
+    # The undeserializable context falls back to its raw serialized string.
+    bad_context = by_name["bad-schedule"]["context"]
+    assert isinstance(bad_context, str)
+    assert bad_context == expected_raw
 
 
 def test_apply_schedules(dbos: DBOS) -> None:
