@@ -9,7 +9,7 @@ from ._logger import dbos_logger
 if TYPE_CHECKING:
     from ._dbos import DBOSRegistry
 
-from ._context import SetWorkflowID
+from ._context import SetEnqueueOptions, SetWorkflowID
 from ._croniter import croniter  # type: ignore
 from ._registrations import get_dbos_func_name
 
@@ -48,7 +48,13 @@ def decorator_scheduler_loop(
                 f"sched-{get_dbos_func_name(func)}-{next_exec_time.isoformat()}"
             )
             if not dbos._sys_db.get_workflow_status(workflowID):
-                with SetWorkflowID(workflowID):
+                latest_application_version = (
+                    dbos._sys_db.get_latest_application_version()["version_name"]
+                )
+                with (
+                    SetWorkflowID(workflowID),
+                    SetEnqueueOptions(app_version=latest_application_version),
+                ):
                     scheduler_queue.enqueue(
                         func, next_exec_time, datetime.now(timezone.utc)
                     )

@@ -1,4 +1,5 @@
 import time
+import uuid
 from datetime import datetime
 
 import pytest
@@ -8,6 +9,7 @@ from sqlalchemy.engine import Engine
 # Public API
 from dbos import DBOS
 from dbos._error import DBOSWorkflowFunctionNotFoundError
+from dbos._registrations import get_dbos_func_name
 
 from .conftest import retry_until_success
 
@@ -107,6 +109,32 @@ def test_scheduled_workflow(dbos: DBOS) -> None:
         assert wf_counter >= 2
 
     retry_until_success(check_fired)
+
+
+def test_scheduled_workflow_uses_latest_application_version(dbos: DBOS) -> None:
+    newer_version = f"newer-{uuid.uuid4()}"
+    dbos._sys_db.create_application_version(newer_version)
+    dbos._sys_db.update_application_version_timestamp(
+        newer_version, int(time.time() * 1000) + 1_000_000
+    )
+
+    @DBOS.scheduled("* * * * * *")
+    @DBOS.workflow()
+    def test_workflow(scheduled: datetime, actual: datetime) -> None:
+        pass
+
+    workflow_id_prefix = f"sched-{get_dbos_func_name(test_workflow)}-"
+
+    def check_scheduled_on_latest_version() -> None:
+        workflows = DBOS.list_workflows(
+            workflow_id_prefix=workflow_id_prefix,
+            load_input=False,
+            load_output=False,
+        )
+        assert len(workflows) >= 1
+        assert all(wf.app_version == newer_version for wf in workflows)
+
+    retry_until_success(check_scheduled_on_latest_version)
 
 
 def test_async_scheduled_workflow(dbos: DBOS) -> None:
