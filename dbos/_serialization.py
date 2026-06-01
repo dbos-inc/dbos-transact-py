@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 import pickle
 from abc import ABC, abstractmethod
@@ -8,7 +9,21 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, List, Mapping, Optional, Tuple, TypeAlias, TypedDict, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Tuple,
+    TypeAlias,
+    TypedDict,
+    cast,
+    get_type_hints,
+)
+
+from dateutil.parser import isoparse
 
 from ._logger import dbos_logger
 
@@ -281,6 +296,58 @@ def deserialize_args(
     if serialization is not None and serialization != serializer.name():
         raise TypeError(f"Serialization {serialization} is not available")
     return cast(WorkflowInputs, serializer.deserialize(serialized_value))
+
+
+def coerce_portable_args_to_hints(
+    wf_func: Callable[..., Any],
+    inputs: WorkflowInputs,
+    skip_self: bool = False,
+) -> WorkflowInputs:
+    """Restore datetime/date arguments lost to portable JSON serialization.
+
+    The portable serializer encodes datetime/date as ISO strings (see
+    ``_to_rfc3339_utc``) and cannot recover the native type on deserialize. When a
+    workflow parameter is annotated ``datetime``/``date`` but the deserialized value
+    is a string, coerce it back so callers see the declared type regardless of how
+    the workflow was invoked. This makes scheduled workflows (whose first argument
+    is the scheduled time) consistent whether run directly, by cron, or after
+    recovery. Unparseable values are left untouched.
+
+    ``skip_self`` drops the leading self/cls parameter for class/instance methods,
+    whose stored arguments don't include the bound class argument.
+    """
+
+    def coerce(value: Any, hint: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        try:
+            if hint is datetime:
+                return isoparse(value)
+            if hint is date:
+                return isoparse(value).date()
+        except (ValueError, OverflowError, TypeError):
+            return value
+        return value
+
+    try:
+        hints = get_type_hints(wf_func)
+    except Exception:
+        hints = getattr(wf_func, "__annotations__", {})
+    if not hints:
+        return inputs
+    try:
+        params = list(inspect.signature(wf_func).parameters.values())
+    except (TypeError, ValueError):
+        return inputs
+    if skip_self:
+        params = params[1:]
+
+    args = list(inputs["args"])
+    for i, value in enumerate(args):
+        if i < len(params):
+            args[i] = coerce(value, hints.get(params[i].name))
+    kwargs = {key: coerce(val, hints.get(key)) for key, val in inputs["kwargs"].items()}
+    return {"args": tuple(args), "kwargs": kwargs}
 
 
 def _safe_str(x: Any) -> str:

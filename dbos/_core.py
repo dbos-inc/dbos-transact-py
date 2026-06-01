@@ -6,10 +6,8 @@ import json
 import sys
 import threading
 import time
-import types
 import uuid
 from concurrent.futures import Future
-from datetime import date, datetime
 from functools import wraps
 from typing import (
     TYPE_CHECKING,
@@ -26,12 +24,7 @@ from typing import (
     TypeVar,
     Union,
     cast,
-    get_args,
-    get_origin,
-    get_type_hints,
 )
-
-from dateutil.parser import isoparse
 
 from dbos._outcome import NoResult, Outcome, Pending
 from dbos._utils import GlobalParams, retriable_postgres_exception
@@ -64,7 +57,6 @@ from ._error import (
 )
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
-    DBOSFuncInfo,
     DBOSFuncType,
     ValidateArgsCallable,
     get_config_name,
@@ -81,6 +73,7 @@ from ._serialization import (
     DBOSPortableJSON,
     WorkflowInputs,
     WorkflowSerializationFormat,
+    coerce_portable_args_to_hints,
     deserialize_args,
     deserialize_exception,
     deserialize_value,
@@ -706,69 +699,6 @@ async def _execute_workflow_async(
                     dbos._active_workflows_set.release(status["workflow_uuid"])
 
 
-def _unwrap_optional(hint: Any) -> Any:
-    """Reduce ``Optional[T]`` / ``T | None`` to ``T``; return the hint unchanged otherwise."""
-    if get_origin(hint) in (Union, types.UnionType):
-        non_none = [a for a in get_args(hint) if a is not type(None)]
-        if len(non_none) == 1:
-            return non_none[0]
-    return hint
-
-
-def _coerce_to_hint(value: Any, hint: Any) -> Any:
-    """Best-effort parse an ISO string back into the datetime/date its hint declares."""
-    if hint is None or not isinstance(value, str):
-        return value
-    target = _unwrap_optional(hint)
-    try:
-        if target is datetime:
-            return isoparse(value)
-        if target is date:
-            return isoparse(value).date()
-    except (ValueError, OverflowError, TypeError):
-        return value
-    return value
-
-
-def coerce_portable_args_to_hints(
-    wf_func: Callable[..., Any], fi: DBOSFuncInfo, inputs: WorkflowInputs
-) -> WorkflowInputs:
-    """Restore datetime/date arguments lost to portable JSON serialization.
-
-    The portable serializer encodes datetime/date as ISO strings (see
-    ``_to_rfc3339_utc``) and cannot recover the native type on deserialize. When a
-    workflow parameter is annotated ``datetime``/``date`` but the deserialized value
-    is a string, coerce it back so callers see the declared type regardless of how
-    the workflow was invoked. This makes scheduled workflows (whose first argument
-    is the scheduled time) consistent whether run directly, by cron, or after
-    recovery. Unparseable values are left untouched.
-    """
-    try:
-        hints = get_type_hints(wf_func)
-    except Exception:
-        hints = getattr(wf_func, "__annotations__", {})
-    if not hints:
-        return inputs
-    try:
-        params = list(inspect.signature(wf_func).parameters.values())
-    except (TypeError, ValueError):
-        return inputs
-    # Skip the leading self/cls parameter for class/instance methods: the stored
-    # arguments don't include the bound class argument.
-    if fi.func_type in (DBOSFuncType.Class, DBOSFuncType.Instance):
-        params = params[1:]
-
-    args = list(inputs["args"])
-    for i, value in enumerate(args):
-        if i < len(params):
-            args[i] = _coerce_to_hint(value, hints.get(params[i].name))
-    kwargs = {
-        key: _coerce_to_hint(val, hints.get(key))
-        for key, val in inputs["kwargs"].items()
-    }
-    return {"args": tuple(args), "kwargs": kwargs}
-
-
 def execute_workflow_by_id(
     dbos: "DBOS", workflow_id: str, is_recovery: bool, is_dequeue: bool
 ) -> "WorkflowHandle[Any]":
@@ -820,7 +750,11 @@ def execute_workflow_by_id(
         and dbos._serializer.name() == DBOSPortableJSON.name()
     )
     if inputs is not None and fi.validate_args is None and used_portable:
-        inputs = coerce_portable_args_to_hints(wf_func, fi, inputs)
+        inputs = coerce_portable_args_to_hints(
+            wf_func,
+            inputs,
+            skip_self=fi.func_type in (DBOSFuncType.Class, DBOSFuncType.Instance),
+        )
     # Run argument validation if configured on the workflow
     if fi.validate_args is not None and inputs is not None:
         try:
