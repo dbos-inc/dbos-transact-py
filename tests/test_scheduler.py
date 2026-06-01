@@ -1441,10 +1441,36 @@ def test_scheduled_workflow_datetime_with_portable_serializer(
         scheduled_at, ctx = received[0]
         assert ctx == {"env": "test"}
         # BUG: with the portable serializer this is a `str`, not a `datetime`.
-        assert isinstance(
-            scheduled_at, datetime
-        ), f"expected datetime, got {type(scheduled_at).__name__}: {scheduled_at!r}"
+        assert isinstance(scheduled_at, datetime)
 
         DBOS.delete_schedule("portable-schedule")
+
+        # Also exercise a class-method scheduled workflow: the leading `cls`
+        # parameter must be skipped so the scheduled-time hint still aligns.
+        cls_received: list[tuple[Any, Any]] = []
+
+        @DBOS.dbos_class()
+        class ScheduledClass:
+            @classmethod
+            @DBOS.workflow()
+            def scheduled_wf(cls, scheduled_at: datetime, ctx: Any) -> None:
+                cls_received.append((scheduled_at, ctx))
+
+        DBOS.create_schedule(
+            schedule_name="portable-class-schedule",
+            workflow_fn=ScheduledClass.scheduled_wf,
+            schedule="0 0 * * *",  # daily, won't fire during the test
+            context={"env": "cls"},
+        )
+
+        cls_handle = DBOS.trigger_schedule("portable-class-schedule")
+        cls_handle.get_result()
+
+        assert len(cls_received) == 1
+        cls_scheduled_at, cls_ctx = cls_received[0]
+        assert cls_ctx == {"env": "cls"}
+        assert isinstance(cls_scheduled_at, datetime)
+
+        DBOS.delete_schedule("portable-class-schedule")
     finally:
         DBOS.destroy(destroy_registry=True)
