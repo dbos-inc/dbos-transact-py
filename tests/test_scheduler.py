@@ -6,6 +6,7 @@ import pytest
 
 from dbos import DBOS, DBOSClient, DBOSConfig, DBOSConfiguredInstance, Queue
 from dbos._error import DBOSException
+from dbos._serialization import DBOSPortableJSONSerializer
 from dbos._utils import INTERNAL_QUEUE_NAME
 
 from .conftest import default_config, retry_until_success
@@ -1400,4 +1401,49 @@ def test_schedule_with_queue_name(dbos: DBOS) -> None:
     sched = DBOS.get_schedule("no-queue-schedule")
     assert sched is not None
     assert sched["queue_name"] is None
+
+
+def test_scheduled_workflow_datetime_with_portable_serializer(
+    config: DBOSConfig, cleanup_test_databases: None
+) -> None:
+    """Reproduces https://github.com/dbos-inc/dbos-transact-py/issues/697.
+
+    With the portable JSON serializer, the scheduled-time first argument of a
+    scheduled workflow is round-tripped through serialization when the workflow
+    is enqueued (by cron, trigger, or recovery). Because the portable serializer
+    encodes datetimes as RFC3339 strings, the workflow receives a `str` instead
+    of the `datetime` it gets when invoked directly in-process.
+    """
+    config["serializer"] = DBOSPortableJSONSerializer()
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+    DBOS.launch()
+    try:
+        received: list[tuple[Any, Any]] = []
+
+        @DBOS.workflow()
+        def scheduled_workflow(scheduled_at: datetime, ctx: Any) -> None:
+            received.append((scheduled_at, ctx))
+
+        DBOS.create_schedule(
+            schedule_name="portable-schedule",
+            workflow_fn=scheduled_workflow,
+            schedule="0 0 * * *",  # daily, won't fire during the test
+            context={"env": "test"},
+        )
+
+        handle = DBOS.trigger_schedule("portable-schedule")
+        handle.get_result()
+
+        assert len(received) == 1
+        scheduled_at, ctx = received[0]
+        assert ctx == {"env": "test"}
+        # BUG: with the portable serializer this is a `str`, not a `datetime`.
+        assert isinstance(
+            scheduled_at, datetime
+        ), f"expected datetime, got {type(scheduled_at).__name__}: {scheduled_at!r}"
+
+        DBOS.delete_schedule("portable-schedule")
+    finally:
+        DBOS.destroy(destroy_registry=True)
     DBOS.delete_schedule("no-queue-schedule")
