@@ -1386,15 +1386,13 @@ def test_cancelling_queued_workflows(dbos: DBOS) -> None:
     assert blocked_handle.get_status().status == WorkflowStatusString.CANCELLED.value
     assert regular_handle.get_result() == None
 
-    # Complete the blocked workflow. After cancellation, the workflow body
-    # may either observe the cancel signal (raising
-    # DBOSAwaitedWorkflowCancelledError) or complete normally and overwrite
-    # the CANCELLED status with SUCCESS — both outcomes are acceptable.
+    # Unblock the cancelled workflow's body. Even though it now runs to
+    # completion, CANCELLED is terminal: it must not overwrite CANCELLED with
+    # SUCCESS, and awaiting its result must raise.
     blocking_event.set()
-    try:
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         blocked_handle.get_result()
-    except DBOSAwaitedWorkflowCancelledError:
-        pass
+    assert blocked_handle.get_status().status == WorkflowStatusString.CANCELLED.value
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
