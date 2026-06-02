@@ -73,6 +73,7 @@ from ._serialization import (
     DBOSPortableJSON,
     WorkflowInputs,
     WorkflowSerializationFormat,
+    coerce_portable_args_to_hints,
     deserialize_args,
     deserialize_exception,
     deserialize_value,
@@ -738,6 +739,15 @@ def execute_workflow_by_id(
             "<NONE>",
             f"{wf_func.__name__} is not a registered workflow function",
         )
+    # Type-coerce arguments whose type is lost to portable JSON serialization.
+    using_portable_serialization = status[
+        "serialization"
+    ] == DBOSPortableJSON.name() or (
+        status["serialization"] is None
+        and dbos._serializer.name() == DBOSPortableJSON.name()
+    )
+    if using_portable_serialization and inputs is not None and fi.validate_args is None:
+        inputs = coerce_portable_args_to_hints(wf_func, inputs)
     # Run argument validation if configured on the workflow
     if fi.validate_args is not None and inputs is not None:
         try:
