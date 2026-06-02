@@ -205,6 +205,88 @@ def test_bulk_cancel(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
+def test_cancel_workflow_children(dbos: DBOS) -> None:
+    # Build a three-level tree: parent -> child -> grandchild, each blocking.
+    parent_id = str(uuid.uuid4())
+    child_id = str(uuid.uuid4())
+    grandchild_id = str(uuid.uuid4())
+    ids = [parent_id, child_id, grandchild_id]
+
+    workflow_events: dict[str, threading.Event] = {i: threading.Event() for i in ids}
+    main_events: dict[str, threading.Event] = {i: threading.Event() for i in ids}
+
+    @DBOS.step()
+    def noop() -> None:
+        pass
+
+    @DBOS.workflow()
+    def grandchild_workflow() -> str:
+        wfid = DBOS.workflow_id
+        assert wfid is not None
+        main_events[wfid].set()
+        workflow_events[wfid].wait()
+        # A step after the wait so the workflow observes its cancellation.
+        noop()
+        return wfid
+
+    @DBOS.workflow()
+    def child_workflow() -> str:
+        wfid = DBOS.workflow_id
+        assert wfid is not None
+        with SetWorkflowID(grandchild_id):
+            DBOS.start_workflow(grandchild_workflow)
+        main_events[wfid].set()
+        workflow_events[wfid].wait()
+        noop()
+        return wfid
+
+    @DBOS.workflow()
+    def parent_workflow() -> str:
+        wfid = DBOS.workflow_id
+        assert wfid is not None
+        with SetWorkflowID(child_id):
+            DBOS.start_workflow(child_workflow)
+        main_events[wfid].set()
+        workflow_events[wfid].wait()
+        noop()
+        return wfid
+
+    with SetWorkflowID(parent_id):
+        parent_handle = DBOS.start_workflow(parent_workflow)
+
+    # Wait until the whole tree is running and blocked
+    for i in ids:
+        main_events[i].wait()
+
+    # The cascade should discover the full descendant tree
+    assert set(dbos._sys_db.get_workflow_children(parent_id)) == {
+        child_id,
+        grandchild_id,
+    }
+
+    # Cancelling without cancel_children only affects the parent
+    DBOS.cancel_workflow(parent_id, cancel_children=False)
+    assert DBOS.get_workflow_status(parent_id).status == "CANCELLED"  # type: ignore[union-attr]
+    assert DBOS.get_workflow_status(child_id).status != "CANCELLED"  # type: ignore[union-attr]
+    assert DBOS.get_workflow_status(grandchild_id).status != "CANCELLED"  # type: ignore[union-attr]
+
+    # Cancelling with cancel_children cancels the entire subtree
+    DBOS.cancel_workflow(parent_id, cancel_children=True)
+    for i in ids:
+        status = DBOS.get_workflow_status(i)
+        assert status is not None
+        assert status.status == "CANCELLED"
+
+    # Release the workflows so they observe the cancellation and threads exit
+    for evt in workflow_events.values():
+        evt.set()
+
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        parent_handle.get_result()
+
+    assert queue_entries_are_cleaned_up(dbos)
+
+
 def test_bulk_resume(dbos: DBOS) -> None:
     steps_completed = 0
     workflow_events: dict[str, threading.Event] = {}
