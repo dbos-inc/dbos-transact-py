@@ -802,17 +802,17 @@ class SystemDatabase(ABC):
                     != WorkflowStatusString.CANCELLED.value
                 )
             )
-            # If the workflow is cancelled, abort the function so it does not
-            # complete. This mirrors the cancellation check done before each step.
+            # update_workflow_outcome is only called to finalize a workflow. If
+            # the workflow has been cancelled, the guarded UPDATE above was a
+            # no-op: the workflow must not complete, so raise so it ends as
+            # cancelled rather than succeeding or erroring.
             current_status = c.execute(
                 sa.select(SystemSchema.workflow_status.c.status).where(
                     SystemSchema.workflow_status.c.workflow_uuid == workflow_id
                 )
             ).scalar_one_or_none()
             if current_status == WorkflowStatusString.CANCELLED.value:
-                raise DBOSWorkflowCancelledError(
-                    f"Workflow {workflow_id} is cancelled. Aborting function."
-                )
+                raise DBOSAwaitedWorkflowCancelledError(workflow_id)
 
     def cancel_workflows(
         self,
