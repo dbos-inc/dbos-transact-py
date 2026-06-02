@@ -785,7 +785,7 @@ class SystemDatabase(ABC):
             # Record the outcome, but never overwrite the terminal CANCELLED
             # status: a workflow can be cancelled during its final step, and if so
             # it must not be able to subsequently complete.
-            c.execute(
+            result = c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .values(
                     status=status,
@@ -803,16 +803,19 @@ class SystemDatabase(ABC):
                 )
             )
             # update_workflow_outcome is only called to finalize a workflow. If
-            # the workflow has been cancelled, the guarded UPDATE above was a
-            # no-op: the workflow must not complete, so raise so it ends as
-            # cancelled rather than succeeding or erroring.
-            current_status = c.execute(
-                sa.select(SystemSchema.workflow_status.c.status).where(
-                    SystemSchema.workflow_status.c.workflow_uuid == workflow_id
-                )
-            ).scalar_one_or_none()
-            if current_status == WorkflowStatusString.CANCELLED.value:
-                raise DBOSAwaitedWorkflowCancelledError(workflow_id)
+            # the guarded UPDATE above matched no rows, the workflow may have
+            # been cancelled: a cancelled workflow must not complete, so re-read
+            # the status and raise so it ends as cancelled rather than succeeding
+            # or erroring. The re-read only happens on this rare no-op path, not
+            # on every completion.
+            if result.rowcount == 0:
+                current_status = c.execute(
+                    sa.select(SystemSchema.workflow_status.c.status).where(
+                        SystemSchema.workflow_status.c.workflow_uuid == workflow_id
+                    )
+                ).scalar_one_or_none()
+                if current_status == WorkflowStatusString.CANCELLED.value:
+                    raise DBOSAwaitedWorkflowCancelledError(workflow_id)
 
     def cancel_workflows(
         self,
