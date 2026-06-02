@@ -986,8 +986,9 @@ def test_resume_and_fork_to_queue(dbos: DBOS) -> None:
     main_thread_event.wait()
     DBOS.cancel_workflow(wfid)
     workflow_event.set()
-    with pytest.raises(Exception):
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         handle.get_result()
+    assert DBOS.get_workflow_status(wfid).status == "CANCELLED"  # type: ignore[union-attr]
     assert step_one_count == 1
     assert step_two_count == 0
 
