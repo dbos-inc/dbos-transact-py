@@ -1,5 +1,5 @@
 
-<div align="center">
+<div align="center"> 
 
 [![GitHub Actions](https://img.shields.io/github/actions/workflow/status/dbos-inc/dbos-transact-py/unit-test.yml?query=branch%3Amain)](https://github.com/dbos-inc/dbos-transact-py/actions/workflows/unit-test.yml)
 [![PyPI release (latest SemVer)](https://img.shields.io/pypi/v/dbos.svg)](https://pypi.python.org/pypi/dbos)
