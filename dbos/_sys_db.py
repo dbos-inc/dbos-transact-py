@@ -782,6 +782,9 @@ class SystemDatabase(ABC):
     ) -> None:
         with self.engine.begin() as c:
             now_ms = self._now_ms_sql()
+            # Record the outcome, but never overwrite the terminal CANCELLED
+            # status: a workflow can be cancelled during its final step, and if so
+            # it must not be able to subsequently complete.
             c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .values(
@@ -794,7 +797,22 @@ class SystemDatabase(ABC):
                     completed_at=now_ms,
                 )
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                .where(
+                    SystemSchema.workflow_status.c.status
+                    != WorkflowStatusString.CANCELLED.value
+                )
             )
+            # If the workflow is cancelled, abort the function so it does not
+            # complete. This mirrors the cancellation check done before each step.
+            current_status = c.execute(
+                sa.select(SystemSchema.workflow_status.c.status).where(
+                    SystemSchema.workflow_status.c.workflow_uuid == workflow_id
+                )
+            ).scalar_one_or_none()
+            if current_status == WorkflowStatusString.CANCELLED.value:
+                raise DBOSWorkflowCancelledError(
+                    f"Workflow {workflow_id} is cancelled. Aborting function."
+                )
 
     def cancel_workflows(
         self,
