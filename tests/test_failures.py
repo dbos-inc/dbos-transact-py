@@ -7,7 +7,7 @@ from typing import Any, Generator, cast
 import pytest
 import sqlalchemy as sa
 from psycopg.errors import SerializationFailure
-from sqlalchemy.exc import InvalidRequestError, OperationalError
+from sqlalchemy.exc import DBAPIError, InvalidRequestError, OperationalError
 
 from dbos import DBOS, SetWorkflowID
 from dbos._client import DBOSClient
@@ -939,3 +939,56 @@ def test_recovery_attempts(dbos: DBOS, config: DBOSConfig) -> None:
     retry_until_success(check_attempt_3)
     event.set()
     DBOS.destroy(destroy_registry=True)
+
+
+def test_get_result_no_hang_on_connection_invalidated_error(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    """Test that a DBAPIError doesn't poison the parent workflow's get_result()
+    (check_workflow_result is wrapped in db_retry, so if we just rethrow an error that contains
+    a db retryable error from the child, get_result() is stuck retrying forever
+    """
+    # Dedicated engine so reproducing the timeout doesn't disturb the sys-db pool.
+    boom_engine = sa.create_engine(dbos._sys_db.engine.url)
+
+    @DBOS.step()
+    def boom_step() -> None:
+        with boom_engine.begin() as c:
+            c.execute(
+                sa.text("SET LOCAL idle_in_transaction_session_timeout = '400'")
+            )
+            c.execute(sa.text("SELECT 1"))
+            time.sleep(1.0)  # leave the transaction idle past the timeout
+            c.execute(sa.text("SELECT 1"))  # -> InternalError, connection_invalidated
+
+    @DBOS.workflow()
+    def child() -> None:
+        boom_step()
+
+    handle: WorkflowHandle[None] = DBOS.start_workflow(child)
+
+    with pytest.raises(DBAPIError):
+        handle.get_result()
+
+    poll_handle: WorkflowHandle[None] = DBOS.retrieve_workflow(handle.workflow_id)
+    outcome: dict[str, Any] = {}
+
+    def retrieve() -> None:
+        try:
+            poll_handle.get_result()
+            outcome["returned"] = True
+        except Exception as e:
+            outcome["exc"] = e
+
+    t = threading.Thread(target=retrieve, daemon=True)
+    t.start()
+    t.join(timeout=15)
+
+    assert not t.is_alive(), (
+        "get_result() hung: db_retry treated the child's stored "
+        "connection-invalidated DBAPIError as a retriable connection failure"
+    )
+    exc = outcome.get("exc")
+    assert isinstance(exc, DBAPIError), f"expected DBAPIError, got {outcome!r}"
+    assert "idle-in-transaction" in str(exc)
+    boom_engine.dispose()
