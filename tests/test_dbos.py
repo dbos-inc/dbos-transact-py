@@ -7,7 +7,8 @@ import os
 import threading
 import time
 import uuid
-from typing import Any, Optional, Set
+from functools import wraps
+from typing import Any, Callable, Optional, Set, TypeVar, cast
 
 import pytest
 import sqlalchemy as sa
@@ -17,6 +18,8 @@ from sqlalchemy.exc import OperationalError
 from dbos import (
     DBOS,
     DBOSConfig,
+    EnqueueOptions,
+    Queue,
     SendMessage,
     SetWorkflowID,
     SetWorkflowTimeout,
@@ -3012,3 +3015,83 @@ def test_notification_fallback_polling(dbos: DBOS) -> None:
     duration = time.time() - begin_time
     assert event_result == "fallback_value"
     assert duration < 5.0
+
+
+def test_workflow_wrapped_by_custom_decorator(dbos: DBOS, client: DBOSClient) -> None:
+    F = TypeVar("F", bound=Callable[..., Any])
+
+    before_count = 0
+    after_count = 0
+    error_count = 0
+
+    def task_meta(description: str) -> Callable[[F], F]:
+        def decorator(func: F) -> F:
+            @wraps(func)
+            def wrapper(*args: Any, **kwargs: Any) -> Any:
+                nonlocal before_count, after_count, error_count
+                before_count += 1
+                try:
+                    result = func(*args, **kwargs)
+                    after_count += 1
+                    return result
+                except Exception:
+                    error_count += 1
+                    raise
+
+            return cast(F, wrapper)
+
+        return decorator
+
+    queue = Queue("wrapped_workflow_queue")
+
+    # @DBOS.workflow() on top: DBOS registers the task_meta wrapper, so the hooks
+    # run both on direct invocation and on recovery.
+    @DBOS.workflow(name="wrapped_workflow")
+    @task_meta(description="wrapped_workflow")
+    def wrapped_workflow(var: str) -> str:
+        return helper_step(var)
+
+    @DBOS.step()
+    def helper_step(var: str) -> str:
+        return var + "!"
+
+    # Direct invocation runs the hooks.
+    wfuuid = str(uuid.uuid4())
+    with SetWorkflowID(wfuuid):
+        assert wrapped_workflow("hello") == "hello!"
+    assert before_count == 1
+    assert after_count == 1
+    assert error_count == 0
+
+    # Enqueuing the workflow runs the hooks
+    enqueue_handle = queue.enqueue(wrapped_workflow, "enqueued")
+    assert enqueue_handle.get_result() == "enqueued!"
+    assert before_count == 2
+    assert after_count == 2
+    assert error_count == 0
+
+    # Client enqueue runs the hooks
+    options: EnqueueOptions = {
+        "queue_name": queue.name,
+        "workflow_name": "wrapped_workflow",
+    }
+    client_handle: WorkflowHandle[str] = client.enqueue(options, "client")
+    assert client_handle.get_result() == "client!"
+    assert before_count == 3
+    assert after_count == 3
+    assert error_count == 0
+
+    # When the workflow is recovered, the hooks run
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"status": "PENDING", "name": "wrapped_workflow"})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
+        )
+
+    handles = DBOS._recover_pending_workflows()
+    assert len(handles) == 1
+    assert handles[0].get_result() == "hello!"
+    assert before_count == 4
+    assert after_count == 4
+    assert error_count == 0
