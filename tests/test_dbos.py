@@ -3017,7 +3017,10 @@ def test_notification_fallback_polling(dbos: DBOS) -> None:
     assert duration < 5.0
 
 
-def test_workflow_wrapped_by_custom_decorator(dbos: DBOS, client: DBOSClient) -> None:
+@pytest.mark.asyncio
+async def test_workflow_wrapped_by_custom_decorator(
+    dbos: DBOS, client: DBOSClient
+) -> None:
     F = TypeVar("F", bound=Callable[..., Any])
 
     before_count = 0
@@ -3027,11 +3030,11 @@ def test_workflow_wrapped_by_custom_decorator(dbos: DBOS, client: DBOSClient) ->
     def task_meta(description: str) -> Callable[[F], F]:
         def decorator(func: F) -> F:
             @wraps(func)
-            def wrapper(*args: Any, **kwargs: Any) -> Any:
+            async def wrapper(*args: Any, **kwargs: Any) -> Any:
                 nonlocal before_count, after_count, error_count
                 before_count += 1
                 try:
-                    result = func(*args, **kwargs)
+                    result = await func(*args, **kwargs)
                     after_count += 1
                     return result
                 except Exception:
@@ -3048,24 +3051,24 @@ def test_workflow_wrapped_by_custom_decorator(dbos: DBOS, client: DBOSClient) ->
     # run both on direct invocation and on recovery.
     @DBOS.workflow(name="wrapped_workflow")
     @task_meta(description="wrapped_workflow")
-    def wrapped_workflow(var: str) -> str:
-        return helper_step(var)
+    async def wrapped_workflow(var: str) -> str:
+        return await helper_step(var)
 
     @DBOS.step()
-    def helper_step(var: str) -> str:
+    async def helper_step(var: str) -> str:
         return var + "!"
 
     # Direct invocation runs the hooks.
     wfuuid = str(uuid.uuid4())
     with SetWorkflowID(wfuuid):
-        assert wrapped_workflow("hello") == "hello!"
+        assert await wrapped_workflow("hello") == "hello!"
     assert before_count == 1
     assert after_count == 1
     assert error_count == 0
 
     # Enqueuing the workflow runs the hooks
-    enqueue_handle = queue.enqueue(wrapped_workflow, "enqueued")
-    assert enqueue_handle.get_result() == "enqueued!"
+    enqueue_handle = await queue.enqueue_async(wrapped_workflow, "enqueued")
+    assert await enqueue_handle.get_result() == "enqueued!"
     assert before_count == 2
     assert after_count == 2
     assert error_count == 0
@@ -3075,13 +3078,16 @@ def test_workflow_wrapped_by_custom_decorator(dbos: DBOS, client: DBOSClient) ->
         "queue_name": queue.name,
         "workflow_name": "wrapped_workflow",
     }
-    client_handle: WorkflowHandle[str] = client.enqueue(options, "client")
-    assert client_handle.get_result() == "client!"
+    client_handle: WorkflowHandleAsync[str] = await client.enqueue_async(
+        options, "client"
+    )
+    assert await client_handle.get_result() == "client!"
     assert before_count == 3
     assert after_count == 3
     assert error_count == 0
 
-    # When the workflow is recovered, the hooks run
+    # When the workflow is recovered, the hooks run. Recovery is sync, so run it in
+    # a thread.
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.update(SystemSchema.workflow_status)
@@ -3089,9 +3095,12 @@ def test_workflow_wrapped_by_custom_decorator(dbos: DBOS, client: DBOSClient) ->
             .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
         )
 
-    handles = DBOS._recover_pending_workflows()
-    assert len(handles) == 1
-    assert handles[0].get_result() == "hello!"
+    def recover_in_thread() -> Any:
+        handles = DBOS._recover_pending_workflows()
+        assert len(handles) == 1
+        return handles[0].get_result()
+
+    assert await asyncio.to_thread(recover_in_thread) == "hello!"
     assert before_count == 4
     assert after_count == 4
     assert error_count == 0
