@@ -19,6 +19,7 @@ from typing import (
 from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
+from sqlalchemy.orm import Session
 
 from dbos._context import MaxPriority, MinPriority
 from dbos._core import DEFAULT_POLLING_INTERVAL
@@ -38,7 +39,6 @@ if TYPE_CHECKING:
 from dbos._croniter import croniter  # type: ignore
 from dbos._dbos_config import get_system_database_url, is_valid_database_url
 from dbos._error import DBOSException, DBOSNonExistentWorkflowError
-from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._scheduler import backfill_schedule, trigger_schedule
 from dbos._serialization import (
     DefaultSerializer,
@@ -196,14 +196,13 @@ class DBOSClient:
     def destroy(self) -> None:
         self._sys_db.destroy()
 
-    def _enqueue(self, options: EnqueueOptions, *args: Any, **kwargs: Any) -> str:
+    def _build_enqueue_status(
+        self, options: EnqueueOptions, *args: Any, **kwargs: Any
+    ) -> tuple[str, WorkflowStatusInternal]:
         validate_enqueue_options(options)
         workflow_name = options["workflow_name"]
         queue_name = options["queue_name"]
 
-        max_recovery_attempts = options.get("max_recovery_attempts")
-        if max_recovery_attempts is None:
-            max_recovery_attempts = DEFAULT_MAX_RECOVERY_ATTEMPTS
         workflow_id = options.get("workflow_id")
         if workflow_id is None:
             workflow_id = generate_uuid()
@@ -270,13 +269,32 @@ class DBOSClient:
             "owner_xid": None,
             "delay_until_epoch_ms": delay_until_epoch_ms,
         }
+        return workflow_id, status
 
+    def _enqueue(self, options: EnqueueOptions, *args: Any, **kwargs: Any) -> str:
+        workflow_id, status = self._build_enqueue_status(options, *args, **kwargs)
         self._sys_db.init_workflow(
             status,
             max_recovery_attempts=None,
             owner_xid=None,
             is_dequeued_request=False,
             is_recovery_request=False,
+        )
+        return workflow_id
+
+    def _enqueue_with_connection(
+        self,
+        conn_or_session: Union[sa.Connection, Session],
+        options: EnqueueOptions,
+        *args: Any,
+        **kwargs: Any,
+    ) -> str:
+        workflow_id, status = self._build_enqueue_status(options, *args, **kwargs)
+        self._sys_db.init_workflow_with_connection(
+            status,
+            conn_or_session,
+            max_recovery_attempts=None,
+            owner_xid=None,
         )
         return workflow_id
 
@@ -290,6 +308,41 @@ class DBOSClient:
         self, options: EnqueueOptions, *args: Any, **kwargs: Any
     ) -> "WorkflowHandleAsync[R]":
         workflow_id = await asyncio.to_thread(self._enqueue, options, *args, **kwargs)
+        return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)
+
+    def enqueue_in_transaction(
+        self,
+        conn_or_session: Union[sa.Connection, Session],
+        options: EnqueueOptions,
+        *args: Any,
+        **kwargs: Any,
+    ) -> "WorkflowHandle[R]":
+        """
+        Enqueue a workflow within a caller-owned SQLAlchemy transaction.
+
+        The caller must commit or roll back the transaction. The returned handle
+        is valid immediately, but ``get_result()`` should only be used after the
+        transaction commits. ``conn_or_session`` must target the DBOS system
+        database.
+        """
+        workflow_id = self._enqueue_with_connection(
+            conn_or_session, options, *args, **kwargs
+        )
+        return WorkflowHandleClientPolling[R](workflow_id, self._sys_db)
+
+    async def enqueue_in_transaction_async(
+        self,
+        conn_or_session: Union[sa.Connection, Session],
+        options: EnqueueOptions,
+        *args: Any,
+        **kwargs: Any,
+    ) -> "WorkflowHandleAsync[R]":
+        """
+        Async variant of :meth:`enqueue_in_transaction`.
+        """
+        workflow_id = await asyncio.to_thread(
+            self._enqueue_with_connection, conn_or_session, options, *args, **kwargs
+        )
         return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)
 
     def register_queue(
