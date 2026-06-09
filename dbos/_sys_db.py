@@ -783,7 +783,10 @@ class SystemDatabase(ABC):
     ) -> None:
         with self.engine.begin() as c:
             now_ms = self._now_ms_sql()
-            c.execute(
+            # Record the outcome, but never overwrite the terminal CANCELLED
+            # status: a workflow can be cancelled during its final step, and if so
+            # it must not be able to subsequently complete.
+            result = c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .values(
                     status=status,
@@ -795,7 +798,25 @@ class SystemDatabase(ABC):
                     completed_at=now_ms,
                 )
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                .where(
+                    SystemSchema.workflow_status.c.status
+                    != WorkflowStatusString.CANCELLED.value
+                )
             )
+            # update_workflow_outcome is only called to finalize a workflow. If
+            # the guarded UPDATE above matched no rows, the workflow may have
+            # been cancelled: a cancelled workflow must not complete, so re-read
+            # the status and raise so it ends as cancelled rather than succeeding
+            # or erroring. The re-read only happens on this rare no-op path, not
+            # on every completion.
+            if result.rowcount == 0:
+                current_status = c.execute(
+                    sa.select(SystemSchema.workflow_status.c.status).where(
+                        SystemSchema.workflow_status.c.workflow_uuid == workflow_id
+                    )
+                ).scalar_one_or_none()
+                if current_status == WorkflowStatusString.CANCELLED.value:
+                    raise DBOSAwaitedWorkflowCancelledError(workflow_id)
 
     def cancel_workflows(
         self,
@@ -1370,15 +1391,9 @@ class SystemDatabase(ABC):
             return workflow_id
 
     @db_retry()
-    def check_workflow_result(self, workflow_id: str) -> Union[NoResult, Any]:
-        """Check if a workflow has completed and return its result.
-
-        Returns NoResult() if the workflow is still pending/enqueued/delayed/not found.
-        Returns the deserialized output on success.
-        Raises on error, cancellation, or max recovery attempts exceeded.
-        """
+    def _read_workflow_result_row(self, workflow_id: str) -> Optional[Any]:
         with self.engine.begin() as c:
-            row = c.execute(
+            return c.execute(
                 sa.select(
                     SystemSchema.workflow_status.c.status,
                     SystemSchema.workflow_status.c.output,
@@ -1386,23 +1401,30 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.serialization,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
             ).fetchone()
-            if row is not None:
-                status = row[0]
-                if status == WorkflowStatusString.SUCCESS.value:
-                    output = row[1]
-                    return deserialize_value(output, row[3], self.serializer)
-                elif status == WorkflowStatusString.ERROR.value:
-                    error = row[2]
-                    e: Exception = deserialize_exception(error, row[3], self.serializer)
-                    raise e
-                elif status == WorkflowStatusString.CANCELLED.value:
-                    # Raise AwaitedWorkflowCancelledError here, not the cancellation exception
-                    # because the awaiting workflow is not being cancelled.
-                    raise DBOSAwaitedWorkflowCancelledError(workflow_id)
-                elif (
-                    status == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
-                ):
-                    raise DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(workflow_id)
+
+    def check_workflow_result(self, workflow_id: str) -> Union[NoResult, Any]:
+        """Check if a workflow has completed and return its result.
+
+        Returns NoResult() if the workflow is still pending/enqueued/delayed/not found.
+        Returns the deserialized output on success.
+        Raises on error, cancellation, or max recovery attempts exceeded.
+        """
+        row = self._read_workflow_result_row(workflow_id)
+        if row is not None:
+            status = row[0]
+            if status == WorkflowStatusString.SUCCESS.value:
+                output = row[1]
+                return deserialize_value(output, row[3], self.serializer)
+            elif status == WorkflowStatusString.ERROR.value:
+                error = row[2]
+                e: Exception = deserialize_exception(error, row[3], self.serializer)
+                raise e
+            elif status == WorkflowStatusString.CANCELLED.value:
+                # Raise AwaitedWorkflowCancelledError here, not the cancellation exception
+                # because the awaiting workflow is not being cancelled.
+                raise DBOSAwaitedWorkflowCancelledError(workflow_id)
+            elif status == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value:
+                raise DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(workflow_id)
         return NoResult()
 
     def await_workflow_result(self, workflow_id: str, polling_interval: float) -> Any:

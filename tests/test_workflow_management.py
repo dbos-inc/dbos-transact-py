@@ -71,6 +71,50 @@ def test_cancel_resume(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
+def test_cancel_after_final_step(dbos: DBOS) -> None:
+    # A workflow cancelled after its final step completes (but before it
+    # finishes) must not be able to complete successfully. CANCELLED is terminal.
+    steps_completed = 0
+    workflow_event = threading.Event()
+    main_thread_event = threading.Event()
+    input = 5
+
+    @DBOS.step()
+    def step_one() -> None:
+        nonlocal steps_completed
+        steps_completed += 1
+
+    @DBOS.workflow()
+    def simple_workflow(x: int) -> int:
+        # The only step runs and records its output...
+        step_one()
+        # ...then the workflow is cancelled before it returns.
+        main_thread_event.set()
+        workflow_event.wait()
+        return x
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        cancelled_handle = DBOS.start_workflow(simple_workflow, input)
+    main_thread_event.wait()
+    DBOS.cancel_workflow(wfid)
+    workflow_event.set()
+
+    # The workflow must not complete successfully.
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        cancelled_handle.get_result()
+    assert steps_completed == 1
+    assert DBOS.get_workflow_status(wfid).status == "CANCELLED"  # type: ignore[union-attr]
+
+    # Resuming it should let it complete successfully.
+    handle = DBOS.resume_workflow(wfid)
+    assert handle.get_result() == input
+    assert DBOS.get_workflow_status(wfid).status == "SUCCESS"  # type: ignore[union-attr]
+    assert steps_completed == 1  # step_one was already recorded, not re-run
+
+    assert queue_entries_are_cleaned_up(dbos)
+
+
 def test_delete_workflow(dbos: DBOS) -> None:
     @DBOS.transaction()
     def txn(x: int) -> int:
@@ -450,9 +494,10 @@ def test_cancel_resume_queue(dbos: DBOS) -> None:
     main_thread_event.wait()
     DBOS.cancel_workflow(wfid)
     workflow_event.set()
-    with pytest.raises(Exception):
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         handle.get_result()
     assert steps_completed == 1
+    assert DBOS.get_workflow_status(wfid).status == "CANCELLED"  # type: ignore[union-attr]
 
     # Resume the workflow. Verify it completes successfully.
     handle = DBOS.resume_workflow(wfid)
@@ -941,8 +986,9 @@ def test_resume_and_fork_to_queue(dbos: DBOS) -> None:
     main_thread_event.wait()
     DBOS.cancel_workflow(wfid)
     workflow_event.set()
-    with pytest.raises(Exception):
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         handle.get_result()
+    assert DBOS.get_workflow_status(wfid).status == "CANCELLED"  # type: ignore[union-attr]
     assert step_one_count == 1
     assert step_two_count == 0
 
