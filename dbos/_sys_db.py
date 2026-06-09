@@ -611,7 +611,7 @@ class SystemDatabase(ABC):
     def _insert_workflow_status(
         self,
         status: WorkflowStatusInternal,
-        conn: sa.Connection,
+        conn: Union[sa.Connection, Session],
         *,
         max_recovery_attempts: Optional[int],
         owner_xid: Optional[str],

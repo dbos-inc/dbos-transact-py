@@ -12,6 +12,7 @@ from typing import Any, Optional, TypedDict
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import Session
 
 from dbos import (
@@ -386,6 +387,16 @@ def test_client_get_event_update(client: DBOSClient, dbos: DBOS) -> None:
     with SetWorkflowID(wfid):
         handle = DBOS.start_workflow(event_test, key, value, 10)
 
+    # The client has no notification listener, so get_event only learns of a value
+    # by polling, and its fallback poll interval (60s) is longer than this
+    # workflow's 10s pre-update window. Wait (non-blocking, timeout=0) for the
+    # workflow's initial set_event to become visible so the assertion below does
+    # not race the first commit and instead read the later "updated-" value.
+    start = time.time()
+    while client.get_event(wfid, key, 0) != value:
+        assert time.time() - start < 10, "workflow did not publish initial event"
+        time.sleep(0.05)
+
     client_value = client.get_event(wfid, key, 10)
     assert client_value == value
     result = handle.get_result()
@@ -553,7 +564,9 @@ def test_enqueue_in_transaction_commit(dbos: DBOS, client: DBOSClient) -> None:
 
     with client._sys_db.engine.connect() as conn:
         with conn.begin():
-            handle = client.enqueue_in_transaction(conn, options, "tx-commit")
+            handle: WorkflowHandle[str] = client.enqueue_in_transaction(
+                conn, options, "tx-commit"
+            )
             assert handle.get_workflow_id() == wfid
             row = conn.execute(
                 sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
@@ -630,8 +643,12 @@ def test_enqueue_in_transaction_deduplication(dbos: DBOS, client: DBOSClient) ->
 
     with client._sys_db.engine.connect() as conn:
         with conn.begin():
-            handle = client.enqueue_in_transaction(conn, options, "abc")
-            handle2 = client.enqueue_in_transaction(conn, options, "def")
+            handle: WorkflowHandle[str] = client.enqueue_in_transaction(
+                conn, options, "abc"
+            )
+            handle2: WorkflowHandle[str] = client.enqueue_in_transaction(
+                conn, options, "def"
+            )
 
     wfid2 = str(uuid.uuid4())
     options["workflow_id"] = wfid2
@@ -663,7 +680,9 @@ def test_enqueue_in_transaction_session(dbos: DBOS, client: DBOSClient) -> None:
 
     with Session(client._sys_db.engine) as session:
         with session.begin():
-            handle = client.enqueue_in_transaction(session, options, "session-commit")
+            handle: WorkflowHandle[str] = client.enqueue_in_transaction(
+                session, options, "session-commit"
+            )
     assert handle.get_result() == "session-commit"
 
     wfid2 = str(uuid.uuid4())
@@ -679,7 +698,12 @@ def test_enqueue_in_transaction_session(dbos: DBOS, client: DBOSClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_enqueue_in_transaction_async(dbos: DBOS, client: DBOSClient) -> None:
+async def test_enqueue_in_transaction_run_sync(
+    dbos: DBOS, client: DBOSClient, skip_with_sqlite: None
+) -> None:
+    # Async applications use a caller-owned async transaction by bridging to the
+    # synchronous enqueue_in_transaction via AsyncConnection.run_sync, which hands
+    # the callable the underlying sync Connection bound to the same transaction.
     await asyncio.to_thread(run_client_collateral)
 
     wfid = str(uuid.uuid4())
@@ -689,15 +713,27 @@ async def test_enqueue_in_transaction_async(dbos: DBOS, client: DBOSClient) -> N
         "workflow_id": wfid,
     }
 
-    with client._sys_db.engine.connect() as conn:
-        with conn.begin():
-            handle = await client.enqueue_in_transaction_async(
-                conn, options, "async-tx"
-            )
-            assert handle.get_workflow_id() == wfid
+    async_engine = create_async_engine(client._sys_db.engine.url)
+    try:
+        async with async_engine.connect() as conn:
+            async with conn.begin():
+                handle: WorkflowHandle[str] = await conn.run_sync(
+                    lambda sync_conn: client.enqueue_in_transaction(
+                        sync_conn, options, "run-sync-tx"
+                    )
+                )
+                assert handle.get_workflow_id() == wfid
+    finally:
+        await async_engine.dispose()
 
-    result = await handle.get_result()
-    assert result == "async-tx"
+    async_handle: WorkflowHandleAsync[str] = await client.retrieve_workflow_async(wfid)
+    result = await async_handle.get_result()
+    assert result == "run-sync-tx"
+
+    list_results = client.list_workflows()
+    assert len(list_results) == 1
+    assert list_results[0].workflow_id == wfid
+    assert list_results[0].status == "SUCCESS"
 
 
 def test_enqueue_with_priority(dbos: DBOS, client: DBOSClient) -> None:

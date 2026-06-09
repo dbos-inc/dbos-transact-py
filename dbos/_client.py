@@ -318,32 +318,16 @@ class DBOSClient:
         **kwargs: Any,
     ) -> "WorkflowHandle[R]":
         """
-        Enqueue a workflow within a caller-owned SQLAlchemy transaction.
+        Enqueue a workflow within a caller-owned synchronous SQLAlchemy transaction.
 
         The caller must commit or roll back the transaction. The returned handle
-        is valid immediately, but ``get_result()`` should only be used after the
-        transaction commits. ``conn_or_session`` must target the DBOS system
-        database.
+        is not valid until the transaction commits. ``conn_or_session`` must
+        target the DBOS system database.
         """
         workflow_id = self._enqueue_with_connection(
             conn_or_session, options, *args, **kwargs
         )
         return WorkflowHandleClientPolling[R](workflow_id, self._sys_db)
-
-    async def enqueue_in_transaction_async(
-        self,
-        conn_or_session: Union[sa.Connection, Session],
-        options: EnqueueOptions,
-        *args: Any,
-        **kwargs: Any,
-    ) -> "WorkflowHandleAsync[R]":
-        """
-        Async variant of :meth:`enqueue_in_transaction`.
-        """
-        workflow_id = await asyncio.to_thread(
-            self._enqueue_with_connection, conn_or_session, options, *args, **kwargs
-        )
-        return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)
 
     def register_queue(
         self,
