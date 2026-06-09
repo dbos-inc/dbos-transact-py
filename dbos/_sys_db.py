@@ -3733,8 +3733,6 @@ class SystemDatabase(ABC):
         *,
         max_recovery_attempts: Optional[int] = None,
         owner_xid: Optional[str] = None,
-        is_recovery_request: Optional[bool] = False,
-        is_dequeued_request: Optional[bool] = False,
     ) -> tuple[WorkflowStatuses, Optional[int], bool]:
         """
         Record the initial status and inputs for a workflow using a caller-owned
@@ -3749,8 +3747,8 @@ class SystemDatabase(ABC):
             conn,
             max_recovery_attempts=max_recovery_attempts,
             owner_xid=owner_xid,
-            is_recovery_request=is_recovery_request,
-            is_dequeued_request=is_dequeued_request,
+            is_recovery_request=False,
+            is_dequeued_request=False,
         )
 
     def check_connection(self) -> None:

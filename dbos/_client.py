@@ -323,6 +323,9 @@ class DBOSClient:
         The caller must commit or roll back the transaction. The returned handle
         is not valid until the transaction commits. ``conn_or_session`` must
         target the DBOS system database.
+
+        From an async context, bridge to this synchronous method with
+        ``await async_conn.run_sync(lambda sync_conn: client.enqueue_in_transaction(sync_conn, options, *args))``.
         """
         workflow_id = self._enqueue_with_connection(
             conn_or_session, options, *args, **kwargs
