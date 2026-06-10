@@ -410,6 +410,10 @@ class DBOS:
         self._executor_field: Optional[ThreadPoolExecutor] = None
         self._background_threads: List[threading.Thread] = []
         self._timeout_tasks: set[asyncio.Task[None]] = set()
+        # Strong references to async workflow tasks: event loops only hold weak
+        # references to tasks, so without these the GC can destroy a running
+        # workflow whose handle was discarded (e.g., on the dequeue path).
+        self._workflow_tasks: set[asyncio.Task[Any]] = set()
         self.conductor_url: Optional[str] = conductor_url
         if config.get("conductor_url"):
             self.conductor_url = config.get("conductor_url")

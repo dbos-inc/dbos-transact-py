@@ -1038,4 +1038,4 @@ def test_dequeued_async_workflow_not_garbage_collected(dbos: DBOS) -> None:
     fut = fut_refs[0]()
     assert fut is not None, "workflow's pending future was garbage-collected"
     loops[0].call_soon_threadsafe(fut.set_result, "done")
-    assert handle.get_result() == "done"
+    assert handle.get_result() == "done"  # type: ignore

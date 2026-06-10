@@ -1069,8 +1069,14 @@ async def start_workflow_async(
         return WorkflowHandleAsyncPolling(new_child_workflow_id, dbos)
 
     coro = _execute_workflow_async(dbos, status, func, new_wf_ctx, args, kwargs)
+    inner_task = asyncio.create_task(coro)
+    # Keep a strong reference to the task until it completes: the event loop
+    # only holds weak references to tasks, so otherwise the GC may destroy a
+    # running workflow whose handle is discarded
+    dbos._workflow_tasks.add(inner_task)
+    inner_task.add_done_callback(dbos._workflow_tasks.discard)
     # Shield the workflow task from cancellation
-    task = asyncio.shield(asyncio.create_task(coro))
+    task = asyncio.shield(inner_task)
     return WorkflowHandleAsyncTask(new_child_workflow_id, task, dbos)
 
 
