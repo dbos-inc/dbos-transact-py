@@ -1069,8 +1069,16 @@ async def start_workflow_async(
         return WorkflowHandleAsyncPolling(new_child_workflow_id, dbos)
 
     coro = _execute_workflow_async(dbos, status, func, new_wf_ctx, args, kwargs)
+    inner_task = asyncio.create_task(coro)
+    # Hold a strong reference to the workflow task until it completes: the
+    # event loop only keeps weak references to tasks, and callers (notably
+    # execute_workflow_by_id on the dequeue path) may discard the returned
+    # handle. Without this, a cyclic GC pass can destroy the pending task
+    # mid-execution, killing the workflow with GeneratorExit (#710).
+    dbos._workflow_tasks.add(inner_task)
+    inner_task.add_done_callback(dbos._workflow_tasks.discard)
     # Shield the workflow task from cancellation
-    task = asyncio.shield(asyncio.create_task(coro))
+    task = asyncio.shield(inner_task)
     return WorkflowHandleAsyncTask(new_child_workflow_id, task, dbos)
 
 

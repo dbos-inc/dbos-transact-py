@@ -954,9 +954,7 @@ def test_get_result_no_hang_on_connection_invalidated_error(
     @DBOS.step()
     def boom_step() -> None:
         with boom_engine.begin() as c:
-            c.execute(
-                sa.text("SET LOCAL idle_in_transaction_session_timeout = '400'")
-            )
+            c.execute(sa.text("SET LOCAL idle_in_transaction_session_timeout = '400'"))
             c.execute(sa.text("SELECT 1"))
             time.sleep(1.0)  # leave the transaction idle past the timeout
             c.execute(sa.text("SELECT 1"))  # -> InternalError, connection_invalidated

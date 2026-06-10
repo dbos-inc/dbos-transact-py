@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import multiprocessing
 import multiprocessing.synchronize
 import os
@@ -6,6 +7,7 @@ import subprocess
 import threading
 import time
 import uuid
+import weakref
 from typing import Any, List
 
 import pytest
@@ -33,7 +35,11 @@ from dbos._error import (
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import GlobalParams
-from tests.conftest import default_config, queue_entries_are_cleaned_up
+from tests.conftest import (
+    default_config,
+    queue_entries_are_cleaned_up,
+    retry_until_success,
+)
 
 
 def test_simple_queue(dbos: DBOS) -> None:
@@ -2745,3 +2751,60 @@ def test_set_workflow_delay(dbos: DBOS) -> None:
 
     assert handle2.get_result() == "done"
     assert handle2.get_status().status == WorkflowStatusString.SUCCESS.value
+
+
+def test_enqueued_async_workflow_survives_gc(dbos: DBOS) -> None:
+    """Regression test for https://github.com/dbos-inc/dbos-transact-py/issues/710"""
+
+    entered = threading.Event()
+    interrupted: List[str] = []
+    loops: List[asyncio.AbstractEventLoop] = []
+    fut_refs: List["weakref.ref[asyncio.Future[str]]"] = []
+
+    @DBOS.workflow()
+    async def hanging_workflow() -> str:
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[str] = loop.create_future()
+        loops.append(loop)
+        # Expose the future only weakly so the test does not itself keep the
+        # workflow task reachable.
+        fut_refs.append(weakref.ref(fut))
+        entered.set()
+        try:
+            # Suspend on a future rooted only in this frame, as application
+            # code awaiting library internals can. Only the reference in
+            # dbos._workflow_tasks keeps this task reachable.
+            return await fut
+        except BaseException as exc:
+            interrupted.append(type(exc).__name__)
+            raise
+
+    DBOS.register_queue("gc_pin_queue")
+    handle = DBOS.enqueue_workflow("gc_pin_queue", hanging_workflow)
+
+    assert entered.wait(timeout=30)
+    time.sleep(0.2)  # let the workflow suspend on its future
+
+    # The running task must be pinned in the instance-level strong-reference set
+    assert len(dbos._workflow_tasks) == 1
+
+    gc.collect()
+    time.sleep(0.2)
+
+    # Unpinned, gc.collect() destroys the task: interrupted == ["GeneratorExit"]
+    assert interrupted == []
+    assert len(dbos._workflow_tasks) == 1
+
+    # The workflow is still alive: unblock it and verify it completes.
+    fut = fut_refs[0]()
+    assert fut is not None, "workflow's pending future was garbage-collected"
+    loops[0].call_soon_threadsafe(fut.set_result, "done")
+    assert handle.get_result() == "done"  # type: ignore
+
+    # Once the workflow completes, the done-callback must release the strong
+    # reference so finished tasks are not leaked. The result is recorded
+    # before the task finishes, so poll briefly for the callback to run.
+    def check_task_released() -> None:
+        assert not dbos._workflow_tasks
+
+    retry_until_success(check_task_released, interval=0.1, max_attempts=50)
