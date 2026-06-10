@@ -35,7 +35,11 @@ from dbos._error import (
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import GlobalParams
-from tests.conftest import default_config, queue_entries_are_cleaned_up
+from tests.conftest import (
+    default_config,
+    queue_entries_are_cleaned_up,
+    retry_until_success,
+)
 
 
 def test_simple_queue(dbos: DBOS) -> None:
@@ -2800,7 +2804,7 @@ def test_enqueued_async_workflow_survives_gc(dbos: DBOS) -> None:
     # Once the workflow completes, the done-callback must release the strong
     # reference so finished tasks are not leaked. The result is recorded
     # before the task finishes, so poll briefly for the callback to run.
-    deadline = time.time() + 10
-    while dbos._workflow_tasks and time.time() < deadline:
-        time.sleep(0.1)
-    assert not dbos._workflow_tasks
+    def check_task_released() -> None:
+        assert not dbos._workflow_tasks
+
+    retry_until_success(check_task_released, interval=0.1, max_attempts=50)
