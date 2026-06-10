@@ -12,6 +12,8 @@ from typing import Any, Optional, TypedDict
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.orm import Session
 
 from dbos import (
     DBOS,
@@ -22,6 +24,8 @@ from dbos import (
     SetWorkflowID,
 )
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
+from dbos._error import DBOSNonExistentWorkflowError
+from dbos._schemas.system_database import SystemSchema
 from tests import client_collateral
 from tests.client_collateral import event_test, retrieve_test, send_test
 
@@ -36,6 +40,16 @@ def run_client_collateral() -> None:
     dirname = os.path.dirname(__file__)
     filename = os.path.join(dirname, "client_collateral.py")
     runpy.run_path(filename)
+
+
+def _workflow_exists(client: DBOSClient, workflow_id: str) -> bool:
+    with client._sys_db.engine.connect() as conn:
+        row = conn.execute(
+            sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
+                SystemSchema.workflow_status.c.workflow_uuid == workflow_id
+            )
+        ).fetchone()
+        return row is not None
 
 
 def test_client_no_migrate(
@@ -373,6 +387,16 @@ def test_client_get_event_update(client: DBOSClient, dbos: DBOS) -> None:
     with SetWorkflowID(wfid):
         handle = DBOS.start_workflow(event_test, key, value, 10)
 
+    # The client has no notification listener, so get_event only learns of a value
+    # by polling, and its fallback poll interval (60s) is longer than this
+    # workflow's 10s pre-update window. Wait (non-blocking, timeout=0) for the
+    # workflow's initial set_event to become visible so the assertion below does
+    # not race the first commit and instead read the later "updated-" value.
+    start = time.time()
+    while client.get_event(wfid, key, 0) != value:
+        assert time.time() - start < 10, "workflow did not publish initial event"
+        time.sleep(0.05)
+
     client_value = client.get_event(wfid, key, 10)
     assert client_value == value
     result = handle.get_result()
@@ -526,6 +550,190 @@ def test_enqueue_with_deduplication(dbos: DBOS, client: DBOSClient) -> None:
 
     assert handle.get_result() == "abc"
     assert handle2.get_result() == "abc"
+
+
+def test_enqueue_in_transaction_commit(dbos: DBOS, client: DBOSClient) -> None:
+    run_client_collateral()
+
+    wfid = str(uuid.uuid4())
+    options: EnqueueOptions = {
+        "queue_name": "test_queue",
+        "workflow_name": "retrieve_test",
+        "workflow_id": wfid,
+    }
+
+    with client._sys_db.engine.connect() as conn:
+        with conn.begin():
+            handle: WorkflowHandle[str] = client.enqueue_in_transaction(
+                conn, options, "tx-commit"
+            )
+            assert handle.get_workflow_id() == wfid
+            row = conn.execute(
+                sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
+                    SystemSchema.workflow_status.c.workflow_uuid == wfid
+                )
+            ).fetchone()
+            assert row is not None
+
+    result = handle.get_result()
+    assert result == "tx-commit"
+
+    list_results = client.list_workflows()
+    assert len(list_results) == 1
+    assert list_results[0].workflow_id == wfid
+    assert list_results[0].status == "SUCCESS"
+
+
+def test_enqueue_in_transaction_rollback(dbos: DBOS, client: DBOSClient) -> None:
+    run_client_collateral()
+
+    wfid = str(uuid.uuid4())
+    options: EnqueueOptions = {
+        "queue_name": "test_queue",
+        "workflow_name": "retrieve_test",
+        "workflow_id": wfid,
+    }
+
+    with client._sys_db.engine.connect() as conn:
+        trans = conn.begin()
+        client.enqueue_in_transaction(conn, options, "tx-rollback")
+        trans.rollback()
+
+    assert not _workflow_exists(client, wfid)
+    with pytest.raises(DBOSNonExistentWorkflowError):
+        client.retrieve_workflow(wfid)
+
+
+def test_enqueue_in_transaction_pre_commit_invisible(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    run_client_collateral()
+
+    wfid = str(uuid.uuid4())
+    options: EnqueueOptions = {
+        "queue_name": "test_queue",
+        "workflow_name": "retrieve_test",
+        "workflow_id": wfid,
+    }
+    engine = client._sys_db.engine
+
+    with engine.connect() as conn:
+        with conn.begin():
+            client.enqueue_in_transaction(conn, options, "tx-invisible")
+            with engine.connect() as other_conn:
+                row = other_conn.execute(
+                    sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
+                        SystemSchema.workflow_status.c.workflow_uuid == wfid
+                    )
+                ).fetchone()
+                assert row is None
+
+
+def test_enqueue_in_transaction_deduplication(dbos: DBOS, client: DBOSClient) -> None:
+    run_client_collateral()
+
+    wfid = str(uuid.uuid4())
+    dedup_id = f"dedup-{wfid}"
+    options: EnqueueOptions = {
+        "queue_name": "test_queue",
+        "workflow_name": "retrieve_test",
+        "workflow_id": wfid,
+        "deduplication_id": dedup_id,
+    }
+
+    with client._sys_db.engine.connect() as conn:
+        with conn.begin():
+            handle: WorkflowHandle[str] = client.enqueue_in_transaction(
+                conn, options, "abc"
+            )
+            handle2: WorkflowHandle[str] = client.enqueue_in_transaction(
+                conn, options, "def"
+            )
+
+    wfid2 = str(uuid.uuid4())
+    options["workflow_id"] = wfid2
+    with client._sys_db.engine.connect() as conn:
+        with conn.begin():
+            with pytest.raises(Exception) as exc_info:
+                client.enqueue_in_transaction(conn, options, "def")
+    assert (
+        f"Workflow {wfid2} was deduplicated due to an existing workflow in queue test_queue with deduplication ID {dedup_id}."
+        in str(exc_info.value)
+    )
+
+    list_results = client.list_queued_workflows()
+    assert len(list_results) == 1
+    assert list_results[0].workflow_id == wfid
+    assert handle.get_result() == "abc"
+    assert handle2.get_result() == "abc"
+
+
+def test_enqueue_in_transaction_session(dbos: DBOS, client: DBOSClient) -> None:
+    run_client_collateral()
+
+    wfid = str(uuid.uuid4())
+    options: EnqueueOptions = {
+        "queue_name": "test_queue",
+        "workflow_name": "retrieve_test",
+        "workflow_id": wfid,
+    }
+
+    with Session(client._sys_db.engine) as session:
+        with session.begin():
+            handle: WorkflowHandle[str] = client.enqueue_in_transaction(
+                session, options, "session-commit"
+            )
+    assert handle.get_result() == "session-commit"
+
+    wfid2 = str(uuid.uuid4())
+    options["workflow_id"] = wfid2
+    session = Session(client._sys_db.engine)
+    try:
+        trans = session.begin()
+        client.enqueue_in_transaction(session, options, "session-rollback")
+        trans.rollback()
+    finally:
+        session.close()
+    assert not _workflow_exists(client, wfid2)
+
+
+@pytest.mark.asyncio
+async def test_enqueue_in_transaction_run_sync(
+    dbos: DBOS, client: DBOSClient, skip_with_sqlite: None
+) -> None:
+    # Async applications use a caller-owned async transaction by bridging to the
+    # synchronous enqueue_in_transaction via AsyncConnection.run_sync, which hands
+    # the callable the underlying sync Connection bound to the same transaction.
+    await asyncio.to_thread(run_client_collateral)
+
+    wfid = str(uuid.uuid4())
+    options: EnqueueOptions = {
+        "queue_name": "test_queue",
+        "workflow_name": "retrieve_test",
+        "workflow_id": wfid,
+    }
+
+    async_engine = create_async_engine(client._sys_db.engine.url)
+    try:
+        async with async_engine.connect() as conn:
+            async with conn.begin():
+                handle: WorkflowHandle[str] = await conn.run_sync(
+                    lambda sync_conn: client.enqueue_in_transaction(
+                        sync_conn, options, "run-sync-tx"
+                    )
+                )
+                assert handle.get_workflow_id() == wfid
+    finally:
+        await async_engine.dispose()
+
+    async_handle: WorkflowHandleAsync[str] = await client.retrieve_workflow_async(wfid)
+    result = await async_handle.get_result()
+    assert result == "run-sync-tx"
+
+    list_results = client.list_workflows()
+    assert len(list_results) == 1
+    assert list_results[0].workflow_id == wfid
+    assert list_results[0].status == "SUCCESS"
 
 
 def test_enqueue_with_priority(dbos: DBOS, client: DBOSClient) -> None:
