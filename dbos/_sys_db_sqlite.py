@@ -41,6 +41,13 @@ class SQLiteSystemDatabase(SystemDatabase):
         @event.listens_for(engine, "connect")
         def set_sqlite_immediate(dbapi_conn: Any, connection_record: Any) -> None:
             dbapi_conn.isolation_level = "IMMEDIATE"
+            # WAL mode lets readers proceed concurrently with a writer instead of
+            # serializing every transaction on a single file lock, and a generous
+            # busy timeout rides out writer contention rather than failing fast
+            # with "database is locked" (the sqlite3 default is only 5 seconds).
+            dbapi_conn.execute("PRAGMA busy_timeout=30000")
+            dbapi_conn.execute("PRAGMA journal_mode=WAL")
+            dbapi_conn.execute("PRAGMA synchronous=NORMAL")
             dbapi_conn.execute("PRAGMA foreign_keys=ON")
 
         return engine
@@ -134,6 +141,11 @@ class SQLiteSystemDatabase(SystemDatabase):
                 dbos_logger.info(f"Deleted SQLite database file: {db_path}")
             else:
                 dbos_logger.info(f"SQLite database file does not exist: {db_path}")
+            # Remove WAL sidecar files so a recreated database starts clean
+            for suffix in ("-wal", "-shm"):
+                sidecar = db_path + suffix
+                if os.path.exists(sidecar):
+                    os.remove(sidecar)
         except OSError as e:
             dbos_logger.error(
                 f"Error deleting SQLite database file {db_path}: {str(e)}"

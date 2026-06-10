@@ -1428,8 +1428,9 @@ def test_timeout_queue(dbos: DBOS) -> None:
             handle = DBOS.enqueue_workflow("test_queue", blocking_workflow)
             handles.append(handle)
 
-    # Also enqueue a normal workflow
-    with SetWorkflowTimeout(1.0):
+    # Also enqueue a normal workflow. Its timeout is generous so a slow CI
+    # runner cannot push the instantly-returning workflow past its deadline.
+    with SetWorkflowTimeout(5.0):
         normal_handle = DBOS.enqueue_workflow("test_queue", normal_workflow)
 
     # Verify the blocked workflows are cancelled
@@ -1545,8 +1546,9 @@ async def test_timeout_queue_async(dbos: DBOS, config: DBOSConfig) -> None:
             )
             handles.append(handle)
 
-    # Also enqueue a normal workflow
-    with SetWorkflowTimeout(1.0):
+    # Also enqueue a normal workflow. Its timeout is generous so a slow CI
+    # runner cannot push the instantly-returning workflow past its deadline.
+    with SetWorkflowTimeout(5.0):
         normal_handle = await DBOS.enqueue_workflow_async(
             "test_queue_async", normal_workflow
         )

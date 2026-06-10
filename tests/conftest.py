@@ -109,9 +109,10 @@ def cleanup_test_databases(config: DBOSConfig, db_engine: sa.Engine) -> None:
         db_path = parsed_url.database
         assert db_path is not None
 
-        # Remove the database files if they exist
-        if os.path.exists(db_path):
-            os.remove(db_path)
+        # Remove the database files (including WAL sidecars) if they exist
+        for path in (db_path, db_path + "-wal", db_path + "-shm"):
+            if os.path.exists(path):
+                os.remove(path)
     else:
         # For PostgreSQL, drop the databases
         app_db_name = sa.make_url(config["application_database_url"]).database
