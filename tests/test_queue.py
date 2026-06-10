@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import multiprocessing
 import multiprocessing.synchronize
 import os
@@ -6,6 +7,7 @@ import subprocess
 import threading
 import time
 import uuid
+import weakref
 from typing import Any, List
 
 import pytest
@@ -2748,13 +2750,7 @@ def test_set_workflow_delay(dbos: DBOS) -> None:
 
 
 def test_enqueued_async_workflow_survives_gc(dbos: DBOS) -> None:
-    """Regression test for #710: the dequeue path discards the workflow
-    handle, so DBOS must hold its own strong reference to the running
-    task. Without it, a garbage-collection pass destroys the pending task
-    and throws GeneratorExit into the workflow mid-execution.
-    """
-    import gc
-    import weakref
+    """Regression test for https://github.com/dbos-inc/dbos-transact-py/issues/710"""
 
     entered = threading.Event()
     interrupted: List[str] = []
