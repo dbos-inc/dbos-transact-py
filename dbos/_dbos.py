@@ -410,6 +410,11 @@ class DBOS:
         self._executor_field: Optional[ThreadPoolExecutor] = None
         self._background_threads: List[threading.Thread] = []
         self._timeout_tasks: set[asyncio.Task[None]] = set()
+        # Strong references to running async workflow tasks: the event loop
+        # only keeps weak references, so without these a garbage-collection
+        # pass can destroy a pending workflow task mid-execution (#710).
+        # Entries remove themselves on completion via done-callback.
+        self._workflow_tasks: set["asyncio.Task[Any]"] = set()
         self.conductor_url: Optional[str] = conductor_url
         if config.get("conductor_url"):
             self.conductor_url = config.get("conductor_url")

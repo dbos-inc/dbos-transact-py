@@ -2745,3 +2745,49 @@ def test_set_workflow_delay(dbos: DBOS) -> None:
 
     assert handle2.get_result() == "done"
     assert handle2.get_status().status == WorkflowStatusString.SUCCESS.value
+
+
+def test_enqueued_async_workflow_survives_gc(dbos: DBOS) -> None:
+    """Regression test for #710: the dequeue path discards the workflow
+    handle, so DBOS must hold its own strong reference to the running
+    task. Without it, a garbage-collection pass destroys the pending task
+    and throws GeneratorExit into the workflow mid-execution.
+    """
+    import gc
+
+    entered = threading.Event()
+    interrupted: List[str] = []
+
+    @DBOS.workflow()
+    async def hanging_workflow() -> str:
+        entered.set()
+        try:
+            # Suspend on a future rooted only in this frame, as application
+            # code awaiting library internals can. Only the reference in
+            # dbos._workflow_tasks keeps this task reachable.
+            await asyncio.get_running_loop().create_future()
+        except BaseException as exc:
+            interrupted.append(type(exc).__name__)
+            raise
+        return "unreachable"
+
+    DBOS.register_queue("gc_pin_queue")
+    DBOS.enqueue_workflow("gc_pin_queue", hanging_workflow)
+
+    assert entered.wait(timeout=30)
+    time.sleep(0.2)  # let the workflow suspend on its future
+    gc.collect()
+    time.sleep(0.2)
+
+    # Unpinned, gc.collect() destroys the task: interrupted == ["GeneratorExit"]
+    assert interrupted == []
+    assert len(dbos._workflow_tasks) == 1
+
+    # Clean up the deliberately-hanging workflow.
+    (task,) = dbos._workflow_tasks
+    task.get_loop().call_soon_threadsafe(task.cancel)
+    for _ in range(300):
+        if interrupted:
+            break
+        time.sleep(0.1)
+    assert interrupted == ["CancelledError"]
