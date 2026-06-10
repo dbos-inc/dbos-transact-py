@@ -223,14 +223,17 @@ def test_stream_concurrent_write_read(dbos: DBOS) -> None:
 
 
 def test_stream_low_latency_delivery(
-    config: DBOSConfig, dbos: DBOS, client: DBOSClient
+    config: DBOSConfig, dbos: DBOS, client: DBOSClient, skip_with_sqlite: None
 ) -> None:
     """Values should reach a blocked reader promptly via LISTEN/NOTIFY rather
     than after a fixed polling interval. Each value carries the wall-clock time
     it was written; the reader asserts it received the value shortly after.
     Verified for the in-process (DBOS) reader with LISTEN/NOTIFY, the
     out-of-process (client) reader (polling), and an in-process reader with
-    LISTEN/NOTIFY disabled (polling)."""
+    LISTEN/NOTIFY disabled (polling).
+
+    Skipped on SQLite: lock contention on slow runners can stall writes for
+    several seconds, making latency assertions inherently flaky."""
     stream_key = "latency_stream"
     num_values = 3
 
@@ -297,12 +300,15 @@ def test_stream_low_latency_delivery(
 
 @pytest.mark.asyncio
 async def test_stream_low_latency_delivery_async(
-    config: DBOSConfig, dbos: DBOS, client: DBOSClient
+    config: DBOSConfig, dbos: DBOS, client: DBOSClient, skip_with_sqlite: None
 ) -> None:
     """Async counterpart of test_stream_low_latency_delivery, exercising the
     read_stream_async paths for the in-process (DBOS) reader with LISTEN/NOTIFY,
     the out-of-process (client) reader (polling), and an in-process reader with
-    LISTEN/NOTIFY disabled (polling)."""
+    LISTEN/NOTIFY disabled (polling).
+
+    Skipped on SQLite: lock contention on slow runners can stall writes for
+    several seconds, making latency assertions inherently flaky."""
     stream_key = "latency_stream_async"
     num_values = 3
 

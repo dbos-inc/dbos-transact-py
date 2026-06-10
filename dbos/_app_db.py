@@ -336,15 +336,12 @@ class SQLiteApplicationDatabase(ApplicationDatabase):
             sqlite_kwargs["connect_args"] = sqlite_connect_args
         engine = sa.create_engine(database_url, **sqlite_kwargs)
 
-        # WAL mode lets readers proceed concurrently with a writer instead of
-        # serializing every transaction on a single file lock, and a generous
-        # busy timeout rides out writer contention rather than failing fast
-        # with "database is locked" (the sqlite3 default is only 5 seconds).
+        # A generous busy timeout rides out lock contention rather than
+        # failing fast with "database is locked" (the sqlite3 default is
+        # only 5 seconds, which slow disks can exceed under load).
         @sa.event.listens_for(engine, "connect")
         def set_sqlite_pragmas(dbapi_conn: Any, connection_record: Any) -> None:
             dbapi_conn.execute("PRAGMA busy_timeout=30000")
-            dbapi_conn.execute("PRAGMA journal_mode=WAL")
-            dbapi_conn.execute("PRAGMA synchronous=NORMAL")
 
         return engine
 
