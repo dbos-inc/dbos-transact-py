@@ -28,6 +28,7 @@ from typing import (
 
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
 from dbos._debug_trigger import DebugTriggers
@@ -610,7 +611,7 @@ class SystemDatabase(ABC):
     def _insert_workflow_status(
         self,
         status: WorkflowStatusInternal,
-        conn: sa.Connection,
+        conn: Union[sa.Connection, Session],
         *,
         max_recovery_attempts: Optional[int],
         owner_xid: Optional[str],
@@ -3724,6 +3725,31 @@ class SystemDatabase(ABC):
             )
         DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_INITWF_COMMIT)
         return wf_status, workflow_deadline_epoch_ms, should_execute
+
+    def init_workflow_with_connection(
+        self,
+        status: WorkflowStatusInternal,
+        conn: Union[sa.Connection, Session],
+        *,
+        max_recovery_attempts: Optional[int] = None,
+        owner_xid: Optional[str] = None,
+    ) -> tuple[WorkflowStatuses, Optional[int], bool]:
+        """
+        Record the initial status and inputs for a workflow using a caller-owned
+        SQLAlchemy Connection or ORM Session.
+
+        Does not begin, commit, rollback, or retry. The caller owns the
+        transaction. The connection or session must target the DBOS system
+        database; it cannot atomically span a separate application database.
+        """
+        return self._insert_workflow_status(
+            status,
+            conn,
+            max_recovery_attempts=max_recovery_attempts,
+            owner_xid=owner_xid,
+            is_recovery_request=False,
+            is_dequeued_request=False,
+        )
 
     def check_connection(self) -> None:
         try:
