@@ -1,6 +1,9 @@
 import asyncio
+import gc
+import threading
 import time
 import uuid
+import weakref
 from typing import Any, List, Optional, cast
 
 import pytest
@@ -985,3 +988,54 @@ async def test_workflow_recovery_async(dbos: DBOS, config: DBOSConfig) -> None:
     stat = await DBOS.get_workflow_status_async(workflow_id)
     assert stat
     assert stat.recovery_attempts == 2
+
+
+def test_dequeued_async_workflow_not_garbage_collected(dbos: DBOS) -> None:
+    # https://github.com/dbos-inc/dbos-transact-py/issues/710
+    # On the dequeue path, execute_workflow_by_id discards the
+    # WorkflowHandleAsyncTask returned by start_workflow_async, so nothing
+    # holds a strong reference to the workflow's asyncio task. If the workflow
+    # suspends on an awaitable reachable only from its own frame, the cyclic
+    # GC destroys the pending task, killing the workflow with GeneratorExit.
+    DBOS.register_queue("test_gc_queue", polling_interval_sec=0.1)
+
+    started = threading.Event()
+    killed: List[str] = []
+    loops: List[asyncio.AbstractEventLoop] = []
+    fut_refs: List["weakref.ref[asyncio.Future[str]]"] = []
+
+    @DBOS.workflow()
+    async def blocked_workflow() -> str:
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[str] = loop.create_future()
+        loops.append(loop)
+        # Expose the future only weakly so the test does not itself keep the
+        # workflow task reachable.
+        fut_refs.append(weakref.ref(fut))
+        started.set()
+        try:
+            # Suspend on a future reachable only from this coroutine's frame.
+            return await fut
+        except BaseException as e:
+            killed.append(type(e).__name__)
+            raise
+
+    handle = DBOS.enqueue_workflow("test_gc_queue", blocked_workflow)
+
+    assert started.wait(timeout=30)
+    # Give the workflow time to reach the await and suspend
+    time.sleep(1)
+
+    # Without a strong reference to the workflow task, this collection
+    # destroys it, throwing GeneratorExit into the suspended coroutine.
+    gc.collect()
+    time.sleep(0.5)
+    gc.collect()
+
+    assert killed == [], f"workflow was killed by the garbage collector: {killed}"
+
+    # The workflow is still alive: unblock it and verify it completes.
+    fut = fut_refs[0]()
+    assert fut is not None, "workflow's pending future was garbage-collected"
+    loops[0].call_soon_threadsafe(fut.set_result, "done")
+    assert handle.get_result() == "done"
