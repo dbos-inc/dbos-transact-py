@@ -893,7 +893,11 @@ class DBOS:
         queue = dbos.retrieve_queue(name)
         assert queue is not None, f"Queue {name} missing from database after upsert"
         if inserted:
-            dbos.logger.info("Registered new queue:")
+            listening = dbos._listening_queues is None or name in dbos._listening_queues
+            if listening:
+                dbos.logger.info("Registered and listening to new queue:")
+            else:
+                dbos.logger.info("Registered new queue (not listening):")
             log_queue(queue)
         return queue
 
