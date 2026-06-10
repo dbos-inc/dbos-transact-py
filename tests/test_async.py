@@ -1026,6 +1026,9 @@ def test_dequeued_async_workflow_not_garbage_collected(dbos: DBOS) -> None:
     # Give the workflow time to reach the await and suspend
     time.sleep(1)
 
+    # The running task must be pinned in the instance-level strong-reference set
+    assert len(dbos._workflow_tasks) == 1
+
     # Without a strong reference to the workflow task, this collection
     # destroys it, throwing GeneratorExit into the suspended coroutine.
     gc.collect()
@@ -1033,9 +1036,18 @@ def test_dequeued_async_workflow_not_garbage_collected(dbos: DBOS) -> None:
     gc.collect()
 
     assert killed == [], f"workflow was killed by the garbage collector: {killed}"
+    assert len(dbos._workflow_tasks) == 1
 
     # The workflow is still alive: unblock it and verify it completes.
     fut = fut_refs[0]()
     assert fut is not None, "workflow's pending future was garbage-collected"
     loops[0].call_soon_threadsafe(fut.set_result, "done")
     assert handle.get_result() == "done"  # type: ignore
+
+    # Once the workflow completes, the done-callback must release the strong
+    # reference so finished tasks are not leaked. The result is recorded
+    # before the task finishes, so poll briefly for the callback to run.
+    deadline = time.time() + 10
+    while dbos._workflow_tasks and time.time() < deadline:
+        time.sleep(0.1)
+    assert not dbos._workflow_tasks
