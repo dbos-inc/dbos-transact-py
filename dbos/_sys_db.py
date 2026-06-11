@@ -4093,6 +4093,20 @@ class SystemDatabase(ABC):
         return metrics
 
     @db_retry()
+    def get_checkpoint_name(
+        self, *, workflow_id: str, function_id: int
+    ) -> Optional[str]:
+        """Return the name of the checkpoint recorded at this point in history, if any."""
+        with self.engine.begin() as c:
+            checkpoint_name: str | None = c.execute(
+                sa.select(SystemSchema.operation_outputs.c.function_name).where(
+                    (SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
+                    & (SystemSchema.operation_outputs.c.function_id == function_id)
+                )
+            ).scalar()
+            return checkpoint_name
+
+    @db_retry()
     def patch(self, *, workflow_id: str, function_id: int, patch_name: str) -> bool:
         """If there is no checkpoint for this point in history,
         insert a patch marker and return True.
