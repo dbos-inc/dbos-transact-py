@@ -46,6 +46,7 @@ from ._error import (
     DBOSConflictingWorkflowError,
     DBOSException,
     DBOSNonExistentWorkflowError,
+    DBOSPatchNondeterminismError,
     DBOSQueueDeduplicatedError,
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
@@ -4092,19 +4093,56 @@ class SystemDatabase(ABC):
 
         return metrics
 
-    @db_retry()
-    def get_checkpoint_name(
-        self, *, workflow_id: str, function_id: int
+    def _get_patch_checkpoint_txn(
+        self, c: sa.Connection, *, workflow_id: str, function_id: int, patch_name: str
     ) -> Optional[str]:
-        """Return the name of the checkpoint recorded at this point in history, if any."""
-        with self.engine.begin() as c:
-            checkpoint_name: str | None = c.execute(
-                sa.select(SystemSchema.operation_outputs.c.function_name).where(
-                    (SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
-                    & (SystemSchema.operation_outputs.c.function_id == function_id)
+        """Return the name of the checkpoint recorded at this point in history, if any.
+
+        If a different checkpoint occupies this point while this patch marker is
+        recorded elsewhere in history, the execution has diverged from the recorded
+        history (e.g. the patch was called concurrently with other operations, or
+        moved in the code), so raise instead of silently treating the history as
+        pre-patch."""
+        rows = c.execute(
+            sa.select(
+                SystemSchema.operation_outputs.c.function_id,
+                SystemSchema.operation_outputs.c.function_name,
+            ).where(
+                (SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
+                & (
+                    (SystemSchema.operation_outputs.c.function_id == function_id)
+                    | (SystemSchema.operation_outputs.c.function_name == patch_name)
                 )
-            ).scalar()
-            return checkpoint_name
+            )
+        ).fetchall()
+        checkpoint_name: Optional[str] = next(
+            (name for fid, name in rows if fid == function_id), None
+        )
+        if checkpoint_name is not None and checkpoint_name != patch_name:
+            marker_position = next(
+                (fid for fid, name in rows if name == patch_name), None
+            )
+            if marker_position is not None:
+                raise DBOSPatchNondeterminismError(
+                    workflow_id,
+                    patch_name,
+                    f"its marker is recorded at step {marker_position}, but this execution reached it at step {function_id}",
+                )
+        return checkpoint_name
+
+    @db_retry()
+    def get_patch_checkpoint(
+        self, *, workflow_id: str, function_id: int, patch_name: str
+    ) -> Optional[str]:
+        """Return the name of the checkpoint recorded at this point in history, if any,
+        raising if the recorded history shows this patch marker at a different point."""
+        with self.engine.begin() as c:
+            return self._get_patch_checkpoint_txn(
+                c,
+                workflow_id=workflow_id,
+                function_id=function_id,
+                patch_name=patch_name,
+            )
 
     @db_retry()
     def patch(self, *, workflow_id: str, function_id: int, patch_name: str) -> bool:
@@ -4112,12 +4150,12 @@ class SystemDatabase(ABC):
         insert a patch marker and return True.
         Otherwise, return whether the checkpoint is this patch marker."""
         with self.engine.begin() as c:
-            checkpoint_name: str | None = c.execute(
-                sa.select(SystemSchema.operation_outputs.c.function_name).where(
-                    (SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
-                    & (SystemSchema.operation_outputs.c.function_id == function_id)
-                )
-            ).scalar()
+            checkpoint_name = self._get_patch_checkpoint_txn(
+                c,
+                workflow_id=workflow_id,
+                function_id=function_id,
+                patch_name=patch_name,
+            )
             if checkpoint_name is None:
                 result: OperationResultInternal = {
                     "workflow_uuid": workflow_id,
@@ -4139,12 +4177,12 @@ class SystemDatabase(ABC):
     ) -> bool:
         """Respect patch markers in history, but do not introduce new patch markers"""
         with self.engine.begin() as c:
-            checkpoint_name: str | None = c.execute(
-                sa.select(SystemSchema.operation_outputs.c.function_name).where(
-                    (SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
-                    & (SystemSchema.operation_outputs.c.function_id == function_id)
-                )
-            ).scalar()
+            checkpoint_name = self._get_patch_checkpoint_txn(
+                c,
+                workflow_id=workflow_id,
+                function_id=function_id,
+                patch_name=patch_name,
+            )
             return checkpoint_name == patch_name
 
     def _get_direct_children(self, workflow_ids: list[str]) -> list[str]:

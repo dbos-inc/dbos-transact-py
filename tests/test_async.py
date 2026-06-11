@@ -22,7 +22,7 @@ from dbos._dbos_config import ConfigFile
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSException,
-    DBOSWorkflowConflictIDError,
+    DBOSPatchNondeterminismError,
 )
 from dbos._schemas.system_database import SystemSchema
 
@@ -1000,16 +1000,16 @@ async def test_workflow_recovery_async(dbos: DBOS, config: DBOSConfig) -> None:
 
 @pytest.mark.asyncio
 async def test_concurrent_patch_async(dbos: DBOS, config: DBOSConfig) -> None:
-    # DBOS.patch_async must be safe to call from concurrent tasks inside one
-    # async workflow. Its read-counter -> DB-write -> increment-counter
-    # sequence must be atomic with respect to sibling tasks reserving
-    # checkpoint positions; otherwise concurrent patches and steps claim the
-    # same function_id and raise DBOSWorkflowConflictIDError.
+    # Calling DBOS.patch_async from concurrent tasks inside one workflow is
+    # inherently nondeterministic: the position each patch marker lands at
+    # depends on task scheduling, so a replay cannot reliably match markers
+    # to patch calls. Instead of recording a scheduling-dependent history
+    # (or corrupting the checkpoint counter and zombie-polling, see #714),
+    # patch_async must detect the interleaving and fail the workflow with a
+    # clean error.
     DBOS.destroy(destroy_registry=True)
     config["enable_patching"] = True
     DBOS(config=config)
-
-    steps_per_task = 5
 
     @DBOS.step()
     async def small_step(tag: str, i: int) -> str:
@@ -1017,8 +1017,8 @@ async def test_concurrent_patch_async(dbos: DBOS, config: DBOSConfig) -> None:
         return f"{tag}:{i}"
 
     async def patch_then_steps(tag: str) -> str:
-        assert await DBOS.patch_async(tag)
-        for i in range(steps_per_task):
+        await DBOS.patch_async(tag)
+        for i in range(5):
             await small_step(tag, i)
             await asyncio.sleep(0)
         return tag
@@ -1033,35 +1033,71 @@ async def test_concurrent_patch_async(dbos: DBOS, config: DBOSConfig) -> None:
 
     DBOS.launch()
 
-    for i in range(15):
-        wfid = f"concurrent-patch-{i}"
-        try:
-            with SetWorkflowID(wfid):
-                result = await asyncio.wait_for(parallel_patch_workflow(), timeout=15.0)
-        except DBOSWorkflowConflictIDError:
-            pytest.fail(
-                f"Workflow {wfid}: concurrent patch_async hit the checkpoint race"
-            )
-        except asyncio.TimeoutError:
-            # If a patch loses the checkpoint race, its
-            # DBOSWorkflowConflictIDError escapes the workflow body and
-            # persist() mistakes it for a duplicate execution, polling
-            # await_workflow_result indefinitely. Cancel the workflow to
-            # unblock that polling thread (so teardown doesn't hang), then
-            # fail.
-            await DBOS.cancel_workflow_async(wfid)
-            pytest.fail(
-                f"Workflow {wfid} hung: concurrent patch_async hit the checkpoint race"
-            )
-        assert sorted(result) == ["a", "b", "c"]
-        # Verify the recorded history is intact: one marker per patch plus
-        # every step, all at distinct consecutive function IDs.
-        steps = await DBOS.list_workflow_steps_async(wfid)
-        assert len(steps) == 3 + 3 * steps_per_task
-        assert sorted(s["function_id"] for s in steps) == list(range(1, len(steps) + 1))
-        markers = {
-            s["function_name"]
-            for s in steps
-            if s["function_name"].startswith("DBOS.patch-")
-        }
-        assert markers == {"DBOS.patch-a", "DBOS.patch-b", "DBOS.patch-c"}
+    # The detection is deterministic: the gather schedules all three probes
+    # before any of them can reserve a checkpoint position, so every task
+    # that loses the race observes another task's reservation and raises.
+    wfid = "concurrent-patch-async"
+    with SetWorkflowID(wfid):
+        with pytest.raises(DBOSPatchNondeterminismError, match="concurrently"):
+            # The guard is generous because SQLite busy_timeout stalls can
+            # reach 30s; it exists only so a regression cannot hang the test.
+            await asyncio.wait_for(parallel_patch_workflow(), timeout=60.0)
+
+    # The workflow fails cleanly rather than hanging or zombie-polling.
+    status = await DBOS.get_workflow_status_async(wfid)
+    assert status is not None
+    assert status.status == "ERROR"
+
+
+@pytest.mark.asyncio
+async def test_patch_marker_displacement(dbos: DBOS, config: DBOSConfig) -> None:
+    # If recorded history contains this patch's marker at a different
+    # position than the one the replaying execution reached--the footprint a
+    # nondeterministically-ordered execution leaves behind--patching must
+    # fail loudly instead of silently taking the pre-patch code path.
+    DBOS.destroy(destroy_registry=True)
+    config["enable_patching"] = True
+    patched_dbos = DBOS(config=config)
+
+    @DBOS.step()
+    async def plant_drifted_history() -> None:
+        # Simulate the recorded history of a drifted execution: another
+        # task's marker at the position this task will probe next, and this
+        # task's marker far away.
+        wfid = DBOS.workflow_id
+        assert wfid is not None
+        patched_dbos._sys_db.patch(
+            workflow_id=wfid, function_id=2, patch_name="DBOS.patch-other"
+        )
+        patched_dbos._sys_db.patch(
+            workflow_id=wfid, function_id=50, patch_name="DBOS.patch-displaced"
+        )
+
+    @DBOS.workflow()
+    async def displaced_marker_workflow() -> bool:
+        await plant_drifted_history()  # consumes position 1
+        # Probes position 2: occupied by a different checkpoint while this
+        # patch's marker sits at position 50.
+        return await DBOS.patch_async("displaced")
+
+    DBOS.launch()
+
+    wfid = "displaced-marker-workflow"
+    with SetWorkflowID(wfid):
+        with pytest.raises(DBOSPatchNondeterminismError, match="step 50"):
+            await displaced_marker_workflow()
+
+    # The sync APIs detect the same displacement at the database layer.
+    sys_db = patched_dbos._sys_db
+    with pytest.raises(DBOSPatchNondeterminismError, match="step 50"):
+        sys_db.patch(workflow_id=wfid, function_id=2, patch_name="DBOS.patch-displaced")
+    with pytest.raises(DBOSPatchNondeterminismError, match="step 50"):
+        sys_db.deprecate_patch(
+            workflow_id=wfid, function_id=2, patch_name="DBOS.patch-displaced"
+        )
+    # An empty position with the marker recorded elsewhere is not flagged:
+    # that is the legitimate footprint of the same patch name checked at
+    # multiple call sites, where this site has not recorded its marker yet.
+    assert sys_db.patch(
+        workflow_id=wfid, function_id=51, patch_name="DBOS.patch-displaced"
+    )
