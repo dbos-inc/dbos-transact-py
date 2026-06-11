@@ -64,6 +64,7 @@ class DBOSErrorCode(Enum):
     QueueDeduplicated = 12
     AwaitedWorkflowCancelled = 13
     AwaitedWorkflowMaxRecoveryAttemptsExceeded = 14
+    PatchNondeterminism = 15
     ConflictingRegistrationError = 25
 
 
@@ -204,7 +205,7 @@ class DBOSPatchNondeterminismError(DBOSException):
         self.inputs = (workflow_id, patch_name, details)
         super().__init__(
             f"Cannot deterministically apply patch {patch_name} in workflow {workflow_id}: {details}. Check that your workflow is deterministic.",
-            dbos_error_code=DBOSErrorCode.UnexpectedStep.value,
+            dbos_error_code=DBOSErrorCode.PatchNondeterminism.value,
         )
 
     def __reduce__(self) -> Any:
