@@ -627,7 +627,7 @@ class DBOS:
             # Listen to notifications
             dbos_logger.debug("Starting notifications listener thread")
             notification_listener_thread = threading.Thread(
-                target=self._sys_db._notification_listener,
+                target=self._sys_db.run_notification_listener,
                 daemon=True,
             )
             notification_listener_thread.start()
@@ -3127,6 +3127,7 @@ class DBOS:
         sys_db = _get_dbos_instance()._sys_db
 
         event, payload = sys_db.register_stream_listener(workflow_id, key)
+        final_read = False
         try:
             while True:
                 # Clear before reading so a notification arriving after the read
@@ -3139,12 +3140,18 @@ class DBOS:
                     yield value
                     offset += 1
                 except ValueError:
+                    if final_read:
+                        break
                     # No value yet: stop if the workflow is done, else wait for a
                     # notification. Workflow completion fires none, so the wait
                     # is bounded by the polling interval to notice termination.
                     status = cls.retrieve_workflow(workflow_id).get_status().status
                     if not workflow_is_active(status):
-                        break
+                        # The workflow may have written between the read above and
+                        # this status check; all its writes are committed by now,
+                        # so read to the end of the stream before stopping.
+                        final_read = True
+                        continue
                     event.wait(
                         timeout=sys_db._notification_listener_polling_interval_sec
                     )
@@ -3228,6 +3235,7 @@ class DBOS:
         )
 
         event, payload = sys_db.register_stream_listener(workflow_id, key)
+        final_read = False
         try:
             while True:
                 # Clear before reading so a notification arriving after the read
@@ -3242,6 +3250,8 @@ class DBOS:
                     yield value
                     offset += 1
                 except ValueError:
+                    if final_read:
+                        break
                     # No value yet: stop if the workflow is done, else wait for a
                     # notification. Poll the event with short asyncio sleeps (no
                     # held thread), bounded by the fallback re-check interval.
@@ -3250,7 +3260,11 @@ class DBOS:
                     )
                     status = await handle.get_status()
                     if not workflow_is_active(status.status):
-                        break
+                        # The workflow may have written between the read above and
+                        # this status check; all its writes are committed by now,
+                        # so read to the end of the stream before stopping.
+                        final_read = True
+                        continue
                     deadline = time.time() + polling_interval
                     while not event.is_set():
                         remaining = deadline - time.time()

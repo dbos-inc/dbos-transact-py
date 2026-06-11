@@ -573,6 +573,7 @@ class SystemDatabase(ABC):
         )
 
         self._listener_thread_lock = threading.Lock()
+        self._listener_running = False
 
         # Now we can run background processes
         self._run_background_processes = True
@@ -2741,6 +2742,25 @@ class SystemDatabase(ABC):
     # The interval that recv and get_event poll on as a fallback to catch dropped notifications
     _notification_fallback_polling_interval: float = 60.0
 
+    def _event_recheck_interval(self) -> float:
+        """How long recv and get_event wait on their in-memory event before
+        re-checking the database.
+
+        With a notification listener running, the listener signals the event
+        promptly and the re-check is only a safety net against dropped
+        notifications. Without one (e.g. in DBOSClient, which never starts a
+        listener thread), the re-check is the only delivery mechanism, so use
+        the much shorter polling interval instead."""
+        if self._listener_running:
+            return self._notification_fallback_polling_interval
+        return self._notification_listener_polling_interval_sec
+
+    def run_notification_listener(self) -> None:
+        """Run the notification listener, marking it active so event waits
+        only re-check the database as a fallback."""
+        self._listener_running = True
+        self._notification_listener()
+
     def recv(
         self,
         workflow_uuid: str,
@@ -2761,9 +2781,7 @@ class SystemDatabase(ABC):
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     break
-                event.wait(
-                    timeout=min(remaining, self._notification_fallback_polling_interval)
-                )
+                event.wait(timeout=min(remaining, self._event_recheck_interval()))
                 if not event.is_set():
                     self.recv_check(workflow_uuid, topic, event)
             return self.recv_consume(workflow_uuid, function_id, topic, start_time)
@@ -2800,7 +2818,7 @@ class SystemDatabase(ABC):
                 now = time.time()
                 if (
                     not event.is_set()
-                    and now - last_poll >= self._notification_fallback_polling_interval
+                    and now - last_poll >= self._event_recheck_interval()
                 ):
                     last_poll = now
                     await asyncio.to_thread(
@@ -3313,9 +3331,7 @@ class SystemDatabase(ABC):
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     break
-                event.wait(
-                    timeout=min(remaining, self._notification_fallback_polling_interval)
-                )
+                event.wait(timeout=min(remaining, self._event_recheck_interval()))
                 if not event.is_set():
                     self.get_event_check(target_uuid, key, event)
             return self.get_event_consume(target_uuid, key, start_time, caller_ctx)
@@ -3350,7 +3366,7 @@ class SystemDatabase(ABC):
                 now = time.time()
                 if (
                     not event.is_set()
-                    and now - last_poll >= self._notification_fallback_polling_interval
+                    and now - last_poll >= self._event_recheck_interval()
                 ):
                     last_poll = now
                     await asyncio.to_thread(

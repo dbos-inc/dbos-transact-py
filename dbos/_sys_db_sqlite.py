@@ -41,6 +41,10 @@ class SQLiteSystemDatabase(SystemDatabase):
         @event.listens_for(engine, "connect")
         def set_sqlite_immediate(dbapi_conn: Any, connection_record: Any) -> None:
             dbapi_conn.isolation_level = "IMMEDIATE"
+            # A generous busy timeout rides out lock contention rather than
+            # failing fast with "database is locked" (the sqlite3 default is
+            # only 5 seconds, which slow disks can exceed under load).
+            dbapi_conn.execute("PRAGMA busy_timeout=30000")
             dbapi_conn.execute("PRAGMA foreign_keys=ON")
 
         return engine

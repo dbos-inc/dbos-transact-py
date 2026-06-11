@@ -4,6 +4,8 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.sqlite-shm
+*.sqlite-wal
 
 # C extensions
 *.so

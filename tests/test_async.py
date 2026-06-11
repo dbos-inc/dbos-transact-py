@@ -569,7 +569,12 @@ async def test_workflow_timeout_async(dbos: DBOS) -> None:
         await (await DBOS.retrieve_workflow_async(direct_child)).get_result()
     assert "was cancelled" in str(exc_info.value)
 
-    # Verify all timeout tasks completed
+    # Verify all timeout tasks complete. A task may still be finishing its
+    # (redundant) cancellation of an already-cancelled workflow, so allow it
+    # a moment to drain rather than asserting instantaneous emptiness.
+    deadline = time.time() + 30
+    while dbos._timeout_tasks and time.time() < deadline:
+        await asyncio.sleep(0.1)
     assert len(dbos._timeout_tasks) == 0
 
 
@@ -592,10 +597,12 @@ async def test_max_parallel_workflows(dbos: DBOS) -> None:
     for i in range(50):
         assert (await tasks[i].get_result()) == i, f"Task {i} should return {i}"
 
+    # The workflows sleep 5s each, so anything well under the 250s serial
+    # time proves they ran in parallel; the margin absorbs slow CI runners.
     end_time = time.time()
     assert (
-        end_time - begin_time < 10
-    ), "All tasks should complete in less than 10 seconds"
+        end_time - begin_time < 30
+    ), "All tasks should complete in less than 30 seconds"
 
     # Test enqueues
     begin_time = time.time()
@@ -612,8 +619,8 @@ async def test_max_parallel_workflows(dbos: DBOS) -> None:
 
     end_time = time.time()
     assert (
-        end_time - begin_time < 10
-    ), "All enqueued tasks should complete in less than 10 seconds"
+        end_time - begin_time < 30
+    ), "All enqueued tasks should complete in less than 30 seconds"
 
 
 @pytest.mark.asyncio

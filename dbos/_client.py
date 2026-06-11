@@ -1057,6 +1057,7 @@ class DBOSClient:
             The values written to the stream in order
         """
         event, payload = self._sys_db.register_stream_listener(workflow_id, key)
+        final_read = False
         try:
             while True:
                 # Clear before reading so a notification arriving after the read
@@ -1069,6 +1070,8 @@ class DBOSClient:
                     yield value
                     offset += 1
                 except ValueError:
+                    if final_read:
+                        break
                     # No value yet: stop if the workflow is done, else wait for a
                     # notification. Workflow completion fires none, so the wait
                     # is bounded by the polling interval to notice termination.
@@ -1076,7 +1079,11 @@ class DBOSClient:
                     if status is None:
                         break
                     if not workflow_is_active(status.status):
-                        break
+                        # The workflow may have written between the read above and
+                        # this status check; all its writes are committed by now,
+                        # so read to the end of the stream before stopping.
+                        final_read = True
+                        continue
                     event.wait(
                         timeout=self._sys_db._notification_listener_polling_interval_sec
                     )
@@ -1100,6 +1107,7 @@ class DBOSClient:
             The values written to the stream in order
         """
         event, payload = self._sys_db.register_stream_listener(workflow_id, key)
+        final_read = False
         try:
             while True:
                 # Clear before reading so a notification arriving after the read
@@ -1114,6 +1122,8 @@ class DBOSClient:
                     yield value
                     offset += 1
                 except ValueError:
+                    if final_read:
+                        break
                     # No value yet: stop if the workflow is done, else wait for a
                     # notification. Poll the event with short asyncio sleeps (no
                     # held thread), bounded by the fallback re-check interval.
@@ -1123,7 +1133,11 @@ class DBOSClient:
                     if status is None:
                         break
                     if not workflow_is_active(status.status):
-                        break
+                        # The workflow may have written between the read above and
+                        # this status check; all its writes are committed by now,
+                        # so read to the end of the stream before stopping.
+                        final_read = True
+                        continue
                     deadline = (
                         time.time()
                         + self._sys_db._notification_listener_polling_interval_sec
