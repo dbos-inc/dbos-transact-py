@@ -19,7 +19,11 @@ from dbos import (
 from dbos._context import assert_current_dbos_context
 from dbos._dbos import WorkflowHandle
 from dbos._dbos_config import ConfigFile
-from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSException
+from dbos._error import (
+    DBOSAwaitedWorkflowCancelledError,
+    DBOSException,
+    DBOSWorkflowConflictIDError,
+)
 from dbos._schemas.system_database import SystemSchema
 
 
@@ -985,3 +989,72 @@ async def test_workflow_recovery_async(dbos: DBOS, config: DBOSConfig) -> None:
     stat = await DBOS.get_workflow_status_async(workflow_id)
     assert stat
     assert stat.recovery_attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_patch_async(dbos: DBOS, config: DBOSConfig) -> None:
+    # DBOS.patch_async must be safe to call from concurrent tasks inside one
+    # async workflow. Its read-counter -> DB-write -> increment-counter
+    # sequence must be atomic with respect to sibling tasks reserving
+    # checkpoint positions; otherwise concurrent patches and steps claim the
+    # same function_id and raise DBOSWorkflowConflictIDError.
+    DBOS.destroy(destroy_registry=True)
+    config["enable_patching"] = True
+    DBOS(config=config)
+
+    steps_per_task = 5
+
+    @DBOS.step()
+    async def small_step(tag: str, i: int) -> str:
+        await asyncio.sleep(0)
+        return f"{tag}:{i}"
+
+    async def patch_then_steps(tag: str) -> str:
+        assert await DBOS.patch_async(tag)
+        for i in range(steps_per_task):
+            await small_step(tag, i)
+            await asyncio.sleep(0)
+        return tag
+
+    @DBOS.workflow()
+    async def parallel_patch_workflow() -> List[str]:
+        return list(
+            await asyncio.gather(
+                patch_then_steps("a"), patch_then_steps("b"), patch_then_steps("c")
+            )
+        )
+
+    DBOS.launch()
+
+    for i in range(15):
+        wfid = f"concurrent-patch-{i}"
+        try:
+            with SetWorkflowID(wfid):
+                result = await asyncio.wait_for(parallel_patch_workflow(), timeout=15.0)
+        except DBOSWorkflowConflictIDError:
+            pytest.fail(
+                f"Workflow {wfid}: concurrent patch_async hit the checkpoint race"
+            )
+        except asyncio.TimeoutError:
+            # If a patch loses the checkpoint race, its
+            # DBOSWorkflowConflictIDError escapes the workflow body and
+            # persist() mistakes it for a duplicate execution, polling
+            # await_workflow_result indefinitely. Cancel the workflow to
+            # unblock that polling thread (so teardown doesn't hang), then
+            # fail.
+            await DBOS.cancel_workflow_async(wfid)
+            pytest.fail(
+                f"Workflow {wfid} hung: concurrent patch_async hit the checkpoint race"
+            )
+        assert sorted(result) == ["a", "b", "c"]
+        # Verify the recorded history is intact: one marker per patch plus
+        # every step, all at distinct consecutive function IDs.
+        steps = await DBOS.list_workflow_steps_async(wfid)
+        assert len(steps) == 3 + 3 * steps_per_task
+        assert sorted(s["function_id"] for s in steps) == list(range(1, len(steps) + 1))
+        markers = {
+            s["function_name"]
+            for s in steps
+            if s["function_name"].startswith("DBOS.patch-")
+        }
+        assert markers == {"DBOS.patch-a", "DBOS.patch-b", "DBOS.patch-c"}
