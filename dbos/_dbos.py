@@ -3314,10 +3314,8 @@ class DBOS:
         # interleaved with the probe.
         function_id = ctx.function_id
         checkpoint_name = await asyncio.to_thread(
-            lambda: sys_db.get_patch_checkpoint(
-                workflow_id=workflow_id,
-                function_id=function_id + 1,
-                patch_name=patch_name,
+            lambda: sys_db.get_checkpoint_name(
+                workflow_id=workflow_id, function_id=function_id + 1
             )
         )
         # No awaits may occur between this check and the reservation below,
@@ -3383,10 +3381,8 @@ class DBOS:
         # See patch_async for why the probe and the reservation are separated.
         function_id = ctx.function_id
         checkpoint_name = await asyncio.to_thread(
-            lambda: sys_db.get_patch_checkpoint(
-                workflow_id=workflow_id,
-                function_id=function_id + 1,
-                patch_name=patch_name,
+            lambda: sys_db.get_checkpoint_name(
+                workflow_id=workflow_id, function_id=function_id + 1
             )
         )
         if ctx.function_id != function_id:
