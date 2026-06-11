@@ -627,7 +627,7 @@ class DBOS:
             # Listen to notifications
             dbos_logger.debug("Starting notifications listener thread")
             notification_listener_thread = threading.Thread(
-                target=self._sys_db._notification_listener,
+                target=self._sys_db.run_notification_listener,
                 daemon=True,
             )
             notification_listener_thread.start()

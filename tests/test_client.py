@@ -359,6 +359,33 @@ def test_client_get_event(client: DBOSClient, dbos: DBOS) -> None:
     assert result == f"{key}-{value}"
 
 
+def test_client_get_event_prompt_delivery(client: DBOSClient, dbos: DBOS) -> None:
+    """The client runs no notification listener, so get_event must poll the
+    database while waiting: a value set mid-wait should be delivered promptly,
+    not discovered only when the full timeout expires."""
+
+    @DBOS.workflow()
+    def delayed_event_workflow(key: str, value: str) -> None:
+        DBOS.sleep(2.0)
+        DBOS.set_event(key, value)
+
+    key = "prompt_key"
+    value = "prompt_value"
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(delayed_event_workflow, key, value)
+
+    start = time.time()
+    assert client.get_event(wfid, key, 60) == value
+    elapsed = time.time() - start
+    handle.get_result()
+
+    # The event is set ~2s in and the client re-checks every ~1s, so delivery
+    # stays far below the 60s timeout a reader blocked on a notification that
+    # never arrives would consume.
+    assert elapsed < 30, f"client.get_event took {elapsed:.1f}s"
+
+
 def test_client_get_event_finished(client: DBOSClient, dbos: DBOS) -> None:
     run_client_collateral()
 
@@ -387,11 +414,9 @@ def test_client_get_event_update(client: DBOSClient, dbos: DBOS) -> None:
     with SetWorkflowID(wfid):
         handle = DBOS.start_workflow(event_test, key, value, 10)
 
-    # The client has no notification listener, so get_event only learns of a value
-    # by polling, and its fallback poll interval (60s) is longer than this
-    # workflow's 10s pre-update window. Wait (non-blocking, timeout=0) for the
-    # workflow's initial set_event to become visible so the assertion below does
-    # not race the first commit and instead read the later "updated-" value.
+    # Wait (non-blocking, timeout=0) for the workflow's initial set_event to
+    # become visible so the assertion below does not race the first commit and
+    # instead read the later "updated-" value.
     start = time.time()
     while client.get_event(wfid, key, 0) != value:
         assert time.time() - start < 10, "workflow did not publish initial event"
