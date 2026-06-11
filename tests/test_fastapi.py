@@ -57,17 +57,19 @@ def test_simple_endpoint(
     response = client.get("/workflow/bob/bob")
     assert response.status_code == 200
     assert response.text == '"bob1bob"'
-    assert caplog.text == ""
+    # Check records rather than caplog.text: background threads (e.g. the queue
+    # manager logging at INFO during launch) can race into the capture window.
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
     response = client.get("/endpoint/bob/bob")
     assert response.status_code == 200
     assert response.text == '"bob1bob"'
-    assert caplog.text == ""
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
     response = client.get("/transaction/bob")
     assert response.status_code == 200
     assert response.text == '"bob1"'
-    assert caplog.text == ""
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
     # Reset logging
     logging.getLogger("dbos").propagate = original_propagate

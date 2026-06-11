@@ -334,7 +334,16 @@ class SQLiteApplicationDatabase(ApplicationDatabase):
                 if k not in ("application_name", "connect_timeout")
             }
             sqlite_kwargs["connect_args"] = sqlite_connect_args
-        return sa.create_engine(database_url, **sqlite_kwargs)
+        engine = sa.create_engine(database_url, **sqlite_kwargs)
+
+        # A generous busy timeout rides out lock contention rather than
+        # failing fast with "database is locked" (the sqlite3 default is
+        # only 5 seconds, which slow disks can exceed under load).
+        @sa.event.listens_for(engine, "connect")
+        def set_sqlite_pragmas(dbapi_conn: Any, connection_record: Any) -> None:
+            dbapi_conn.execute("PRAGMA busy_timeout=30000")
+
+        return engine
 
     def run_migrations(self) -> None:
         with self.engine.begin() as conn:

@@ -49,17 +49,19 @@ def test_flask_endpoint(
     response = client.get("/endpoint/a/b")
     assert response.status_code == 200
     assert response.json == {"result": "a1b"}
-    assert caplog.text == ""
+    # Check records rather than caplog.text: background threads (e.g. the queue
+    # manager logging at INFO during launch) can race into the capture window.
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
     response = client.get("/workflow/a/b")
     assert response.status_code == 200
     assert response.json == {"result": "a1b"}
-    assert caplog.text == ""
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
     response = client.get("/transaction/bob")
     assert response.status_code == 200
     assert response.text == "bob1"
-    assert caplog.text == ""
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
     # Reset logging
     logging.getLogger("dbos").propagate = original_propagate

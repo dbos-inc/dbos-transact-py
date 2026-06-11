@@ -1130,7 +1130,9 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     assert len(workflows) == num_workflows
 
 
-def test_global_timeout(dbos: DBOS) -> None:
+def test_global_timeout(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> None:
+    # Skipped on imprecise-time SQLite: second-granularity created_at can eat
+    # the 1s margin between the cutoff and the final workflow's start time.
     event = threading.Event()
 
     @DBOS.workflow()
