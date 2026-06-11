@@ -1036,14 +1036,16 @@ async def test_concurrent_patch_async(dbos: DBOS, config: DBOSConfig) -> None:
     # The detection is deterministic: the gather schedules all three probes
     # before any of them can reserve a checkpoint position, so every task
     # that loses the race observes another task's reservation and raises.
-    wfid = "concurrent-patch-async"
-    with SetWorkflowID(wfid):
-        with pytest.raises(DBOSPatchNondeterminismError, match="concurrently"):
-            # The guard is generous because SQLite busy_timeout stalls can
-            # reach 30s; it exists only so a regression cannot hang the test.
-            await asyncio.wait_for(parallel_patch_workflow(), timeout=60.0)
+    # Repeat to exercise many interleavings of which task wins the race.
+    for i in range(15):
+        wfid = f"concurrent-patch-{i}"
+        with SetWorkflowID(wfid):
+            with pytest.raises(DBOSPatchNondeterminismError, match="concurrently"):
+                # The guard is generous because SQLite busy_timeout stalls can
+                # reach 30s; it exists only so a regression cannot hang the test.
+                await asyncio.wait_for(parallel_patch_workflow(), timeout=60.0)
 
-    # The workflow fails cleanly rather than hanging or zombie-polling.
-    status = await DBOS.get_workflow_status_async(wfid)
-    assert status is not None
-    assert status.status == "ERROR"
+        # The workflow fails cleanly rather than hanging or zombie-polling.
+        status = await DBOS.get_workflow_status_async(wfid)
+        assert status is not None
+        assert status.status == "ERROR"
