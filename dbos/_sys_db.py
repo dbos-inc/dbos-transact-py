@@ -1529,6 +1529,7 @@ class SystemDatabase(ABC):
         queues_only: bool = False,
         was_forked_from: Optional[bool] = None,
         has_parent: Optional[bool] = None,
+        attributes: Optional[Dict[str, Any]] = None,
     ) -> List[WorkflowStatus]:
         """
         Retrieve a list of workflows based on the search criteria.
@@ -1610,6 +1611,8 @@ class SystemDatabase(ABC):
             query = query.where(
                 SystemSchema.workflow_status.c.authenticated_user.in_(user_list)
             )
+        if attributes:
+            query = query.where(self._attributes_contains_clause(attributes))
         if start_time:
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
@@ -2331,6 +2334,13 @@ class SystemDatabase(ABC):
     @abstractmethod
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a unique constraint violation."""
+        pass
+
+    @abstractmethod
+    def _attributes_contains_clause(
+        self, attributes: Dict[str, Any]
+    ) -> sa.ColumnElement[bool]:
+        """Build a clause matching workflows whose attributes contain all the given key-value pairs."""
         pass
 
     @abstractmethod

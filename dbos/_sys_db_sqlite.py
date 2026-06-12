@@ -1,3 +1,4 @@
+import json
 import os
 import time
 from typing import Any, Dict, Optional, Tuple
@@ -9,6 +10,7 @@ from sqlalchemy.exc import DBAPIError
 from dbos._migration import sqlite_migrations
 
 from ._logger import dbos_logger
+from ._schemas.system_database import SystemSchema
 from ._sys_db import SystemDatabase
 
 
@@ -116,6 +118,33 @@ class SQLiteSystemDatabase(SystemDatabase):
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a unique constraint violation in SQLite."""
         return "UNIQUE constraint failed" in str(dbapi_error.orig)
+
+    def _attributes_contains_clause(
+        self, attributes: Dict[str, Any]
+    ) -> sa.ColumnElement[bool]:
+        """Approximate Postgres JSONB containment (@>) with json_extract.
+
+        Scalar values match by equality (JSON true/false extract as 1/0, and a
+        JSON null is distinguished from a missing key via json_type). Nested
+        values match by minified-JSON equality, which is stricter than
+        Postgres's recursive subset containment.
+        """
+        col = SystemSchema.workflow_status.c.attributes
+        clauses: list[sa.ColumnElement[bool]] = []
+        for key, value in attributes.items():
+            path = f'$."{key}"'
+            extracted = sa.func.json_extract(col, path)
+            if value is None:
+                clauses.append(sa.func.json_type(col, path) == "null")
+            elif isinstance(value, bool):
+                clauses.append(extracted == (1 if value else 0))
+            elif isinstance(value, (int, float, str)):
+                clauses.append(extracted == value)
+            else:
+                clauses.append(
+                    extracted == sa.func.json_extract(json.dumps(value), "$")
+                )
+        return sa.and_(*clauses)
 
     def _is_foreign_key_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a foreign key violation in SQLite."""
