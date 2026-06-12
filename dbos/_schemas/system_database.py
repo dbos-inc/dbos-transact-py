@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     Column,
@@ -17,6 +18,7 @@ from sqlalchemy import (
     Text,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 
 
 class SystemSchema:
@@ -90,6 +92,7 @@ class SystemSchema:
         Column("delay_until_epoch_ms", BigInteger, nullable=True),
         Column("rate_limited", Boolean, nullable=False, server_default="false"),
         Column("completed_at", BigInteger, nullable=True),
+        Column("attributes", JSON().with_variant(JSONB(), "postgresql"), nullable=True),
         Index("workflow_status_created_at_index", "created_at"),
         Index(
             "idx_workflow_status_delayed",
@@ -141,6 +144,12 @@ class SystemSchema:
             "started_at_epoch_ms",
             postgresql_where=text("started_at_epoch_ms IS NOT NULL"),
             sqlite_where=text("started_at_epoch_ms IS NOT NULL"),
+        ),
+        # Postgres-only; the SQLite migrations do not create this index
+        Index(
+            "idx_workflow_status_attributes",
+            "attributes",
+            postgresql_using="gin",
         ),
         Index(
             "uq_workflow_status_dedup_id",
