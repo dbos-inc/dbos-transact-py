@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, List
 from dbos._context import UseLogAttributes
 from dbos._utils import GlobalParams
 
-from ._core import execute_workflow_by_id
+from ._core import WorkflowHandlePolling, execute_workflow_by_id
 from ._error import DBOSWorkflowFunctionNotFoundError
 from ._sys_db import GetPendingWorkflowsOutput
 
@@ -19,10 +19,7 @@ def _recover_workflow(
     if workflow.queue_name:
         cleared = dbos._sys_db.clear_queue_assignment(workflow.workflow_id)
         if cleared:
-            # Skip the existence check: clear_queue_assignment updating a row
-            # proves the workflow exists, and the check is not retried on
-            # transient database errors.
-            return dbos.retrieve_workflow(workflow.workflow_id, existing_workflow=False)
+            return WorkflowHandlePolling(workflow.workflow_id, dbos)
     return execute_workflow_by_id(dbos, workflow.workflow_id, True, False)
 
 
