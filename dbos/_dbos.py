@@ -146,6 +146,7 @@ from ._error import (
     DBOSConflictingRegistrationError,
     DBOSException,
     DBOSNonExistentWorkflowError,
+    DBOSPatchNondeterminismError,
 )
 from ._event_loop import BackgroundEventLoop
 from ._logger import (
@@ -3294,8 +3295,57 @@ class DBOS:
         return patched
 
     @classmethod
-    def patch_async(cls, patch_name: str) -> Coroutine[Any, Any, bool]:
-        return asyncio.to_thread(cls.patch, patch_name)
+    async def patch_async(cls, patch_name: str) -> bool:
+        if not _get_dbos_instance().enable_patching:
+            raise DBOSException("enable_patching must be True in DBOS configuration")
+        ctx = get_local_dbos_context()
+        if ctx is None or not ctx.is_workflow():
+            raise DBOSException("DBOS.patch_async must be called from a workflow")
+        workflow_id = ctx.workflow_id
+        patch_name = f"DBOS.patch-{patch_name}"
+        sys_db = _get_dbos_instance()._sys_db
+        # Unlike DBOS.patch, this cannot simply read the database and then
+        # consume a checkpoint position: sibling tasks in the same async
+        # workflow may reserve positions while this coroutine is off the
+        # event loop, and any such interleaving makes the position of the
+        # patch marker--and therefore replay--dependent on task scheduling.
+        # Probe the database in a thread, then revalidate and reserve the
+        # position on the event loop, failing loudly if a sibling task
+        # interleaved with the probe.
+        function_id = ctx.function_id
+        checkpoint_name = await asyncio.to_thread(
+            lambda: sys_db.get_checkpoint_name(
+                workflow_id=workflow_id, function_id=function_id + 1
+            )
+        )
+        # No awaits may occur between this check and the reservation below,
+        # so the slice is atomic on the event loop.
+        if ctx.function_id != function_id:
+            raise DBOSPatchNondeterminismError(
+                workflow_id,
+                patch_name,
+                "DBOS.patch_async was called concurrently with other operations "
+                "in the same workflow, so the position of its marker would "
+                "depend on task scheduling; call it from sequential workflow code",
+            )
+        if checkpoint_name is not None and checkpoint_name != patch_name:
+            # Pre-patch replay: run the old code, consuming no position.
+            return False
+        # Reserve the next checkpoint position.
+        ctx.function_id += 1
+        if checkpoint_name == patch_name:
+            # Replay: the patch marker is already in history.
+            return True
+        # New execution: record the marker at the reserved position. No
+        # sibling task can write to it because every checkpoint operation
+        # reserves its position on the event loop before writing.
+        return await asyncio.to_thread(
+            lambda: sys_db.patch(
+                workflow_id=workflow_id,
+                function_id=function_id + 1,
+                patch_name=patch_name,
+            )
+        )
 
     @classmethod
     def deprecate_patch(cls, patch_name: str) -> bool:
@@ -3317,8 +3367,38 @@ class DBOS:
         return True
 
     @classmethod
-    def deprecate_patch_async(cls, patch_name: str) -> Coroutine[Any, Any, bool]:
-        return asyncio.to_thread(cls.deprecate_patch, patch_name)
+    async def deprecate_patch_async(cls, patch_name: str) -> bool:
+        if not _get_dbos_instance().enable_patching:
+            raise DBOSException("enable_patching must be True in DBOS configuration")
+        ctx = get_local_dbos_context()
+        if ctx is None or not ctx.is_workflow():
+            raise DBOSException(
+                "DBOS.deprecate_patch_async must be called from a workflow"
+            )
+        workflow_id = ctx.workflow_id
+        patch_name = f"DBOS.patch-{patch_name}"
+        sys_db = _get_dbos_instance()._sys_db
+        # See patch_async for why the probe and the reservation are separated.
+        function_id = ctx.function_id
+        checkpoint_name = await asyncio.to_thread(
+            lambda: sys_db.get_checkpoint_name(
+                workflow_id=workflow_id, function_id=function_id + 1
+            )
+        )
+        if ctx.function_id != function_id:
+            raise DBOSPatchNondeterminismError(
+                workflow_id,
+                patch_name,
+                "DBOS.deprecate_patch_async was called concurrently with other "
+                "operations in the same workflow, so the position of its marker "
+                "would depend on task scheduling; call it from sequential "
+                "workflow code",
+            )
+        # If the patch is already in history, consume its position;
+        # otherwise consume nothing and introduce no new marker.
+        if checkpoint_name == patch_name:
+            ctx.function_id += 1
+        return True
 
     @classproperty
     def tracer(self) -> DBOSTracer:

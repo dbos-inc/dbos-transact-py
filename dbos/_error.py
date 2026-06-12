@@ -64,6 +64,7 @@ class DBOSErrorCode(Enum):
     QueueDeduplicated = 12
     AwaitedWorkflowCancelled = 13
     AwaitedWorkflowMaxRecoveryAttemptsExceeded = 14
+    PatchNondeterminism = 15
     ConflictingRegistrationError = 25
 
 
@@ -187,6 +188,24 @@ class DBOSUnexpectedStepError(DBOSException):
         super().__init__(
             f"During execution of workflow {workflow_id} step {step_id}, function {recorded_name} was recorded when {expected_name} was expected. Check that your workflow is deterministic.",
             dbos_error_code=DBOSErrorCode.UnexpectedStep.value,
+        )
+
+    def __reduce__(self) -> Any:
+        # Tell pickle how to reconstruct this object
+        return (
+            self.__class__,
+            self.inputs,
+        )
+
+
+class DBOSPatchNondeterminismError(DBOSException):
+    """Exception raised when patching detects a non-deterministic workflow execution."""
+
+    def __init__(self, workflow_id: str, patch_name: str, details: str) -> None:
+        self.inputs = (workflow_id, patch_name, details)
+        super().__init__(
+            f"Cannot deterministically apply patch {patch_name} in workflow {workflow_id}: {details}. Check that your workflow is deterministic.",
+            dbos_error_code=DBOSErrorCode.PatchNondeterminism.value,
         )
 
     def __reduce__(self) -> Any:

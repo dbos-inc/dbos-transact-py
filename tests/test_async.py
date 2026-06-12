@@ -19,7 +19,11 @@ from dbos import (
 from dbos._context import assert_current_dbos_context
 from dbos._dbos import WorkflowHandle
 from dbos._dbos_config import ConfigFile
-from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSException
+from dbos._error import (
+    DBOSAwaitedWorkflowCancelledError,
+    DBOSException,
+    DBOSPatchNondeterminismError,
+)
 from dbos._schemas.system_database import SystemSchema
 
 
@@ -992,3 +996,56 @@ async def test_workflow_recovery_async(dbos: DBOS, config: DBOSConfig) -> None:
     stat = await DBOS.get_workflow_status_async(workflow_id)
     assert stat
     assert stat.recovery_attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_patch_async(dbos: DBOS, config: DBOSConfig) -> None:
+    # Calling DBOS.patch_async from concurrent tasks inside one workflow is
+    # inherently nondeterministic: the position each patch marker lands at
+    # depends on task scheduling, so a replay cannot reliably match markers
+    # to patch calls. Instead of recording a scheduling-dependent history
+    # (or corrupting the checkpoint counter and zombie-polling, see #714),
+    # patch_async must detect the interleaving and fail the workflow with a
+    # clean error.
+    DBOS.destroy(destroy_registry=True)
+    config["enable_patching"] = True
+    DBOS(config=config)
+
+    @DBOS.step()
+    async def small_step(tag: str, i: int) -> str:
+        await asyncio.sleep(0)
+        return f"{tag}:{i}"
+
+    async def patch_then_steps(tag: str) -> str:
+        await DBOS.patch_async(tag)
+        for i in range(5):
+            await small_step(tag, i)
+            await asyncio.sleep(0)
+        return tag
+
+    @DBOS.workflow()
+    async def parallel_patch_workflow() -> List[str]:
+        return list(
+            await asyncio.gather(
+                patch_then_steps("a"), patch_then_steps("b"), patch_then_steps("c")
+            )
+        )
+
+    DBOS.launch()
+
+    # The detection is deterministic: the gather schedules all three probes
+    # before any of them can reserve a checkpoint position, so every task
+    # that loses the race observes another task's reservation and raises.
+    # Repeat to exercise many interleavings of which task wins the race.
+    for i in range(15):
+        wfid = f"concurrent-patch-{i}"
+        with SetWorkflowID(wfid):
+            with pytest.raises(DBOSPatchNondeterminismError, match="concurrently"):
+                # The guard is generous because SQLite busy_timeout stalls can
+                # reach 30s; it exists only so a regression cannot hang the test.
+                await asyncio.wait_for(parallel_patch_workflow(), timeout=60.0)
+
+        # The workflow fails cleanly rather than hanging or zombie-polling.
+        status = await DBOS.get_workflow_status_async(wfid)
+        assert status is not None
+        assert status.status == "ERROR"
