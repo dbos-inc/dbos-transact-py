@@ -211,8 +211,9 @@ def test_stream_concurrent_write_read(dbos: DBOS) -> None:
 
     for value in DBOS.read_stream(wfid, stream_key):
         read_values.append(value)
-        # Ensure we're not waiting too long for each value
-        assert time.time() - start_time < 30  # Safety timeout
+        # Safety timeout: generous because SQLite busy_timeout stalls can reach 30s,
+        # but below the 120s pytest-timeout hard kill
+        assert time.time() - start_time < 100
 
     # Wait for writer to complete
     handle.get_result()
@@ -716,8 +717,9 @@ async def test_async_stream_concurrent_write_read(dbos: DBOS) -> None:
 
     async for value in DBOS.read_stream_async(wfid, stream_key):
         read_values.append(value)
-        # Ensure we're not waiting too long for each value
-        assert time.time() - start_time < 30  # Safety timeout
+        # Safety timeout: generous because SQLite busy_timeout stalls can reach 30s,
+        # but below the 120s pytest-timeout hard kill
+        assert time.time() - start_time < 100
 
     # Wait for writer to complete
     await writer_handle.get_result()
