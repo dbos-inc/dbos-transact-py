@@ -136,6 +136,7 @@ def _enqueue_scheduled_workflow(
         "started_at_epoch_ms": None,
         "owner_xid": None,
         "delay_until_epoch_ms": None,
+        "attributes": None,
     }
     sys_db.init_workflow(
         status,

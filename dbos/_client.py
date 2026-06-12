@@ -86,6 +86,7 @@ class EnqueueOptions(_EnqueueOptionsRequired, total=False):
     serialization_type: WorkflowSerializationFormat
     class_name: str
     instance_name: str
+    attributes: Dict[str, Any]
 
 
 def validate_enqueue_options(options: EnqueueOptions) -> None:
@@ -268,6 +269,7 @@ class DBOSClient:
             "started_at_epoch_ms": None,
             "owner_xid": None,
             "delay_until_epoch_ms": delay_until_epoch_ms,
+            "attributes": options.get("attributes"),
         }
         return workflow_id, status
 

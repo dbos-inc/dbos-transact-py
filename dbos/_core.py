@@ -446,7 +446,11 @@ def _init_workflow(
             if enqueue_options is not None
             else None
         ),
+        "attributes": ctx.workflow_attributes,
     }
+    # Consume the attributes from the workflow's context so that workflows
+    # started inside this workflow do not inherit them.
+    ctx.workflow_attributes = None
 
     # Synchronously record the status and inputs for workflows
     try:
