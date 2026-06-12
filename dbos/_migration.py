@@ -8,7 +8,7 @@ from ._logger import dbos_logger
 # autocommit (CREATE/DROP INDEX CONCURRENTLY cannot run inside a transaction
 # block on Postgres). On CockroachDB, schema changes are inherently online,
 # so this set is ignored and the regular transactional path is used.
-_ONLINE_MIGRATIONS = {22, 23, 24, 25, 26, 27, 29, 30, 31, 32, 34, 35, 37, 41}
+_ONLINE_MIGRATIONS = {22, 23, 24, 25, 26, 27, 29, 30, 31, 32, 34, 35, 37}
 
 
 def _concurrently(is_cockroach: bool) -> str:
@@ -854,15 +854,14 @@ FOR EACH ROW EXECUTE FUNCTION "{schema}".streams_function();
 
 
 def get_dbos_migration_forty(schema: str) -> str:
-    # ADD COLUMN with no default is a fast catalog-only update.
-    return f'ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "attributes" JSONB'
-
-
-def get_dbos_migration_fortyone(schema: str, is_cockroach: bool) -> str:
-    # Supports containment (@>) filters on workflow attributes. On CockroachDB,
-    # USING GIN creates an inverted index.
-    c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_attributes" ON "{schema}"."workflow_status" USING GIN ("attributes")'
+    # ADD COLUMN with no default is catalog-only; the partial index built in
+    # the same transaction covers zero rows, so no CONCURRENTLY is needed.
+    # The index supports containment (@>) filters on workflow attributes; on
+    # CockroachDB, USING GIN creates an inverted index.
+    return f"""
+ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "attributes" JSONB;
+CREATE INDEX IF NOT EXISTS "idx_workflow_status_attributes" ON "{schema}"."workflow_status" USING GIN ("attributes") WHERE "attributes" IS NOT NULL;
+"""
 
 
 def get_dbos_migrations(
@@ -909,7 +908,6 @@ def get_dbos_migrations(
         get_dbos_migration_thirtyeight(schema, is_cockroach),
         get_dbos_migration_thirtynine(schema, use_listen_notify),
         get_dbos_migration_forty(schema),
-        get_dbos_migration_fortyone(schema, is_cockroach),
     ]
 
 
@@ -1196,6 +1194,6 @@ sqlite_migrations = [
     sqlite_migration_thirtysix,
     sqlite_migration_thirtyseven,
     # There is no SQLite version of migrations thirty-eight and thirty-nine
+    # Unlike Postgres migration forty, this creates no index (no GIN equivalent)
     sqlite_migration_forty,
-    # There is no SQLite version of migration forty-one (GIN index)
 ]

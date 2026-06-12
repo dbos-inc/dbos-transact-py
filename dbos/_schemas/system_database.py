@@ -150,6 +150,7 @@ class SystemSchema:
             "idx_workflow_status_attributes",
             "attributes",
             postgresql_using="gin",
+            postgresql_where=text("attributes IS NOT NULL"),
         ),
         Index(
             "uq_workflow_status_dedup_id",
