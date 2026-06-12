@@ -1751,6 +1751,7 @@ class SystemDatabase(ABC):
             infos.append(info)
         return infos
 
+    @db_retry()
     def get_pending_workflows(
         self, executor_id: str, app_version: str
     ) -> list[GetPendingWorkflowsOutput]:
@@ -3597,6 +3598,7 @@ class SystemDatabase(ABC):
             # Return the IDs of all functions we started
             return ret_ids
 
+    @db_retry()
     def clear_queue_assignment(self, workflow_id: str) -> bool:
         with self.engine.begin() as c:
             # Reset the status of the task to "ENQUEUED"
