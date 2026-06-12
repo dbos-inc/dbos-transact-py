@@ -1751,6 +1751,7 @@ class SystemDatabase(ABC):
             infos.append(info)
         return infos
 
+    @db_retry()
     def get_pending_workflows(
         self, executor_id: str, app_version: str
     ) -> list[GetPendingWorkflowsOutput]:
