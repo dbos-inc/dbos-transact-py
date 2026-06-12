@@ -52,6 +52,16 @@ def _workflow_exists(client: DBOSClient, workflow_id: str) -> bool:
         return row is not None
 
 
+def _count_notifications(client: DBOSClient, workflow_id: str) -> int:
+    with client._sys_db.engine.connect() as conn:
+        rows = conn.execute(
+            sa.select(SystemSchema.notifications.c.message_uuid).where(
+                SystemSchema.notifications.c.destination_uuid == workflow_id
+            )
+        ).fetchall()
+        return len(rows)
+
+
 def test_client_no_migrate(
     dbos: DBOS, config: DBOSConfig, skip_with_sqlite: None
 ) -> None:
@@ -759,6 +769,244 @@ async def test_enqueue_in_transaction_run_sync(
     assert len(list_results) == 1
     assert list_results[0].workflow_id == wfid
     assert list_results[0].status == "SUCCESS"
+
+
+def test_send_in_transaction_commit(dbos: DBOS, client: DBOSClient) -> None:
+    run_client_collateral()
+
+    now = time.time_ns()
+    topic = f"test-topic-{now}"
+    message = f"Hello, DBOS! {now}"
+
+    with SetWorkflowID(str(uuid.uuid4())):
+        handle = DBOS.start_workflow(send_test, topic)
+    wfid = handle.get_workflow_id()
+
+    with client._sys_db.engine.connect() as conn:
+        with conn.begin():
+            client.send_in_transaction(conn, wfid, message, topic)
+            row = conn.execute(
+                sa.select(SystemSchema.notifications.c.destination_uuid).where(
+                    SystemSchema.notifications.c.destination_uuid == wfid
+                )
+            ).fetchone()
+            assert row is not None
+
+    assert handle.get_result() == message
+
+
+def test_send_in_transaction_rollback(dbos: DBOS, client: DBOSClient) -> None:
+    run_client_collateral()
+
+    now = time.time_ns()
+    topic = f"test-topic-{now}"
+
+    with SetWorkflowID(str(uuid.uuid4())):
+        handle = DBOS.start_workflow(send_test, topic)
+    wfid = handle.get_workflow_id()
+
+    with client._sys_db.engine.connect() as conn:
+        trans = conn.begin()
+        client.send_in_transaction(conn, wfid, f"rolled-back {now}", topic)
+        trans.rollback()
+
+    assert _count_notifications(client, wfid) == 0
+
+    # The workflow receives only a message sent after the rollback.
+    client.send(wfid, f"delivered {now}", topic)
+    assert handle.get_result() == f"delivered {now}"
+
+
+def test_send_in_transaction_pre_commit_invisible(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    run_client_collateral()
+
+    now = time.time_ns()
+    topic = f"test-topic-{now}"
+    message = f"Hello, DBOS! {now}"
+
+    with SetWorkflowID(str(uuid.uuid4())):
+        handle = DBOS.start_workflow(send_test, topic)
+    wfid = handle.get_workflow_id()
+    engine = client._sys_db.engine
+
+    with engine.connect() as conn:
+        with conn.begin():
+            client.send_in_transaction(conn, wfid, message, topic)
+            with engine.connect() as other_conn:
+                row = other_conn.execute(
+                    sa.select(SystemSchema.notifications.c.destination_uuid).where(
+                        SystemSchema.notifications.c.destination_uuid == wfid
+                    )
+                ).fetchone()
+                assert row is None
+
+    assert handle.get_result() == message
+
+
+def test_send_in_transaction_idempotent(dbos: DBOS, client: DBOSClient) -> None:
+    run_client_collateral()
+
+    now = time.time_ns()
+    topic = f"test-topic-{now}"
+    message = f"Hello, DBOS! {now}"
+    idempotency_key = f"test-idempotency-{now}"
+
+    with SetWorkflowID(str(uuid.uuid4())):
+        handle = DBOS.start_workflow(send_test, topic)
+    wfid = handle.get_workflow_id()
+
+    # Sending twice with the same idempotency key in the same transaction
+    # inserts a single message. Counting on the sending connection is
+    # deterministic because the workflow cannot consume uncommitted rows.
+    with client._sys_db.engine.connect() as conn:
+        with conn.begin():
+            client.send_in_transaction(conn, wfid, message, topic, idempotency_key)
+            client.send_in_transaction(conn, wfid, message, topic, idempotency_key)
+            rows = conn.execute(
+                sa.select(SystemSchema.notifications.c.message_uuid).where(
+                    SystemSchema.notifications.c.destination_uuid == wfid
+                )
+            ).fetchall()
+            assert len(rows) == 1
+
+    assert handle.get_result() == message
+
+
+def test_send_in_transaction_session(dbos: DBOS, client: DBOSClient) -> None:
+    run_client_collateral()
+
+    now = time.time_ns()
+    topic = f"test-topic-{now}"
+
+    with SetWorkflowID(str(uuid.uuid4())):
+        handle = DBOS.start_workflow(send_test, topic)
+    wfid = handle.get_workflow_id()
+
+    with Session(client._sys_db.engine) as session:
+        with session.begin():
+            client.send_in_transaction(session, wfid, f"session-commit {now}", topic)
+    assert handle.get_result() == f"session-commit {now}"
+
+    with SetWorkflowID(str(uuid.uuid4())):
+        handle2 = DBOS.start_workflow(send_test, topic)
+    wfid2 = handle2.get_workflow_id()
+
+    session = Session(client._sys_db.engine)
+    try:
+        trans = session.begin()
+        client.send_in_transaction(session, wfid2, f"session-rollback {now}", topic)
+        trans.rollback()
+    finally:
+        session.close()
+    assert _count_notifications(client, wfid2) == 0
+
+    client.send(wfid2, f"delivered {now}", topic)
+    assert handle2.get_result() == f"delivered {now}"
+
+
+def test_send_bulk_in_transaction(dbos: DBOS, client: DBOSClient) -> None:
+    run_client_collateral()
+
+    now = time.time_ns()
+    topic = f"test-topic-{now}"
+
+    wfid_a = str(uuid.uuid4())
+    wfid_b = str(uuid.uuid4())
+    with SetWorkflowID(wfid_a):
+        handle_a = DBOS.start_workflow(send_test, topic)
+    with SetWorkflowID(wfid_b):
+        handle_b = DBOS.start_workflow(send_test, topic)
+
+    with client._sys_db.engine.connect() as conn:
+        trans = conn.begin()
+        client.send_bulk_in_transaction(
+            conn,
+            [
+                SendMessage(wfid_a, f"rolled-back-a {now}", topic),
+                SendMessage(wfid_b, f"rolled-back-b {now}", topic),
+            ],
+        )
+        trans.rollback()
+
+    assert _count_notifications(client, wfid_a) == 0
+    assert _count_notifications(client, wfid_b) == 0
+
+    with client._sys_db.engine.connect() as conn:
+        with conn.begin():
+            client.send_bulk_in_transaction(
+                conn,
+                [
+                    SendMessage(wfid_a, f"to_a {now}", topic),
+                    SendMessage(wfid_b, f"to_b {now}", topic),
+                ],
+            )
+
+    assert handle_a.get_result() == f"to_a {now}"
+    assert handle_b.get_result() == f"to_b {now}"
+
+
+def test_enqueue_and_send_in_transaction(dbos: DBOS, client: DBOSClient) -> None:
+    # Atomically enqueue a workflow and send it a message in one transaction.
+    # The workflow row inserted by the enqueue satisfies the foreign key
+    # constraint on the notification within the same transaction.
+    run_client_collateral()
+
+    now = time.time_ns()
+    topic = f"test-topic-{now}"
+    message = f"Hello, DBOS! {now}"
+    wfid = str(uuid.uuid4())
+    options: EnqueueOptions = {
+        "queue_name": "test_queue",
+        "workflow_name": "send_test",
+        "workflow_id": wfid,
+    }
+
+    with client._sys_db.engine.connect() as conn:
+        with conn.begin():
+            handle: WorkflowHandle[str] = client.enqueue_in_transaction(
+                conn, options, topic
+            )
+            client.send_in_transaction(conn, wfid, message, topic)
+
+    assert handle.get_result() == message
+
+
+@pytest.mark.asyncio
+async def test_send_in_transaction_run_sync(
+    dbos: DBOS, client: DBOSClient, skip_with_sqlite: None
+) -> None:
+    # Async applications use a caller-owned async transaction by bridging to the
+    # synchronous send_in_transaction via AsyncConnection.run_sync, which hands
+    # the callable the underlying sync Connection bound to the same transaction.
+    await asyncio.to_thread(run_client_collateral)
+
+    now = time.time_ns()
+    topic = f"test-topic-{now}"
+    message = f"run-sync-tx {now}"
+
+    def start_workflow() -> WorkflowHandle[str]:
+        with SetWorkflowID(str(uuid.uuid4())):
+            return DBOS.start_workflow(send_test, topic)
+
+    handle = await asyncio.to_thread(start_workflow)
+    wfid = handle.get_workflow_id()
+
+    async_engine = create_async_engine(client._sys_db.engine.url)
+    try:
+        async with async_engine.connect() as conn:
+            async with conn.begin():
+                await conn.run_sync(
+                    lambda sync_conn: client.send_in_transaction(
+                        sync_conn, wfid, message, topic
+                    )
+                )
+    finally:
+        await async_engine.dispose()
+
+    result = await asyncio.to_thread(handle.get_result)
+    assert result == message
 
 
 def test_enqueue_with_priority(dbos: DBOS, client: DBOSClient) -> None:

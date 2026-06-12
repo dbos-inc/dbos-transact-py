@@ -2186,7 +2186,7 @@ class SystemDatabase(ABC):
         self,
         result: OperationResultInternal,
         completed_at_epoch_ms: int,
-        conn: sa.Connection,
+        conn: Union[sa.Connection, Session],
     ) -> None:
         error = result["error"]
         output = result["output"]
@@ -2333,7 +2333,7 @@ class SystemDatabase(ABC):
         workflow_id: str,
         function_id: int,
         function_name: str,
-        conn: sa.Connection,
+        conn: Union[sa.Connection, Session],
     ) -> Optional[RecordedResult]:
         # First query: Retrieve the workflow status
         workflow_status_sql = sa.select(
@@ -2410,7 +2410,7 @@ class SystemDatabase(ABC):
             )
 
     def _find_fork_descendants_txn(
-        self, workflow_ids: List[str], conn: sa.Connection
+        self, workflow_ids: List[str], conn: Union[sa.Connection, Session]
     ) -> Dict[str, Set[str]]:
         """Return every workflow recursively forked from each of `workflow_ids`.
 
@@ -2481,6 +2481,55 @@ class SystemDatabase(ABC):
         `destination_id` but also to every workflow recursively forked from it
         (forks, forks of forks, ...) that exists at send time.
         """
+        with self.engine.begin() as c:
+            self._send_bulk_txn(
+                messages,
+                c,
+                serialization_type=serialization_type,
+                workflow_id=workflow_id,
+                function_id=function_id,
+                function_name=function_name,
+                send_to_forks=send_to_forks,
+            )
+
+    def send_bulk_with_connection(
+        self,
+        messages: List[SendMessage],
+        conn: Union[sa.Connection, Session],
+        *,
+        serialization_type: Optional["WorkflowSerializationFormat"],
+        function_name: str,
+        send_to_forks: bool,
+    ) -> None:
+        """Send one or more messages using a caller-owned SQLAlchemy
+        Connection or ORM Session.
+
+        Does not begin, commit, rollback, or retry. The caller owns the
+        transaction; the messages are not visible to their destinations until
+        it commits. The connection or session must target the DBOS system
+        database.
+        """
+        self._send_bulk_txn(
+            messages,
+            conn,
+            serialization_type=serialization_type,
+            workflow_id=None,
+            function_id=None,
+            function_name=function_name,
+            send_to_forks=send_to_forks,
+        )
+
+    def _send_bulk_txn(
+        self,
+        messages: List[SendMessage],
+        conn: Union[sa.Connection, Session],
+        *,
+        serialization_type: Optional["WorkflowSerializationFormat"],
+        workflow_id: Optional[str],
+        function_id: Optional[int],
+        function_name: str,
+        send_to_forks: bool,
+    ) -> None:
         start_time = int(time.time() * 1000)
 
         # Reject duplicate idempotency keys
@@ -2500,95 +2549,92 @@ class SystemDatabase(ABC):
             for m in messages
         ]
 
-        with self.engine.begin() as c:
-            if workflow_id is not None:
-                assert function_id is not None
-                recorded_output = self._check_operation_execution_txn(
-                    workflow_id, function_id, function_name, conn=c
+        if workflow_id is not None:
+            assert function_id is not None
+            recorded_output = self._check_operation_execution_txn(
+                workflow_id, function_id, function_name, conn=conn
+            )
+            if recorded_output is not None:
+                dbos_logger.debug(
+                    f"Replaying {function_name}, id: {function_id}, messages: {len(messages)}"
                 )
-                if recorded_output is not None:
-                    dbos_logger.debug(
-                        f"Replaying {function_name}, id: {function_id}, messages: {len(messages)}"
-                    )
-                    return  # Already sent before
-                else:
-                    dbos_logger.debug(
-                        f"Running {function_name}, id: {function_id}, messages: {len(messages)}"
-                    )
+                return  # Already sent before
+            else:
+                dbos_logger.debug(
+                    f"Running {function_name}, id: {function_id}, messages: {len(messages)}"
+                )
 
-            # Expand each message to its destination set (the workflow itself plus,
-            # if requested, every workflow recursively forked from it). Forks for
-            # all destinations are resolved in a single bulk walk, inside the
-            # transaction so the recipient set is consistent with the insert.
-            fork_descendants: Dict[str, Set[str]] = {}
+        # Expand each message to its destination set (the workflow itself plus,
+        # if requested, every workflow recursively forked from it). Forks for
+        # all destinations are resolved in a single bulk walk, inside the
+        # transaction so the recipient set is consistent with the insert.
+        fork_descendants: Dict[str, Set[str]] = {}
+        if send_to_forks:
+            fork_descendants = self._find_fork_descendants_txn(
+                [m.destination_id for m, _, _ in prepared], conn
+            )
+
+        rows = []
+        for m, serval, serialization in prepared:
+            destinations = [m.destination_id]
             if send_to_forks:
-                fork_descendants = self._find_fork_descendants_txn(
-                    [m.destination_id for m, _, _ in prepared], c
+                destinations.extend(
+                    sorted(fork_descendants.get(m.destination_id, set()))
+                )
+            for dest in destinations:
+                if m.idempotency_key is None:
+                    message_uuid = str(generate_uuid())
+                else:
+                    # An idempotency key is scoped per destination: suffix it
+                    # with the recipient's workflow ID. This gives each recipient
+                    # a distinct, deterministic message_uuid (so a single key can
+                    # fan out across forks) while replays stay idempotent, and
+                    # makes the message_uuid independent of whether the send fanned
+                    # out to forks.
+                    message_uuid = f"{m.idempotency_key}::{dest}"
+                rows.append(
+                    {
+                        "destination_uuid": dest,
+                        "topic": (m.topic if m.topic is not None else _dbos_null_topic),
+                        "message": serval,
+                        "message_uuid": message_uuid,
+                        "serialization": serialization,
+                    }
                 )
 
-            rows = []
-            for m, serval, serialization in prepared:
-                destinations = [m.destination_id]
-                if send_to_forks:
-                    destinations.extend(
-                        sorted(fork_descendants.get(m.destination_id, set()))
+        try:
+            if rows:
+                conn.execute(
+                    self.dialect.insert(SystemSchema.notifications)
+                    .values(rows)
+                    .on_conflict_do_nothing(
+                        index_elements=[
+                            SystemSchema.notifications.c.message_uuid,
+                        ]
                     )
-                for dest in destinations:
-                    if m.idempotency_key is None:
-                        message_uuid = str(generate_uuid())
-                    else:
-                        # An idempotency key is scoped per destination: suffix it
-                        # with the recipient's workflow ID. This gives each recipient
-                        # a distinct, deterministic message_uuid (so a single key can
-                        # fan out across forks) while replays stay idempotent, and
-                        # makes the message_uuid independent of whether the send fanned
-                        # out to forks.
-                        message_uuid = f"{m.idempotency_key}::{dest}"
-                    rows.append(
-                        {
-                            "destination_uuid": dest,
-                            "topic": (
-                                m.topic if m.topic is not None else _dbos_null_topic
-                            ),
-                            "message": serval,
-                            "message_uuid": message_uuid,
-                            "serialization": serialization,
-                        }
-                    )
-
-            try:
-                if rows:
-                    c.execute(
-                        self.dialect.insert(SystemSchema.notifications)
-                        .values(rows)
-                        .on_conflict_do_nothing(
-                            index_elements=[
-                                SystemSchema.notifications.c.message_uuid,
-                            ]
-                        )
-                    )
-            except DBAPIError as dbapi_error:
-                if self._is_foreign_key_violation(dbapi_error):
-                    raise DBOSNonExistentWorkflowError(
-                        "`send` destination",
-                        ", ".join(sorted({m.destination_id for m in messages})),
-                    )
-                raise
-
-            if workflow_id is not None:
-                assert function_id is not None
-                output: OperationResultInternal = {
-                    "workflow_uuid": workflow_id,
-                    "function_id": function_id,
-                    "function_name": function_name,
-                    "started_at_epoch_ms": start_time,
-                    "output": None,
-                    "error": None,
-                    "serialization": None,
-                }
-                self._record_operation_result_txn(
-                    output, int(time.time() * 1000), conn=c
                 )
+        except DBAPIError as dbapi_error:
+            if self._is_foreign_key_violation(dbapi_error):
+                raise DBOSNonExistentWorkflowError(
+                    "`send` destination",
+                    ", ".join(sorted({m.destination_id for m in messages})),
+                )
+            raise
+
+        if workflow_id is not None:
+            assert function_id is not None
+            output: OperationResultInternal = {
+                "workflow_uuid": workflow_id,
+                "function_id": function_id,
+                "function_name": function_name,
+                "started_at_epoch_ms": start_time,
+                "output": None,
+                "error": None,
+                "serialization": None,
+            }
+            self._record_operation_result_txn(
+                output, int(time.time() * 1000), conn=conn
+            )
 
     @db_retry()
     def recv_setup(
