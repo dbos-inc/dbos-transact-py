@@ -14,6 +14,8 @@ from dbos import (
     SetWorkflowID,
     WorkflowHandle,
 )
+from dbos._error import DBOSException
+from tests.conftest import using_sqlite
 
 
 def test_attributes_direct_invocation(dbos: DBOS) -> None:
@@ -104,7 +106,7 @@ def test_attributes_client(client: DBOSClient, dbos: DBOS) -> None:
     assert handle.get_status().attributes == {"source": "client"}
 
 
-def test_attributes_list_filter(dbos: DBOS) -> None:
+def test_attributes_list_filter(dbos: DBOS, skip_with_sqlite: None) -> None:
     @DBOS.workflow()
     def attr_workflow() -> None:
         return None
@@ -140,7 +142,7 @@ def test_attributes_list_filter(dbos: DBOS) -> None:
     assert matched_ids(attributes={"missing": "key"}) == set()
 
 
-def test_attributes_list_queued(dbos: DBOS) -> None:
+def test_attributes_list_queued(dbos: DBOS, skip_with_sqlite: None) -> None:
     start_event = threading.Event()
     blocking_event = threading.Event()
 
@@ -164,7 +166,7 @@ def test_attributes_list_queued(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
-async def test_attributes_list_async(dbos: DBOS) -> None:
+async def test_attributes_list_async(dbos: DBOS, skip_with_sqlite: None) -> None:
     start_event = threading.Event()
     blocking_event = threading.Event()
 
@@ -189,7 +191,9 @@ async def test_attributes_list_async(dbos: DBOS) -> None:
     handle.get_result()
 
 
-def test_attributes_client_list(client: DBOSClient, dbos: DBOS) -> None:
+def test_attributes_client_list(
+    client: DBOSClient, dbos: DBOS, skip_with_sqlite: None
+) -> None:
     options: EnqueueOptions = {
         "queue_name": "unconsumed_queue",
         "workflow_name": "client_workflow",
@@ -206,7 +210,9 @@ def test_attributes_client_list(client: DBOSClient, dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
-async def test_attributes_client_list_async(client: DBOSClient, dbos: DBOS) -> None:
+async def test_attributes_client_list_async(
+    client: DBOSClient, dbos: DBOS, skip_with_sqlite: None
+) -> None:
     options: EnqueueOptions = {
         "queue_name": "unconsumed_queue",
         "workflow_name": "client_workflow",
@@ -220,6 +226,13 @@ async def test_attributes_client_list_async(client: DBOSClient, dbos: DBOS) -> N
     assert {s.workflow_id for s in statuses} == {h1.workflow_id, h2.workflow_id}
     queued = await client.list_queued_workflows_async(attributes={"n": 1})
     assert [s.workflow_id for s in queued] == [h1.workflow_id]
+
+
+def test_attributes_filter_unsupported_sqlite(dbos: DBOS) -> None:
+    if not using_sqlite():
+        pytest.skip("Tests the SQLite-only error path")
+    with pytest.raises(DBOSException, match="not supported on SQLite"):
+        DBOS.list_workflows(attributes={"customer": "acme"})
 
 
 def test_attributes_debouncer(dbos: DBOS) -> None:
