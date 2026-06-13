@@ -1,3 +1,4 @@
+import json
 import threading
 import uuid
 from typing import Any
@@ -226,6 +227,45 @@ async def test_attributes_client_list_async(
     assert {s.workflow_id for s in statuses} == {h1.workflow_id, h2.workflow_id}
     queued = await client.list_queued_workflows_async(attributes={"n": 1})
     assert [s.workflow_id for s in queued] == [h1.workflow_id]
+
+
+def test_attributes_conductor_protocol(dbos: DBOS, skip_with_sqlite: None) -> None:
+    import dbos._conductor.protocol as p
+
+    @DBOS.workflow()
+    def conductor_workflow() -> None:
+        return None
+
+    with SetWorkflowAttributes({"customer": "acme", "tier": 1}):
+        handle = DBOS.start_workflow(conductor_workflow)
+    handle.get_result()
+
+    # Parse a list_workflows request as Conductor would send it and run the
+    # same query the handler runs
+    request = p.ListWorkflowsRequest.from_json(
+        json.dumps(
+            {
+                "type": "list_workflows",
+                "request_id": "test-request",
+                "body": {"attributes": {"customer": "acme"}},
+            }
+        )
+    )
+    infos = dbos._sys_db.list_workflows(attributes=request.body.get("attributes", None))
+    assert [i.workflow_id for i in infos] == [handle.workflow_id]
+
+    # Attributes are JSON on the wire and survive response serialization
+    output = p.WorkflowsOutput.from_workflow_information(infos[0])
+    assert output.Attributes is not None
+    assert json.loads(output.Attributes) == {"customer": "acme", "tier": 1}
+    response = p.ListWorkflowsResponse(
+        type=p.MessageType.LIST_WORKFLOWS, request_id="test-request", output=[output]
+    )
+    serialized = json.loads(response.to_json())
+    assert json.loads(serialized["output"][0]["Attributes"]) == {
+        "customer": "acme",
+        "tier": 1,
+    }
 
 
 def test_attributes_filter_unsupported_sqlite(dbos: DBOS) -> None:
