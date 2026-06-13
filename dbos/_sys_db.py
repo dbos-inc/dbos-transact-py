@@ -420,6 +420,15 @@ class ThreadSafeEventDict:
             ]
 
 
+# Return type of the recv/get_event setup phases: either a cached result
+# (OAOO replay or value already available) or the registered event the
+# caller must wait on.
+EventSetupResult = Union[
+    tuple[Literal[True], Any],
+    tuple[Literal[False], threading.Event, float, str, int],
+]
+
+
 F = TypeVar("F", bound=Callable[..., Any])
 
 
@@ -2633,6 +2642,8 @@ class SystemDatabase(ABC):
         success, _ = self.notifications_map.set(payload, event, (workflow_uuid, topic))
         if not success:
             # This should not happen, but if it does, it means the workflow is executed concurrently.
+            # set() incremented the existing entry's count, so undo that before raising.
+            self.notifications_map.pop(payload)
             raise DBOSWorkflowConflictIDError(workflow_uuid)
 
         try:
@@ -2789,6 +2800,38 @@ class SystemDatabase(ABC):
         finally:
             self.notifications_map.pop(payload)
 
+    async def _run_event_setup_async(
+        self,
+        event_map: ThreadSafeEventDict,
+        setup_fn: Callable[..., EventSetupResult],
+        *args: Any,
+    ) -> EventSetupResult:
+        """Run a recv/get_event setup function in a worker thread, cleaning up
+        if this coroutine is cancelled while the thread is in flight.
+
+        The worker thread cannot be cancelled, so it completes the event_map
+        registration even after cancellation abandons the coroutine before its
+        try/finally cleanup is in place. A stale recv entry makes the next recv
+        on the same workflow and topic fail with DBOSWorkflowConflictIDError;
+        a stale get_event entry leaks. So shield the setup task and, on
+        cancellation, attach a callback that removes the registration once the
+        thread finishes.
+        """
+        setup_task = asyncio.create_task(asyncio.to_thread(setup_fn, *args))
+        try:
+            return await asyncio.shield(setup_task)
+        except asyncio.CancelledError:
+
+            def unregister(task: "asyncio.Task[EventSetupResult]") -> None:
+                if task.cancelled() or task.exception() is not None:
+                    return
+                result = task.result()
+                if not result[0]:
+                    event_map.pop(result[3])
+
+            setup_task.add_done_callback(unregister)
+            raise
+
     async def recv_async(
         self,
         workflow_uuid: str,
@@ -2797,7 +2840,8 @@ class SystemDatabase(ABC):
         topic: Optional[str],
         timeout_seconds: float = 60,
     ) -> Any:
-        setup = await asyncio.to_thread(
+        setup = await self._run_event_setup_async(
+            self.notifications_map,
             self.recv_setup,
             workflow_uuid,
             function_id,
@@ -3346,7 +3390,8 @@ class SystemDatabase(ABC):
         timeout_seconds: float = 60,
         caller_ctx: Optional[GetEventWorkflowContext] = None,
     ) -> Any:
-        setup = await asyncio.to_thread(
+        setup = await self._run_event_setup_async(
+            self.workflow_events_map,
             self.get_event_setup,
             target_uuid,
             key,
