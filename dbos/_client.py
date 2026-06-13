@@ -86,6 +86,7 @@ class EnqueueOptions(_EnqueueOptionsRequired, total=False):
     serialization_type: WorkflowSerializationFormat
     class_name: str
     instance_name: str
+    attributes: Dict[str, Any]
 
 
 def validate_enqueue_options(options: EnqueueOptions) -> None:
@@ -268,6 +269,7 @@ class DBOSClient:
             "started_at_epoch_ms": None,
             "owner_xid": None,
             "delay_until_epoch_ms": delay_until_epoch_ms,
+            "attributes": options.get("attributes"),
         }
         return workflow_id, status
 
@@ -789,6 +791,7 @@ class DBOSClient:
         queues_only: bool = False,
         was_forked_from: Optional[bool] = None,
         has_parent: Optional[bool] = None,
+        attributes: Optional[Dict[str, Any]] = None,
     ) -> List[WorkflowStatus]:
         return self._sys_db.list_workflows(
             workflow_ids=workflow_ids,
@@ -815,6 +818,7 @@ class DBOSClient:
             queues_only=queues_only,
             was_forked_from=was_forked_from,
             has_parent=has_parent,
+            attributes=attributes,
         )
 
     async def list_workflows_async(
@@ -844,6 +848,7 @@ class DBOSClient:
         queues_only: bool = False,
         was_forked_from: Optional[bool] = None,
         has_parent: Optional[bool] = None,
+        attributes: Optional[Dict[str, Any]] = None,
     ) -> List[WorkflowStatus]:
         return await asyncio.to_thread(
             self.list_workflows,
@@ -871,6 +876,7 @@ class DBOSClient:
             queues_only=queues_only,
             was_forked_from=was_forked_from,
             has_parent=has_parent,
+            attributes=attributes,
         )
 
     def list_queued_workflows(
@@ -898,6 +904,7 @@ class DBOSClient:
         load_output: bool = True,
         executor_id: Optional[str | list[str]] = None,
         has_parent: Optional[bool] = None,
+        attributes: Optional[Dict[str, Any]] = None,
     ) -> List[WorkflowStatus]:
         return self._sys_db.list_workflows(
             workflow_ids=workflow_ids,
@@ -923,6 +930,7 @@ class DBOSClient:
             executor_id=executor_id,
             queues_only=True,
             has_parent=has_parent,
+            attributes=attributes,
         )
 
     async def list_queued_workflows_async(
@@ -950,6 +958,7 @@ class DBOSClient:
         load_output: bool = True,
         executor_id: Optional[str | list[str]] = None,
         has_parent: Optional[bool] = None,
+        attributes: Optional[Dict[str, Any]] = None,
     ) -> List[WorkflowStatus]:
         return await asyncio.to_thread(
             self.list_queued_workflows,
@@ -975,6 +984,7 @@ class DBOSClient:
             load_output=load_output,
             executor_id=executor_id,
             has_parent=has_parent,
+            attributes=attributes,
         )
 
     def list_workflow_steps(
