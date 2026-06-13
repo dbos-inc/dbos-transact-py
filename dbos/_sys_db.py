@@ -2607,10 +2607,7 @@ class SystemDatabase(ABC):
         timeout_function_id: int,
         topic: Optional[str],
         timeout_seconds: float = 60,
-    ) -> Union[
-        tuple[Literal[True], Any],
-        tuple[Literal[False], threading.Event, float, str, int],
-    ]:
+    ) -> EventSetupResult:
         """Setup phase of recv. Returns either:
         - (True, result) if a cached result was found (OAOO replay or message already available)
         - (False, event, actual_timeout, payload, start_time) if caller must wait on the event
@@ -3228,10 +3225,7 @@ class SystemDatabase(ABC):
         key: str,
         timeout_seconds: float = 60,
         caller_ctx: Optional[GetEventWorkflowContext] = None,
-    ) -> Union[
-        tuple[Literal[True], Any],
-        tuple[Literal[False], threading.Event, float, str, int],
-    ]:
+    ) -> EventSetupResult:
         """Setup phase of get_event. Returns either:
         - (True, result) if a cached result was found (OAOO replay)
         - (False, event, actual_timeout, payload, start_time) if caller must wait on the event
