@@ -25,7 +25,9 @@ from dbos._error import (
     DBOSException,
     DBOSPatchNondeterminismError,
 )
+from dbos._event_loop import BackgroundEventLoop
 from dbos._schemas.system_database import SystemSchema
+from tests.conftest import retry_until_success_async
 
 
 @pytest.mark.asyncio
@@ -1147,3 +1149,100 @@ async def test_concurrent_patch_async(dbos: DBOS, config: DBOSConfig) -> None:
         status = await DBOS.get_workflow_status_async(wfid)
         assert status is not None
         assert status.status == "ERROR"
+
+
+def test_destroy_from_adopted_main_loop_does_not_deadlock(
+    config: DBOSConfig, cleanup_test_databases: None
+) -> None:
+    """Reproduce the DBOS.destroy() self-deadlock.
+
+    When DBOS.launch() runs inside a running event loop, DBOS adopts that loop
+    as its main loop. A workflow with a timeout parks a "timeout task" on that
+    loop. If destroy() is then called from that same loop's thread while a
+    timeout task is still pending, destroy() schedules a cancellation coroutine
+    onto the loop and blocks the calling thread on .result() -- but the loop is
+    the calling thread, so it can never run the coroutine. Permanent hang.
+
+    We run the whole launch + timeout + destroy scenario on a dedicated thread
+    with its own event loop, then join it with a timeout. Before the fix the
+    thread deadlocks (join times out); after the fix it completes promptly.
+    """
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def wf_with_timeout() -> str:
+        return "done"
+
+    scenario_error: List[BaseException] = []
+
+    def run_scenario() -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def scenario() -> None:
+            # Launch from within the running loop so DBOS adopts it as main loop.
+            DBOS.launch()
+
+            # The workflow returns immediately, but its timeout task stays parked
+            # in asyncio.sleep() on this loop, so it is still pending in
+            # dbos._timeout_tasks when we destroy.
+            with SetWorkflowTimeout(30):
+                assert wf_with_timeout() == "done"
+
+            # Poll (don't sleep a fixed amount) until the loop has actually
+            # created the parked timeout task. The async retry yields to the loop
+            # between attempts, so the task gets a chance to be created.
+            def timeout_task_is_pending() -> None:
+                assert dbos._timeout_tasks, "expected a pending timeout task"
+
+            await retry_until_success_async(
+                timeout_task_is_pending, interval=0.2, max_attempts=50
+            )
+
+            # Called from the adopted main-loop thread -> deadlocks before the fix.
+            DBOS.destroy(destroy_registry=True)
+
+        try:
+            loop.run_until_complete(scenario())
+        except BaseException as e:
+            scenario_error.append(e)
+        finally:
+            loop.close()
+
+    worker = threading.Thread(
+        target=run_scenario, name="dbos-destroy-scenario", daemon=True
+    )
+    worker.start()
+    worker.join(timeout=20)
+
+    assert not worker.is_alive(), (
+        "DBOS.destroy() deadlocked: it was called from the adopted main-loop "
+        "thread while a timeout task was still pending."
+    )
+    if scenario_error:
+        raise scenario_error[0]
+
+
+@pytest.mark.asyncio
+async def test_submit_coroutine_from_own_loop_raises_instead_of_hanging() -> None:
+    """submit_coroutine must fail loudly, not deadlock, when called from its own loop.
+
+    Blocking on .result() from the thread that runs the target loop can never
+    complete (the loop can't run the coroutine while blocked waiting for it), so
+    the call must raise rather than hang.
+    """
+    bg = BackgroundEventLoop()
+    # start() adopts the currently-running loop (this test's loop) as the main loop.
+    bg.start()
+    try:
+
+        async def noop() -> int:
+            return 42
+
+        assert bg.target_loop() is asyncio.get_running_loop()
+        coro = noop()
+        with pytest.raises(RuntimeError, match="deadlock"):
+            bg.submit_coroutine(coro)
+    finally:
+        bg.stop()
