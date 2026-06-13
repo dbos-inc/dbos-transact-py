@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import time
 import uuid
 from typing import Any, List, Optional, cast
@@ -230,6 +231,103 @@ async def test_send_recv_async(dbos: DBOS) -> None:
     with pytest.raises(Exception) as exc_info:
         await dbos.recv_async("test1")
     assert "recv() must be called from within a workflow" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_recv_async_cancelled_during_setup(dbos: DBOS) -> None:
+    """Cancelling recv_async while its setup phase runs in a worker thread
+    must not leave a notifications_map registration behind. Cleanup is
+    synchronous: the moment the cancelled call returns, the entry is gone, so
+    there is no window in which the next recv on the same workflow and topic
+    raises a spurious DBOSWorkflowConflictIDError."""
+
+    @DBOS.workflow()
+    async def noop_workflow() -> None:
+        return None
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        await noop_workflow()
+
+    sys_db = dbos._sys_db
+    topic = "cancel_topic"
+    payload = f"{wfid}::{topic}"
+
+    in_setup = threading.Event()
+    release_setup = threading.Event()
+    original_recv_check = sys_db.recv_check
+
+    # recv_setup calls recv_check after registering in notifications_map,
+    # so blocking here holds the setup thread mid-registration.
+    def blocking_recv_check(*args: Any, **kwargs: Any) -> None:
+        in_setup.set()
+        assert release_setup.wait(timeout=10)
+        original_recv_check(*args, **kwargs)
+
+    sys_db.recv_check = blocking_recv_check  # type: ignore[method-assign]
+    try:
+        recv_task = asyncio.create_task(
+            sys_db.recv_async(wfid, 100, 101, topic, timeout_seconds=10)
+        )
+        assert await asyncio.to_thread(in_setup.wait, 10)
+        # Cancel while the thread is mid-registration, then let it finish so
+        # the cancellation's synchronous cleanup can run to completion.
+        recv_task.cancel()
+        release_setup.set()
+        with pytest.raises(asyncio.CancelledError):
+            await recv_task
+        # Cleanup happened before CancelledError propagated -- no polling
+        # window for a concurrent recv to trip over a stale entry.
+        assert sys_db.notifications_map.get(payload) is None
+    finally:
+        sys_db.recv_check = original_recv_check  # type: ignore[method-assign]
+
+    # A later recv on the same workflow and topic must not see a stale entry.
+    message = await sys_db.recv_async(wfid, 102, 103, topic, timeout_seconds=0.1)
+    assert message is None
+    assert sys_db.notifications_map.get(payload) is None
+
+
+@pytest.mark.asyncio
+async def test_get_event_async_cancelled_during_setup(dbos: DBOS) -> None:
+    """Cancelling get_event_async while its setup phase runs in a worker
+    thread must not leave a workflow_events_map registration behind, and
+    cleanup must complete synchronously before CancelledError propagates."""
+
+    @DBOS.workflow()
+    async def noop_workflow() -> None:
+        return None
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        await noop_workflow()
+
+    sys_db = dbos._sys_db
+    key = "cancel_key"
+    payload = f"{wfid}::{key}"
+
+    in_setup = threading.Event()
+    release_setup = threading.Event()
+    original_get_event_check = sys_db.get_event_check
+
+    def blocking_get_event_check(*args: Any, **kwargs: Any) -> None:
+        in_setup.set()
+        assert release_setup.wait(timeout=10)
+        original_get_event_check(*args, **kwargs)
+
+    sys_db.get_event_check = blocking_get_event_check  # type: ignore[method-assign]
+    try:
+        get_event_task = asyncio.create_task(
+            sys_db.get_event_async(wfid, key, timeout_seconds=10)
+        )
+        assert await asyncio.to_thread(in_setup.wait, 10)
+        get_event_task.cancel()
+        release_setup.set()
+        with pytest.raises(asyncio.CancelledError):
+            await get_event_task
+        assert sys_db.workflow_events_map.get(payload) is None
+    finally:
+        sys_db.get_event_check = original_get_event_check  # type: ignore[method-assign]
 
 
 @pytest.mark.asyncio
