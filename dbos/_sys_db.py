@@ -2804,15 +2804,21 @@ class SystemDatabase(ABC):
         *args: Any,
     ) -> EventSetupResult:
         """Run a recv/get_event setup function in a worker thread, cleaning up
-        if this coroutine is cancelled while the thread is in flight.
+        synchronously if this coroutine is cancelled while the thread is in
+        flight.
 
-        The worker thread cannot be cancelled, so it completes the event_map
-        registration even after cancellation abandons the coroutine before its
-        try/finally cleanup is in place. A stale recv entry makes the next recv
-        on the same workflow and topic fail with DBOSWorkflowConflictIDError;
-        a stale get_event entry leaks. So shield the setup task and, on
-        cancellation, attach a callback that removes the registration once the
-        thread finishes.
+        The worker thread cannot be cancelled, so it finishes registering in
+        event_map even after cancellation abandons the coroutine before its
+        try/finally cleanup is in place. A leftover recv entry makes the next
+        recv on the same workflow and topic fail with
+        DBOSWorkflowConflictIDError -- a spurious "duplicate execution" that
+        parks the caller in await_workflow_result forever; a leftover
+        get_event entry leaks. So on cancellation, wait for the thread inline
+        and undo its registration *before* re-raising CancelledError: once the
+        cancelled call returns, no stale entry remains, so there is no window
+        for a concurrent recv to trip over. If a further cancellation
+        interrupts that wait, fall back to deferred cleanup via a done-callback
+        so an impatient caller is not blocked on the thread.
         """
         setup_task = asyncio.create_task(asyncio.to_thread(setup_fn, *args))
         try:
@@ -2821,12 +2827,27 @@ class SystemDatabase(ABC):
 
             def unregister(task: "asyncio.Task[EventSetupResult]") -> None:
                 if task.cancelled() or task.exception() is not None:
+                    # Setup never registered, or registered then cleaned up
+                    # after its own failure; nothing to undo.
                     return
                 result = task.result()
                 if not result[0]:
                     event_map.pop(result[3])
 
-            setup_task.add_done_callback(unregister)
+            # Wait for the thread to finish, then undo its registration. A
+            # second cancellation lands in the except below; an exception from
+            # setup is ignored because setup already cleaned up after itself.
+            try:
+                await asyncio.shield(setup_task)
+            except asyncio.CancelledError:
+                if not setup_task.done():
+                    # Cancelled again while still waiting on the thread: hand
+                    # cleanup to a done-callback rather than block any longer.
+                    setup_task.add_done_callback(unregister)
+                    raise
+            except Exception:
+                pass
+            unregister(setup_task)
             raise
 
     async def recv_async(
