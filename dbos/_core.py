@@ -544,6 +544,9 @@ def _get_wf_invoke_func(
             return output
         except DBOSWorkflowConflictIDError:
             # Await the workflow result
+            dbos.logger.warning(
+                f"Aborting duplicate execution of workflow {status['workflow_uuid']}."
+            )
             r: R = dbos._sys_db.await_workflow_result(
                 status["workflow_uuid"], polling_interval=DEFAULT_POLLING_INTERVAL
             )

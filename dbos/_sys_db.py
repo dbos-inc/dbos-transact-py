@@ -423,6 +423,15 @@ class ThreadSafeEventDict:
             ]
 
 
+# Return type of the recv/get_event setup phases: either a cached result
+# (OAOO replay or value already available) or the registered event the
+# caller must wait on.
+EventSetupResult = Union[
+    tuple[Literal[True], Any],
+    tuple[Literal[False], threading.Event, float, str, int],
+]
+
+
 F = TypeVar("F", bound=Callable[..., Any])
 
 
@@ -2618,10 +2627,7 @@ class SystemDatabase(ABC):
         timeout_function_id: int,
         topic: Optional[str],
         timeout_seconds: float = 60,
-    ) -> Union[
-        tuple[Literal[True], Any],
-        tuple[Literal[False], threading.Event, float, str, int],
-    ]:
+    ) -> EventSetupResult:
         """Setup phase of recv. Returns either:
         - (True, result) if a cached result was found (OAOO replay or message already available)
         - (False, event, actual_timeout, payload, start_time) if caller must wait on the event
@@ -2653,6 +2659,8 @@ class SystemDatabase(ABC):
         success, _ = self.notifications_map.set(payload, event, (workflow_uuid, topic))
         if not success:
             # This should not happen, but if it does, it means the workflow is executed concurrently.
+            # set() incremented the existing entry's count, so undo that before raising.
+            self.notifications_map.pop(payload)
             raise DBOSWorkflowConflictIDError(workflow_uuid)
 
         try:
@@ -2809,6 +2817,59 @@ class SystemDatabase(ABC):
         finally:
             self.notifications_map.pop(payload)
 
+    async def _run_event_setup_async(
+        self,
+        event_map: ThreadSafeEventDict,
+        setup_fn: Callable[..., EventSetupResult],
+        *args: Any,
+    ) -> EventSetupResult:
+        """Run a recv/get_event setup function in a worker thread, cleaning up
+        synchronously if this coroutine is cancelled while the thread is in
+        flight.
+
+        The worker thread cannot be cancelled, so it finishes registering in
+        event_map even after cancellation abandons the coroutine before its
+        try/finally cleanup is in place. A leftover recv entry makes the next
+        recv on the same workflow and topic fail with
+        DBOSWorkflowConflictIDError -- a spurious "duplicate execution" that
+        parks the caller in await_workflow_result forever; a leftover
+        get_event entry leaks. So on cancellation, wait for the thread inline
+        and undo its registration *before* re-raising CancelledError: once the
+        cancelled call returns, no stale entry remains, so there is no window
+        for a concurrent recv to trip over. If a further cancellation
+        interrupts that wait, fall back to deferred cleanup via a done-callback
+        so an impatient caller is not blocked on the thread.
+        """
+        setup_task = asyncio.create_task(asyncio.to_thread(setup_fn, *args))
+        try:
+            return await asyncio.shield(setup_task)
+        except asyncio.CancelledError:
+
+            def unregister(task: "asyncio.Task[EventSetupResult]") -> None:
+                if task.cancelled() or task.exception() is not None:
+                    # Setup never registered, or registered then cleaned up
+                    # after its own failure; nothing to undo.
+                    return
+                result = task.result()
+                if not result[0]:
+                    event_map.pop(result[3])
+
+            # Wait for the thread to finish, then undo its registration. A
+            # second cancellation lands in the except below; an exception from
+            # setup is ignored because setup already cleaned up after itself.
+            try:
+                await asyncio.shield(setup_task)
+            except asyncio.CancelledError:
+                if not setup_task.done():
+                    # Cancelled again while still waiting on the thread: hand
+                    # cleanup to a done-callback rather than block any longer.
+                    setup_task.add_done_callback(unregister)
+                    raise
+            except Exception:
+                pass
+            unregister(setup_task)
+            raise
+
     async def recv_async(
         self,
         workflow_uuid: str,
@@ -2817,7 +2878,8 @@ class SystemDatabase(ABC):
         topic: Optional[str],
         timeout_seconds: float = 60,
     ) -> Any:
-        setup = await asyncio.to_thread(
+        setup = await self._run_event_setup_async(
+            self.notifications_map,
             self.recv_setup,
             workflow_uuid,
             function_id,
@@ -3204,10 +3266,7 @@ class SystemDatabase(ABC):
         key: str,
         timeout_seconds: float = 60,
         caller_ctx: Optional[GetEventWorkflowContext] = None,
-    ) -> Union[
-        tuple[Literal[True], Any],
-        tuple[Literal[False], threading.Event, float, str, int],
-    ]:
+    ) -> EventSetupResult:
         """Setup phase of get_event. Returns either:
         - (True, result) if a cached result was found (OAOO replay)
         - (False, event, actual_timeout, payload, start_time) if caller must wait on the event
@@ -3366,7 +3425,8 @@ class SystemDatabase(ABC):
         timeout_seconds: float = 60,
         caller_ctx: Optional[GetEventWorkflowContext] = None,
     ) -> Any:
-        setup = await asyncio.to_thread(
+        setup = await self._run_event_setup_async(
+            self.workflow_events_map,
             self.get_event_setup,
             target_uuid,
             key,
