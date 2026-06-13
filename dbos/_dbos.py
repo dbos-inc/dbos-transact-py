@@ -776,17 +776,32 @@ class DBOS:
                 else:
                     break
         if self._timeout_tasks:
+            target_loop = self._background_event_loop.target_loop()
+            try:
+                current_loop: Optional[asyncio.AbstractEventLoop] = (
+                    asyncio.get_running_loop()
+                )
+            except RuntimeError:
+                current_loop = None
 
-            async def cancel_timeout_tasks() -> None:
+            if current_loop is not None and current_loop is target_loop:
+                # destroy() is running on the loop that owns the timeout
+                # tasks, so cancel them directly.
                 for task in self._timeout_tasks:
                     task.cancel()
-                await asyncio.gather(*self._timeout_tasks, return_exceptions=True)
                 self._timeout_tasks.clear()
+            else:
 
-            try:
-                self._background_event_loop.submit_coroutine(cancel_timeout_tasks())
-            except RuntimeError as e:
-                dbos_logger.warning(f"Exception cancelling timeout tasks: {e}")
+                async def cancel_timeout_tasks() -> None:
+                    for task in self._timeout_tasks:
+                        task.cancel()
+                    await asyncio.gather(*self._timeout_tasks, return_exceptions=True)
+                    self._timeout_tasks.clear()
+
+                try:
+                    self._background_event_loop.submit_coroutine(cancel_timeout_tasks())
+                except RuntimeError as e:
+                    dbos_logger.warning(f"Exception cancelling timeout tasks: {e}")
         self._background_event_loop.stop()
         if self._admin_server_field is not None:
             self._admin_server_field.stop()
