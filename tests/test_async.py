@@ -25,6 +25,7 @@ from dbos._error import (
     DBOSException,
     DBOSPatchNondeterminismError,
 )
+from dbos._event_loop import BackgroundEventLoop
 from dbos._schemas.system_database import SystemSchema
 from tests.conftest import retry_until_success_async
 
@@ -1221,3 +1222,27 @@ def test_destroy_from_adopted_main_loop_does_not_deadlock(
     )
     if scenario_error:
         raise scenario_error[0]
+
+
+@pytest.mark.asyncio
+async def test_submit_coroutine_from_own_loop_raises_instead_of_hanging() -> None:
+    """submit_coroutine must fail loudly, not deadlock, when called from its own loop.
+
+    Blocking on .result() from the thread that runs the target loop can never
+    complete (the loop can't run the coroutine while blocked waiting for it), so
+    the call must raise rather than hang.
+    """
+    bg = BackgroundEventLoop()
+    # start() adopts the currently-running loop (this test's loop) as the main loop.
+    bg.start()
+    try:
+
+        async def noop() -> int:
+            return 42
+
+        assert bg.target_loop() is asyncio.get_running_loop()
+        coro = noop()
+        with pytest.raises(RuntimeError, match="deadlock"):
+            bg.submit_coroutine(coro)
+    finally:
+        bg.stop()

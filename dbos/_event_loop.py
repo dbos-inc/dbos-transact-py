@@ -93,7 +93,24 @@ class BackgroundEventLoop:
         """Submit a coroutine to the background event loop and block until it completes."""
         loop = self.target_loop()
         if loop is None:
+            coro.close()
             raise RuntimeError("Event loop not started")
+        try:
+            running_loop: Optional[asyncio.AbstractEventLoop] = (
+                asyncio.get_running_loop()
+            )
+        except RuntimeError:
+            running_loop = None
+        if running_loop is loop:
+            # We are on the target loop's own thread. Blocking on .result() here
+            # would deadlock: the loop can never run the coroutine while it is
+            # blocked waiting for it. Fail loudly instead of hanging.
+            coro.close()
+            raise RuntimeError(
+                "submit_coroutine was called from within its own event loop "
+                "thread, which would deadlock. Schedule the coroutine without "
+                "blocking (e.g. submit_coroutine_nowait) instead."
+            )
         return asyncio.run_coroutine_threadsafe(coro, loop).result()
 
     def submit_coroutine_nowait(
