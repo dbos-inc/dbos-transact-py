@@ -67,7 +67,6 @@ def default_config() -> DBOSConfig:
         ),
         "enable_otlp": False,
         "notification_listener_polling_interval_sec": 0.01,
-        "scheduler_polling_interval_sec": 1,
     }
 
 
