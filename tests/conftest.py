@@ -1,3 +1,4 @@
+import asyncio
 import glob
 import os
 import subprocess
@@ -274,6 +275,26 @@ def retry_until_success(
     if error is not None:
         raise error
     raise RuntimeError("retry_until_success failed without an exception")
+
+
+async def retry_until_success_async(
+    func: Callable[[], T], interval: float = 1, max_attempts: int = 10
+) -> T:
+    """Async sibling of retry_until_success.
+
+    Sleeps with asyncio.sleep between attempts so the event loop stays free to
+    make progress (e.g. to run a task we are waiting on). func itself is sync.
+    """
+    error: Optional[Exception] = None
+    for _ in range(max_attempts):
+        try:
+            return func()
+        except Exception as e:
+            error = e
+            await asyncio.sleep(interval)
+    if error is not None:
+        raise error
+    raise RuntimeError("retry_until_success_async failed without an exception")
 
 
 def pytest_unconfigure(config: Any) -> None:

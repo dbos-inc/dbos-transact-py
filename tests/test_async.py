@@ -26,6 +26,7 @@ from dbos._error import (
     DBOSPatchNondeterminismError,
 )
 from dbos._schemas.system_database import SystemSchema
+from tests.conftest import retry_until_success_async
 
 
 @pytest.mark.asyncio
@@ -1091,9 +1092,15 @@ def test_destroy_from_adopted_main_loop_does_not_deadlock(
             with SetWorkflowTimeout(30):
                 assert wf_with_timeout() == "done"
 
-            # Let the loop actually create the parked timeout task.
-            await asyncio.sleep(0.5)
-            assert len(dbos._timeout_tasks) >= 1, "expected a pending timeout task"
+            # Poll (don't sleep a fixed amount) until the loop has actually
+            # created the parked timeout task. The async retry yields to the loop
+            # between attempts, so the task gets a chance to be created.
+            def timeout_task_is_pending() -> None:
+                assert dbos._timeout_tasks, "expected a pending timeout task"
+
+            await retry_until_success_async(
+                timeout_task_is_pending, interval=0.2, max_attempts=50
+            )
 
             # Called from the adopted main-loop thread -> deadlocks before the fix.
             DBOS.destroy(destroy_registry=True)
