@@ -39,7 +39,7 @@ from dbos._utils import (
     retriable_sqlite_exception,
 )
 
-from ._context import DBOSContext, get_local_dbos_context
+from ._context import DBOSContext, get_local_dbos_context, validate_workflow_attributes
 from ._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
@@ -945,6 +945,21 @@ class SystemDatabase(ABC):
                 .values(
                     delay_until_epoch_ms=resolved,
                     updated_at=func.extract("epoch", func.now()) * 1000,
+                )
+            )
+
+    def update_workflow_attributes(
+        self, workflow_id: str, attributes: Optional[Dict[str, Any]]
+    ) -> None:
+        """Replace the custom attributes attached to a workflow."""
+        validate_workflow_attributes(attributes)
+        with self.engine.begin() as c:
+            c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                .values(
+                    attributes=attributes,
+                    updated_at=self._now_ms_sql(),
                 )
             )
 
