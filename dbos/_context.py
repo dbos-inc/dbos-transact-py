@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from dbos._utils import GlobalParams, generate_uuid
 
+from ._error import DBOSException
 from ._logger import dbos_logger
 from ._tracer import dbos_tracer
 
@@ -542,14 +543,14 @@ def validate_workflow_attributes(attributes: Optional[Dict[str, Any]]) -> None:
     status is recorded as JSON.
     """
     if attributes is not None and not isinstance(attributes, dict):
-        raise Exception(
+        raise DBOSException(
             f"Invalid workflow attributes {attributes}. Attributes must be a dict."
         )
     if attributes is not None:
         try:
             json.dumps(attributes)
         except (TypeError, ValueError) as e:
-            raise Exception(
+            raise DBOSException(
                 f"Invalid workflow attributes {attributes}. "
                 "Attributes must be JSON-serializable."
             ) from e
@@ -559,7 +560,8 @@ class SetWorkflowAttributes:
     """
     Set custom key-value attributes to be attached to workflows started or enqueued
     within the block. Attributes are recorded in the workflow status at creation and
-    are not inherited by child workflows.
+    are not inherited by child workflows. They can be updated after creation with
+    DBOS.update_workflow_attributes.
 
     Typical Usage
         ```

@@ -185,7 +185,8 @@ class WorkflowStatus:
     # The UNIX epoch timestamp at which the workflow completed (SUCCESS, ERROR,
     # or CANCELLED). None if the workflow has not completed.
     completed_at: Optional[int]
-    # Custom key-value attributes attached to the workflow at creation
+    # Custom key-value attributes attached to the workflow at creation and
+    # optionally updated afterward via update_workflow_attributes
     attributes: Optional[Dict[str, Any]]
 
     # INTERNAL FIELDS
