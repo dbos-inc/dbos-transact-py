@@ -82,13 +82,36 @@ class BackgroundEventLoop:
 
     T = TypeVar("T")
 
+    def target_loop(self) -> Optional[asyncio.AbstractEventLoop]:
+        """The loop coroutines are submitted to: the adopted main loop if one is
+        running, otherwise the background loop."""
+        if self._main_loop is not None and self._main_loop.is_running():
+            return self._main_loop
+        return self._loop
+
     def submit_coroutine(self, coro: Coroutine[Any, Any, T]) -> T:
         """Submit a coroutine to the background event loop and block until it completes."""
-        if self._main_loop is not None and self._main_loop.is_running():
-            return asyncio.run_coroutine_threadsafe(coro, self._main_loop).result()
-        if self._loop is None:
+        loop = self.target_loop()
+        if loop is None:
+            coro.close()
             raise RuntimeError("Event loop not started")
-        return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
+        try:
+            running_loop: Optional[asyncio.AbstractEventLoop] = (
+                asyncio.get_running_loop()
+            )
+        except RuntimeError:
+            running_loop = None
+        if running_loop is loop:
+            # We are on the target loop's own thread. Blocking on .result() here
+            # would deadlock: the loop can never run the coroutine while it is
+            # blocked waiting for it. Fail loudly instead of hanging.
+            coro.close()
+            raise RuntimeError(
+                "submit_coroutine was called from within its own event loop "
+                "thread, which would deadlock. Schedule the coroutine without "
+                "blocking (e.g. submit_coroutine_nowait) instead."
+            )
+        return asyncio.run_coroutine_threadsafe(coro, loop).result()
 
     def submit_coroutine_nowait(
         self,
@@ -100,11 +123,7 @@ class BackgroundEventLoop:
         If task_set is provided, the created task is added to it and
         automatically removed when the task completes.
         """
-        loop = (
-            self._main_loop
-            if self._main_loop is not None and self._main_loop.is_running()
-            else self._loop
-        )
+        loop = self.target_loop()
         if loop is None:
             raise RuntimeError("Event loop not started")
 
