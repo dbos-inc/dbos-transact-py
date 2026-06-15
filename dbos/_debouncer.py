@@ -26,6 +26,7 @@ from dbos._client import (
 from dbos._context import (
     DBOSContextEnsure,
     SetEnqueueOptions,
+    SetWorkflowAttributes,
     SetWorkflowID,
     SetWorkflowTimeout,
     assert_current_dbos_context,
@@ -67,6 +68,7 @@ class ContextOptions(TypedDict):
     priority: Optional[int]
     app_version: Optional[str]
     workflow_timeout_sec: Optional[float]
+    attributes: Optional[Dict[str, Any]]
 
 
 # Parameters for the debouncer workflow
@@ -133,7 +135,11 @@ def debouncer_workflow(
     # After the timeout or period has elapsed, start the user workflow with the requested context parameters,
     # either directly or on a queue.
     with SetWorkflowID(ctx["workflow_id"]):
-        with SetWorkflowTimeout(ctx["workflow_timeout_sec"]):
+        # Use .get() because inputs recorded before attributes existed lack the key
+        with (
+            SetWorkflowTimeout(ctx["workflow_timeout_sec"]),
+            SetWorkflowAttributes(ctx.get("attributes")),
+        ):
             func = dbos._registry.workflow_info_map.get(options["workflow_name"], None)
             if not func:
                 raise Exception(
@@ -248,13 +254,14 @@ class Debouncer(Generic[P, R]):
                     if ctx.workflow_timeout_ms
                     else None
                 ),
+                "attributes": ctx.workflow_attributes,
             }
         while True:
             try:
                 # Attempt to enqueue a debouncer for this workflow.
                 deduplication_id = f"{self.options['workflow_name']}-{debounce_key}"
                 with SetEnqueueOptions(deduplication_id=deduplication_id):
-                    with SetWorkflowTimeout(None):
+                    with SetWorkflowTimeout(None), SetWorkflowAttributes(None):
                         internal_queue.enqueue(
                             debouncer_workflow,
                             debounce_period_sec,
@@ -350,6 +357,7 @@ class DebouncerClient:
             "deduplication_id": self.workflow_options.get("deduplication_id"),
             "priority": self.workflow_options.get("priority"),
             "workflow_timeout_sec": self.workflow_options.get("workflow_timeout"),
+            "attributes": self.workflow_options.get("attributes"),
         }
         message_id = generate_uuid()
         while True:

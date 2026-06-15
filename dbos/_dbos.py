@@ -2288,6 +2288,7 @@ class DBOS:
         queues_only: bool = False,
         was_forked_from: Optional[bool] = None,
         has_parent: Optional[bool] = None,
+        attributes: Optional[Dict[str, Any]] = None,
     ) -> List[WorkflowStatus]:
         check_async("list_workflows")
 
@@ -2317,6 +2318,7 @@ class DBOS:
                 queues_only=queues_only,
                 was_forked_from=was_forked_from,
                 has_parent=has_parent,
+                attributes=attributes,
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
@@ -2351,6 +2353,7 @@ class DBOS:
         queues_only: bool = False,
         was_forked_from: Optional[bool] = None,
         has_parent: Optional[bool] = None,
+        attributes: Optional[Dict[str, Any]] = None,
     ) -> List[WorkflowStatus]:
         step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
@@ -2381,6 +2384,7 @@ class DBOS:
                 queues_only=queues_only,
                 was_forked_from=was_forked_from,
                 has_parent=has_parent,
+                attributes=attributes,
             )
 
         return await asyncio.to_thread(
@@ -2416,6 +2420,7 @@ class DBOS:
         load_output: bool = True,
         executor_id: Optional[str | list[str]] = None,
         has_parent: Optional[bool] = None,
+        attributes: Optional[Dict[str, Any]] = None,
     ) -> List[WorkflowStatus]:
         check_async("list_queued_workflows")
 
@@ -2444,6 +2449,7 @@ class DBOS:
                 executor_id=executor_id,
                 queues_only=True,
                 has_parent=has_parent,
+                attributes=attributes,
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
@@ -2478,6 +2484,7 @@ class DBOS:
         load_output: bool = True,
         executor_id: Optional[str | list[str]] = None,
         has_parent: Optional[bool] = None,
+        attributes: Optional[Dict[str, Any]] = None,
     ) -> List[WorkflowStatus]:
         step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
@@ -2507,6 +2514,7 @@ class DBOS:
                 executor_id=executor_id,
                 queues_only=True,
                 has_parent=has_parent,
+                attributes=attributes,
             )
 
         return await asyncio.to_thread(

@@ -853,6 +853,17 @@ FOR EACH ROW EXECUTE FUNCTION "{schema}".streams_function();
 """
 
 
+def get_dbos_migration_forty(schema: str) -> str:
+    # ADD COLUMN with no default is catalog-only; the partial index built in
+    # the same transaction covers zero rows, so no CONCURRENTLY is needed.
+    # The index supports containment (@>) filters on workflow attributes; on
+    # CockroachDB, USING GIN creates an inverted index.
+    return f"""
+ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "attributes" JSONB;
+CREATE INDEX IF NOT EXISTS "idx_workflow_status_attributes" ON "{schema}"."workflow_status" USING GIN ("attributes") WHERE "attributes" IS NOT NULL;
+"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -896,6 +907,7 @@ def get_dbos_migrations(
         get_dbos_migration_thirtyseven(schema, is_cockroach),
         get_dbos_migration_thirtyeight(schema, is_cockroach),
         get_dbos_migration_thirtynine(schema, use_listen_notify),
+        get_dbos_migration_forty(schema),
     ]
 
 
@@ -1142,6 +1154,8 @@ CREATE INDEX IF NOT EXISTS "idx_workflow_status_completed_at" ON "workflow_statu
 
 sqlite_migration_thirtyseven = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_started_at" ON "workflow_status" ("started_at_epoch_ms") WHERE "started_at_epoch_ms" IS NOT NULL'
 
+sqlite_migration_forty = 'ALTER TABLE workflow_status ADD COLUMN "attributes" TEXT'
+
 sqlite_migrations = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -1179,4 +1193,7 @@ sqlite_migrations = [
     sqlite_migration_thirtyfive,
     sqlite_migration_thirtysix,
     sqlite_migration_thirtyseven,
+    # There is no SQLite version of migrations thirty-eight and thirty-nine
+    # Unlike Postgres migration forty, this creates no index (no GIN equivalent)
+    sqlite_migration_forty,
 ]
