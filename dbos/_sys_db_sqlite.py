@@ -8,6 +8,7 @@ from sqlalchemy.exc import DBAPIError
 
 from dbos._migration import sqlite_migrations
 
+from ._error import DBOSException
 from ._logger import dbos_logger
 from ._sys_db import SystemDatabase
 
@@ -116,6 +117,16 @@ class SQLiteSystemDatabase(SystemDatabase):
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a unique constraint violation in SQLite."""
         return "UNIQUE constraint failed" in str(dbapi_error.orig)
+
+    def _attributes_contains_clause(
+        self, attributes: Dict[str, Any]
+    ) -> sa.ColumnElement[bool]:
+        # SQLite's JSON functions cannot faithfully reproduce Postgres JSONB
+        # containment (@>), so rather than silently diverge, reject the filter.
+        raise DBOSException(
+            "Filtering workflows by attributes is not supported on SQLite. "
+            "Use a Postgres system database to filter by attributes."
+        )
 
     def _is_foreign_key_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a foreign key violation in SQLite."""

@@ -1,7 +1,17 @@
 import json
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Dict, List, Optional, Type, TypedDict, TypeVar, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Optional,
+    Type,
+    TypedDict,
+    TypeVar,
+    Union,
+)
 
 from dbos._serialization import Serializer, safe_deserialize_schedule_context
 from dbos._sys_db import (
@@ -186,6 +196,7 @@ class ListWorkflowsBody(TypedDict, total=False):
     queues_only: bool
     was_forked_from: Optional[bool]
     has_parent: Optional[bool]
+    attributes: Optional[Dict[str, Any]]
 
 
 @dataclass
@@ -217,6 +228,7 @@ class WorkflowsOutput:
     DequeuedAt: Optional[str]
     DelayUntilEpochMS: Optional[str]
     CompletedAt: Optional[str]
+    Attributes: Optional[str]
 
     @classmethod
     def from_workflow_information(cls, info: WorkflowStatus) -> "WorkflowsOutput":
@@ -253,6 +265,10 @@ class WorkflowsOutput:
         completed_at_str = (
             str(info.completed_at) if info.completed_at is not None else None
         )
+        # JSON rather than str() so the wire format is parseable by Conductor
+        attributes_str = (
+            json.dumps(info.attributes) if info.attributes is not None else None
+        )
 
         return cls(
             WorkflowUUID=info.workflow_id,
@@ -282,6 +298,7 @@ class WorkflowsOutput:
             DequeuedAt=dequeued_at_str,
             DelayUntilEpochMS=delay_until_epoch_ms_str,
             CompletedAt=completed_at_str,
+            Attributes=attributes_str,
         )
 
 
@@ -355,6 +372,7 @@ class ListQueuedWorkflowsBody(TypedDict, total=False):
     executor_id: Optional[Union[str, List[str]]]
     was_forked_from: Optional[bool]
     has_parent: Optional[bool]
+    attributes: Optional[Dict[str, Any]]
 
 
 @dataclass

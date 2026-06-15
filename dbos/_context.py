@@ -8,7 +8,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum
 from types import TracebackType
-from typing import TYPE_CHECKING, List, Literal, Optional, Type, TypedDict
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, TypedDict
 
 from dbos._serialization import WorkflowSerializationFormat
 
@@ -129,6 +129,8 @@ class DBOSContext:
         self.deduplication_id: Optional[str] = None
         # A user-specified priority for the enqueuing workflow.
         self.priority: Optional[int] = None
+        # User-specified attributes to attach to the next started workflow.
+        self.workflow_attributes: Optional[Dict[str, Any]] = None
         # If the workflow is enqueued on a partitioned queue, its partition key
         self.queue_partition_key: Optional[str] = None
         # The UNIX epoch timestamp before which the workflow should not be dequeued
@@ -140,6 +142,12 @@ class DBOSContext:
         if is_for_workflow:
             rv.id_assigned_for_next_workflow = self.id_assigned_for_next_workflow
             self.id_assigned_for_next_workflow = ""
+            # Copy so later mutation of the caller's dict cannot affect the child
+            rv.workflow_attributes = (
+                dict(self.workflow_attributes)
+                if self.workflow_attributes is not None
+                else None
+            )
         rv.is_within_set_workflow_id_block = self.is_within_set_workflow_id_block
         rv.parent_workflow_id = self.workflow_id
         rv.parent_workflow_fid = self.function_id
@@ -166,6 +174,7 @@ class DBOSContext:
         rv.priority = self.priority
         rv.queue_partition_key = self.queue_partition_key
         rv.delay_until_epoch_ms = self.delay_until_epoch_ms
+        rv.workflow_attributes = self.workflow_attributes
         self.function_id += 1
         rv.function_id = self.function_id
         if reserve_sleep_id:
@@ -520,6 +529,62 @@ class SetWorkflowTimeout:
         assert_current_dbos_context().workflow_deadline_epoch_ms = (
             self.saved_workflow_deadline_epoch_ms
         )
+        # Code to clean up the basic context if we created it
+        if self.created_ctx:
+            _clear_local_dbos_context()
+        return False  # Did not handle
+
+
+class SetWorkflowAttributes:
+    """
+    Set custom key-value attributes to be attached to workflows started or enqueued
+    within the block. Attributes are recorded in the workflow status at creation and
+    are not inherited by child workflows.
+
+    Typical Usage
+        ```
+        with SetWorkflowAttributes({"customer": "acme", "region": "us-east-1"}):
+            result = workflow_function(...)
+        ```
+    """
+
+    def __init__(self, attributes: Optional[Dict[str, Any]]) -> None:
+        if attributes is not None and not isinstance(attributes, dict):
+            raise Exception(
+                f"Invalid workflow attributes {attributes}. Attributes must be a dict."
+            )
+        # Fail fast here rather than surfacing an opaque error later when the
+        # workflow status is recorded as JSON.
+        if attributes is not None:
+            try:
+                json.dumps(attributes)
+            except (TypeError, ValueError) as e:
+                raise Exception(
+                    f"Invalid workflow attributes {attributes}. "
+                    "Attributes must be JSON-serializable."
+                ) from e
+        self.created_ctx = False
+        self.attributes = attributes
+        self.saved_attributes: Optional[Dict[str, Any]] = None
+
+    def __enter__(self) -> SetWorkflowAttributes:
+        # Code to create a basic context
+        ctx = get_local_dbos_context()
+        if ctx is None:
+            self.created_ctx = True
+            _set_local_dbos_context(DBOSContext())
+        ctx = assert_current_dbos_context()
+        self.saved_attributes = ctx.workflow_attributes
+        ctx.workflow_attributes = self.attributes
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        assert_current_dbos_context().workflow_attributes = self.saved_attributes
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()

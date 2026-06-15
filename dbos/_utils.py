@@ -4,7 +4,7 @@ import sys
 import uuid
 
 import psycopg
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, ResourceClosedError
 
 INTERNAL_QUEUE_NAME = "_dbos_internal_queue"
 
@@ -58,8 +58,14 @@ def retriable_postgres_exception(e: Exception) -> bool:
 def retriable_sqlite_exception(e: Exception) -> bool:
     if "database is locked" in str(e):
         return True
-    else:
-        return False
+    # Under concurrent writes, pysqlite can intermittently invalidate the
+    # cursor of an "INSERT ... RETURNING" statement before its row is fetched,
+    # surfacing as a ResourceClosedError ("does not return rows"). The enclosing
+    # transaction has rolled back and the write is idempotent (ON CONFLICT DO
+    # UPDATE), so the operation is safe to retry.
+    if isinstance(e, ResourceClosedError) and "does not return rows" in str(e):
+        return True
+    return False
 
 
 def generate_uuid() -> str:

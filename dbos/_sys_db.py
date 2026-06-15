@@ -185,6 +185,8 @@ class WorkflowStatus:
     # The UNIX epoch timestamp at which the workflow completed (SUCCESS, ERROR,
     # or CANCELLED). None if the workflow has not completed.
     completed_at: Optional[int]
+    # Custom key-value attributes attached to the workflow at creation
+    attributes: Optional[Dict[str, Any]]
 
     # INTERNAL FIELDS
 
@@ -224,6 +226,7 @@ class WorkflowStatusInternal(TypedDict):
     serialization: Optional[str]
     owner_xid: Optional[str]
     delay_until_epoch_ms: Optional[int]
+    attributes: Optional[Dict[str, Any]]
 
 
 class MetricData(TypedDict):
@@ -682,6 +685,7 @@ class SystemDatabase(ABC):
                 parent_workflow_id=status["parent_workflow_id"],
                 owner_xid=owner_xid,
                 delay_until_epoch_ms=status["delay_until_epoch_ms"],
+                attributes=status["attributes"],
             )
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
@@ -987,6 +991,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.assumed_role,
                     SystemSchema.workflow_status.c.inputs,
                     SystemSchema.workflow_status.c.serialization,
+                    SystemSchema.workflow_status.c.attributes,
                 ).where(
                     SystemSchema.workflow_status.c.workflow_uuid.in_(
                         original_workflow_ids
@@ -1023,6 +1028,7 @@ class SystemDatabase(ABC):
                             inputs=status[8],
                             assumed_role=status[7],
                             forked_from=original_workflow_id,
+                            attributes=status[10],
                         )
                         for original_workflow_id, forked_workflow_id, status in zip(
                             original_workflow_ids, forked_workflow_ids, statuses
@@ -1336,6 +1342,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.started_at_epoch_ms,
                     SystemSchema.workflow_status.c.serialization,
                     SystemSchema.workflow_status.c.delay_until_epoch_ms,
+                    SystemSchema.workflow_status.c.attributes,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -1370,6 +1377,7 @@ class SystemDatabase(ABC):
                 "serialization": row[23],
                 "owner_xid": None,
                 "delay_until_epoch_ms": row[24],
+                "attributes": row[25],
             }
             return status
 
@@ -1530,6 +1538,7 @@ class SystemDatabase(ABC):
         queues_only: bool = False,
         was_forked_from: Optional[bool] = None,
         has_parent: Optional[bool] = None,
+        attributes: Optional[Dict[str, Any]] = None,
     ) -> List[WorkflowStatus]:
         """
         Retrieve a list of workflows based on the search criteria.
@@ -1579,6 +1588,7 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.delay_until_epoch_ms,
             SystemSchema.workflow_status.c.was_forked_from,
             SystemSchema.workflow_status.c.completed_at,
+            SystemSchema.workflow_status.c.attributes,
         ]
         if load_input:
             load_columns.append(SystemSchema.workflow_status.c.inputs)
@@ -1610,6 +1620,8 @@ class SystemDatabase(ABC):
             query = query.where(
                 SystemSchema.workflow_status.c.authenticated_user.in_(user_list)
             )
+        if attributes:
+            query = query.where(self._attributes_contains_clause(attributes))
         if start_time:
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
@@ -1733,8 +1745,9 @@ class SystemDatabase(ABC):
             info.delay_until_epoch_ms = row[23]
             info.was_forked_from = row[24]
             info.completed_at = row[25]
+            info.attributes = row[26]
 
-            idx = 26
+            idx = 27
             raw_input = row[idx] if load_input else None
             if load_input:
                 idx += 1
@@ -2330,6 +2343,13 @@ class SystemDatabase(ABC):
     @abstractmethod
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a unique constraint violation."""
+        pass
+
+    @abstractmethod
+    def _attributes_contains_clause(
+        self, attributes: Dict[str, Any]
+    ) -> sa.ColumnElement[bool]:
+        """Build a clause matching workflows whose attributes contain all the given key-value pairs."""
         pass
 
     @abstractmethod

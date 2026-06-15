@@ -4,6 +4,7 @@ from ._context import (
     DBOSContextEnsure,
     DBOSContextSetAuth,
     SetEnqueueOptions,
+    SetWorkflowAttributes,
     SetWorkflowID,
     SetWorkflowTimeout,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "EnqueueOptions",
     "KafkaMessage",
     "PortableWorkflowError",
+    "SetWorkflowAttributes",
     "SetWorkflowID",
     "SetWorkflowTimeout",
     "SetEnqueueOptions",

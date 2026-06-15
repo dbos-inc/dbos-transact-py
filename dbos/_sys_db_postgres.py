@@ -3,11 +3,13 @@ from typing import Any, Dict, Optional, cast
 
 import psycopg
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import DBAPIError
 
 from dbos._migration import ensure_dbos_schema, run_dbos_migrations, should_migrate
 
 from ._logger import dbos_logger
+from ._schemas.system_database import SystemSchema
 from ._sys_db import SystemDatabase
 
 
@@ -106,6 +108,16 @@ class PostgresSystemDatabase(SystemDatabase):
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a unique constraint violation in PostgreSQL."""
         return dbapi_error.orig.sqlstate == "23505"  # type: ignore
+
+    def _attributes_contains_clause(
+        self, attributes: Dict[str, Any]
+    ) -> sa.ColumnElement[bool]:
+        # Coerce to JSONB so contains() renders the @> containment operator,
+        # which is served by the GIN index on the attributes column. The
+        # column's generic JSON type would render contains() as a string LIKE.
+        return sa.type_coerce(
+            SystemSchema.workflow_status.c.attributes, JSONB
+        ).contains(attributes)
 
     def _is_foreign_key_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a foreign key violation in PostgreSQL."""
