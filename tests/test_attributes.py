@@ -376,6 +376,54 @@ def test_update_workflow_attributes_in_workflow(dbos: DBOS) -> None:
     assert [s["function_name"] for s in steps] == ["DBOS.updateWorkflowAttributes"]
 
 
+@pytest.mark.asyncio
+async def test_update_workflow_attributes_async_in_workflow(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    async def target_workflow(x: int) -> int:
+        return x
+
+    target_id = str(uuid.uuid4())
+    with SetWorkflowAttributes({"phase": "start"}):
+        with SetWorkflowID(target_id):
+            target_handle = await DBOS.start_workflow_async(target_workflow, 5)
+    assert (await target_handle.get_result()) == 5
+
+    @DBOS.step()
+    async def marker_step(label: str) -> str:
+        return label
+
+    @DBOS.workflow()
+    async def management_workflow() -> None:
+        # Interleave the update with real steps to prove the step ID is reserved
+        # in the correct sequence even though the update runs in a worker thread.
+        await marker_step("before")
+        await DBOS.update_workflow_attributes_async(target_id, {"phase": "managed"})
+        await marker_step("after")
+
+    mgmt_wfid = str(uuid.uuid4())
+    with SetWorkflowID(mgmt_wfid):
+        handle = await DBOS.start_workflow_async(management_workflow)
+    await handle.get_result()
+
+    # The update took effect on the target workflow
+    statuses = await DBOS.list_workflows_async(workflow_ids=[target_id])
+    assert statuses[0].attributes == {"phase": "managed"}
+
+    # The update is checkpointed as a single step, correctly ordered between the
+    # surrounding real steps (no function-ID collision or off-by-one).
+    steps = await DBOS.list_workflow_steps_async(mgmt_wfid)
+    names = [s["function_name"] for s in steps]
+    assert len(names) == 3
+    assert "marker_step" in names[0]
+    assert names[1] == "DBOS.updateWorkflowAttributes"
+    assert "marker_step" in names[2]
+
+    # The sync method refuses to run inside an event loop, steering async callers
+    # to the _async variant.
+    with pytest.raises(RuntimeError, match="update_workflow_attributes_async"):
+        DBOS.update_workflow_attributes(target_id, {"phase": "nope"})
+
+
 def test_update_workflow_attributes_client(client: DBOSClient, dbos: DBOS) -> None:
     options: EnqueueOptions = {
         "queue_name": "unconsumed_queue",
