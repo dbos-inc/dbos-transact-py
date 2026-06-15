@@ -553,6 +553,16 @@ class SetWorkflowAttributes:
             raise Exception(
                 f"Invalid workflow attributes {attributes}. Attributes must be a dict."
             )
+        # Fail fast here rather than surfacing an opaque error later when the
+        # workflow status is recorded as JSON.
+        if attributes is not None:
+            try:
+                json.dumps(attributes)
+            except (TypeError, ValueError) as e:
+                raise Exception(
+                    f"Invalid workflow attributes {attributes}. "
+                    "Attributes must be JSON-serializable."
+                ) from e
         self.created_ctx = False
         self.attributes = attributes
         self.saved_attributes: Optional[Dict[str, Any]] = None

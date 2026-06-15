@@ -275,6 +275,20 @@ def test_attributes_filter_unsupported_sqlite(dbos: DBOS) -> None:
         DBOS.list_workflows(attributes={"customer": "acme"})
 
 
+def test_attributes_validation() -> None:
+    # A non-dict is rejected
+    with pytest.raises(Exception, match="must be a dict"):
+        SetWorkflowAttributes(["not", "a", "dict"])  # type: ignore[arg-type]
+
+    # A dict holding a non-JSON-serializable value is rejected up front
+    with pytest.raises(Exception, match="must be JSON-serializable"):
+        SetWorkflowAttributes({"obj": object()})
+
+    # None and JSON-serializable dicts are accepted
+    SetWorkflowAttributes(None)
+    SetWorkflowAttributes({"a": 1, "b": [1, 2], "c": {"d": None}})
+
+
 def test_attributes_debouncer(dbos: DBOS) -> None:
     @DBOS.workflow()
     def debounced_workflow(x: int) -> int:
