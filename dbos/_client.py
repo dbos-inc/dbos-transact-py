@@ -575,6 +575,37 @@ class DBOSClient:
             send_to_forks=send_to_forks,
         )
 
+    def send_in_transaction(
+        self,
+        conn_or_session: Union[sa.Connection, Session],
+        destination_id: str,
+        message: Any,
+        topic: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+        *,
+        serialization_type: Optional[
+            WorkflowSerializationFormat
+        ] = WorkflowSerializationFormat.DEFAULT,
+        send_to_forks: bool = False,
+    ) -> None:
+        """
+        Send a message to a workflow within a caller-owned synchronous SQLAlchemy transaction.
+
+        The caller must commit or roll back the transaction. The message is not
+        visible to the destination workflow until the transaction commits.
+        ``conn_or_session`` must target the DBOS system database.
+
+        From an async context, bridge to this synchronous method with
+        ``await async_conn.run_sync(lambda sync_conn: client.send_in_transaction(sync_conn, destination_id, message))``.
+        """
+        self._sys_db.send_bulk_with_connection(
+            [SendMessage(destination_id, message, topic, idempotency_key)],
+            conn_or_session,
+            serialization_type=serialization_type,
+            function_name="DBOS.send",
+            send_to_forks=send_to_forks,
+        )
+
     def send_bulk(
         self,
         messages: List[SendMessage],
@@ -616,6 +647,34 @@ class DBOSClient:
             self.send_bulk,
             messages,
             serialization_type=serialization_type,
+            send_to_forks=send_to_forks,
+        )
+
+    def send_bulk_in_transaction(
+        self,
+        conn_or_session: Union[sa.Connection, Session],
+        messages: List[SendMessage],
+        *,
+        serialization_type: Optional[
+            WorkflowSerializationFormat
+        ] = WorkflowSerializationFormat.DEFAULT,
+        send_to_forks: bool = False,
+    ) -> None:
+        """
+        Send many messages to workflow executions within a caller-owned synchronous SQLAlchemy transaction.
+
+        The caller must commit or roll back the transaction. The messages are
+        not visible to their destination workflows until the transaction
+        commits. ``conn_or_session`` must target the DBOS system database.
+
+        If `send_to_forks` is set, every message is also delivered to all
+        workflows recursively forked from its destination.
+        """
+        self._sys_db.send_bulk_with_connection(
+            messages,
+            conn_or_session,
+            serialization_type=serialization_type,
+            function_name="DBOS.send_bulk",
             send_to_forks=send_to_forks,
         )
 

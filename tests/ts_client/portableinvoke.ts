@@ -25,15 +25,19 @@ async function doTest() {
     await client.send(wfhs.workflowID, 'm', 'incoming', undefined, { serializationType: 'portable' });
 
     let deserializationErrs = 0;
-    assertEqual(await client.getEvent(wfhs.workflowID, 'defstat', 2), { status: 'Happy' }, 'defstat event');
+    // The workflow is enqueued, so the first getEvent must wait for the queue to
+    // dequeue and start it before 'defstat' is set. Use a generous timeout (matching
+    // the rich-types section below) so this is robust to queue-dequeue latency on
+    // loaded CI machines; a short 2s timeout flakes with a null result.
+    assertEqual(await client.getEvent(wfhs.workflowID, 'defstat', 10), { status: 'Happy' }, 'defstat event');
     try {
-      assertEqual(await client.getEvent(wfhs.workflowID, 'nstat', 2), { status: 'Happy' }, 'nstat event');
+      assertEqual(await client.getEvent(wfhs.workflowID, 'nstat', 10), { status: 'Happy' }, 'nstat event');
     }
     catch (e) {
       ++deserializationErrs;
       if (!(e as Error).message.includes('deserialization type py_pickle is not available')) throw e;
     }
-    assertEqual(await client.getEvent(wfhs.workflowID, 'pstat', 2), { status: 'Happy' }, 'pstat event');
+    assertEqual(await client.getEvent(wfhs.workflowID, 'pstat', 10), { status: 'Happy' }, 'pstat event');
 
     const { value: ddread } = await client.readStream(wfhs.workflowID, 'defstream').next();
     assertEqual(ddread, { stream: 'OhYeah' }, 'defstream value');
