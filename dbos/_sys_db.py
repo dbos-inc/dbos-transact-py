@@ -952,7 +952,7 @@ class SystemDatabase(ABC):
     def update_workflow_attributes(
         self, workflow_id: str, attributes: Optional[Dict[str, Any]]
     ) -> None:
-        """Replace the custom attributes attached to a workflow."""
+        """Replace the custom attributes attached to a workflow. Pass None to clear all attributes."""
         validate_workflow_attributes(attributes)
         with self.engine.begin() as c:
             c.execute(

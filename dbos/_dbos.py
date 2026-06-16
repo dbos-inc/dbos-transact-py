@@ -1957,7 +1957,7 @@ class DBOS:
     def update_workflow_attributes(
         cls, workflow_id: str, attributes: Optional[Dict[str, Any]]
     ) -> None:
-        """Replace the custom attributes attached to a workflow by ID.
+        """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes.
 
         Safe to call from within a workflow: the update is recorded as a step so
         it runs exactly once even if the workflow is recovered.
@@ -1980,7 +1980,7 @@ class DBOS:
     async def update_workflow_attributes_async(
         cls, workflow_id: str, attributes: Optional[Dict[str, Any]]
     ) -> None:
-        """Replace the custom attributes attached to a workflow by ID.
+        """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes.
 
         Safe to call from within a workflow: the update is recorded as a step so
         it runs exactly once even if the workflow is recovered.

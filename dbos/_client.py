@@ -656,13 +656,13 @@ class DBOSClient:
     def update_workflow_attributes(
         self, workflow_id: str, attributes: Optional[Dict[str, Any]]
     ) -> None:
-        """Replace the custom attributes attached to a workflow by ID."""
+        """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes."""
         self._sys_db.update_workflow_attributes(workflow_id, attributes)
 
     async def update_workflow_attributes_async(
         self, workflow_id: str, attributes: Optional[Dict[str, Any]]
     ) -> None:
-        """Replace the custom attributes attached to a workflow by ID."""
+        """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes."""
         await asyncio.to_thread(
             self.update_workflow_attributes, workflow_id, attributes
         )
