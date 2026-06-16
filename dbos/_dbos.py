@@ -1954,6 +1954,54 @@ class DBOS:
         )
 
     @classmethod
+    def update_workflow_attributes(
+        cls, workflow_id: str, attributes: Optional[Dict[str, Any]]
+    ) -> None:
+        """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes.
+
+        Safe to call from within a workflow: the update is recorded as a step so
+        it runs exactly once even if the workflow is recovered.
+        """
+        check_async("update_workflow_attributes")
+
+        def fn() -> None:
+            dbos_logger.info(f"Updating attributes of workflow: {workflow_id}")
+            _get_dbos_instance()._sys_db.update_workflow_attributes(
+                workflow_id, attributes
+            )
+
+        return _get_dbos_instance()._sys_db.call_function_as_step(
+            fn,
+            "DBOS.updateWorkflowAttributes",
+            snapshot_step_context(reserve_sleep_id=False),
+        )
+
+    @classmethod
+    async def update_workflow_attributes_async(
+        cls, workflow_id: str, attributes: Optional[Dict[str, Any]]
+    ) -> None:
+        """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes.
+
+        Safe to call from within a workflow: the update is recorded as a step so
+        it runs exactly once even if the workflow is recovered.
+        """
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
+        await cls._configure_asyncio_thread_pool()
+
+        def fn() -> None:
+            dbos_logger.info(f"Updating attributes of workflow: {workflow_id}")
+            _get_dbos_instance()._sys_db.update_workflow_attributes(
+                workflow_id, attributes
+            )
+
+        return await asyncio.to_thread(
+            _get_dbos_instance()._sys_db.call_function_as_step,
+            fn,
+            "DBOS.updateWorkflowAttributes",
+            step_ctx,
+        )
+
+    @classmethod
     def delete_workflow(
         cls, workflow_id: str, *, delete_children: bool = False
     ) -> None:

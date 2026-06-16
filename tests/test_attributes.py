@@ -289,6 +289,173 @@ def test_attributes_validation() -> None:
     SetWorkflowAttributes({"a": 1, "b": [1, 2], "c": {"d": None}})
 
 
+def test_update_workflow_attributes(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def noop_workflow() -> None:
+        return None
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowAttributes({"customer": "acme", "tier": 1}):
+        with SetWorkflowID(wfid):
+            noop_workflow()
+    assert DBOS.list_workflows(workflow_ids=[wfid])[0].attributes == {
+        "customer": "acme",
+        "tier": 1,
+    }
+
+    # Replacing the attributes overwrites the whole dict
+    DBOS.update_workflow_attributes(wfid, {"customer": "acme", "tier": 2})
+    assert DBOS.list_workflows(workflow_ids=[wfid])[0].attributes == {
+        "customer": "acme",
+        "tier": 2,
+    }
+
+    # A workflow that started without attributes can have them set
+    wfid_no_attrs = str(uuid.uuid4())
+    with SetWorkflowID(wfid_no_attrs):
+        noop_workflow()
+    assert DBOS.list_workflows(workflow_ids=[wfid_no_attrs])[0].attributes is None
+    DBOS.update_workflow_attributes(wfid_no_attrs, {"added": "later"})
+    assert DBOS.list_workflows(workflow_ids=[wfid_no_attrs])[0].attributes == {
+        "added": "later"
+    }
+
+    # Passing None clears the attributes
+    DBOS.update_workflow_attributes(wfid, None)
+    assert DBOS.list_workflows(workflow_ids=[wfid])[0].attributes is None
+
+
+@pytest.mark.asyncio
+async def test_update_workflow_attributes_async(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def noop_workflow() -> None:
+        return None
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowAttributes({"customer": "acme"}):
+        with SetWorkflowID(wfid):
+            noop_workflow()
+
+    await DBOS.update_workflow_attributes_async(wfid, {"customer": "bigco"})
+    statuses = await DBOS.list_workflows_async(workflow_ids=[wfid])
+    assert statuses[0].attributes == {"customer": "bigco"}
+
+
+def test_update_workflow_attributes_validation(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def noop_workflow() -> None:
+        return None
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        noop_workflow()
+
+    with pytest.raises(Exception, match="must be a dict"):
+        DBOS.update_workflow_attributes(wfid, ["not", "a", "dict"])  # type: ignore[arg-type]
+    with pytest.raises(Exception, match="must be JSON-serializable"):
+        DBOS.update_workflow_attributes(wfid, {"obj": object()})
+
+
+def test_update_workflow_attributes_in_workflow(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def updating_workflow() -> None:
+        assert DBOS.workflow_id is not None
+        DBOS.update_workflow_attributes(DBOS.workflow_id, {"phase": "running"})
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowAttributes({"phase": "start"}):
+        with SetWorkflowID(wfid):
+            updating_workflow()
+
+    assert DBOS.list_workflows(workflow_ids=[wfid])[0].attributes == {
+        "phase": "running"
+    }
+
+    # The update is recorded as a step so it runs exactly once on recovery
+    steps = DBOS.list_workflow_steps(wfid)
+    assert [s["function_name"] for s in steps] == ["DBOS.updateWorkflowAttributes"]
+
+
+@pytest.mark.asyncio
+async def test_update_workflow_attributes_async_in_workflow(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    async def target_workflow(x: int) -> int:
+        return x
+
+    target_id = str(uuid.uuid4())
+    with SetWorkflowAttributes({"phase": "start"}):
+        with SetWorkflowID(target_id):
+            target_handle = await DBOS.start_workflow_async(target_workflow, 5)
+    assert (await target_handle.get_result()) == 5
+
+    @DBOS.step()
+    async def marker_step(label: str) -> str:
+        return label
+
+    @DBOS.workflow()
+    async def management_workflow() -> None:
+        # Interleave the update with real steps to prove the step ID is reserved
+        # in the correct sequence even though the update runs in a worker thread.
+        await marker_step("before")
+        await DBOS.update_workflow_attributes_async(target_id, {"phase": "managed"})
+        await marker_step("after")
+
+    mgmt_wfid = str(uuid.uuid4())
+    with SetWorkflowID(mgmt_wfid):
+        handle = await DBOS.start_workflow_async(management_workflow)
+    await handle.get_result()
+
+    # The update took effect on the target workflow
+    statuses = await DBOS.list_workflows_async(workflow_ids=[target_id])
+    assert statuses[0].attributes == {"phase": "managed"}
+
+    # The update is checkpointed as a single step, correctly ordered between the
+    # surrounding real steps (no function-ID collision or off-by-one).
+    steps = await DBOS.list_workflow_steps_async(mgmt_wfid)
+    names = [s["function_name"] for s in steps]
+    assert len(names) == 3
+    assert "marker_step" in names[0]
+    assert names[1] == "DBOS.updateWorkflowAttributes"
+    assert "marker_step" in names[2]
+
+    # The sync method refuses to run inside an event loop, steering async callers
+    # to the _async variant.
+    with pytest.raises(RuntimeError, match="update_workflow_attributes_async"):
+        DBOS.update_workflow_attributes(target_id, {"phase": "nope"})
+
+
+def test_update_workflow_attributes_client(client: DBOSClient, dbos: DBOS) -> None:
+    options: EnqueueOptions = {
+        "queue_name": "unconsumed_queue",
+        "workflow_name": "client_workflow",
+        "attributes": {"source": "client"},
+    }
+    handle: WorkflowHandle[Any] = client.enqueue(options, 1)
+    assert handle.get_status().attributes == {"source": "client"}
+
+    client.update_workflow_attributes(handle.workflow_id, {"source": "updated"})
+    assert handle.get_status().attributes == {"source": "updated"}
+
+    client.update_workflow_attributes(handle.workflow_id, None)
+    assert handle.get_status().attributes is None
+
+
+@pytest.mark.asyncio
+async def test_update_workflow_attributes_client_async(
+    client: DBOSClient, dbos: DBOS
+) -> None:
+    options: EnqueueOptions = {
+        "queue_name": "unconsumed_queue",
+        "workflow_name": "client_workflow",
+        "attributes": {"source": "client_async"},
+    }
+    handle: WorkflowHandle[Any] = client.enqueue(options, 1)
+    await client.update_workflow_attributes_async(
+        handle.workflow_id, {"source": "updated_async"}
+    )
+    assert handle.get_status().attributes == {"source": "updated_async"}
+
+
 def test_attributes_debouncer(dbos: DBOS) -> None:
     @DBOS.workflow()
     def debounced_workflow(x: int) -> int:
