@@ -1,13 +1,14 @@
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from dbos import DBOS, DBOSConfig
+from dbos import DBOS, DBOSConfig, SetWorkflowAttributes
 
 
 def test_workflow_export(dbos: DBOS, config: DBOSConfig) -> None:
 
     key = "key"
     value = "value"
+    attributes = {"customer": "acme", "region": "us-east-1"}
 
     @DBOS.step()
     def step() -> None:
@@ -36,9 +37,17 @@ def test_workflow_export(dbos: DBOS, config: DBOSConfig) -> None:
         DBOS.write_stream(key, value)
         return DBOS.workflow_id, child_id
 
-    workflow_id, child_id = workflow()
+    with SetWorkflowAttributes(attributes):
+        workflow_id, child_id = workflow()
     # Child workflow ID follows pattern: parent_id-function_id
     grandchild_id = f"{child_id}-1"
+
+    # Capture the original status so we can confirm a faithful round-trip of
+    # every persisted status field (not just the input/output/steps).
+    original_status = DBOS.get_workflow_status(workflow_id)
+    assert original_status is not None
+    assert original_status.attributes == attributes
+    assert original_status.completed_at is not None
 
     exported_workflow = dbos._sys_db.export_workflow(workflow_id, export_children=True)
     original_steps = DBOS.list_workflow_steps(workflow_id)
@@ -74,6 +83,14 @@ def test_workflow_export(dbos: DBOS, config: DBOSConfig) -> None:
     imported_parent_status = DBOS.get_workflow_status(workflow_id)
     assert imported_parent_status is not None
     assert imported_parent_status.parent_workflow_id is None
+
+    # Every persisted status field round-trips faithfully through export/import.
+    assert imported_parent_status.attributes == attributes
+    assert imported_parent_status.completed_at == original_status.completed_at
+    assert imported_parent_status.status == original_status.status
+    assert imported_parent_status.created_at == original_status.created_at
+    assert imported_parent_status.updated_at == original_status.updated_at
+    assert imported_parent_status.was_forked_from == original_status.was_forked_from
 
     imported_child_status = DBOS.get_workflow_status(child_id)
     assert imported_child_status is not None

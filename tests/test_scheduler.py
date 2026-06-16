@@ -745,6 +745,41 @@ def test_list_workflows_by_schedule_name(dbos: DBOS) -> None:
     DBOS.delete_schedule("search-b")
 
 
+def test_schedule_name_survives_export_import(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def scheduled_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    DBOS.create_schedule(
+        schedule_name="export-test",
+        workflow_fn=scheduled_workflow,
+        schedule="0 0 * * *",  # daily, won't fire during the test
+    )
+    handle = DBOS.trigger_schedule("export-test")
+    handle.get_result()
+    workflow_id = handle.workflow_id
+
+    original = DBOS.get_workflow_status(workflow_id)
+    assert original is not None
+    assert original.schedule_name == "export-test"
+
+    # Export, delete, then reimport: schedule_name must survive the round-trip.
+    exported = dbos._sys_db.export_workflow(workflow_id, export_children=True)
+    DBOS.delete_workflow(workflow_id)
+    assert DBOS.list_workflows(workflow_ids=[workflow_id]) == []
+
+    dbos._sys_db.import_workflow(exported)
+    imported = DBOS.get_workflow_status(workflow_id)
+    assert imported is not None
+    assert imported.schedule_name == "export-test"
+    # The reimported run is still found by the schedule_name filter.
+    assert [
+        w.workflow_id for w in DBOS.list_workflows(schedule_name="export-test")
+    ] == [workflow_id]
+
+    DBOS.delete_schedule("export-test")
+
+
 def test_client_schedule_crud(client: DBOSClient) -> None:
     # Create a schedule with context and timezone
     client.create_schedule(

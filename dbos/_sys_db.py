@@ -4395,6 +4395,15 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.parent_workflow_id,
                         SystemSchema.workflow_status.c.serialization,
                         SystemSchema.workflow_status.c.delay_until_epoch_ms,
+                        SystemSchema.workflow_status.c.was_forked_from,
+                        SystemSchema.workflow_status.c.rate_limited,
+                        SystemSchema.workflow_status.c.completed_at,
+                        SystemSchema.workflow_status.c.attributes,
+                        SystemSchema.workflow_status.c.schedule_name,
+                        # owner_xid is intentionally omitted: it is a transient
+                        # transaction-ownership token, not logical workflow state
+                        # (get_workflow_status also returns None for it), and a
+                        # source database's xid is meaningless in the target.
                     ).where(SystemSchema.workflow_status.c.workflow_uuid == wf_id)
                 ).fetchone()
 
@@ -4430,6 +4439,11 @@ class SystemDatabase(ABC):
                     "parent_workflow_id": status_row[25],
                     "serialization": status_row[26],
                     "delay_until_epoch_ms": status_row[27],
+                    "was_forked_from": status_row[28],
+                    "rate_limited": status_row[29],
+                    "completed_at": status_row[30],
+                    "attributes": status_row[31],
+                    "schedule_name": status_row[32],
                 }
 
                 # Export operation_outputs
@@ -4584,6 +4598,13 @@ class SystemDatabase(ABC):
                         parent_workflow_id=status.get("parent_workflow_id"),
                         serialization=status.get("serialization"),
                         delay_until_epoch_ms=status.get("delay_until_epoch_ms"),
+                        # NOT NULL columns: fall back to False for payloads
+                        # exported before these fields were included.
+                        was_forked_from=status.get("was_forked_from", False),
+                        rate_limited=status.get("rate_limited", False),
+                        completed_at=status.get("completed_at"),
+                        attributes=status.get("attributes"),
+                        schedule_name=status.get("schedule_name"),
                     )
                 )
 
