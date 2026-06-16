@@ -707,7 +707,10 @@ async def test_high_async_concurrency(dbos: DBOS, config: DBOSConfig) -> None:
         config["max_executor_threads"]
         and peak_threads < config["max_executor_threads"] + 10
     )
-    assert elapsed < 60
+    # Floor is ~15s per workflow (sleep_async 5s + recv 5s + get_event 5s), run
+    # concurrently. 90s keeps the same 6x headroom as the steps assertion above,
+    # avoiding flakes from SQLite write contention under CI load.
+    assert elapsed < 90
 
 
 @pytest.mark.asyncio

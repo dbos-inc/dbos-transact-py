@@ -197,6 +197,7 @@ class ListWorkflowsBody(TypedDict, total=False):
     was_forked_from: Optional[bool]
     has_parent: Optional[bool]
     attributes: Optional[Dict[str, Any]]
+    schedule_name: Optional[Union[str, List[str]]]
 
 
 @dataclass
@@ -229,6 +230,7 @@ class WorkflowsOutput:
     DelayUntilEpochMS: Optional[str]
     CompletedAt: Optional[str]
     Attributes: Optional[str]
+    ScheduleName: Optional[str]
 
     @classmethod
     def from_workflow_information(cls, info: WorkflowStatus) -> "WorkflowsOutput":
@@ -299,6 +301,7 @@ class WorkflowsOutput:
             DelayUntilEpochMS=delay_until_epoch_ms_str,
             CompletedAt=completed_at_str,
             Attributes=attributes_str,
+            ScheduleName=info.schedule_name,
         )
 
 
@@ -373,6 +376,7 @@ class ListQueuedWorkflowsBody(TypedDict, total=False):
     was_forked_from: Optional[bool]
     has_parent: Optional[bool]
     attributes: Optional[Dict[str, Any]]
+    schedule_name: Optional[Union[str, List[str]]]
 
 
 @dataclass

@@ -1117,13 +1117,18 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     for i in range(num_workflows):
         assert workflow(i) == i
     time.sleep(1)
+    # Capture the cutoff between the two batches. Doing it here (rather than after
+    # the second batch with a -1s offset) makes the test independent of how long
+    # the second batch takes to run, which can exceed 1s under load and otherwise
+    # cause some second-batch workflows to be GC'ed.
+    gc_cutoff_ms = int(time.time() * 1000)
     for i in range(num_workflows):
         assert workflow(i) == i
 
     # GC the first half, verify only half were GC'ed
     garbage_collect(
         dbos,
-        cutoff_epoch_timestamp_ms=int(time.time() * 1000) - 1000,
+        cutoff_epoch_timestamp_ms=gc_cutoff_ms,
         rows_threshold=None,
     )
     workflows = DBOS.list_workflows()

@@ -447,6 +447,9 @@ def _init_workflow(
             else None
         ),
         "attributes": ctx.workflow_attributes,
+        # schedule_name is only set by the persistent scheduler, which builds
+        # the workflow status directly rather than going through this path.
+        "schedule_name": None,
     }
     # Consume the attributes from the workflow's context so that workflows
     # started inside this workflow do not inherit them.
