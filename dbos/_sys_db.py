@@ -188,6 +188,8 @@ class WorkflowStatus:
     # Custom key-value attributes attached to the workflow at creation and
     # optionally updated afterward via update_workflow_attributes
     attributes: Optional[Dict[str, Any]]
+    # If this workflow was enqueued by a named schedule, that schedule's name
+    schedule_name: Optional[str]
 
     # INTERNAL FIELDS
 
@@ -228,6 +230,7 @@ class WorkflowStatusInternal(TypedDict):
     owner_xid: Optional[str]
     delay_until_epoch_ms: Optional[int]
     attributes: Optional[Dict[str, Any]]
+    schedule_name: Optional[str]
 
 
 class MetricData(TypedDict):
@@ -687,6 +690,7 @@ class SystemDatabase(ABC):
                 owner_xid=owner_xid,
                 delay_until_epoch_ms=status["delay_until_epoch_ms"],
                 attributes=status["attributes"],
+                schedule_name=status["schedule_name"],
             )
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
@@ -1359,6 +1363,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.serialization,
                     SystemSchema.workflow_status.c.delay_until_epoch_ms,
                     SystemSchema.workflow_status.c.attributes,
+                    SystemSchema.workflow_status.c.schedule_name,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -1394,6 +1399,7 @@ class SystemDatabase(ABC):
                 "owner_xid": None,
                 "delay_until_epoch_ms": row[24],
                 "attributes": row[25],
+                "schedule_name": row[26],
             }
             return status
 
@@ -1555,6 +1561,7 @@ class SystemDatabase(ABC):
         was_forked_from: Optional[bool] = None,
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
+        schedule_name: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         """
         Retrieve a list of workflows based on the search criteria.
@@ -1576,6 +1583,7 @@ class SystemDatabase(ABC):
         queue_name_list = _to_list(queue_name)
         executor_id_list = _to_list(executor_id)
         prefix_list = _to_list(workflow_id_prefix)
+        schedule_name_list = _to_list(schedule_name)
 
         load_columns = [
             SystemSchema.workflow_status.c.workflow_uuid,
@@ -1605,6 +1613,7 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.was_forked_from,
             SystemSchema.workflow_status.c.completed_at,
             SystemSchema.workflow_status.c.attributes,
+            SystemSchema.workflow_status.c.schedule_name,
         ]
         if load_input:
             load_columns.append(SystemSchema.workflow_status.c.inputs)
@@ -1632,6 +1641,10 @@ class SystemDatabase(ABC):
             query = query.order_by(SystemSchema.workflow_status.c.created_at.asc())
         if name_list:
             query = query.where(SystemSchema.workflow_status.c.name.in_(name_list))
+        if schedule_name_list:
+            query = query.where(
+                SystemSchema.workflow_status.c.schedule_name.in_(schedule_name_list)
+            )
         if user_list:
             query = query.where(
                 SystemSchema.workflow_status.c.authenticated_user.in_(user_list)
@@ -1762,8 +1775,9 @@ class SystemDatabase(ABC):
             info.was_forked_from = row[24]
             info.completed_at = row[25]
             info.attributes = row[26]
+            info.schedule_name = row[27]
 
-            idx = 27
+            idx = 28
             raw_input = row[idx] if load_input else None
             if load_input:
                 idx += 1

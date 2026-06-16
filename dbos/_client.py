@@ -270,6 +270,7 @@ class DBOSClient:
             "owner_xid": None,
             "delay_until_epoch_ms": delay_until_epoch_ms,
             "attributes": options.get("attributes"),
+            "schedule_name": None,
         }
         return workflow_id, status
 
@@ -865,6 +866,7 @@ class DBOSClient:
         was_forked_from: Optional[bool] = None,
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
+        schedule_name: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         return self._sys_db.list_workflows(
             workflow_ids=workflow_ids,
@@ -892,6 +894,7 @@ class DBOSClient:
             was_forked_from=was_forked_from,
             has_parent=has_parent,
             attributes=attributes,
+            schedule_name=schedule_name,
         )
 
     async def list_workflows_async(
@@ -922,6 +925,7 @@ class DBOSClient:
         was_forked_from: Optional[bool] = None,
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
+        schedule_name: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         return await asyncio.to_thread(
             self.list_workflows,
@@ -950,6 +954,7 @@ class DBOSClient:
             was_forked_from=was_forked_from,
             has_parent=has_parent,
             attributes=attributes,
+            schedule_name=schedule_name,
         )
 
     def list_queued_workflows(

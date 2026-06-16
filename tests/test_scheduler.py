@@ -692,6 +692,59 @@ def test_trigger_schedule(dbos: DBOS) -> None:
     DBOS.delete_schedule("trigger-test")
 
 
+def test_list_workflows_by_schedule_name(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def scheduled_workflow(scheduled_at: datetime, ctx: Any) -> str:
+        return "scheduled"
+
+    @DBOS.workflow()
+    def manual_workflow() -> str:
+        return "manual"
+
+    # A directly-invoked workflow has no schedule_name and is not returned by
+    # the schedule_name filter.
+    manual_handle = DBOS.start_workflow(manual_workflow)
+    assert manual_handle.get_result() == "manual"
+    manual_status = DBOS.list_workflows(workflow_ids=[manual_handle.workflow_id])
+    assert len(manual_status) == 1
+    assert manual_status[0].schedule_name is None
+
+    # Two distinct schedules sharing the same workflow function. schedule_name
+    # is what distinguishes their runs, since both have the same name.
+    for name in ("search-a", "search-b"):
+        DBOS.create_schedule(
+            schedule_name=name,
+            workflow_fn=scheduled_workflow,
+            schedule="0 0 * * *",  # daily, won't fire during the test
+        )
+
+    handle_a = DBOS.trigger_schedule("search-a")
+    handle_b = DBOS.trigger_schedule("search-b")
+    handle_a.get_result()
+    handle_b.get_result()
+
+    # Filter by a single schedule name
+    runs_a = DBOS.list_workflows(schedule_name="search-a")
+    assert len(runs_a) == 1
+    assert runs_a[0].workflow_id == handle_a.workflow_id
+    assert runs_a[0].schedule_name == "search-a"
+    assert runs_a[0].name == scheduled_workflow.dbos_function_name  # type: ignore
+
+    # Filter by a list of schedule names
+    runs_both = DBOS.list_workflows(schedule_name=["search-a", "search-b"])
+    assert {w.workflow_id for w in runs_both} == {
+        handle_a.workflow_id,
+        handle_b.workflow_id,
+    }
+    assert all(w.schedule_name in ("search-a", "search-b") for w in runs_both)
+
+    # A schedule name that produced no runs returns nothing
+    assert DBOS.list_workflows(schedule_name="never-fired") == []
+
+    DBOS.delete_schedule("search-a")
+    DBOS.delete_schedule("search-b")
+
+
 def test_client_schedule_crud(client: DBOSClient) -> None:
     # Create a schedule with context and timezone
     client.create_schedule(

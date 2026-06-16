@@ -2337,6 +2337,7 @@ class DBOS:
         was_forked_from: Optional[bool] = None,
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
+        schedule_name: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         check_async("list_workflows")
 
@@ -2367,6 +2368,7 @@ class DBOS:
                 was_forked_from=was_forked_from,
                 has_parent=has_parent,
                 attributes=attributes,
+                schedule_name=schedule_name,
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
@@ -2402,6 +2404,7 @@ class DBOS:
         was_forked_from: Optional[bool] = None,
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
+        schedule_name: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
@@ -2433,6 +2436,7 @@ class DBOS:
                 was_forked_from=was_forked_from,
                 has_parent=has_parent,
                 attributes=attributes,
+                schedule_name=schedule_name,
             )
 
         return await asyncio.to_thread(

@@ -93,6 +93,7 @@ class SystemSchema:
         Column("rate_limited", Boolean, nullable=False, server_default="false"),
         Column("completed_at", BigInteger, nullable=True),
         Column("attributes", JSON().with_variant(JSONB(), "postgresql"), nullable=True),
+        Column("schedule_name", Text, nullable=True),
         Index("workflow_status_created_at_index", "created_at"),
         Index(
             "idx_workflow_status_delayed",
@@ -151,6 +152,12 @@ class SystemSchema:
             "attributes",
             postgresql_using="gin",
             postgresql_where=text("attributes IS NOT NULL"),
+        ),
+        Index(
+            "idx_workflow_status_schedule_name",
+            "schedule_name",
+            postgresql_where=text("schedule_name IS NOT NULL"),
+            sqlite_where=text("schedule_name IS NOT NULL"),
         ),
         Index(
             "uq_workflow_status_dedup_id",
