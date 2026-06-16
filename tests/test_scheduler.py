@@ -694,8 +694,8 @@ def test_trigger_schedule(dbos: DBOS) -> None:
 
 def test_list_workflows_by_schedule_name(dbos: DBOS) -> None:
     @DBOS.workflow()
-    def scheduled_workflow(scheduled_at: datetime, ctx: Any) -> str:
-        return "scheduled"
+    def scheduled_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        pass
 
     @DBOS.workflow()
     def manual_workflow() -> str:
