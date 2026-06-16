@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from dbos._utils import GlobalParams, generate_uuid
 
+from ._error import DBOSException
 from ._logger import dbos_logger
 from ._tracer import dbos_tracer
 
@@ -535,11 +536,32 @@ class SetWorkflowTimeout:
         return False  # Did not handle
 
 
+def validate_workflow_attributes(attributes: Optional[Dict[str, Any]]) -> None:
+    """Validate that workflow attributes are a JSON-serializable dict (or None).
+
+    Fail fast here rather than surfacing an opaque error later when the workflow
+    status is recorded as JSON.
+    """
+    if attributes is not None and not isinstance(attributes, dict):
+        raise DBOSException(
+            f"Invalid workflow attributes {attributes}. Attributes must be a dict."
+        )
+    if attributes is not None:
+        try:
+            json.dumps(attributes)
+        except (TypeError, ValueError) as e:
+            raise DBOSException(
+                f"Invalid workflow attributes {attributes}. "
+                "Attributes must be JSON-serializable."
+            ) from e
+
+
 class SetWorkflowAttributes:
     """
     Set custom key-value attributes to be attached to workflows started or enqueued
     within the block. Attributes are recorded in the workflow status at creation and
-    are not inherited by child workflows.
+    are not inherited by child workflows. They can be updated after creation with
+    DBOS.update_workflow_attributes.
 
     Typical Usage
         ```
@@ -549,20 +571,7 @@ class SetWorkflowAttributes:
     """
 
     def __init__(self, attributes: Optional[Dict[str, Any]]) -> None:
-        if attributes is not None and not isinstance(attributes, dict):
-            raise Exception(
-                f"Invalid workflow attributes {attributes}. Attributes must be a dict."
-            )
-        # Fail fast here rather than surfacing an opaque error later when the
-        # workflow status is recorded as JSON.
-        if attributes is not None:
-            try:
-                json.dumps(attributes)
-            except (TypeError, ValueError) as e:
-                raise Exception(
-                    f"Invalid workflow attributes {attributes}. "
-                    "Attributes must be JSON-serializable."
-                ) from e
+        validate_workflow_attributes(attributes)
         self.created_ctx = False
         self.attributes = attributes
         self.saved_attributes: Optional[Dict[str, Any]] = None
