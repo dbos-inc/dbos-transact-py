@@ -813,6 +813,17 @@ def execute_workflow_by_id(
                 inputs["args"] = (class_object,) + inputs["args"]
 
         with SetWorkflowID(workflow_id):
+            # Propagate the workflow's partition key from its persisted status
+            # into the context. start_workflow(_async) rebuilds the in-memory
+            # status from this context, and that status determines the (queue,
+            # partition) bucket the workflow registers in the active-workflows
+            # set. Without this, a dequeued partitioned workflow registers under
+            # a null partition key, so per-partition worker_concurrency
+            # accounting never counts it and the queue over-dequeues past the
+            # limit.
+            assert_current_dbos_context().queue_partition_key = status.get(
+                "queue_partition_key"
+            )
             if inspect.iscoroutinefunction(wf_func):
                 ctx = get_local_dbos_context()
                 parent_ctx_copy = copy.copy(ctx)
