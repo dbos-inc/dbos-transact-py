@@ -3907,11 +3907,15 @@ class SystemDatabase(ABC):
 
     def _apply_caller_schema(self, conn: Union[sa.Connection, Session]) -> None:
         """Translate the placeholder schema on a caller-owned Connection/Session (the caller's own statements are unaffected)."""
-        translate = {SCHEMA_PLACEHOLDER: self.schema}
+        # Set the option in place on the underlying Connection. Session.connection(execution_options=...)
+        # is silently ignored once the caller has already procured the connection (run any statement) in
+        # this transaction, which is the normal case for a caller-owned transaction.
         if isinstance(conn, Session):
-            conn.connection(execution_options={"schema_translate_map": translate})
-        else:
-            conn.execution_options(schema_translate_map=translate)
+            conn = conn.connection()
+        existing = conn.get_execution_options().get("schema_translate_map") or {}
+        conn.execution_options(
+            schema_translate_map={**existing, SCHEMA_PLACEHOLDER: self.schema}
+        )
 
     def init_workflow_with_connection(
         self,
