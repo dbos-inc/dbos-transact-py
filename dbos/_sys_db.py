@@ -578,10 +578,7 @@ class SystemDatabase(ABC):
         else:
             base_engine = self._create_engine(system_database_url, engine_kwargs)
             self.created_engine = True
-        # Apply the real schema per-engine so multiple instances/clients with
-        # different schemas don't clobber shared table metadata. Tables are
-        # defined against SCHEMA_PLACEHOLDER; translate it to self.schema here
-        # (None for SQLite renders unqualified names).
+        # Translate the placeholder schema to this instance's schema per-engine (None for SQLite = unqualified).
         self.engine = base_engine.execution_options(
             schema_translate_map={SCHEMA_PLACEHOLDER: self.schema}
         )
@@ -3909,15 +3906,7 @@ class SystemDatabase(ABC):
         return wf_status, workflow_deadline_epoch_ms, should_execute
 
     def _apply_caller_schema(self, conn: Union[sa.Connection, Session]) -> None:
-        """Apply this system database's schema_translate_map to a caller-owned
-        Connection or Session.
-
-        System tables are defined against SCHEMA_PLACEHOLDER and rely on the
-        engine's schema_translate_map to resolve the real schema. A caller may
-        pass a connection built from an engine that lacks that map, so set it
-        here. Only the private placeholder key is added, so the caller's own
-        statements are unaffected.
-        """
+        """Translate the placeholder schema on a caller-owned Connection/Session (the caller's own statements are unaffected)."""
         translate = {SCHEMA_PLACEHOLDER: self.schema}
         if isinstance(conn, Session):
             conn.connection(execution_options={"schema_translate_map": translate})

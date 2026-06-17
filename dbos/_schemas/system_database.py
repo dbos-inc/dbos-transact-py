@@ -23,8 +23,7 @@ from . import SCHEMA_PLACEHOLDER
 
 class SystemSchema:
     ### System table schema
-    # Tables are defined against a fixed placeholder schema; the real schema is
-    # applied per-engine via schema_translate_map (see SystemDatabase.__init__).
+    # Real schema is applied per-engine via schema_translate_map.
     metadata_obj = MetaData(schema=SCHEMA_PLACEHOLDER)
     sysdb_suffix = "_dbos_sys"
 

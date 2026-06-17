@@ -88,10 +88,7 @@ def test_two_schemas_isolated_in_one_process(
     skip_with_sqlite: None,
     cleanup_test_databases: None,
 ) -> None:
-    """Two system databases with different schemas must stay isolated within one
-    process. Before per-engine schema_translate_map, the second instance's
-    set_schema() clobbered shared table metadata, so both ended up using one
-    schema (the regression this guards against)."""
+    """Two system databases with different schemas must stay isolated within one process."""
     sys_db_url = config["system_database_url"]
     assert sys_db_url is not None
 
@@ -117,9 +114,7 @@ def test_two_schemas_isolated_in_one_process(
         db_a.run_migrations()
         db_b.run_migrations()
 
-        # Write a row through each instance *after* both were constructed. With
-        # the old shared-global schema, db_a's Core insert would have targeted
-        # db_b's schema (last writer of set_schema wins).
+        # Write a row through each instance; it should land in that instance's schema.
         ins = SystemSchema.application_versions.insert()
         with db_a.engine.begin() as conn:
             conn.execute(

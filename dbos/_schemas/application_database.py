@@ -14,8 +14,7 @@ from . import SCHEMA_PLACEHOLDER
 
 
 class ApplicationSchema:
-    # Tables are defined against a fixed placeholder schema; the real schema is
-    # applied per-engine via schema_translate_map (see ApplicationDatabase.__init__).
+    # Real schema is applied per-engine via schema_translate_map.
     metadata_obj = MetaData(schema=SCHEMA_PLACEHOLDER)
 
     transaction_outputs = Table(

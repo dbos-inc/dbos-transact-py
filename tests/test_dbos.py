@@ -2496,8 +2496,7 @@ def test_custom_engine(
         send_evt.wait()
         return DBOS.recv()
 
-    # DBOS derives a schema-aware engine (carrying schema_translate_map) from the
-    # custom engine, sharing its connection pool rather than using it verbatim.
+    # DBOS derives a schema-aware engine sharing the custom engine's pool.
     assert dbos._sys_db.engine.pool is engine.pool
     handle = DBOS.start_workflow(recv_workflow)
     ready_evt.wait()

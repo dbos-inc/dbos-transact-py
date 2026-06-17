@@ -133,8 +133,7 @@ class AsyncSQLAlchemyDatasource(ABC):
         else:
             base_engine = self._create_engine(database_url, engine_kwargs)
             self.created_engine = True
-        # Apply the real schema per-engine via schema_translate_map instead of
-        # mutating shared table metadata (None renders unqualified for SQLite).
+        # Translate the placeholder schema to this instance's schema per-engine (None for SQLite = unqualified).
         self.engine = base_engine.execution_options(
             schema_translate_map={SCHEMA_PLACEHOLDER: self.schema}
         )
@@ -433,8 +432,7 @@ class SQLAlchemyDatasource(ABC):
         else:
             base_engine = self._create_engine(database_url, engine_kwargs)
             self.created_engine = True
-        # Apply the real schema per-engine via schema_translate_map instead of
-        # mutating shared table metadata (None renders unqualified for SQLite).
+        # Translate the placeholder schema to this instance's schema per-engine (None for SQLite = unqualified).
         self.engine = base_engine.execution_options(
             schema_translate_map={SCHEMA_PLACEHOLDER: self.schema}
         )

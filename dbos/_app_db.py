@@ -84,10 +84,7 @@ class ApplicationDatabase(ABC):
             self.schema = None
         else:
             self.schema = schema if schema else "dbos"
-        # Apply the real schema per-engine via schema_translate_map so the shared
-        # ApplicationSchema table metadata isn't mutated (None renders unqualified
-        # for SQLite). This also keeps user tables untouched: only the placeholder
-        # schema is translated.
+        # Translate the placeholder schema to this instance's schema per-engine (None for SQLite = unqualified).
         self.engine = self._create_engine(
             database_url, engine_kwargs
         ).execution_options(schema_translate_map={SCHEMA_PLACEHOLDER: self.schema})
