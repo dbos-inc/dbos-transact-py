@@ -38,6 +38,7 @@ from ._context import (
     EnterDBOSTransaction,
     EnterDBOSWorkflow,
     OperationType,
+    SetEnqueueOptions,
     SetWorkflowID,
     TracedAttributes,
     assert_current_dbos_context,
@@ -812,7 +813,11 @@ def execute_workflow_by_id(
             if fi.func_type != DBOSFuncType.Static:
                 inputs["args"] = (class_object,) + inputs["args"]
 
-        with SetWorkflowID(workflow_id):
+        # Propagate the workflow's partition key from its persisted status.
+        with (
+            SetWorkflowID(workflow_id),
+            SetEnqueueOptions(queue_partition_key=status.get("queue_partition_key")),
+        ):
             if inspect.iscoroutinefunction(wf_func):
                 ctx = get_local_dbos_context()
                 parent_ctx_copy = copy.copy(ctx)

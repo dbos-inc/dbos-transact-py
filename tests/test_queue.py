@@ -39,6 +39,7 @@ from tests.conftest import (
     default_config,
     queue_entries_are_cleaned_up,
     retry_until_success,
+    retry_until_success_async,
 )
 
 
@@ -2486,6 +2487,81 @@ def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
         }
     )
     assert client_handle.get_result()
+
+
+@pytest.mark.asyncio
+async def test_partition_queue_worker_concurrency_async(dbos: DBOS) -> None:
+    """worker_concurrency is enforced *per partition* on a partitioned queue.
+
+    Each partition independently runs up to worker_concurrency async workflows
+    concurrently on this worker; partitions neither share the limit nor block
+    one another.
+    """
+
+    worker_concurrency = 2
+    partitions = ["partition-a", "partition-b"]
+    wfs_per_partition = 4
+
+    unblock_event = threading.Event()
+    # Async workflows run on the background event loop thread while these
+    # assertions run on the test's loop, so guard the shared counters with a lock.
+    lock = threading.Lock()
+    running: dict[str, int] = {p: 0 for p in partitions}
+    max_running: dict[str, int] = {p: 0 for p in partitions}
+
+    @DBOS.workflow()
+    async def blocking_workflow(partition: str) -> str:
+        with lock:
+            running[partition] += 1
+            max_running[partition] = max(max_running[partition], running[partition])
+        while not unblock_event.is_set():
+            await asyncio.sleep(0.05)
+        with lock:
+            running[partition] -= 1
+        assert DBOS.workflow_id is not None
+        return DBOS.workflow_id
+
+    await DBOS.register_queue_async(
+        "queue", partition_queue=True, worker_concurrency=worker_concurrency
+    )
+
+    # Enqueue more workflows per partition than the worker may run at once.
+    handles: list[WorkflowHandleAsync[str]] = []
+    for partition in partitions:
+        with SetEnqueueOptions(queue_partition_key=partition):
+            for _ in range(wfs_per_partition):
+                handles.append(
+                    await DBOS.enqueue_workflow_async(
+                        "queue", blocking_workflow, partition
+                    )
+                )
+
+    # Each partition should independently saturate its worker_concurrency limit.
+    # If the limit were shared across partitions, they would compete and could
+    # not all reach worker_concurrency at the same time.
+    def all_partitions_saturated() -> None:
+        with lock:
+            for partition in partitions:
+                assert running[partition] == worker_concurrency, (
+                    f"partition {partition} has {running[partition]} running, "
+                    f"expected {worker_concurrency}"
+                )
+
+    await retry_until_success_async(all_partitions_saturated)
+
+    # Let several polling intervals pass and confirm no partition ever exceeded
+    # its worker_concurrency limit.
+    await asyncio.sleep(2)
+    with lock:
+        for partition in partitions:
+            assert max_running[partition] == worker_concurrency
+
+    # Unblock everything and confirm every workflow completes successfully.
+    unblock_event.set()
+    for handle in handles:
+        assert await handle.get_result() is not None
+
+    assert queue_entries_are_cleaned_up(dbos)
 
 
 def test_polling_interval(dbos: DBOS) -> None:
