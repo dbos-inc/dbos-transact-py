@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from sqlalchemy import (
     JSON,
     BigInteger,
@@ -20,30 +18,15 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 
+from . import SCHEMA_PLACEHOLDER
+
 
 class SystemSchema:
     ### System table schema
-    metadata_obj = MetaData(schema="dbos")
+    # Tables are defined against a fixed placeholder schema; the real schema is
+    # applied per-engine via schema_translate_map (see SystemDatabase.__init__).
+    metadata_obj = MetaData(schema=SCHEMA_PLACEHOLDER)
     sysdb_suffix = "_dbos_sys"
-
-    @classmethod
-    def set_schema(cls, schema_name: Optional[str]) -> None:
-        """
-        Set the schema for all DBOS system tables.
-
-        Args:
-            schema_name: The name of the schema to use for system tables
-        """
-        cls.metadata_obj.schema = schema_name
-        cls.workflow_status.schema = schema_name
-        cls.operation_outputs.schema = schema_name
-        cls.notifications.schema = schema_name
-        cls.workflow_events.schema = schema_name
-        cls.streams.schema = schema_name
-        cls.workflow_events_history.schema = schema_name
-        cls.workflow_schedules.schema = schema_name
-        cls.application_versions.schema = schema_name
-        cls.queues.schema = schema_name
 
     workflow_status = Table(
         "workflow_status",

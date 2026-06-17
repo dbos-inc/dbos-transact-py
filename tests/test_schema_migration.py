@@ -83,6 +83,89 @@ def test_systemdb_migration_custom_schema(
     DBOS.destroy()
 
 
+def test_two_schemas_isolated_in_one_process(
+    config: DBOSConfig,
+    skip_with_sqlite: None,
+    cleanup_test_databases: None,
+) -> None:
+    """Two system databases with different schemas must stay isolated within one
+    process. Before per-engine schema_translate_map, the second instance's
+    set_schema() clobbered shared table metadata, so both ended up using one
+    schema (the regression this guards against)."""
+    sys_db_url = config["system_database_url"]
+    assert sys_db_url is not None
+
+    db_a = SystemDatabase.create(
+        system_database_url=sys_db_url,
+        engine_kwargs={},
+        engine=None,
+        schema="schema_alpha",
+        executor_id=None,
+        serializer=DefaultSerializer(),
+        use_listen_notify=False,
+    )
+    db_b = SystemDatabase.create(
+        system_database_url=sys_db_url,
+        engine_kwargs={},
+        engine=None,
+        schema="schema_beta",
+        executor_id=None,
+        serializer=DefaultSerializer(),
+        use_listen_notify=False,
+    )
+    try:
+        db_a.run_migrations()
+        db_b.run_migrations()
+
+        # Write a row through each instance *after* both were constructed. With
+        # the old shared-global schema, db_a's Core insert would have targeted
+        # db_b's schema (last writer of set_schema wins).
+        ins = SystemSchema.application_versions.insert()
+        with db_a.engine.begin() as conn:
+            conn.execute(
+                ins.values(
+                    version_id="alpha-row",
+                    version_name="alpha-row",
+                    version_timestamp=1,
+                    created_at=1,
+                )
+            )
+        with db_b.engine.begin() as conn:
+            conn.execute(
+                ins.values(
+                    version_id="beta-row",
+                    version_name="beta-row",
+                    version_timestamp=1,
+                    created_at=1,
+                )
+            )
+
+        # Each instance's Core queries see only its own schema's row.
+        sel = sa.select(SystemSchema.application_versions.c.version_id)
+        with db_a.engine.begin() as conn:
+            assert [r[0] for r in conn.execute(sel)] == ["alpha-row"]
+        with db_b.engine.begin() as conn:
+            assert [r[0] for r in conn.execute(sel)] == ["beta-row"]
+
+        # And the rows physically live in the correct schemas.
+        with db_a.engine.begin() as conn:
+            assert (
+                conn.execute(
+                    sa.text("SELECT version_id FROM schema_alpha.application_versions")
+                ).scalar_one()
+                == "alpha-row"
+            )
+            assert (
+                conn.execute(
+                    sa.text("SELECT version_id FROM schema_beta.application_versions")
+                ).scalar_one()
+                == "beta-row"
+            )
+    finally:
+        db_a.destroy()
+        db_b.destroy()
+
+
 def test_reset(
     config: DBOSConfig, db_engine: sa.Engine, skip_with_sqlite: None
 ) -> None:

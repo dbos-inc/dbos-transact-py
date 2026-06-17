@@ -12,6 +12,7 @@ from dbos._serialization import Serializer
 
 from ._error import DBOSUnexpectedStepError, DBOSWorkflowConflictIDError
 from ._logger import dbos_logger
+from ._schemas import SCHEMA_PLACEHOLDER
 from ._schemas.application_database import ApplicationSchema
 from ._sys_db import StepInfo
 
@@ -83,8 +84,13 @@ class ApplicationDatabase(ABC):
             self.schema = None
         else:
             self.schema = schema if schema else "dbos"
-        ApplicationSchema.transaction_outputs.schema = schema
-        self.engine = self._create_engine(database_url, engine_kwargs)
+        # Apply the real schema per-engine via schema_translate_map so the shared
+        # ApplicationSchema table metadata isn't mutated (None renders unqualified
+        # for SQLite). This also keeps user tables untouched: only the placeholder
+        # schema is translated.
+        self.engine = self._create_engine(
+            database_url, engine_kwargs
+        ).execution_options(schema_translate_map={SCHEMA_PLACEHOLDER: self.schema})
         self._engine_kwargs = engine_kwargs
         self.sessionmaker = sessionmaker(bind=self.engine)
         self.serializer = serializer
@@ -316,8 +322,6 @@ class SQLiteApplicationDatabase(ApplicationDatabase):
         self, database_url: str, engine_kwargs: Dict[str, Any]
     ) -> sa.Engine:
         """Create a SQLite engine."""
-        # TODO: Make the schema dynamic so this isn't needed
-        ApplicationSchema.transaction_outputs.schema = None
         sqlite_kwargs = engine_kwargs.copy()
         connect_args = sqlite_kwargs.get("connect_args", {})
         if connect_args:

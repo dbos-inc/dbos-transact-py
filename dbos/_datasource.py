@@ -31,6 +31,7 @@ from dbos._app_db import RecordedResult
 from dbos._context import DBOSContextEnsure, get_local_dbos_context
 from dbos._dbos import IsolationLevel
 from dbos._error import DBOSException
+from dbos._schemas import SCHEMA_PLACEHOLDER
 from dbos._schemas.datasource_database import DatasourceSchema
 from dbos._serialization import (
     DBOSDefaultSerializer,
@@ -126,13 +127,17 @@ class AsyncSQLAlchemyDatasource(ABC):
         )
         self.dialect = sq if database_url.startswith("sqlite") else pg
         self.schema = _resolve_schema(database_url, schema)
-        DatasourceSchema.datasource_outputs.schema = self.schema
         if engine:
-            self.engine = engine
+            base_engine = engine
             self.created_engine = False
         else:
-            self.engine = self._create_engine(database_url, engine_kwargs)
+            base_engine = self._create_engine(database_url, engine_kwargs)
             self.created_engine = True
+        # Apply the real schema per-engine via schema_translate_map instead of
+        # mutating shared table metadata (None renders unqualified for SQLite).
+        self.engine = base_engine.execution_options(
+            schema_translate_map={SCHEMA_PLACEHOLDER: self.schema}
+        )
         self._engine_kwargs = engine_kwargs
         self.sessionmaker = async_sessionmaker(bind=self.engine)
         self.serializer = serializer
@@ -422,13 +427,17 @@ class SQLAlchemyDatasource(ABC):
         )
         self.dialect = sq if database_url.startswith("sqlite") else pg
         self.schema = _resolve_schema(database_url, schema)
-        DatasourceSchema.datasource_outputs.schema = self.schema
         if engine:
-            self.engine = engine
+            base_engine = engine
             self.created_engine = False
         else:
-            self.engine = self._create_engine(database_url, engine_kwargs)
+            base_engine = self._create_engine(database_url, engine_kwargs)
             self.created_engine = True
+        # Apply the real schema per-engine via schema_translate_map instead of
+        # mutating shared table metadata (None renders unqualified for SQLite).
+        self.engine = base_engine.execution_options(
+            schema_translate_map={SCHEMA_PLACEHOLDER: self.schema}
+        )
         self._engine_kwargs = engine_kwargs
         self.sessionmaker = sessionmaker(bind=self.engine)
         self.serializer = serializer

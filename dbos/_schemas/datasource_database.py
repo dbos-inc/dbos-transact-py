@@ -8,10 +8,13 @@ from sqlalchemy import (
     Text,
 )
 
+from . import SCHEMA_PLACEHOLDER
+
 
 class DatasourceSchema:
-    schema = "dbos"
-    metadata_obj = MetaData(schema=schema)
+    # Tables are defined against a fixed placeholder schema; the real schema is
+    # applied per-engine via schema_translate_map (see the datasource __init__s).
+    metadata_obj = MetaData(schema=SCHEMA_PLACEHOLDER)
 
     datasource_outputs = Table(
         "datasource_outputs",
