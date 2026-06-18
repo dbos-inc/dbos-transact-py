@@ -614,7 +614,8 @@ class SystemDatabase(ABC):
     def destroy(self) -> None:
         self._run_background_processes = False
         self._cleanup_connections()
-        self.engine.dispose()
+        if self.created_engine:
+            self.engine.dispose()
 
     @abstractmethod
     def _cleanup_connections(self) -> None:
