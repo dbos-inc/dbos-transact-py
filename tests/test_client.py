@@ -732,6 +732,36 @@ def test_enqueue_in_transaction_session(dbos: DBOS, client: DBOSClient) -> None:
     assert not _workflow_exists(client, wfid2)
 
 
+def test_enqueue_in_transaction_session_after_statement(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    # Regression: a caller brings its own engine/Session (which does not carry DBOS's
+    # internal schema_translate_map) and runs a statement before the DBOS call, procuring
+    # its connection. Session.connection(execution_options=...) is silently ignored once a
+    # connection is established, so _apply_caller_schema must translate the placeholder
+    # schema on the underlying Connection directly or the enqueue targets a nonexistent schema.
+    run_client_collateral()
+
+    wfid = str(uuid.uuid4())
+    options: EnqueueOptions = {
+        "queue_name": "test_queue",
+        "workflow_name": "retrieve_test",
+        "workflow_id": wfid,
+    }
+
+    engine = sa.create_engine(client._sys_db.engine.url)
+    try:
+        with Session(engine) as session:
+            with session.begin():
+                session.execute(sa.text("SELECT 1"))  # procure the connection first
+                handle: WorkflowHandle[str] = client.enqueue_in_transaction(
+                    session, options, "after-statement"
+                )
+    finally:
+        engine.dispose()
+    assert handle.get_result() == "after-statement"
+
+
 @pytest.mark.asyncio
 async def test_enqueue_in_transaction_run_sync(
     dbos: DBOS, client: DBOSClient, skip_with_sqlite: None
@@ -791,6 +821,35 @@ def test_send_in_transaction_commit(dbos: DBOS, client: DBOSClient) -> None:
                 )
             ).fetchone()
             assert row is not None
+
+    assert handle.get_result() == message
+
+
+def test_send_in_transaction_session_after_statement(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    # Regression: a caller brings its own engine/Session (which does not carry DBOS's
+    # internal schema_translate_map) and runs a statement before the DBOS call, procuring
+    # its connection. _apply_caller_schema must still translate the placeholder schema on
+    # the underlying Connection; otherwise the send targets a nonexistent placeholder schema.
+    run_client_collateral()
+
+    now = time.time_ns()
+    topic = f"test-topic-{now}"
+    message = f"Hello, DBOS! {now}"
+
+    with SetWorkflowID(str(uuid.uuid4())):
+        handle = DBOS.start_workflow(send_test, topic)
+    wfid = handle.get_workflow_id()
+
+    engine = sa.create_engine(client._sys_db.engine.url)
+    try:
+        with Session(engine) as session:
+            with session.begin():
+                session.execute(sa.text("SELECT 1"))  # procure the connection first
+                client.send_in_transaction(session, wfid, message, topic)
+    finally:
+        engine.dispose()
 
     assert handle.get_result() == message
 

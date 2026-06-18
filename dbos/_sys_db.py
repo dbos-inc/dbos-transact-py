@@ -54,6 +54,7 @@ from ._error import (
 )
 from ._logger import dbos_logger
 from ._outcome import NoResult
+from ._schemas import SCHEMA_PLACEHOLDER
 from ._schemas.system_database import SystemSchema
 from ._serialization import (
     DBOSPortableJSON,
@@ -570,14 +571,17 @@ class SystemDatabase(ABC):
             self.schema = None
         else:
             self.schema = schema if schema else "dbos"
-        SystemSchema.set_schema(self.schema)
 
         if engine:
-            self.engine = engine
+            base_engine = engine
             self.created_engine = False
         else:
-            self.engine = self._create_engine(system_database_url, engine_kwargs)
+            base_engine = self._create_engine(system_database_url, engine_kwargs)
             self.created_engine = True
+        # Translate the placeholder schema to this instance's schema per-engine (None for SQLite = unqualified).
+        self.engine = base_engine.execution_options(
+            schema_translate_map={SCHEMA_PLACEHOLDER: self.schema}
+        )
         self._engine_kwargs = engine_kwargs
 
         self.notifications_map = ThreadSafeEventDict()
@@ -610,7 +614,8 @@ class SystemDatabase(ABC):
     def destroy(self) -> None:
         self._run_background_processes = False
         self._cleanup_connections()
-        self.engine.dispose()
+        if self.created_engine:
+            self.engine.dispose()
 
     @abstractmethod
     def _cleanup_connections(self) -> None:
@@ -2568,6 +2573,7 @@ class SystemDatabase(ABC):
         it commits. The connection or session must target the DBOS system
         database.
         """
+        self._apply_caller_schema(conn)
         self._send_bulk_txn(
             messages,
             conn,
@@ -3900,6 +3906,18 @@ class SystemDatabase(ABC):
         DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_INITWF_COMMIT)
         return wf_status, workflow_deadline_epoch_ms, should_execute
 
+    def _apply_caller_schema(self, conn: Union[sa.Connection, Session]) -> None:
+        """Translate the placeholder schema on a caller-owned Connection/Session (the caller's own statements are unaffected)."""
+        # Set the option in place on the underlying Connection. Session.connection(execution_options=...)
+        # is silently ignored once the caller has already procured the connection (run any statement) in
+        # this transaction, which is the normal case for a caller-owned transaction.
+        if isinstance(conn, Session):
+            conn = conn.connection()
+        existing = conn.get_execution_options().get("schema_translate_map") or {}
+        conn.execution_options(
+            schema_translate_map={**existing, SCHEMA_PLACEHOLDER: self.schema}
+        )
+
     def init_workflow_with_connection(
         self,
         status: WorkflowStatusInternal,
@@ -3916,6 +3934,7 @@ class SystemDatabase(ABC):
         transaction. The connection or session must target the DBOS system
         database; it cannot atomically span a separate application database.
         """
+        self._apply_caller_schema(conn)
         return self._insert_workflow_status(
             status,
             conn,

@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 from dbos._migration import get_sqlite_timestamp_expr
-from dbos._schemas.datasource_database import DatasourceSchema
 
 from ._logger import dbos_logger
 
@@ -87,7 +86,6 @@ class SqliteSyncDatasource(SQLAlchemyDatasource):
     def _create_engine(
         self, database_url: str, engine_kwargs: Dict[str, Any]
     ) -> sa.Engine:
-        DatasourceSchema.datasource_outputs.schema = None
         return sa.create_engine(database_url, **_filter_sqlite_kwargs(engine_kwargs))
 
     def run_migrations(self) -> None:

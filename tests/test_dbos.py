@@ -2496,7 +2496,8 @@ def test_custom_engine(
         send_evt.wait()
         return DBOS.recv()
 
-    assert dbos._sys_db.engine == engine
+    # DBOS derives a schema-aware engine sharing the custom engine's pool.
+    assert dbos._sys_db.engine.pool is engine.pool
     handle = DBOS.start_workflow(recv_workflow)
     ready_evt.wait()
     DBOS.send(handle.workflow_id, val)

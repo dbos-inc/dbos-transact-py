@@ -10,10 +10,12 @@ from sqlalchemy import (
     text,
 )
 
+from . import SCHEMA_PLACEHOLDER
+
 
 class ApplicationSchema:
-    schema = "dbos"
-    metadata_obj = MetaData(schema=schema)
+    # Real schema is applied per-engine via schema_translate_map.
+    metadata_obj = MetaData(schema=SCHEMA_PLACEHOLDER)
 
     transaction_outputs = Table(
         "transaction_outputs",
