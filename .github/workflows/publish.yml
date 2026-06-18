@@ -19,7 +19,7 @@ jobs:
     - name: Setup PDM
       uses: pdm-project/setup-pdm@v4
       with:
-        python-version: '3.9.x'
+        python-version: '3.10'
         architecture: 'x64'
 
     - name: Install Dependencies
@@ -28,7 +28,7 @@ jobs:
     - name: Build package
       run: pdm build
 
-    - name: Publish package to TestPyPI
+    - name: Publish package to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         packages-dir: dist/
