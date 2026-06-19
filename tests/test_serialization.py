@@ -1495,3 +1495,49 @@ def test_custom_serializer_across_restarts(
     client_no_custom.destroy()
 
     DBOS.destroy(destroy_registry=True)
+
+
+def test_portable_default_step_error_not_masked(
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+) -> None:
+    """
+    Test that when using DBOSPortableJSONSerializer as a default, exceptions are
+    still properly recorded and propagated, not masked by serialization errors.
+    """
+    DBOS.destroy(destroy_registry=True)
+    config["serializer"] = DBOSPortableJSONSerializer()
+    DBOS(config=config)
+    DBOS.launch()
+
+    class CustomException(Exception):
+        pass
+
+    @DBOS.step()
+    def failing_step() -> None:
+        raise CustomException("Custom error message")
+
+    @DBOS.workflow()
+    def failing_workflow() -> None:
+        failing_step()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(failing_workflow)
+
+    # Pre-fix, recording the step exception crashed with
+    # `TypeError: Object of type CustomException is not portable JSON serializable`,
+    # which then propagated in place of the real error.
+    # Post-fix, the original CustomException surfaces unchanged.
+    with pytest.raises(CustomException) as exc_info:
+        handle.get_result()
+    assert str(exc_info.value) == "Custom error message"
+
+    # The exception was durably recorded in portable form, so reading it back
+    # from the system DB reconstructs a PortableWorkflowError with the real cause.
+    with pytest.raises(PortableWorkflowError) as stored_exc_info:
+        DBOS.retrieve_workflow(wfid).get_result()
+    assert stored_exc_info.value.name == "CustomException"
+    assert stored_exc_info.value.message == "Custom error message"
+
+    DBOS.destroy(destroy_registry=True)
