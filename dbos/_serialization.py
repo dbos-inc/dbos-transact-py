@@ -411,6 +411,9 @@ def serialize_exception(
     serialization: Optional[str],
     serializer: Serializer,
 ) -> tuple[str, str]:
+    if serialization is None:
+        serialization = serializer.name()
+
     if serialization == DBOSPortableJSON.name():
         return (
             DBOSPortableJSON.serialize(exception_to_workflow_error_data(value)),
@@ -426,6 +429,9 @@ def serialize_exception(
 def deserialize_exception(
     serialized_value: str, serialization: Optional[str], serializer: Serializer
 ) -> Exception:
+    if serialization is None:
+        serialization = serializer.name()
+
     if serialized_value is None:
         return None
     if serialization == DBOSPortableJSON.name():
