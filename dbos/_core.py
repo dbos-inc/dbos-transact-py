@@ -1072,7 +1072,7 @@ async def start_workflow_async(
         is_recovery_request=is_recovery_request,
         is_dequeued_request=is_dequeued_request,
         serialization_type=serialization_type,
-        workflow_id_override=new_child_workflow_id,
+        child_workflow_id=new_child_workflow_id,
     )
 
     if status["serialization"] == DBOSPortableJSON.name():
