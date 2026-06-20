@@ -1262,12 +1262,12 @@ async def test_async_child_id_survives_concurrent_context_clear(dbos: DBOS) -> N
         return x
 
     @DBOS.workflow()
-    async def parent(n: int) -> list:
-        return await asyncio.gather(*[child(i) for i in range(n)])
+    async def parent(n: int) -> List[int]:
+        return cast(List[int], await asyncio.gather(*[child(i) for i in range(n)]))
 
     real_check = dbos._sys_db.check_operation_execution
     real_record = dbos._sys_db.record_child_workflow
-    fired: list = []
+    fired: List[int] = []
 
     def check_and_clear(*args, **kwargs):  # type: ignore[no-untyped-def]
         # First sys-db call in the child's init_wf (to_thread worker); blanking workflow_id here simulates a concurrent end_workflow() on shutdown.
