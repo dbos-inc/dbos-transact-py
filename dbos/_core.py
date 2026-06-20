@@ -362,12 +362,12 @@ def _init_workflow(
     is_recovery_request: Optional[bool],
     is_dequeued_request: Optional[bool],
     serialization_type: Optional[WorkflowSerializationFormat],
-    workflow_id_override: Optional[str] = None,
+    child_workflow_id: Optional[str] = None,
 ) -> tuple[WorkflowStatusInternal, bool]:
-    # workflow_id_override: id captured before to_thread dispatch, so a concurrent end_workflow() on shutdown can't blank the id read here.
+    # If launching child, capture ID before to_thread dispatch, so a concurrent end_workflow() on shutdown can't blank the id read here.
     wfid = (
-        workflow_id_override
-        if workflow_id_override
+        child_workflow_id
+        if child_workflow_id
         else (
             ctx.workflow_id
             if len(ctx.workflow_id) > 0
@@ -949,7 +949,7 @@ def start_workflow(
         is_recovery_request=is_recovery,
         is_dequeued_request=is_dequeued,
         serialization_type=serialization_type,
-        workflow_id_override=new_child_workflow_id,
+        child_workflow_id=new_child_workflow_id,
     )
 
     if status["serialization"] == DBOSPortableJSON.name():
@@ -1229,7 +1229,7 @@ def workflow_wrapper(
                 is_recovery_request=False,
                 is_dequeued_request=False,
                 serialization_type=fi.serialization_type,
-                workflow_id_override=child_wfid,
+                child_workflow_id=child_wfid,
             )
 
             def get_recorded_result(_func: Callable[[], R]) -> R:
