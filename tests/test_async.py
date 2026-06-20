@@ -17,7 +17,7 @@ from dbos import (
     SetWorkflowTimeout,
     WorkflowHandleAsync,
 )
-from dbos._context import assert_current_dbos_context
+from dbos._context import assert_current_dbos_context, get_local_dbos_context
 from dbos._dbos import WorkflowHandle
 from dbos._dbos_config import ConfigFile
 from dbos._error import (
@@ -1246,3 +1246,90 @@ async def test_submit_coroutine_from_own_loop_raises_instead_of_hanging() -> Non
             bg.submit_coroutine(coro)
     finally:
         bg.stop()
+
+
+# Regression: a concurrent end_workflow() (shutdown) could blank an async child's id while its registration ran in a to_thread worker, persisting empty ids.
+
+
+@pytest.mark.asyncio
+async def test_async_child_id_survives_concurrent_context_clear(dbos: DBOS) -> None:
+    """Deterministically reproduce the race: while the child's registration runs in
+    a worker thread, clear the child context's workflow_id (exactly what shutdown's
+    end_workflow() does). The recorded ids must still be correct, not empty."""
+
+    @DBOS.workflow()
+    async def child(x: int) -> int:
+        return x
+
+    @DBOS.workflow()
+    async def parent(n: int) -> list:
+        return await asyncio.gather(*[child(i) for i in range(n)])
+
+    real_check = dbos._sys_db.check_operation_execution
+    real_record = dbos._sys_db.record_child_workflow
+    fired: list = []
+
+    def check_and_clear(*args, **kwargs):  # type: ignore[no-untyped-def]
+        # First sys-db call in the child's init_wf (to_thread worker); blanking workflow_id here simulates a concurrent end_workflow() on shutdown.
+        result = real_check(*args, **kwargs)
+        ctx = get_local_dbos_context()
+        if ctx is not None and ctx.has_parent() and ctx.workflow_id:
+            ctx._test_saved_wfid = ctx.workflow_id  # type: ignore[attr-defined]
+            ctx.workflow_id = ""
+            fired.append(1)
+        return result
+
+    def record_and_restore(*args, **kwargs):  # type: ignore[no-untyped-def]
+        # Last sys-db call in init_wf; restore the id so the child's normal __exit__ stays consistent in this non-cancelled test.
+        try:
+            return real_record(*args, **kwargs)
+        finally:
+            ctx = get_local_dbos_context()
+            saved = getattr(ctx, "_test_saved_wfid", "") if ctx is not None else ""
+            if saved:
+                ctx.workflow_id = saved  # type: ignore[union-attr]
+
+    dbos._sys_db.check_operation_execution = check_and_clear  # type: ignore[method-assign]
+    dbos._sys_db.record_child_workflow = record_and_restore  # type: ignore[method-assign]
+    try:
+        fanout = 5
+        assert (await parent(fanout)) == list(range(fanout))
+    finally:
+        dbos._sys_db.check_operation_execution = real_check  # type: ignore[method-assign]
+        dbos._sys_db.record_child_workflow = real_record  # type: ignore[method-assign]
+
+    # The injection must have actually fired (otherwise the test proves nothing).
+    assert len(fired) >= fanout
+
+    # No corrupt rows anywhere in the system database.
+    with dbos._sys_db.engine.connect() as c:
+        empty_status = c.execute(
+            sa.select(sa.func.count())
+            .select_from(SystemSchema.workflow_status)
+            .where(sa.func.length(SystemSchema.workflow_status.c.workflow_uuid) == 0)
+        ).scalar()
+        empty_links = c.execute(
+            sa.select(sa.func.count())
+            .select_from(SystemSchema.operation_outputs)
+            .where(SystemSchema.operation_outputs.c.child_workflow_id == "")
+        ).scalar()
+        child_links = c.execute(
+            sa.select(SystemSchema.operation_outputs.c.child_workflow_id).where(
+                SystemSchema.operation_outputs.c.child_workflow_id.isnot(None)
+            )
+        ).fetchall()
+
+    assert empty_status == 0
+    assert empty_links == 0
+    # Every recorded child link points at a real child workflow row.
+    for (child_id,) in child_links:
+        assert child_id
+        status = dbos._sys_db.get_workflow_status(child_id)
+        assert status is not None
+
+
+def test_record_child_workflow_rejects_empty_id(dbos: DBOS) -> None:
+    """The persistence guard: an empty child id is never valid and must fail loudly
+    rather than silently corrupt operation_outputs."""
+    with pytest.raises(DBOSException):
+        dbos._sys_db.record_child_workflow("some-parent-id", "", 0, "some.func")
