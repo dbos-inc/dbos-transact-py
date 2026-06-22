@@ -2361,6 +2361,12 @@ class SystemDatabase(ABC):
         functionID: int,
         functionName: str,
     ) -> None:
+        # An empty child id is never valid; fail loudly instead of silently wedging the parent on recovery.
+        if not childUUID:
+            raise DBOSException(
+                f"Attempted to record an empty child workflow ID for parent "
+                f"{parentUUID} (function {functionID}, {functionName})."
+            )
         sql = sa.insert(SystemSchema.operation_outputs).values(
             workflow_uuid=parentUUID,
             function_id=functionID,
