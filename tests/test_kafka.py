@@ -76,16 +76,7 @@ def produce_one_message(server: str, topic: str) -> bool:
 def test_kafka_no_offset_loss_on_relaunch(
     config: DBOSConfig, cleanup_test_databases: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Regression test for https://github.com/dbos-inc/dbos-transact-py/issues/733
-    #
-    # A message returned by consumer.poll() must not have its Kafka offset
-    # committed until the corresponding DBOS workflow is durably enqueued.
-    # Otherwise, a shutdown in the post-poll/pre-enqueue window commits the
-    # offset (losing the message) while DBOS has no durable record of it.
-    #
-    # We amplify that window by pausing inside poll() after a real message is
-    # returned, relaunch DBOS while parked there, then assert the message is
-    # still delivered (redelivered from Kafka) after the relaunch.
+    # Regression for #733: relaunch while parked after poll() but before enqueue, then assert no message loss.
     import dbos._kafka as dbos_kafka_module
 
     server = "localhost:9092"
@@ -96,8 +87,7 @@ def test_kafka_no_offset_loss_on_relaunch(
     if not produce_one_message(server, topic):
         pytest.skip("Kafka not available")
 
-    # confluent_kafka.Consumer is what dbos._kafka imports; patch the module's
-    # reference and delegate to the real class from here.
+    # Wrap the real Consumer that dbos._kafka uses so we can pause inside poll().
     original_consumer_cls = Consumer
     first_poll_returned = threading.Event()
     poll_delay_seconds = 3.0
@@ -109,8 +99,7 @@ def test_kafka_no_offset_loss_on_relaunch(
         def poll(self, timeout: Optional[float] = None) -> Any:
             msg = self._inner.poll(timeout)
             if msg is not None and msg.error() is None:
-                # Park in the post-poll/pre-enqueue window so the relaunch
-                # (shutdown) lands here, before the workflow is enqueued.
+                # Park in the post-poll/pre-enqueue window so the relaunch lands here.
                 first_poll_returned.set()
                 time.sleep(poll_delay_seconds)
             return msg
@@ -135,8 +124,7 @@ def test_kafka_no_offset_loss_on_relaunch(
         def offset_loss_workflow(msg: KafkaMessage) -> None:
             processed.set()
 
-    # Launch #1: consume up to the post-poll window, then shut down before the
-    # workflow is durably enqueued.
+    # Launch #1: consume up to the post-poll window, then shut down before enqueue.
     DBOS.destroy(destroy_registry=True)
     register()
     DBOS(config=config)
@@ -151,9 +139,7 @@ def test_kafka_no_offset_loss_on_relaunch(
             not processed.is_set()
         ), "Workflow was enqueued before relaunch; the shutdown window was missed"
 
-        # Launch #2: a correct integration redelivers offset 0 because its
-        # workflow was never durably enqueued. The buggy integration committed
-        # the offset during the launch #1 shutdown, so the message is lost here.
+        # Launch #2: correct code redelivers offset 0; buggy code already committed it (lost).
         register()
         DBOS(config=config)
         DBOS.launch()

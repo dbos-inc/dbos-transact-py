@@ -46,14 +46,7 @@ def _kafka_consumer_loop(
     if "auto.offset.reset" not in config:
         config["auto.offset.reset"] = "earliest"
 
-    # DBOS owns offset advancement. librdkafka's default behavior stores a
-    # message's offset the instant poll() returns it, and auto-commit (periodic
-    # and on consumer.close()) can then commit that offset before DBOS has
-    # durably enqueued the corresponding workflow. On shutdown in that window
-    # the message would be lost (committed past durable state). To guarantee
-    # at-least-once delivery into DBOS, disable automatic offset storage and
-    # store the offset ourselves only after the workflow is durably enqueued.
-    # Auto-commit then only ever flushes offsets DBOS has already made durable.
+    # Store offsets ourselves after durable enqueue, so commits never outrun durable state.
     if config.get("enable.auto.offset.store", True) is not False:
         if config.get("enable.auto.offset.store") is True:
             dbos_logger.warning(
@@ -75,9 +68,7 @@ def _kafka_consumer_loop(
             cmsg = consumer.poll(1.0)
 
             if stop_event.is_set():
-                # Discarding the in-hand message is safe: its offset was not
-                # stored (enable.auto.offset.store is disabled above), so it
-                # will be redelivered after restart instead of being lost.
+                # Safe to drop: offset wasn't stored, so Kafka redelivers it.
                 return
 
             if cmsg is None:
@@ -119,16 +110,11 @@ def _kafka_consumer_loop(
                     else:
                         _kafka_queue.enqueue(func, msg)
 
-                # The workflow is now durably enqueued, so it is safe to advance
-                # the Kafka offset past this message. Storing it (rather than
-                # committing synchronously) lets auto-commit batch the actual
-                # commit; if we crash before the commit, the message is simply
-                # redelivered and deduplicated by its deterministic workflow ID.
+                # Workflow is durable; advance the offset (auto-commit flushes it later).
                 try:
                     consumer.store_offsets(message=cmsg)
                 except KafkaException as e:
-                    # e.g. the partition was revoked mid-flight. The offset
-                    # stays unadvanced, so the message is redelivered safely.
+                    # Partition revoked, etc.; offset stays put and the message is redelivered.
                     dbos_logger.warning(f"Failed to store Kafka offset: {e}")
 
     finally:
