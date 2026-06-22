@@ -103,8 +103,7 @@ def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:
         ],
         end_time=cutoff_iso,
     ):
-        # Don't cancel DELAYED workflows scheduled to run in the future: they are
-        # not stale work, just work that isn't runnable yet.
+        # Don't cancel DELAYED workflows scheduled to run in the future.
         if (
             workflow.status == WorkflowStatusString.DELAYED.value
             and workflow.delay_until_epoch_ms is not None

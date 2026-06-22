@@ -8,6 +8,7 @@ import sqlalchemy as sa
 from dbos import DBOS, DBOSClient, SetEnqueueOptions, SetWorkflowID, WorkflowHandle
 from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.application_database import ApplicationSchema
+from dbos._sys_db import WorkflowStatusString
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from dbos._workflow_commands import garbage_collect, global_timeout
 from tests.conftest import queue_entries_are_cleaned_up
@@ -1166,11 +1167,7 @@ def test_global_timeout(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> No
 
 
 def test_global_timeout_skips_future_delayed(dbos: DBOS) -> None:
-    # A DELAYED workflow scheduled to run in the future must survive a global
-    # timeout sweep, even when the cutoff is after its creation time. It is not
-    # stale work, just work that isn't runnable yet. See issue #736.
-    from dbos._sys_db import WorkflowStatusString
-
+    # A future-scheduled DELAYED workflow must survive a global timeout sweep (issue #736).
     event = threading.Event()
 
     @DBOS.workflow()
