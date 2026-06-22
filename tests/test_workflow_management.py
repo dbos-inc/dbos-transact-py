@@ -1165,6 +1165,52 @@ def test_global_timeout(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> No
     assert final_handle.get_result() is not None
 
 
+def test_global_timeout_skips_future_delayed(dbos: DBOS) -> None:
+    # A DELAYED workflow scheduled to run in the future must survive a global
+    # timeout sweep, even when the cutoff is after its creation time. It is not
+    # stale work, just work that isn't runnable yet. See issue #736.
+    from dbos._sys_db import WorkflowStatusString
+
+    event = threading.Event()
+
+    @DBOS.workflow()
+    def blocked_workflow() -> None:
+        # Loop on DBOS.sleep so cancellation is detected and the thread exits.
+        while not event.wait(0):
+            DBOS.sleep(0.1)
+
+    @DBOS.workflow()
+    def delayed_workflow() -> None:
+        pass
+
+    DBOS.register_queue("global_timeout_delay_queue")
+
+    # A running (PENDING) workflow should still be cancelled by the sweep.
+    blocked_handle = DBOS.start_workflow(blocked_workflow)
+    # A workflow scheduled far into the future should survive the sweep.
+    with SetEnqueueOptions(delay_seconds=600.0):
+        delayed_handle = DBOS.enqueue_workflow(
+            "global_timeout_delay_queue", delayed_workflow
+        )
+
+    delayed_status = delayed_handle.get_status()
+    assert delayed_status.status == WorkflowStatusString.DELAYED.value
+    assert delayed_status.delay_until_epoch_ms is not None
+    assert delayed_status.delay_until_epoch_ms > int(time.time() * 1000)
+
+    # Time out everything created so far.
+    global_timeout(dbos, int(time.time() * 1000))
+
+    # The future-delayed workflow is untouched; the running workflow is cancelled.
+    assert delayed_handle.get_status().status == WorkflowStatusString.DELAYED.value
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        blocked_handle.get_result()
+
+    # Release the blocked workflow's thread and clean up the delayed workflow.
+    event.set()
+    DBOS.cancel_workflow(delayed_handle.workflow_id)
+
+
 def test_fork_events(dbos: DBOS) -> None:
     key = "key"
     event = threading.Event()
