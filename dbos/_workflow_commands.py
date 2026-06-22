@@ -95,6 +95,8 @@ def garbage_collect(
 def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:
     cutoff_iso = datetime.fromtimestamp(cutoff_epoch_timestamp_ms / 1000).isoformat()
     now_ms = int(time.time() * 1000)
+    # Don't cancel a DELAYED workflow until this long past its scheduled run time.
+    delayed_workflow_buffer_ms = 60 * 60 * 1000
     for workflow in dbos.list_workflows(
         status=[
             WorkflowStatusString.PENDING.value,
@@ -103,11 +105,11 @@ def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:
         ],
         end_time=cutoff_iso,
     ):
-        # Don't cancel DELAYED workflows scheduled to run in the future.
+        # Don't cancel DELAYED workflows still within their scheduled-run buffer.
         if (
             workflow.status == WorkflowStatusString.DELAYED.value
             and workflow.delay_until_epoch_ms is not None
-            and workflow.delay_until_epoch_ms > now_ms
+            and workflow.delay_until_epoch_ms > now_ms - delayed_workflow_buffer_ms
         ):
             continue
         dbos.cancel_workflow(workflow.workflow_id)
