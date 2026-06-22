@@ -149,15 +149,22 @@ async def debouncer_workflow(
         with (
             SetWorkflowTimeout(ctx["workflow_timeout_sec"]),
             SetWorkflowAttributes(ctx.get("attributes")),
-            SetEnqueueOptions(
-                deduplication_id=ctx["deduplication_id"],
-                priority=ctx["priority"],
-                app_version=ctx["app_version"],
-            ),
         ):
-            await queue.enqueue_async(
-                func, *workflow_inputs["args"], **workflow_inputs["kwargs"]
-            )
+            if options["queue_name"]:
+                # Apply the caller's enqueue options only on a user-specified queue,
+                # matching the original behavior (the direct-start path applied none).
+                with SetEnqueueOptions(
+                    deduplication_id=ctx["deduplication_id"],
+                    priority=ctx["priority"],
+                    app_version=ctx["app_version"],
+                ):
+                    await queue.enqueue_async(
+                        func, *workflow_inputs["args"], **workflow_inputs["kwargs"]
+                    )
+            else:
+                await queue.enqueue_async(
+                    func, *workflow_inputs["args"], **workflow_inputs["kwargs"]
+                )
 
 
 class Debouncer(Generic[P, R]):
