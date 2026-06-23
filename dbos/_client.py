@@ -1420,6 +1420,12 @@ class DBOSClient:
             cron = entry["schedule"]
             if not croniter.is_valid(cron, second_at_beginning=True):
                 raise DBOSException(f"Invalid cron schedule: '{cron}'")
+            cron_timezone = entry.get("cron_timezone")
+            if cron_timezone is not None:
+                try:
+                    ZoneInfo(cron_timezone)
+                except Exception:
+                    raise DBOSException(f"Invalid timezone: '{cron_timezone}'")
             to_apply.append(
                 WorkflowSchedule(
                     schedule_id=generate_uuid(),
@@ -1431,7 +1437,7 @@ class DBOSClient:
                     context=self._sys_db.serializer.serialize(entry["context"]),
                     last_fired_at=None,
                     automatic_backfill=entry.get("automatic_backfill", False),
-                    cron_timezone=entry.get("cron_timezone"),
+                    cron_timezone=cron_timezone,
                     queue_name=entry.get("queue_name"),
                 )
             )

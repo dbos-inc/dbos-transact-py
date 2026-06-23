@@ -4721,12 +4721,7 @@ class SystemDatabase(ABC):
     def upsert_schedule(
         self, schedule: WorkflowSchedule, conn: Optional[sa.Connection] = None
     ) -> None:
-        # Create or replace a schedule by name. Unlike create_schedule, this is
-        # idempotent and safe to run concurrently from many workers: a unique
-        # conflict on schedule_name updates the existing row instead of raising.
-        # On conflict the schedule_id is replaced too, so the scheduler (which
-        # keys live threads by schedule_id) treats a re-applied schedule as new
-        # and restarts its thread, picking up any changed fields.
+        # Idempotent upsert by schedule_name; resets schedule_id on conflict (restarting the scheduler thread), preserving status/last_fired_at.
         def _do(c: sa.Connection) -> None:
             c.execute(
                 self.dialect.insert(SystemSchema.workflow_schedules)
@@ -4750,9 +4745,7 @@ class SystemDatabase(ABC):
                         "workflow_name": schedule["workflow_name"],
                         "workflow_class_name": schedule["workflow_class_name"],
                         "schedule": schedule["schedule"],
-                        "status": schedule["status"],
                         "context": schedule["context"],
-                        "last_fired_at": schedule.get("last_fired_at"),
                         "automatic_backfill": schedule.get("automatic_backfill", False),
                         "cron_timezone": schedule.get("cron_timezone"),
                         "queue_name": schedule.get("queue_name"),

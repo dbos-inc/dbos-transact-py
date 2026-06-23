@@ -331,9 +331,7 @@ def test_apply_schedules_concurrent(dbos: DBOS) -> None:
     assert schedules[0]["context"] == {"region": "us"}
     schedule_id = schedules[0]["schedule_id"]
 
-    # Re-applying leaves exactly one row, updated in place, but assigns a fresh
-    # schedule_id so the scheduler (which keys threads by schedule_id) restarts
-    # the thread and picks up the changed fields.
+    # Re-applying leaves one row, updated in place, but with a fresh schedule_id.
     DBOS.apply_schedules(
         [
             {
@@ -356,9 +354,7 @@ def test_apply_schedules_concurrent(dbos: DBOS) -> None:
 
 
 def test_apply_schedules_live_update(dbos: DBOS) -> None:
-    # Re-applying a changed schedule via apply_schedules must take effect on a
-    # running scheduler: the upsert assigns a fresh schedule_id, so the
-    # scheduler stops the old thread and starts a new one with the new context.
+    # Re-applying a changed schedule must take effect live: a fresh schedule_id restarts the scheduler thread with the new context.
     received_contexts: list[Any] = []
 
     @DBOS.workflow()
@@ -402,6 +398,46 @@ def test_apply_schedules_live_update(dbos: DBOS) -> None:
     retry_until_success(check_fired_v2)
 
     DBOS.delete_schedule("live-update")
+
+
+def test_apply_schedules_preserves_runtime_state(dbos: DBOS) -> None:
+    # A re-apply replaces the definition but must not clobber runtime state (status, last_fired_at).
+    @DBOS.workflow()
+    def wf(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    # Daily cron so it never fires during the test.
+    DBOS.apply_schedules(
+        [
+            {
+                "schedule_name": "state-keep",
+                "workflow_fn": wf,
+                "schedule": "0 0 * * *",
+                "context": {"version": 1},
+            }
+        ]
+    )
+    DBOS.pause_schedule("state-keep")
+    dbos._sys_db.update_last_fired_at("state-keep", "2020-01-01T00:00:00+00:00")
+
+    DBOS.apply_schedules(
+        [
+            {
+                "schedule_name": "state-keep",
+                "workflow_fn": wf,
+                "schedule": "0 0 * * *",
+                "context": {"version": 2},
+            }
+        ]
+    )
+
+    sched = DBOS.get_schedule("state-keep")
+    assert sched is not None
+    assert sched["status"] == "PAUSED"  # preserved
+    assert sched["last_fired_at"] == "2020-01-01T00:00:00+00:00"  # preserved
+    assert sched["context"] == {"version": 2}  # definition still updated
+
+    DBOS.delete_schedule("state-keep")
 
 
 def test_schedule_crud_from_workflow(dbos: DBOS) -> None:
@@ -1008,7 +1044,7 @@ def test_client_apply_schedules(client: DBOSClient) -> None:
                 "schedule": "0 0 * * *",
                 "context": None,
                 "automatic_backfill": True,
-                "cron_timezone": "US/Pacific",
+                "cron_timezone": "America/Los_Angeles",
             },
         ]
     )
@@ -1022,7 +1058,7 @@ def test_client_apply_schedules(client: DBOSClient) -> None:
     assert by_name["sched-b"]["workflow_name"] == "wf.b"
     assert by_name["sched-b"]["context"] is None
     assert by_name["sched-b"]["automatic_backfill"] is True
-    assert by_name["sched-b"]["cron_timezone"] == "US/Pacific"
+    assert by_name["sched-b"]["cron_timezone"] == "America/Los_Angeles"
 
     # Replace sched-a, add sched-c
     client.apply_schedules(
@@ -1362,7 +1398,7 @@ async def test_client_schedule_crud_async(client: DBOSClient) -> None:
                 "schedule": "0 0 * * *",
                 "context": None,
                 "automatic_backfill": True,
-                "cron_timezone": "US/Pacific",
+                "cron_timezone": "America/Los_Angeles",
             },
         ]
     )
@@ -1376,7 +1412,7 @@ async def test_client_schedule_crud_async(client: DBOSClient) -> None:
     assert by_name["async-client-b"]["schedule"] == "0 0 * * *"
     assert by_name["async-client-b"]["context"] is None
     assert by_name["async-client-b"]["automatic_backfill"] is True
-    assert by_name["async-client-b"]["cron_timezone"] == "US/Pacific"
+    assert by_name["async-client-b"]["cron_timezone"] == "America/Los_Angeles"
 
     # Replace async-client-a, add async-client-c
     await client.apply_schedules_async(
