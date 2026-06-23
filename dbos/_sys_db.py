@@ -4724,7 +4724,9 @@ class SystemDatabase(ABC):
         # Create or replace a schedule by name. Unlike create_schedule, this is
         # idempotent and safe to run concurrently from many workers: a unique
         # conflict on schedule_name updates the existing row instead of raising.
-        # The existing row's schedule_id is preserved on conflict.
+        # On conflict the schedule_id is replaced too, so the scheduler (which
+        # keys live threads by schedule_id) treats a re-applied schedule as new
+        # and restarts its thread, picking up any changed fields.
         def _do(c: sa.Connection) -> None:
             c.execute(
                 self.dialect.insert(SystemSchema.workflow_schedules)
@@ -4744,6 +4746,7 @@ class SystemDatabase(ABC):
                 .on_conflict_do_update(
                     index_elements=["schedule_name"],
                     set_={
+                        "schedule_id": schedule["schedule_id"],
                         "workflow_name": schedule["workflow_name"],
                         "workflow_class_name": schedule["workflow_class_name"],
                         "schedule": schedule["schedule"],

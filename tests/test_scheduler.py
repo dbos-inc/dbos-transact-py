@@ -331,8 +331,9 @@ def test_apply_schedules_concurrent(dbos: DBOS) -> None:
     assert schedules[0]["context"] == {"region": "us"}
     schedule_id = schedules[0]["schedule_id"]
 
-    # Re-applying must update fields in place while preserving schedule_id, so
-    # the scheduler (which keys threads by schedule_id) doesn't churn threads.
+    # Re-applying leaves exactly one row, updated in place, but assigns a fresh
+    # schedule_id so the scheduler (which keys threads by schedule_id) restarts
+    # the thread and picks up the changed fields.
     DBOS.apply_schedules(
         [
             {
@@ -345,13 +346,62 @@ def test_apply_schedules_concurrent(dbos: DBOS) -> None:
     )
     schedules = DBOS.list_schedules()
     assert len(schedules) == 1
-    assert schedules[0]["schedule_id"] == schedule_id
+    assert schedules[0]["schedule_id"] != schedule_id
     assert schedules[0]["schedule"] == "0 * * * *"
     assert schedules[0]["context"] == {"region": "eu"}
 
     # Clean up
     DBOS.delete_schedule("shared-schedule")
     assert len(DBOS.list_schedules()) == 0
+
+
+def test_apply_schedules_live_update(dbos: DBOS) -> None:
+    # Re-applying a changed schedule via apply_schedules must take effect on a
+    # running scheduler: the upsert assigns a fresh schedule_id, so the
+    # scheduler stops the old thread and starts a new one with the new context.
+    received_contexts: list[Any] = []
+
+    @DBOS.workflow()
+    def scheduled_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        received_contexts.append(ctx)
+
+    DBOS.apply_schedules(
+        [
+            {
+                "schedule_name": "live-update",
+                "workflow_fn": scheduled_workflow,
+                "schedule": "* * * * * *",
+                "context": {"version": 1},
+            }
+        ]
+    )
+
+    def check_fired_v1() -> None:
+        assert any(c == {"version": 1} for c in received_contexts)
+
+    retry_until_success(check_fired_v1)
+
+    # Re-apply the same schedule with a new context.
+    count_before = len(received_contexts)
+    DBOS.apply_schedules(
+        [
+            {
+                "schedule_name": "live-update",
+                "workflow_fn": scheduled_workflow,
+                "schedule": "* * * * * *",
+                "context": {"version": 2},
+            }
+        ]
+    )
+
+    # The running scheduler must pick up the new context and fire it.
+    def check_fired_v2() -> None:
+        v2 = [c for c in received_contexts[count_before:] if c == {"version": 2}]
+        assert len(v2) >= 2
+
+    retry_until_success(check_fired_v2)
+
+    DBOS.delete_schedule("live-update")
 
 
 def test_schedule_crud_from_workflow(dbos: DBOS) -> None:
