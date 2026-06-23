@@ -329,6 +329,25 @@ def test_apply_schedules_concurrent(dbos: DBOS) -> None:
     assert schedules[0]["schedule_name"] == "shared-schedule"
     assert schedules[0]["schedule"] == "* * * * *"
     assert schedules[0]["context"] == {"region": "us"}
+    schedule_id = schedules[0]["schedule_id"]
+
+    # Re-applying must update fields in place while preserving schedule_id, so
+    # the scheduler (which keys threads by schedule_id) doesn't churn threads.
+    DBOS.apply_schedules(
+        [
+            {
+                "schedule_name": "shared-schedule",
+                "workflow_fn": wf,
+                "schedule": "0 * * * *",
+                "context": {"region": "eu"},
+            }
+        ]
+    )
+    schedules = DBOS.list_schedules()
+    assert len(schedules) == 1
+    assert schedules[0]["schedule_id"] == schedule_id
+    assert schedules[0]["schedule"] == "0 * * * *"
+    assert schedules[0]["context"] == {"region": "eu"}
 
     # Clean up
     DBOS.delete_schedule("shared-schedule")

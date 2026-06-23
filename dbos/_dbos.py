@@ -2956,8 +2956,7 @@ class DBOS:
             )
         with dbos._sys_db.engine.begin() as c:
             for sched in to_apply:
-                dbos._sys_db.delete_schedule(sched["schedule_name"], conn=c)
-                dbos._sys_db.create_schedule(sched, conn=c)
+                dbos._sys_db.upsert_schedule(sched, conn=c)
 
     @classmethod
     async def apply_schedules_async(

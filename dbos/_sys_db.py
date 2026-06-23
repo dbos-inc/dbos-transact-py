@@ -4718,6 +4718,51 @@ class SystemDatabase(ABC):
             with self.engine.begin() as c:
                 _do(c)
 
+    def upsert_schedule(
+        self, schedule: WorkflowSchedule, conn: Optional[sa.Connection] = None
+    ) -> None:
+        # Create or replace a schedule by name. Unlike create_schedule, this is
+        # idempotent and safe to run concurrently from many workers: a unique
+        # conflict on schedule_name updates the existing row instead of raising.
+        # The existing row's schedule_id is preserved on conflict.
+        def _do(c: sa.Connection) -> None:
+            c.execute(
+                self.dialect.insert(SystemSchema.workflow_schedules)
+                .values(
+                    schedule_id=schedule["schedule_id"],
+                    schedule_name=schedule["schedule_name"],
+                    workflow_name=schedule["workflow_name"],
+                    workflow_class_name=schedule["workflow_class_name"],
+                    schedule=schedule["schedule"],
+                    status=schedule["status"],
+                    context=schedule["context"],
+                    last_fired_at=schedule.get("last_fired_at"),
+                    automatic_backfill=schedule.get("automatic_backfill", False),
+                    cron_timezone=schedule.get("cron_timezone"),
+                    queue_name=schedule.get("queue_name"),
+                )
+                .on_conflict_do_update(
+                    index_elements=["schedule_name"],
+                    set_={
+                        "workflow_name": schedule["workflow_name"],
+                        "workflow_class_name": schedule["workflow_class_name"],
+                        "schedule": schedule["schedule"],
+                        "status": schedule["status"],
+                        "context": schedule["context"],
+                        "last_fired_at": schedule.get("last_fired_at"),
+                        "automatic_backfill": schedule.get("automatic_backfill", False),
+                        "cron_timezone": schedule.get("cron_timezone"),
+                        "queue_name": schedule.get("queue_name"),
+                    },
+                )
+            )
+
+        if conn is not None:
+            _do(conn)
+        else:
+            with self.engine.begin() as c:
+                _do(c)
+
     def list_schedules(
         self,
         *,
