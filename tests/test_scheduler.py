@@ -292,9 +292,8 @@ def test_apply_schedules(dbos: DBOS) -> None:
 
 def test_apply_schedules_concurrent(dbos: DBOS) -> None:
     # Applying the same schedule from many workers concurrently must be
-    # idempotent: it should never raise (e.g. a unique-constraint violation
-    # from the internal delete-then-insert) and must leave exactly one
-    # schedule behind.
+    # idempotent: it should never raise (e.g. a unique-constraint violation)
+    # and must leave exactly one schedule behind.
     @DBOS.workflow()
     def wf(scheduled_at: datetime, ctx: Any) -> None:
         pass
@@ -331,7 +330,7 @@ def test_apply_schedules_concurrent(dbos: DBOS) -> None:
     assert schedules[0]["context"] == {"region": "us"}
     schedule_id = schedules[0]["schedule_id"]
 
-    # Re-applying leaves one row, updated in place, but with a fresh schedule_id.
+    # Re-applying leaves one row, updated in place, preserving schedule_id.
     DBOS.apply_schedules(
         [
             {
@@ -344,7 +343,7 @@ def test_apply_schedules_concurrent(dbos: DBOS) -> None:
     )
     schedules = DBOS.list_schedules()
     assert len(schedules) == 1
-    assert schedules[0]["schedule_id"] != schedule_id
+    assert schedules[0]["schedule_id"] == schedule_id
     assert schedules[0]["schedule"] == "0 * * * *"
     assert schedules[0]["context"] == {"region": "eu"}
 
@@ -354,7 +353,7 @@ def test_apply_schedules_concurrent(dbos: DBOS) -> None:
 
 
 def test_apply_schedules_live_update(dbos: DBOS) -> None:
-    # Re-applying a changed schedule must take effect live: a fresh schedule_id restarts the scheduler thread with the new context.
+    # Re-applying a changed schedule must take effect live: the scheduler loop detects the modified definition and restarts the thread with the new context, preserving schedule_id.
     received_contexts: list[Any] = []
 
     @DBOS.workflow()
@@ -438,6 +437,52 @@ def test_apply_schedules_preserves_runtime_state(dbos: DBOS) -> None:
     assert sched["context"] == {"version": 2}  # definition still updated
 
     DBOS.delete_schedule("state-keep")
+
+
+def test_schedule_thread_signature() -> None:
+    # The scheduler loop restarts a thread only when a re-apply changes the
+    # schedule's *definition*. The signature must therefore react to definition
+    # fields and ignore identity/lifecycle/runtime state. In particular it must
+    # ignore last_fired_at (which changes on every fire — otherwise the thread
+    # would restart constantly) and schedule_id (so a re-apply that touches only
+    # runtime state does not trigger a spurious restart + backfill).
+    from dbos._scheduler import _ScheduleThread
+    from dbos._sys_db import WorkflowSchedule
+
+    base: WorkflowSchedule = {
+        "schedule_id": "id-1",
+        "schedule_name": "sig",
+        "workflow_name": "wf",
+        "workflow_class_name": None,
+        "schedule": "* * * * *",
+        "status": "ACTIVE",
+        "context": "ctx",
+        "last_fired_at": None,
+        "automatic_backfill": False,
+        "cron_timezone": None,
+        "queue_name": None,
+    }
+    sig = _ScheduleThread.compute_signature(base)
+
+    # Identity / lifecycle / runtime fields must NOT change the signature.
+    for field, value in [
+        ("schedule_id", "id-2"),
+        ("status", "PAUSED"),
+        ("last_fired_at", "2020-01-01T00:00:00+00:00"),
+        ("automatic_backfill", True),
+    ]:
+        assert _ScheduleThread.compute_signature({**base, field: value}) == sig  # type: ignore[misc]
+
+    # Definition fields MUST change the signature so the loop restarts the thread.
+    for field, value in [
+        ("workflow_name", "wf2"),
+        ("workflow_class_name", "SomeClass"),
+        ("schedule", "0 * * * *"),
+        ("context", "ctx2"),
+        ("cron_timezone", "America/Los_Angeles"),
+        ("queue_name", "q"),
+    ]:
+        assert _ScheduleThread.compute_signature({**base, field: value}) != sig  # type: ignore[misc]
 
 
 def test_schedule_crud_from_workflow(dbos: DBOS) -> None:

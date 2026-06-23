@@ -4721,7 +4721,7 @@ class SystemDatabase(ABC):
     def upsert_schedule(
         self, schedule: WorkflowSchedule, conn: Optional[sa.Connection] = None
     ) -> None:
-        # Idempotent upsert by schedule_name; resets schedule_id on conflict (restarting the scheduler thread), preserving status/last_fired_at.
+        # Idempotent upsert by schedule_name; preserves schedule_id, status, and last_fired_at on conflict. The scheduler loop detects the changed definition and restarts the thread.
         def _do(c: sa.Connection) -> None:
             c.execute(
                 self.dialect.insert(SystemSchema.workflow_schedules)
@@ -4741,7 +4741,6 @@ class SystemDatabase(ABC):
                 .on_conflict_do_update(
                     index_elements=["schedule_name"],
                     set_={
-                        "schedule_id": schedule["schedule_id"],
                         "workflow_name": schedule["workflow_name"],
                         "workflow_class_name": schedule["workflow_class_name"],
                         "schedule": schedule["schedule"],

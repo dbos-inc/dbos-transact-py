@@ -35,9 +35,26 @@ class _ScheduleThread:
         tz_name = schedule.get("cron_timezone")
         self.tzinfo = ZoneInfo(tz_name) if tz_name else timezone.utc
         self.queue_name: Optional[str] = schedule.get("queue_name")
+        # Snapshot of the definition this thread is running, used by the loop to
+        # detect a re-applied (modified) schedule and restart the thread.
+        self.signature: tuple[Any, ...] = self.compute_signature(schedule)
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
+
+    @staticmethod
+    def compute_signature(schedule: WorkflowSchedule) -> tuple[Any, ...]:
+        # The fields that determine the running thread's behavior. Deliberately
+        # excludes schedule_id, status, last_fired_at, and automatic_backfill,
+        # which are identity/lifecycle/runtime state, not part of the definition.
+        return (
+            schedule["workflow_name"],
+            schedule["workflow_class_name"],
+            schedule["schedule"],
+            schedule["context"],
+            schedule.get("cron_timezone"),
+            schedule.get("queue_name"),
+        )
 
     def _loop(self) -> None:
         from ._dbos import _get_dbos_instance
@@ -268,9 +285,22 @@ def dynamic_scheduler_loop(
                 if schedule_thread is not None:
                     schedule_thread.stop()
                     del schedule_threads[schedule_id]
-            elif schedule_thread is None:
-                # Automatic backfill: if enabled and last_fired_at is set,
-                # backfill missed executions before starting the thread.
+            elif schedule_thread is not None:
+                # Already running — restart it if the schedule was re-applied
+                # with a modified definition (cron, context, timezone, queue,
+                # workflow). No backfill: the schedule ran continuously, so
+                # nothing was missed.
+                if schedule_thread.signature != _ScheduleThread.compute_signature(
+                    schedule
+                ):
+                    schedule_thread.stop()
+                    schedule_threads[schedule_id] = _ScheduleThread(
+                        schedule, dbos._sys_db.serializer
+                    )
+            else:
+                # Not running — start it. Automatic backfill: if enabled and
+                # last_fired_at is set, backfill missed executions (e.g. while
+                # the scheduler was down) before starting the thread.
                 if schedule.get("automatic_backfill") and schedule.get("last_fired_at"):
                     try:
                         assert schedule["last_fired_at"]
