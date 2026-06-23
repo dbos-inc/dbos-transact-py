@@ -1045,14 +1045,18 @@ def test_recv_consume_idempotent_on_db_retry(dbos: DBOS) -> None:
     function_id = 1
     start_time = int(time.time() * 1000)
 
+    # Which of the two messages is consumed first depends on created_at_epoch_ms
+    # ordering, which can tie under coarse timestamp resolution -- the
+    # idempotency property holds for either, so don't assume an order.
     first = dbos._sys_db.recv_consume(dest_id, function_id, None, start_time)
-    assert first == "msg1"
+    assert first in ("msg1", "msg2")
 
-    # A db_retry re-run re-invokes recv_consume with identical arguments.
+    # A db_retry re-run re-invokes recv_consume with identical arguments. It must
+    # return the same already-recorded message, not consume the other one.
     replay = dbos._sys_db.recv_consume(dest_id, function_id, None, start_time)
-    assert replay == "msg1"
+    assert replay == first
 
-    # The replay must not have consumed msg2.
+    # The replay must not have consumed the second message.
     with dbos._sys_db.engine.connect() as c:
         unconsumed = c.execute(
             sa.select(SystemSchema.notifications.c.message).where(
@@ -1165,7 +1169,7 @@ def test_record_get_result_increments_function_id_once_on_db_retry(
         dbos._sys_db.engine = proxy  # type: ignore[assignment]
         dbos._sys_db.record_get_result(str(uuid.uuid4()), "some-output", None, None)
     finally:
-        dbos._sys_db.engine = real_engine  # type: ignore[assignment]
+        dbos._sys_db.engine = real_engine
         _set_local_dbos_context(prev)
 
     # The injected failure actually forced a retry...
