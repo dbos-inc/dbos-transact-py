@@ -1,5 +1,7 @@
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -285,6 +287,51 @@ def test_apply_schedules(dbos: DBOS) -> None:
     DBOS.delete_schedule("sched-a")
     DBOS.delete_schedule("sched-b")
     DBOS.delete_schedule("sched-c")
+    assert len(DBOS.list_schedules()) == 0
+
+
+def test_apply_schedules_concurrent(dbos: DBOS) -> None:
+    # Applying the same schedule from many workers concurrently must be
+    # idempotent: it should never raise (e.g. a unique-constraint violation
+    # from the internal delete-then-insert) and must leave exactly one
+    # schedule behind.
+    @DBOS.workflow()
+    def wf(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    num_workers = 8
+    # Release all workers at once so they hit the database simultaneously,
+    # maximizing the chance of a concurrency conflict.
+    barrier = threading.Barrier(num_workers)
+
+    def apply_same_schedule() -> None:
+        barrier.wait(timeout=30)
+        DBOS.apply_schedules(
+            [
+                {
+                    "schedule_name": "shared-schedule",
+                    "workflow_fn": wf,
+                    "schedule": "* * * * *",
+                    "context": {"region": "us"},
+                }
+            ]
+        )
+
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = [executor.submit(apply_same_schedule) for _ in range(num_workers)]
+        # Surface any exception raised by a worker.
+        for future in futures:
+            future.result()
+
+    # Exactly one schedule should exist, with the expected values.
+    schedules = DBOS.list_schedules()
+    assert len(schedules) == 1
+    assert schedules[0]["schedule_name"] == "shared-schedule"
+    assert schedules[0]["schedule"] == "* * * * *"
+    assert schedules[0]["context"] == {"region": "us"}
+
+    # Clean up
+    DBOS.delete_schedule("shared-schedule")
     assert len(DBOS.list_schedules()) == 0
 
 
