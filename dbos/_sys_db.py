@@ -2334,10 +2334,7 @@ class SystemDatabase(ABC):
             if ctx is None or not ctx.is_workflow():
                 return
             ctx.function_id += 1  # Record the get_result as a step
-        # Capture the identifiers before entering the retry loop. db_retry can
-        # re-invoke its body after an ambiguous commit, and the function_id
-        # increment above must happen exactly once per get_result -- so it lives
-        # outside the retried function.
+        # Capture ids outside the retry: db_retry may re-run its body, but function_id must increment only once.
         workflow_id = ctx.workflow_id
         function_id = ctx.function_id
 
@@ -2388,11 +2385,7 @@ class SystemDatabase(ABC):
                 c.execute(sql)
         except DBAPIError as dbapi_error:
             if self._is_unique_constraint_violation(dbapi_error):
-                # A row already exists at this (parent, function_id). If it
-                # records the same child, this is an idempotent retry (e.g.
-                # db_retry re-ran the body after the connection dropped on a
-                # prior commit) -- benign. A different child means the workflow
-                # executed nondeterministically, which is a genuine conflict.
+                # Same child means an idempotent db_retry; a different child means nondeterminism (a real conflict).
                 with self.engine.begin() as c:
                     existing = c.execute(
                         sa.select(
@@ -2806,12 +2799,7 @@ class SystemDatabase(ABC):
         topic = topic if topic is not None else _dbos_null_topic
 
         with self.engine.begin() as c:
-            # Idempotency: db_retry can re-invoke this body if the connection
-            # drops after a prior attempt already committed (consuming the
-            # message and recording the result). In that case the result is
-            # durably recorded, so return it instead of consuming a second
-            # message -- otherwise the retry would consume nothing, record a
-            # conflicting timestamp, and lose the original message.
+            # Idempotency: if a prior db_retry attempt already committed, return the recorded message, not a new one.
             recorded = c.execute(
                 sa.select(
                     SystemSchema.operation_outputs.c.output,

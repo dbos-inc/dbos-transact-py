@@ -1883,14 +1883,10 @@ async def run_step_async(
             )
 
         if inspect.iscoroutinefunction(func):
-            # Async step: build the Pending outcome on the loop and await it
-            # (it offloads its own blocking work via asyncio.to_thread).
+            # Async step: build the Pending outcome on the loop and await it.
             return await cast(Coroutine[Any, Any, R], invoke())
         else:
-            # Sync step: invoke_step runs the entire step synchronously -- the
-            # operation-result DB checkpoints, the user body, and any retry
-            # backoff sleep. Offload it to a worker thread so it does not block
-            # the event loop, matching the non-workflow branch below.
+            # Sync step: run it off-loop so its DB checkpoints, body, and retry sleep don't block the loop.
             return await asyncio.to_thread(lambda: cast(R, invoke()))
     else:
         if inspect.iscoroutinefunction(func):
