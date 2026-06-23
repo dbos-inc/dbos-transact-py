@@ -85,7 +85,7 @@ class DebouncerMessage(TypedDict):
     debounce_period_sec: float
 
 
-def debouncer_workflow(
+async def debouncer_workflow(
     initial_debounce_period_sec: float,
     ctx: ContextOptions,
     options: DebouncerOptions,
@@ -101,68 +101,71 @@ def debouncer_workflow(
     # Every time the debounced workflow is called, a message is sent to this workflow.
     # It waits until debounce_period_sec have passed since the last message or until
     # debounce_timeout_sec has elapsed.
-    def get_debounce_deadline_epoch_sec() -> float:
+    async def get_debounce_deadline_epoch_sec() -> float:
         return (
             time.time() + options["debounce_timeout_sec"]
             if options["debounce_timeout_sec"]
             else math.inf
         )
 
-    debounce_deadline_epoch_sec = dbos._sys_db.call_function_as_step(
-        get_debounce_deadline_epoch_sec,
-        "get_debounce_deadline_epoch_sec",
-        snapshot_step_context(reserve_sleep_id=False),
+    async def get_time() -> float:
+        return time.time()
+
+    debounce_deadline_epoch_sec = await DBOS.run_step_async(
+        {"name": "get_debounce_deadline_epoch_sec"}, get_debounce_deadline_epoch_sec
     )
     debounce_period_sec = initial_debounce_period_sec
-    while (
-        DBOS.run_step({"name": "get_time"}, lambda: time.time())
-        < debounce_deadline_epoch_sec
-    ):
-        time_until_deadline = max(
-            debounce_deadline_epoch_sec
-            - DBOS.run_step({"name": "get_time"}, lambda: time.time()),
-            0,
+    while True:
+        now = await DBOS.run_step_async({"name": "get_time"}, get_time)
+        if now >= debounce_deadline_epoch_sec:
+            break
+        timeout = min(debounce_period_sec, max(debounce_deadline_epoch_sec - now, 0))
+        message: Optional[DebouncerMessage] = await DBOS.recv_async(
+            _DEBOUNCER_TOPIC, timeout_seconds=timeout
         )
-        timeout = min(debounce_period_sec, time_until_deadline)
-        message: DebouncerMessage = DBOS.recv(_DEBOUNCER_TOPIC, timeout_seconds=timeout)
         if message is None:
             break
-        else:
-            workflow_inputs = message["inputs"]
-            debounce_period_sec = message["debounce_period_sec"]
-            # Acknowledge receipt of the message
-            DBOS.set_event(message["message_id"], message["message_id"])
-    # After the timeout or period has elapsed, start the user workflow with the requested context parameters,
-    # either directly or on a queue.
+        workflow_inputs = message["inputs"]
+        debounce_period_sec = message["debounce_period_sec"]
+        # Acknowledge receipt of the message
+        await DBOS.set_event_async(message["message_id"], message["message_id"])
+
+    # After the timeout or period has elapsed, enqueue the user workflow with the requested
+    # context parameters.
+    func = dbos._registry.workflow_info_map.get(options["workflow_name"], None)
+    if not func:
+        raise Exception(
+            f"Invalid workflow name provided to debouncer: {options['workflow_name']}"
+        )
+    if options["queue_name"]:
+        queue = dbos._registry.queue_info_map.get(options["queue_name"], None)
+        if not queue:
+            queue = await DBOS.retrieve_queue_async(options["queue_name"])
+        if not queue:
+            raise Exception(
+                f"Invalid queue name provided to debouncer: {options['queue_name']}"
+            )
+    else:
+        queue = dbos._registry.get_internal_queue()
     with SetWorkflowID(ctx["workflow_id"]):
         # Use .get() because inputs recorded before attributes existed lack the key
         with (
             SetWorkflowTimeout(ctx["workflow_timeout_sec"]),
             SetWorkflowAttributes(ctx.get("attributes")),
         ):
-            func = dbos._registry.workflow_info_map.get(options["workflow_name"], None)
-            if not func:
-                raise Exception(
-                    f"Invalid workflow name provided to debouncer: {options['workflow_name']}"
-                )
             if options["queue_name"]:
-                queue = dbos._registry.queue_info_map.get(options["queue_name"], None)
-                if not queue:
-                    queue = dbos._sys_db.get_queue(options["queue_name"])
-                if not queue:
-                    raise Exception(
-                        f"Invalid queue name provided to debouncer: {options['queue_name']}"
-                    )
+                # Apply the caller's enqueue options only on a user-specified queue,
+                # matching the original behavior (the direct-start path applied none).
                 with SetEnqueueOptions(
                     deduplication_id=ctx["deduplication_id"],
                     priority=ctx["priority"],
                     app_version=ctx["app_version"],
                 ):
-                    queue.enqueue(
+                    await queue.enqueue_async(
                         func, *workflow_inputs["args"], **workflow_inputs["kwargs"]
                     )
             else:
-                DBOS.start_workflow(
+                await queue.enqueue_async(
                     func, *workflow_inputs["args"], **workflow_inputs["kwargs"]
                 )
 
