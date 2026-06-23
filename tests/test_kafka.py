@@ -1,12 +1,12 @@
 import random
 import threading
 import time
-from typing import NoReturn
+from typing import Any, NoReturn, Optional
 
 import pytest
-from confluent_kafka import KafkaError, Producer
+from confluent_kafka import Consumer, KafkaError, Producer
 
-from dbos import DBOS, KafkaMessage
+from dbos import DBOS, DBOSConfig, KafkaMessage
 
 # These tests require local Kafka to run.
 # Without it, they're automatically skipped.
@@ -56,6 +56,99 @@ def send_test_messages(server: str, topic: str) -> bool:
         return False
     finally:
         pass
+
+
+def produce_one_message(server: str, topic: str) -> bool:
+    try:
+
+        def on_error(err: KafkaError) -> NoReturn:
+            raise Exception(err)
+
+        producer = Producer({"bootstrap.servers": server, "error_cb": on_error})
+        producer.produce(topic, key=b"offset-loss-key", value=b"offset-loss-value")
+        producer.poll(10)
+        producer.flush(10)
+        return True
+    except Exception:
+        return False
+
+
+def test_kafka_no_offset_loss_on_relaunch(
+    config: DBOSConfig, cleanup_test_databases: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression for #733: relaunch while parked after poll() but before enqueue, then assert no message loss.
+    import dbos._kafka as dbos_kafka_module
+
+    server = "localhost:9092"
+    suffix = random.randrange(1_000_000_000)
+    topic = f"dbos-kafka-offsetloss-{suffix}"
+    group_id = f"dbos-kafka-offsetloss-{suffix}"
+
+    if not produce_one_message(server, topic):
+        pytest.skip("Kafka not available")
+
+    # Wrap the real Consumer that dbos._kafka uses so we can pause inside poll().
+    original_consumer_cls = Consumer
+    first_poll_returned = threading.Event()
+    poll_delay_seconds = 3.0
+
+    class PausingConsumer:
+        def __init__(self, conf: dict[str, Any]) -> None:
+            self._inner = original_consumer_cls(conf)
+
+        def poll(self, timeout: Optional[float] = None) -> Any:
+            msg = self._inner.poll(timeout)
+            if msg is not None and msg.error() is None:
+                # Park in the post-poll/pre-enqueue window so the relaunch lands here.
+                first_poll_returned.set()
+                time.sleep(poll_delay_seconds)
+            return msg
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._inner, name)
+
+    monkeypatch.setattr(dbos_kafka_module, "Consumer", PausingConsumer)
+
+    processed = threading.Event()
+
+    def register() -> None:
+        @DBOS.kafka_consumer(
+            {
+                "bootstrap.servers": server,
+                "group.id": group_id,
+                "auto.offset.reset": "earliest",
+            },
+            [topic],
+        )
+        @DBOS.workflow()
+        def offset_loss_workflow(msg: KafkaMessage) -> None:
+            processed.set()
+
+    # Launch #1: consume up to the post-poll window, then shut down before enqueue.
+    DBOS.destroy(destroy_registry=True)
+    register()
+    DBOS(config=config)
+    DBOS.launch()
+    try:
+        assert first_poll_returned.wait(
+            timeout=30
+        ), "Kafka consumer never returned the produced message"
+        # Relaunch while the consumer is parked after poll() but before enqueue.
+        DBOS.destroy(destroy_registry=True)
+        assert (
+            not processed.is_set()
+        ), "Workflow was enqueued before relaunch; the shutdown window was missed"
+
+        # Launch #2: correct code redelivers offset 0; buggy code already committed it (lost).
+        register()
+        DBOS(config=config)
+        DBOS.launch()
+        assert processed.wait(timeout=45), (
+            "Kafka message was lost after relaunch: the offset was committed "
+            "before the durable workflow was created"
+        )
+    finally:
+        DBOS.destroy(destroy_registry=True)
 
 
 def test_kafka(dbos: DBOS) -> None:

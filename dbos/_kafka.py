@@ -46,6 +46,15 @@ def _kafka_consumer_loop(
     if "auto.offset.reset" not in config:
         config["auto.offset.reset"] = "earliest"
 
+    # Store offsets ourselves after durable enqueue, so commits never outrun durable state.
+    if config.get("enable.auto.offset.store", True) is not False:
+        if config.get("enable.auto.offset.store") is True:
+            dbos_logger.warning(
+                "Overriding enable.auto.offset.store=True: DBOS manages Kafka "
+                "offset storage to avoid committing past durable workflow state."
+            )
+        config["enable.auto.offset.store"] = False
+
     if config.get("group.id") is None:
         config["group.id"] = safe_group_name(get_dbos_func_name(func), topics)
         dbos_logger.warning(
@@ -59,6 +68,7 @@ def _kafka_consumer_loop(
             cmsg = consumer.poll(1.0)
 
             if stop_event.is_set():
+                # Safe to drop: offset wasn't stored, so Kafka redelivers it.
                 return
 
             if cmsg is None:
@@ -99,6 +109,13 @@ def _kafka_consumer_loop(
                         queue.enqueue(func, msg)
                     else:
                         _kafka_queue.enqueue(func, msg)
+
+                # Workflow is durable; advance the offset (auto-commit flushes it later).
+                try:
+                    consumer.store_offsets(message=cmsg)
+                except KafkaException as e:
+                    # Partition revoked, etc.; offset stays put and the message is redelivered.
+                    dbos_logger.warning(f"Failed to store Kafka offset: {e}")
 
     finally:
         consumer.close()
