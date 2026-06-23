@@ -2320,7 +2320,6 @@ class SystemDatabase(ABC):
 
         record_operation_result_retry()
 
-    @db_retry()
     def record_get_result(
         self,
         result_workflow_id: str,
@@ -2335,23 +2334,34 @@ class SystemDatabase(ABC):
             if ctx is None or not ctx.is_workflow():
                 return
             ctx.function_id += 1  # Record the get_result as a step
-        # Because there's no corresponding check, we do nothing on conflict
-        # and do not raise a DBOSWorkflowConflictIDError
-        sql = (
-            self.dialect.insert(SystemSchema.operation_outputs)
-            .values(
-                workflow_uuid=ctx.workflow_id,
-                function_id=ctx.function_id,
-                function_name="DBOS.getResult",
-                output=output,
-                error=error,
-                child_workflow_id=result_workflow_id,
-                serialization=serialization,
+        # Capture the identifiers before entering the retry loop. db_retry can
+        # re-invoke its body after an ambiguous commit, and the function_id
+        # increment above must happen exactly once per get_result -- so it lives
+        # outside the retried function.
+        workflow_id = ctx.workflow_id
+        function_id = ctx.function_id
+
+        @db_retry()
+        def record() -> None:
+            # Because there's no corresponding check, we do nothing on conflict
+            # and do not raise a DBOSWorkflowConflictIDError
+            sql = (
+                self.dialect.insert(SystemSchema.operation_outputs)
+                .values(
+                    workflow_uuid=workflow_id,
+                    function_id=function_id,
+                    function_name="DBOS.getResult",
+                    output=output,
+                    error=error,
+                    child_workflow_id=result_workflow_id,
+                    serialization=serialization,
+                )
+                .on_conflict_do_nothing()
             )
-            .on_conflict_do_nothing()
-        )
-        with self.engine.begin() as c:
-            c.execute(sql)
+            with self.engine.begin() as c:
+                c.execute(sql)
+
+        record()
 
     @db_retry()
     def record_child_workflow(
@@ -2378,6 +2388,23 @@ class SystemDatabase(ABC):
                 c.execute(sql)
         except DBAPIError as dbapi_error:
             if self._is_unique_constraint_violation(dbapi_error):
+                # A row already exists at this (parent, function_id). If it
+                # records the same child, this is an idempotent retry (e.g.
+                # db_retry re-ran the body after the connection dropped on a
+                # prior commit) -- benign. A different child means the workflow
+                # executed nondeterministically, which is a genuine conflict.
+                with self.engine.begin() as c:
+                    existing = c.execute(
+                        sa.select(
+                            SystemSchema.operation_outputs.c.child_workflow_id
+                        ).where(
+                            SystemSchema.operation_outputs.c.workflow_uuid
+                            == parentUUID,
+                            SystemSchema.operation_outputs.c.function_id == functionID,
+                        )
+                    ).fetchone()
+                if existing is not None and existing[0] == childUUID:
+                    return
                 raise DBOSWorkflowConflictIDError(parentUUID)
             raise
 
@@ -2779,6 +2806,26 @@ class SystemDatabase(ABC):
         topic = topic if topic is not None else _dbos_null_topic
 
         with self.engine.begin() as c:
+            # Idempotency: db_retry can re-invoke this body if the connection
+            # drops after a prior attempt already committed (consuming the
+            # message and recording the result). In that case the result is
+            # durably recorded, so return it instead of consuming a second
+            # message -- otherwise the retry would consume nothing, record a
+            # conflicting timestamp, and lose the original message.
+            recorded = c.execute(
+                sa.select(
+                    SystemSchema.operation_outputs.c.output,
+                    SystemSchema.operation_outputs.c.serialization,
+                ).where(
+                    SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
+                    SystemSchema.operation_outputs.c.function_id == function_id,
+                )
+            ).fetchall()
+            if len(recorded) > 0:
+                return deserialize_value(
+                    recorded[0][0], recorded[0][1], self.serializer
+                )
+
             consume_stmt = (
                 sa.update(SystemSchema.notifications)
                 .where(
