@@ -291,16 +291,13 @@ def test_apply_schedules(dbos: DBOS) -> None:
 
 
 def test_apply_schedules_concurrent(dbos: DBOS) -> None:
-    # Applying the same schedule from many workers concurrently must be
-    # idempotent: it should never raise (e.g. a unique-constraint violation)
-    # and must leave exactly one schedule behind.
+    # Concurrent applies of the same schedule must be idempotent: one row, no error.
     @DBOS.workflow()
     def wf(scheduled_at: datetime, ctx: Any) -> None:
         pass
 
     num_workers = 8
-    # Release all workers at once so they hit the database simultaneously,
-    # maximizing the chance of a concurrency conflict.
+    # Release all workers at once to maximize the chance of a conflict.
     barrier = threading.Barrier(num_workers)
 
     def apply_same_schedule() -> None:
@@ -440,12 +437,7 @@ def test_apply_schedules_preserves_runtime_state(dbos: DBOS) -> None:
 
 
 def test_schedule_thread_signature() -> None:
-    # The scheduler loop restarts a thread only when a re-apply changes the
-    # schedule's *definition*. The signature must therefore react to definition
-    # fields and ignore identity/lifecycle/runtime state. In particular it must
-    # ignore last_fired_at (which changes on every fire — otherwise the thread
-    # would restart constantly) and schedule_id (so a re-apply that touches only
-    # runtime state does not trigger a spurious restart + backfill).
+    # Signature must react to definition fields and ignore identity/lifecycle/runtime state.
     from dbos._scheduler import _ScheduleThread
     from dbos._sys_db import WorkflowSchedule
 

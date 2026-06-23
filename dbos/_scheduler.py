@@ -35,8 +35,7 @@ class _ScheduleThread:
         tz_name = schedule.get("cron_timezone")
         self.tzinfo = ZoneInfo(tz_name) if tz_name else timezone.utc
         self.queue_name: Optional[str] = schedule.get("queue_name")
-        # Snapshot of the definition this thread is running, used by the loop to
-        # detect a re-applied (modified) schedule and restart the thread.
+        # Definition snapshot; the loop restarts the thread when it changes.
         self.signature: tuple[Any, ...] = self.compute_signature(schedule)
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -44,9 +43,7 @@ class _ScheduleThread:
 
     @staticmethod
     def compute_signature(schedule: WorkflowSchedule) -> tuple[Any, ...]:
-        # The fields that determine the running thread's behavior. Deliberately
-        # excludes schedule_id, status, last_fired_at, and automatic_backfill,
-        # which are identity/lifecycle/runtime state, not part of the definition.
+        # Definition fields only; excludes identity/lifecycle/runtime state.
         return (
             schedule["workflow_name"],
             schedule["workflow_class_name"],
@@ -286,10 +283,7 @@ def dynamic_scheduler_loop(
                     schedule_thread.stop()
                     del schedule_threads[schedule_id]
             elif schedule_thread is not None:
-                # Already running — restart it if the schedule was re-applied
-                # with a modified definition (cron, context, timezone, queue,
-                # workflow). No backfill: the schedule ran continuously, so
-                # nothing was missed.
+                # Running — restart on a changed definition; no backfill needed.
                 if schedule_thread.signature != _ScheduleThread.compute_signature(
                     schedule
                 ):
@@ -298,9 +292,7 @@ def dynamic_scheduler_loop(
                         schedule, dbos._sys_db.serializer
                     )
             else:
-                # Not running — start it. Automatic backfill: if enabled and
-                # last_fired_at is set, backfill missed executions (e.g. while
-                # the scheduler was down) before starting the thread.
+                # Not running — start it, backfilling missed executions first if enabled.
                 if schedule.get("automatic_backfill") and schedule.get("last_fired_at"):
                     try:
                         assert schedule["last_fired_at"]
