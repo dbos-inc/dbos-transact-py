@@ -49,6 +49,7 @@ from ._error import (
     DBOSException,
     DBOSMaxStepRetriesExceeded,
     DBOSNonExistentWorkflowError,
+    DBOSNotAuthorizedError,
     DBOSQueueDeduplicatedError,
     DBOSRecoveryError,
     DBOSUnexpectedStepError,
@@ -643,14 +644,16 @@ def _check_required_roles_or_finalize_error(
 ) -> Optional[str]:
     """Run the required-role check for a workflow about to execute.
 
-    A required-role failure is terminal: the persisted auth context will never
+    A required-role denial is terminal: the persisted auth context will never
     satisfy the check on a subsequent attempt. Finalize the row as ERROR instead
     of letting the exception escape and leave the workflow stuck PENDING (which,
-    on the queue/recovery paths, would be redequeued forever).
+    on the queue/recovery paths, would be redequeued forever). Only
+    DBOSNotAuthorizedError is treated this way; any other (non-deterministic)
+    error propagates without finalizing, so it remains retryable.
     """
     try:
         return check_required_roles(func, fi)
-    except Exception as role_error:
+    except DBOSNotAuthorizedError as role_error:
         dbos._sys_db.update_workflow_outcome(
             status["workflow_uuid"],
             WorkflowStatusString.ERROR.value,

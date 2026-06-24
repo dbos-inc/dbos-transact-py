@@ -298,6 +298,38 @@ def _require_terminal(dbos: DBOS, workflow_id: str) -> str:
     return status.status
 
 
+def test_roles_denied_queue_recovery(dbos: DBOS) -> None:
+    # The QUEUE + RECOVERY combination (issue #743): when a role-denied queued
+    # workflow is recovered, _recover_workflow takes the queue branch -- it
+    # returns the row to the queue instead of running it directly. The queue must
+    # then re-dispatch it and the dequeue path must finalize it as ERROR, rather
+    # than bouncing it back to PENDING and redequeueing it forever.
+    queue = Queue("test_roles_denied_queue_recovery")
+
+    @DBOS.required_roles(["admin"])
+    @DBOS.workflow()
+    def workflow() -> None:
+        return None
+
+    with DBOSContextSetAuth("bob", ["reader"]):
+        handle = queue.enqueue(workflow)
+    with pytest.raises(DBOSNotAuthorizedError):
+        handle.get_result()
+
+    # Reset to PENDING (queue_name is preserved) and recover. Because the row is
+    # queued, recovery returns it to the queue rather than executing it directly.
+    dbos._sys_db.update_workflow_outcome(handle.workflow_id, "PENDING")
+    recovery_handles = DBOS._recover_pending_workflows()
+    assert len(recovery_handles) == 1
+    with pytest.raises(DBOSNotAuthorizedError):
+        recovery_handles[0].get_result()
+
+    status = retry_until_success(
+        lambda: _require_terminal(dbos, handle.workflow_id), interval=0.2
+    )
+    assert status == WorkflowStatusString.ERROR.value
+
+
 @pytest.mark.asyncio
 async def test_roles_denied_async(dbos: DBOS) -> None:
     # Same as test_roles_denied_start_workflow, for the async execution path.
