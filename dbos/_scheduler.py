@@ -35,9 +35,23 @@ class _ScheduleThread:
         tz_name = schedule.get("cron_timezone")
         self.tzinfo = ZoneInfo(tz_name) if tz_name else timezone.utc
         self.queue_name: Optional[str] = schedule.get("queue_name")
+        # Definition snapshot; the loop restarts the thread when it changes.
+        self.signature: tuple[Any, ...] = self.compute_signature(schedule)
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
+
+    @staticmethod
+    def compute_signature(schedule: WorkflowSchedule) -> tuple[Any, ...]:
+        # Definition fields only; excludes identity/lifecycle/runtime state.
+        return (
+            schedule["workflow_name"],
+            schedule["workflow_class_name"],
+            schedule["schedule"],
+            schedule["context"],
+            schedule.get("cron_timezone"),
+            schedule.get("queue_name"),
+        )
 
     def _loop(self) -> None:
         from ._dbos import _get_dbos_instance
@@ -268,9 +282,17 @@ def dynamic_scheduler_loop(
                 if schedule_thread is not None:
                     schedule_thread.stop()
                     del schedule_threads[schedule_id]
-            elif schedule_thread is None:
-                # Automatic backfill: if enabled and last_fired_at is set,
-                # backfill missed executions before starting the thread.
+            elif schedule_thread is not None:
+                # Running — restart on a changed definition; no backfill needed.
+                if schedule_thread.signature != _ScheduleThread.compute_signature(
+                    schedule
+                ):
+                    schedule_thread.stop()
+                    schedule_threads[schedule_id] = _ScheduleThread(
+                        schedule, dbos._sys_db.serializer
+                    )
+            else:
+                # Not running — start it, backfilling missed executions first if enabled.
                 if schedule.get("automatic_backfill") and schedule.get("last_fired_at"):
                     try:
                         assert schedule["last_fired_at"]

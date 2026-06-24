@@ -2914,6 +2914,12 @@ class DBOS:
             cron = entry["schedule"]
             if not croniter.is_valid(cron, second_at_beginning=True):
                 raise DBOSException(f"Invalid cron schedule: '{cron}'")
+            cron_timezone = entry.get("cron_timezone")
+            if cron_timezone is not None:
+                try:
+                    ZoneInfo(cron_timezone)
+                except Exception:
+                    raise DBOSException(f"Invalid timezone: '{cron_timezone}'")
             workflow_fn = entry["workflow_fn"]
             workflow_name = get_dbos_func_name(workflow_fn)
             if workflow_name not in dbos._registry.workflow_info_map:
@@ -2950,14 +2956,13 @@ class DBOS:
                     context=dbos._sys_db.serializer.serialize(entry["context"]),
                     last_fired_at=None,
                     automatic_backfill=entry.get("automatic_backfill", False),
-                    cron_timezone=entry.get("cron_timezone"),
+                    cron_timezone=cron_timezone,
                     queue_name=entry_queue_name,
                 )
             )
         with dbos._sys_db.engine.begin() as c:
             for sched in to_apply:
-                dbos._sys_db.delete_schedule(sched["schedule_name"], conn=c)
-                dbos._sys_db.create_schedule(sched, conn=c)
+                dbos._sys_db.upsert_schedule(sched, conn=c)
 
     @classmethod
     async def apply_schedules_async(

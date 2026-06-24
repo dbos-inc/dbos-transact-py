@@ -4753,6 +4753,46 @@ class SystemDatabase(ABC):
             with self.engine.begin() as c:
                 _do(c)
 
+    def upsert_schedule(
+        self, schedule: WorkflowSchedule, conn: Optional[sa.Connection] = None
+    ) -> None:
+        # Idempotent upsert by schedule_name; preserves schedule_id, status, and last_fired_at on conflict. The scheduler loop detects the changed definition and restarts the thread.
+        def _do(c: sa.Connection) -> None:
+            c.execute(
+                self.dialect.insert(SystemSchema.workflow_schedules)
+                .values(
+                    schedule_id=schedule["schedule_id"],
+                    schedule_name=schedule["schedule_name"],
+                    workflow_name=schedule["workflow_name"],
+                    workflow_class_name=schedule["workflow_class_name"],
+                    schedule=schedule["schedule"],
+                    status=schedule["status"],
+                    context=schedule["context"],
+                    last_fired_at=schedule.get("last_fired_at"),
+                    automatic_backfill=schedule.get("automatic_backfill", False),
+                    cron_timezone=schedule.get("cron_timezone"),
+                    queue_name=schedule.get("queue_name"),
+                )
+                .on_conflict_do_update(
+                    index_elements=["schedule_name"],
+                    set_={
+                        "workflow_name": schedule["workflow_name"],
+                        "workflow_class_name": schedule["workflow_class_name"],
+                        "schedule": schedule["schedule"],
+                        "context": schedule["context"],
+                        "automatic_backfill": schedule.get("automatic_backfill", False),
+                        "cron_timezone": schedule.get("cron_timezone"),
+                        "queue_name": schedule.get("queue_name"),
+                    },
+                )
+            )
+
+        if conn is not None:
+            _do(conn)
+        else:
+            with self.engine.begin() as c:
+                _do(c)
+
     def list_schedules(
         self,
         *,

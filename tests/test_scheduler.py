@@ -1,5 +1,7 @@
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -286,6 +288,193 @@ def test_apply_schedules(dbos: DBOS) -> None:
     DBOS.delete_schedule("sched-b")
     DBOS.delete_schedule("sched-c")
     assert len(DBOS.list_schedules()) == 0
+
+
+def test_apply_schedules_concurrent(dbos: DBOS) -> None:
+    # Concurrent applies of the same schedule must be idempotent: one row, no error.
+    @DBOS.workflow()
+    def wf(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    num_workers = 8
+    # Release all workers at once to maximize the chance of a conflict.
+    barrier = threading.Barrier(num_workers)
+
+    def apply_same_schedule() -> None:
+        barrier.wait(timeout=30)
+        DBOS.apply_schedules(
+            [
+                {
+                    "schedule_name": "shared-schedule",
+                    "workflow_fn": wf,
+                    "schedule": "* * * * *",
+                    "context": {"region": "us"},
+                }
+            ]
+        )
+
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = [executor.submit(apply_same_schedule) for _ in range(num_workers)]
+        # Surface any exception raised by a worker.
+        for future in futures:
+            future.result()
+
+    # Exactly one schedule should exist, with the expected values.
+    schedules = DBOS.list_schedules()
+    assert len(schedules) == 1
+    assert schedules[0]["schedule_name"] == "shared-schedule"
+    assert schedules[0]["schedule"] == "* * * * *"
+    assert schedules[0]["context"] == {"region": "us"}
+    schedule_id = schedules[0]["schedule_id"]
+
+    # Re-applying leaves one row, updated in place, preserving schedule_id.
+    DBOS.apply_schedules(
+        [
+            {
+                "schedule_name": "shared-schedule",
+                "workflow_fn": wf,
+                "schedule": "0 * * * *",
+                "context": {"region": "eu"},
+            }
+        ]
+    )
+    schedules = DBOS.list_schedules()
+    assert len(schedules) == 1
+    assert schedules[0]["schedule_id"] == schedule_id
+    assert schedules[0]["schedule"] == "0 * * * *"
+    assert schedules[0]["context"] == {"region": "eu"}
+
+    # Clean up
+    DBOS.delete_schedule("shared-schedule")
+    assert len(DBOS.list_schedules()) == 0
+
+
+def test_apply_schedules_live_update(dbos: DBOS) -> None:
+    # Re-applying a changed schedule must take effect live: the scheduler loop detects the modified definition and restarts the thread with the new context, preserving schedule_id.
+    received_contexts: list[Any] = []
+
+    @DBOS.workflow()
+    def scheduled_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        received_contexts.append(ctx)
+
+    DBOS.apply_schedules(
+        [
+            {
+                "schedule_name": "live-update",
+                "workflow_fn": scheduled_workflow,
+                "schedule": "* * * * * *",
+                "context": {"version": 1},
+            }
+        ]
+    )
+
+    def check_fired_v1() -> None:
+        assert any(c == {"version": 1} for c in received_contexts)
+
+    retry_until_success(check_fired_v1)
+
+    # Re-apply the same schedule with a new context.
+    count_before = len(received_contexts)
+    DBOS.apply_schedules(
+        [
+            {
+                "schedule_name": "live-update",
+                "workflow_fn": scheduled_workflow,
+                "schedule": "* * * * * *",
+                "context": {"version": 2},
+            }
+        ]
+    )
+
+    # The running scheduler must pick up the new context and fire it.
+    def check_fired_v2() -> None:
+        v2 = [c for c in received_contexts[count_before:] if c == {"version": 2}]
+        assert len(v2) >= 2
+
+    retry_until_success(check_fired_v2)
+
+    DBOS.delete_schedule("live-update")
+
+
+def test_apply_schedules_preserves_runtime_state(dbos: DBOS) -> None:
+    # A re-apply replaces the definition but must not clobber runtime state (status, last_fired_at).
+    @DBOS.workflow()
+    def wf(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    # Daily cron so it never fires during the test.
+    DBOS.apply_schedules(
+        [
+            {
+                "schedule_name": "state-keep",
+                "workflow_fn": wf,
+                "schedule": "0 0 * * *",
+                "context": {"version": 1},
+            }
+        ]
+    )
+    DBOS.pause_schedule("state-keep")
+    dbos._sys_db.update_last_fired_at("state-keep", "2020-01-01T00:00:00+00:00")
+
+    DBOS.apply_schedules(
+        [
+            {
+                "schedule_name": "state-keep",
+                "workflow_fn": wf,
+                "schedule": "0 0 * * *",
+                "context": {"version": 2},
+            }
+        ]
+    )
+
+    sched = DBOS.get_schedule("state-keep")
+    assert sched is not None
+    assert sched["status"] == "PAUSED"  # preserved
+    assert sched["last_fired_at"] == "2020-01-01T00:00:00+00:00"  # preserved
+    assert sched["context"] == {"version": 2}  # definition still updated
+
+    DBOS.delete_schedule("state-keep")
+
+
+def test_schedule_thread_signature() -> None:
+    # Signature must react to definition fields and ignore identity/lifecycle/runtime state.
+    from dbos._scheduler import _ScheduleThread
+    from dbos._sys_db import WorkflowSchedule
+
+    base: WorkflowSchedule = {
+        "schedule_id": "id-1",
+        "schedule_name": "sig",
+        "workflow_name": "wf",
+        "workflow_class_name": None,
+        "schedule": "* * * * *",
+        "status": "ACTIVE",
+        "context": "ctx",
+        "last_fired_at": None,
+        "automatic_backfill": False,
+        "cron_timezone": None,
+        "queue_name": None,
+    }
+    sig = _ScheduleThread.compute_signature(base)
+
+    # Identity / lifecycle / runtime fields must NOT change the signature.
+    for field, value in [
+        ("schedule_id", "id-2"),
+        ("status", "PAUSED"),
+        ("last_fired_at", "2020-01-01T00:00:00+00:00"),
+        ("automatic_backfill", True),
+    ]:
+        assert _ScheduleThread.compute_signature({**base, field: value}) == sig  # type: ignore[misc]
+
+    # Definition fields MUST change the signature so the loop restarts the thread.
+    for field, value in [
+        ("workflow_name", "wf2"),
+        ("workflow_class_name", "SomeClass"),
+        ("schedule", "0 * * * *"),
+        ("context", "ctx2"),
+        ("cron_timezone", "America/Los_Angeles"),
+        ("queue_name", "q"),
+    ]:
+        assert _ScheduleThread.compute_signature({**base, field: value}) != sig  # type: ignore[misc]
 
 
 def test_schedule_crud_from_workflow(dbos: DBOS) -> None:
@@ -892,7 +1081,7 @@ def test_client_apply_schedules(client: DBOSClient) -> None:
                 "schedule": "0 0 * * *",
                 "context": None,
                 "automatic_backfill": True,
-                "cron_timezone": "US/Pacific",
+                "cron_timezone": "America/Los_Angeles",
             },
         ]
     )
@@ -906,7 +1095,7 @@ def test_client_apply_schedules(client: DBOSClient) -> None:
     assert by_name["sched-b"]["workflow_name"] == "wf.b"
     assert by_name["sched-b"]["context"] is None
     assert by_name["sched-b"]["automatic_backfill"] is True
-    assert by_name["sched-b"]["cron_timezone"] == "US/Pacific"
+    assert by_name["sched-b"]["cron_timezone"] == "America/Los_Angeles"
 
     # Replace sched-a, add sched-c
     client.apply_schedules(
@@ -1246,7 +1435,7 @@ async def test_client_schedule_crud_async(client: DBOSClient) -> None:
                 "schedule": "0 0 * * *",
                 "context": None,
                 "automatic_backfill": True,
-                "cron_timezone": "US/Pacific",
+                "cron_timezone": "America/Los_Angeles",
             },
         ]
     )
@@ -1260,7 +1449,7 @@ async def test_client_schedule_crud_async(client: DBOSClient) -> None:
     assert by_name["async-client-b"]["schedule"] == "0 0 * * *"
     assert by_name["async-client-b"]["context"] is None
     assert by_name["async-client-b"]["automatic_backfill"] is True
-    assert by_name["async-client-b"]["cron_timezone"] == "US/Pacific"
+    assert by_name["async-client-b"]["cron_timezone"] == "America/Los_Angeles"
 
     # Replace async-client-a, add async-client-c
     await client.apply_schedules_async(
