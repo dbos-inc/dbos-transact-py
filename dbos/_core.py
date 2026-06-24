@@ -58,6 +58,7 @@ from ._error import (
 )
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
+    DBOSFuncInfo,
     DBOSFuncType,
     ValidateArgsCallable,
     get_config_name,
@@ -634,6 +635,32 @@ class ActiveWorkflowById:
             return sum(1 for bucket in self._m.values() if bucket == target)
 
 
+def _check_required_roles_or_finalize_error(
+    dbos: "DBOS",
+    status: WorkflowStatusInternal,
+    func: "Callable[..., Any]",
+    fi: Optional[DBOSFuncInfo],
+) -> Optional[str]:
+    """Run the required-role check for a workflow about to execute.
+
+    A required-role failure is terminal: the persisted auth context will never
+    satisfy the check on a subsequent attempt. Finalize the row as ERROR instead
+    of letting the exception escape and leave the workflow stuck PENDING (which,
+    on the queue/recovery paths, would be redequeued forever).
+    """
+    try:
+        return check_required_roles(func, fi)
+    except Exception as role_error:
+        dbos._sys_db.update_workflow_outcome(
+            status["workflow_uuid"],
+            WorkflowStatusString.ERROR.value,
+            error=serialize_exception(
+                role_error, status["serialization"], dbos._serializer
+            )[0],
+        )
+        raise
+
+
 def _execute_workflow_wthread(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
@@ -649,7 +676,9 @@ def _execute_workflow_wthread(
     }
     fi = get_func_info(func)
     with EnterDBOSWorkflow(attributes, ctx):
-        rr: Optional[str] = check_required_roles(func, fi)
+        rr: Optional[str] = _check_required_roles_or_finalize_error(
+            dbos, status, func, fi
+        )
         with DBOSAssumeRole(rr):
             owned = dbos._active_workflows_set.acquire(
                 status["workflow_uuid"],
@@ -692,7 +721,9 @@ async def _execute_workflow_async(
     }
     fi = get_func_info(func)
     with EnterDBOSWorkflow(attributes, ctx):
-        rr: Optional[str] = check_required_roles(func, fi)
+        rr: Optional[str] = _check_required_roles_or_finalize_error(
+            dbos, status, func, fi
+        )
         with DBOSAssumeRole(rr):
             owned = dbos._active_workflows_set.acquire(
                 status["workflow_uuid"],
