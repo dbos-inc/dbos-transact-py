@@ -619,7 +619,8 @@ class ActiveWorkflowById:
             del self._m[key]
 
     def activeList(self) -> List[str]:
-        return list(self._m.keys())
+        with self._lock:
+            return list(self._m.keys())
 
     def count_for_queue(
         self, queue_name: str, queue_partition_key: Optional[str] = None
@@ -1864,24 +1865,29 @@ async def run_step_async(
     # Otherwise, run it as a normal function.
     options = normalize_step_options(options)
     if step_ctx and step_ctx.is_workflow():
-        outcome = invoke_step(
-            dbos,
-            step_ctx,
-            func,
-            args,
-            kwargs,
-            step_name=options["name"] if options["name"] else func.__qualname__,
-            retries_allowed=options["retries_allowed"],
-            interval_seconds=options["interval_seconds"],
-            max_attempts=options["max_attempts"],
-            backoff_rate=options["backoff_rate"],
-            should_retry=options["should_retry"],
-            preemptible=options["preemptible"],
-        )
+
+        def invoke() -> Union[R, Coroutine[Any, Any, R]]:
+            return invoke_step(
+                dbos,
+                step_ctx,
+                func,
+                args,
+                kwargs,
+                step_name=options["name"] if options["name"] else func.__qualname__,
+                retries_allowed=options["retries_allowed"],
+                interval_seconds=options["interval_seconds"],
+                max_attempts=options["max_attempts"],
+                backoff_rate=options["backoff_rate"],
+                should_retry=options["should_retry"],
+                preemptible=options["preemptible"],
+            )
+
         if inspect.iscoroutinefunction(func):
-            return await cast(Coroutine[Any, Any, R], outcome)
+            # Async step: build the Pending outcome on the loop and await it.
+            return await cast(Coroutine[Any, Any, R], invoke())
         else:
-            return cast(R, outcome)
+            # Sync step: run it off-loop so its DB checkpoints, body, and retry sleep don't block the loop.
+            return await asyncio.to_thread(lambda: cast(R, invoke()))
     else:
         if inspect.iscoroutinefunction(func):
             return await cast(Callable[P, Coroutine[Any, Any, R]], func)(

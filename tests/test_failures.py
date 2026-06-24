@@ -11,18 +11,22 @@ from sqlalchemy.exc import DBAPIError, InvalidRequestError, OperationalError
 
 from dbos import DBOS, SetWorkflowID
 from dbos._client import DBOSClient
+from dbos._context import DBOSContext, _set_local_dbos_context, get_local_dbos_context
 from dbos._dbos import WorkflowHandle
 from dbos._dbos_config import DBOSConfig
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
+    DBOSException,
     DBOSMaxStepRetriesExceeded,
     DBOSNotAuthorizedError,
     DBOSQueueDeduplicatedError,
     DBOSUnexpectedStepError,
+    DBOSWorkflowConflictIDError,
     MaxRecoveryAttemptsExceededError,
 )
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
+from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import DefaultSerializer, safe_deserialize
 from dbos._sys_db import WorkflowStatusString
 from dbos._sys_db_postgres import PostgresSystemDatabase
@@ -1012,3 +1016,173 @@ def test_retriable_sqlite_exception() -> None:
     )
     # Unrelated errors are not retriable
     assert not retriable_sqlite_exception(Exception("syntax error"))
+
+
+def _make_status_row(dbos: DBOS, workflow_id: str) -> None:
+    """Run a trivial workflow under a fixed id so a workflow_status row exists
+    (operation_outputs and notifications both FK to it)."""
+
+    @DBOS.workflow()
+    def _noop() -> None:
+        return None
+
+    with SetWorkflowID(workflow_id):
+        _noop()
+
+
+def test_recv_consume_idempotent_on_db_retry(dbos: DBOS) -> None:
+    """recv_consume is wrapped in db_retry, which re-runs the whole body if the
+    connection drops after the consume committed but before the result was
+    acknowledged. The re-run must return the already-recorded message rather
+    than consume a *second* message (or raise a spurious conflict from
+    re-recording the result at the same function_id)."""
+    dest_id = str(uuid.uuid4())
+    _make_status_row(dbos, dest_id)
+
+    DBOS.send(dest_id, "msg1")
+    DBOS.send(dest_id, "msg2")
+
+    function_id = 1
+    start_time = int(time.time() * 1000)
+
+    # Which of the two messages is consumed first depends on created_at_epoch_ms
+    # ordering, which can tie under coarse timestamp resolution -- the
+    # idempotency property holds for either, so don't assume an order.
+    first = dbos._sys_db.recv_consume(dest_id, function_id, None, start_time)
+    assert first in ("msg1", "msg2")
+
+    # A db_retry re-run re-invokes recv_consume with identical arguments. It must
+    # return the same already-recorded message, not consume the other one.
+    replay = dbos._sys_db.recv_consume(dest_id, function_id, None, start_time)
+    assert replay == first
+
+    # The replay must not have consumed the second message.
+    with dbos._sys_db.engine.connect() as c:
+        unconsumed = c.execute(
+            sa.select(SystemSchema.notifications.c.message).where(
+                SystemSchema.notifications.c.destination_uuid == dest_id,
+                SystemSchema.notifications.c.consumed == False,
+            )
+        ).fetchall()
+    assert len(unconsumed) == 1
+
+
+def test_recv_consume_idempotent_on_timeout(dbos: DBOS) -> None:
+    """The idempotency path must also round-trip the no-message (timeout) case,
+    where the recorded output is a serialized None rather than NULL."""
+    dest_id = str(uuid.uuid4())
+    _make_status_row(dbos, dest_id)
+
+    function_id = 1
+    start_time = int(time.time() * 1000)
+
+    # No message available: records None as the durable result.
+    first = dbos._sys_db.recv_consume(dest_id, function_id, None, start_time)
+    assert first is None
+
+    # Re-run returns the recorded None, not a freshly consumed message even if
+    # one has since arrived.
+    DBOS.send(dest_id, "late")
+    replay = dbos._sys_db.recv_consume(dest_id, function_id, None, start_time)
+    assert replay is None
+
+    with dbos._sys_db.engine.connect() as c:
+        unconsumed = c.execute(
+            sa.select(SystemSchema.notifications.c.message).where(
+                SystemSchema.notifications.c.destination_uuid == dest_id,
+                SystemSchema.notifications.c.consumed == False,
+            )
+        ).fetchall()
+    assert len(unconsumed) == 1
+
+
+def test_record_child_workflow_idempotent_on_db_retry(dbos: DBOS) -> None:
+    """record_child_workflow is wrapped in db_retry. If a prior attempt
+    committed and the connection then dropped, the re-run hits a unique
+    violation; recording the *same* child is an idempotent replay (return),
+    while a *different* child is real nondeterminism (conflict)."""
+    parent_id = str(uuid.uuid4())
+    _make_status_row(dbos, parent_id)
+
+    child_id = str(uuid.uuid4())
+    function_id = 1
+    function_name = "test_child"
+
+    dbos._sys_db.record_child_workflow(parent_id, child_id, function_id, function_name)
+
+    # Re-recording the same child at the same function_id is idempotent.
+    dbos._sys_db.record_child_workflow(parent_id, child_id, function_id, function_name)
+
+    # A different child at the same function_id is a genuine conflict.
+    with pytest.raises(DBOSWorkflowConflictIDError):
+        dbos._sys_db.record_child_workflow(
+            parent_id, str(uuid.uuid4()), function_id, function_name
+        )
+
+    # An empty child id is rejected loudly rather than silently wedging recovery.
+    with pytest.raises(DBOSException):
+        dbos._sys_db.record_child_workflow(parent_id, "", 2, function_name)
+
+
+class _RetryOnceEngine:
+    """Engine proxy whose first begin() on the test's own thread raises a
+    retriable error (a simulated dropped connection), forcing the surrounding
+    db_retry loop to re-run its body exactly once. Calls from other threads
+    (background pollers) and all later calls delegate to the real engine."""
+
+    def __init__(self, real: Any, thread_id: int) -> None:
+        self._real = real
+        self._thread_id = thread_id
+        self.fired = False
+
+    def begin(self) -> Any:
+        if not self.fired and threading.get_ident() == self._thread_id:
+            self.fired = True
+            raise Exception("database is locked")  # retriable on pg and sqlite
+        return self._real.begin()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
+def test_record_get_result_increments_function_id_once_on_db_retry(
+    dbos: DBOS,
+) -> None:
+    """record_get_result increments ctx.function_id once as part of recording
+    the get_result step. The increment must happen outside the db_retry loop:
+    if the DB write retries, the function_id must not advance a second time, or
+    the workflow's step sequence desyncs from its recorded history."""
+    workflow_id = str(uuid.uuid4())
+    _make_status_row(dbos, workflow_id)
+
+    ctx = DBOSContext()
+    ctx.workflow_id = workflow_id
+    ctx.function_id = 0
+    assert ctx.is_workflow()
+
+    real_engine = dbos._sys_db.engine
+    proxy = _RetryOnceEngine(real_engine, threading.get_ident())
+
+    prev = get_local_dbos_context()
+    _set_local_dbos_context(ctx)
+    try:
+        dbos._sys_db.engine = proxy  # type: ignore[assignment]
+        dbos._sys_db.record_get_result(str(uuid.uuid4()), "some-output", None, None)
+    finally:
+        dbos._sys_db.engine = real_engine
+        _set_local_dbos_context(prev)
+
+    # The injected failure actually forced a retry...
+    assert proxy.fired
+    # ...but the function_id advanced exactly once (0 -> 1).
+    assert ctx.function_id == 1
+
+    # Exactly one get_result row was recorded, at that function_id.
+    with dbos._sys_db.engine.connect() as c:
+        rows = c.execute(
+            sa.select(SystemSchema.operation_outputs.c.function_id).where(
+                SystemSchema.operation_outputs.c.workflow_uuid == workflow_id,
+                SystemSchema.operation_outputs.c.function_name == "DBOS.getResult",
+            )
+        ).fetchall()
+    assert [r[0] for r in rows] == [1]
