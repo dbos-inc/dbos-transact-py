@@ -573,14 +573,26 @@ def _get_wf_invoke_func(
         except DBOSWorkflowCancelledError as error:
             raise DBOSAwaitedWorkflowCancelledError(status["workflow_uuid"])
         except Exception as error:
-            dbos._sys_db.update_workflow_outcome(
-                status["workflow_uuid"],
-                WorkflowStatusString.ERROR.value,
-                error=serialize_exception(
+            try:
+                error_str = serialize_exception(
                     error,
                     status["serialization"],
                     dbos._serializer,
-                )[0],
+                )[0]
+            except Exception:
+                # Fallback: create a simple error we know can be serialized so the
+                # workflow is terminalized as ERROR instead of being left PENDING
+                # (which would mask the real error and re-execute on every recovery).
+                fallback = Exception(f"{type(error).__name__}: {error}")
+                error_str = serialize_exception(
+                    fallback,
+                    status["serialization"],
+                    dbos._serializer,
+                )[0]
+            dbos._sys_db.update_workflow_outcome(
+                status["workflow_uuid"],
+                WorkflowStatusString.ERROR.value,
+                error=error_str,
             )
             raise
 
