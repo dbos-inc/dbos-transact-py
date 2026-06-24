@@ -2320,7 +2320,6 @@ class SystemDatabase(ABC):
 
         record_operation_result_retry()
 
-    @db_retry()
     def record_get_result(
         self,
         result_workflow_id: str,
@@ -2335,23 +2334,31 @@ class SystemDatabase(ABC):
             if ctx is None or not ctx.is_workflow():
                 return
             ctx.function_id += 1  # Record the get_result as a step
-        # Because there's no corresponding check, we do nothing on conflict
-        # and do not raise a DBOSWorkflowConflictIDError
-        sql = (
-            self.dialect.insert(SystemSchema.operation_outputs)
-            .values(
-                workflow_uuid=ctx.workflow_id,
-                function_id=ctx.function_id,
-                function_name="DBOS.getResult",
-                output=output,
-                error=error,
-                child_workflow_id=result_workflow_id,
-                serialization=serialization,
+        # Capture ids outside the retry: db_retry may re-run its body, but function_id must increment only once.
+        workflow_id = ctx.workflow_id
+        function_id = ctx.function_id
+
+        @db_retry()
+        def record() -> None:
+            # Because there's no corresponding check, we do nothing on conflict
+            # and do not raise a DBOSWorkflowConflictIDError
+            sql = (
+                self.dialect.insert(SystemSchema.operation_outputs)
+                .values(
+                    workflow_uuid=workflow_id,
+                    function_id=function_id,
+                    function_name="DBOS.getResult",
+                    output=output,
+                    error=error,
+                    child_workflow_id=result_workflow_id,
+                    serialization=serialization,
+                )
+                .on_conflict_do_nothing()
             )
-            .on_conflict_do_nothing()
-        )
-        with self.engine.begin() as c:
-            c.execute(sql)
+            with self.engine.begin() as c:
+                c.execute(sql)
+
+        record()
 
     @db_retry()
     def record_child_workflow(
@@ -2378,6 +2385,19 @@ class SystemDatabase(ABC):
                 c.execute(sql)
         except DBAPIError as dbapi_error:
             if self._is_unique_constraint_violation(dbapi_error):
+                # Same child means an idempotent db_retry; a different child means nondeterminism (a real conflict).
+                with self.engine.begin() as c:
+                    existing = c.execute(
+                        sa.select(
+                            SystemSchema.operation_outputs.c.child_workflow_id
+                        ).where(
+                            SystemSchema.operation_outputs.c.workflow_uuid
+                            == parentUUID,
+                            SystemSchema.operation_outputs.c.function_id == functionID,
+                        )
+                    ).fetchone()
+                if existing is not None and existing[0] == childUUID:
+                    return
                 raise DBOSWorkflowConflictIDError(parentUUID)
             raise
 
@@ -2779,6 +2799,21 @@ class SystemDatabase(ABC):
         topic = topic if topic is not None else _dbos_null_topic
 
         with self.engine.begin() as c:
+            # Idempotency: if a prior db_retry attempt already committed, return the recorded message, not a new one.
+            recorded = c.execute(
+                sa.select(
+                    SystemSchema.operation_outputs.c.output,
+                    SystemSchema.operation_outputs.c.serialization,
+                ).where(
+                    SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
+                    SystemSchema.operation_outputs.c.function_id == function_id,
+                )
+            ).fetchall()
+            if len(recorded) > 0:
+                return deserialize_value(
+                    recorded[0][0], recorded[0][1], self.serializer
+                )
+
             consume_stmt = (
                 sa.update(SystemSchema.notifications)
                 .where(
