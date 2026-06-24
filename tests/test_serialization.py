@@ -26,6 +26,7 @@ from dbos._serialization import (
     PortableWorkflowError,
     Serializer,
     WorkflowSerializationFormat,
+    deserialize_exception,
 )
 from dbos._sys_db import WorkflowStatusString
 
@@ -515,6 +516,37 @@ def test_portable_error_with_unserializable_data(dbos: DBOS) -> None:
     assert exc_info.value.message == "boom"
     assert exc_info.value.code == 409
     assert isinstance(exc_info.value.data, str)
+
+
+def test_serialize_exception_for_persistence_broken_str() -> None:
+    """The error-persistence fallback must never itself raise, even when the
+    exception is BOTH unpicklable AND has a __str__ that raises.
+
+    Regression: the fallback used to build its message with an f-string on the
+    raw error (``f"...{error}"``), so a broken ``__str__`` re-raised inside the
+    error handler. That skipped ``update_workflow_outcome`` and left the workflow
+    PENDING -- the exact failure the fallback exists to prevent. The fallback now
+    routes the message through ``_safe_str``.
+    """
+    from dbos._core import _serialize_exception_for_persistence
+
+    class _BrokenStrUnpicklable(ValueError):
+        def __str__(self) -> str:
+            raise RuntimeError("broken __str__")
+
+        def __reduce__(self) -> Any:
+            raise TypeError("unpicklable")
+
+    err = _BrokenStrUnpicklable("boom")
+
+    # DEFAULT (pickle) format: serializing the original error fails, so the
+    # fallback path runs. It must produce a serialized string, not raise.
+    out = _serialize_exception_for_persistence(err, None, DBOSDefaultSerializer)
+    assert isinstance(out, str) and out
+
+    # And it round-trips to a readable, generic error naming the original class.
+    restored = deserialize_exception(out, None, DBOSDefaultSerializer)
+    assert "_BrokenStrUnpicklable" in repr(restored)
 
 
 @pytest.mark.asyncio
