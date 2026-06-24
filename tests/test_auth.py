@@ -240,6 +240,28 @@ def test_roles_denied_queue(dbos: DBOS) -> None:
     assert status.status == WorkflowStatusString.ERROR.value
 
 
+def test_roles_denied_queue_no_auth_context(dbos: DBOS) -> None:
+    # A role-gated workflow enqueued with no auth context at all (e.g. a SQL
+    # enqueue that never set authenticated_roles) must finalize as ERROR rather
+    # than stay PENDING (issue #743). Exercises the other raise branch in
+    # check_required_roles (no authentication information).
+    queue = Queue("test_roles_denied_queue_no_auth_context")
+
+    @DBOS.required_roles(["admin"])
+    @DBOS.workflow()
+    def workflow() -> None:
+        return None
+
+    handle = queue.enqueue(workflow)
+
+    with pytest.raises(DBOSNotAuthorizedError):
+        handle.get_result()
+
+    status = DBOS.get_workflow_status(handle.workflow_id)
+    assert status is not None
+    assert status.status == WorkflowStatusString.ERROR.value
+
+
 def test_roles_denied_recovery(dbos: DBOS) -> None:
     # A role-denied workflow that is recovered must finalize as ERROR instead of
     # bouncing back to PENDING on every recovery attempt (issue #743).
