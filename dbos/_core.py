@@ -49,6 +49,7 @@ from ._error import (
     DBOSException,
     DBOSMaxStepRetriesExceeded,
     DBOSNonExistentWorkflowError,
+    DBOSNotAuthorizedError,
     DBOSQueueDeduplicatedError,
     DBOSRecoveryError,
     DBOSUnexpectedStepError,
@@ -58,6 +59,7 @@ from ._error import (
 )
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
+    DBOSFuncInfo,
     DBOSFuncType,
     ValidateArgsCallable,
     get_config_name,
@@ -72,8 +74,10 @@ from ._registrations import (
 from ._roles import check_required_roles
 from ._serialization import (
     DBOSPortableJSON,
+    Serializer,
     WorkflowInputs,
     WorkflowSerializationFormat,
+    _safe_str,
     coerce_portable_args_to_hints,
     deserialize_args,
     deserialize_exception,
@@ -525,6 +529,27 @@ def _init_workflow(
     return status, should_execute
 
 
+def _serialize_exception_for_persistence(
+    error: Exception,
+    serialization: Optional[str],
+    serializer: Serializer,
+) -> str:
+    """Serialize an exception for persisting a workflow's ERROR outcome.
+
+    Serializing an arbitrary user exception can itself fail (e.g. an unpicklable
+    attribute, or a broken ``__str__``/``__repr__``). If it does, fall back to a
+    plain, always-serializable Exception so the workflow is still terminalized as
+    ERROR instead of being left PENDING and re-executed on every recovery. The
+    fallback message is built with ``_safe_str`` so a broken ``__str__`` cannot
+    itself raise here and defeat the fallback.
+    """
+    try:
+        return serialize_exception(error, serialization, serializer)[0]
+    except Exception:
+        fallback = Exception(f"{type(error).__name__}: {_safe_str(error)}")
+        return serialize_exception(fallback, serialization, serializer)[0]
+
+
 def _get_wf_invoke_func(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
@@ -571,14 +596,13 @@ def _get_wf_invoke_func(
         except DBOSWorkflowCancelledError as error:
             raise DBOSAwaitedWorkflowCancelledError(status["workflow_uuid"])
         except Exception as error:
+            error_str = _serialize_exception_for_persistence(
+                error, status["serialization"], dbos._serializer
+            )
             dbos._sys_db.update_workflow_outcome(
                 status["workflow_uuid"],
                 WorkflowStatusString.ERROR.value,
-                error=serialize_exception(
-                    error,
-                    status["serialization"],
-                    dbos._serializer,
-                )[0],
+                error=error_str,
             )
             raise
 
@@ -634,6 +658,34 @@ class ActiveWorkflowById:
             return sum(1 for bucket in self._m.values() if bucket == target)
 
 
+def _check_required_roles_or_finalize_error(
+    dbos: "DBOS",
+    status: WorkflowStatusInternal,
+    func: "Callable[..., Any]",
+    fi: Optional[DBOSFuncInfo],
+) -> Optional[str]:
+    """Run the required-role check for a workflow about to execute.
+
+    A required-role denial is terminal: the persisted auth context will never
+    satisfy the check on a subsequent attempt. Finalize the row as ERROR instead
+    of letting the exception escape and leave the workflow stuck PENDING (which,
+    on the queue/recovery paths, would be redequeued forever). Only
+    DBOSNotAuthorizedError is treated this way; any other (non-deterministic)
+    error propagates without finalizing, so it remains retryable.
+    """
+    try:
+        return check_required_roles(func, fi)
+    except DBOSNotAuthorizedError as role_error:
+        dbos._sys_db.update_workflow_outcome(
+            status["workflow_uuid"],
+            WorkflowStatusString.ERROR.value,
+            error=_serialize_exception_for_persistence(
+                role_error, status["serialization"], dbos._serializer
+            ),
+        )
+        raise
+
+
 def _execute_workflow_wthread(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
@@ -649,7 +701,9 @@ def _execute_workflow_wthread(
     }
     fi = get_func_info(func)
     with EnterDBOSWorkflow(attributes, ctx):
-        rr: Optional[str] = check_required_roles(func, fi)
+        rr: Optional[str] = _check_required_roles_or_finalize_error(
+            dbos, status, func, fi
+        )
         with DBOSAssumeRole(rr):
             owned = dbos._active_workflows_set.acquire(
                 status["workflow_uuid"],
@@ -692,7 +746,9 @@ async def _execute_workflow_async(
     }
     fi = get_func_info(func)
     with EnterDBOSWorkflow(attributes, ctx):
-        rr: Optional[str] = check_required_roles(func, fi)
+        rr: Optional[str] = _check_required_roles_or_finalize_error(
+            dbos, status, func, fi
+        )
         with DBOSAssumeRole(rr):
             owned = dbos._active_workflows_set.acquire(
                 status["workflow_uuid"],
@@ -736,16 +792,9 @@ def execute_workflow_by_id(
         )
     except Exception as deser_error:
         # Mark workflow as ERROR immediately instead of leaving it PENDING for infinite retry
-        try:
-            error_str = serialize_exception(
-                deser_error, status["serialization"], dbos._serializer
-            )[0]
-        except Exception:
-            # Fallback: create a simple error we know can be serialized
-            fallback = Exception(f"{type(deser_error).__name__}: {deser_error}")
-            error_str = serialize_exception(
-                fallback, status["serialization"], dbos._serializer
-            )[0]
+        error_str = _serialize_exception_for_persistence(
+            deser_error, status["serialization"], dbos._serializer
+        )
         dbos._sys_db.update_workflow_outcome(
             workflow_id,
             WorkflowStatusString.ERROR.value,
@@ -781,16 +830,9 @@ def execute_workflow_by_id(
             )
             inputs = {"args": validated_args, "kwargs": validated_kwargs}
         except Exception as val_error:
-            try:
-                error_str = serialize_exception(
-                    val_error, status["serialization"], dbos._serializer
-                )[0]
-            except Exception:
-                # Fallback: create a simple error we know can be serialized
-                fallback = Exception(f"{type(val_error).__name__}: {val_error}")
-                error_str = serialize_exception(
-                    fallback, status["serialization"], dbos._serializer
-                )[0]
+            error_str = _serialize_exception_for_persistence(
+                val_error, status["serialization"], dbos._serializer
+            )
             dbos._sys_db.update_workflow_outcome(
                 workflow_id,
                 WorkflowStatusString.ERROR.value,
