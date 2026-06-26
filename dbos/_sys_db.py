@@ -1912,6 +1912,14 @@ class SystemDatabase(ABC):
         executor_id: Optional[List[str]] = None,
         queue_name: Optional[List[str]] = None,
         workflow_id_prefix: Optional[List[str]] = None,
+        workflow_ids: Optional[List[str]] = None,
+        forked_from: Optional[List[str]] = None,
+        parent_workflow_id: Optional[List[str]] = None,
+        user: Optional[List[str]] = None,
+        schedule_name: Optional[List[str]] = None,
+        was_forked_from: Optional[bool] = None,
+        has_parent: Optional[bool] = None,
+        attributes: Optional[Dict[str, Any]] = None,
     ) -> List[WorkflowAggregateRow]:
         if time_bucket_size_ms is not None and time_bucket_size_ms <= 0:
             raise ValueError("time_bucket_size_ms must be > 0")
@@ -2054,6 +2062,43 @@ class SystemDatabase(ABC):
                     ]
                 )
             )
+        if workflow_ids:
+            query = query.where(
+                SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids)
+            )
+        if forked_from:
+            query = query.where(
+                SystemSchema.workflow_status.c.forked_from.in_(forked_from)
+            )
+        if parent_workflow_id:
+            query = query.where(
+                SystemSchema.workflow_status.c.parent_workflow_id.in_(
+                    parent_workflow_id
+                )
+            )
+        if user:
+            query = query.where(
+                SystemSchema.workflow_status.c.authenticated_user.in_(user)
+            )
+        if schedule_name:
+            query = query.where(
+                SystemSchema.workflow_status.c.schedule_name.in_(schedule_name)
+            )
+        if was_forked_from is not None:
+            query = query.where(
+                SystemSchema.workflow_status.c.was_forked_from == was_forked_from
+            )
+        if has_parent is not None:
+            if has_parent:
+                query = query.where(
+                    SystemSchema.workflow_status.c.parent_workflow_id.isnot(None)
+                )
+            else:
+                query = query.where(
+                    SystemSchema.workflow_status.c.parent_workflow_id.is_(None)
+                )
+        if attributes:
+            query = query.where(self._attributes_contains_clause(attributes))
 
         query = query.group_by(*group_columns)
 
