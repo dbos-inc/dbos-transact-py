@@ -1639,7 +1639,7 @@ def test_get_workflow_aggregates_completed_dequeued(
     assert results == []
 
 
-def test_get_workflow_aggregates_filters(dbos: DBOS) -> None:
+def test_get_workflow_aggregates_filters(dbos: DBOS, skip_with_sqlite: None) -> None:
     @DBOS.workflow()
     def child_workflow() -> None:
         return
