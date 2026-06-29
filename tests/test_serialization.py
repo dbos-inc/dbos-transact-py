@@ -26,7 +26,9 @@ from dbos._serialization import (
     PortableWorkflowError,
     Serializer,
     WorkflowSerializationFormat,
+    deserialize_exception,
 )
+from dbos._sys_db import WorkflowStatusString
 
 
 class JsonSerializer(Serializer):
@@ -458,6 +460,93 @@ def test_portable_ser(dbos: DBOS, client: DBOSClient) -> None:
         DBOS.retrieve_workflow(lwfid).get_result()
     assert ex_info.value.name == "Exception"
     assert ex_info.value.message == "This is just a plain error"
+
+
+class _NonJSON:
+    def __repr__(self) -> str:
+        return "<non-json payload>"
+
+
+class _AppErrorWithData(ValueError):
+    # Module-level (picklable) so the default-serializer get-result path is exercised;
+    # the unserializable `data` attribute is what stresses the portable path.
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.code = 409
+        self.data = _NonJSON()  # not portably serializable
+
+
+def test_portable_error_with_unserializable_data(dbos: DBOS) -> None:
+    """A PORTABLE workflow that raises an exception carrying a non-JSON-serializable
+    attribute must still be terminalized as ERROR with the real error recorded.
+
+    Regression for C1: previously ``serialize_exception`` raised inside the error
+    handler (``exception_to_workflow_error_data`` embedded the raw attribute, which
+    ``_portableify`` could not serialize), so ``update_workflow_outcome`` was never
+    called. The workflow was left PENDING, the real error was masked by a TypeError,
+    and it re-executed on every recovery.
+    """
+
+    captured_id: Dict[str, str] = {}
+
+    @DBOS.workflow(
+        name="portableUnserializableErr",
+        serialization_type=WorkflowSerializationFormat.PORTABLE,
+    )
+    def raises_unserializable() -> None:
+        assert DBOS.workflow_id is not None
+        captured_id["id"] = DBOS.workflow_id
+        raise _AppErrorWithData("boom")
+
+    # The caller sees the ORIGINAL error, not a masked serialization TypeError.
+    with pytest.raises(_AppErrorWithData):
+        raises_unserializable()
+
+    wfid = captured_id["id"]
+
+    # Critical assertion: the workflow is recorded as ERROR, not left PENDING.
+    handle: WorkflowHandle[None] = DBOS.retrieve_workflow(wfid)
+    assert handle.get_status().status == WorkflowStatusString.ERROR.value
+
+    # The recorded error round-trips: name/message/code preserved, the
+    # unserializable attribute degraded to a string instead of crashing.
+    with pytest.raises(PortableWorkflowError) as exc_info:
+        handle.get_result()
+    assert exc_info.value.name == "_AppErrorWithData"
+    assert exc_info.value.message == "boom"
+    assert exc_info.value.code == 409
+    assert isinstance(exc_info.value.data, str)
+
+
+def test_serialize_exception_for_persistence_broken_str() -> None:
+    """The error-persistence fallback must never itself raise, even when the
+    exception is BOTH unpicklable AND has a __str__ that raises.
+
+    Regression: the fallback used to build its message with an f-string on the
+    raw error (``f"...{error}"``), so a broken ``__str__`` re-raised inside the
+    error handler. That skipped ``update_workflow_outcome`` and left the workflow
+    PENDING -- the exact failure the fallback exists to prevent. The fallback now
+    routes the message through ``_safe_str``.
+    """
+    from dbos._core import _serialize_exception_for_persistence
+
+    class _BrokenStrUnpicklable(ValueError):
+        def __str__(self) -> str:
+            raise RuntimeError("broken __str__")
+
+        def __reduce__(self) -> Any:
+            raise TypeError("unpicklable")
+
+    err = _BrokenStrUnpicklable("boom")
+
+    # DEFAULT (pickle) format: serializing the original error fails, so the
+    # fallback path runs. It must produce a serialized string, not raise.
+    out = _serialize_exception_for_persistence(err, None, DBOSDefaultSerializer)
+    assert isinstance(out, str) and out
+
+    # And it round-trips to a readable, generic error naming the original class.
+    restored = deserialize_exception(out, None, DBOSDefaultSerializer)
+    assert "_BrokenStrUnpicklable" in repr(restored)
 
 
 @pytest.mark.asyncio

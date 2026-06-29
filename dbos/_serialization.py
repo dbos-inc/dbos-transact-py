@@ -400,7 +400,13 @@ def exception_to_workflow_error_data(
             continue
         if callable(v):
             continue
-        out["data"] = v
+        try:
+            # Only include the attribute if it is portably serializable; otherwise
+            # fall back to a string so serializing the error can never itself fail
+            # (which would prevent the workflow's error from being recorded at all).
+            out["data"] = _portableify(v)
+        except Exception:
+            out["data"] = _safe_str(v)
         break
 
     return out

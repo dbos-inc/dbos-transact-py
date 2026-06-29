@@ -17,9 +17,9 @@ def _recover_workflow(
     dbos: "DBOS", workflow: GetPendingWorkflowsOutput
 ) -> "WorkflowHandle[Any]":
     if workflow.queue_name:
-        cleared = dbos._sys_db.clear_queue_assignment(workflow.workflow_id)
-        if cleared:
-            return WorkflowHandlePolling(workflow.workflow_id, dbos)
+        # Queued workflows are dispatched by the queue, not run directly by recovery: just return the row to the queue.
+        dbos._sys_db.clear_queue_assignment(workflow.workflow_id)
+        return WorkflowHandlePolling(workflow.workflow_id, dbos)
     return execute_workflow_by_id(dbos, workflow.workflow_id, True, False)
 
 

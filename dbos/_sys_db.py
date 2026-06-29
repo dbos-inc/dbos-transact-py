@@ -3847,10 +3847,10 @@ class SystemDatabase(ABC):
             return ret_ids
 
     @db_retry()
-    def clear_queue_assignment(self, workflow_id: str) -> bool:
+    def clear_queue_assignment(self, workflow_id: str) -> None:
         with self.engine.begin() as c:
-            # Reset the status of the task to "ENQUEUED"
-            res = c.execute(
+            # Reset the task to "ENQUEUED" so the queue re-dispatches it; a no-op if the row is no longer PENDING-queued.
+            c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
                 .where(SystemSchema.workflow_status.c.queue_name.isnot(None))
@@ -3862,8 +3862,6 @@ class SystemDatabase(ABC):
                     status=WorkflowStatusString.ENQUEUED.value, started_at_epoch_ms=None
                 )
             )
-            # If no rows were affected, the workflow is not anymore in the queue or was already completed
-            return res.rowcount > 0
 
     T = TypeVar("T")
 
