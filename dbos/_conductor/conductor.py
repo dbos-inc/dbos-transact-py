@@ -970,6 +970,18 @@ class ConductorWebsocket(threading.Thread):
                                     workflow_id_prefix=agg_body.get(
                                         "workflow_id_prefix", None
                                     ),
+                                    workflow_ids=agg_body.get("workflow_ids", None),
+                                    forked_from=agg_body.get("forked_from", None),
+                                    parent_workflow_id=agg_body.get(
+                                        "parent_workflow_id", None
+                                    ),
+                                    user=agg_body.get("user", None),
+                                    schedule_name=agg_body.get("schedule_name", None),
+                                    was_forked_from=agg_body.get(
+                                        "was_forked_from", None
+                                    ),
+                                    has_parent=agg_body.get("has_parent", None),
+                                    attributes=agg_body.get("attributes", None),
                                 )
                                 agg_output = [
                                     p.WorkflowAggregateOutput(
