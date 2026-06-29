@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 # Public API
-from dbos import DBOS, Queue, SetWorkflowID, WorkflowStatusString
+from dbos import DBOS, Queue, SetWorkflowAttributes, SetWorkflowID, WorkflowStatusString
 from dbos._utils import GlobalParams
 
 
@@ -1637,6 +1637,74 @@ def test_get_workflow_aggregates_completed_dequeued(
         select_count=True,
     )
     assert results == []
+
+
+def test_get_workflow_aggregates_filters(dbos: DBOS, skip_with_sqlite: None) -> None:
+    @DBOS.workflow()
+    def child_workflow() -> None:
+        return
+
+    @DBOS.workflow()
+    def parent_workflow() -> None:
+        child_workflow()
+
+    @DBOS.workflow()
+    def standalone_workflow() -> None:
+        return
+
+    # Parent (+ child) and a standalone workflow.
+    parent_id = str(uuid.uuid4())
+    with SetWorkflowID(parent_id):
+        parent_workflow()
+    standalone_id = str(uuid.uuid4())
+    with SetWorkflowID(standalone_id):
+        standalone_workflow()
+
+    # parent_workflow_id: only the child matches.
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_name=True, select_count=True, parent_workflow_id=[parent_id]
+    )
+    assert {r["group"]["name"]: r["count"] for r in results} == {
+        child_workflow.__qualname__: 1
+    }
+
+    # has_parent=True: only the child; has_parent=False: parent + standalone.
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_status=True, select_count=True, has_parent=True
+    )
+    assert sum(r["count"] or 0 for r in results) == 1
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_status=True, select_count=True, has_parent=False
+    )
+    assert sum(r["count"] or 0 for r in results) == 2
+
+    # workflow_ids: restrict to a specific set.
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_status=True, select_count=True, workflow_ids=[standalone_id]
+    )
+    assert sum(r["count"] or 0 for r in results) == 1
+
+    # Fork the standalone workflow, exercising forked_from / was_forked_from.
+    forked = DBOS.fork_workflow(standalone_id, 1)
+    forked.get_result()
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_status=True, select_count=True, was_forked_from=True
+    )
+    assert sum(r["count"] or 0 for r in results) == 1  # the original
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_status=True, select_count=True, forked_from=[standalone_id]
+    )
+    assert sum(r["count"] or 0 for r in results) == 1  # the fork
+
+    # attributes: only workflows tagged with matching attributes match.
+    with SetWorkflowAttributes({"tenant": "acme"}):
+        tagged_id = str(uuid.uuid4())
+        with SetWorkflowID(tagged_id):
+            standalone_workflow()
+    results = dbos._sys_db.get_workflow_aggregates(
+        group_by_status=True, select_count=True, attributes={"tenant": "acme"}
+    )
+    assert sum(r["count"] or 0 for r in results) == 1
 
 
 def test_get_workflow_aggregates_select_min_created_at(dbos: DBOS) -> None:

@@ -806,6 +806,14 @@ class GetWorkflowAggregatesBody(TypedDict, total=False):
     executor_id: Optional[List[str]]
     queue_name: Optional[List[str]]
     workflow_id_prefix: Optional[List[str]]
+    workflow_ids: Optional[List[str]]
+    forked_from: Optional[List[str]]
+    parent_workflow_id: Optional[List[str]]
+    user: Optional[List[str]]
+    schedule_name: Optional[List[str]]
+    was_forked_from: Optional[bool]
+    has_parent: Optional[bool]
+    attributes: Optional[Dict[str, Any]]
 
 
 @dataclass
