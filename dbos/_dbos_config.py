@@ -26,6 +26,7 @@ class DBOSConfig(TypedDict, total=False):
         application_database_url (str): Connection string for the DBOS application database, in which DBOS @Transaction functions run. Optional. Should be the same type of database (SQLite or Postgres) as the system database.
         database_url (str): (DEPRECATED) Database connection string
         sys_db_pool_size (int): System database pool size
+        sys_db_polling_concurrency (int): Maximum number of DB-backed polling reads (from wait operations such as get_result, recv, and get_event) that may run concurrently against the system database pool. This keeps high-fan-out polling from checking out every pool connection and starving control-plane operations such as enqueue/dequeue, status writes, recovery, and cancellation. Defaults to half the system database pool size (minimum 1). Set to a non-positive value to disable the limiter.
         db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs (See https://docs.sqlalchemy.org/en/20/core/engines.html#sqlalchemy.create_engine)
         log_level (str): Log level
         otlp_log_level: Optional[str]: log level specficially for OTLP logging (if enabled); must be no less severe than log_level
@@ -59,6 +60,7 @@ class DBOSConfig(TypedDict, total=False):
     application_database_url: Optional[str]
     database_url: Optional[str]
     sys_db_pool_size: Optional[int]
+    sys_db_polling_concurrency: Optional[int]
     db_engine_kwargs: Optional[Dict[str, Any]]
     log_level: Optional[str]
     otlp_log_level: Optional[str]
@@ -97,6 +99,7 @@ class RuntimeConfig(TypedDict, total=False):
 
 class DatabaseConfig(TypedDict, total=False):
     sys_db_pool_size: Optional[int]
+    sys_db_polling_concurrency: Optional[int]
     db_engine_kwargs: Optional[Dict[str, Any]]
     sys_db_engine_kwargs: Optional[Dict[str, Any]]
     migrate: Optional[List[str]]
@@ -151,6 +154,10 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     db_config: DatabaseConfig = {}
     if "sys_db_pool_size" in config:
         db_config["sys_db_pool_size"] = config.get("sys_db_pool_size")
+    if "sys_db_polling_concurrency" in config:
+        db_config["sys_db_polling_concurrency"] = config.get(
+            "sys_db_polling_concurrency"
+        )
     if "db_engine_kwargs" in config:
         db_config["db_engine_kwargs"] = config.get("db_engine_kwargs")
     if db_config:

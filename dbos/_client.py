@@ -145,6 +145,11 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
         return status
 
 
+# Default size of the client's system database connection pool. Half of this
+# (rounded down) is reserved for polling reads by default; see PollingLimiter.
+DEFAULT_CLIENT_POOL_SIZE = 5
+
+
 class DBOSClient:
 
     def __init__(
@@ -156,6 +161,8 @@ class DBOSClient:
         application_database_url: Optional[str] = None,
         dbos_system_schema: Optional[str] = "dbos",
         serializer: Serializer = DefaultSerializer(),
+        system_database_pool_size: Optional[int] = None,
+        system_database_polling_concurrency: Optional[int] = None,
     ):
         self._serializer = serializer
         if system_database_engine:
@@ -181,7 +188,11 @@ class DBOSClient:
                 "connect_args": {"application_name": "dbos_transact_client"},
                 "pool_timeout": 30,
                 "max_overflow": 0,
-                "pool_size": 2,
+                "pool_size": (
+                    system_database_pool_size
+                    if system_database_pool_size is not None
+                    else DEFAULT_CLIENT_POOL_SIZE
+                ),
                 "pool_pre_ping": True,
             },
             engine=system_database_engine,
@@ -191,6 +202,7 @@ class DBOSClient:
             # The client does not run a notification listener thread, so stream
             # reads cannot be woken by LISTEN/NOTIFY and instead poll the offset.
             use_listen_notify=False,
+            polling_concurrency=system_database_polling_concurrency,
         )
         self._sys_db.check_connection()
 

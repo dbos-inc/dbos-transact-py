@@ -679,6 +679,29 @@ def test_translate_dbosconfig_just_sys_db_pool_size():
     assert "env" not in translated_config
 
 
+def test_translate_dbosconfig_sys_db_polling_concurrency():
+    config: DBOSConfig = {
+        "name": "test-app",
+        "sys_db_pool_size": 50,
+        "sys_db_polling_concurrency": 8,
+    }
+    translated_config = translate_dbos_config_to_config_file(config)
+
+    assert translated_config["database"]["sys_db_pool_size"] == 50
+    assert translated_config["database"]["sys_db_polling_concurrency"] == 8
+
+    # When unset, translation leaves it absent; the default (half the pool) is
+    # materialized later in the SystemDatabase constructor.
+    translated_config = translate_dbos_config_to_config_file(
+        {
+            "name": "test-app",
+            "sys_db_pool_size": 50,
+        }
+    )
+    assert translated_config["database"]["sys_db_pool_size"] == 50
+    assert "sys_db_polling_concurrency" not in translated_config["database"]
+
+
 def test_translate_dbosconfig_just_db_engine_kwargs():
     config: DBOSConfig = {
         "name": "test-app",
