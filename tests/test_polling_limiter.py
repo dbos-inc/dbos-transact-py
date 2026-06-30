@@ -30,8 +30,7 @@ def _run_under_limiter(limit: int, tasks: int) -> int:
             with lock:
                 in_flight += 1
                 peak = max(peak, in_flight)
-            # Hold the permit briefly so overlapping runners would be observed
-            # if the limiter permitted them.
+            # Hold the permit briefly so overlapping runners would be observed.
             time.sleep(0.02)
             with lock:
                 in_flight -= 1
@@ -114,8 +113,7 @@ def test_sysdb_polling_concurrency_can_be_disabled(tmp_path: Any) -> None:
 
 
 def test_client_defaults_pool_size_and_polling_concurrency(tmp_path: Any) -> None:
-    # The client connects lazily, so we can inspect the wiring against a fresh
-    # SQLite file without exercising any real workload.
+    # The client connects lazily, so inspect the wiring against a fresh SQLite file.
     client = DBOSClient(system_database_url=f"sqlite:///{tmp_path / 'client.sqlite'}")
     try:
         pool = client._sys_db.engine.pool
@@ -144,9 +142,7 @@ def test_client_pool_size_and_polling_concurrency_overrides(tmp_path: Any) -> No
 
 
 def test_sysdb_defaults_polling_concurrency_to_half_custom_pool(tmp_path: Any) -> None:
-    # A custom engine with a custom pool size is provided (and no pool_size in
-    # engine_kwargs). The limiter should read the custom pool's actual size and
-    # default to half of it, rather than falling back to the default pool size.
+    # Custom engine with its own pool size and no pool_size kwarg: limiter halves the actual pool, not the fallback.
     engine = sa.create_engine(
         f"sqlite:///{tmp_path / 'custom_pool.sqlite'}",
         poolclass=QueuePool,
@@ -165,8 +161,7 @@ def test_sysdb_defaults_polling_concurrency_to_half_custom_pool(tmp_path: Any) -
         executor_id=None,
     )
     try:
-        # Half the custom pool of 10, not the default (which would be 10 for a
-        # fallback pool size of 20).
+        # Half the custom pool of 10, not the fallback default (which would also be 10).
         assert db.poll_limiter.limit == 5
         assert db.poll_limiter.enabled is True
     finally:
@@ -175,8 +170,7 @@ def test_sysdb_defaults_polling_concurrency_to_half_custom_pool(tmp_path: Any) -
 
 
 def test_sysdb_defaults_pool_size_when_undeterminable(tmp_path: Any) -> None:
-    # A NullPool reports no size and no pool_size is configured, so the limiter
-    # falls back to the default pool size to compute its default concurrency.
+    # NullPool reports no size and none is configured, so the limiter uses the fallback pool size.
     engine = sa.create_engine(
         f"sqlite:///{tmp_path / 'nopool.sqlite'}", poolclass=sa.NullPool
     )
@@ -223,8 +217,7 @@ async def test_control_plane_responsive_under_polling_storm(
     @DBOS.workflow()
     def blocked_workflow() -> str:
         started.set()
-        # Block the workflow thread so it stays in-flight (never completes) and
-        # the pollers below keep polling instead of resolving.
+        # Block the workflow thread so it stays in-flight and the pollers keep polling.
         release.wait()
         return "done"
 
@@ -237,29 +230,22 @@ async def test_control_plane_responsive_under_polling_storm(
     wfid = handle.get_workflow_id()
     assert started.wait(timeout=10)
 
-    # Route asyncio.to_thread through DBOS's executor, exactly as the runtime
-    # does before serving concurrent pollers.
+    # Route asyncio.to_thread through DBOS's executor, as the runtime does.
     await DBOS._configure_asyncio_thread_pool()
 
-    # Far more pollers than the limit, at a short interval, so the limiter is
-    # saturated (excess pollers queue on the semaphore) regardless of machine speed.
+    # Far more pollers than the limit so the limiter saturates regardless of machine speed.
     NUM_POLLERS = 350
     POLL_INTERVAL_SEC = 0.001
     NUM_PROBES = 30
 
     loop = asyncio.get_running_loop()
-    # Measure control-plane latency on a dedicated thread so it reflects system
-    # database pool availability, not contention for the pollers' thread pool.
-    # This models DBOS's background control-plane threads (queue runner,
-    # recovery, scheduler), which hit the pool directly rather than via
-    # asyncio.to_thread.
+    # Dedicated thread so latency reflects pool availability, modelling DBOS's control-plane threads that hit the pool directly.
     control_plane_executor = ThreadPoolExecutor(
         max_workers=1, thread_name_prefix="control-plane"
     )
 
     def control_plane_op() -> float:
-        # A real control-plane read that checks out a pool connection (bypassing
-        # the polling limiter, as enqueue/dequeue/status writes do).
+        # A real control-plane read that checks out a connection, bypassing the limiter.
         t0 = time.perf_counter()
         sys_db.list_workflows(limit=1)
         return time.perf_counter() - t0
@@ -277,8 +263,7 @@ async def test_control_plane_responsive_under_polling_storm(
         h: Any = await DBOS.retrieve_workflow_async(wfid, existing_workflow=False)
         while True:
             try:
-                # Never returns while the workflow is blocked; reissued only if a
-                # poll raises, and cancelled at teardown.
+                # Never returns while the workflow is blocked; cancelled at teardown.
                 await h.get_result(polling_interval_sec=POLL_INTERVAL_SEC)
             except asyncio.CancelledError:
                 raise
@@ -301,7 +286,5 @@ async def test_control_plane_responsive_under_polling_storm(
     assert (await asyncio.to_thread(handle.get_result)) == "done"
 
     msg = f"control-plane median latency with limiter={with_limiter * 1000:.1f}ms"
-    # With the limiter, control-plane work always finds a reserved connection
-    # despite the polling storm, so it stays fast in absolute terms -- generously
-    # below the 30s pool_timeout even on a slow/loaded CI runner.
+    # With the limiter, control-plane work finds a reserved connection and stays fast, well below the 30s pool_timeout.
     assert with_limiter < 2.0, msg

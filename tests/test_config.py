@@ -690,8 +690,7 @@ def test_translate_dbosconfig_sys_db_polling_concurrency():
     assert translated_config["database"]["sys_db_pool_size"] == 50
     assert translated_config["database"]["sys_db_polling_concurrency"] == 8
 
-    # When unset, translation leaves it absent; the default (half the pool) is
-    # materialized later in the SystemDatabase constructor.
+    # When unset, translation leaves it absent; the default is materialized later in SystemDatabase.
     translated_config = translate_dbos_config_to_config_file(
         {
             "name": "test-app",

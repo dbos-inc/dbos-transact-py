@@ -145,8 +145,7 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
         return status
 
 
-# Default size of the client's system database connection pool. Half of this
-# (rounded down) is reserved for polling reads by default; see PollingLimiter.
+# Client system DB pool size; polling reads default to half of it (see PollingLimiter).
 DEFAULT_CLIENT_POOL_SIZE = 5
 
 
@@ -199,8 +198,7 @@ class DBOSClient:
             schema=dbos_system_schema,
             serializer=serializer,
             executor_id=None,
-            # The client does not run a notification listener thread, so stream
-            # reads cannot be woken by LISTEN/NOTIFY and instead poll the offset.
+            # No notification listener in the client, so stream reads poll the offset.
             use_listen_notify=False,
             polling_concurrency=system_database_polling_concurrency,
         )

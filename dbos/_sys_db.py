@@ -485,9 +485,7 @@ def db_retry(
     return decorator
 
 
-# Fallback system database pool size used to compute the default polling
-# concurrency when the engine's configured pool size cannot be determined (e.g.
-# a NullPool or a custom engine). Mirrors the default in configure_db_engine_parameters.
+# Fallback pool size for defaulting polling concurrency when the engine's is unknown (mirrors configure_db_engine_parameters).
 DEFAULT_SYS_DB_POOL_SIZE = 20
 
 
@@ -595,11 +593,7 @@ class SystemDatabase(ABC):
         )
         self._engine_kwargs = engine_kwargs
 
-        # Cap how many DB-backed polling reads may run concurrently against the
-        # pool, so a polling storm cannot check out every connection and starve
-        # control-plane operations. Default to half the pool (minimum 1),
-        # reserving the rest of the pool for control-plane work. A non-positive
-        # value disables the limiter. See PollingLimiter.
+        # Cap concurrent polling reads (default half the pool, min 1; non-positive disables) so a storm can't starve the control plane. See PollingLimiter.
         effective_pool_size = self._get_effective_pool_size(base_engine, engine_kwargs)
         polling_limit = (
             polling_concurrency
@@ -1484,11 +1478,7 @@ class SystemDatabase(ABC):
 
     @db_retry()
     def _read_workflow_result_row(self, workflow_id: str) -> Optional[Any]:
-        # This is a polling read: run it under the polling limiter so high-fan-out
-        # get_result loops cannot check out every pool connection. The limiter is
-        # acquired inside the db_retry-wrapped body (not around the call) so the
-        # permit is released across retry backoff rather than pinned through a DB
-        # outage -- matching check_first_workflow_id.
+        # Polling read under the limiter; acquired inside the db_retry body so the permit frees across backoff (like check_first_workflow_id).
         with self.poll_limiter, self.engine.begin() as c:
             return c.execute(
                 sa.select(
@@ -4259,11 +4249,7 @@ class SystemDatabase(ABC):
     def read_stream(self, workflow_uuid: str, key: str, offset: int) -> Any:
         """Read the value at the specified offset for the given workflow_uuid and key."""
 
-        # This is a polling read: read_stream loops poll the offset (the client has
-        # no notification listener and polls it directly), so run it under the
-        # polling limiter to keep high-fan-out stream consumers from checking out
-        # every pool connection. The limiter is acquired inside the db_retry-wrapped
-        # body so the permit is released across retry backoff.
+        # Polling read (listener-less clients poll the offset) under the limiter; inside db_retry so the permit frees across backoff.
         with self.poll_limiter, self.engine.begin() as c:
             result = c.execute(
                 sa.select(
