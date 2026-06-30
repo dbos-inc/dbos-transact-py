@@ -139,6 +139,37 @@ def test_client_pool_size_and_polling_concurrency_overrides(tmp_path: Any) -> No
         client.destroy()
 
 
+def test_sysdb_defaults_polling_concurrency_to_half_custom_pool(tmp_path: Any) -> None:
+    # A custom engine with a custom pool size is provided (and no pool_size in
+    # engine_kwargs). The limiter should read the custom pool's actual size and
+    # default to half of it, rather than falling back to the default pool size.
+    engine = sa.create_engine(
+        f"sqlite:///{tmp_path / 'custom_pool.sqlite'}",
+        poolclass=QueuePool,
+        pool_size=10,
+        max_overflow=0,
+    )
+    # Sanity check the custom pool size.
+    assert isinstance(engine.pool, QueuePool)
+    assert engine.pool.size() == 10
+    db = SystemDatabase.create(
+        system_database_url=f"sqlite:///{tmp_path / 'custom_pool.sqlite'}",
+        engine_kwargs={},
+        engine=engine,
+        schema=None,
+        serializer=DefaultSerializer(),
+        executor_id=None,
+    )
+    try:
+        # Half the custom pool of 10, not the default (which would be 10 for a
+        # fallback pool size of 20).
+        assert db.poll_limiter.limit == 5
+        assert db.poll_limiter.enabled is True
+    finally:
+        db.destroy()
+        engine.dispose()
+
+
 def test_sysdb_defaults_pool_size_when_undeterminable(tmp_path: Any) -> None:
     # A NullPool reports no size and no pool_size is configured, so the limiter
     # falls back to the default pool size to compute its default concurrency.
