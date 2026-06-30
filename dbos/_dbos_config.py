@@ -26,7 +26,7 @@ class DBOSConfig(TypedDict, total=False):
         application_database_url (str): Connection string for the DBOS application database, in which DBOS @Transaction functions run. Optional. Should be the same type of database (SQLite or Postgres) as the system database.
         database_url (str): (DEPRECATED) Database connection string
         sys_db_pool_size (int): System database pool size
-        sys_db_polling_concurrency (int): Maximum number of DB-backed polling reads (from wait operations such as get_result, recv, and get_event) that may run concurrently against the system database pool. This keeps high-fan-out polling from checking out every pool connection and starving control-plane operations such as enqueue/dequeue, status writes, recovery, and cancellation. Defaults to half the system database pool size (minimum 1). Set to a non-positive value to disable the limiter.
+        sys_db_polling_concurrency (int): Maximum number of DB-backed polling reads (from wait operations such as get_result, recv, get_event, and read_stream) that may run concurrently against the system database pool. This keeps high-fan-out polling from checking out every pool connection and starving control-plane operations such as enqueue/dequeue, status writes, recovery, and cancellation. Defaults to half the system database pool size (minimum 1). Set to a non-positive value to disable the limiter.
         db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs (See https://docs.sqlalchemy.org/en/20/core/engines.html#sqlalchemy.create_engine)
         log_level (str): Log level
         otlp_log_level: Optional[str]: log level specficially for OTLP logging (if enabled); must be no less severe than log_level

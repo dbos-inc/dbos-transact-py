@@ -1484,7 +1484,12 @@ class SystemDatabase(ABC):
 
     @db_retry()
     def _read_workflow_result_row(self, workflow_id: str) -> Optional[Any]:
-        with self.engine.begin() as c:
+        # This is a polling read: run it under the polling limiter so high-fan-out
+        # get_result loops cannot check out every pool connection. The limiter is
+        # acquired inside the db_retry-wrapped body (not around the call) so the
+        # permit is released across retry backoff rather than pinned through a DB
+        # outage -- matching check_first_workflow_id.
+        with self.poll_limiter, self.engine.begin() as c:
             return c.execute(
                 sa.select(
                     SystemSchema.workflow_status.c.status,
@@ -1501,10 +1506,7 @@ class SystemDatabase(ABC):
         Returns the deserialized output on success.
         Raises on error, cancellation, or max recovery attempts exceeded.
         """
-        # This is a polling read: run it under the polling limiter so high-fan-out
-        # get_result loops cannot check out every pool connection.
-        with self.poll_limiter:
-            row = self._read_workflow_result_row(workflow_id)
+        row = self._read_workflow_result_row(workflow_id)
         if row is not None:
             status = row[0]
             if status == WorkflowStatusString.SUCCESS.value:
@@ -4257,7 +4259,12 @@ class SystemDatabase(ABC):
     def read_stream(self, workflow_uuid: str, key: str, offset: int) -> Any:
         """Read the value at the specified offset for the given workflow_uuid and key."""
 
-        with self.engine.begin() as c:
+        # This is a polling read: read_stream loops poll the offset (the client has
+        # no notification listener and polls it directly), so run it under the
+        # polling limiter to keep high-fan-out stream consumers from checking out
+        # every pool connection. The limiter is acquired inside the db_retry-wrapped
+        # body so the permit is released across retry backoff.
+        with self.poll_limiter, self.engine.begin() as c:
             result = c.execute(
                 sa.select(
                     SystemSchema.streams.c.value, SystemSchema.streams.c.serialization

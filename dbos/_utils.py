@@ -16,9 +16,9 @@ request_id_header = "x-request-id"
 
 class PollingLimiter:
     """A counting-semaphore-based limiter that caps how many DB-backed polling
-    reads (from wait operations such as ``get_result``, ``recv``, and
-    ``get_event``) may run concurrently against the system database pool. This
-    keeps high-fan-out polling from checking out every pool connection and
+    reads (from wait operations such as ``get_result``, ``recv``, ``get_event``,
+    and ``read_stream``) may run concurrently against the system database pool.
+    This keeps high-fan-out polling from checking out every pool connection and
     starving control-plane operations such as enqueue/dequeue, status writes,
     recovery, and cancellation.
 
