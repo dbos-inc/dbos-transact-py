@@ -1,11 +1,15 @@
+import asyncio
+import statistics
 import threading
 import time
-from typing import Any
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, List
 
+import pytest
 import sqlalchemy as sa
 from sqlalchemy.pool import QueuePool
 
-from dbos import DBOSClient
+from dbos import DBOS, DBOSClient
 from dbos._client import DEFAULT_CLIENT_POOL_SIZE
 from dbos._serialization import DefaultSerializer
 from dbos._sys_db import DEFAULT_SYS_DB_POOL_SIZE, SystemDatabase
@@ -189,3 +193,122 @@ def test_sysdb_defaults_pool_size_when_undeterminable(tmp_path: Any) -> None:
     finally:
         db.destroy()
         engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_control_plane_responsive_under_polling_storm(dbos: DBOS) -> None:
+    """End-to-end: launch a large fan-out of async pollers calling get_result on
+    a still-running workflow with a short polling interval, and verify that
+    control-plane operations keep proceeding with minimal latency.
+
+    The pollers run their DB reads through asyncio.to_thread (DBOS's unbounded
+    executor), so without the limiter they would check out every connection in
+    the system database pool and a control-plane op would queue behind them. The
+    limiter caps concurrent poll reads at half the pool, keeping the other half
+    free for control-plane work.
+
+    To make this a real guard (and robust to absolute machine speed), the same
+    storm is measured in two phases on the same run: with the limiter active,
+    then with it disabled. The limiter must both keep control-plane latency low
+    in absolute terms and materially lower than the unlimited case.
+    """
+    started = threading.Event()
+    release = threading.Event()
+
+    @DBOS.workflow()
+    def blocked_workflow() -> str:
+        started.set()
+        # Block the workflow thread so it stays in-flight (never completes) and
+        # the pollers below keep polling instead of resolving.
+        release.wait()
+        return "done"
+
+    sys_db = dbos._sys_db
+    # The limiter must actually be active and leave headroom for control-plane.
+    assert sys_db.poll_limiter.enabled
+    assert sys_db.poll_limiter.limit < DEFAULT_SYS_DB_POOL_SIZE
+    limiter = sys_db.poll_limiter
+
+    handle = DBOS.start_workflow(blocked_workflow)
+    wfid = handle.get_workflow_id()
+    assert started.wait(timeout=10)
+
+    # Route asyncio.to_thread through DBOS's executor, exactly as the runtime
+    # does before serving concurrent pollers.
+    await DBOS._configure_asyncio_thread_pool()
+
+    # Enough pollers at a short interval to keep the pool saturated when
+    # unlimited, regardless of machine speed.
+    NUM_POLLERS = 350
+    POLL_INTERVAL_SEC = 0.001
+    NUM_PROBES = 30
+
+    loop = asyncio.get_running_loop()
+    # Measure control-plane latency on a dedicated thread so it reflects system
+    # database pool availability, not contention for the pollers' thread pool.
+    # This models DBOS's background control-plane threads (queue runner,
+    # recovery, scheduler), which hit the pool directly rather than via
+    # asyncio.to_thread.
+    control_plane_executor = ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="control-plane"
+    )
+
+    def control_plane_op() -> float:
+        # A real control-plane read that checks out a pool connection (bypassing
+        # the polling limiter, as enqueue/dequeue/status writes do).
+        t0 = time.perf_counter()
+        sys_db.list_workflows(limit=1)
+        return time.perf_counter() - t0
+
+    async def measure() -> float:
+        latencies: List[float] = []
+        for _ in range(NUM_PROBES):
+            latencies.append(
+                await loop.run_in_executor(control_plane_executor, control_plane_op)
+            )
+            await asyncio.sleep(0.01)
+        return statistics.median(latencies)
+
+    async def poll_forever() -> None:
+        h: Any = await DBOS.retrieve_workflow_async(wfid, existing_workflow=False)
+        while True:
+            try:
+                # Never returns while the workflow is blocked; reissued only if a
+                # poll raises, and cancelled at teardown.
+                await h.get_result(polling_interval_sec=POLL_INTERVAL_SEC)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                await asyncio.sleep(POLL_INTERVAL_SEC)
+
+    pollers = [asyncio.create_task(poll_forever()) for _ in range(NUM_POLLERS)]
+    try:
+        # Phase 1: limiter active. Let the storm ramp up, then measure.
+        await asyncio.sleep(1.0)
+        with_limiter = await measure()
+
+        # Phase 2: disable the limiter (modelling the pre-fix behavior) so the
+        # pollers can consume the whole pool, then measure again.
+        sys_db.poll_limiter = PollingLimiter(0)
+        await asyncio.sleep(1.0)
+        without_limiter = await measure()
+    finally:
+        sys_db.poll_limiter = limiter
+        for t in pollers:
+            t.cancel()
+        await asyncio.gather(*pollers, return_exceptions=True)
+        release.set()
+        control_plane_executor.shutdown(wait=True)
+
+    # The blocked workflow completes once released.
+    assert (await asyncio.to_thread(handle.get_result)) == "done"
+
+    msg = (
+        f"control-plane median latency: with limiter={with_limiter * 1000:.1f}ms, "
+        f"without limiter={without_limiter * 1000:.1f}ms"
+    )
+    # With the limiter, control-plane work always finds a reserved connection, so
+    # it stays fast in absolute terms (far below the 30s pool_timeout)...
+    assert with_limiter < 0.5, msg
+    # ...and materially faster than when pollers are free to consume the pool.
+    assert with_limiter * 1.5 < without_limiter, msg
