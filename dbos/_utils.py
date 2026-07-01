@@ -1,7 +1,10 @@
 import importlib.metadata
 import os
 import sys
+import threading
 import uuid
+from types import TracebackType
+from typing import Optional, Type
 
 import psycopg
 from sqlalchemy.exc import DBAPIError, ResourceClosedError
@@ -9,6 +12,45 @@ from sqlalchemy.exc import DBAPIError, ResourceClosedError
 INTERNAL_QUEUE_NAME = "_dbos_internal_queue"
 
 request_id_header = "x-request-id"
+
+
+class PollingLimiter:
+    """A counting-semaphore-based limiter that caps how many DB-backed polling
+    reads (from wait operations such as ``get_result``, ``recv``, ``get_event``,
+    and ``read_stream``) may run concurrently against the system database pool.
+    This keeps high-fan-out polling from checking out every pool connection and
+    starving control-plane operations such as enqueue/dequeue, status writes,
+    recovery, and cancellation.
+
+    Use it as a context manager around the polling read::
+
+        with self.poll_limiter:
+            ...  # checkout a connection and run the poll query
+
+    A non-positive limit disables the limiter: ``__enter__``/``__exit__`` become
+    no-ops, so it adds no overhead when it is turned off. The same instance is
+    shared across threads; the underlying ``threading.BoundedSemaphore`` is
+    thread-safe and hands permits to waiters in (roughly) FIFO order.
+    """
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        self.enabled = limit > 0
+        self._semaphore = threading.BoundedSemaphore(limit) if self.enabled else None
+
+    def __enter__(self) -> "PollingLimiter":
+        if self._semaphore is not None:
+            self._semaphore.acquire()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> None:
+        if self._semaphore is not None:
+            self._semaphore.release()
 
 
 class GlobalParams:
