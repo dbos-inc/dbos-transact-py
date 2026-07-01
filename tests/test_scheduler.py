@@ -290,6 +290,42 @@ def test_apply_schedules(dbos: DBOS) -> None:
     assert len(DBOS.list_schedules()) == 0
 
 
+def test_apply_schedules_optional_context(dbos: DBOS) -> None:
+    # Regression for #747: context is optional in ScheduleInput (total=False), so
+    # omitting it must default to None instead of raising KeyError, and the running
+    # scheduler must actually fire the workflow with that None context.
+    received_contexts: list[Any] = []
+
+    @DBOS.workflow()
+    def scheduled_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        received_contexts.append(ctx)
+
+    # Note: no "context" key at all.
+    DBOS.apply_schedules(
+        [
+            {
+                "schedule_name": "no-context",
+                "workflow_fn": scheduled_workflow,
+                "schedule": "* * * * * *",
+            }
+        ]
+    )
+    schedules = DBOS.list_schedules()
+    assert len(schedules) == 1
+    assert schedules[0]["schedule_name"] == "no-context"
+    assert schedules[0]["context"] is None
+
+    # The scheduler must fire the workflow, passing the defaulted None context.
+    def check_fired() -> None:
+        assert len(received_contexts) >= 1
+        assert all(c is None for c in received_contexts)
+
+    retry_until_success(check_fired)
+
+    DBOS.delete_schedule("no-context")
+    assert len(DBOS.list_schedules()) == 0
+
+
 def test_apply_schedules_concurrent(dbos: DBOS) -> None:
     # Concurrent applies of the same schedule must be idempotent: one row, no error.
     @DBOS.workflow()
@@ -1153,6 +1189,40 @@ def test_client_apply_schedules(client: DBOSClient) -> None:
     client.delete_schedule("sched-a")
     client.delete_schedule("sched-b")
     client.delete_schedule("sched-c")
+    assert len(client.list_schedules()) == 0
+
+
+def test_client_apply_schedules_optional_context(client: DBOSClient) -> None:
+    # Regression for #747: context is optional in ClientScheduleInput (total=False),
+    # so omitting it must default to None instead of raising KeyError, and the
+    # scheduled workflow must actually run with that None context.
+    received: list[tuple[datetime, Any]] = []
+
+    @DBOS.workflow()
+    def scheduled_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        received.append((scheduled_at, ctx))
+
+    # Note: no "context" key at all. Daily cron so it only runs when triggered.
+    client.apply_schedules(
+        [
+            {
+                "schedule_name": "no-context",
+                "workflow_name": scheduled_workflow.__qualname__,
+                "schedule": "0 0 * * *",
+            }
+        ]
+    )
+    schedules = client.list_schedules()
+    assert len(schedules) == 1
+    assert schedules[0]["schedule_name"] == "no-context"
+    assert schedules[0]["context"] is None
+
+    # Trigger the schedule and confirm the workflow runs with the defaulted None context.
+    client.trigger_schedule("no-context").get_result()
+    assert len(received) == 1
+    assert received[0][1] is None
+
+    client.delete_schedule("no-context")
     assert len(client.list_schedules()) == 0
 
 
