@@ -225,9 +225,15 @@ def test_debouncer_client_best_effort(dbos: DBOS, client: DBOSClient) -> None:
     debouncer = DebouncerClient(client, options, best_effort=True)
     debounce_period_sec = 2
 
-    first_handle = debouncer.debounce("key", debounce_period_sec, 0)
-    second_handle = debouncer.debounce("key", debounce_period_sec, 1)
-    third_handle = debouncer.debounce("key", debounce_period_sec, 2)
+    first_handle: WorkflowHandle[int] = debouncer.debounce(
+        "key", debounce_period_sec, 0
+    )
+    second_handle: WorkflowHandle[int] = debouncer.debounce(
+        "key", debounce_period_sec, 1
+    )
+    third_handle: WorkflowHandle[int] = debouncer.debounce(
+        "key", debounce_period_sec, 2
+    )
     assert first_handle.workflow_id == second_handle.workflow_id
     assert first_handle.workflow_id == third_handle.workflow_id
     assert first_handle.get_result() == 2
