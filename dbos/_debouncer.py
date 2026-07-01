@@ -83,6 +83,8 @@ class DebouncerMessage(TypedDict):
     inputs: WorkflowInputs
     message_id: str
     debounce_period_sec: float
+    # When set, the debouncer skips the set_event ack (best-effort mode)
+    best_effort: bool
 
 
 async def debouncer_workflow(
@@ -102,24 +104,34 @@ async def debouncer_workflow(
     # It waits until debounce_period_sec have passed since the last message or until
     # debounce_timeout_sec has elapsed.
     async def get_debounce_deadline_epoch_sec() -> float:
-        return (
-            time.time() + options["debounce_timeout_sec"]
-            if options["debounce_timeout_sec"]
-            else math.inf
-        )
+        timeout_sec = options["debounce_timeout_sec"]
+        assert timeout_sec is not None  # only called when a timeout is configured
+        return time.time() + timeout_sec
 
     async def get_time() -> float:
         return time.time()
 
-    debounce_deadline_epoch_sec = await DBOS.run_step_async(
-        {"name": "get_debounce_deadline_epoch_sec"}, get_debounce_deadline_epoch_sec
-    )
+    # Only track a deadline when an overall timeout is set; otherwise it is infinite
+    # and reading the clock each iteration would be a durable step with no effect.
+    has_deadline = bool(options["debounce_timeout_sec"])
+    if has_deadline:
+        debounce_deadline_epoch_sec = await DBOS.run_step_async(
+            {"name": "get_debounce_deadline_epoch_sec"}, get_debounce_deadline_epoch_sec
+        )
+    else:
+        debounce_deadline_epoch_sec = math.inf
+
     debounce_period_sec = initial_debounce_period_sec
     while True:
-        now = await DBOS.run_step_async({"name": "get_time"}, get_time)
-        if now >= debounce_deadline_epoch_sec:
-            break
-        timeout = min(debounce_period_sec, max(debounce_deadline_epoch_sec - now, 0))
+        if has_deadline:
+            now = await DBOS.run_step_async({"name": "get_time"}, get_time)
+            if now >= debounce_deadline_epoch_sec:
+                break
+            timeout = min(
+                debounce_period_sec, max(debounce_deadline_epoch_sec - now, 0)
+            )
+        else:
+            timeout = debounce_period_sec
         message: Optional[DebouncerMessage] = await DBOS.recv_async(
             _DEBOUNCER_TOPIC, timeout_seconds=timeout
         )
@@ -127,8 +139,9 @@ async def debouncer_workflow(
             break
         workflow_inputs = message["inputs"]
         debounce_period_sec = message["debounce_period_sec"]
-        # Acknowledge receipt of the message
-        await DBOS.set_event_async(message["message_id"], message["message_id"])
+        # Acknowledge receipt unless the sender opted into best-effort mode
+        if not message.get("best_effort"):
+            await DBOS.set_event_async(message["message_id"], message["message_id"])
 
     # After the timeout or period has elapsed, enqueue the user workflow with the requested
     # context parameters.
@@ -178,8 +191,13 @@ class Debouncer(Generic[P, R]):
         *,
         debounce_timeout_sec: Optional[float] = None,
         queue: Optional[Union[Queue, str]] = None,
+        best_effort: bool = False,
     ):
         self.func_name = workflow_name
+        # Best-effort mode skips input acknowledgment: faster, but an input may be
+        # dropped if it arrives just as the debounced workflow fires (the returned handle
+        # resolves to a result computed without that input).
+        self.best_effort = best_effort
         self.options: DebouncerOptions = {
             "debounce_timeout_sec": debounce_timeout_sec,
             "queue_name": _resolve_queue_name(queue),
@@ -192,6 +210,7 @@ class Debouncer(Generic[P, R]):
         *,
         debounce_timeout_sec: Optional[float] = None,
         queue: Optional[Union[Queue, str]] = None,
+        best_effort: bool = False,
     ) -> "Debouncer[P, R]":
 
         if isinstance(workflow, (types.MethodType)):
@@ -200,6 +219,7 @@ class Debouncer(Generic[P, R]):
             get_dbos_func_name(workflow),
             debounce_timeout_sec=debounce_timeout_sec,
             queue=queue,
+            best_effort=best_effort,
         )
 
     @staticmethod
@@ -208,6 +228,7 @@ class Debouncer(Generic[P, R]):
         *,
         debounce_timeout_sec: Optional[float] = None,
         queue: Optional[Union[Queue, str]] = None,
+        best_effort: bool = False,
     ) -> "Debouncer[P, R]":
 
         if isinstance(workflow, (types.MethodType)):
@@ -216,6 +237,7 @@ class Debouncer(Generic[P, R]):
             get_dbos_func_name(workflow),
             debounce_timeout_sec=debounce_timeout_sec,
             queue=queue,
+            best_effort=best_effort,
         )
 
     def debounce(
@@ -259,58 +281,65 @@ class Debouncer(Generic[P, R]):
                 ),
                 "attributes": ctx.workflow_attributes,
             }
-        while True:
-            try:
-                # Attempt to enqueue a debouncer for this workflow.
-                deduplication_id = f"{self.options['workflow_name']}-{debounce_key}"
-                with SetEnqueueOptions(deduplication_id=deduplication_id):
-                    with SetWorkflowTimeout(None), SetWorkflowAttributes(None):
-                        internal_queue.enqueue(
-                            debouncer_workflow,
-                            debounce_period_sec,
-                            ctxOptions,
-                            self.options,
-                            *args,
-                            **kwargs,
-                        )
-                return WorkflowHandlePolling(user_workflow_id, dbos)
-            except DBOSQueueDeduplicatedError:
-                # If there is already a debouncer, send a message to it.
-                # Deterministically retrieve the ID of the debouncer
-                def get_deduplicated_workflow() -> Optional[str]:
-                    return dbos._sys_db.get_deduplicated_workflow(
-                        queue_name=internal_queue.name,
-                        deduplication_id=deduplication_id,
-                    )
+        deduplication_id = f"{self.options['workflow_name']}-{debounce_key}"
 
-                dedup_wfid = dbos._sys_db.call_function_as_step(
-                    get_deduplicated_workflow,
-                    "DBOS.get_deduplicated_workflow",
-                    snapshot_step_context(reserve_sleep_id=False),
-                )
-                if dedup_wfid is None:
-                    continue
-                else:
-                    workflow_inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
-                    message: DebouncerMessage = {
-                        "message_id": message_id,
-                        "inputs": workflow_inputs,
-                        "debounce_period_sec": debounce_period_sec,
-                    }
-                    DBOS.send(dedup_wfid, message, _DEBOUNCER_TOPIC)
-                    # Wait for the debouncer to acknowledge receipt of the message.
-                    # If the message is not acknowledged, this likely means the debouncer started its workflow
-                    # and exited without processing this message, so try again.
-                    if not DBOS.get_event(dedup_wfid, message_id, timeout_seconds=1):
-                        continue
-                    # Retrieve the user workflow ID from the input to the debouncer
-                    # and return a handle to it
-                    dedup_workflow_input = (
-                        DBOS.retrieve_workflow(dedup_wfid).get_status().input
-                    )
-                    assert dedup_workflow_input is not None
-                    user_workflow_id = dedup_workflow_input["args"][1]["workflow_id"]
+        # Deterministically retrieve the ID of the debouncer for this key, if one exists
+        def get_deduplicated_workflow() -> Optional[str]:
+            return dbos._sys_db.get_deduplicated_workflow(
+                queue_name=internal_queue.name,
+                deduplication_id=deduplication_id,
+            )
+
+        while True:
+            # Check for an existing debouncer first to avoid a wasted enqueue INSERT and
+            # the DBOSQueueDeduplicatedError it raises on every call for a hot key.
+            dedup_wfid = dbos._sys_db.call_function_as_step(
+                get_deduplicated_workflow,
+                "DBOS.get_deduplicated_workflow",
+                snapshot_step_context(reserve_sleep_id=False),
+            )
+            if dedup_wfid is None:
+                try:
+                    # No existing debouncer: attempt to enqueue one.
+                    with SetEnqueueOptions(deduplication_id=deduplication_id):
+                        with SetWorkflowTimeout(None), SetWorkflowAttributes(None):
+                            internal_queue.enqueue(
+                                debouncer_workflow,
+                                debounce_period_sec,
+                                ctxOptions,
+                                self.options,
+                                *args,
+                                **kwargs,
+                            )
                     return WorkflowHandlePolling(user_workflow_id, dbos)
+                except DBOSQueueDeduplicatedError:
+                    # A debouncer was created concurrently; re-read it and send instead.
+                    dedup_wfid = dbos._sys_db.call_function_as_step(
+                        get_deduplicated_workflow,
+                        "DBOS.get_deduplicated_workflow",
+                        snapshot_step_context(reserve_sleep_id=False),
+                    )
+                    if dedup_wfid is None:
+                        continue
+            # An existing debouncer was found: send it a message to extend its window.
+            workflow_inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
+            message: DebouncerMessage = {
+                "message_id": message_id,
+                "inputs": workflow_inputs,
+                "debounce_period_sec": debounce_period_sec,
+                "best_effort": self.best_effort,
+            }
+            DBOS.send(dedup_wfid, message, _DEBOUNCER_TOPIC)
+            # Wait for the debouncer to ack (unless best-effort); no ack means it already
+            # fired and exited without processing this message, so try again.
+            if not self.best_effort:
+                if not DBOS.get_event(dedup_wfid, message_id, timeout_seconds=1):
+                    continue
+            # Retrieve the user workflow ID from the debouncer's input and return a handle
+            dedup_workflow_input = DBOS.retrieve_workflow(dedup_wfid).get_status().input
+            assert dedup_workflow_input is not None
+            user_workflow_id = dedup_workflow_input["args"][1]["workflow_id"]
+            return WorkflowHandlePolling(user_workflow_id, dbos)
 
     async def debounce_async(
         self,
@@ -337,8 +366,13 @@ class DebouncerClient:
         *,
         debounce_timeout_sec: Optional[float] = None,
         queue: Optional[Union[Queue, str]] = None,
+        best_effort: bool = False,
     ):
         self.workflow_options = workflow_options
+        # Best-effort mode skips input acknowledgment: faster, but an input may be
+        # dropped if it arrives just as the debounced workflow fires (the returned handle
+        # resolves to a result computed without that input).
+        self.best_effort = best_effort
         self.debouncer_options: DebouncerOptions = {
             "debounce_timeout_sec": debounce_timeout_sec,
             "queue_name": _resolve_queue_name(queue),
@@ -363,61 +397,62 @@ class DebouncerClient:
             "attributes": self.workflow_options.get("attributes"),
         }
         message_id = generate_uuid()
+        deduplication_id = f"{self.debouncer_options['workflow_name']}-{debounce_key}"
         while True:
-            try:
-                # Attempt to enqueue a debouncer for this workflow.
-                deduplication_id = (
-                    f"{self.debouncer_options['workflow_name']}-{debounce_key}"
-                )
-                debouncer_options: EnqueueOptions = {
-                    "workflow_name": DEBOUNCER_WORKFLOW_NAME,
-                    "queue_name": INTERNAL_QUEUE_NAME,
-                    "deduplication_id": deduplication_id,
-                }
-                self.client.enqueue(
-                    debouncer_options,
-                    debounce_period_sec,
-                    ctxOptions,
-                    self.debouncer_options,
-                    *args,
-                    **kwargs,
-                )
-                return WorkflowHandleClientPolling[R](
-                    ctxOptions["workflow_id"], self.client._sys_db
-                )
-            except DBOSQueueDeduplicatedError:
-                # If there is already a debouncer, send a message to it.
-                dedup_wfid = self.client._sys_db.get_deduplicated_workflow(
-                    queue_name=INTERNAL_QUEUE_NAME,
-                    deduplication_id=deduplication_id,
-                )
-                if dedup_wfid is None:
-                    continue
-                else:
-                    workflow_inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
-                    message: DebouncerMessage = {
-                        "message_id": message_id,
-                        "inputs": workflow_inputs,
-                        "debounce_period_sec": debounce_period_sec,
+            # Check for an existing debouncer first to avoid a wasted enqueue INSERT and
+            # the DBOSQueueDeduplicatedError it raises on every call for a hot key.
+            dedup_wfid = self.client._sys_db.get_deduplicated_workflow(
+                queue_name=INTERNAL_QUEUE_NAME,
+                deduplication_id=deduplication_id,
+            )
+            if dedup_wfid is None:
+                try:
+                    # No existing debouncer: attempt to enqueue one.
+                    debouncer_options: EnqueueOptions = {
+                        "workflow_name": DEBOUNCER_WORKFLOW_NAME,
+                        "queue_name": INTERNAL_QUEUE_NAME,
+                        "deduplication_id": deduplication_id,
                     }
-                    self.client.send(dedup_wfid, message, _DEBOUNCER_TOPIC)
-                    # Wait for the debouncer to acknowledge receipt of the message.
-                    # If the message is not acknowledged, this likely means the debouncer started its workflow
-                    # and exited without processing this message, so try again.
-                    if not self.client.get_event(
-                        dedup_wfid, message_id, timeout_seconds=1
-                    ):
-                        continue
-                    # Retrieve the user workflow ID from the input to the debouncer
-                    # and return a handle to it
-                    dedup_workflow_input = (
-                        self.client.retrieve_workflow(dedup_wfid).get_status().input
+                    self.client.enqueue(
+                        debouncer_options,
+                        debounce_period_sec,
+                        ctxOptions,
+                        self.debouncer_options,
+                        *args,
+                        **kwargs,
                     )
-                    assert dedup_workflow_input is not None
-                    user_workflow_id = dedup_workflow_input["args"][1]["workflow_id"]
                     return WorkflowHandleClientPolling[R](
-                        user_workflow_id, self.client._sys_db
+                        ctxOptions["workflow_id"], self.client._sys_db
                     )
+                except DBOSQueueDeduplicatedError:
+                    # A debouncer was created concurrently; re-read it and send instead.
+                    dedup_wfid = self.client._sys_db.get_deduplicated_workflow(
+                        queue_name=INTERNAL_QUEUE_NAME,
+                        deduplication_id=deduplication_id,
+                    )
+                    if dedup_wfid is None:
+                        continue
+            # An existing debouncer was found: send it a message to extend its window.
+            workflow_inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
+            message: DebouncerMessage = {
+                "message_id": message_id,
+                "inputs": workflow_inputs,
+                "debounce_period_sec": debounce_period_sec,
+                "best_effort": self.best_effort,
+            }
+            self.client.send(dedup_wfid, message, _DEBOUNCER_TOPIC)
+            # Wait for the debouncer to ack (unless best-effort); no ack means it already
+            # fired and exited without processing this message, so try again.
+            if not self.best_effort:
+                if not self.client.get_event(dedup_wfid, message_id, timeout_seconds=1):
+                    continue
+            # Retrieve the user workflow ID from the debouncer's input and return a handle
+            dedup_workflow_input = (
+                self.client.retrieve_workflow(dedup_wfid).get_status().input
+            )
+            assert dedup_workflow_input is not None
+            user_workflow_id = dedup_workflow_input["args"][1]["workflow_id"]
+            return WorkflowHandleClientPolling[R](user_workflow_id, self.client._sys_db)
 
     async def debounce_async(
         self, deboucne_key: str, debounce_period_sec: float, *args: Any, **kwargs: Any
