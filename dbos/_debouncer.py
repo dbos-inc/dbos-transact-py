@@ -194,8 +194,9 @@ class Debouncer(Generic[P, R]):
         best_effort: bool = False,
     ):
         self.func_name = workflow_name
-        # Best-effort re-arm skips the send/ack handshake: cheaper on the hot path,
-        # but a re-arm racing the debouncer's firing may be silently dropped.
+        # Best-effort mode skips acknowledgment of new inputs.
+        # This improves performance but inputs may be dropped if they arrive
+        # at the same instance the debounced workflow fires.
         self.best_effort = best_effort
         self.options: DebouncerOptions = {
             "debounce_timeout_sec": debounce_timeout_sec,
@@ -368,8 +369,9 @@ class DebouncerClient:
         best_effort: bool = False,
     ):
         self.workflow_options = workflow_options
-        # Best-effort re-arm skips the send/ack handshake: cheaper on the hot path,
-        # but a re-arm racing the debouncer's firing may be silently dropped.
+        # Best-effort mode skips acknowledgment of new inputs.
+        # This improves performance but inputs may be dropped if they arrive
+        # at the same instance the debounced workflow fires.
         self.best_effort = best_effort
         self.debouncer_options: DebouncerOptions = {
             "debounce_timeout_sec": debounce_timeout_sec,
