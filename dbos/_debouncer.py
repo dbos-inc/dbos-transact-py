@@ -194,9 +194,9 @@ class Debouncer(Generic[P, R]):
         best_effort: bool = False,
     ):
         self.func_name = workflow_name
-        # Best-effort mode skips acknowledgment of new inputs.
-        # This improves performance but inputs may be dropped if they arrive
-        # at the same instance the debounced workflow fires.
+        # Best-effort mode skips input acknowledgment: faster, but an input may be
+        # dropped if it arrives just as the debounced workflow fires (the returned handle
+        # resolves to a result computed without that input).
         self.best_effort = best_effort
         self.options: DebouncerOptions = {
             "debounce_timeout_sec": debounce_timeout_sec,
@@ -291,8 +291,8 @@ class Debouncer(Generic[P, R]):
             )
 
         while True:
-            # Check for an existing debouncer first; avoids a failed enqueue (which leaves
-            # a dead workflow_status tuple) on every call for a hot key.
+            # Check for an existing debouncer first to avoid a wasted enqueue INSERT and
+            # the DBOSQueueDeduplicatedError it raises on every call for a hot key.
             dedup_wfid = dbos._sys_db.call_function_as_step(
                 get_deduplicated_workflow,
                 "DBOS.get_deduplicated_workflow",
@@ -369,9 +369,9 @@ class DebouncerClient:
         best_effort: bool = False,
     ):
         self.workflow_options = workflow_options
-        # Best-effort mode skips acknowledgment of new inputs.
-        # This improves performance but inputs may be dropped if they arrive
-        # at the same instance the debounced workflow fires.
+        # Best-effort mode skips input acknowledgment: faster, but an input may be
+        # dropped if it arrives just as the debounced workflow fires (the returned handle
+        # resolves to a result computed without that input).
         self.best_effort = best_effort
         self.debouncer_options: DebouncerOptions = {
             "debounce_timeout_sec": debounce_timeout_sec,
@@ -399,8 +399,8 @@ class DebouncerClient:
         message_id = generate_uuid()
         deduplication_id = f"{self.debouncer_options['workflow_name']}-{debounce_key}"
         while True:
-            # Check for an existing debouncer first; avoids a failed enqueue (which leaves
-            # a dead workflow_status tuple) on every call for a hot key.
+            # Check for an existing debouncer first to avoid a wasted enqueue INSERT and
+            # the DBOSQueueDeduplicatedError it raises on every call for a hot key.
             dedup_wfid = self.client._sys_db.get_deduplicated_workflow(
                 queue_name=INTERNAL_QUEUE_NAME,
                 deduplication_id=deduplication_id,

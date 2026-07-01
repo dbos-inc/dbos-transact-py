@@ -18,16 +18,22 @@ from dbos._queue import Queue
 from dbos._utils import GlobalParams
 
 
-def _debouncer_step_names(user_workflow_id: str) -> list[str]:
-    # Return the recorded step names of the debouncer that enqueued the given workflow.
+def _debouncer_id(user_workflow_id: str) -> str:
+    # Return the workflow ID of the debouncer that enqueued the given user workflow.
     debouncers = [
         w
         for w in DBOS.list_workflows(name=DEBOUNCER_WORKFLOW_NAME)
         if w.input is not None and w.input["args"][1]["workflow_id"] == user_workflow_id
     ]
     assert len(debouncers) == 1
+    return debouncers[0].workflow_id
+
+
+def _debouncer_step_names(user_workflow_id: str) -> list[str]:
+    # Return the recorded step names of the debouncer that enqueued the given workflow.
     return [
-        s["function_name"] for s in DBOS.list_workflow_steps(debouncers[0].workflow_id)
+        s["function_name"]
+        for s in DBOS.list_workflow_steps(_debouncer_id(user_workflow_id))
     ]
 
 
@@ -179,6 +185,56 @@ def test_debouncer_best_effort(dbos: DBOS) -> None:
     assert "get_time" not in step_names
     assert "get_debounce_deadline_epoch_sec" not in step_names
     assert step_names.count("DBOS.recv") >= 1
+
+
+def test_debouncer_best_effort_refreshes_after_fire(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    # Once a best-effort debouncer fires, its dedup id is cleared on completion, so a
+    # later call for the same key cannot send to the dead debouncer: it must start a
+    # fresh one, and the returned handle must still resolve to the new value. This is
+    # the concurrent-fire window the happy-path test cannot reach.
+    debouncer = Debouncer.create(workflow, best_effort=True)
+    short_period = 1
+
+    first_handle = debouncer.debounce("key", short_period, 0)
+    assert first_handle.get_result() == 0
+    # Block until the first debouncer fully completes (dedup id cleared) before retrying.
+    DBOS.retrieve_workflow(_debouncer_id(first_handle.workflow_id)).get_result()
+
+    second_handle = debouncer.debounce("key", short_period, 1)
+    assert second_handle.workflow_id != first_handle.workflow_id
+    assert second_handle.get_result() == 1
+
+
+def test_debouncer_client_best_effort(dbos: DBOS, client: DBOSClient) -> None:
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    DBOS.register_queue("test-queue")
+    options: EnqueueOptions = {
+        "workflow_name": workflow.__qualname__,
+        "queue_name": "test-queue",
+    }
+    # Best-effort works over the client path too: it coalesces and skips the ack.
+    debouncer = DebouncerClient(client, options, best_effort=True)
+    debounce_period_sec = 2
+
+    first_handle = debouncer.debounce("key", debounce_period_sec, 0)
+    second_handle = debouncer.debounce("key", debounce_period_sec, 1)
+    third_handle = debouncer.debounce("key", debounce_period_sec, 2)
+    assert first_handle.workflow_id == second_handle.workflow_id
+    assert first_handle.workflow_id == third_handle.workflow_id
+    assert first_handle.get_result() == 2
+
+    # Best-effort skips the ack, so the debouncer records no setEvent step.
+    step_names = _debouncer_step_names(first_handle.workflow_id)
+    assert "DBOS.setEvent" not in step_names
 
 
 def test_debouncer_no_timeout_skips_clock_reads(dbos: DBOS) -> None:
