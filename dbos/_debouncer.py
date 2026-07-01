@@ -83,7 +83,7 @@ class DebouncerMessage(TypedDict):
     inputs: WorkflowInputs
     message_id: str
     debounce_period_sec: float
-    # When set, the debouncer skips the set_event ack (best-effort re-arm)
+    # When set, the debouncer skips the set_event ack (best-effort mode)
     best_effort: bool
 
 
@@ -139,7 +139,7 @@ async def debouncer_workflow(
             break
         workflow_inputs = message["inputs"]
         debounce_period_sec = message["debounce_period_sec"]
-        # Acknowledge receipt unless the sender opted into best-effort re-arm
+        # Acknowledge receipt unless the sender opted into best-effort mode
         if not message.get("best_effort"):
             await DBOS.set_event_async(message["message_id"], message["message_id"])
 
@@ -292,7 +292,7 @@ class Debouncer(Generic[P, R]):
 
         while True:
             # Check for an existing debouncer first; avoids a failed enqueue (which leaves
-            # a dead workflow_status tuple) on every re-arm of a hot key.
+            # a dead workflow_status tuple) on every call for a hot key.
             dedup_wfid = dbos._sys_db.call_function_as_step(
                 get_deduplicated_workflow,
                 "DBOS.get_deduplicated_workflow",
@@ -321,7 +321,7 @@ class Debouncer(Generic[P, R]):
                     )
                     if dedup_wfid is None:
                         continue
-            # An existing debouncer was found: send it a message to re-arm.
+            # An existing debouncer was found: send it a message to extend its window.
             workflow_inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
             message: DebouncerMessage = {
                 "message_id": message_id,
@@ -400,7 +400,7 @@ class DebouncerClient:
         deduplication_id = f"{self.debouncer_options['workflow_name']}-{debounce_key}"
         while True:
             # Check for an existing debouncer first; avoids a failed enqueue (which leaves
-            # a dead workflow_status tuple) on every re-arm of a hot key.
+            # a dead workflow_status tuple) on every call for a hot key.
             dedup_wfid = self.client._sys_db.get_deduplicated_workflow(
                 queue_name=INTERNAL_QUEUE_NAME,
                 deduplication_id=deduplication_id,
@@ -432,7 +432,7 @@ class DebouncerClient:
                     )
                     if dedup_wfid is None:
                         continue
-            # An existing debouncer was found: send it a message to re-arm.
+            # An existing debouncer was found: send it a message to extend its window.
             workflow_inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
             message: DebouncerMessage = {
                 "message_id": message_id,

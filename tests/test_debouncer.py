@@ -160,7 +160,7 @@ def test_debouncer_best_effort(dbos: DBOS) -> None:
 
     first_value, second_value, third_value = 0, 1, 2
 
-    # Best-effort re-arm skips the send/ack handshake but still coalesces.
+    # Best-effort mode skips the send/ack handshake but still coalesces.
     debouncer = Debouncer.create(workflow, best_effort=True)
     debounce_period_sec = 2
 
