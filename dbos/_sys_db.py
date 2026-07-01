@@ -3751,8 +3751,19 @@ class SystemDatabase(ABC):
                 available_tasks = max(0, queue._concurrency - global_pending_workflows)
                 max_tasks = min(max_tasks, available_tasks)
 
+            # Scalar subquery yielding the latest registered application version.
+            latest_version_subquery = (
+                sa.select(SystemSchema.application_versions.c.version_name)
+                .order_by(
+                    SystemSchema.application_versions.c.version_timestamp.desc()
+                )
+                .limit(1)
+                .scalar_subquery()
+            )
+
             # Retrieve the first max_tasks workflows in the queue.
-            # Only retrieve workflows of the local version (or without version set)
+            # Only retrieve workflows of the local version. Version-less workflows
+            # are only dequeued when this worker is running the latest version.
             skip_locks = queue._concurrency is None
             query = (
                 sa.select(
@@ -3768,7 +3779,10 @@ class SystemDatabase(ABC):
                     sa.or_(
                         SystemSchema.workflow_status.c.application_version
                         == app_version,
-                        SystemSchema.workflow_status.c.application_version.is_(None),
+                        sa.and_(
+                            SystemSchema.workflow_status.c.application_version.is_(None),
+                            latest_version_subquery == app_version,
+                        ),
                     )
                 )
                 # Unless global concurrency is set, use skip_locked to only select
