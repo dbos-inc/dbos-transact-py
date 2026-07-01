@@ -196,11 +196,11 @@ def test_debouncer_no_timeout_skips_clock_reads(dbos: DBOS) -> None:
     assert first_handle.workflow_id == second_handle.workflow_id
     assert first_handle.get_result() == 1
 
-    # No overall timeout → no clock-read steps (optimization A) ...
+    # No overall timeout means no clock-read steps are recorded
     step_names = _debouncer_step_names(first_handle.workflow_id)
     assert "get_time" not in step_names
     assert "get_debounce_deadline_epoch_sec" not in step_names
-    # ... but acks are still recorded because best_effort was not set.
+    # But acks are still recorded because best_effort was not set
     assert "DBOS.setEvent" in step_names
 
 
