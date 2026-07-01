@@ -13,8 +13,22 @@ from dbos import (
 )
 from dbos._client import EnqueueOptions
 from dbos._context import SetEnqueueOptions, SetWorkflowTimeout
+from dbos._core import DEBOUNCER_WORKFLOW_NAME
 from dbos._queue import Queue
 from dbos._utils import GlobalParams
+
+
+def _debouncer_step_names(user_workflow_id: str) -> list[str]:
+    # Return the recorded step names of the debouncer that enqueued the given workflow.
+    debouncers = [
+        w
+        for w in DBOS.list_workflows(name=DEBOUNCER_WORKFLOW_NAME)
+        if w.input is not None and w.input["args"][1]["workflow_id"] == user_workflow_id
+    ]
+    assert len(debouncers) == 1
+    return [
+        s["function_name"] for s in DBOS.list_workflow_steps(debouncers[0].workflow_id)
+    ]
 
 
 def test_debouncer(dbos: DBOS) -> None:
@@ -136,6 +150,78 @@ def test_multiple_debouncers(dbos: DBOS) -> None:
     assert second_handle.get_result() == second_value
     assert third_handle.get_result() == fourth_value
     assert fourth_handle.get_result() == fourth_value
+
+
+def test_debouncer_best_effort(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    first_value, second_value, third_value = 0, 1, 2
+
+    # Best-effort re-arm skips the send/ack handshake but still coalesces.
+    debouncer = Debouncer.create(workflow, best_effort=True)
+    debounce_period_sec = 2
+
+    first_handle = debouncer.debounce("key", debounce_period_sec, first_value)
+    second_handle = debouncer.debounce("key", debounce_period_sec, second_value)
+    third_handle = debouncer.debounce("key", debounce_period_sec, third_value)
+    assert first_handle.workflow_id == second_handle.workflow_id
+    assert first_handle.workflow_id == third_handle.workflow_id
+    assert first_handle.get_result() == third_value
+    assert third_handle.get_result() == third_value
+
+    # Best-effort means the debouncer records no acks, and without an overall timeout
+    # it records no per-iteration clock reads either.
+    step_names = _debouncer_step_names(first_handle.workflow_id)
+    assert "DBOS.setEvent" not in step_names
+    assert "get_time" not in step_names
+    assert "get_debounce_deadline_epoch_sec" not in step_names
+    assert step_names.count("DBOS.recv") >= 1
+
+
+def test_debouncer_no_timeout_skips_clock_reads(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    # Default debouncer: acks enabled, no overall timeout.
+    debouncer = Debouncer.create(workflow)
+    debounce_period_sec = 2
+
+    first_handle = debouncer.debounce("key", debounce_period_sec, 0)
+    second_handle = debouncer.debounce("key", debounce_period_sec, 1)
+    assert first_handle.workflow_id == second_handle.workflow_id
+    assert first_handle.get_result() == 1
+
+    # No overall timeout → no clock-read steps (optimization A) ...
+    step_names = _debouncer_step_names(first_handle.workflow_id)
+    assert "get_time" not in step_names
+    assert "get_debounce_deadline_epoch_sec" not in step_names
+    # ... but acks are still recorded because best_effort was not set.
+    assert "DBOS.setEvent" in step_names
+
+
+def test_debouncer_timeout_records_clock_reads(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    # With an overall timeout, the deadline is tracked, so clock reads are recorded.
+    debouncer = Debouncer.create(workflow, debounce_timeout_sec=2)
+    long_debounce_period = 10000000
+
+    first_handle = debouncer.debounce("key", long_debounce_period, 0)
+    second_handle = debouncer.debounce("key", long_debounce_period, 1)
+    assert first_handle.workflow_id == second_handle.workflow_id
+    assert first_handle.get_result() == 1
+
+    step_names = _debouncer_step_names(first_handle.workflow_id)
+    assert "get_debounce_deadline_epoch_sec" in step_names
+    assert "get_time" in step_names
 
 
 def test_debouncer_queue(dbos: DBOS) -> None:
