@@ -1408,7 +1408,7 @@ class DBOSClient:
         Atomically create or replace a set of schedules.
 
         Args:
-            schedules: A list of schedule inputs, each containing ``schedule_name``, ``workflow_name``, ``schedule`` (cron), and ``context``.
+            schedules: A list of schedule inputs, each containing the required fields ``schedule_name``, ``workflow_name``, and ``schedule`` (cron), plus optional fields including ``context``.
 
         Raises:
             DBOSException: If a cron expression is invalid
@@ -1444,7 +1444,7 @@ class DBOSClient:
                     workflow_class_name=entry.get("workflow_class_name"),
                     schedule=cron,
                     status="ACTIVE",
-                    context=self._sys_db.serializer.serialize(entry["context"]),
+                    context=self._sys_db.serializer.serialize(entry.get("context")),
                     last_fired_at=None,
                     automatic_backfill=entry.get("automatic_backfill", False),
                     cron_timezone=cron_timezone,

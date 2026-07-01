@@ -2889,7 +2889,7 @@ class DBOS:
         Atomically create or replace a set of schedules.
 
         Args:
-            schedules: A list of schedule inputs, each containing ``schedule_name``, ``workflow_fn``, ``schedule`` (cron), and ``context``.
+            schedules: A list of schedule inputs, each containing the required fields ``schedule_name``, ``workflow_fn``, and ``schedule`` (cron), plus optional fields including ``context``.
 
         Raises:
             DBOSException: If called from within a workflow, a cron expression is invalid, or a workflow is not registered
@@ -2956,7 +2956,7 @@ class DBOS:
                     workflow_class_name=workflow_class_name,
                     schedule=cron,
                     status="ACTIVE",
-                    context=dbos._sys_db.serializer.serialize(entry["context"]),
+                    context=dbos._sys_db.serializer.serialize(entry.get("context")),
                     last_fired_at=None,
                     automatic_backfill=entry.get("automatic_backfill", False),
                     cron_timezone=cron_timezone,
