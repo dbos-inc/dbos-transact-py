@@ -3751,15 +3751,23 @@ class SystemDatabase(ABC):
                 available_tasks = max(0, queue._concurrency - global_pending_workflows)
                 max_tasks = min(max_tasks, available_tasks)
 
-            # Scalar subquery yielding the latest registered application version.
-            latest_version_subquery = (
+            latest_version = c.execute(
                 sa.select(SystemSchema.application_versions.c.version_name)
                 .order_by(
                     SystemSchema.application_versions.c.version_timestamp.desc()
                 )
                 .limit(1)
-                .scalar_subquery()
+            ).scalar()
+            is_latest_version = latest_version is None or latest_version == app_version
+
+            version_predicate = (
+                SystemSchema.workflow_status.c.application_version == app_version
             )
+            if is_latest_version:
+                version_predicate = sa.or_(
+                    SystemSchema.workflow_status.c.application_version == app_version,
+                    SystemSchema.workflow_status.c.application_version.is_(None),
+                )
 
             # Retrieve the first max_tasks workflows in the queue.
             # Only retrieve workflows of the local version. Version-less workflows
@@ -3775,16 +3783,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.status
                     == WorkflowStatusString.ENQUEUED.value
                 )
-                .where(
-                    sa.or_(
-                        SystemSchema.workflow_status.c.application_version
-                        == app_version,
-                        sa.and_(
-                            SystemSchema.workflow_status.c.application_version.is_(None),
-                            latest_version_subquery == app_version,
-                        ),
-                    )
-                )
+                .where(version_predicate)
                 # Unless global concurrency is set, use skip_locked to only select
                 # rows that can be locked. If global concurrency is set, use no_wait
                 # to ensure all processes have a consistent view of the table.
