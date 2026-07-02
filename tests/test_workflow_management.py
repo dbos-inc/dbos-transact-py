@@ -1096,7 +1096,8 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     assert len(workflows) == 0
 
     # ENQUEUED and DELAYED workflows must not be garbage collected
-    DBOS.register_queue("gc_test_queue")
+    # worker_concurrency=0 blocks dequeue so the workflow deterministically stays ENQUEUED
+    DBOS.register_queue("gc_test_queue", worker_concurrency=0)
 
     @DBOS.workflow()
     def gc_test_workflow() -> None:
@@ -1239,7 +1240,8 @@ def test_garbage_collection_batched(
         assert len(rows) == 1
         assert rows[0][0] == handle.workflow_id
 
-    DBOS.register_queue("gc_batched_test_queue")
+    # worker_concurrency=0 blocks dequeue so the workflow deterministically stays ENQUEUED
+    DBOS.register_queue("gc_batched_test_queue", worker_concurrency=0)
 
     @DBOS.workflow()
     def gc_test_workflow() -> None:
