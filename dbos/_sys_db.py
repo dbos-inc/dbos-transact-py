@@ -5007,12 +5007,17 @@ class SystemDatabase(ABC):
     # ── Application Version CRUD ────────────────────────────────
 
     def create_application_version(self, version_name: str) -> None:
+        # Stamp timestamps client-side: the SQLite column default only has
+        # second resolution on Python < 3.12.
+        now_ms = int(time.time() * 1000)
         with self.engine.begin() as c:
             c.execute(
                 self.dialect.insert(SystemSchema.application_versions)
                 .values(
                     version_id=generate_uuid(),
                     version_name=version_name,
+                    version_timestamp=now_ms,
+                    created_at=now_ms,
                 )
                 .on_conflict_do_nothing(index_elements=["version_name"])
             )
