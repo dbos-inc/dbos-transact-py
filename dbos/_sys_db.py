@@ -34,6 +34,7 @@ from sqlalchemy.sql import func
 from dbos._debug_trigger import DebugTriggers
 from dbos._utils import (
     INTERNAL_QUEUE_NAME,
+    PollingLimiter,
     generate_uuid,
     retriable_postgres_exception,
     retriable_sqlite_exception,
@@ -508,6 +509,10 @@ def db_retry(
     return decorator
 
 
+# Fallback pool size for defaulting polling concurrency when the engine's is unknown (mirrors configure_db_engine_parameters).
+DEFAULT_SYS_DB_POOL_SIZE = 20
+
+
 class SystemDatabase(ABC):
 
     @staticmethod
@@ -520,6 +525,7 @@ class SystemDatabase(ABC):
         executor_id: Optional[str],
         use_listen_notify: bool = True,
         notification_listener_polling_interval_sec: float = 1.0,
+        polling_concurrency: Optional[int] = None,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
         if system_database_url.startswith("sqlite"):
@@ -534,6 +540,7 @@ class SystemDatabase(ABC):
                 executor_id=executor_id,
                 use_listen_notify=use_listen_notify,
                 notification_listener_polling_interval_sec=notification_listener_polling_interval_sec,
+                polling_concurrency=polling_concurrency,
             )
         else:
             from ._sys_db_postgres import PostgresSystemDatabase
@@ -547,6 +554,7 @@ class SystemDatabase(ABC):
                 executor_id=executor_id,
                 use_listen_notify=use_listen_notify,
                 notification_listener_polling_interval_sec=notification_listener_polling_interval_sec,
+                polling_concurrency=polling_concurrency,
             )
 
     def __init__(
@@ -560,6 +568,7 @@ class SystemDatabase(ABC):
         executor_id: Optional[str],
         use_listen_notify: bool = True,
         notification_listener_polling_interval_sec: float = 1.0,
+        polling_concurrency: Optional[int] = None,
     ):
         import sqlalchemy.dialects.postgresql as pg
         import sqlalchemy.dialects.sqlite as sq
@@ -608,6 +617,15 @@ class SystemDatabase(ABC):
         )
         self._engine_kwargs = engine_kwargs
 
+        # Cap concurrent polling reads (default half the pool, min 1; non-positive disables) so a storm can't starve the control plane. See PollingLimiter.
+        effective_pool_size = self._get_effective_pool_size(base_engine, engine_kwargs)
+        polling_limit = (
+            polling_concurrency
+            if polling_concurrency is not None
+            else max(1, effective_pool_size // 2)
+        )
+        self.poll_limiter = PollingLimiter(polling_limit)
+
         self.notifications_map = ThreadSafeEventDict()
         self.workflow_events_map = ThreadSafeEventDict()
         self.streams_map = ThreadSafeEventDict()
@@ -621,6 +639,29 @@ class SystemDatabase(ABC):
 
         # Now we can run background processes
         self._run_background_processes = True
+
+    @staticmethod
+    def _get_effective_pool_size(
+        engine: sa.Engine, engine_kwargs: Dict[str, Any]
+    ) -> int:
+        """Determine the system database pool's effective max size, used to
+        default the polling concurrency to half the pool.
+
+        Prefer the engine's actual configured pool size (so a custom engine is
+        respected), then the configured ``pool_size`` kwarg, then a default. A
+        NullPool reports no size; fall through to the default in that case."""
+        pool_size = getattr(engine.pool, "size", None)
+        if callable(pool_size):
+            try:
+                actual = pool_size()
+                if actual and actual > 0:
+                    return int(actual)
+            except Exception:
+                pass
+        configured = engine_kwargs.get("pool_size")
+        if configured and configured > 0:
+            return int(configured)
+        return DEFAULT_SYS_DB_POOL_SIZE
 
     @abstractmethod
     def _create_engine(
@@ -1538,7 +1579,8 @@ class SystemDatabase(ABC):
 
     @db_retry()
     def _read_workflow_result_row(self, workflow_id: str) -> Optional[Any]:
-        with self.engine.begin() as c:
+        # Polling read under the limiter; acquired inside the db_retry body so the permit frees across backoff (like check_first_workflow_id).
+        with self.poll_limiter, self.engine.begin() as c:
             return c.execute(
                 sa.select(
                     SystemSchema.workflow_status.c.status,
@@ -1599,7 +1641,8 @@ class SystemDatabase(ABC):
         """
         if not workflow_ids:
             raise ValueError("workflow_ids must not be empty")
-        with self.engine.begin() as c:
+        # This is a polling read (wait_first): run it under the polling limiter.
+        with self.poll_limiter, self.engine.begin() as c:
             row = c.execute(
                 sa.select(
                     SystemSchema.workflow_status.c.workflow_uuid,
@@ -3024,7 +3067,8 @@ class SystemDatabase(ABC):
         """
         normalized_topic = topic if topic is not None else _dbos_null_topic
         try:
-            with self.engine.begin() as c:
+            # This is a polling read: run it under the polling limiter.
+            with self.poll_limiter, self.engine.begin() as c:
                 rows = c.execute(
                     sa.select(SystemSchema.notifications.c.topic).where(
                         SystemSchema.notifications.c.destination_uuid == workflow_uuid,
@@ -3649,7 +3693,8 @@ class SystemDatabase(ABC):
         Used as a fallback in case the notification listener thread drops a notification.
         """
         try:
-            with self.engine.begin() as c:
+            # This is a polling read: run it under the polling limiter.
+            with self.poll_limiter, self.engine.begin() as c:
                 rows = c.execute(
                     sa.select(
                         SystemSchema.workflow_events.c.value,
@@ -4331,7 +4376,8 @@ class SystemDatabase(ABC):
     def read_stream(self, workflow_uuid: str, key: str, offset: int) -> Any:
         """Read the value at the specified offset for the given workflow_uuid and key."""
 
-        with self.engine.begin() as c:
+        # Polling read (listener-less clients poll the offset) under the limiter; inside db_retry so the permit frees across backoff.
+        with self.poll_limiter, self.engine.begin() as c:
             result = c.execute(
                 sa.select(
                     SystemSchema.streams.c.value, SystemSchema.streams.c.serialization

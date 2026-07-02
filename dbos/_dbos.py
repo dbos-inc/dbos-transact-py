@@ -562,6 +562,9 @@ class DBOS:
                 use_listen_notify=self._config["use_listen_notify"],
                 executor_id=GlobalParams.executor_id,
                 notification_listener_polling_interval_sec=self._notification_listener_polling_interval_sec,
+                polling_concurrency=self._config["database"].get(
+                    "sys_db_polling_concurrency"
+                ),
             )
             assert self._config["database"]["db_engine_kwargs"] is not None
             if self._config["database_url"]:
