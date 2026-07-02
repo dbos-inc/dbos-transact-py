@@ -2426,6 +2426,54 @@ async def test_enqueue_version_async(dbos: DBOS) -> None:
     assert await handle.get_result() == input
 
 
+def test_dequeue_no_version_requires_latest(dbos: DBOS, client: DBOSClient) -> None:
+    # A worker only dequeues version-less (application_version IS NULL) workflows
+    # when it is running the latest registered application version. Workflows
+    # tagged with the worker's own version are always dequeued.
+    queue_name = f"test_dequeue_latest_{uuid.uuid4()}"
+    DBOS.register_queue(queue_name)
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    current_version = GlobalParams.app_version
+
+    # Register a newer application version so this worker is no longer the latest.
+    newer_version = f"newer-{uuid.uuid4()}"
+    dbos._sys_db.create_application_version(newer_version)
+    dbos._sys_db.update_application_version_timestamp(
+        newer_version, int(time.time() * 1000) + 1_000_000
+    )
+
+    # Enqueue a version-less workflow (client enqueue with no app_version).
+    versionless_handle: WorkflowHandle[int] = client.enqueue(
+        {
+            "queue_name": queue_name,
+            "workflow_name": workflow.__qualname__,
+        },
+        5,
+    )
+
+    # Enqueue a workflow tagged with this worker's current version.
+    versioned_handle = DBOS.enqueue_workflow(queue_name, workflow, 7)
+
+    # The version-tagged workflow is dequeued and completes.
+    assert versioned_handle.get_result() == 7
+
+    # The version-less workflow is NOT dequeued: this worker is not the latest.
+    assert (
+        versionless_handle.get_status().status
+        == WorkflowStatusString.ENQUEUED.value
+    )
+
+    # Make this worker the latest version again; now the version-less workflow runs.
+    dbos._sys_db.update_application_version_timestamp(
+        current_version, int(time.time() * 1000) + 2_000_000
+    )
+    assert versionless_handle.get_result() == 5
+
+
 def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
 
     blocking_event = threading.Event()
