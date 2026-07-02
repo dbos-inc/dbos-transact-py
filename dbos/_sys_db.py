@@ -232,6 +232,12 @@ class WorkflowStatusInternal(TypedDict):
     delay_until_epoch_ms: Optional[int]
     attributes: Optional[Dict[str, Any]]
     schedule_name: Optional[str]
+    # Absolute cap (Unix epoch ms) beyond which debounce bounces may not extend
+    # the delay. None means the workflow is not debounced or has no timeout.
+    debounce_deadline_epoch_ms: Optional[int]
+    # True if this workflow's deduplication_id is a debounce key that must be
+    # cleared when the workflow transitions from DELAYED to ENQUEUED.
+    is_debounced: bool
 
 
 class MetricData(TypedDict):
@@ -255,6 +261,26 @@ class EnqueueOptionsInternal(TypedDict):
     queue_partition_key: Optional[str]
     # The UNIX epoch timestamp before which the workflow should not be dequeued
     delay_until_epoch_ms: Optional[int]
+    # Absolute cap (Unix epoch ms) beyond which debounce bounces may not extend
+    # the delay. None means the workflow is not debounced or has no timeout.
+    debounce_deadline_epoch_ms: Optional[int]
+    # True if this workflow's deduplication_id is a debounce key to be cleared
+    # when the workflow transitions from DELAYED to ENQUEUED.
+    is_debounced: bool
+
+
+class DebounceResult(TypedDict):
+    # The winner's workflow ID if an existing debounced DELAYED workflow was
+    # found and its delay/inputs were extended; None if no bounce occurred.
+    bounced_workflow_id: Optional[str]
+    # The current holder of (queue_name, deduplication_id) when no bounce
+    # occurred, or None if the key is unheld (it was cleared when the previous
+    # debounced workflow transitioned from DELAYED to ENQUEUED).
+    holder_workflow_id: Optional[str]
+    # The holder's workflow function name, used to detect a legacy debouncer.
+    holder_name: Optional[str]
+    # Whether the holder is itself a debounced workflow.
+    holder_is_debounced: bool
 
 
 class RecordedResult(TypedDict):
@@ -696,6 +722,8 @@ class SystemDatabase(ABC):
                 delay_until_epoch_ms=status["delay_until_epoch_ms"],
                 attributes=status["attributes"],
                 schedule_name=status["schedule_name"],
+                debounce_deadline_epoch_ms=status["debounce_deadline_epoch_ms"],
+                is_debounced=status["is_debounced"],
             )
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
@@ -957,6 +985,81 @@ class SystemDatabase(ABC):
                     updated_at=func.extract("epoch", func.now()) * 1000,
                 )
             )
+
+    def debounce_delayed_workflow(
+        self,
+        *,
+        queue_name: str,
+        deduplication_id: str,
+        delay_until_epoch_ms: int,
+        inputs: str,
+        serialization: Optional[str],
+    ) -> DebounceResult:
+        """Extend an existing debounced DELAYED workflow's delay and update its inputs.
+
+        Performed as a single atomic transaction. The new delay is capped at the
+        workflow's debounce_deadline_epoch_ms, if one is set. If no debounced
+        DELAYED workflow holds this (queue_name, deduplication_id), returns
+        information about the current holder (or that the key is unheld) so the
+        caller can decide whether to start a fresh workflow or surface a conflict.
+        """
+        wsc = SystemSchema.workflow_status.c
+        with self.engine.begin() as c:
+            # Cap the new delay at the debounce deadline, if any. Written as a
+            # CASE (not LEAST/min) to stay portable across Postgres and SQLite.
+            capped_delay = sa.case(
+                (
+                    sa.and_(
+                        wsc.debounce_deadline_epoch_ms.isnot(None),
+                        wsc.debounce_deadline_epoch_ms < delay_until_epoch_ms,
+                    ),
+                    wsc.debounce_deadline_epoch_ms,
+                ),
+                else_=delay_until_epoch_ms,
+            )
+            updated = c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(wsc.queue_name == queue_name)
+                .where(wsc.deduplication_id == deduplication_id)
+                .where(wsc.status == WorkflowStatusString.DELAYED.value)
+                .where(wsc.is_debounced == True)
+                .values(
+                    delay_until_epoch_ms=capped_delay,
+                    inputs=inputs,
+                    serialization=serialization,
+                    updated_at=self._now_ms_sql(),
+                )
+                .returning(wsc.workflow_uuid)
+            ).fetchone()
+            if updated is not None:
+                return {
+                    "bounced_workflow_id": updated[0],
+                    "holder_workflow_id": None,
+                    "holder_name": None,
+                    "holder_is_debounced": False,
+                }
+            # No debounced DELAYED workflow matched. The key may be unheld (the
+            # previous debounced workflow already flipped to ENQUEUED and cleared
+            # it) or held by another workflow (a user's own deduplicated workflow,
+            # or a legacy debouncer during a version upgrade).
+            holder = c.execute(
+                sa.select(wsc.workflow_uuid, wsc.name, wsc.is_debounced)
+                .where(wsc.queue_name == queue_name)
+                .where(wsc.deduplication_id == deduplication_id)
+            ).fetchone()
+            if holder is None:
+                return {
+                    "bounced_workflow_id": None,
+                    "holder_workflow_id": None,
+                    "holder_name": None,
+                    "holder_is_debounced": False,
+                }
+            return {
+                "bounced_workflow_id": None,
+                "holder_workflow_id": holder[0],
+                "holder_name": holder[1],
+                "holder_is_debounced": bool(holder[2]),
+            }
 
     def update_workflow_attributes(
         self, workflow_id: str, attributes: Optional[Dict[str, Any]]
@@ -1369,6 +1472,8 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.delay_until_epoch_ms,
                     SystemSchema.workflow_status.c.attributes,
                     SystemSchema.workflow_status.c.schedule_name,
+                    SystemSchema.workflow_status.c.debounce_deadline_epoch_ms,
+                    SystemSchema.workflow_status.c.is_debounced,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -1405,6 +1510,8 @@ class SystemDatabase(ABC):
                 "delay_until_epoch_ms": row[24],
                 "attributes": row[25],
                 "schedule_name": row[26],
+                "debounce_deadline_epoch_ms": row[27],
+                "is_debounced": bool(row[28]),
             }
             return status
 
@@ -3658,7 +3765,13 @@ class SystemDatabase(ABC):
             return [row[0] for row in rows]
 
     def transition_delayed_workflows(self) -> None:
-        """Transition DELAYED workflows whose delay has expired to ENQUEUED."""
+        """Transition DELAYED workflows whose delay has expired to ENQUEUED.
+
+        For debounced workflows, clear the deduplication_id in the same atomic
+        update: the ID is a debounce key held only while the workflow is DELAYED,
+        so a later debounce with the same key starts a fresh workflow instead of
+        bouncing this one (which is now committed to running).
+        """
         now_ms = int(time.time() * 1000)
         with self.engine.begin() as c:
             c.execute(
@@ -3668,7 +3781,16 @@ class SystemDatabase(ABC):
                     == WorkflowStatusString.DELAYED.value
                 )
                 .where(SystemSchema.workflow_status.c.delay_until_epoch_ms <= now_ms)
-                .values(status=WorkflowStatusString.ENQUEUED.value)
+                .values(
+                    status=WorkflowStatusString.ENQUEUED.value,
+                    deduplication_id=sa.case(
+                        (
+                            SystemSchema.workflow_status.c.is_debounced == True,
+                            None,
+                        ),
+                        else_=SystemSchema.workflow_status.c.deduplication_id,
+                    ),
+                )
             )
 
     def start_queued_workflows(
@@ -4503,6 +4625,8 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.completed_at,
                         SystemSchema.workflow_status.c.attributes,
                         SystemSchema.workflow_status.c.schedule_name,
+                        SystemSchema.workflow_status.c.debounce_deadline_epoch_ms,
+                        SystemSchema.workflow_status.c.is_debounced,
                         # owner_xid is intentionally omitted: it is a transient
                         # transaction-ownership token, not logical workflow state
                         # (get_workflow_status also returns None for it), and a
@@ -4547,6 +4671,8 @@ class SystemDatabase(ABC):
                     "completed_at": status_row[30],
                     "attributes": status_row[31],
                     "schedule_name": status_row[32],
+                    "debounce_deadline_epoch_ms": status_row[33],
+                    "is_debounced": status_row[34],
                 }
 
                 # Export operation_outputs
@@ -4708,6 +4834,10 @@ class SystemDatabase(ABC):
                         completed_at=status.get("completed_at"),
                         attributes=status.get("attributes"),
                         schedule_name=status.get("schedule_name"),
+                        debounce_deadline_epoch_ms=status.get(
+                            "debounce_deadline_epoch_ms"
+                        ),
+                        is_debounced=status.get("is_debounced", False),
                     )
                 )
 

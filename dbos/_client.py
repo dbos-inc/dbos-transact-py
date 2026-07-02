@@ -87,6 +87,9 @@ class EnqueueOptions(_EnqueueOptionsRequired, total=False):
     class_name: str
     instance_name: str
     attributes: Dict[str, Any]
+    # Internal debouncer fields; not part of the public enqueue API.
+    debounce_deadline_epoch_ms: Optional[int]
+    is_debounced: bool
 
 
 def validate_enqueue_options(options: EnqueueOptions) -> None:
@@ -271,6 +274,8 @@ class DBOSClient:
             "delay_until_epoch_ms": delay_until_epoch_ms,
             "attributes": options.get("attributes"),
             "schedule_name": None,
+            "debounce_deadline_epoch_ms": options.get("debounce_deadline_epoch_ms"),
+            "is_debounced": options.get("is_debounced", False),
         }
         return workflow_id, status
 

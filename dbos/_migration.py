@@ -875,6 +875,18 @@ CREATE INDEX IF NOT EXISTS "idx_workflow_status_schedule_name" ON "{schema}"."wo
 """
 
 
+def get_dbos_migration_fortytwo(schema: str) -> str:
+    # ADD COLUMN with no default (or a constant default) is catalog-only, so no
+    # table rewrite. These columns support the debouncer: is_debounced marks a
+    # workflow whose deduplication_id is a debounce key to be cleared when the
+    # workflow transitions from DELAYED to ENQUEUED, and debounce_deadline_epoch_ms
+    # caps how far bounces may extend the delay.
+    return f"""
+ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "debounce_deadline_epoch_ms" BIGINT DEFAULT NULL;
+ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "is_debounced" BOOLEAN NOT NULL DEFAULT FALSE;
+"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -920,6 +932,7 @@ def get_dbos_migrations(
         get_dbos_migration_thirtynine(schema, use_listen_notify),
         get_dbos_migration_forty(schema),
         get_dbos_migration_fortyone(schema),
+        get_dbos_migration_fortytwo(schema),
     ]
 
 
@@ -1173,6 +1186,11 @@ ALTER TABLE workflow_status ADD COLUMN "schedule_name" TEXT;
 CREATE INDEX IF NOT EXISTS "idx_workflow_status_schedule_name" ON "workflow_status" ("schedule_name") WHERE "schedule_name" IS NOT NULL;
 """
 
+sqlite_migration_fortytwo = """
+ALTER TABLE workflow_status ADD COLUMN "debounce_deadline_epoch_ms" BIGINT DEFAULT NULL;
+ALTER TABLE workflow_status ADD COLUMN "is_debounced" BOOLEAN NOT NULL DEFAULT FALSE;
+"""
+
 sqlite_migrations = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -1214,4 +1232,5 @@ sqlite_migrations = [
     # Unlike Postgres migration forty, this creates no index (no GIN equivalent)
     sqlite_migration_forty,
     sqlite_migration_fortyone,
+    sqlite_migration_fortytwo,
 ]

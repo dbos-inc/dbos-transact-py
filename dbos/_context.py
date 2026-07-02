@@ -136,6 +136,12 @@ class DBOSContext:
         self.queue_partition_key: Optional[str] = None
         # The UNIX epoch timestamp before which the workflow should not be dequeued
         self.delay_until_epoch_ms: Optional[int] = None
+        # Absolute cap (Unix epoch ms) beyond which debounce bounces may not
+        # extend the delay of the next enqueued workflow.
+        self.debounce_deadline_epoch_ms: Optional[int] = None
+        # Whether the next enqueued workflow is debounced (its deduplication_id
+        # is a debounce key to be cleared on the DELAYED->ENQUEUED transition).
+        self.is_debounced: bool = False
 
     def create_child(self, *, is_for_workflow: bool) -> DBOSContext:
         rv = DBOSContext()
@@ -175,6 +181,8 @@ class DBOSContext:
         rv.priority = self.priority
         rv.queue_partition_key = self.queue_partition_key
         rv.delay_until_epoch_ms = self.delay_until_epoch_ms
+        rv.debounce_deadline_epoch_ms = self.debounce_deadline_epoch_ms
+        rv.is_debounced = self.is_debounced
         rv.workflow_attributes = self.workflow_attributes
         self.function_id += 1
         rv.function_id = self.function_id
@@ -672,6 +680,63 @@ class SetEnqueueOptions:
         curr_ctx.queue_partition_key = self.saved_queue_partition_key
         curr_ctx.delay_until_epoch_ms = self.saved_delay_until_epoch_ms
         # Code to clean up the basic context if we created it
+        if self.created_ctx:
+            _clear_local_dbos_context()
+        return False
+
+
+class SetWorkflowDebounce:
+    """Internal: mark the next enqueued workflow as debounced.
+
+    Sets the deduplication ID (a debounce key), the initial delay, the absolute
+    debounce deadline, and the is_debounced flag on the context, restoring them
+    on exit. Unlike SetEnqueueOptions, it leaves priority/app_version/partition
+    untouched so a debounced workflow still inherits the caller's other options.
+    """
+
+    def __init__(
+        self,
+        *,
+        deduplication_id: str,
+        delay_until_epoch_ms: int,
+        debounce_deadline_epoch_ms: Optional[int],
+    ) -> None:
+        self.created_ctx = False
+        self.deduplication_id = deduplication_id
+        self.delay_until_epoch_ms = delay_until_epoch_ms
+        self.debounce_deadline_epoch_ms = debounce_deadline_epoch_ms
+        self.saved_deduplication_id: Optional[str] = None
+        self.saved_delay_until_epoch_ms: Optional[int] = None
+        self.saved_debounce_deadline_epoch_ms: Optional[int] = None
+        self.saved_is_debounced: bool = False
+
+    def __enter__(self) -> SetWorkflowDebounce:
+        ctx = get_local_dbos_context()
+        if ctx is None:
+            self.created_ctx = True
+            _set_local_dbos_context(DBOSContext())
+        ctx = assert_current_dbos_context()
+        self.saved_deduplication_id = ctx.deduplication_id
+        self.saved_delay_until_epoch_ms = ctx.delay_until_epoch_ms
+        self.saved_debounce_deadline_epoch_ms = ctx.debounce_deadline_epoch_ms
+        self.saved_is_debounced = ctx.is_debounced
+        ctx.deduplication_id = self.deduplication_id
+        ctx.delay_until_epoch_ms = self.delay_until_epoch_ms
+        ctx.debounce_deadline_epoch_ms = self.debounce_deadline_epoch_ms
+        ctx.is_debounced = True
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        curr_ctx = assert_current_dbos_context()
+        curr_ctx.deduplication_id = self.saved_deduplication_id
+        curr_ctx.delay_until_epoch_ms = self.saved_delay_until_epoch_ms
+        curr_ctx.debounce_deadline_epoch_ms = self.saved_debounce_deadline_epoch_ms
+        curr_ctx.is_debounced = self.saved_is_debounced
         if self.created_ctx:
             _clear_local_dbos_context()
         return False

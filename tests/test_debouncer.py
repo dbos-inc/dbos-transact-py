@@ -13,7 +13,9 @@ from dbos import (
 )
 from dbos._client import EnqueueOptions
 from dbos._context import SetEnqueueOptions, SetWorkflowTimeout
+from dbos._error import DBOSQueueDeduplicatedError
 from dbos._queue import Queue
+from dbos._registrations import get_dbos_func_name
 from dbos._utils import GlobalParams
 
 
@@ -322,3 +324,99 @@ async def test_debouncer_client_async(dbos: DBOS, client: DBOSClient) -> None:
     )
     assert handle.workflow_id == wfid
     assert await handle.get_result() == first_value
+
+
+def test_debounce_flip_clears_dedup(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    debouncer = Debouncer.create(workflow)
+    # A huge period keeps the workflow DELAYED until a later bounce shortens it.
+    handle = debouncer.debounce("key", 1000000, 1)
+
+    # While delayed, the workflow is marked debounced and holds the debounce key.
+    status = dbos._sys_db.get_workflow_status(handle.workflow_id)
+    assert status is not None
+    assert status["status"] == "DELAYED"
+    assert status["is_debounced"] is True
+    assert status["deduplication_id"] == f"{get_dbos_func_name(workflow)}-key"
+
+    # A bounce extends the delay and replaces the input; the same workflow runs.
+    handle2 = debouncer.debounce("key", 1, 2)
+    assert handle2.workflow_id == handle.workflow_id
+    assert handle2.get_result() == 2
+
+    # When the workflow transitioned from DELAYED to ENQUEUED, its debounce key
+    # was cleared, so a later debounce with the same key starts a fresh workflow.
+    status = dbos._sys_db.get_workflow_status(handle.workflow_id)
+    assert status is not None
+    assert status["deduplication_id"] is None
+
+    handle3 = debouncer.debounce("key", 1, 3)
+    assert handle3.workflow_id != handle.workflow_id
+    assert handle3.get_result() == 3
+
+
+def test_debounce_cancel_then_redebounce(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    debouncer = Debouncer.create(workflow)
+    handle = debouncer.debounce("key", 1000000, 1)
+    status = dbos._sys_db.get_workflow_status(handle.workflow_id)
+    assert status is not None and status["status"] == "DELAYED"
+
+    # Cancelling a delayed debounced workflow clears its debounce key.
+    DBOS.cancel_workflow(handle.workflow_id)
+
+    # A new debounce with the same key therefore starts a fresh workflow.
+    handle2 = debouncer.debounce("key", 1, 2)
+    assert handle2.workflow_id != handle.workflow_id
+    assert handle2.get_result() == 2
+
+
+def test_debounce_deadline_caps_initial_delay(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    # A huge period with a finite timeout: the delay is capped at the deadline.
+    debouncer = Debouncer.create(workflow, debounce_timeout_sec=1000)
+    handle = debouncer.debounce("key", 1000000, 1)
+
+    status = dbos._sys_db.get_workflow_status(handle.workflow_id)
+    assert status is not None
+    assert status["status"] == "DELAYED"
+    assert status["is_debounced"] is True
+    assert status["debounce_deadline_epoch_ms"] is not None
+    assert status["delay_until_epoch_ms"] is not None
+    assert status["delay_until_epoch_ms"] <= status["debounce_deadline_epoch_ms"]
+
+    DBOS.cancel_workflow(handle.workflow_id)
+
+
+def test_debounce_user_dedup_conflict_raises(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        DBOS.sleep(1000000)
+        return x
+
+    # A non-debounced workflow occupies the debounce key on the internal queue.
+    dedup_id = f"{get_dbos_func_name(workflow)}-key"
+    internal_queue = dbos._registry.get_internal_queue()
+    with SetEnqueueOptions(deduplication_id=dedup_id):
+        blocker = internal_queue.enqueue(workflow, 1)
+
+    # The key is held by a workflow that is not itself debounced, so debouncing
+    # the same key surfaces the deduplication conflict rather than hijacking it.
+    debouncer = Debouncer.create(workflow)
+    with pytest.raises(DBOSQueueDeduplicatedError):
+        debouncer.debounce("key", 1, 2)
+
+    DBOS.cancel_workflow(blocker.workflow_id)
