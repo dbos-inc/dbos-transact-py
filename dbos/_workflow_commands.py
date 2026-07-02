@@ -73,7 +73,7 @@ def delete_workflow(
 
 
 # Default number of rows deleted per garbage collection batch
-DEFAULT_GC_BATCH_SIZE = 100_000
+DEFAULT_GC_BATCH_SIZE = 10_000
 
 
 def garbage_collect(
