@@ -24,9 +24,13 @@ from dbos._client import (
     WorkflowHandleClientAsyncPolling,
     WorkflowHandleClientPolling,
 )
-from dbos._context import SetWorkflowDebounce, snapshot_step_context
+from dbos._context import (
+    SetWorkflowDebounce,
+    get_local_dbos_context,
+    snapshot_step_context,
+)
 from dbos._core import WorkflowHandleAsyncPolling, WorkflowHandlePolling
-from dbos._error import DBOSQueueDeduplicatedError
+from dbos._error import DBOSException, DBOSQueueDeduplicatedError
 from dbos._queue import Queue
 from dbos._registrations import get_dbos_func_name, get_func_info
 from dbos._serialization import serialize_args
@@ -45,6 +49,21 @@ def _resolve_queue_name(queue: Optional[Union[Queue, str]]) -> Optional[str]:
     if isinstance(queue, Queue):
         return queue.name
     return queue
+
+
+def _reject_conflicting_options(*, has_deduplication_id: bool, has_delay: bool) -> None:
+    """A debounce owns the workflow's deduplication ID (the debounce key) and its
+    delay (the debounce period), so a caller must not also set them."""
+    if has_deduplication_id:
+        raise DBOSException(
+            "Cannot debounce a workflow with a deduplication_id set: the debounce "
+            "key is used as the workflow's deduplication ID."
+        )
+    if has_delay:
+        raise DBOSException(
+            "Cannot debounce a workflow with a delay set: the debounce period "
+            "controls the workflow's delay."
+        )
 
 
 # The action a debounce caller should take after a bounce attempt.
@@ -163,6 +182,14 @@ class Debouncer(Generic[P, R]):
 
         dbos = _get_dbos_instance()
 
+        # The caller must not set a deduplication_id or delay: the debounce owns both.
+        ctx = get_local_dbos_context()
+        if ctx is not None:
+            _reject_conflicting_options(
+                has_deduplication_id=ctx.deduplication_id is not None,
+                has_delay=ctx.delay_until_epoch_ms is not None,
+            )
+
         # Resolve the queue the debounced workflow will run on.
         queue_name = self.options["queue_name"]
         if queue_name:
@@ -269,6 +296,13 @@ class DebouncerClient:
     def debounce(
         self, debounce_key: str, debounce_period_sec: float, *args: Any, **kwargs: Any
     ) -> "WorkflowHandle[R]":
+        # The workflow options must not set a deduplication_id or delay: the debounce owns both.
+        _reject_conflicting_options(
+            has_deduplication_id=self.workflow_options.get("deduplication_id")
+            is not None,
+            has_delay=self.workflow_options.get("delay_seconds") is not None,
+        )
+
         # Run on the debouncer's queue if one was given, else the queue named in the workflow options.
         queue_name = (
             self.debouncer_options["queue_name"] or self.workflow_options["queue_name"]

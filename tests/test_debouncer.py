@@ -13,7 +13,7 @@ from dbos import (
 )
 from dbos._client import EnqueueOptions
 from dbos._context import SetEnqueueOptions, SetWorkflowTimeout
-from dbos._error import DBOSQueueDeduplicatedError
+from dbos._error import DBOSException, DBOSQueueDeduplicatedError
 from dbos._queue import Queue
 from dbos._registrations import get_dbos_func_name
 from dbos._utils import GlobalParams
@@ -179,12 +179,10 @@ def test_debouncer_queue(dbos: DBOS) -> None:
     assert handle.get_result() == first_value
     assert handle.get_status().queue_name == queue.name
 
-    # Test SetEnqueueOptions works
+    # SetEnqueueOptions priority/app_version pass through (a deduplication_id/delay would be rejected, see test_debounce_rejects_*).
     test_version = "test_version"
     GlobalParams.app_version = test_version
-    with SetEnqueueOptions(
-        priority=1, deduplication_id="test", app_version=test_version
-    ):
+    with SetEnqueueOptions(priority=1, app_version=test_version):
         handle = debouncer.debounce("key", debounce_period_sec, first_value)
     assert handle.get_result() == first_value
     assert handle.get_status().queue_name == queue.name
@@ -461,10 +459,7 @@ def test_debounce_inworkflow_does_not_inherit_parent_deadline(dbos: DBOS) -> Non
 
     debouncer = Debouncer.create(child)
 
-    # Debounce from inside a workflow whose timeout (1s) is shorter than the
-    # debounce delay (3s). The debounced workflow must NOT inherit the parent's
-    # absolute deadline, or it would expire while DELAYED and be cancelled
-    # before it ever runs.
+    # Debounce inside a workflow whose timeout (1s) is shorter than the debounce delay (3s); the debounced workflow must not inherit the parent's deadline or it would be cancelled before running.
     @DBOS.workflow()
     def parent() -> str:
         handle = debouncer.debounce("deadline-key", 3.0, 5)
@@ -512,9 +507,7 @@ def test_debounce_inworkflow_replay_is_deterministic(dbos: DBOS) -> None:
     child_wfid = parent_handle.get_result()
     assert parent_body_runs["count"] == 1
 
-    # Force the parent to replay from its checkpoint. The bounce step and the
-    # subsequent enqueue are both checkpointed, so replay must re-run the body,
-    # return the SAME child id, and NOT enqueue a second child.
+    # Force the parent to replay from its checkpoint: the bounce step and enqueue are checkpointed, so replay must re-run the body, return the same child id, and not enqueue a second child.
     dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
     recovery_handles = DBOS._recover_pending_workflows()
     replayed = [h for h in recovery_handles if h.workflow_id == wfid]
@@ -530,3 +523,54 @@ def test_debounce_inworkflow_replay_is_deterministic(dbos: DBOS) -> None:
     child_handle: WorkflowHandle[int] = DBOS.retrieve_workflow(child_wfid)
     assert child_handle.get_result() == 7
     assert child_runs["count"] == 1
+
+
+def test_debounce_rejects_caller_dedup_and_delay(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    # A debounce owns the workflow's deduplication ID and delay, so a caller that sets either must fail loudly rather than have it silently ignored.
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    debouncer = Debouncer.create(workflow)
+
+    # Local: a caller-set deduplication_id is rejected.
+    with pytest.raises(DBOSException, match="deduplication_id"):
+        with SetEnqueueOptions(deduplication_id="caller-dedup"):
+            debouncer.debounce("k", 1.0, 1)
+
+    # Local: a caller-set delay is rejected.
+    with pytest.raises(DBOSException, match="delay"):
+        with SetEnqueueOptions(delay_seconds=100.0):
+            debouncer.debounce("k", 1.0, 1)
+
+    # Neither conflicting option left a workflow behind.
+    assert len(DBOS.list_workflows(name=get_dbos_func_name(workflow))) == 0
+
+    DBOS.register_queue("reject-queue")
+
+    # Client: a deduplication_id in the workflow options is rejected.
+    dedup_client = DebouncerClient(
+        client,
+        {
+            "workflow_name": workflow.__qualname__,
+            "queue_name": "reject-queue",
+            "deduplication_id": "caller-dedup",
+        },
+    )
+    with pytest.raises(DBOSException, match="deduplication_id"):
+        dedup_client.debounce("k", 1.0, 1)
+
+    # Client: a delay in the workflow options is rejected.
+    delay_client = DebouncerClient(
+        client,
+        {
+            "workflow_name": workflow.__qualname__,
+            "queue_name": "reject-queue",
+            "delay_seconds": 100.0,
+        },
+    )
+    with pytest.raises(DBOSException, match="delay"):
+        delay_client.debounce("k", 1.0, 1)
