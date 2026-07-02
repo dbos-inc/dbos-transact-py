@@ -4253,7 +4253,7 @@ class SystemDatabase(ABC):
         if cutoff_epoch_timestamp_ms is None:
             return None
 
-        # del all workflows older than cutoff that's not pending, enwued, delayed
+        # Delete all workflows older than cutoff that are NOT PENDING, ENQUEUED, or DELAYED
         gc_filter = sa.and_(
             SystemSchema.workflow_status.c.created_at < cutoff_epoch_timestamp_ms,
             ~SystemSchema.workflow_status.c.status.in_(
@@ -4269,24 +4269,32 @@ class SystemDatabase(ABC):
             with self.engine.begin() as c:
                 c.execute(sa.delete(SystemSchema.workflow_status).where(gc_filter))
         else:
-            # incremental del, committing each batch in its own Tx
-            # so locks, WAL growth & cascade work stay bounded & progress
-            # is preserved if a batch fails.
-            batch_query = (
-                sa.select(SystemSchema.workflow_status.c.workflow_uuid)
-                .where(gc_filter)
-                .limit(batch_size)
-                .correlate(None)
-                .scalar_subquery()
-            )
-            delete_stmt = sa.delete(SystemSchema.workflow_status).where(
-                SystemSchema.workflow_status.c.workflow_uuid.in_(batch_query)
-            )
+            # Delete in batches, each committed in its own transaction, by advancing
+            # a created_at watermark: every batch is one range scan at the bottom of
+            # workflow_status_created_at_index and never revisits deleted rows.
             while True:
                 with self.engine.begin() as c:
-                    deleted_rows = c.execute(delete_stmt).rowcount
-                if deleted_rows < batch_size:
-                    break
+                    # Find the created_at of the batch_size-th oldest eligible row
+                    step = c.execute(
+                        sa.select(SystemSchema.workflow_status.c.created_at)
+                        .where(gc_filter)
+                        .order_by(SystemSchema.workflow_status.c.created_at)
+                        .limit(1)
+                        .offset(batch_size - 1)
+                    ).scalar()
+                    if step is None:
+                        # Fewer than batch_size eligible rows remain: delete them and stop
+                        c.execute(
+                            sa.delete(SystemSchema.workflow_status).where(gc_filter)
+                        )
+                        break
+                    # Delete the batch; created_at ties may push it slightly over batch_size
+                    c.execute(
+                        sa.delete(SystemSchema.workflow_status).where(
+                            gc_filter,
+                            SystemSchema.workflow_status.c.created_at <= step,
+                        )
+                    )
 
         with self.engine.begin() as c:
             # Then, get the IDs of all remaining old workflows

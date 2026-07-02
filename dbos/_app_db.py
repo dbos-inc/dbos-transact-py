@@ -211,28 +211,34 @@ class ApplicationDatabase(ABC):
                 )
             return
 
-        # incrementally del, commit each batch in its own Tx so
-        # locks and WAL growth stay bounded & progress is preserved if batch
-        # fails. pk = (workflow_uuid, function_id), so batch by
-        # distinct workflow ID: batch_size counts workflows, & each iter
-        # del every eligible row of selected workflows.
-        batch_query = (
-            sa.select(ApplicationSchema.transaction_outputs.c.workflow_uuid)
-            .distinct()
-            .where(*gc_conditions)
-            .limit(batch_size)
-            .correlate(None)
-            .scalar_subquery()
-        )
-        delete_stmt = sa.delete(ApplicationSchema.transaction_outputs).where(
-            *gc_conditions,
-            ApplicationSchema.transaction_outputs.c.workflow_uuid.in_(batch_query),
-        )
+        # Delete in batches, each committed in its own transaction, by advancing
+        # a created_at watermark: every batch is one range scan at the bottom of
+        # transaction_outputs_created_at_index and never revisits deleted rows.
         while True:
             with self.engine.begin() as c:
-                deleted_rows = c.execute(delete_stmt).rowcount
-            if deleted_rows == 0:
-                break
+                # Find the created_at of the batch_size-th oldest eligible row
+                step = c.execute(
+                    sa.select(ApplicationSchema.transaction_outputs.c.created_at)
+                    .where(*gc_conditions)
+                    .order_by(ApplicationSchema.transaction_outputs.c.created_at)
+                    .limit(1)
+                    .offset(batch_size - 1)
+                ).scalar()
+                if step is None:
+                    # Fewer than batch_size eligible rows remain: delete them and stop
+                    c.execute(
+                        sa.delete(ApplicationSchema.transaction_outputs).where(
+                            *gc_conditions
+                        )
+                    )
+                    break
+                # Delete the batch; created_at ties may push it slightly over batch_size
+                c.execute(
+                    sa.delete(ApplicationSchema.transaction_outputs).where(
+                        *gc_conditions,
+                        ApplicationSchema.transaction_outputs.c.created_at <= step,
+                    )
+                )
 
     def delete_transaction_outputs(self, workflow_ids: list[str]) -> None:
         """Delete transaction outputs for the specified workflows."""

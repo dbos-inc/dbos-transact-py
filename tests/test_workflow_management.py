@@ -1,4 +1,3 @@
-import math
 import threading
 import time
 import uuid
@@ -1170,6 +1169,8 @@ def test_garbage_collection_batched(
     handle = DBOS.start_workflow(blocked_workflow)
     for i in range(num_workflows):
         assert workflow(i) == i
+        # Space out created_at so watermark batches split deterministically
+        time.sleep(0.005)
 
     assert dbos._app_db
 
@@ -1216,10 +1217,10 @@ def test_garbage_collection_batched(
         sa_event.remove(dbos._sys_db.engine, "before_cursor_execute", count_sys_deletes)
         sa_event.remove(dbos._app_db.engine, "before_cursor_execute", count_app_deletes)
 
-    # app's db loop stop on first empty batch, so it
-    # issues ceil(num_workflows / batch_size) batches +1 empty batch.
+    # Each loop issues num_workflows // batch_size full batches, then one final
+    # delete for the remainder (possibly empty)
     assert len(sys_delete_counts) == num_workflows // batch_size + 1
-    assert len(app_delete_counts) == math.ceil(num_workflows / batch_size) + 1
+    assert len(app_delete_counts) == num_workflows // batch_size + 1
 
     workflows = DBOS.list_workflows()
     assert len(workflows) == 1
@@ -1311,6 +1312,8 @@ def test_garbage_collection_batched_resumable(
 
     for i in range(num_workflows):
         assert workflow(i) == i
+        # Space out created_at so the first batch deletes exactly batch_size rows
+        time.sleep(0.005)
 
     # let 1st DELETE batch through, then fail the second
     delete_count = 0
