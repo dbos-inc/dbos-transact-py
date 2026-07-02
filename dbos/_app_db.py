@@ -184,22 +184,55 @@ class ApplicationDatabase(ABC):
         return result
 
     def garbage_collect(
-        self, cutoff_epoch_timestamp_ms: int, pending_workflow_ids: list[str]
+        self,
+        cutoff_epoch_timestamp_ms: int,
+        pending_workflow_ids: list[str],
+        batch_size: Optional[int] = None,
     ) -> None:
-        with self.engine.begin() as c:
-            delete_query = sa.delete(ApplicationSchema.transaction_outputs).where(
-                ApplicationSchema.transaction_outputs.c.created_at
-                < cutoff_epoch_timestamp_ms
+        if batch_size is not None and batch_size < 1:
+            raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
+        gc_conditions = [
+            ApplicationSchema.transaction_outputs.c.created_at
+            < cutoff_epoch_timestamp_ms
+        ]
+        if len(pending_workflow_ids) > 0:
+            gc_conditions.append(
+                ~ApplicationSchema.transaction_outputs.c.workflow_uuid.in_(
+                    pending_workflow_ids
+                )
             )
 
-            if len(pending_workflow_ids) > 0:
-                delete_query = delete_query.where(
-                    ~ApplicationSchema.transaction_outputs.c.workflow_uuid.in_(
-                        pending_workflow_ids
+        if batch_size is None:
+            with self.engine.begin() as c:
+                c.execute(
+                    sa.delete(ApplicationSchema.transaction_outputs).where(
+                        *gc_conditions
                     )
                 )
+            return
 
-            c.execute(delete_query)
+        # incrementally del, commit each batch in its own Tx so
+        # locks and WAL growth stay bounded & progress is preserved if batch
+        # fails. pk = (workflow_uuid, function_id), so batch by
+        # distinct workflow ID: batch_size counts workflows, & each iter
+        # del every eligible row of selected workflows.
+        batch_query = (
+            sa.select(ApplicationSchema.transaction_outputs.c.workflow_uuid)
+            .distinct()
+            .where(*gc_conditions)
+            .limit(batch_size)
+            .correlate(None)
+            .scalar_subquery()
+        )
+        delete_stmt = sa.delete(ApplicationSchema.transaction_outputs).where(
+            *gc_conditions,
+            ApplicationSchema.transaction_outputs.c.workflow_uuid.in_(batch_query),
+        )
+        while True:
+            with self.engine.begin() as c:
+                deleted_rows = c.execute(delete_stmt).rowcount
+            if deleted_rows == 0:
+                break
 
     def delete_transaction_outputs(self, workflow_ids: list[str]) -> None:
         """Delete transaction outputs for the specified workflows."""

@@ -4224,8 +4224,13 @@ class SystemDatabase(ABC):
             return deserialize_value(result[0], result[1], self.serializer)
 
     def garbage_collect(
-        self, cutoff_epoch_timestamp_ms: Optional[int], rows_threshold: Optional[int]
+        self,
+        cutoff_epoch_timestamp_ms: Optional[int],
+        rows_threshold: Optional[int],
+        batch_size: Optional[int] = None,
     ) -> Optional[tuple[int, list[str]]]:
+        if batch_size is not None and batch_size < 1:
+            raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
         if rows_threshold is not None:
             with self.engine.begin() as c:
                 # Get the created_at timestamp of the rows_threshold newest row
@@ -4248,25 +4253,42 @@ class SystemDatabase(ABC):
         if cutoff_epoch_timestamp_ms is None:
             return None
 
-        with self.engine.begin() as c:
-            # Delete all workflows older than cutoff that are NOT PENDING, ENQUEUED, or DELAYED
-            c.execute(
-                sa.delete(SystemSchema.workflow_status)
-                .where(
-                    SystemSchema.workflow_status.c.created_at
-                    < cutoff_epoch_timestamp_ms
-                )
-                .where(
-                    ~SystemSchema.workflow_status.c.status.in_(
-                        [
-                            WorkflowStatusString.PENDING.value,
-                            WorkflowStatusString.ENQUEUED.value,
-                            WorkflowStatusString.DELAYED.value,
-                        ]
-                    )
-                )
-            )
+        # del all workflows older than cutoff that's not pending, enwued, delayed
+        gc_filter = sa.and_(
+            SystemSchema.workflow_status.c.created_at < cutoff_epoch_timestamp_ms,
+            ~SystemSchema.workflow_status.c.status.in_(
+                [
+                    WorkflowStatusString.PENDING.value,
+                    WorkflowStatusString.ENQUEUED.value,
+                    WorkflowStatusString.DELAYED.value,
+                ]
+            ),
+        )
 
+        if batch_size is None:
+            with self.engine.begin() as c:
+                c.execute(sa.delete(SystemSchema.workflow_status).where(gc_filter))
+        else:
+            # incremental del, committing each batch in its own Tx
+            # so locks, WAL growth & cascade work stay bounded & progress
+            # is preserved if a batch fails.
+            batch_query = (
+                sa.select(SystemSchema.workflow_status.c.workflow_uuid)
+                .where(gc_filter)
+                .limit(batch_size)
+                .correlate(None)
+                .scalar_subquery()
+            )
+            delete_stmt = sa.delete(SystemSchema.workflow_status).where(
+                SystemSchema.workflow_status.c.workflow_uuid.in_(batch_query)
+            )
+            while True:
+                with self.engine.begin() as c:
+                    deleted_rows = c.execute(delete_stmt).rowcount
+                if deleted_rows < batch_size:
+                    break
+
+        with self.engine.begin() as c:
             # Then, get the IDs of all remaining old workflows
             pending_enqueued_result = c.execute(
                 sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(

@@ -741,6 +741,24 @@ def test_admin_garbage_collect(dbos: DBOS) -> None:
 
     assert len(DBOS.list_workflows()) == 0
 
+    num_workflows = 5
+    for _ in range(num_workflows):
+        workflow()
+
+    assert len(DBOS.list_workflows()) == num_workflows
+
+    response = requests.post(
+        f"http://localhost:3001/dbos-garbage-collect",
+        json={
+            "cutoff_epoch_timestamp_ms": int(time.time() * 1000),
+            "batch_size": 2,
+        },
+        timeout=5,
+    )
+    response.raise_for_status()
+
+    assert len(DBOS.list_workflows()) == 0
+
 
 def test_admin_global_timeout(dbos: DBOS) -> None:
 

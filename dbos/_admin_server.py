@@ -189,10 +189,12 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             inputs = json.loads(post_data.decode("utf-8"))
             cutoff_epoch_timestamp_ms = inputs.get("cutoff_epoch_timestamp_ms", None)
             rows_threshold = inputs.get("rows_threshold", None)
+            batch_size = inputs.get("batch_size", None)
             garbage_collect(
                 self.dbos,
                 cutoff_epoch_timestamp_ms=cutoff_epoch_timestamp_ms,
                 rows_threshold=rows_threshold,
+                batch_size=batch_size,
             )
             self.send_response(204)
             self._end_headers()

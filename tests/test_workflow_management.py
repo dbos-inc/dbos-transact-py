@@ -1,9 +1,12 @@
+import math
 import threading
 import time
 import uuid
+from typing import Any
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy import event as sa_event
 
 from dbos import DBOS, DBOSClient, SetEnqueueOptions, SetWorkflowID, WorkflowHandle
 from dbos._error import DBOSAwaitedWorkflowCancelledError
@@ -1133,6 +1136,258 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     )
     workflows = DBOS.list_workflows()
     assert len(workflows) == num_workflows
+
+
+# batch_size=3 exercises a final short batch (10 % 3 != 0); batch_size=5
+# exercises the exact-multiple termination edge (10 % 5 == 0); batch_size=20
+# exercises a single batch larger than the number of eligible rows.
+@pytest.mark.parametrize("batch_size", [3, 5, 20])
+def test_garbage_collection_batched(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None, batch_size: int
+) -> None:
+    event = threading.Event()
+
+    @DBOS.transaction()
+    def txn(x: int) -> int:
+        DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+        return x
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        txn(x)
+        return x
+
+    @DBOS.workflow()
+    def blocked_workflow() -> str:
+        txn(0)
+        event.wait()
+        workflow_id = DBOS.workflow_id
+        assert workflow_id is not None
+        return workflow_id
+
+    num_workflows = 10
+
+    handle = DBOS.start_workflow(blocked_workflow)
+    for i in range(num_workflows):
+        assert workflow(i) == i
+
+    assert dbos._app_db
+
+    # Count DELETE statements per table to verify del are batched
+    sys_delete_counts: list[int] = []
+    app_delete_counts: list[int] = []
+
+    def count_sys_deletes(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        if statement.lstrip().upper().startswith("DELETE") and (
+            "workflow_status" in statement
+        ):
+            sys_delete_counts.append(1)
+
+    def count_app_deletes(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        if statement.lstrip().upper().startswith("DELETE") and (
+            "transaction_outputs" in statement
+        ):
+            app_delete_counts.append(1)
+
+    sa_event.listen(dbos._sys_db.engine, "before_cursor_execute", count_sys_deletes)
+    sa_event.listen(dbos._app_db.engine, "before_cursor_execute", count_app_deletes)
+    try:
+        garbage_collect(
+            dbos,
+            cutoff_epoch_timestamp_ms=int(time.time() * 1000),
+            rows_threshold=None,
+            batch_size=batch_size,
+        )
+    finally:
+        sa_event.remove(dbos._sys_db.engine, "before_cursor_execute", count_sys_deletes)
+        sa_event.remove(dbos._app_db.engine, "before_cursor_execute", count_app_deletes)
+
+    # app's db loop stop on first empty batch, so it
+    # issues ceil(num_workflows / batch_size) batches +1 empty batch.
+    assert len(sys_delete_counts) == num_workflows // batch_size + 1
+    assert len(app_delete_counts) == math.ceil(num_workflows / batch_size) + 1
+
+    workflows = DBOS.list_workflows()
+    assert len(workflows) == 1
+    assert workflows[0].workflow_id == handle.workflow_id
+    with dbos._app_db.engine.begin() as c:
+        rows = c.execute(
+            sa.select(ApplicationSchema.transaction_outputs.c.workflow_uuid)
+        ).all()
+        assert len(rows) == 1
+        assert rows[0][0] == handle.workflow_id
+
+    DBOS.register_queue("gc_batched_test_queue")
+
+    @DBOS.workflow()
+    def gc_test_workflow() -> None:
+        pass
+
+    enqueued_handle = DBOS.enqueue_workflow("gc_batched_test_queue", gc_test_workflow)
+    with SetEnqueueOptions(delay_seconds=60.0):
+        delayed_handle = DBOS.enqueue_workflow(
+            "gc_batched_test_queue", gc_test_workflow
+        )
+
+    event.set()
+    assert handle.get_result() is not None
+    garbage_collect(
+        dbos,
+        cutoff_epoch_timestamp_ms=int(time.time() * 1000),
+        rows_threshold=None,
+        batch_size=1,
+    )
+    wf_ids = {w.workflow_id for w in DBOS.list_workflows()}
+    assert wf_ids == {enqueued_handle.workflow_id, delayed_handle.workflow_id}
+    with dbos._app_db.engine.begin() as c:
+        rows = c.execute(
+            sa.select(ApplicationSchema.transaction_outputs.c.workflow_uuid)
+        ).all()
+        assert len(rows) == 0
+
+    DBOS.cancel_workflow(enqueued_handle.workflow_id)
+    DBOS.cancel_workflow(delayed_handle.workflow_id)
+
+    garbage_collect(
+        dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=batch_size
+    )
+    garbage_collect(
+        dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=batch_size
+    )
+
+
+def test_garbage_collection_batched_rows_threshold(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    num_workflows = 10
+    rows_threshold = 4
+
+    workflow_ids: list[str] = []
+    for i in range(num_workflows):
+        handle = DBOS.start_workflow(workflow, i)
+        assert handle.get_result() == i
+        workflow_ids.append(handle.workflow_id)
+        time.sleep(0.005)
+
+    garbage_collect(
+        dbos,
+        cutoff_epoch_timestamp_ms=None,
+        rows_threshold=rows_threshold,
+        batch_size=3,
+    )
+
+    # exactly newest rows_threshold workflows survive
+    surviving_ids = {w.workflow_id for w in DBOS.list_workflows()}
+    assert surviving_ids == set(workflow_ids[-rows_threshold:])
+
+
+def test_garbage_collection_batched_resumable(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    num_workflows = 10
+    batch_size = 3
+
+    for i in range(num_workflows):
+        assert workflow(i) == i
+
+    # let 1st DELETE batch through, then fail the second
+    delete_count = 0
+
+    def fail_second_delete(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        nonlocal delete_count
+        if statement.lstrip().upper().startswith("DELETE") and (
+            "workflow_status" in statement
+        ):
+            delete_count += 1
+            if delete_count > 1:
+                raise RuntimeError("injected garbage collection failure")
+
+    sa_event.listen(dbos._sys_db.engine, "before_cursor_execute", fail_second_delete)
+    try:
+        with pytest.raises(Exception, match="injected garbage collection failure"):
+            dbos._sys_db.garbage_collect(
+                cutoff_epoch_timestamp_ms=int(time.time() * 1000),
+                rows_threshold=None,
+                batch_size=batch_size,
+            )
+    finally:
+        sa_event.remove(
+            dbos._sys_db.engine, "before_cursor_execute", fail_second_delete
+        )
+
+    # first batch committed before failure & wasn't rolled back
+    assert len(DBOS.list_workflows()) == num_workflows - batch_size
+
+    # rerunning GC completes deletion
+    dbos._sys_db.garbage_collect(
+        cutoff_epoch_timestamp_ms=int(time.time() * 1000),
+        rows_threshold=None,
+        batch_size=batch_size,
+    )
+    assert len(DBOS.list_workflows()) == 0
+
+
+def test_garbage_collection_batch_size_validation(dbos: DBOS) -> None:
+    assert dbos._app_db
+    for invalid_batch_size in (0, -1):
+        with pytest.raises(ValueError):
+            garbage_collect(
+                dbos,
+                cutoff_epoch_timestamp_ms=1,
+                rows_threshold=None,
+                batch_size=invalid_batch_size,
+            )
+        with pytest.raises(ValueError):
+            dbos._sys_db.garbage_collect(
+                cutoff_epoch_timestamp_ms=1,
+                rows_threshold=None,
+                batch_size=invalid_batch_size,
+            )
+        with pytest.raises(ValueError):
+            dbos._app_db.garbage_collect(1, [], batch_size=invalid_batch_size)
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    assert workflow(1) == 1
+    with pytest.raises(ValueError):
+        garbage_collect(
+            dbos,
+            cutoff_epoch_timestamp_ms=int(time.time() * 1000),
+            rows_threshold=None,
+            batch_size=0,
+        )
+    assert len(DBOS.list_workflows()) == 1
 
 
 def test_global_timeout(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> None:
