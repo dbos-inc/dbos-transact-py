@@ -1,5 +1,4 @@
 import asyncio
-import math
 import time
 import types
 from typing import (
@@ -25,23 +24,12 @@ from dbos._client import (
     WorkflowHandleClientAsyncPolling,
     WorkflowHandleClientPolling,
 )
-from dbos._context import (
-    SetEnqueueOptions,
-    SetWorkflowAttributes,
-    SetWorkflowDebounce,
-    SetWorkflowID,
-    SetWorkflowTimeout,
-    snapshot_step_context,
-)
-from dbos._core import (
-    DEBOUNCER_WORKFLOW_NAME,
-    WorkflowHandleAsyncPolling,
-    WorkflowHandlePolling,
-)
+from dbos._context import SetWorkflowDebounce, snapshot_step_context
+from dbos._core import WorkflowHandleAsyncPolling, WorkflowHandlePolling
 from dbos._error import DBOSQueueDeduplicatedError
 from dbos._queue import Queue
 from dbos._registrations import get_dbos_func_name, get_func_info
-from dbos._serialization import WorkflowInputs, serialize_args
+from dbos._serialization import serialize_args
 from dbos._sys_db import DebounceResult
 
 if TYPE_CHECKING:
@@ -49,13 +37,6 @@ if TYPE_CHECKING:
 
 P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
-
-
-_DEBOUNCER_TOPIC = "DEBOUNCER_TOPIC"
-
-# How long to wait before retrying when a legacy (pre-delay-based) debouncer
-# workflow still holds a debounce key during a version upgrade.
-_LEGACY_DRAIN_RETRY_SEC = 1.0
 
 
 def _resolve_queue_name(queue: Optional[Union[Queue, str]]) -> Optional[str]:
@@ -67,7 +48,7 @@ def _resolve_queue_name(queue: Optional[Union[Queue, str]]) -> Optional[str]:
 
 
 # The action a debounce caller should take after a bounce attempt.
-_BounceAction = Literal["return", "enqueue", "wait", "raise", "retry"]
+_BounceAction = Literal["return", "enqueue", "raise", "retry"]
 
 
 def _classify_bounce(result: DebounceResult) -> _BounceAction:
@@ -76,8 +57,6 @@ def _classify_bounce(result: DebounceResult) -> _BounceAction:
     - "return": an existing debounced workflow was extended; return a handle to
       ``result["bounced_workflow_id"]``.
     - "enqueue": the key is unheld; enqueue a fresh debounced workflow.
-    - "wait": a legacy debouncer workflow holds the key during a version upgrade;
-      wait for it to drain, then retry.
     - "raise": the key is held by a non-debounced workflow (a caller's own
       deduplicated workflow); surface the deduplication conflict.
     - "retry": a debounced holder flipped out of DELAYED mid-bounce (a rare
@@ -87,123 +66,16 @@ def _classify_bounce(result: DebounceResult) -> _BounceAction:
         return "return"
     if result["holder_workflow_id"] is None:
         return "enqueue"
-    if result["holder_name"] == DEBOUNCER_WORKFLOW_NAME:
-        return "wait"
     if not result["holder_is_debounced"]:
         return "raise"
     return "retry"
 
 
-# Options saved from the local context to pass through to the debounced function
-class ContextOptions(TypedDict):
-    workflow_id: str
-    deduplication_id: Optional[str]
-    priority: Optional[int]
-    app_version: Optional[str]
-    workflow_timeout_sec: Optional[float]
-    attributes: Optional[Dict[str, Any]]
-
-
-# Parameters for the debouncer workflow
+# Parameters for the debouncer
 class DebouncerOptions(TypedDict):
     workflow_name: str
     debounce_timeout_sec: Optional[float]
     queue_name: Optional[str]
-
-
-# The message sent from a debounce to the debouncer workflow
-class DebouncerMessage(TypedDict):
-    inputs: WorkflowInputs
-    message_id: str
-    debounce_period_sec: float
-
-
-# DEPRECATED: retained only so debouncer workflows enqueued before the switch to
-# delay-based debouncing can drain during a version upgrade. New debounces no
-# longer enqueue this workflow. Remove in a future release.
-async def debouncer_workflow(
-    initial_debounce_period_sec: float,
-    ctx: ContextOptions,
-    options: DebouncerOptions,
-    *args: Tuple[Any, ...],
-    **kwargs: Dict[str, Any],
-) -> None:
-    from dbos._dbos import DBOS, _get_dbos_instance
-
-    dbos = _get_dbos_instance()
-
-    workflow_inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
-
-    # Every time the debounced workflow is called, a message is sent to this workflow.
-    # It waits until debounce_period_sec have passed since the last message or until
-    # debounce_timeout_sec has elapsed.
-    async def get_debounce_deadline_epoch_sec() -> float:
-        return (
-            time.time() + options["debounce_timeout_sec"]
-            if options["debounce_timeout_sec"]
-            else math.inf
-        )
-
-    async def get_time() -> float:
-        return time.time()
-
-    debounce_deadline_epoch_sec = await DBOS.run_step_async(
-        {"name": "get_debounce_deadline_epoch_sec"}, get_debounce_deadline_epoch_sec
-    )
-    debounce_period_sec = initial_debounce_period_sec
-    while True:
-        now = await DBOS.run_step_async({"name": "get_time"}, get_time)
-        if now >= debounce_deadline_epoch_sec:
-            break
-        timeout = min(debounce_period_sec, max(debounce_deadline_epoch_sec - now, 0))
-        message: Optional[DebouncerMessage] = await DBOS.recv_async(
-            _DEBOUNCER_TOPIC, timeout_seconds=timeout
-        )
-        if message is None:
-            break
-        workflow_inputs = message["inputs"]
-        debounce_period_sec = message["debounce_period_sec"]
-        # Acknowledge receipt of the message
-        await DBOS.set_event_async(message["message_id"], message["message_id"])
-
-    # After the timeout or period has elapsed, enqueue the user workflow with the requested
-    # context parameters.
-    func = dbos._registry.workflow_info_map.get(options["workflow_name"], None)
-    if not func:
-        raise Exception(
-            f"Invalid workflow name provided to debouncer: {options['workflow_name']}"
-        )
-    if options["queue_name"]:
-        queue = dbos._registry.queue_info_map.get(options["queue_name"], None)
-        if not queue:
-            queue = await DBOS.retrieve_queue_async(options["queue_name"])
-        if not queue:
-            raise Exception(
-                f"Invalid queue name provided to debouncer: {options['queue_name']}"
-            )
-    else:
-        queue = dbos._registry.get_internal_queue()
-    with SetWorkflowID(ctx["workflow_id"]):
-        # Use .get() because inputs recorded before attributes existed lack the key
-        with (
-            SetWorkflowTimeout(ctx["workflow_timeout_sec"]),
-            SetWorkflowAttributes(ctx.get("attributes")),
-        ):
-            if options["queue_name"]:
-                # Apply the caller's enqueue options only on a user-specified queue,
-                # matching the original behavior (the direct-start path applied none).
-                with SetEnqueueOptions(
-                    deduplication_id=ctx["deduplication_id"],
-                    priority=ctx["priority"],
-                    app_version=ctx["app_version"],
-                ):
-                    await queue.enqueue_async(
-                        func, *workflow_inputs["args"], **workflow_inputs["kwargs"]
-                    )
-            else:
-                await queue.enqueue_async(
-                    func, *workflow_inputs["args"], **workflow_inputs["kwargs"]
-                )
 
 
 class Debouncer(Generic[P, R]):
@@ -347,9 +219,6 @@ class Debouncer(Generic[P, R]):
                 raise DBOSQueueDeduplicatedError(
                     result["holder_workflow_id"], queue.name, deduplication_id
                 )
-            if action == "wait":
-                time.sleep(_LEGACY_DRAIN_RETRY_SEC)
-                continue
             if action == "retry":
                 continue
 
@@ -445,9 +314,6 @@ class DebouncerClient:
                 raise DBOSQueueDeduplicatedError(
                     result["holder_workflow_id"], queue_name, deduplication_id
                 )
-            if action == "wait":
-                time.sleep(_LEGACY_DRAIN_RETRY_SEC)
-                continue
             if action == "retry":
                 continue
 

@@ -277,8 +277,6 @@ class DebounceResult(TypedDict):
     # occurred, or None if the key is unheld (it was cleared when the previous
     # debounced workflow transitioned from DELAYED to ENQUEUED).
     holder_workflow_id: Optional[str]
-    # The holder's workflow function name, used to detect a legacy debouncer.
-    holder_name: Optional[str]
     # Whether the holder is itself a debounced workflow.
     holder_is_debounced: bool
 
@@ -1035,15 +1033,13 @@ class SystemDatabase(ABC):
                 return {
                     "bounced_workflow_id": updated[0],
                     "holder_workflow_id": None,
-                    "holder_name": None,
                     "holder_is_debounced": False,
                 }
             # No debounced DELAYED workflow matched. The key may be unheld (the
             # previous debounced workflow already flipped to ENQUEUED and cleared
-            # it) or held by another workflow (a user's own deduplicated workflow,
-            # or a legacy debouncer during a version upgrade).
+            # it) or held by another workflow (a user's own deduplicated workflow).
             holder = c.execute(
-                sa.select(wsc.workflow_uuid, wsc.name, wsc.is_debounced)
+                sa.select(wsc.workflow_uuid, wsc.is_debounced)
                 .where(wsc.queue_name == queue_name)
                 .where(wsc.deduplication_id == deduplication_id)
             ).fetchone()
@@ -1051,14 +1047,12 @@ class SystemDatabase(ABC):
                 return {
                     "bounced_workflow_id": None,
                     "holder_workflow_id": None,
-                    "holder_name": None,
                     "holder_is_debounced": False,
                 }
             return {
                 "bounced_workflow_id": None,
                 "holder_workflow_id": holder[0],
-                "holder_name": holder[1],
-                "holder_is_debounced": bool(holder[2]),
+                "holder_is_debounced": bool(holder[1]),
             }
 
     def update_workflow_attributes(
@@ -3875,9 +3869,7 @@ class SystemDatabase(ABC):
 
             latest_version = c.execute(
                 sa.select(SystemSchema.application_versions.c.version_name)
-                .order_by(
-                    SystemSchema.application_versions.c.version_timestamp.desc()
-                )
+                .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
                 .limit(1)
             ).scalar()
             is_latest_version = latest_version is None or latest_version == app_version
