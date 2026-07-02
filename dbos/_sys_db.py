@@ -3751,14 +3751,7 @@ class SystemDatabase(ABC):
                 available_tasks = max(0, queue._concurrency - global_pending_workflows)
                 max_tasks = min(max_tasks, available_tasks)
 
-            latest_version = c.execute(
-                sa.select(SystemSchema.application_versions.c.version_name)
-                .order_by(
-                    SystemSchema.application_versions.c.version_timestamp.desc()
-                )
-                .limit(1)
-            ).scalar()
-            is_latest_version = latest_version is None or latest_version == app_version
+            is_latest_version = self._is_latest_application_version(c, app_version)
 
             version_predicate = (
                 SystemSchema.workflow_status.c.application_version == app_version
@@ -5021,6 +5014,33 @@ class SystemDatabase(ABC):
                 )
                 .on_conflict_do_nothing(index_elements=["version_name"])
             )
+
+    def _is_latest_application_version(
+        self, c: sa.Connection, version_name: str
+    ) -> bool:
+        # A version is latest iff no version has a strictly greater timestamp.
+        # Ties count as latest: comparing names against an arbitrarily-ordered
+        # max row would starve one of two versions registered at the same
+        # timestamp. An unregistered version is latest only if no versions
+        # are registered at all (coalesce to -1: any row beats it).
+        my_version_timestamp = (
+            sa.select(SystemSchema.application_versions.c.version_timestamp)
+            .where(SystemSchema.application_versions.c.version_name == version_name)
+            .scalar_subquery()
+        )
+        newer_version_exists = c.execute(
+            sa.select(
+                sa.exists().where(
+                    SystemSchema.application_versions.c.version_timestamp
+                    > sa.func.coalesce(my_version_timestamp, -1)
+                )
+            )
+        ).scalar()
+        return not bool(newer_version_exists)
+
+    def is_latest_application_version(self, version_name: str) -> bool:
+        with self.engine.begin() as c:
+            return self._is_latest_application_version(c, version_name)
 
     def update_application_version_timestamp(
         self, version_name: str, new_timestamp: int

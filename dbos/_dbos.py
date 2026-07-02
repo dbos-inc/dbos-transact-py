@@ -589,8 +589,8 @@ class DBOS:
 
             # Register the current application version
             self._sys_db.create_application_version(GlobalParams.app_version)
-            latest = self._sys_db.get_latest_application_version()
-            if latest["version_name"] != GlobalParams.app_version:
+            if not self._sys_db.is_latest_application_version(GlobalParams.app_version):
+                latest = self._sys_db.get_latest_application_version()
                 dbos_logger.warning(
                     f"Current version '{GlobalParams.app_version}' is not the latest version. "
                     f"Latest version is '{latest['version_name']}'."
