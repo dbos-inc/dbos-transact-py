@@ -2625,7 +2625,9 @@ def test_polling_interval(dbos: DBOS) -> None:
         assert time.time() - start_time < 1.0
 
 
-def test_listen_queue(dbos: DBOS, config: DBOSConfig) -> None:
+def test_listen_queue(
+    dbos: DBOS, config: DBOSConfig, skip_with_sqlite_imprecise_time: None
+) -> None:
     DBOS.destroy(destroy_registry=True)
     DBOS(config=config)
 

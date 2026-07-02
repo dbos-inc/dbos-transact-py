@@ -1,4 +1,5 @@
 import uuid
+from typing import Any
 
 import pytest
 
@@ -523,6 +524,50 @@ def test_debounce_inworkflow_replay_is_deterministic(dbos: DBOS) -> None:
     child_handle: WorkflowHandle[int] = DBOS.retrieve_workflow(child_wfid)
     assert child_handle.get_result() == 7
     assert child_runs["count"] == 1
+
+
+def test_debounce_retries_replayed_portable_dedup_error(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression test: when an in-workflow debounce's fresh enqueue loses the dedup race, the
+    # DBOSQueueDeduplicatedError is checkpointed at the parent's function ID. On replay it is
+    # re-raised from that checkpoint, but a workflow using portable (cross-language JSON)
+    # serialization deserializes it to a PortableWorkflowError carrying only the original type
+    # name -- not the original type. The retry loop must still recognize that form and bounce the
+    # existing workflow; otherwise the replayed workflow errors instead of retrying.
+    from dbos._serialization import PortableWorkflowError
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    debouncer = Debouncer.create(workflow)
+
+    original_enqueue = Queue.enqueue
+    enqueue_calls = {"count": 0}
+
+    def enqueue_raising_portable_dedup_once(
+        self: Queue, func: Any, *args: Any, **kwargs: Any
+    ) -> Any:
+        # The first enqueue raises the exact object a replay produces from a checkpointed,
+        # portable-serialized dedup error; subsequent enqueues behave normally.
+        enqueue_calls["count"] += 1
+        if enqueue_calls["count"] == 1:
+            raise PortableWorkflowError(
+                "Workflow was deduplicated",
+                DBOSQueueDeduplicatedError.__name__,
+                None,
+                None,
+            )
+        return original_enqueue(self, func, *args, **kwargs)
+
+    monkeypatch.setattr(Queue, "enqueue", enqueue_raising_portable_dedup_once)
+
+    handle = debouncer.debounce("portable-key", 0.5, 5)
+
+    # The loop recognized the replay-form dedup error and retried instead of propagating it.
+    assert enqueue_calls["count"] == 2
+    assert handle.get_result() == 5
 
 
 def test_debounce_rejects_caller_dedup_and_delay(

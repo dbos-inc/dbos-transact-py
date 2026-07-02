@@ -33,7 +33,7 @@ from dbos._core import WorkflowHandleAsyncPolling, WorkflowHandlePolling
 from dbos._error import DBOSException, DBOSQueueDeduplicatedError
 from dbos._queue import Queue
 from dbos._registrations import get_dbos_func_name, get_func_info
-from dbos._serialization import serialize_args
+from dbos._serialization import PortableWorkflowError, serialize_args
 from dbos._sys_db import DebounceResult
 
 if TYPE_CHECKING:
@@ -49,6 +49,23 @@ def _resolve_queue_name(queue: Optional[Union[Queue, str]]) -> Optional[str]:
     if isinstance(queue, Queue):
         return queue.name
     return queue
+
+
+def _is_queue_deduplicated_error(e: BaseException) -> bool:
+    """True if ``e`` is a queue-deduplication error, including its replay form.
+
+    When an in-workflow debounce's fresh enqueue loses the dedup race, the
+    DBOSQueueDeduplicatedError is checkpointed at the parent's function ID. On
+    replay it is re-raised from that checkpoint, but a workflow using portable
+    (cross-language JSON) serialization deserializes it to a PortableWorkflowError
+    (which carries the original type name), not the original type. Match both so
+    the retry loop still recognizes the collision on replay instead of erroring.
+    """
+    if isinstance(e, DBOSQueueDeduplicatedError):
+        return True
+    if isinstance(e, PortableWorkflowError):
+        return e.name == DBOSQueueDeduplicatedError.__name__
+    return False
 
 
 def _reject_conflicting_options(*, has_deduplication_id: bool, has_delay: bool) -> None:
@@ -255,8 +272,11 @@ class Debouncer(Generic[P, R]):
                     debounce_deadline_epoch_ms=deadline_ms,
                 ):
                     return queue.enqueue(func, *args, **kwargs)
-            except DBOSQueueDeduplicatedError:
+            except (DBOSQueueDeduplicatedError, PortableWorkflowError) as e:
                 # A concurrent debounce grabbed the key between bounce and enqueue; loop to bounce that workflow instead.
+                # (Also catches the portable-serialization replay form of the dedup error; see _is_queue_deduplicated_error.)
+                if not _is_queue_deduplicated_error(e):
+                    raise
                 continue
 
     async def debounce_async(
