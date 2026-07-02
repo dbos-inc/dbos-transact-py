@@ -5,7 +5,9 @@ from dbos import DBOS, DBOSConfig
 from dbos._error import DBOSUnexpectedStepError
 
 
-def test_patch(dbos: DBOS, config: DBOSConfig) -> None:
+def test_patch(
+    dbos: DBOS, config: DBOSConfig, skip_with_sqlite_imprecise_time: None
+) -> None:
     DBOS.destroy(destroy_registry=True)
     config["enable_patching"] = True
     test_version = "test_version"
@@ -224,7 +226,9 @@ def test_patch(dbos: DBOS, config: DBOSConfig) -> None:
 
 
 @pytest.mark.asyncio
-async def test_patch_async(dbos: DBOS, config: DBOSConfig) -> None:
+async def test_patch_async(
+    dbos: DBOS, config: DBOSConfig, skip_with_sqlite_imprecise_time: None
+) -> None:
     DBOS.destroy(destroy_registry=True)
     config["enable_patching"] = True
     DBOS(config=config)
