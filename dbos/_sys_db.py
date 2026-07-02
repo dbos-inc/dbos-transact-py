@@ -233,11 +233,9 @@ class WorkflowStatusInternal(TypedDict):
     delay_until_epoch_ms: Optional[int]
     attributes: Optional[Dict[str, Any]]
     schedule_name: Optional[str]
-    # Absolute cap (Unix epoch ms) beyond which debounce bounces may not extend
-    # the delay. None means the workflow is not debounced or has no timeout.
+    # Absolute cap (Unix epoch ms) beyond which bounces may not extend the delay; None if not debounced or no timeout.
     debounce_deadline_epoch_ms: Optional[int]
-    # True if this workflow's deduplication_id is a debounce key that must be
-    # cleared when the workflow transitions from DELAYED to ENQUEUED.
+    # True if this workflow's dedup ID is a debounce key to clear on the DELAYED->ENQUEUED transition.
     is_debounced: bool
 
 
@@ -262,21 +260,16 @@ class EnqueueOptionsInternal(TypedDict):
     queue_partition_key: Optional[str]
     # The UNIX epoch timestamp before which the workflow should not be dequeued
     delay_until_epoch_ms: Optional[int]
-    # Absolute cap (Unix epoch ms) beyond which debounce bounces may not extend
-    # the delay. None means the workflow is not debounced or has no timeout.
+    # Absolute cap (Unix epoch ms) beyond which bounces may not extend the delay; None if not debounced or no timeout.
     debounce_deadline_epoch_ms: Optional[int]
-    # True if this workflow's deduplication_id is a debounce key to be cleared
-    # when the workflow transitions from DELAYED to ENQUEUED.
+    # True if this workflow's dedup ID is a debounce key to clear on the DELAYED->ENQUEUED transition.
     is_debounced: bool
 
 
 class DebounceResult(TypedDict):
-    # The winner's workflow ID if an existing debounced DELAYED workflow was
-    # found and its delay/inputs were extended; None if no bounce occurred.
+    # The winner's workflow ID if an existing debounced DELAYED workflow was extended; None if no bounce occurred.
     bounced_workflow_id: Optional[str]
-    # The current holder of (queue_name, deduplication_id) when no bounce
-    # occurred, or None if the key is unheld (it was cleared when the previous
-    # debounced workflow transitioned from DELAYED to ENQUEUED).
+    # The current holder of (queue_name, deduplication_id) when no bounce occurred, or None if the key is unheld.
     holder_workflow_id: Optional[str]
     # Whether the holder is itself a debounced workflow.
     holder_is_debounced: bool
@@ -1044,8 +1037,7 @@ class SystemDatabase(ABC):
         """
         wsc = SystemSchema.workflow_status.c
         with self.engine.begin() as c:
-            # Cap the new delay at the debounce deadline, if any. Written as a
-            # CASE (not LEAST/min) to stay portable across Postgres and SQLite.
+            # Cap the new delay at the debounce deadline, if any (CASE not LEAST/min, for Postgres/SQLite portability).
             capped_delay = sa.case(
                 (
                     sa.and_(
@@ -1076,9 +1068,7 @@ class SystemDatabase(ABC):
                     "holder_workflow_id": None,
                     "holder_is_debounced": False,
                 }
-            # No debounced DELAYED workflow matched. The key may be unheld (the
-            # previous debounced workflow already flipped to ENQUEUED and cleared
-            # it) or held by another workflow (a user's own deduplicated workflow).
+            # No debounced DELAYED workflow matched: the key is unheld, or held by another (e.g. a user's own deduplicated) workflow.
             holder = c.execute(
                 sa.select(wsc.workflow_uuid, wsc.is_debounced)
                 .where(wsc.queue_name == queue_name)
@@ -3929,8 +3919,7 @@ class SystemDatabase(ABC):
                 )
 
             # Retrieve the first max_tasks workflows in the queue.
-            # Only retrieve workflows of the local version. Version-less workflows
-            # are only dequeued when this worker is running the latest version.
+            # Only dequeue workflows of the local version; version-less ones only when this worker runs the latest version.
             skip_locks = queue._concurrency is None
             query = (
                 sa.select(

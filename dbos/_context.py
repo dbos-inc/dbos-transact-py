@@ -136,11 +136,9 @@ class DBOSContext:
         self.queue_partition_key: Optional[str] = None
         # The UNIX epoch timestamp before which the workflow should not be dequeued
         self.delay_until_epoch_ms: Optional[int] = None
-        # Absolute cap (Unix epoch ms) beyond which debounce bounces may not
-        # extend the delay of the next enqueued workflow.
+        # Absolute cap (Unix epoch ms) beyond which bounces may not extend the next enqueued workflow's delay.
         self.debounce_deadline_epoch_ms: Optional[int] = None
-        # Whether the next enqueued workflow is debounced (its deduplication_id
-        # is a debounce key to be cleared on the DELAYED->ENQUEUED transition).
+        # Whether the next enqueued workflow is debounced (its dedup ID is a debounce key cleared on DELAYED->ENQUEUED).
         self.is_debounced: bool = False
 
     def create_child(self, *, is_for_workflow: bool) -> DBOSContext:

@@ -136,8 +136,7 @@ class Debouncer(Generic[P, R]):
         args: Tuple[Any, ...],
         kwargs: Dict[str, Any],
     ) -> DebounceResult:
-        # Serialize the new inputs the same way the initial enqueue did, so a
-        # bounce that replaces them stays consistent with the workflow's format.
+        # Serialize new inputs with the workflow's format so a bounce stays consistent with the initial enqueue.
         fi = get_func_info(func)
         serialization_type = fi.serialization_type if fi is not None else None
         inputs, serialization = serialize_args(
@@ -189,13 +188,7 @@ class Debouncer(Generic[P, R]):
         timeout_sec = self.options["debounce_timeout_sec"]
 
         while True:
-            # Try to extend an existing debounced workflow for this key first. This
-            # is the hot path for a burst of calls, and it makes the dedup key the
-            # sole coalescing mechanism: a caller-pinned workflow ID reused across
-            # calls bounces the existing workflow here rather than colliding on
-            # workflow_uuid (which would silently drop the new input). Run as a
-            # checkpointed step so a debounce called from within a workflow replays
-            # deterministically.
+            # Try to extend an existing debounced workflow for this key first (hot path, sole coalescing mechanism); a checkpointed step so an in-workflow debounce replays deterministically.
             result = dbos._sys_db.call_function_as_step(
                 lambda: self._bounce(
                     dbos,
@@ -222,9 +215,7 @@ class Debouncer(Generic[P, R]):
             if action == "retry":
                 continue
 
-            # action == "enqueue": the key is free, so create a fresh debounced
-            # workflow. These times are only observed when a fresh workflow is
-            # created; on replay the enqueue short-circuits through its checkpoint.
+            # action == "enqueue": key is free, create a fresh debounced workflow (these times are observed only on fresh creation; replay short-circuits through the checkpoint).
             now_ms = int(time.time() * 1000)
             deadline_ms = int(now_ms + timeout_sec * 1000) if timeout_sec else None
             delay_until_ms = now_ms + int(debounce_period_sec * 1000)
@@ -238,8 +229,7 @@ class Debouncer(Generic[P, R]):
                 ):
                     return queue.enqueue(func, *args, **kwargs)
             except DBOSQueueDeduplicatedError:
-                # A concurrent debounce grabbed the key between the bounce and this
-                # enqueue; loop to bounce that workflow instead.
+                # A concurrent debounce grabbed the key between bounce and enqueue; loop to bounce that workflow instead.
                 continue
 
     async def debounce_async(
@@ -279,8 +269,7 @@ class DebouncerClient:
     def debounce(
         self, debounce_key: str, debounce_period_sec: float, *args: Any, **kwargs: Any
     ) -> "WorkflowHandle[R]":
-        # Run the debounced workflow on the debouncer's queue if one was given,
-        # otherwise on the queue named in the workflow options.
+        # Run on the debouncer's queue if one was given, else the queue named in the workflow options.
         queue_name = (
             self.debouncer_options["queue_name"] or self.workflow_options["queue_name"]
         )
@@ -289,10 +278,7 @@ class DebouncerClient:
         serialization_type = self.workflow_options.get("serialization_type")
 
         while True:
-            # Try to extend an existing debounced workflow for this key first, so
-            # the dedup key is the sole coalescing mechanism (a caller-pinned
-            # workflow ID reused across calls bounces the existing workflow rather
-            # than colliding on workflow_uuid and dropping the new input).
+            # Try to extend an existing debounced workflow for this key first, so the dedup key is the sole coalescing mechanism.
             inputs, serialization = serialize_args(
                 args, kwargs, serialization_type, self.client._serializer
             )
@@ -317,8 +303,7 @@ class DebouncerClient:
             if action == "retry":
                 continue
 
-            # action == "enqueue": the key is free, so create a fresh debounced
-            # workflow.
+            # action == "enqueue": the key is free, so create a fresh debounced workflow.
             now_ms = int(time.time() * 1000)
             deadline_ms = int(now_ms + timeout_sec * 1000) if timeout_sec else None
             delay_sec = debounce_period_sec
@@ -338,8 +323,7 @@ class DebouncerClient:
             try:
                 return self.client.enqueue(options, *args, **kwargs)
             except DBOSQueueDeduplicatedError:
-                # A concurrent debounce grabbed the key between the bounce and this
-                # enqueue; loop to bounce that workflow instead.
+                # A concurrent debounce grabbed the key between bounce and enqueue; loop to bounce that workflow instead.
                 continue
 
     async def debounce_async(

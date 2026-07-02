@@ -348,8 +348,7 @@ def test_debounce_flip_clears_dedup(dbos: DBOS) -> None:
     assert handle2.workflow_id == handle.workflow_id
     assert handle2.get_result() == 2
 
-    # When the workflow transitioned from DELAYED to ENQUEUED, its debounce key
-    # was cleared, so a later debounce with the same key starts a fresh workflow.
+    # On the DELAYED->ENQUEUED transition its debounce key was cleared, so a later debounce with the same key starts fresh.
     status = dbos._sys_db.get_workflow_status(handle.workflow_id)
     assert status is not None
     assert status["deduplication_id"] is None
@@ -413,8 +412,7 @@ def test_debounce_user_dedup_conflict_raises(dbos: DBOS) -> None:
     with SetEnqueueOptions(deduplication_id=dedup_id):
         blocker = internal_queue.enqueue(workflow, 1)
 
-    # The key is held by a workflow that is not itself debounced, so debouncing
-    # the same key surfaces the deduplication conflict rather than hijacking it.
+    # The key is held by a non-debounced workflow, so debouncing it surfaces the dedup conflict rather than hijacking it.
     debouncer = Debouncer.create(workflow)
     with pytest.raises(DBOSQueueDeduplicatedError):
         debouncer.debounce("key", 1, 2)
@@ -430,9 +428,7 @@ def test_debounce_fixed_workflow_id_reuse(dbos: DBOS) -> None:
 
     debouncer = Debouncer.create(workflow)
 
-    # Pinning the same workflow ID across debounces of the same key must still
-    # bounce the existing DELAYED workflow (last input wins), not silently drop
-    # the new input by colliding on workflow_uuid.
+    # Pinning the same workflow ID across debounces of one key must still bounce the existing workflow (last input wins), not drop it on a workflow_uuid collision.
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         first_handle = debouncer.debounce("key", 2, 1)
@@ -443,8 +439,7 @@ def test_debounce_fixed_workflow_id_reuse(dbos: DBOS) -> None:
     assert first_handle.get_result() == 2
     assert second_handle.get_result() == 2
 
-    # A huge initial period pinned to an ID, then a short one under the same ID,
-    # must still shorten the delay so the workflow actually runs.
+    # A huge initial period then a short one under the same pinned ID must still shorten the delay so the workflow runs.
     wfid2 = str(uuid.uuid4())
     with SetWorkflowID(wfid2):
         third_handle = debouncer.debounce("key2", 1000000, 3)

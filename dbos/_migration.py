@@ -876,11 +876,6 @@ CREATE INDEX IF NOT EXISTS "idx_workflow_status_schedule_name" ON "{schema}"."wo
 
 
 def get_dbos_migration_fortytwo(schema: str) -> str:
-    # ADD COLUMN with no default (or a constant default) is catalog-only, so no
-    # table rewrite. These columns support the debouncer: is_debounced marks a
-    # workflow whose deduplication_id is a debounce key to be cleared when the
-    # workflow transitions from DELAYED to ENQUEUED, and debounce_deadline_epoch_ms
-    # caps how far bounces may extend the delay.
     return f"""
 ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "debounce_deadline_epoch_ms" BIGINT DEFAULT NULL;
 ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "is_debounced" BOOLEAN NOT NULL DEFAULT FALSE;
