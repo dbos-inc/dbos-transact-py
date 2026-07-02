@@ -1016,6 +1016,7 @@ def test_resume_and_fork_to_queue(dbos: DBOS) -> None:
 
 def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> None:
     event = threading.Event()
+    started = threading.Event()
 
     @DBOS.step()
     def step(x: int) -> int:
@@ -1035,6 +1036,7 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     @DBOS.workflow()
     def blocked_workflow() -> str:
         txn(0)
+        started.set()
         event.wait()
         workflow_id = DBOS.workflow_id
         assert workflow_id is not None
@@ -1043,6 +1045,8 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     num_workflows = 10
 
     handle = DBOS.start_workflow(blocked_workflow)
+    # Wait for its txn output to commit so GC assertions can count on it
+    assert started.wait(timeout=30)
     for i in range(num_workflows):
         assert workflow(i) == i
 
@@ -1147,6 +1151,7 @@ def test_garbage_collection_batched(
     dbos: DBOS, skip_with_sqlite_imprecise_time: None, batch_size: int
 ) -> None:
     event = threading.Event()
+    started = threading.Event()
 
     @DBOS.transaction()
     def txn(x: int) -> int:
@@ -1161,6 +1166,7 @@ def test_garbage_collection_batched(
     @DBOS.workflow()
     def blocked_workflow() -> str:
         txn(0)
+        started.set()
         event.wait()
         workflow_id = DBOS.workflow_id
         assert workflow_id is not None
@@ -1169,6 +1175,8 @@ def test_garbage_collection_batched(
     num_workflows = 10
 
     handle = DBOS.start_workflow(blocked_workflow)
+    # Wait for its txn output to commit so GC assertions can count on it
+    assert started.wait(timeout=30)
     for i in range(num_workflows):
         assert workflow(i) == i
         # Space out created_at so watermark batches split deterministically
