@@ -4227,7 +4227,7 @@ class SystemDatabase(ABC):
         self,
         cutoff_epoch_timestamp_ms: Optional[int],
         rows_threshold: Optional[int],
-        batch_size: Optional[int] = None,
+        batch_size: Optional[int],
     ) -> Optional[tuple[int, list[str]]]:
         if batch_size is not None and batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")

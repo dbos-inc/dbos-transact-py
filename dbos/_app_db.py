@@ -187,7 +187,7 @@ class ApplicationDatabase(ABC):
         self,
         cutoff_epoch_timestamp_ms: int,
         pending_workflow_ids: list[str],
-        batch_size: Optional[int] = None,
+        batch_size: Optional[int],
     ) -> None:
         if batch_size is not None and batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")

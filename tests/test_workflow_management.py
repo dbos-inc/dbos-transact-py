@@ -1046,8 +1046,10 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     for i in range(num_workflows):
         assert workflow(i) == i
 
-    # Garbage collect all but one workflow
-    garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1)
+    # Garbage collect all but one workflow, exercising the unbatched path
+    garbage_collect(
+        dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
+    )
     # Verify two workflows remain: the newest and the blocked workflow
     workflows = DBOS.list_workflows()
     assert len(workflows) == 2
