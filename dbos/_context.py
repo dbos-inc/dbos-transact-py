@@ -690,6 +690,13 @@ class SetWorkflowDebounce:
     debounce deadline, and the is_debounced flag on the context, restoring them
     on exit. Unlike SetEnqueueOptions, it leaves priority/app_version/partition
     untouched so a debounced workflow still inherits the caller's other options.
+
+    It also clears any propagated workflow deadline: a debounce called inside a
+    workflow that has a timeout would otherwise pass that workflow's absolute
+    deadline to the debounced workflow, which — because a debounce delay can be
+    long — could expire before the debounced workflow ever runs. The debounced
+    workflow's own timeout (an explicit SetWorkflowTimeout, kept in
+    workflow_timeout_ms) is unaffected and is applied fresh on dequeue.
     """
 
     def __init__(
@@ -707,6 +714,7 @@ class SetWorkflowDebounce:
         self.saved_delay_until_epoch_ms: Optional[int] = None
         self.saved_debounce_deadline_epoch_ms: Optional[int] = None
         self.saved_is_debounced: bool = False
+        self.saved_workflow_deadline_epoch_ms: Optional[int] = None
 
     def __enter__(self) -> SetWorkflowDebounce:
         ctx = get_local_dbos_context()
@@ -718,10 +726,13 @@ class SetWorkflowDebounce:
         self.saved_delay_until_epoch_ms = ctx.delay_until_epoch_ms
         self.saved_debounce_deadline_epoch_ms = ctx.debounce_deadline_epoch_ms
         self.saved_is_debounced = ctx.is_debounced
+        self.saved_workflow_deadline_epoch_ms = ctx.workflow_deadline_epoch_ms
         ctx.deduplication_id = self.deduplication_id
         ctx.delay_until_epoch_ms = self.delay_until_epoch_ms
         ctx.debounce_deadline_epoch_ms = self.debounce_deadline_epoch_ms
         ctx.is_debounced = True
+        # Don't inherit the caller workflow's deadline onto the debounced workflow.
+        ctx.workflow_deadline_epoch_ms = None
         return self
 
     def __exit__(
@@ -735,6 +746,7 @@ class SetWorkflowDebounce:
         curr_ctx.delay_until_epoch_ms = self.saved_delay_until_epoch_ms
         curr_ctx.debounce_deadline_epoch_ms = self.saved_debounce_deadline_epoch_ms
         curr_ctx.is_debounced = self.saved_is_debounced
+        curr_ctx.workflow_deadline_epoch_ms = self.saved_workflow_deadline_epoch_ms
         if self.created_ctx:
             _clear_local_dbos_context()
         return False

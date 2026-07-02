@@ -448,3 +448,85 @@ def test_debounce_fixed_workflow_id_reuse(dbos: DBOS) -> None:
     assert third_handle.workflow_id == wfid2
     assert fourth_handle.workflow_id == wfid2
     assert fourth_handle.get_result() == 4
+
+
+def test_debounce_inworkflow_does_not_inherit_parent_deadline(dbos: DBOS) -> None:
+
+    ran = {"child": False}
+
+    @DBOS.workflow()
+    def child(x: int) -> int:
+        ran["child"] = True
+        return x
+
+    debouncer = Debouncer.create(child)
+
+    # Debounce from inside a workflow whose timeout (1s) is shorter than the
+    # debounce delay (3s). The debounced workflow must NOT inherit the parent's
+    # absolute deadline, or it would expire while DELAYED and be cancelled
+    # before it ever runs.
+    @DBOS.workflow()
+    def parent() -> str:
+        handle = debouncer.debounce("deadline-key", 3.0, 5)
+        return handle.workflow_id
+
+    with SetWorkflowTimeout(1.0):
+        parent_handle = DBOS.start_workflow(parent)
+    child_wfid = parent_handle.get_result()
+
+    # The debounced workflow carries no inherited deadline while delayed.
+    status = dbos._sys_db.get_workflow_status(child_wfid)
+    assert status is not None
+    assert status["status"] == "DELAYED"
+    assert status["workflow_deadline_epoch_ms"] is None
+
+    # It runs to completion after the delay rather than being cancelled.
+    child_handle: WorkflowHandle[int] = DBOS.retrieve_workflow(child_wfid)
+    assert child_handle.get_result() == 5
+    assert ran["child"] is True
+    assert child_handle.get_status().status == "SUCCESS"
+
+
+def test_debounce_inworkflow_replay_is_deterministic(dbos: DBOS) -> None:
+
+    child_runs = {"count": 0}
+
+    @DBOS.workflow()
+    def child(x: int) -> int:
+        child_runs["count"] += 1
+        return x
+
+    debouncer = Debouncer.create(child)
+
+    parent_body_runs = {"count": 0}
+
+    @DBOS.workflow()
+    def parent() -> str:
+        parent_body_runs["count"] += 1
+        handle = debouncer.debounce("replay-key", 1.0, 7)
+        return handle.workflow_id
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        parent_handle = DBOS.start_workflow(parent)
+    child_wfid = parent_handle.get_result()
+    assert parent_body_runs["count"] == 1
+
+    # Force the parent to replay from its checkpoint. The bounce step and the
+    # subsequent enqueue are both checkpointed, so replay must re-run the body,
+    # return the SAME child id, and NOT enqueue a second child.
+    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+    recovery_handles = DBOS._recover_pending_workflows()
+    replayed = [h for h in recovery_handles if h.workflow_id == wfid]
+    assert len(replayed) == 1
+    assert replayed[0].get_result() == child_wfid
+    assert parent_body_runs["count"] == 2
+
+    # Exactly one child workflow exists for this key: replay did not double-enqueue.
+    child_name = get_dbos_func_name(child)
+    assert len(DBOS.list_workflows(name=child_name)) == 1
+
+    # The single debounced child runs to completion exactly once.
+    child_handle: WorkflowHandle[int] = DBOS.retrieve_workflow(child_wfid)
+    assert child_handle.get_result() == 7
+    assert child_runs["count"] == 1
