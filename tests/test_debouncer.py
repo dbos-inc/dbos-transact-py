@@ -420,3 +420,36 @@ def test_debounce_user_dedup_conflict_raises(dbos: DBOS) -> None:
         debouncer.debounce("key", 1, 2)
 
     DBOS.cancel_workflow(blocker.workflow_id)
+
+
+def test_debounce_fixed_workflow_id_reuse(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    debouncer = Debouncer.create(workflow)
+
+    # Pinning the same workflow ID across debounces of the same key must still
+    # bounce the existing DELAYED workflow (last input wins), not silently drop
+    # the new input by colliding on workflow_uuid.
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        first_handle = debouncer.debounce("key", 2, 1)
+    with SetWorkflowID(wfid):
+        second_handle = debouncer.debounce("key", 2, 2)
+    assert first_handle.workflow_id == wfid
+    assert second_handle.workflow_id == wfid
+    assert first_handle.get_result() == 2
+    assert second_handle.get_result() == 2
+
+    # A huge initial period pinned to an ID, then a short one under the same ID,
+    # must still shorten the delay so the workflow actually runs.
+    wfid2 = str(uuid.uuid4())
+    with SetWorkflowID(wfid2):
+        third_handle = debouncer.debounce("key2", 1000000, 3)
+    with SetWorkflowID(wfid2):
+        fourth_handle = debouncer.debounce("key2", 1, 4)
+    assert third_handle.workflow_id == wfid2
+    assert fourth_handle.workflow_id == wfid2
+    assert fourth_handle.get_result() == 4

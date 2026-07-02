@@ -66,30 +66,32 @@ def _resolve_queue_name(queue: Optional[Union[Queue, str]]) -> Optional[str]:
     return queue
 
 
-# The action to take after attempting to bounce an existing debounced workflow.
-_BounceAction = Literal["return", "retry", "wait", "raise"]
+# The action a debounce caller should take after a bounce attempt.
+_BounceAction = Literal["return", "enqueue", "wait", "raise", "retry"]
 
 
-def _classify_bounce(result: DebounceResult) -> Tuple[_BounceAction, Optional[str]]:
+def _classify_bounce(result: DebounceResult) -> _BounceAction:
     """Decide what a debounce caller should do after a bounce attempt.
 
-    - "return": an existing debounced workflow was extended; return a handle to it.
-    - "retry": the key is unheld (the previous debounced workflow already started)
-      or a rare race occurred; try enqueueing a fresh workflow again.
+    - "return": an existing debounced workflow was extended; return a handle to
+      ``result["bounced_workflow_id"]``.
+    - "enqueue": the key is unheld; enqueue a fresh debounced workflow.
     - "wait": a legacy debouncer workflow holds the key during a version upgrade;
       wait for it to drain, then retry.
     - "raise": the key is held by a non-debounced workflow (a caller's own
       deduplicated workflow); surface the deduplication conflict.
+    - "retry": a debounced holder flipped out of DELAYED mid-bounce (a rare
+      race); retry the bounce.
     """
     if result["bounced_workflow_id"] is not None:
-        return "return", result["bounced_workflow_id"]
+        return "return"
     if result["holder_workflow_id"] is None:
-        return "retry", None
+        return "enqueue"
     if result["holder_name"] == DEBOUNCER_WORKFLOW_NAME:
-        return "wait", None
+        return "wait"
     if not result["holder_is_debounced"]:
-        return "raise", None
-    return "retry", None
+        return "raise"
+    return "retry"
 
 
 # Options saved from the local context to pass through to the debounced function
@@ -315,50 +317,61 @@ class Debouncer(Generic[P, R]):
         timeout_sec = self.options["debounce_timeout_sec"]
 
         while True:
-            # These are only observed the first time a fresh workflow is created;
-            # on replay the enqueue short-circuits through its checkpoint.
+            # Try to extend an existing debounced workflow for this key first. This
+            # is the hot path for a burst of calls, and it makes the dedup key the
+            # sole coalescing mechanism: a caller-pinned workflow ID reused across
+            # calls bounces the existing workflow here rather than colliding on
+            # workflow_uuid (which would silently drop the new input). Run as a
+            # checkpointed step so a debounce called from within a workflow replays
+            # deterministically.
+            result = dbos._sys_db.call_function_as_step(
+                lambda: self._bounce(
+                    dbos,
+                    func,
+                    queue.name,
+                    deduplication_id,
+                    debounce_period_sec,
+                    args,
+                    kwargs,
+                ),
+                "DBOS.debounce_delayed_workflow",
+                snapshot_step_context(reserve_sleep_id=False),
+            )
+            action = _classify_bounce(result)
+            if action == "return":
+                bounced_wfid = result["bounced_workflow_id"]
+                assert bounced_wfid is not None
+                return WorkflowHandlePolling(bounced_wfid, dbos)
+            if action == "raise":
+                assert result["holder_workflow_id"] is not None
+                raise DBOSQueueDeduplicatedError(
+                    result["holder_workflow_id"], queue.name, deduplication_id
+                )
+            if action == "wait":
+                time.sleep(_LEGACY_DRAIN_RETRY_SEC)
+                continue
+            if action == "retry":
+                continue
+
+            # action == "enqueue": the key is free, so create a fresh debounced
+            # workflow. These times are only observed when a fresh workflow is
+            # created; on replay the enqueue short-circuits through its checkpoint.
             now_ms = int(time.time() * 1000)
             deadline_ms = int(now_ms + timeout_sec * 1000) if timeout_sec else None
             delay_until_ms = now_ms + int(debounce_period_sec * 1000)
             if deadline_ms is not None:
                 delay_until_ms = min(delay_until_ms, deadline_ms)
             try:
-                # Enqueue a fresh debounced workflow. The debounce key occupies the
-                # deduplication slot, so a concurrent debounce for the same key
-                # collides here and falls through to the bounce path below.
                 with SetWorkflowDebounce(
                     deduplication_id=deduplication_id,
                     delay_until_epoch_ms=delay_until_ms,
                     debounce_deadline_epoch_ms=deadline_ms,
                 ):
-                    handle = queue.enqueue(func, *args, **kwargs)
-                return handle
+                    return queue.enqueue(func, *args, **kwargs)
             except DBOSQueueDeduplicatedError:
-                # A debounced workflow already exists for this key. Extend its
-                # delay and replace its inputs, as a checkpointed step so a
-                # debounce called from within a workflow replays deterministically.
-                result = dbos._sys_db.call_function_as_step(
-                    lambda: self._bounce(
-                        dbos,
-                        func,
-                        queue.name,
-                        deduplication_id,
-                        debounce_period_sec,
-                        args,
-                        kwargs,
-                    ),
-                    "DBOS.debounce_delayed_workflow",
-                    snapshot_step_context(reserve_sleep_id=False),
-                )
-                action, bounced_wfid = _classify_bounce(result)
-                if action == "return":
-                    assert bounced_wfid is not None
-                    return WorkflowHandlePolling(bounced_wfid, dbos)
-                if action == "raise":
-                    raise
-                if action == "wait":
-                    time.sleep(_LEGACY_DRAIN_RETRY_SEC)
-                # "retry"/"wait": loop and attempt a fresh enqueue again.
+                # A concurrent debounce grabbed the key between the bounce and this
+                # enqueue; loop to bounce that workflow instead.
+                continue
 
     async def debounce_async(
         self,
@@ -407,6 +420,39 @@ class DebouncerClient:
         serialization_type = self.workflow_options.get("serialization_type")
 
         while True:
+            # Try to extend an existing debounced workflow for this key first, so
+            # the dedup key is the sole coalescing mechanism (a caller-pinned
+            # workflow ID reused across calls bounces the existing workflow rather
+            # than colliding on workflow_uuid and dropping the new input).
+            inputs, serialization = serialize_args(
+                args, kwargs, serialization_type, self.client._serializer
+            )
+            bounce_delay_ms = int(time.time() * 1000 + debounce_period_sec * 1000)
+            result = self.client._sys_db.debounce_delayed_workflow(
+                queue_name=queue_name,
+                deduplication_id=deduplication_id,
+                delay_until_epoch_ms=bounce_delay_ms,
+                inputs=inputs,
+                serialization=serialization,
+            )
+            action = _classify_bounce(result)
+            if action == "return":
+                bounced_wfid = result["bounced_workflow_id"]
+                assert bounced_wfid is not None
+                return WorkflowHandleClientPolling[R](bounced_wfid, self.client._sys_db)
+            if action == "raise":
+                assert result["holder_workflow_id"] is not None
+                raise DBOSQueueDeduplicatedError(
+                    result["holder_workflow_id"], queue_name, deduplication_id
+                )
+            if action == "wait":
+                time.sleep(_LEGACY_DRAIN_RETRY_SEC)
+                continue
+            if action == "retry":
+                continue
+
+            # action == "enqueue": the key is free, so create a fresh debounced
+            # workflow.
             now_ms = int(time.time() * 1000)
             deadline_ms = int(now_ms + timeout_sec * 1000) if timeout_sec else None
             delay_sec = debounce_period_sec
@@ -424,34 +470,11 @@ class DebouncerClient:
                 },
             )
             try:
-                # Enqueue a fresh debounced workflow. A concurrent debounce for the
-                # same key collides on the deduplication slot and bounces below.
                 return self.client.enqueue(options, *args, **kwargs)
             except DBOSQueueDeduplicatedError:
-                # A debounced workflow already exists for this key; extend its
-                # delay and replace its inputs.
-                inputs, serialization = serialize_args(
-                    args, kwargs, serialization_type, self.client._serializer
-                )
-                bounce_delay_ms = int(time.time() * 1000 + debounce_period_sec * 1000)
-                result = self.client._sys_db.debounce_delayed_workflow(
-                    queue_name=queue_name,
-                    deduplication_id=deduplication_id,
-                    delay_until_epoch_ms=bounce_delay_ms,
-                    inputs=inputs,
-                    serialization=serialization,
-                )
-                action, bounced_wfid = _classify_bounce(result)
-                if action == "return":
-                    assert bounced_wfid is not None
-                    return WorkflowHandleClientPolling[R](
-                        bounced_wfid, self.client._sys_db
-                    )
-                if action == "raise":
-                    raise
-                if action == "wait":
-                    time.sleep(_LEGACY_DRAIN_RETRY_SEC)
-                # "retry"/"wait": loop and attempt a fresh enqueue again.
+                # A concurrent debounce grabbed the key between the bounce and this
+                # enqueue; loop to bounce that workflow instead.
+                continue
 
     async def debounce_async(
         self, deboucne_key: str, debounce_period_sec: float, *args: Any, **kwargs: Any
