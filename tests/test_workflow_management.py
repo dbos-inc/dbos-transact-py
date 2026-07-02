@@ -1143,9 +1143,7 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     assert len(workflows) == num_workflows
 
 
-# batch_size=3 exercises a final short batch (10 % 3 != 0); batch_size=5
-# exercises the exact-multiple termination edge (10 % 5 == 0); batch_size=20
-# exercises a single batch larger than the number of eligible rows.
+# batch_size: 3 = short final batch, 5 = exact multiple, 20 = larger than all eligible rows
 @pytest.mark.parametrize("batch_size", [3, 5, 20])
 def test_garbage_collection_batched(
     dbos: DBOS, skip_with_sqlite_imprecise_time: None, batch_size: int
@@ -1227,8 +1225,7 @@ def test_garbage_collection_batched(
         sa_event.remove(dbos._sys_db.engine, "before_cursor_execute", count_sys_deletes)
         sa_event.remove(dbos._app_db.engine, "before_cursor_execute", count_app_deletes)
 
-    # Each loop issues num_workflows // batch_size full batches, then one final
-    # delete for the remainder (possibly empty)
+    # Each loop runs num_workflows // batch_size full batches plus a final remainder delete
     assert len(sys_delete_counts) == num_workflows // batch_size + 1
     assert len(app_delete_counts) == num_workflows // batch_size + 1
 

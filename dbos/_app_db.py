@@ -211,21 +211,23 @@ class ApplicationDatabase(ABC):
                 )
             return
 
-        # Delete in batches, each committed in its own transaction, by advancing
-        # a created_at watermark: every batch is one range scan at the bottom of
-        # transaction_outputs_created_at_index and never revisits deleted rows.
+        # Batch-delete by advancing a created_at watermark, one committed transaction per batch
+        watermark = 0
         while True:
             with self.engine.begin() as c:
-                # Find the created_at of the batch_size-th oldest eligible row
+                # Find the created_at of the batch_size-th oldest eligible row above the watermark
                 step = c.execute(
                     sa.select(ApplicationSchema.transaction_outputs.c.created_at)
-                    .where(*gc_conditions)
+                    .where(
+                        *gc_conditions,
+                        ApplicationSchema.transaction_outputs.c.created_at > watermark,
+                    )
                     .order_by(ApplicationSchema.transaction_outputs.c.created_at)
                     .limit(1)
                     .offset(batch_size - 1)
                 ).scalar()
                 if step is None:
-                    # Fewer than batch_size eligible rows remain: delete them and stop
+                    # Final batch: delete every remaining eligible row, even below the watermark
                     c.execute(
                         sa.delete(ApplicationSchema.transaction_outputs).where(
                             *gc_conditions
@@ -236,9 +238,11 @@ class ApplicationDatabase(ABC):
                 c.execute(
                     sa.delete(ApplicationSchema.transaction_outputs).where(
                         *gc_conditions,
+                        ApplicationSchema.transaction_outputs.c.created_at > watermark,
                         ApplicationSchema.transaction_outputs.c.created_at <= step,
                     )
                 )
+            watermark = step
 
     def delete_transaction_outputs(self, workflow_ids: list[str]) -> None:
         """Delete transaction outputs for the specified workflows."""

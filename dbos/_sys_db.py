@@ -4269,21 +4269,23 @@ class SystemDatabase(ABC):
             with self.engine.begin() as c:
                 c.execute(sa.delete(SystemSchema.workflow_status).where(gc_filter))
         else:
-            # Delete in batches, each committed in its own transaction, by advancing
-            # a created_at watermark: every batch is one range scan at the bottom of
-            # workflow_status_created_at_index and never revisits deleted rows.
+            # Batch-delete by advancing a created_at watermark, one committed transaction per batch
+            watermark = 0
             while True:
                 with self.engine.begin() as c:
-                    # Find the created_at of the batch_size-th oldest eligible row
+                    # Find the created_at of the batch_size-th oldest eligible row above the watermark
                     step = c.execute(
                         sa.select(SystemSchema.workflow_status.c.created_at)
-                        .where(gc_filter)
+                        .where(
+                            gc_filter,
+                            SystemSchema.workflow_status.c.created_at > watermark,
+                        )
                         .order_by(SystemSchema.workflow_status.c.created_at)
                         .limit(1)
                         .offset(batch_size - 1)
                     ).scalar()
                     if step is None:
-                        # Fewer than batch_size eligible rows remain: delete them and stop
+                        # Final batch: delete every remaining eligible row, even below the watermark
                         c.execute(
                             sa.delete(SystemSchema.workflow_status).where(gc_filter)
                         )
@@ -4292,9 +4294,11 @@ class SystemDatabase(ABC):
                     c.execute(
                         sa.delete(SystemSchema.workflow_status).where(
                             gc_filter,
+                            SystemSchema.workflow_status.c.created_at > watermark,
                             SystemSchema.workflow_status.c.created_at <= step,
                         )
                     )
+                watermark = step
 
         with self.engine.begin() as c:
             # Then, get the IDs of all remaining old workflows
