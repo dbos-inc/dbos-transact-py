@@ -928,3 +928,97 @@ async def test_async_ds_recovers_from_sysdb_loss(
     with SetWorkflowID(wfid):
         assert await my_workflow() == "recovered"
     assert call_count["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Application-error retry policy (opt-in; mirrors @DBOS.step / Go RunAsTransaction)
+# ---------------------------------------------------------------------------
+
+
+def test_sync_ds_txn_retries_to_success(
+    dbos: DBOS, sync_ds: SQLAlchemyDatasource
+) -> None:
+    """@ds.transaction(retries_allowed=True) re-runs the body on an app error."""
+    runs = {"n": 0}
+
+    @sync_ds.transaction(retries_allowed=True, max_attempts=3, interval_seconds=0.001)
+    def flaky(value: str) -> str:
+        runs["n"] += 1
+        if runs["n"] < 3:
+            raise ValueError("transient")
+        return f"ok:{value}"
+
+    @DBOS.workflow()
+    def wf(value: str) -> str:
+        return flaky(value)
+
+    with SetWorkflowID(str(uuid.uuid4())):
+        assert wf("x") == "ok:x"
+    assert runs["n"] == 3  # one initial attempt plus two retries
+
+
+def test_sync_ds_txn_no_retry_by_default(
+    dbos: DBOS, sync_ds: SQLAlchemyDatasource
+) -> None:
+    runs = {"n": 0}
+
+    @sync_ds.transaction
+    def boom() -> str:
+        runs["n"] += 1
+        raise ValueError("boom")
+
+    @DBOS.workflow()
+    def wf() -> str:
+        return boom()
+
+    with SetWorkflowID(str(uuid.uuid4())):
+        with pytest.raises(ValueError, match="boom"):
+            wf()
+    assert runs["n"] == 1  # default retries_allowed=False: runs once
+
+
+def test_sync_ds_txn_should_retry_stops(
+    dbos: DBOS, sync_ds: SQLAlchemyDatasource
+) -> None:
+    runs = {"n": 0}
+
+    @sync_ds.transaction(
+        retries_allowed=True,
+        max_attempts=5,
+        interval_seconds=0.001,
+        should_retry=lambda e: False,
+    )
+    def permanent() -> str:
+        runs["n"] += 1
+        raise ValueError("permanent")
+
+    @DBOS.workflow()
+    def wf() -> str:
+        return permanent()
+
+    with SetWorkflowID(str(uuid.uuid4())):
+        with pytest.raises(ValueError, match="permanent"):
+            wf()
+    assert runs["n"] == 1  # predicate rejected: no retries despite max_attempts=5
+
+
+@pytest.mark.asyncio
+async def test_async_ds_txn_retries_to_success(
+    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource
+) -> None:
+    runs = {"n": 0}
+
+    @async_ds.transaction(retries_allowed=True, max_attempts=3, interval_seconds=0.001)
+    async def flaky(value: str) -> str:
+        runs["n"] += 1
+        if runs["n"] < 3:
+            raise ValueError("transient")
+        return f"ok:{value}"
+
+    @DBOS.workflow()
+    async def wf(value: str) -> str:
+        return await flaky(value)
+
+    with SetWorkflowID(str(uuid.uuid4())):
+        assert await wf("x") == "ok:x"
+    assert runs["n"] == 3

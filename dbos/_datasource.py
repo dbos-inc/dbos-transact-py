@@ -48,6 +48,9 @@ from ._logger import dbos_logger
 _INITIAL_RETRY_WAIT_SECONDS = 0.001
 _RETRY_BACKOFF_FACTOR = 1.5
 _MAX_RETRY_WAIT_SECONDS = 2.0
+# Cap for the (opt-in) application-error retry backoff, matching the step
+# retry policy's max interval of one hour.
+_MAX_TXN_RETRY_WAIT_SECONDS = 3600.0
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -61,6 +64,20 @@ def _parse_ds_options(
         ds_options.get("isolation_level") if ds_options else None
     ) or "SERIALIZABLE"
     return name, isolation_level
+
+
+def _parse_ds_retry(
+    ds_options: Optional["DatasourceOptions"],
+) -> "tuple[bool, float, int, float, Optional[Callable[[BaseException], bool]]]":
+    """The opt-in application-error retry policy, defaulting to a single attempt."""
+    o = ds_options or {}
+    return (
+        o.get("retries_allowed", False),
+        o.get("interval_seconds", 1.0),
+        o.get("max_attempts", 3),
+        o.get("backoff_rate", 2.0),
+        o.get("should_retry", None),
+    )
 
 
 def _replay_recorded(recorded: "RecordedResult", serializer: "Serializer") -> Any:
@@ -106,6 +123,11 @@ def _resolve_schema(database_url: str, schema: Optional[str]) -> Optional[str]:
 class DatasourceOptions(TypedDict, total=False):
     name: Optional[str]
     isolation_level: Optional[IsolationLevel]
+    retries_allowed: bool
+    interval_seconds: float
+    max_attempts: int
+    backoff_rate: float
+    should_retry: Optional[Callable[[BaseException], bool]]
 
 
 class AsyncSQLAlchemyDatasource(ABC):
@@ -253,6 +275,9 @@ class AsyncSQLAlchemyDatasource(ABC):
         **kwargs: P.kwargs,
     ) -> R:
         name, isolation_level = _parse_ds_options(ds_options, func)
+        retries_allowed, interval_seconds, max_attempts, backoff_rate, should_retry = (
+            _parse_ds_retry(ds_options)
+        )
 
         if not inspect.iscoroutinefunction(func):
             raise DBOSException(
@@ -277,6 +302,10 @@ class AsyncSQLAlchemyDatasource(ABC):
 
             output: R
             retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
+            # Application-error retry budget (serialization conflicts are retried
+            # separately, below, and don't consume it). Default: a single attempt.
+            txn_attempts = max_attempts if retries_allowed else 1
+            txn_attempt = 0
             with DBOSContextEnsure() as exec_ctx:
                 while True:
                     async with self.sessionmaker() as session:
@@ -332,6 +361,23 @@ class AsyncSQLAlchemyDatasource(ABC):
                                 )
                             raise
                         except Exception as e:
+                            # Application error: retry the whole transaction if the
+                            # budget allows and should_retry accepts it, re-running on
+                            # a fresh transaction (this attempt already rolled back on
+                            # exiting session.begin). Otherwise record and re-raise.
+                            if (
+                                retries_allowed
+                                and txn_attempt + 1 < txn_attempts
+                                and (should_retry is None or should_retry(e))
+                            ):
+                                await asyncio.sleep(
+                                    min(
+                                        interval_seconds * (backoff_rate**txn_attempt),
+                                        _MAX_TXN_RETRY_WAIT_SECONDS,
+                                    )
+                                )
+                                txn_attempt += 1
+                                continue
                             if in_wf:
                                 serialized_e, serialization = serialize_exception(
                                     e, None, self.serializer
@@ -373,6 +419,11 @@ class AsyncSQLAlchemyDatasource(ABC):
         *,
         name: Optional[str] = None,
         isolation_level: IsolationLevel = "SERIALIZABLE",
+        retries_allowed: bool = False,
+        interval_seconds: float = 1.0,
+        max_attempts: int = 3,
+        backoff_rate: float = 2.0,
+        should_retry: Optional[Callable[[BaseException], bool]] = None,
     ) -> Callable[
         [Callable[P, Coroutine[Any, Any, R]]], Callable[P, Coroutine[Any, Any, R]]
     ]: ...
@@ -383,6 +434,11 @@ class AsyncSQLAlchemyDatasource(ABC):
         *,
         name: Optional[str] = None,
         isolation_level: IsolationLevel = "SERIALIZABLE",
+        retries_allowed: bool = False,
+        interval_seconds: float = 1.0,
+        max_attempts: int = 3,
+        backoff_rate: float = 2.0,
+        should_retry: Optional[Callable[[BaseException], bool]] = None,
     ) -> Any:
         def decorator(
             f: Callable[..., Coroutine[Any, Any, Any]],
@@ -395,6 +451,13 @@ class AsyncSQLAlchemyDatasource(ABC):
             ds_options: DatasourceOptions = {"isolation_level": isolation_level}
             if name is not None:
                 ds_options["name"] = name
+            if retries_allowed:
+                ds_options["retries_allowed"] = True
+                ds_options["interval_seconds"] = interval_seconds
+                ds_options["max_attempts"] = max_attempts
+                ds_options["backoff_rate"] = backoff_rate
+            if should_retry is not None:
+                ds_options["should_retry"] = should_retry
 
             @wraps(f)
             async def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -550,6 +613,9 @@ class SQLAlchemyDatasource(ABC):
         **kwargs: P.kwargs,
     ) -> R:
         name, isolation_level = _parse_ds_options(ds_options, func)
+        retries_allowed, interval_seconds, max_attempts, backoff_rate, should_retry = (
+            _parse_ds_retry(ds_options)
+        )
 
         if inspect.iscoroutinefunction(func):
             raise DBOSException(
@@ -574,6 +640,10 @@ class SQLAlchemyDatasource(ABC):
 
             output: R
             retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
+            # Application-error retry budget (serialization conflicts are retried
+            # separately, below, and don't consume it). Default: a single attempt.
+            txn_attempts = max_attempts if retries_allowed else 1
+            txn_attempt = 0
             with DBOSContextEnsure() as exec_ctx:
                 while True:
                     with self.sessionmaker() as session:
@@ -629,6 +699,23 @@ class SQLAlchemyDatasource(ABC):
                                 )
                             raise
                         except Exception as e:
+                            # Application error: retry the whole transaction if the
+                            # budget allows and should_retry accepts it, re-running on
+                            # a fresh transaction (this attempt already rolled back on
+                            # exiting session.begin). Otherwise record and re-raise.
+                            if (
+                                retries_allowed
+                                and txn_attempt + 1 < txn_attempts
+                                and (should_retry is None or should_retry(e))
+                            ):
+                                time.sleep(
+                                    min(
+                                        interval_seconds * (backoff_rate**txn_attempt),
+                                        _MAX_TXN_RETRY_WAIT_SECONDS,
+                                    )
+                                )
+                                txn_attempt += 1
+                                continue
                             if in_wf:
                                 serialized_e, serialization = serialize_exception(
                                     e, None, self.serializer
@@ -660,6 +747,11 @@ class SQLAlchemyDatasource(ABC):
         *,
         name: Optional[str] = None,
         isolation_level: IsolationLevel = "SERIALIZABLE",
+        retries_allowed: bool = False,
+        interval_seconds: float = 1.0,
+        max_attempts: int = 3,
+        backoff_rate: float = 2.0,
+        should_retry: Optional[Callable[[BaseException], bool]] = None,
     ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
 
     def transaction(
@@ -668,6 +760,11 @@ class SQLAlchemyDatasource(ABC):
         *,
         name: Optional[str] = None,
         isolation_level: IsolationLevel = "SERIALIZABLE",
+        retries_allowed: bool = False,
+        interval_seconds: float = 1.0,
+        max_attempts: int = 3,
+        backoff_rate: float = 2.0,
+        should_retry: Optional[Callable[[BaseException], bool]] = None,
     ) -> Any:
         def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
             if inspect.iscoroutinefunction(f):
@@ -678,6 +775,13 @@ class SQLAlchemyDatasource(ABC):
             ds_options: DatasourceOptions = {"isolation_level": isolation_level}
             if name is not None:
                 ds_options["name"] = name
+            if retries_allowed:
+                ds_options["retries_allowed"] = True
+                ds_options["interval_seconds"] = interval_seconds
+                ds_options["max_attempts"] = max_attempts
+                ds_options["backoff_rate"] = backoff_rate
+            if should_retry is not None:
+                ds_options["should_retry"] = should_retry
 
             @wraps(f)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
