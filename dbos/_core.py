@@ -1378,7 +1378,15 @@ def decorate_workflow(
 
 
 def decorate_transaction(
-    dbosreg: "DBOSRegistry", name: Optional[str], isolation_level: "IsolationLevel"
+    dbosreg: "DBOSRegistry",
+    name: Optional[str],
+    isolation_level: "IsolationLevel",
+    *,
+    retries_allowed: bool = False,
+    interval_seconds: float = 1.0,
+    max_attempts: int = 3,
+    backoff_rate: float = 2.0,
+    should_retry: Optional[Callable[[BaseException], bool]] = None,
 ) -> Callable[[F], F]:
     def decorator(func: F) -> F:
 
@@ -1457,8 +1465,15 @@ def decorate_transaction(
                     retry_wait_seconds = 0.001
                     backoff_factor = 1.5
                     max_retry_wait_seconds = 2.0
+                    # Application-error retry budget. A serialization conflict is
+                    # retried separately (below) and does not consume it; with
+                    # retries_allowed=False this is a single attempt — prior behavior.
+                    txn_attempts = max_attempts if retries_allowed else 1
+                    txn_attempt = 0
+                    max_txn_retry_interval_seconds = 3600.0
                     while True:
                         has_recorded_error = False
+                        retrying_app_error = False
                         txn_error: Optional[Exception] = None
                         try:
                             with session.begin():
@@ -1564,10 +1579,39 @@ def decorate_transaction(
                             raise
                         except Exception as error:
                             txn_error = error
+                            # An application error: retry the whole transaction if the
+                            # budget allows and the predicate accepts it, re-running the
+                            # function on a fresh transaction (the failed attempt's
+                            # writes were already rolled back on exiting session.begin).
+                            # Otherwise fall through to record the error and re-raise.
+                            if (
+                                retries_allowed
+                                and txn_attempt + 1 < txn_attempts
+                                and (should_retry is None or should_retry(error))
+                            ):
+                                retrying_app_error = True
+                                dbos.logger.warning(
+                                    f"Transaction {transaction_name} being automatically "
+                                    f"retried (attempt {txn_attempt + 2} of {txn_attempts})",
+                                    exc_info=error,
+                                )
+                                time.sleep(
+                                    min(
+                                        interval_seconds * (backoff_rate**txn_attempt),
+                                        max_txn_retry_interval_seconds,
+                                    )
+                                )
+                                txn_attempt += 1
+                                continue
                             raise
                         finally:
-                            # Don't record the error if it was already recorded
-                            if txn_error and not has_recorded_error:
+                            # Don't record the error if it was already recorded, or if
+                            # we are going to retry the whole transaction.
+                            if (
+                                txn_error
+                                and not has_recorded_error
+                                and not retrying_app_error
+                            ):
                                 serialized_e, serialization = serialize_exception(
                                     txn_error, None, dbos._serializer
                                 )
