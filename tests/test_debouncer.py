@@ -180,10 +180,10 @@ def test_debouncer_queue(dbos: DBOS) -> None:
     assert handle.get_result() == first_value
     assert handle.get_status().queue_name == queue.name
 
-    # SetEnqueueOptions priority/app_version pass through (a deduplication_id/delay would be rejected, see test_debounce_rejects_*).
+    # SetEnqueueOptions app_version passes through (deduplication_id/delay/priority/partition key are rejected, see test_debounce_rejects_*).
     test_version = "test_version"
     GlobalParams.app_version = test_version
-    with SetEnqueueOptions(priority=1, app_version=test_version):
+    with SetEnqueueOptions(app_version=test_version):
         handle = debouncer.debounce("key", debounce_period_sec, first_value)
     assert handle.get_result() == first_value
     assert handle.get_status().queue_name == queue.name
@@ -573,7 +573,7 @@ def test_debounce_retries_replayed_portable_dedup_error(
 def test_debounce_rejects_caller_dedup_and_delay(
     dbos: DBOS, client: DBOSClient
 ) -> None:
-    # A debounce owns the workflow's deduplication ID and delay, so a caller that sets either must fail loudly rather than have it silently ignored.
+    # A debounce owns the workflow's deduplication ID and delay, and priority/partition keys cannot apply to a debounced enqueue, so a caller that sets any of them must fail loudly rather than have it silently ignored or break later.
 
     @DBOS.workflow()
     def workflow(x: int) -> int:
@@ -591,7 +591,17 @@ def test_debounce_rejects_caller_dedup_and_delay(
         with SetEnqueueOptions(delay_seconds=100.0):
             debouncer.debounce("k", 1.0, 1)
 
-    # Neither conflicting option left a workflow behind.
+    # Local: a caller-set priority is rejected.
+    with pytest.raises(DBOSException, match="priority"):
+        with SetEnqueueOptions(priority=1):
+            debouncer.debounce("k", 1.0, 1)
+
+    # Local: a caller-set partition key is rejected.
+    with pytest.raises(DBOSException, match="partition key"):
+        with SetEnqueueOptions(queue_partition_key="caller-partition"):
+            debouncer.debounce("k", 1.0, 1)
+
+    # No conflicting option left a workflow behind.
     assert len(DBOS.list_workflows(name=get_dbos_func_name(workflow))) == 0
 
     DBOS.register_queue("reject-queue")
@@ -619,3 +629,27 @@ def test_debounce_rejects_caller_dedup_and_delay(
     )
     with pytest.raises(DBOSException, match="delay"):
         delay_client.debounce("k", 1.0, 1)
+
+    # Client: a priority in the workflow options is rejected.
+    priority_client = DebouncerClient(
+        client,
+        {
+            "workflow_name": workflow.__qualname__,
+            "queue_name": "reject-queue",
+            "priority": 1,
+        },
+    )
+    with pytest.raises(DBOSException, match="priority"):
+        priority_client.debounce("k", 1.0, 1)
+
+    # Client: a partition key in the workflow options is rejected.
+    partition_client = DebouncerClient(
+        client,
+        {
+            "workflow_name": workflow.__qualname__,
+            "queue_name": "reject-queue",
+            "queue_partition_key": "caller-partition",
+        },
+    )
+    with pytest.raises(DBOSException, match="partition key"):
+        partition_client.debounce("k", 1.0, 1)

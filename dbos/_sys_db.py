@@ -1018,6 +1018,7 @@ class SystemDatabase(ABC):
                 )
             )
 
+    @db_retry()
     def debounce_delayed_workflow(
         self,
         *,
