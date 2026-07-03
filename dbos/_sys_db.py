@@ -1542,33 +1542,6 @@ class SystemDatabase(ABC):
             return status
 
     @db_retry()
-    def get_deduplicated_workflow(
-        self, queue_name: str, deduplication_id: str
-    ) -> Optional[str]:
-        """
-        Get the workflow ID associated with a given queue name and deduplication ID.
-
-        Args:
-            queue_name: The name of the queue
-            deduplication_id: The deduplication ID
-
-        Returns:
-            The workflow UUID if found, None otherwise
-        """
-        with self.engine.begin() as c:
-            row = c.execute(
-                sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
-                    SystemSchema.workflow_status.c.queue_name == queue_name,
-                    SystemSchema.workflow_status.c.deduplication_id == deduplication_id,
-                )
-            ).fetchone()
-
-            if row is None:
-                return None
-            workflow_id: str = row[0]
-            return workflow_id
-
-    @db_retry()
     def _read_workflow_result_row(self, workflow_id: str) -> Optional[Any]:
         # Polling read under the limiter; acquired inside the db_retry body so the permit frees across backoff (like check_first_workflow_id).
         with self.poll_limiter, self.engine.begin() as c:

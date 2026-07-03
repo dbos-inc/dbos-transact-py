@@ -404,12 +404,14 @@ class DebouncerClient:
                     "queue_name": queue_name,
                     "deduplication_id": deduplication_id,
                     "delay_seconds": delay_sec,
-                    "debounce_deadline_epoch_ms": deadline_ms,
-                    "is_debounced": True,
                 },
             )
             try:
-                return self.client.enqueue(options, *args, **kwargs)
+                # The debounce fields are not part of the public EnqueueOptions API, so pass them through the internal debounced-enqueue path.
+                workflow_id = self.client._enqueue_debounced(
+                    options, deadline_ms, *args, **kwargs
+                )
+                return WorkflowHandleClientPolling[R](workflow_id, self.client._sys_db)
             except DBOSQueueDeduplicatedError:
                 # A concurrent debounce grabbed the key between bounce and enqueue; loop to bounce that workflow instead.
                 continue
