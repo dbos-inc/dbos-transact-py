@@ -228,6 +228,12 @@ class Debouncer(Generic[P, R]):
                 has_partition_key=ctx.queue_partition_key is not None,
             )
 
+        # Capture a SetWorkflowID-pinned ID once: it is re-applied on every enqueue attempt (a lost dedup race consumes it before raising) and must not stay armed for the caller's next workflow when a bounce coalesces or a conflict raises.
+        pinned_workflow_id: Optional[str] = None
+        if ctx is not None and ctx.id_assigned_for_next_workflow:
+            pinned_workflow_id = ctx.id_assigned_for_next_workflow
+            ctx.id_assigned_for_next_workflow = ""
+
         # Resolve the queue the debounced workflow will run on.
         queue_name = self.options["queue_name"]
         if queue_name:
@@ -286,6 +292,10 @@ class Debouncer(Generic[P, R]):
             delay_until_ms = now_ms + int(debounce_period_sec * 1000)
             if deadline_ms is not None:
                 delay_until_ms = min(delay_until_ms, deadline_ms)
+            # Re-apply the pinned ID for this attempt; queue.enqueue consumes it.
+            if pinned_workflow_id is not None:
+                assert ctx is not None
+                ctx.id_assigned_for_next_workflow = pinned_workflow_id
             try:
                 with SetWorkflowDebounce(
                     deduplication_id=deduplication_id,

@@ -653,3 +653,69 @@ def test_debounce_rejects_caller_dedup_and_delay(
     )
     with pytest.raises(DBOSException, match="partition key"):
         partition_client.debounce("k", 1.0, 1)
+
+
+def test_debounce_bounce_path_does_not_leak_pinned_id(dbos: DBOS) -> None:
+    # Regression test: a SetWorkflowID pinned around a debounce that coalesces (bounce path) is captured by the debounce and must not stay armed on the workflow's context, or the next child workflow the parent starts would silently run under the pinned ID.
+
+    @DBOS.workflow()
+    def child(x: int) -> int:
+        return x
+
+    @DBOS.workflow()
+    def other(x: int) -> int:
+        return x
+
+    debouncer = Debouncer.create(child)
+
+    @DBOS.workflow()
+    def parent(pinned_id: str) -> tuple[str, str]:
+        # The first call creates the delayed workflow; the pinned second call bounces it, so the pinned ID goes unused.
+        first = debouncer.debounce("leak-key", 1000000, 1)
+        with SetWorkflowID(pinned_id):
+            bounced = debouncer.debounce("leak-key", 1000000, 2)
+        assert bounced.workflow_id == first.workflow_id
+        next_handle = DBOS.start_workflow(other, 3)
+        return first.workflow_id, next_handle.workflow_id
+
+    pinned_id = str(uuid.uuid4())
+    delayed_wfid, next_wfid = DBOS.start_workflow(parent, pinned_id).get_result()
+
+    # The next child workflow did not inherit the unused pinned ID.
+    assert next_wfid != pinned_id
+    assert DBOS.retrieve_workflow(next_wfid).get_result() == 3
+
+    DBOS.cancel_workflow(delayed_wfid)
+
+
+def test_debounce_pinned_id_survives_enqueue_dedup_race(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression test: a fresh-enqueue attempt consumes a SetWorkflowID-pinned ID from the context before its INSERT can lose the dedup race. The retry loop must re-apply the pinned ID so the workflow is still created under it, not a generated UUID.
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    debouncer = Debouncer.create(workflow)
+
+    original_init = dbos._sys_db.init_workflow
+    init_calls = {"count": 0}
+
+    def init_raising_dedup_once(*args: Any, **kwargs: Any) -> Any:
+        # The first enqueue's insert loses the dedup race after the pinned ID was already consumed; later calls behave normally.
+        init_calls["count"] += 1
+        if init_calls["count"] == 1:
+            raise DBOSQueueDeduplicatedError("racer", "queue", "dedup")
+        return original_init(*args, **kwargs)
+
+    monkeypatch.setattr(dbos._sys_db, "init_workflow", init_raising_dedup_once)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = debouncer.debounce("pin-race-key", 0.5, 7)
+
+    # The retried enqueue reused the pinned ID rather than minting a random one.
+    assert init_calls["count"] >= 2
+    assert handle.workflow_id == wfid
+    assert handle.get_result() == 7
