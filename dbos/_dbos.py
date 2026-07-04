@@ -1035,7 +1035,9 @@ class DBOS:
             isolation_level(IsolationLevel): Transaction isolation level
             retries_allowed(bool): If true, retry the transaction when its function
                 raises an exception. Serialization conflicts are always retried,
-                independent of this setting.
+                independent of this setting. A retry re-runs the whole function;
+                database writes roll back between attempts, but any non-transactional
+                side effects repeat.
             interval_seconds(float): Time between retry attempts
             backoff_rate(float): Multiplier for exponentially increasing `interval_seconds` between retries
             max_attempts(int): Maximum number of attempts (including the first) before re-raising

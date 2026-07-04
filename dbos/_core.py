@@ -1583,9 +1583,12 @@ def decorate_transaction(
                             # budget allows and the predicate accepts it, re-running the
                             # function on a fresh transaction (the failed attempt's
                             # writes were already rolled back on exiting session.begin).
-                            # Otherwise fall through to record the error and re-raise.
+                            # A replayed recorded error is terminal, not a fresh failure,
+                            # so it is never retried. Otherwise fall through to record and
+                            # re-raise.
                             if (
                                 retries_allowed
+                                and not has_recorded_error
                                 and txn_attempt + 1 < txn_attempts
                                 and (should_retry is None or should_retry(error))
                             ):

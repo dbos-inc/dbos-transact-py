@@ -8,10 +8,14 @@ Go SDK's RunAsTransaction step-retry options. Serialization retries are unchange
 and independent of this policy.
 """
 
+import time
+import uuid
+
 import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS
+from dbos import DBOS, SetWorkflowID
+from dbos._schemas.system_database import SystemSchema
 
 
 def test_transaction_retries_to_success(dbos: DBOS) -> None:
@@ -78,3 +82,50 @@ def test_transaction_should_retry_predicate_stops(dbos: DBOS) -> None:
     with pytest.raises(Exception, match="permanent"):
         permanent("v")
     assert runs == 1  # predicate rejected the error: no retries despite max_attempts=5
+
+
+def test_transaction_recorded_error_replays_without_retrying(dbos: DBOS) -> None:
+    """A recorded transaction error, replayed on recovery, must be re-raised
+    immediately — not fed back into the retry loop (which would sleep the whole
+    backoff again for an already-decided outcome)."""
+    runs = {"n": 0}
+
+    @DBOS.transaction(retries_allowed=True, max_attempts=2, interval_seconds=0.5)
+    def failing() -> None:
+        DBOS.sql_session.execute(sa.text("SELECT 1"))
+        runs["n"] += 1
+        raise ValueError("permanent")
+
+    @DBOS.workflow()
+    def wf() -> None:
+        return failing()
+
+    wfid = str(uuid.uuid4())
+    # First run: the transaction exhausts its retry budget and records the error
+    # (in transaction_outputs, the app DB, and operation_outputs, the system DB).
+    with SetWorkflowID(wfid):
+        with pytest.raises(ValueError, match="permanent"):
+            wf()
+    assert runs["n"] == 2  # one initial attempt plus one retry, then recorded
+
+    # Simulate the crash window: drop the system-DB workflow record. The CASCADE
+    # wipes operation_outputs, but transaction_outputs (app DB, no such FK) stays.
+    # On re-run the top-level replay check misses and the in-loop check finds the
+    # recorded error — the path that must not be retried.
+    with dbos._sys_db.engine.begin() as conn:
+        conn.execute(
+            sa.delete(SystemSchema.workflow_status).where(
+                SystemSchema.workflow_status.c.workflow_uuid == wfid
+            )
+        )
+
+    start = time.time()
+    with SetWorkflowID(wfid):
+        with pytest.raises(ValueError, match="permanent"):
+            wf()
+    elapsed = time.time() - start
+    assert runs["n"] == 2, "the body is not re-run on replay of a recorded error"
+    assert elapsed < 0.3, (
+        f"replay of a recorded error must be immediate, not spin the retry "
+        f"backoff (took {elapsed:.2f}s)"
+    )
