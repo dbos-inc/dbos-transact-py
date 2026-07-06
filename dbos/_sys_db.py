@@ -273,6 +273,8 @@ class DebounceResult(TypedDict):
     holder_workflow_id: Optional[str]
     # Whether the holder is itself a debounced workflow.
     holder_is_debounced: bool
+    # The holder's workflow name; a mismatch with the caller's means a debounce-key collision between workflows.
+    holder_workflow_name: Optional[str]
 
 
 class RecordedResult(TypedDict):
@@ -1022,6 +1024,7 @@ class SystemDatabase(ABC):
     def debounce_delayed_workflow(
         self,
         *,
+        workflow_name: str,
         queue_name: str,
         deduplication_id: str,
         delay_until_epoch_ms: int,
@@ -1031,10 +1034,11 @@ class SystemDatabase(ABC):
         """Extend an existing debounced DELAYED workflow's delay and update its inputs.
 
         Performed as a single atomic transaction. The new delay is capped at the
-        workflow's debounce_deadline_epoch_ms, if one is set. If no debounced
-        DELAYED workflow holds this (queue_name, deduplication_id), returns
-        information about the current holder (or that the key is unheld) so the
-        caller can decide whether to start a fresh workflow or surface a conflict.
+        workflow's debounce_deadline_epoch_ms, if one is set. Matching on
+        workflow_name ensures a debounce-key collision between different workflows
+        (e.g. "a"+"b-c" vs "a-b"+"c") never overwrites another workflow's inputs.
+        If nothing matched, returns the current holder (or that the key is unheld)
+        so the caller can decide whether to start fresh or surface a conflict.
         """
         wsc = SystemSchema.workflow_status.c
         with self.engine.begin() as c:
@@ -1051,6 +1055,7 @@ class SystemDatabase(ABC):
             )
             updated = c.execute(
                 sa.update(SystemSchema.workflow_status)
+                .where(wsc.name == workflow_name)
                 .where(wsc.queue_name == queue_name)
                 .where(wsc.deduplication_id == deduplication_id)
                 .where(wsc.status == WorkflowStatusString.DELAYED.value)
@@ -1068,10 +1073,11 @@ class SystemDatabase(ABC):
                     "bounced_workflow_id": updated[0],
                     "holder_workflow_id": None,
                     "holder_is_debounced": False,
+                    "holder_workflow_name": None,
                 }
-            # No debounced DELAYED workflow matched: the key is unheld, or held by another (e.g. a user's own deduplicated) workflow.
+            # No match: the key is unheld, or held by a non-debounced or name-colliding workflow.
             holder = c.execute(
-                sa.select(wsc.workflow_uuid, wsc.is_debounced)
+                sa.select(wsc.workflow_uuid, wsc.is_debounced, wsc.name)
                 .where(wsc.queue_name == queue_name)
                 .where(wsc.deduplication_id == deduplication_id)
             ).fetchone()
@@ -1080,11 +1086,13 @@ class SystemDatabase(ABC):
                     "bounced_workflow_id": None,
                     "holder_workflow_id": None,
                     "holder_is_debounced": False,
+                    "holder_workflow_name": None,
                 }
             return {
                 "bounced_workflow_id": None,
                 "holder_workflow_id": holder[0],
                 "holder_is_debounced": bool(holder[1]),
+                "holder_workflow_name": holder[2],
             }
 
     def update_workflow_attributes(

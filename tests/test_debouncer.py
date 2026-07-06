@@ -1,3 +1,4 @@
+import threading
 import uuid
 from typing import Any
 
@@ -327,8 +328,13 @@ async def test_debouncer_client_async(dbos: DBOS, client: DBOSClient) -> None:
 
 def test_debounce_flip_clears_dedup(dbos: DBOS) -> None:
 
+    started = threading.Event()
+    blocker = threading.Event()
+
     @DBOS.workflow()
     def workflow(x: int) -> int:
+        started.set()
+        blocker.wait()
         return x
 
     debouncer = Debouncer.create(workflow)
@@ -342,18 +348,25 @@ def test_debounce_flip_clears_dedup(dbos: DBOS) -> None:
     assert status["is_debounced"] is True
     assert status["deduplication_id"] == f"{get_dbos_func_name(workflow)}-key"
 
-    # A bounce extends the delay and replaces the input; the same workflow runs.
+    # A bounce shortens the delay and replaces the input; the same workflow runs.
     handle2 = debouncer.debounce("key", 1, 2)
     assert handle2.workflow_id == handle.workflow_id
-    assert handle2.get_result() == 2
 
-    # On the DELAYED->ENQUEUED transition its debounce key was cleared, so a later debounce with the same key starts fresh.
+    # Wait for the flip: the workflow starts but blocks, so it's in flight, not complete.
+    assert started.wait(timeout=60)
+
+    # The flip cleared the debounce key; assert while still running since completion also clears it.
     status = dbos._sys_db.get_workflow_status(handle.workflow_id)
     assert status is not None
+    assert status["status"] == "PENDING"
     assert status["deduplication_id"] is None
 
+    # A same-key debounce therefore starts fresh even before the first workflow finishes.
     handle3 = debouncer.debounce("key", 1, 3)
     assert handle3.workflow_id != handle.workflow_id
+
+    blocker.set()
+    assert handle2.get_result() == 2
     assert handle3.get_result() == 3
 
 
@@ -719,3 +732,42 @@ def test_debounce_pinned_id_survives_enqueue_dedup_race(
     assert init_calls["count"] >= 2
     assert handle.workflow_id == wfid
     assert handle.get_result() == 7
+
+
+def test_debounce_key_collision_between_workflows(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    # Regression test: "colw"+"b-k" and "colw-b"+"k" both yield dedup ID "colw-b-k" (hyphenated names are client-only).
+    # The collider must surface the conflict, not overwrite the other workflow's row.
+    queue_name = f"collision-queue-{uuid.uuid4()}"
+    DBOS.register_queue(queue_name)
+
+    debouncer_a = DebouncerClient(
+        client, {"workflow_name": "colw", "queue_name": queue_name}
+    )
+    debouncer_b = DebouncerClient(
+        client, {"workflow_name": "colw-b", "queue_name": queue_name}
+    )
+
+    # A huge period keeps workflow "colw" DELAYED, holding dedup ID "colw-b-k".
+    handle_a: WorkflowHandle[int] = debouncer_a.debounce("b-k", 1000000, 1)
+    status = dbos._sys_db.get_workflow_status(handle_a.workflow_id)
+    assert status is not None
+    assert status["status"] == "DELAYED"
+    assert status["deduplication_id"] == "colw-b-k"
+
+    # The colliding debounce for workflow "colw-b" raises instead of hijacking the row.
+    with pytest.raises(DBOSQueueDeduplicatedError):
+        debouncer_b.debounce("k", 1, 2)
+
+    # The victim is untouched: still DELAYED under its own name.
+    status = dbos._sys_db.get_workflow_status(handle_a.workflow_id)
+    assert status is not None
+    assert status["status"] == "DELAYED"
+    assert status["name"] == "colw"
+
+    # A same-name bounce still coalesces onto the existing workflow.
+    handle_a2: WorkflowHandle[int] = debouncer_a.debounce("b-k", 1000000, 3)
+    assert handle_a2.workflow_id == handle_a.workflow_id
+
+    DBOS.cancel_workflow(handle_a.workflow_id)

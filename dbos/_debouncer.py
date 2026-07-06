@@ -106,22 +106,24 @@ def _reject_conflicting_options(
 _BounceAction = Literal["return", "enqueue", "raise", "retry"]
 
 
-def _classify_bounce(result: DebounceResult) -> _BounceAction:
+def _classify_bounce(result: DebounceResult, workflow_name: str) -> _BounceAction:
     """Decide what a debounce caller should do after a bounce attempt.
 
     - "return": an existing debounced workflow was extended; return a handle to
       ``result["bounced_workflow_id"]``.
     - "enqueue": the key is unheld; enqueue a fresh debounced workflow.
-    - "raise": the key is held by a non-debounced workflow (a caller's own
-      deduplicated workflow); surface the deduplication conflict.
-    - "retry": a debounced holder flipped out of DELAYED mid-bounce (a rare
-      race); retry the bounce.
+    - "raise": the key is held by a non-debounced workflow or by a different
+      workflow whose debounce key collides; surface the deduplication conflict.
+    - "retry": a same-name debounced holder flipped out of DELAYED mid-bounce
+      (a rare race); retry the bounce.
     """
     if result["bounced_workflow_id"] is not None:
         return "return"
     if result["holder_workflow_id"] is None:
         return "enqueue"
     if not result["holder_is_debounced"]:
+        return "raise"
+    if result["holder_workflow_name"] != workflow_name:
         return "raise"
     return "retry"
 
@@ -199,6 +201,7 @@ class Debouncer(Generic[P, R]):
         )
         delay_until_epoch_ms = int(time.time() * 1000 + debounce_period_sec * 1000)
         result: DebounceResult = dbos._sys_db.debounce_delayed_workflow(
+            workflow_name=self.options["workflow_name"],
             queue_name=queue_name,
             deduplication_id=deduplication_id,
             delay_until_epoch_ms=delay_until_epoch_ms,
@@ -273,7 +276,7 @@ class Debouncer(Generic[P, R]):
                 "DBOS.debounce_delayed_workflow",
                 snapshot_step_context(reserve_sleep_id=False),
             )
-            action = _classify_bounce(result)
+            action = _classify_bounce(result, self.options["workflow_name"])
             if action == "return":
                 bounced_wfid = result["bounced_workflow_id"]
                 assert bounced_wfid is not None
@@ -372,13 +375,14 @@ class DebouncerClient:
             )
             bounce_delay_ms = int(time.time() * 1000 + debounce_period_sec * 1000)
             result = self.client._sys_db.debounce_delayed_workflow(
+                workflow_name=self.debouncer_options["workflow_name"],
                 queue_name=queue_name,
                 deduplication_id=deduplication_id,
                 delay_until_epoch_ms=bounce_delay_ms,
                 inputs=inputs,
                 serialization=serialization,
             )
-            action = _classify_bounce(result)
+            action = _classify_bounce(result, self.debouncer_options["workflow_name"])
             if action == "return":
                 bounced_wfid = result["bounced_workflow_id"]
                 assert bounced_wfid is not None
