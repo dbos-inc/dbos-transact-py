@@ -37,7 +37,6 @@ from typing import (
 from zoneinfo import ZoneInfo
 
 from dbos._conductor.conductor import ConductorWebsocket
-from dbos._debouncer import debouncer_workflow
 from dbos._serialization import (
     DefaultSerializer,
     Serializer,
@@ -52,7 +51,6 @@ from dbos._workflow_commands import fork_workflow
 
 from ._classproperty import classproperty
 from ._core import (
-    DEBOUNCER_WORKFLOW_NAME,
     DEFAULT_POLLING_INTERVAL,
     TEMP_SEND_WF_NAME,
     ActiveWorkflowById,
@@ -495,11 +493,6 @@ class DBOS:
             self.send(destination_id, message, topic)
 
         decorate_workflow(self._registry, TEMP_SEND_WF_NAME, None)(send_temp_workflow)
-
-        # Register the debouncer workflow
-        decorate_workflow(self._registry, DEBOUNCER_WORKFLOW_NAME, None)(
-            debouncer_workflow
-        )
 
         for handler in dbos_logger.handlers:
             handler.flush()

@@ -466,8 +466,3 @@ def test_attributes_debouncer(dbos: DBOS) -> None:
         handle = debouncer.debounce("key", 1.0, 5)
     assert handle.get_result() == 5
     assert handle.get_status().attributes == {"source": "debouncer"}
-
-    # The internal debouncer workflow itself does not get the user's attributes
-    internal_statuses = DBOS.list_workflows(name="_dbos_debouncer_workflow")
-    for status in internal_statuses:
-        assert status.attributes is None

@@ -112,7 +112,6 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 F = TypeVar("F", bound=Callable[..., Any])
 
 TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
-DEBOUNCER_WORKFLOW_NAME = "_dbos_debouncer_workflow"
 DEFAULT_POLLING_INTERVAL = 1.0
 
 
@@ -461,6 +460,14 @@ def _assemble_workflow_status(
             enqueue_options["delay_until_epoch_ms"]
             if enqueue_options is not None
             else None
+        ),
+        "debounce_deadline_epoch_ms": (
+            enqueue_options["debounce_deadline_epoch_ms"]
+            if enqueue_options is not None
+            else None
+        ),
+        "is_debounced": (
+            enqueue_options["is_debounced"] if enqueue_options is not None else False
         ),
         "attributes": ctx.workflow_attributes,
         # schedule_name is only set by the persistent scheduler, which builds
@@ -1049,6 +1056,10 @@ def start_workflow(
         delay_until_epoch_ms=(
             local_ctx.delay_until_epoch_ms if local_ctx is not None else None
         ),
+        debounce_deadline_epoch_ms=(
+            local_ctx.debounce_deadline_epoch_ms if local_ctx is not None else None
+        ),
+        is_debounced=(local_ctx.is_debounced if local_ctx is not None else False),
     )
     new_wf_ctx = DBOSContext.create_start_workflow_child(local_ctx)
     new_child_workflow_id = new_wf_ctx.id_assigned_for_next_workflow
@@ -1169,6 +1180,10 @@ async def start_workflow_async(
         delay_until_epoch_ms=(
             local_ctx.delay_until_epoch_ms if local_ctx is not None else None
         ),
+        debounce_deadline_epoch_ms=(
+            local_ctx.debounce_deadline_epoch_ms if local_ctx is not None else None
+        ),
+        is_debounced=(local_ctx.is_debounced if local_ctx is not None else False),
     )
     new_child_workflow_id = new_wf_ctx.id_assigned_for_next_workflow
 

@@ -155,6 +155,8 @@ def _enqueue_scheduled_workflow(
         "delay_until_epoch_ms": None,
         "attributes": None,
         "schedule_name": schedule_name,
+        "debounce_deadline_epoch_ms": None,
+        "is_debounced": False,
     }
     sys_db.init_workflow(
         status,
