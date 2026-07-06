@@ -76,6 +76,8 @@ class SystemSchema:
         Column("completed_at", BigInteger, nullable=True),
         Column("attributes", JSON().with_variant(JSONB(), "postgresql"), nullable=True),
         Column("schedule_name", Text, nullable=True),
+        Column("debounce_deadline_epoch_ms", BigInteger, nullable=True),
+        Column("is_debounced", Boolean, nullable=False, server_default="false"),
         Index("workflow_status_created_at_index", "created_at"),
         Index(
             "idx_workflow_status_delayed",

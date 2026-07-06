@@ -1,4 +1,6 @@
+import threading
 import uuid
+from typing import Any
 
 import pytest
 
@@ -13,7 +15,10 @@ from dbos import (
 )
 from dbos._client import EnqueueOptions
 from dbos._context import SetEnqueueOptions, SetWorkflowTimeout
+from dbos._debug_trigger import DebugAction, DebugTriggers
+from dbos._error import DBOSException, DBOSQueueDeduplicatedError
 from dbos._queue import Queue
+from dbos._registrations import get_dbos_func_name
 from dbos._utils import GlobalParams
 
 
@@ -177,12 +182,10 @@ def test_debouncer_queue(dbos: DBOS) -> None:
     assert handle.get_result() == first_value
     assert handle.get_status().queue_name == queue.name
 
-    # Test SetEnqueueOptions works
+    # SetEnqueueOptions app_version passes through (deduplication_id/delay/priority/partition key are rejected, see test_debounce_rejects_*).
     test_version = "test_version"
     GlobalParams.app_version = test_version
-    with SetEnqueueOptions(
-        priority=1, deduplication_id="test", app_version=test_version
-    ):
+    with SetEnqueueOptions(app_version=test_version):
         handle = debouncer.debounce("key", debounce_period_sec, first_value)
     assert handle.get_result() == first_value
     assert handle.get_status().queue_name == queue.name
@@ -322,3 +325,583 @@ async def test_debouncer_client_async(dbos: DBOS, client: DBOSClient) -> None:
     )
     assert handle.workflow_id == wfid
     assert await handle.get_result() == first_value
+
+
+def test_debounce_flip_clears_dedup(dbos: DBOS) -> None:
+
+    started = threading.Event()
+    blocker = threading.Event()
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        started.set()
+        blocker.wait()
+        return x
+
+    debouncer = Debouncer.create(workflow)
+    # A huge period keeps the workflow DELAYED until a later bounce shortens it.
+    handle = debouncer.debounce("key", 1000000, 1)
+
+    # While delayed, the workflow is marked debounced and holds the debounce key.
+    status = dbos._sys_db.get_workflow_status(handle.workflow_id)
+    assert status is not None
+    assert status["status"] == "DELAYED"
+    assert status["is_debounced"] is True
+    assert status["deduplication_id"] == f"{get_dbos_func_name(workflow)}-key"
+
+    # A bounce shortens the delay and replaces the input; the same workflow runs.
+    handle2 = debouncer.debounce("key", 1, 2)
+    assert handle2.workflow_id == handle.workflow_id
+
+    # Wait for the flip: the workflow starts but blocks, so it's in flight, not complete.
+    assert started.wait(timeout=60)
+
+    # The flip cleared the debounce key; assert while still running since completion also clears it.
+    status = dbos._sys_db.get_workflow_status(handle.workflow_id)
+    assert status is not None
+    assert status["status"] == "PENDING"
+    assert status["deduplication_id"] is None
+
+    # A same-key debounce therefore starts fresh even before the first workflow finishes.
+    handle3 = debouncer.debounce("key", 1, 3)
+    assert handle3.workflow_id != handle.workflow_id
+
+    blocker.set()
+    assert handle2.get_result() == 2
+    assert handle3.get_result() == 3
+
+
+def test_debounce_cancel_then_redebounce(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    debouncer = Debouncer.create(workflow)
+    handle = debouncer.debounce("key", 1000000, 1)
+    status = dbos._sys_db.get_workflow_status(handle.workflow_id)
+    assert status is not None and status["status"] == "DELAYED"
+
+    # Cancelling a delayed debounced workflow clears its debounce key.
+    DBOS.cancel_workflow(handle.workflow_id)
+
+    # A new debounce with the same key therefore starts a fresh workflow.
+    handle2 = debouncer.debounce("key", 1, 2)
+    assert handle2.workflow_id != handle.workflow_id
+    assert handle2.get_result() == 2
+
+
+def test_debounce_deadline_caps_initial_delay(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    # A huge period with a finite timeout: the delay is capped at the deadline.
+    debouncer = Debouncer.create(workflow, debounce_timeout_sec=1000)
+    handle = debouncer.debounce("key", 1000000, 1)
+
+    status = dbos._sys_db.get_workflow_status(handle.workflow_id)
+    assert status is not None
+    assert status["status"] == "DELAYED"
+    assert status["is_debounced"] is True
+    assert status["debounce_deadline_epoch_ms"] is not None
+    assert status["delay_until_epoch_ms"] is not None
+    assert status["delay_until_epoch_ms"] <= status["debounce_deadline_epoch_ms"]
+
+    DBOS.cancel_workflow(handle.workflow_id)
+
+
+def test_debounce_user_dedup_conflict_raises(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        DBOS.sleep(1000000)
+        return x
+
+    # A non-debounced workflow occupies the debounce key on the internal queue.
+    dedup_id = f"{get_dbos_func_name(workflow)}-key"
+    internal_queue = dbos._registry.get_internal_queue()
+    with SetEnqueueOptions(deduplication_id=dedup_id):
+        blocker = internal_queue.enqueue(workflow, 1)
+
+    # The key is held by a non-debounced workflow, so debouncing it surfaces the dedup conflict rather than hijacking it.
+    debouncer = Debouncer.create(workflow)
+    with pytest.raises(DBOSQueueDeduplicatedError):
+        debouncer.debounce("key", 1, 2)
+
+    DBOS.cancel_workflow(blocker.workflow_id)
+
+
+def test_debounce_fixed_workflow_id_reuse(dbos: DBOS) -> None:
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    debouncer = Debouncer.create(workflow)
+
+    # Pinning the same workflow ID across debounces of one key must still bounce the existing workflow (last input wins), not drop it on a workflow_uuid collision.
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        first_handle = debouncer.debounce("key", 2, 1)
+    with SetWorkflowID(wfid):
+        second_handle = debouncer.debounce("key", 2, 2)
+    assert first_handle.workflow_id == wfid
+    assert second_handle.workflow_id == wfid
+    assert first_handle.get_result() == 2
+    assert second_handle.get_result() == 2
+
+    # A huge initial period then a short one under the same pinned ID must still shorten the delay so the workflow runs.
+    wfid2 = str(uuid.uuid4())
+    with SetWorkflowID(wfid2):
+        third_handle = debouncer.debounce("key2", 1000000, 3)
+    with SetWorkflowID(wfid2):
+        fourth_handle = debouncer.debounce("key2", 1, 4)
+    assert third_handle.workflow_id == wfid2
+    assert fourth_handle.workflow_id == wfid2
+    assert fourth_handle.get_result() == 4
+
+
+def test_debounce_inworkflow_does_not_inherit_parent_deadline(dbos: DBOS) -> None:
+
+    ran = {"child": False}
+
+    @DBOS.workflow()
+    def child(x: int) -> int:
+        ran["child"] = True
+        return x
+
+    debouncer = Debouncer.create(child)
+
+    # Debounce inside a workflow whose timeout (1s) is shorter than the debounce delay (3s); the debounced workflow must not inherit the parent's deadline or it would be cancelled before running.
+    @DBOS.workflow()
+    def parent() -> str:
+        handle = debouncer.debounce("deadline-key", 3.0, 5)
+        return handle.workflow_id
+
+    with SetWorkflowTimeout(1.0):
+        parent_handle = DBOS.start_workflow(parent)
+    child_wfid = parent_handle.get_result()
+
+    # The debounced workflow carries no inherited deadline while delayed.
+    status = dbos._sys_db.get_workflow_status(child_wfid)
+    assert status is not None
+    assert status["status"] == "DELAYED"
+    assert status["workflow_deadline_epoch_ms"] is None
+
+    # It runs to completion after the delay rather than being cancelled.
+    child_handle: WorkflowHandle[int] = DBOS.retrieve_workflow(child_wfid)
+    assert child_handle.get_result() == 5
+    assert ran["child"] is True
+    assert child_handle.get_status().status == "SUCCESS"
+
+
+def test_debounce_inworkflow_replay_is_deterministic(dbos: DBOS) -> None:
+
+    child_runs = {"count": 0}
+
+    @DBOS.workflow()
+    def child(x: int) -> int:
+        child_runs["count"] += 1
+        return x
+
+    debouncer = Debouncer.create(child)
+
+    parent_body_runs = {"count": 0}
+
+    @DBOS.workflow()
+    def parent() -> str:
+        parent_body_runs["count"] += 1
+        handle = debouncer.debounce("replay-key", 1.0, 7)
+        return handle.workflow_id
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        parent_handle = DBOS.start_workflow(parent)
+    child_wfid = parent_handle.get_result()
+    assert parent_body_runs["count"] == 1
+
+    # Force the parent to replay from its checkpoint: the bounce step and enqueue are checkpointed, so replay must re-run the body, return the same child id, and not enqueue a second child.
+    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+    recovery_handles = DBOS._recover_pending_workflows()
+    replayed = [h for h in recovery_handles if h.workflow_id == wfid]
+    assert len(replayed) == 1
+    assert replayed[0].get_result() == child_wfid
+    assert parent_body_runs["count"] == 2
+
+    # Exactly one child workflow exists for this key: replay did not double-enqueue.
+    child_name = get_dbos_func_name(child)
+    assert len(DBOS.list_workflows(name=child_name)) == 1
+
+    # The single debounced child runs to completion exactly once.
+    child_handle: WorkflowHandle[int] = DBOS.retrieve_workflow(child_wfid)
+    assert child_handle.get_result() == 7
+    assert child_runs["count"] == 1
+
+
+def test_debounce_retries_replayed_portable_dedup_error(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression test: when an in-workflow debounce's fresh enqueue loses the dedup race, the
+    # DBOSQueueDeduplicatedError is checkpointed at the parent's function ID. On replay it is
+    # re-raised from that checkpoint, but a workflow using portable (cross-language JSON)
+    # serialization deserializes it to a PortableWorkflowError carrying only the original type
+    # name -- not the original type. The retry loop must still recognize that form and bounce the
+    # existing workflow; otherwise the replayed workflow errors instead of retrying.
+    from dbos._serialization import PortableWorkflowError
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    debouncer = Debouncer.create(workflow)
+
+    original_enqueue = Queue.enqueue
+    enqueue_calls = {"count": 0}
+
+    def enqueue_raising_portable_dedup_once(
+        self: Queue, func: Any, *args: Any, **kwargs: Any
+    ) -> Any:
+        # The first enqueue raises the exact object a replay produces from a checkpointed,
+        # portable-serialized dedup error; subsequent enqueues behave normally.
+        enqueue_calls["count"] += 1
+        if enqueue_calls["count"] == 1:
+            raise PortableWorkflowError(
+                "Workflow was deduplicated",
+                DBOSQueueDeduplicatedError.__name__,
+                None,
+                None,
+            )
+        return original_enqueue(self, func, *args, **kwargs)
+
+    monkeypatch.setattr(Queue, "enqueue", enqueue_raising_portable_dedup_once)
+
+    handle = debouncer.debounce("portable-key", 0.5, 5)
+
+    # The loop recognized the replay-form dedup error and retried instead of propagating it.
+    assert enqueue_calls["count"] == 2
+    assert handle.get_result() == 5
+
+
+def test_debounce_rejects_caller_dedup_and_delay(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    # A debounce owns the workflow's deduplication ID and delay, and priority/partition keys cannot apply to a debounced enqueue, so a caller that sets any of them must fail loudly rather than have it silently ignored or break later.
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    debouncer = Debouncer.create(workflow)
+
+    # Local: a caller-set deduplication_id is rejected.
+    with pytest.raises(DBOSException, match="deduplication_id"):
+        with SetEnqueueOptions(deduplication_id="caller-dedup"):
+            debouncer.debounce("k", 1.0, 1)
+
+    # Local: a caller-set delay is rejected.
+    with pytest.raises(DBOSException, match="delay"):
+        with SetEnqueueOptions(delay_seconds=100.0):
+            debouncer.debounce("k", 1.0, 1)
+
+    # Local: a caller-set priority is rejected.
+    with pytest.raises(DBOSException, match="priority"):
+        with SetEnqueueOptions(priority=1):
+            debouncer.debounce("k", 1.0, 1)
+
+    # Local: a caller-set partition key is rejected.
+    with pytest.raises(DBOSException, match="partition key"):
+        with SetEnqueueOptions(queue_partition_key="caller-partition"):
+            debouncer.debounce("k", 1.0, 1)
+
+    # No conflicting option left a workflow behind.
+    assert len(DBOS.list_workflows(name=get_dbos_func_name(workflow))) == 0
+
+    DBOS.register_queue("reject-queue")
+
+    # Client: a deduplication_id in the workflow options is rejected.
+    dedup_client = DebouncerClient(
+        client,
+        {
+            "workflow_name": workflow.__qualname__,
+            "queue_name": "reject-queue",
+            "deduplication_id": "caller-dedup",
+        },
+    )
+    with pytest.raises(DBOSException, match="deduplication_id"):
+        dedup_client.debounce("k", 1.0, 1)
+
+    # Client: a delay in the workflow options is rejected.
+    delay_client = DebouncerClient(
+        client,
+        {
+            "workflow_name": workflow.__qualname__,
+            "queue_name": "reject-queue",
+            "delay_seconds": 100.0,
+        },
+    )
+    with pytest.raises(DBOSException, match="delay"):
+        delay_client.debounce("k", 1.0, 1)
+
+    # Client: a priority in the workflow options is rejected.
+    priority_client = DebouncerClient(
+        client,
+        {
+            "workflow_name": workflow.__qualname__,
+            "queue_name": "reject-queue",
+            "priority": 1,
+        },
+    )
+    with pytest.raises(DBOSException, match="priority"):
+        priority_client.debounce("k", 1.0, 1)
+
+    # Client: a partition key in the workflow options is rejected.
+    partition_client = DebouncerClient(
+        client,
+        {
+            "workflow_name": workflow.__qualname__,
+            "queue_name": "reject-queue",
+            "queue_partition_key": "caller-partition",
+        },
+    )
+    with pytest.raises(DBOSException, match="partition key"):
+        partition_client.debounce("k", 1.0, 1)
+
+
+def test_debounce_bounce_path_does_not_leak_pinned_id(dbos: DBOS) -> None:
+    # Regression test: a SetWorkflowID pinned around a debounce that coalesces (bounce path) is captured by the debounce and must not stay armed on the workflow's context, or the next child workflow the parent starts would silently run under the pinned ID.
+
+    @DBOS.workflow()
+    def child(x: int) -> int:
+        return x
+
+    @DBOS.workflow()
+    def other(x: int) -> int:
+        return x
+
+    debouncer = Debouncer.create(child)
+
+    @DBOS.workflow()
+    def parent(pinned_id: str) -> tuple[str, str]:
+        # The first call creates the delayed workflow; the pinned second call bounces it, so the pinned ID goes unused.
+        first = debouncer.debounce("leak-key", 1000000, 1)
+        with SetWorkflowID(pinned_id):
+            bounced = debouncer.debounce("leak-key", 1000000, 2)
+        assert bounced.workflow_id == first.workflow_id
+        next_handle = DBOS.start_workflow(other, 3)
+        return first.workflow_id, next_handle.workflow_id
+
+    pinned_id = str(uuid.uuid4())
+    delayed_wfid, next_wfid = DBOS.start_workflow(parent, pinned_id).get_result()
+
+    # The next child workflow did not inherit the unused pinned ID.
+    assert next_wfid != pinned_id
+    assert DBOS.retrieve_workflow(next_wfid).get_result() == 3
+
+    DBOS.cancel_workflow(delayed_wfid)
+
+
+def test_debounce_pinned_id_survives_enqueue_dedup_race(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression test: a fresh-enqueue attempt consumes a SetWorkflowID-pinned ID from the context before its INSERT can lose the dedup race. The retry loop must re-apply the pinned ID so the workflow is still created under it, not a generated UUID.
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    debouncer = Debouncer.create(workflow)
+
+    original_init = dbos._sys_db.init_workflow
+    init_calls = {"count": 0}
+
+    def init_raising_dedup_once(*args: Any, **kwargs: Any) -> Any:
+        # The first enqueue's insert loses the dedup race after the pinned ID was already consumed; later calls behave normally.
+        init_calls["count"] += 1
+        if init_calls["count"] == 1:
+            raise DBOSQueueDeduplicatedError("racer", "queue", "dedup")
+        return original_init(*args, **kwargs)
+
+    monkeypatch.setattr(dbos._sys_db, "init_workflow", init_raising_dedup_once)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = debouncer.debounce("pin-race-key", 0.5, 7)
+
+    # The retried enqueue reused the pinned ID rather than minting a random one.
+    assert init_calls["count"] >= 2
+    assert handle.workflow_id == wfid
+    assert handle.get_result() == 7
+
+
+def test_debounce_key_collision_between_workflows(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    # Regression test: "colw"+"b-k" and "colw-b"+"k" both yield dedup ID "colw-b-k" (hyphenated names are client-only).
+    # The collider must surface the conflict, not overwrite the other workflow's row.
+    queue_name = f"collision-queue-{uuid.uuid4()}"
+    DBOS.register_queue(queue_name)
+
+    debouncer_a = DebouncerClient(
+        client, {"workflow_name": "colw", "queue_name": queue_name}
+    )
+    debouncer_b = DebouncerClient(
+        client, {"workflow_name": "colw-b", "queue_name": queue_name}
+    )
+
+    # A huge period keeps workflow "colw" DELAYED, holding dedup ID "colw-b-k".
+    handle_a: WorkflowHandle[int] = debouncer_a.debounce("b-k", 1000000, 1)
+    status = dbos._sys_db.get_workflow_status(handle_a.workflow_id)
+    assert status is not None
+    assert status["status"] == "DELAYED"
+    assert status["deduplication_id"] == "colw-b-k"
+
+    # The colliding debounce for workflow "colw-b" raises instead of hijacking the row.
+    with pytest.raises(DBOSQueueDeduplicatedError):
+        debouncer_b.debounce("k", 1, 2)
+
+    # The victim is untouched: still DELAYED under its own name.
+    status = dbos._sys_db.get_workflow_status(handle_a.workflow_id)
+    assert status is not None
+    assert status["status"] == "DELAYED"
+    assert status["name"] == "colw"
+
+    # A same-name bounce still coalesces onto the existing workflow.
+    handle_a2: WorkflowHandle[int] = debouncer_a.debounce("b-k", 1000000, 3)
+    assert handle_a2.workflow_id == handle_a.workflow_id
+
+    DBOS.cancel_workflow(handle_a.workflow_id)
+
+
+def test_debounce_bounce_atomic_with_checkpoint(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression test (exactly-once): an in-workflow bounce commits atomically with its step
+    # checkpoint. If the checkpoint write fails, the bounce must roll back with it; otherwise a
+    # recovered parent would re-bounce or re-enqueue work that already committed, running it twice.
+    runs = {"count": 0}
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        runs["count"] += 1
+        return x
+
+    debouncer = Debouncer.create(workflow)
+
+    # A fresh debounced workflow, kept DELAYED by a huge period.
+    w_handle = debouncer.debounce("atomic-key", 1000000, 1)
+    status = dbos._sys_db.get_workflow_status(w_handle.workflow_id)
+    assert status is not None and status["status"] == "DELAYED"
+    delay_before = status["delay_until_epoch_ms"]
+    assert delay_before is not None
+
+    # The bounce's checkpoint write fails once, after the bounce UPDATE ran in the same transaction.
+    original_record = dbos._sys_db._record_operation_result_txn
+    fail = {"armed": True}
+
+    def record_failing_once(*args: Any, **kwargs: Any) -> Any:
+        if (
+            fail["armed"]
+            and args[0]["function_name"] == "DBOS.debounce_delayed_workflow"
+        ):
+            fail["armed"] = False
+            raise RuntimeError("crash before checkpoint commit")
+        return original_record(*args, **kwargs)
+
+    monkeypatch.setattr(
+        dbos._sys_db, "_record_operation_result_txn", record_failing_once
+    )
+
+    @DBOS.workflow()
+    def parent() -> str:
+        handle = debouncer.debounce("atomic-key", 2000000, 2)
+        return handle.workflow_id
+
+    pwfid = str(uuid.uuid4())
+    with SetWorkflowID(pwfid):
+        parent_handle = DBOS.start_workflow(parent)
+    with pytest.raises(Exception, match="crash before checkpoint commit"):
+        parent_handle.get_result()
+
+    # The failed checkpoint rolled back the bounce with it: the delay (set in the same UPDATE as the inputs) is unchanged.
+    status = dbos._sys_db.get_workflow_status(w_handle.workflow_id)
+    assert status is not None
+    assert status["status"] == "DELAYED"
+    assert status["delay_until_epoch_ms"] == delay_before
+
+    # Recovery replays the parent: no checkpoint exists, so the bounce re-executes and lands exactly once.
+    dbos._sys_db.update_workflow_outcome(pwfid, "PENDING")
+    recovery_handles = DBOS._recover_pending_workflows()
+    replayed = [h for h in recovery_handles if h.workflow_id == pwfid]
+    assert len(replayed) == 1
+    assert replayed[0].get_result() == w_handle.workflow_id
+
+    status = dbos._sys_db.get_workflow_status(w_handle.workflow_id)
+    assert status is not None
+    assert status["delay_until_epoch_ms"] is not None
+    assert status["delay_until_epoch_ms"] > delay_before
+
+    # Exactly one workflow exists for the key; shortening the delay runs it exactly once with the bounced input.
+    assert len(DBOS.list_workflows(name=get_dbos_func_name(workflow))) == 1
+    final_handle = debouncer.debounce("atomic-key", 0.5, 2)
+    assert final_handle.workflow_id == w_handle.workflow_id
+    assert final_handle.get_result() == 2
+    assert runs["count"] == 1
+
+
+def test_debounce_bounce_checkpoint_survives_post_commit_crash(dbos: DBOS) -> None:
+    # Regression test (exactly-once): a crash immediately after the atomic bounce+checkpoint
+    # commit must replay through the checkpoint on recovery -- same handle, no second bounce.
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    debouncer = Debouncer.create(workflow)
+    w_handle = debouncer.debounce("post-commit-key", 1000000, 1)
+    status = dbos._sys_db.get_workflow_status(w_handle.workflow_id)
+    assert status is not None and status["status"] == "DELAYED"
+    delay_before = status["delay_until_epoch_ms"]
+    assert delay_before is not None
+
+    @DBOS.workflow()
+    def parent() -> str:
+        handle = debouncer.debounce("post-commit-key", 2000000, 2)
+        return handle.workflow_id
+
+    # Crash the parent right after the bounce's transaction commits.
+    DebugTriggers.set_debug_trigger(
+        DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT,
+        DebugAction().set_exception_to_throw(
+            RuntimeError("crash after checkpoint commit")
+        ),
+    )
+    try:
+        pwfid = str(uuid.uuid4())
+        with SetWorkflowID(pwfid):
+            parent_handle = DBOS.start_workflow(parent)
+        with pytest.raises(Exception, match="crash after checkpoint commit"):
+            parent_handle.get_result()
+    finally:
+        DebugTriggers.clear_debug_triggers()
+
+    # The bounce and its checkpoint both committed before the crash.
+    status = dbos._sys_db.get_workflow_status(w_handle.workflow_id)
+    assert status is not None
+    assert status["delay_until_epoch_ms"] is not None
+    assert status["delay_until_epoch_ms"] > delay_before
+    delay_after_crash = status["delay_until_epoch_ms"]
+
+    # Replay short-circuits through the checkpoint: same handle, and no re-executed bounce re-extends the delay.
+    dbos._sys_db.update_workflow_outcome(pwfid, "PENDING")
+    recovery_handles = DBOS._recover_pending_workflows()
+    replayed = [h for h in recovery_handles if h.workflow_id == pwfid]
+    assert len(replayed) == 1
+    assert replayed[0].get_result() == w_handle.workflow_id
+
+    status = dbos._sys_db.get_workflow_status(w_handle.workflow_id)
+    assert status is not None
+    assert status["delay_until_epoch_ms"] == delay_after_crash
+
+    DBOS.cancel_workflow(w_handle.workflow_id)

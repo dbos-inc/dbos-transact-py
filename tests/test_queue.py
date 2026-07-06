@@ -2427,9 +2427,7 @@ async def test_enqueue_version_async(dbos: DBOS) -> None:
 
 
 def test_dequeue_no_version_requires_latest(dbos: DBOS, client: DBOSClient) -> None:
-    # A worker only dequeues version-less (application_version IS NULL) workflows
-    # when it is running the latest registered application version. Workflows
-    # tagged with the worker's own version are always dequeued.
+    # A worker dequeues version-less (application_version IS NULL) workflows only when running the latest registered version; own-version workflows are always dequeued.
     queue_name = f"test_dequeue_latest_{uuid.uuid4()}"
     DBOS.register_queue(queue_name)
 
@@ -2462,10 +2460,7 @@ def test_dequeue_no_version_requires_latest(dbos: DBOS, client: DBOSClient) -> N
     assert versioned_handle.get_result() == 7
 
     # The version-less workflow is NOT dequeued: this worker is not the latest.
-    assert (
-        versionless_handle.get_status().status
-        == WorkflowStatusString.ENQUEUED.value
-    )
+    assert versionless_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
 
     # Make this worker the latest version again; now the version-less workflow runs.
     dbos._sys_db.update_application_version_timestamp(
@@ -2630,7 +2625,9 @@ def test_polling_interval(dbos: DBOS) -> None:
         assert time.time() - start_time < 1.0
 
 
-def test_listen_queue(dbos: DBOS, config: DBOSConfig) -> None:
+def test_listen_queue(
+    dbos: DBOS, config: DBOSConfig, skip_with_sqlite_imprecise_time: None
+) -> None:
     DBOS.destroy(destroy_registry=True)
     DBOS(config=config)
 
