@@ -15,6 +15,7 @@ from dbos import (
 )
 from dbos._client import EnqueueOptions
 from dbos._context import SetEnqueueOptions, SetWorkflowTimeout
+from dbos._debug_trigger import DebugAction, DebugTriggers
 from dbos._error import DBOSException, DBOSQueueDeduplicatedError
 from dbos._queue import Queue
 from dbos._registrations import get_dbos_func_name
@@ -771,3 +772,136 @@ def test_debounce_key_collision_between_workflows(
     assert handle_a2.workflow_id == handle_a.workflow_id
 
     DBOS.cancel_workflow(handle_a.workflow_id)
+
+
+def test_debounce_bounce_atomic_with_checkpoint(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression test (exactly-once): an in-workflow bounce commits atomically with its step
+    # checkpoint. If the checkpoint write fails, the bounce must roll back with it; otherwise a
+    # recovered parent would re-bounce or re-enqueue work that already committed, running it twice.
+    runs = {"count": 0}
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        runs["count"] += 1
+        return x
+
+    debouncer = Debouncer.create(workflow)
+
+    # A fresh debounced workflow, kept DELAYED by a huge period.
+    w_handle = debouncer.debounce("atomic-key", 1000000, 1)
+    status = dbos._sys_db.get_workflow_status(w_handle.workflow_id)
+    assert status is not None and status["status"] == "DELAYED"
+    delay_before = status["delay_until_epoch_ms"]
+    assert delay_before is not None
+
+    # The bounce's checkpoint write fails once, after the bounce UPDATE ran in the same transaction.
+    original_record = dbos._sys_db._record_operation_result_txn
+    fail = {"armed": True}
+
+    def record_failing_once(*args: Any, **kwargs: Any) -> Any:
+        if (
+            fail["armed"]
+            and args[0]["function_name"] == "DBOS.debounce_delayed_workflow"
+        ):
+            fail["armed"] = False
+            raise RuntimeError("crash before checkpoint commit")
+        return original_record(*args, **kwargs)
+
+    monkeypatch.setattr(
+        dbos._sys_db, "_record_operation_result_txn", record_failing_once
+    )
+
+    @DBOS.workflow()
+    def parent() -> str:
+        handle = debouncer.debounce("atomic-key", 2000000, 2)
+        return handle.workflow_id
+
+    pwfid = str(uuid.uuid4())
+    with SetWorkflowID(pwfid):
+        parent_handle = DBOS.start_workflow(parent)
+    with pytest.raises(Exception, match="crash before checkpoint commit"):
+        parent_handle.get_result()
+
+    # The failed checkpoint rolled back the bounce with it: the delay (set in the same UPDATE as the inputs) is unchanged.
+    status = dbos._sys_db.get_workflow_status(w_handle.workflow_id)
+    assert status is not None
+    assert status["status"] == "DELAYED"
+    assert status["delay_until_epoch_ms"] == delay_before
+
+    # Recovery replays the parent: no checkpoint exists, so the bounce re-executes and lands exactly once.
+    dbos._sys_db.update_workflow_outcome(pwfid, "PENDING")
+    recovery_handles = DBOS._recover_pending_workflows()
+    replayed = [h for h in recovery_handles if h.workflow_id == pwfid]
+    assert len(replayed) == 1
+    assert replayed[0].get_result() == w_handle.workflow_id
+
+    status = dbos._sys_db.get_workflow_status(w_handle.workflow_id)
+    assert status is not None
+    assert status["delay_until_epoch_ms"] is not None
+    assert status["delay_until_epoch_ms"] > delay_before
+
+    # Exactly one workflow exists for the key; shortening the delay runs it exactly once with the bounced input.
+    assert len(DBOS.list_workflows(name=get_dbos_func_name(workflow))) == 1
+    final_handle = debouncer.debounce("atomic-key", 0.5, 2)
+    assert final_handle.workflow_id == w_handle.workflow_id
+    assert final_handle.get_result() == 2
+    assert runs["count"] == 1
+
+
+def test_debounce_bounce_checkpoint_survives_post_commit_crash(dbos: DBOS) -> None:
+    # Regression test (exactly-once): a crash immediately after the atomic bounce+checkpoint
+    # commit must replay through the checkpoint on recovery -- same handle, no second bounce.
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    debouncer = Debouncer.create(workflow)
+    w_handle = debouncer.debounce("post-commit-key", 1000000, 1)
+    status = dbos._sys_db.get_workflow_status(w_handle.workflow_id)
+    assert status is not None and status["status"] == "DELAYED"
+    delay_before = status["delay_until_epoch_ms"]
+    assert delay_before is not None
+
+    @DBOS.workflow()
+    def parent() -> str:
+        handle = debouncer.debounce("post-commit-key", 2000000, 2)
+        return handle.workflow_id
+
+    # Crash the parent right after the bounce's transaction commits.
+    DebugTriggers.set_debug_trigger(
+        DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT,
+        DebugAction().set_exception_to_throw(
+            RuntimeError("crash after checkpoint commit")
+        ),
+    )
+    try:
+        pwfid = str(uuid.uuid4())
+        with SetWorkflowID(pwfid):
+            parent_handle = DBOS.start_workflow(parent)
+        with pytest.raises(Exception, match="crash after checkpoint commit"):
+            parent_handle.get_result()
+    finally:
+        DebugTriggers.clear_debug_triggers()
+
+    # The bounce and its checkpoint both committed before the crash.
+    status = dbos._sys_db.get_workflow_status(w_handle.workflow_id)
+    assert status is not None
+    assert status["delay_until_epoch_ms"] is not None
+    assert status["delay_until_epoch_ms"] > delay_before
+    delay_after_crash = status["delay_until_epoch_ms"]
+
+    # Replay short-circuits through the checkpoint: same handle, and no re-executed bounce re-extends the delay.
+    dbos._sys_db.update_workflow_outcome(pwfid, "PENDING")
+    recovery_handles = DBOS._recover_pending_workflows()
+    replayed = [h for h in recovery_handles if h.workflow_id == pwfid]
+    assert len(replayed) == 1
+    assert replayed[0].get_result() == w_handle.workflow_id
+
+    status = dbos._sys_db.get_workflow_status(w_handle.workflow_id)
+    assert status is not None
+    assert status["delay_until_epoch_ms"] == delay_after_crash
+
+    DBOS.cancel_workflow(w_handle.workflow_id)

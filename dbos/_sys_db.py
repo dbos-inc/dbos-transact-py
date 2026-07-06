@@ -1020,7 +1020,6 @@ class SystemDatabase(ABC):
                 )
             )
 
-    @db_retry()
     def debounce_delayed_workflow(
         self,
         *,
@@ -1030,6 +1029,7 @@ class SystemDatabase(ABC):
         delay_until_epoch_ms: int,
         inputs: str,
         serialization: Optional[str],
+        conn: Optional[sa.Connection] = None,
     ) -> DebounceResult:
         """Extend an existing debounced DELAYED workflow's delay and update its inputs.
 
@@ -1039,9 +1039,13 @@ class SystemDatabase(ABC):
         (e.g. "a"+"b-c" vs "a-b"+"c") never overwrites another workflow's inputs.
         If nothing matched, returns the current holder (or that the key is unheld)
         so the caller can decide whether to start fresh or surface a conflict.
+
+        Runs on ``conn`` if given, joining its transaction (e.g. a checkpointed
+        step's via call_txn_as_step); otherwise in its own retried transaction.
         """
-        wsc = SystemSchema.workflow_status.c
-        with self.engine.begin() as c:
+
+        def _do(c: sa.Connection) -> DebounceResult:
+            wsc = SystemSchema.workflow_status.c
             # Cap the new delay at the debounce deadline, if any (CASE not LEAST/min, for Postgres/SQLite portability).
             capped_delay = sa.case(
                 (
@@ -1094,6 +1098,16 @@ class SystemDatabase(ABC):
                 "holder_is_debounced": bool(holder[1]),
                 "holder_workflow_name": holder[2],
             }
+
+        if conn is not None:
+            return _do(conn)
+
+        @db_retry()
+        def _standalone() -> DebounceResult:
+            with self.engine.begin() as c:
+                return _do(c)
+
+        return _standalone()
 
     def update_workflow_attributes(
         self, workflow_id: str, attributes: Optional[Dict[str, Any]]
@@ -5333,4 +5347,5 @@ class SystemDatabase(ABC):
                 "error": None,
             }
             self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
-            return result
+        DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT)
+        return result

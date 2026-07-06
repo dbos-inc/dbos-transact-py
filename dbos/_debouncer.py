@@ -18,6 +18,8 @@ from typing import (
     cast,
 )
 
+import sqlalchemy as sa
+
 from dbos._client import (
     DBOSClient,
     EnqueueOptions,
@@ -25,6 +27,7 @@ from dbos._client import (
     WorkflowHandleClientPolling,
 )
 from dbos._context import (
+    EnterDBOSStepCtx,
     SetWorkflowDebounce,
     get_local_dbos_context,
     snapshot_step_context,
@@ -192,6 +195,7 @@ class Debouncer(Generic[P, R]):
         debounce_period_sec: float,
         args: Tuple[Any, ...],
         kwargs: Dict[str, Any],
+        conn: Optional[sa.Connection] = None,
     ) -> DebounceResult:
         # Serialize new inputs with the workflow's format so a bounce stays consistent with the initial enqueue.
         fi = get_func_info(func)
@@ -207,6 +211,7 @@ class Debouncer(Generic[P, R]):
             delay_until_epoch_ms=delay_until_epoch_ms,
             inputs=inputs,
             serialization=serialization,
+            conn=conn,
         )
         return result
 
@@ -262,9 +267,31 @@ class Debouncer(Generic[P, R]):
         timeout_sec = self.options["debounce_timeout_sec"]
 
         while True:
-            # Try to extend an existing debounced workflow for this key first (hot path, sole coalescing mechanism); a checkpointed step so an in-workflow debounce replays deterministically.
-            result = dbos._sys_db.call_function_as_step(
-                lambda: self._bounce(
+            # Try to extend an existing debounced workflow for this key first (hot path, sole coalescing mechanism).
+            # In a workflow, the bounce runs via call_txn_as_step so it commits atomically with its step checkpoint: a crash can never commit one without the other, which on recovery would re-bounce work that already ran.
+            step_ctx = snapshot_step_context(reserve_sleep_id=False)
+            result: DebounceResult
+            if step_ctx is not None and step_ctx.is_workflow():
+                with EnterDBOSStepCtx(
+                    {"name": "debounce_delayed_workflow"}, step_ctx
+                ) as step:
+                    result = dbos._sys_db.call_txn_as_step(
+                        step.workflow_id,
+                        step.curr_step_function_id,
+                        "DBOS.debounce_delayed_workflow",
+                        lambda c: self._bounce(
+                            dbos,
+                            func,
+                            queue.name,
+                            deduplication_id,
+                            debounce_period_sec,
+                            args,
+                            kwargs,
+                            conn=c,
+                        ),
+                    )
+            else:
+                result = self._bounce(
                     dbos,
                     func,
                     queue.name,
@@ -272,10 +299,7 @@ class Debouncer(Generic[P, R]):
                     debounce_period_sec,
                     args,
                     kwargs,
-                ),
-                "DBOS.debounce_delayed_workflow",
-                snapshot_step_context(reserve_sleep_id=False),
-            )
+                )
             action = _classify_bounce(result, self.options["workflow_name"])
             if action == "return":
                 bounced_wfid = result["bounced_workflow_id"]
