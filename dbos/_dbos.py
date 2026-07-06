@@ -115,7 +115,11 @@ from ._tracer import DBOSTracer, dbos_tracer
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
-    from ._kafka import _KafkaConsumerWorkflow
+    from ._kafka import (
+        KafkaConsumerRegistration,
+        KafkaOrdering,
+        _KafkaConsumerWorkflow,
+    )
     from flask import Flask
     from opentelemetry.trace import Span
 
@@ -220,6 +224,8 @@ class DBOSRegistry:
         self.queue_info_map: dict[str, Queue] = {}
         self.pollers: list[RegisteredJob] = []
         self.dbos: Optional[DBOS] = None
+        # Kafka consumer registrations, for cross-consumer validation
+        self.kafka_registrations: list[KafkaConsumerRegistration] = []
 
     def register_wf_function(self, name: str, wrapped_func: F, functype: str) -> None:
         if name in self.function_type_map:
@@ -1138,13 +1144,39 @@ class DBOS:
         config: dict[str, Any],
         topics: list[str],
         in_order: bool = False,
+        *,
+        ordering: Optional[KafkaOrdering] = None,
+        batch_size: int = 250,
+        queue: Optional[Queue] = None,
     ) -> Callable[[_KafkaConsumerWorkflow], _KafkaConsumerWorkflow]:
-        """Decorate a function to be used as a Kafka consumer."""
+        """Decorate a function to be used as a Kafka consumer.
+
+        Args:
+            config: confluent-kafka consumer configuration.
+            topics: Topics (or ^-prefixed regexes) to subscribe to.
+            in_order: Deprecated alias for ordering="topic".
+            ordering: "none" (default) processes messages in parallel;
+                "partition" processes them serially per topic partition
+                (Kafka's delivery-order guarantee) and in parallel across
+                partitions; "topic" processes them serially per topic.
+            batch_size: Maximum number of messages consumed and durably
+                enqueued per batch.
+            queue: Optional queue on which consumer workflows run, for
+                configuring concurrency limits. Only valid with
+                ordering="none"; ordered consumers share an internal
+                partitioned queue.
+        """
         try:
             from ._kafka import kafka_consumer
 
             return kafka_consumer(
-                _get_or_create_dbos_registry(), config, topics, in_order
+                _get_or_create_dbos_registry(),
+                config,
+                topics,
+                in_order,
+                ordering=ordering,
+                batch_size=batch_size,
+                queue=queue,
             )
         except ModuleNotFoundError as e:
             raise DBOSException(

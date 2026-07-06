@@ -6,6 +6,7 @@ import random
 import sys
 import threading
 import time
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -3798,9 +3799,7 @@ class SystemDatabase(ABC):
 
             latest_version = c.execute(
                 sa.select(SystemSchema.application_versions.c.version_name)
-                .order_by(
-                    SystemSchema.application_versions.c.version_timestamp.desc()
-                )
+                .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
                 .limit(1)
             ).scalar()
             is_latest_version = latest_version is None or latest_version == app_version
@@ -4047,6 +4046,72 @@ class SystemDatabase(ABC):
             )
         DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_INITWF_COMMIT)
         return wf_status, workflow_deadline_epoch_ms, should_execute
+
+    def init_workflows(self, statuses: List[WorkflowStatusInternal]) -> Set[str]:
+        """
+        Batch-insert ENQUEUED workflow status rows in a single transaction.
+
+        Rows whose workflow_uuid already exists are skipped rather than updated,
+        making this idempotent under redelivery (e.g. Kafka). Returns the IDs of
+        the rows actually inserted.
+        """
+        if len(statuses) == 0:
+            return set()
+        # created_at's server default is the transaction timestamp, identical for
+        # every row in the batch; queues order by (priority, created_at), so stamp
+        # distinct, monotonically increasing values to preserve intra-batch order.
+        base_ms = int(time.time() * 1000)
+        rows: List[Dict[str, Any]] = []
+        for i, status in enumerate(statuses):
+            assert status["status"] == WorkflowStatusString.ENQUEUED.value
+            assert status["deduplication_id"] is None
+            rows.append(
+                {
+                    "workflow_uuid": status["workflow_uuid"],
+                    "status": status["status"],
+                    "name": status["name"],
+                    "class_name": status["class_name"],
+                    "config_name": status["config_name"],
+                    "output": None,
+                    "error": None,
+                    "executor_id": status["executor_id"],
+                    "application_version": status["app_version"],
+                    "application_id": status["app_id"],
+                    "authenticated_user": status["authenticated_user"],
+                    "authenticated_roles": status["authenticated_roles"],
+                    "assumed_role": status["assumed_role"],
+                    "queue_name": status["queue_name"],
+                    "recovery_attempts": 0,
+                    "workflow_timeout_ms": status["workflow_timeout_ms"],
+                    "workflow_deadline_epoch_ms": status["workflow_deadline_epoch_ms"],
+                    "deduplication_id": None,
+                    "priority": status["priority"],
+                    "inputs": status["inputs"],
+                    "serialization": status["serialization"],
+                    "queue_partition_key": status["queue_partition_key"],
+                    "parent_workflow_id": status["parent_workflow_id"],
+                    "owner_xid": str(uuid.uuid4()),
+                    "delay_until_epoch_ms": status["delay_until_epoch_ms"],
+                    "attributes": status["attributes"],
+                    "schedule_name": status["schedule_name"],
+                    "created_at": base_ms + i,
+                    "updated_at": base_ms + i,
+                }
+            )
+        inserted: Set[str] = set()
+        # Chunk to stay well under bind-parameter limits (~29 params per row).
+        chunk_size = 500
+        with self.engine.begin() as conn:
+            for start in range(0, len(rows), chunk_size):
+                chunk = rows[start : start + chunk_size]
+                result = conn.execute(
+                    self.dialect.insert(SystemSchema.workflow_status)
+                    .values(chunk)
+                    .on_conflict_do_nothing(index_elements=["workflow_uuid"])
+                    .returning(SystemSchema.workflow_status.c.workflow_uuid)
+                )
+                inserted.update(row[0] for row in result)
+        return inserted
 
     def _apply_caller_schema(self, conn: Union[sa.Connection, Session]) -> None:
         """Translate the placeholder schema on a caller-owned Connection/Session (the caller's own statements are unaffected)."""

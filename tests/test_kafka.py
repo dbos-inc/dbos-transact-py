@@ -87,7 +87,7 @@ def test_kafka_no_offset_loss_on_relaunch(
     if not produce_one_message(server, topic):
         pytest.skip("Kafka not available")
 
-    # Wrap the real Consumer that dbos._kafka uses so we can pause inside poll().
+    # Wrap the real Consumer that dbos._kafka uses so we can pause inside consume().
     original_consumer_cls = Consumer
     first_poll_returned = threading.Event()
     poll_delay_seconds = 3.0
@@ -96,13 +96,13 @@ def test_kafka_no_offset_loss_on_relaunch(
         def __init__(self, conf: dict[str, Any]) -> None:
             self._inner = original_consumer_cls(conf)
 
-        def poll(self, timeout: Optional[float] = None) -> Any:
-            msg = self._inner.poll(timeout)
-            if msg is not None and msg.error() is None:
-                # Park in the post-poll/pre-enqueue window so the relaunch lands here.
+        def consume(self, num_messages: int = 1, timeout: float = -1) -> Any:
+            msgs = self._inner.consume(num_messages, timeout)
+            if any(m.error() is None for m in msgs):
+                # Park in the post-consume/pre-enqueue window so the relaunch lands here.
                 first_poll_returned.set()
                 time.sleep(poll_delay_seconds)
-            return msg
+            return msgs
 
         def __getattr__(self, name: str) -> Any:
             return getattr(self._inner, name)
@@ -224,24 +224,26 @@ def test_kafka_in_order(dbos: DBOS) -> None:
     if not send_test_messages(server, topic):
         pytest.skip("Kafka not available")
 
-    @DBOS.kafka_consumer(
-        {
-            "bootstrap.servers": server,
-            "group.id": "dbos-test",
-            "auto.offset.reset": "earliest",
-        },
-        [topic],
-        in_order=True,
-    )
-    @DBOS.workflow()
-    def test_kafka_workflow(msg: KafkaMessage) -> None:
-        time.sleep(random.uniform(0, 2))
-        nonlocal kafka_count
-        kafka_count += 1
-        assert f"test message key {kafka_count - 1}".encode() == msg.key
-        print(msg)
-        if kafka_count == NUM_EVENTS:
-            event.set()
+    with pytest.warns(DeprecationWarning):
+
+        @DBOS.kafka_consumer(
+            {
+                "bootstrap.servers": server,
+                "group.id": "dbos-test",
+                "auto.offset.reset": "earliest",
+            },
+            [topic],
+            in_order=True,
+        )
+        @DBOS.workflow()
+        def test_kafka_workflow(msg: KafkaMessage) -> None:
+            time.sleep(random.uniform(0, 2))
+            nonlocal kafka_count
+            kafka_count += 1
+            assert f"test message key {kafka_count - 1}".encode() == msg.key
+            print(msg)
+            if kafka_count == NUM_EVENTS:
+                event.set()
 
     wait = event.wait(timeout=15)
     assert wait
@@ -282,3 +284,243 @@ def test_kafka_no_groupid(dbos: DBOS) -> None:
     wait = event.wait(timeout=10)
     assert wait
     assert kafka_count == NUM_EVENTS * 2
+
+
+def test_kafka_partition_ordering(dbos: DBOS) -> None:
+    # ordering="partition": serial per partition, parallel across partitions.
+    from confluent_kafka.admin import AdminClient, NewTopic
+
+    server = "localhost:9092"
+    topic = f"dbos-kafka-part-{random.randrange(1_000_000_000)}"
+    num_partitions = 4
+    num_per_partition = 5
+
+    admin = AdminClient({"bootstrap.servers": server})
+    try:
+        admin.create_topics([NewTopic(topic, num_partitions=num_partitions)])[
+            topic
+        ].result(10)
+    except Exception:
+        pytest.skip("Kafka not available")
+
+    producer = Producer({"bootstrap.servers": server})
+    # Wait for the new topic's partitions to propagate to the producer
+    for _ in range(30):
+        metadata = producer.list_topics(topic, timeout=5)
+        if len(metadata.topics[topic].partitions) == num_partitions:
+            break
+        time.sleep(0.5)
+    for p in range(num_partitions):
+        for i in range(num_per_partition):
+            producer.produce(topic, partition=p, value=f"{i}")
+    producer.flush(10)
+
+    lock = threading.Lock()
+    seen: dict[int, list[int]] = {p: [] for p in range(num_partitions)}
+    active = 0
+    max_active = 0
+    done = threading.Event()
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": server,
+            "group.id": "dbos-test-partition-ordering",
+            "auto.offset.reset": "earliest",
+        },
+        [topic],
+        ordering="partition",
+    )
+    @DBOS.workflow()
+    def partition_workflow(msg: KafkaMessage) -> None:
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.5)  # widen the window to observe cross-partition parallelism
+        with lock:
+            active -= 1
+            assert msg.partition is not None
+            seen[msg.partition].append(int(msg.value))  # type: ignore
+            if sum(len(v) for v in seen.values()) == num_partitions * num_per_partition:
+                done.set()
+
+    assert done.wait(timeout=90)
+    # Kafka's guarantee: per-partition order is preserved exactly
+    for p in range(num_partitions):
+        assert seen[p] == list(range(num_per_partition))
+    # Partitions were processed in parallel
+    assert max_active >= 2
+
+
+def test_kafka_db_outage(dbos: DBOS, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The consumer must survive transient enqueue failures with no message loss.
+    event = threading.Event()
+    kafka_count = 0
+    server = "localhost:9092"
+    topic = f"dbos-kafka-outage-{random.randrange(1_000_000_000)}"
+
+    if not send_test_messages(server, topic):
+        pytest.skip("Kafka not available")
+
+    fail_remaining = 3
+    failures_injected = 0
+    original_init_workflows = dbos._sys_db.init_workflows
+
+    def flaky_init_workflows(statuses: Any) -> Any:
+        nonlocal fail_remaining, failures_injected
+        if fail_remaining > 0:
+            fail_remaining -= 1
+            failures_injected += 1
+            raise Exception("Simulated database outage")
+        return original_init_workflows(statuses)
+
+    monkeypatch.setattr(dbos._sys_db, "init_workflows", flaky_init_workflows)
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": server,
+            "group.id": "dbos-test-db-outage",
+            "auto.offset.reset": "earliest",
+        },
+        [topic],
+    )
+    @DBOS.workflow()
+    def outage_workflow(msg: KafkaMessage) -> None:
+        nonlocal kafka_count
+        kafka_count += 1
+        if kafka_count == NUM_EVENTS:
+            event.set()
+
+    # Backoff between injected failures is 1s + 2s + 4s
+    assert event.wait(timeout=60)
+    assert kafka_count == NUM_EVENTS
+    assert failures_injected == 3
+
+
+def test_kafka_throughput(dbos: DBOS, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Ingest throughput: batched enqueue must far exceed the old one-txn-per-message path.
+    server = "localhost:9092"
+    topic = f"dbos-kafka-bench-{random.randrange(1_000_000_000)}"
+    num_messages = 1000
+
+    try:
+        producer = Producer({"bootstrap.servers": server})
+        for i in range(num_messages):
+            producer.produce(topic, value=f"message-{i}")
+        producer.poll(10)
+        if producer.flush(10) > 0:
+            pytest.skip("Kafka not available")
+    except Exception:
+        pytest.skip("Kafka not available")
+
+    inserted_total = 0
+    first_insert_at: Optional[float] = None
+    last_insert_at: Optional[float] = None
+    done = threading.Event()
+    original_init_workflows = dbos._sys_db.init_workflows
+
+    def counting_init_workflows(statuses: Any) -> Any:
+        nonlocal inserted_total, first_insert_at, last_insert_at
+        if first_insert_at is None:
+            first_insert_at = time.monotonic()
+        result = original_init_workflows(statuses)
+        inserted_total += len(result)
+        if inserted_total >= num_messages:
+            last_insert_at = time.monotonic()
+            done.set()
+        return result
+
+    monkeypatch.setattr(dbos._sys_db, "init_workflows", counting_init_workflows)
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": server,
+            "group.id": "dbos-test-throughput",
+            "auto.offset.reset": "earliest",
+        },
+        [topic],
+    )
+    @DBOS.workflow()
+    def bench_workflow(msg: KafkaMessage) -> None:
+        pass
+
+    assert done.wait(timeout=60)
+    assert first_insert_at is not None and last_insert_at is not None
+    elapsed = max(last_insert_at - first_insert_at, 0.001)
+    rate = num_messages / elapsed
+    print(
+        f"Kafka ingest throughput: {rate:.0f} msg/s ({num_messages} in {elapsed:.2f}s)"
+    )
+    # Conservative floor: the pre-redesign serial path measured ~315 msg/s on a
+    # local database, and batching should exceed that several-fold.
+    assert rate > 1000
+
+
+def test_kafka_duplicate_group_validation(dbos: DBOS) -> None:
+    # Two consumers sharing a group.id and topic would split messages between them.
+    from dbos._error import DBOSInitializationError
+
+    config = {"bootstrap.servers": "localhost:9092", "group.id": "dbos-test-dup-group"}
+    topic = "dbos-test-dup-topic"
+
+    @DBOS.kafka_consumer(dict(config), [topic])
+    @DBOS.workflow()
+    def consumer_one(msg: KafkaMessage) -> None:
+        pass
+
+    with pytest.raises(DBOSInitializationError, match="share"):
+
+        @DBOS.kafka_consumer(dict(config), [topic])
+        @DBOS.workflow()
+        def consumer_two(msg: KafkaMessage) -> None:
+            pass
+
+
+def test_kafka_config_not_mutated(dbos: DBOS) -> None:
+    config = {
+        "bootstrap.servers": "localhost:9092",
+        "group.id": "dbos-test-no-mutate",
+    }
+    snapshot = dict(config)
+
+    @DBOS.kafka_consumer(config, ["dbos-test-no-mutate-topic"])
+    @DBOS.workflow()
+    def no_mutate_workflow(msg: KafkaMessage) -> None:
+        pass
+
+    assert config == snapshot
+
+
+def test_init_workflows_idempotent(dbos: DBOS) -> None:
+    # Batch insert dedups on workflow ID, making Kafka redelivery a no-op.
+    from dbos._core import prepare_enqueued_workflow
+
+    @DBOS.workflow()
+    def batch_workflow(value: str) -> None:
+        pass
+
+    # Use an undeclared queue so the rows sit ENQUEUED and aren't executed
+    queue_name = f"unpolled-queue-{random.randrange(1_000_000_000)}"
+    prefix = f"batch-test-{random.randrange(1_000_000_000)}"
+
+    def build_statuses() -> list[Any]:
+        return [
+            prepare_enqueued_workflow(
+                dbos,
+                batch_workflow,
+                (f"value-{i}",),
+                {},
+                queue_name=queue_name,
+                workflow_id=f"{prefix}-{i}",
+            )
+            for i in range(5)
+        ]
+
+    inserted = dbos._sys_db.init_workflows(build_statuses())
+    assert inserted == {f"{prefix}-{i}" for i in range(5)}
+    # Redelivering the same batch inserts nothing
+    assert dbos._sys_db.init_workflows(build_statuses()) == set()
+    # A partially-redelivered batch inserts only the new rows
+    statuses = build_statuses()
+    statuses[0]["workflow_uuid"] = f"{prefix}-new"
+    assert dbos._sys_db.init_workflows(statuses) == {f"{prefix}-new"}

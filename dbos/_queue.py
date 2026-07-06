@@ -480,13 +480,20 @@ def queue_worker_thread(
                     local_running_count = dbos._active_workflows_set.count_for_queue(
                         queue.name, key
                     )
-                    dequeued_workflows = dbos._sys_db.start_queued_workflows(
-                        queue,
-                        GlobalParams.executor_id,
-                        GlobalParams.app_version,
-                        key,
-                        local_running_count,
-                    )
+                    try:
+                        dequeued_workflows = dbos._sys_db.start_queued_workflows(
+                            queue,
+                            GlobalParams.executor_id,
+                            GlobalParams.app_version,
+                            key,
+                            local_running_count,
+                        )
+                    except OperationalError as e:
+                        # Another worker holds this partition's lock; skip it
+                        # until the next poll without aborting the other keys.
+                        if isinstance(e.orig, errors.LockNotAvailable):
+                            continue
+                        raise
                     for id in dequeued_workflows:
                         try:
                             execute_workflow_by_id(dbos, id, False, True)
@@ -509,9 +516,13 @@ def queue_worker_thread(
                     except Exception as e:
                         dbos.logger.error(f"Error executing workflow {id}: {e}")
         except OperationalError as e:
-            if isinstance(
-                e.orig, (errors.SerializationFailure, errors.LockNotAvailable)
-            ):
+            if isinstance(e.orig, errors.LockNotAvailable):
+                # Another worker is dequeueing this queue right now; retry next
+                # poll without backing off.
+                dbos.logger.debug(
+                    f"Queue {queue.name} is locked by another worker; retrying next poll."
+                )
+            elif isinstance(e.orig, errors.SerializationFailure):
                 # If a serialization error is encountered, increase the polling interval
                 polling_interval = min(
                     max_polling_interval,

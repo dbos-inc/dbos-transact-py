@@ -350,7 +350,7 @@ def normalize_step_options(opts: Optional[StepOptions]) -> StepOptions:
     return {**DEFAULT_STEP_OPTIONS, **(opts or {})}
 
 
-def _init_workflow(
+def _assemble_workflow_status(
     dbos: "DBOS",
     ctx: DBOSContext,
     *,
@@ -361,13 +361,11 @@ def _init_workflow(
     queue: Optional[str],
     workflow_timeout_ms: Optional[int],
     workflow_deadline_epoch_ms: Optional[int],
-    max_recovery_attempts: Optional[int],
     enqueue_options: Optional[EnqueueOptionsInternal],
-    is_recovery_request: Optional[bool],
-    is_dequeued_request: Optional[bool],
     serialization_type: Optional[WorkflowSerializationFormat],
     child_workflow_id: Optional[str] = None,
-) -> tuple[WorkflowStatusInternal, bool]:
+) -> WorkflowStatusInternal:
+    """Build (without persisting) the status row for a new workflow."""
     # If launching child, capture ID before to_thread dispatch, so a concurrent end_workflow() on shutdown can't blank the id read here.
     wfid = (
         child_workflow_id
@@ -472,6 +470,42 @@ def _init_workflow(
     # Consume the attributes from the workflow's context so that workflows
     # started inside this workflow do not inherit them.
     ctx.workflow_attributes = None
+    return status
+
+
+def _init_workflow(
+    dbos: "DBOS",
+    ctx: DBOSContext,
+    *,
+    inputs: WorkflowInputs,
+    wf_name: str,
+    class_name: Optional[str],
+    config_name: Optional[str],
+    queue: Optional[str],
+    workflow_timeout_ms: Optional[int],
+    workflow_deadline_epoch_ms: Optional[int],
+    max_recovery_attempts: Optional[int],
+    enqueue_options: Optional[EnqueueOptionsInternal],
+    is_recovery_request: Optional[bool],
+    is_dequeued_request: Optional[bool],
+    serialization_type: Optional[WorkflowSerializationFormat],
+    child_workflow_id: Optional[str] = None,
+) -> tuple[WorkflowStatusInternal, bool]:
+    status = _assemble_workflow_status(
+        dbos,
+        ctx,
+        inputs=inputs,
+        wf_name=wf_name,
+        class_name=class_name,
+        config_name=config_name,
+        queue=queue,
+        workflow_timeout_ms=workflow_timeout_ms,
+        workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
+        enqueue_options=enqueue_options,
+        serialization_type=serialization_type,
+        child_workflow_id=child_workflow_id,
+    )
+    wfid = status["workflow_uuid"]
 
     # Synchronously record the status and inputs for workflows
     try:
@@ -527,6 +561,64 @@ def _init_workflow(
     status["workflow_deadline_epoch_ms"] = workflow_deadline_epoch_ms
     status["status"] = wf_status
     return status, should_execute
+
+
+def prepare_enqueued_workflow(
+    dbos: "DBOS",
+    func: "Callable[..., Any]",
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    *,
+    queue_name: str,
+    workflow_id: str,
+    queue_partition_key: Optional[str] = None,
+) -> WorkflowStatusInternal:
+    """Build (without persisting) an ENQUEUED status row for func on queue_name.
+
+    For batch enqueuers (e.g. the Kafka consumer) that persist many rows in one
+    transaction via SystemDatabase.init_workflows. Ignores any ambient DBOS
+    context: the workflow ID and enqueue options are passed explicitly.
+    """
+    fself: Optional[object] = None
+    if hasattr(func, "__self__"):
+        fself = func.__self__
+    if fself is not None:
+        args = (fself,) + args
+
+    fi = get_func_info(func)
+    if fi is None:
+        raise DBOSWorkflowFunctionNotFoundError(
+            "<NONE>",
+            f"{func.__name__} is not a registered workflow function",
+        )
+    serialization_type = fi.serialization_type
+    if serialization_type is None:
+        serialization_type = WorkflowSerializationFormat.DEFAULT
+
+    func = cast("Workflow[P, R]", func.__orig_func)  # type: ignore
+
+    inputs: WorkflowInputs = {"args": args, "kwargs": kwargs}
+    enqueue_options = EnqueueOptionsInternal(
+        deduplication_id=None,
+        priority=None,
+        app_version=None,
+        queue_partition_key=queue_partition_key,
+        delay_until_epoch_ms=None,
+    )
+    return _assemble_workflow_status(
+        dbos,
+        DBOSContext(),  # fresh context: no parent, auth, or attributes
+        inputs=inputs,
+        wf_name=get_dbos_func_name(func),
+        class_name=get_dbos_class_name(fi, func, args),
+        config_name=get_config_name(fi, func, args),
+        queue=queue_name,
+        workflow_timeout_ms=None,
+        workflow_deadline_epoch_ms=None,
+        enqueue_options=enqueue_options,
+        serialization_type=serialization_type,
+        child_workflow_id=workflow_id,
+    )
 
 
 def _serialize_exception_for_persistence(
