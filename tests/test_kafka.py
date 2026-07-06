@@ -299,7 +299,7 @@ def test_kafka_partition_ordering(dbos: DBOS) -> None:
     try:
         admin.create_topics([NewTopic(topic, num_partitions=num_partitions)])[
             topic
-        ].result(10)
+        ].result()
     except Exception:
         pytest.skip("Kafka not available")
 
