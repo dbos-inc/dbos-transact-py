@@ -2,6 +2,7 @@
 
 import base64
 import pickle
+import sqlite3
 import uuid
 from typing import Any, AsyncGenerator, Generator
 
@@ -14,6 +15,7 @@ from sqlalchemy.exc import OperationalError
 
 from dbos import DBOS, AsyncSQLAlchemyDatasource, SetWorkflowID, SQLAlchemyDatasource
 from dbos._datasource_postgres import PostgresAsyncDatasource, PostgresSyncDatasource
+from dbos._datasource_sqlite import SqliteAsyncDatasource, SqliteSyncDatasource
 from dbos._error import DBOSException
 from dbos._schemas.datasource_database import DatasourceSchema
 from dbos._schemas.system_database import SystemSchema
@@ -348,6 +350,59 @@ def test_sync_ds_retries_on_serialization_error(
     with SetWorkflowID(wfid):
         assert my_workflow() == "success"
     assert call_count["n"] == max_retries + 1
+
+
+def test_sync_ds_retries_locked_precheck(
+    dbos: DBOS, sync_ds: SQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 'database is locked' error on the OAOO pre-check read must be retried, not terminal (#761)."""
+    if not isinstance(sync_ds, SqliteSyncDatasource):
+        pytest.skip("SQLite-specific: locked pre-check retry")
+
+    body_calls = {"n": 0}
+
+    def step() -> str:
+        body_calls["n"] += 1
+        sync_ds.sql_session().execute(sa.text("SELECT 1"))
+        return "ok"
+
+    @DBOS.workflow()
+    def my_workflow() -> str:
+        return sync_ds.run_tx_step({"name": "locked_precheck"}, step)
+
+    # The first pre-check read hits a transient lock; it must be retried, not raised terminally.
+    real_check = sync_ds._check_execution
+    precheck_calls = {"n": 0}
+
+    def flaky_check(workflow_id: str, step_id: int) -> Any:
+        precheck_calls["n"] += 1
+        if precheck_calls["n"] == 1:
+            raise OperationalError(
+                "SELECT ... FROM datasource_outputs ...",
+                {},
+                sqlite3.OperationalError("database is locked"),
+            )
+        return real_check(workflow_id, step_id)
+
+    monkeypatch.setattr(sync_ds, "_check_execution", flaky_check)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "ok"
+    assert precheck_calls["n"] >= 2  # pre-check was retried after the lock
+    assert body_calls["n"] == 1  # body ran exactly once
+
+    # The successful result, not an error, must be recorded.
+    with sync_ds.engine.connect() as conn:
+        row = conn.execute(
+            sa.select(
+                DatasourceSchema.datasource_outputs.c.output,
+                DatasourceSchema.datasource_outputs.c.error,
+            ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+        ).first()
+    assert row is not None
+    assert row.error is None
+    assert row.output is not None
 
 
 def test_sync_ds_multiple_steps_in_workflow(
@@ -726,6 +781,60 @@ async def test_async_ds_retries_on_serialization_error(
     with SetWorkflowID(wfid):
         assert await my_workflow() == "success"
     assert call_count["n"] == max_retries + 1
+
+
+@pytest.mark.asyncio
+async def test_async_ds_retries_locked_precheck(
+    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 'database is locked' error on the async OAOO pre-check read must be retried, not terminal (#761)."""
+    if not isinstance(async_ds, SqliteAsyncDatasource):
+        pytest.skip("SQLite-specific: locked pre-check retry")
+
+    body_calls = {"n": 0}
+
+    async def step() -> str:
+        body_calls["n"] += 1
+        await async_ds.sql_session().execute(sa.text("SELECT 1"))
+        return "ok"
+
+    @DBOS.workflow()
+    async def my_workflow() -> str:
+        return await async_ds.run_tx_step_async({"name": "locked_precheck"}, step)
+
+    real_check = async_ds._check_execution
+    precheck_calls = {"n": 0}
+
+    async def flaky_check(workflow_id: str, step_id: int) -> Any:
+        precheck_calls["n"] += 1
+        if precheck_calls["n"] == 1:
+            raise OperationalError(
+                "SELECT ... FROM datasource_outputs ...",
+                {},
+                sqlite3.OperationalError("database is locked"),
+            )
+        return await real_check(workflow_id, step_id)
+
+    monkeypatch.setattr(async_ds, "_check_execution", flaky_check)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "ok"
+    assert precheck_calls["n"] >= 2  # pre-check was retried after the lock
+    assert body_calls["n"] == 1  # body ran exactly once
+
+    async with async_ds.engine.connect() as conn:
+        row = (
+            await conn.execute(
+                sa.select(
+                    DatasourceSchema.datasource_outputs.c.output,
+                    DatasourceSchema.datasource_outputs.c.error,
+                ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+            )
+        ).first()
+    assert row is not None
+    assert row.error is None
+    assert row.output is not None
 
 
 @pytest.mark.asyncio
