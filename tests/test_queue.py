@@ -1833,7 +1833,9 @@ async def test_simple_queue_async(dbos: DBOS) -> None:
     assert (await handle.get_result()) == "abcd123"
     with SetWorkflowID(wfid):
         assert (await test_workflow("abc", "123")) == "abcd123"
-    assert wf_counter == 2
+    assert (
+        wf_counter == 1
+    )  # Direct re-invoke of the completed workflow returns the recorded result without re-running the body (#762)
     assert step_counter == 1
 
 

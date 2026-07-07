@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import threading
 import time
 import uuid
@@ -69,7 +70,9 @@ async def test_async_workflow(dbos: DBOS) -> None:
         result = await test_workflow("alice", "bob")
         assert result == "alicetxn11bobstep1"
 
-    assert wf_counter == 2
+    assert (
+        wf_counter == 1
+    )  # Completed replay returns the recorded result without re-running the body (#762)
     assert step_counter == 1
     assert txn_counter == 1
 
@@ -130,9 +133,52 @@ async def test_async_step(dbos: DBOS) -> None:
         result = await test_workflow("alice", "bob")
         assert result == "alicetxn11bobstep1"
 
-    assert wf_counter == 2
+    assert (
+        wf_counter == 1
+    )  # Completed replay returns the recorded result without re-running the body (#762)
     assert step_counter == 1
     assert txn_counter == 1
+
+
+@pytest.mark.asyncio
+async def test_async_completed_replay_no_hook_rerun(dbos: DBOS) -> None:
+    # Invoking a completed async workflow must return the recorded result WITHOUT re-running its
+    # body or any application decorator wrapping it, matching the sync path (#762).
+    hook_counter: int = 0
+    body_counter: int = 0
+    step_counter: int = 0
+
+    def app_hook(func: Any) -> Any:
+        @functools.wraps(func)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            nonlocal hook_counter
+            hook_counter += 1
+            return await func(*args, **kwargs)
+
+        return wrapper
+
+    @DBOS.step()
+    async def test_step(var: str) -> str:
+        nonlocal step_counter
+        step_counter += 1
+        return var + ":step"
+
+    @DBOS.workflow()
+    @app_hook
+    async def test_workflow(var: str) -> str:
+        nonlocal body_counter
+        body_counter += 1
+        return await test_step(var)
+
+    wfuuid = f"test_async_completed_replay-{time.time_ns()}"
+    with SetWorkflowID(wfuuid):
+        assert await test_workflow("direct") == "direct:step"
+    assert (hook_counter, body_counter, step_counter) == (1, 1, 1)
+
+    # Completed replay: the stored result is returned, nothing is re-executed.
+    with SetWorkflowID(wfuuid):
+        assert await test_workflow("mutated") == "direct:step"
+    assert (hook_counter, body_counter, step_counter) == (1, 1, 1)
 
 
 @pytest.mark.asyncio
@@ -209,11 +255,11 @@ async def test_send_recv_async(dbos: DBOS) -> None:
         duration = time.time() - begin_time
         assert duration > 0.7
 
-    # Test OAOO
+    # Test OAOO: re-invoking a completed workflow returns the recorded result without re-running the body (#762)
     with SetWorkflowID(send_uuid):
         res = await test_send_workflow(handle.get_workflow_id(), "testtopic")
         assert res == dest_uuid
-        assert send_counter == 2
+        assert send_counter == 1
 
     with SetWorkflowID(dest_uuid):
         begin_time = time.time()
@@ -221,7 +267,7 @@ async def test_send_recv_async(dbos: DBOS) -> None:
         duration = time.time() - begin_time
         assert duration < 3.0
         assert res == "test2-test1-test3"
-        assert recv_counter == 2
+        assert recv_counter == 1  # Completed replay does not re-run the body (#762)
 
     with SetWorkflowID(timeout_uuid):
         begin_time = time.time()
