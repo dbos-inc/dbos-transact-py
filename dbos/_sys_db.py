@@ -633,10 +633,9 @@ class SystemDatabase(ABC):
         self._listener_thread_lock = threading.Lock()
         self._listener_running = False
 
-        # Monotonic created_at cursor for batch-enqueued rows so queue order
-        # (priority, created_at) never regresses across batches
+        # Per-partition-key created_at cursors: keep per-key queue order monotonic across batches
         self._batch_created_at_lock = threading.Lock()
-        self._batch_created_at_cursor = 0
+        self._batch_created_at_cursors: Dict[str, int] = {}
 
         # Now we can run background processes
         self._run_background_processes = True
@@ -4163,12 +4162,22 @@ class SystemDatabase(ABC):
         """
         if len(statuses) == 0:
             return set()
-        # Stamp distinct created_at (base_ms + i) from a process-wide monotonic cursor
-        # so queue order (priority, created_at) never regresses across batches
-        n = len(statuses)
+        # Stamp created_at monotonic within each partition key so per-key order holds across batches; unordered rows (no key) get wall-clock time.
+        now_ms = int(time.time() * 1000)
+        created_ats: List[int] = []
         with self._batch_created_at_lock:
-            base_ms = max(int(time.time() * 1000), self._batch_created_at_cursor)
-            self._batch_created_at_cursor = base_ms + n
+            next_for_key: Dict[str, int] = {}
+            for status in statuses:
+                key = status["queue_partition_key"]
+                if key is None:
+                    created_ats.append(now_ms)
+                    continue
+                value = next_for_key.get(key)
+                if value is None:
+                    value = max(now_ms, self._batch_created_at_cursors.get(key, 0))
+                created_ats.append(value)
+                next_for_key[key] = value + 1
+            self._batch_created_at_cursors.update(next_for_key)
         rows: List[Dict[str, Any]] = []
         for i, status in enumerate(statuses):
             assert status["status"] == WorkflowStatusString.ENQUEUED.value
@@ -4202,8 +4211,8 @@ class SystemDatabase(ABC):
                     "delay_until_epoch_ms": status["delay_until_epoch_ms"],
                     "attributes": status["attributes"],
                     "schedule_name": status["schedule_name"],
-                    "created_at": base_ms + i,
-                    "updated_at": base_ms + i,
+                    "created_at": created_ats[i],
+                    "updated_at": created_ats[i],
                 }
             )
         inserted: Set[str] = set()
