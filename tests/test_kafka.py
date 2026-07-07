@@ -525,6 +525,73 @@ def test_kafka_two_groups_same_topic(dbos: DBOS) -> None:
     assert seen["b"] == set(range(NUM_EVENTS))
 
 
+def test_kafka_two_ordered_consumers_same_topic(dbos: DBOS) -> None:
+    # Pre-overhaul, ordered ("in_order") consumers got a topic-named queue, so a
+    # second consumer on the same topic crashed with "already been declared". The
+    # shared partitioned queue removes that limit: two ordered consumers with
+    # distinct group IDs now coexist, each seeing every message in offset order.
+    from confluent_kafka.admin import AdminClient, NewTopic
+
+    server = "localhost:9092"
+    topic = f"dbos-kafka-ordered2-{random.randrange(1_000_000_000)}"
+    num_messages = 8
+
+    admin = AdminClient({"bootstrap.servers": server})
+    try:
+        # One partition so each group's messages have a single, well-defined order.
+        admin.create_topics([NewTopic(topic, num_partitions=1)])[topic].result()
+    except Exception:
+        pytest.skip("Kafka not available")
+
+    producer = Producer({"bootstrap.servers": server})
+    for i in range(num_messages):
+        producer.produce(topic, partition=0, value=f"{i}")
+    if producer.flush(10) > 0:
+        pytest.skip("Kafka not available")
+
+    lock = threading.Lock()
+    seen: dict[str, list[int]] = {"a": [], "b": []}
+    done = threading.Event()
+
+    def record(group: str, msg: KafkaMessage) -> None:
+        with lock:
+            seen[group].append(int(msg.value))  # type: ignore
+            if len(seen["a"]) == num_messages and len(seen["b"]) == num_messages:
+                done.set()
+
+    # Both decorators registering without raising is itself the regression check.
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": server,
+            "group.id": "dbos-test-ordered2-a",
+            "auto.offset.reset": "earliest",
+        },
+        [topic],
+        ordering="topic",
+    )
+    @DBOS.workflow()
+    def ordered_a(msg: KafkaMessage) -> None:
+        record("a", msg)
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": server,
+            "group.id": "dbos-test-ordered2-b",
+            "auto.offset.reset": "earliest",
+        },
+        [topic],
+        ordering="topic",
+    )
+    @DBOS.workflow()
+    def ordered_b(msg: KafkaMessage) -> None:
+        record("b", msg)
+
+    assert done.wait(timeout=60)
+    # Each group independently saw every message in exact offset order.
+    assert seen["a"] == list(range(num_messages))
+    assert seen["b"] == list(range(num_messages))
+
+
 def test_kafka_config_not_mutated(dbos: DBOS) -> None:
     config = {
         "bootstrap.servers": "localhost:9092",
