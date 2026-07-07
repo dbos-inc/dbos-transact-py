@@ -611,6 +611,8 @@ def prepare_enqueued_workflow(
         app_version=None,
         queue_partition_key=queue_partition_key,
         delay_until_epoch_ms=None,
+        debounce_deadline_epoch_ms=None,
+        is_debounced=False,
     )
     return _assemble_workflow_status(
         dbos,
