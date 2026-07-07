@@ -1259,11 +1259,7 @@ def workflow_wrapper(
         init_status: dict[str, WorkflowStatusInternal] = {}
 
         def check_and_init() -> Union[NoResult, R]:
-            """Initialize the workflow row, short-circuiting an already-completed (or replayed-child)
-            workflow with its recorded result so its body is never re-executed. Returning NoResult lets
-            the outcome run the body; returning a value skips it. This mirrors the step replay path and
-            keeps the async completed-replay path from re-running the workflow body (#762).
-            """
+            """Initialize the workflow row, returning its recorded result to skip an already-completed workflow's body or NoResult to run it."""
             nonlocal workflow_id
             workflow_id = child_wfid
 

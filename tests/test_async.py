@@ -70,9 +70,7 @@ async def test_async_workflow(dbos: DBOS) -> None:
         result = await test_workflow("alice", "bob")
         assert result == "alicetxn11bobstep1"
 
-    assert (
-        wf_counter == 1
-    )  # Completed replay returns the recorded result without re-running the body (#762)
+    assert wf_counter == 1  # Completed replay does not re-run the body (#762)
     assert step_counter == 1
     assert txn_counter == 1
 
@@ -133,17 +131,14 @@ async def test_async_step(dbos: DBOS) -> None:
         result = await test_workflow("alice", "bob")
         assert result == "alicetxn11bobstep1"
 
-    assert (
-        wf_counter == 1
-    )  # Completed replay returns the recorded result without re-running the body (#762)
+    assert wf_counter == 1  # Completed replay does not re-run the body (#762)
     assert step_counter == 1
     assert txn_counter == 1
 
 
 @pytest.mark.asyncio
 async def test_async_completed_replay_no_hook_rerun(dbos: DBOS) -> None:
-    # Invoking a completed async workflow must return the recorded result WITHOUT re-running its
-    # body or any application decorator wrapping it, matching the sync path (#762).
+    # A completed async workflow returns its recorded result without re-running its body or wrapping decorators (#762).
     hook_counter: int = 0
     body_counter: int = 0
     step_counter: int = 0

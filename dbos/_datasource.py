@@ -217,8 +217,7 @@ class AsyncSQLAlchemyDatasource(ABC):
     async def _check_execution_with_retry(
         self, workflow_id: str, step_id: int
     ) -> Optional[RecordedResult]:
-        # Retry the OAOO pre-check read on transient concurrency errors (e.g. SQLite
-        # "database is locked"), matching the transaction body's retry policy (#761).
+        # Retry the OAOO pre-check read on transient concurrency errors, matching the transaction body's retry policy.
         retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
         while True:
             try:
@@ -537,8 +536,7 @@ class SQLAlchemyDatasource(ABC):
     def _check_execution_with_retry(
         self, workflow_id: str, step_id: int
     ) -> Optional[RecordedResult]:
-        # Retry the OAOO pre-check read on transient concurrency errors (e.g. SQLite
-        # "database is locked"), matching the transaction body's retry policy (#761).
+        # Retry the OAOO pre-check read on transient concurrency errors, matching the transaction body's retry policy.
         retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
         while True:
             try:

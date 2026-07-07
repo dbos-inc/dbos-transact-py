@@ -444,8 +444,7 @@ def test_recovery_workflow(dbos: DBOS) -> None:
 
 
 def test_recovery_empty_id_dead_letters(dbos: DBOS) -> None:
-    # A poisoned empty-string workflow_uuid must be dead-lettered as ERROR, never
-    # re-executed under a fresh random UUID (ghost fork), see issue #759.
+    # A poisoned empty-string workflow_uuid must be dead-lettered as ERROR, never ghost-forked under a fresh UUID (#759).
     from dbos._core import execute_workflow_by_id
 
     wf_counter: int = 0
