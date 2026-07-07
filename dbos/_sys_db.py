@@ -4464,8 +4464,13 @@ class SystemDatabase(ABC):
             return deserialize_value(result[0], result[1], self.serializer)
 
     def garbage_collect(
-        self, cutoff_epoch_timestamp_ms: Optional[int], rows_threshold: Optional[int]
+        self,
+        cutoff_epoch_timestamp_ms: Optional[int],
+        rows_threshold: Optional[int],
+        batch_size: Optional[int],
     ) -> Optional[tuple[int, list[str]]]:
+        if batch_size is not None and batch_size < 1:
+            raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
         if rows_threshold is not None:
             with self.engine.begin() as c:
                 # Get the created_at timestamp of the rows_threshold newest row
@@ -4488,25 +4493,54 @@ class SystemDatabase(ABC):
         if cutoff_epoch_timestamp_ms is None:
             return None
 
-        with self.engine.begin() as c:
-            # Delete all workflows older than cutoff that are NOT PENDING, ENQUEUED, or DELAYED
-            c.execute(
-                sa.delete(SystemSchema.workflow_status)
-                .where(
-                    SystemSchema.workflow_status.c.created_at
-                    < cutoff_epoch_timestamp_ms
-                )
-                .where(
-                    ~SystemSchema.workflow_status.c.status.in_(
-                        [
-                            WorkflowStatusString.PENDING.value,
-                            WorkflowStatusString.ENQUEUED.value,
-                            WorkflowStatusString.DELAYED.value,
-                        ]
-                    )
-                )
-            )
+        # Delete all workflows older than cutoff that are NOT PENDING, ENQUEUED, or DELAYED
+        gc_filter = sa.and_(
+            SystemSchema.workflow_status.c.created_at < cutoff_epoch_timestamp_ms,
+            ~SystemSchema.workflow_status.c.status.in_(
+                [
+                    WorkflowStatusString.PENDING.value,
+                    WorkflowStatusString.ENQUEUED.value,
+                    WorkflowStatusString.DELAYED.value,
+                ]
+            ),
+        )
 
+        if batch_size is None:
+            with self.engine.begin() as c:
+                c.execute(sa.delete(SystemSchema.workflow_status).where(gc_filter))
+        else:
+            # Batch-delete by advancing a created_at watermark, one committed transaction per batch
+            watermark = 0
+            while True:
+                with self.engine.begin() as c:
+                    # Find the created_at of the batch_size-th oldest eligible row above the watermark
+                    step = c.execute(
+                        sa.select(SystemSchema.workflow_status.c.created_at)
+                        .where(
+                            gc_filter,
+                            SystemSchema.workflow_status.c.created_at > watermark,
+                        )
+                        .order_by(SystemSchema.workflow_status.c.created_at)
+                        .limit(1)
+                        .offset(batch_size - 1)
+                    ).scalar()
+                    if step is None:
+                        # Final batch: delete every remaining eligible row, even below the watermark
+                        c.execute(
+                            sa.delete(SystemSchema.workflow_status).where(gc_filter)
+                        )
+                        break
+                    # Delete the batch; created_at ties may push it slightly over batch_size
+                    c.execute(
+                        sa.delete(SystemSchema.workflow_status).where(
+                            gc_filter,
+                            SystemSchema.workflow_status.c.created_at > watermark,
+                            SystemSchema.workflow_status.c.created_at <= step,
+                        )
+                    )
+                watermark = step
+
+        with self.engine.begin() as c:
             # Then, get the IDs of all remaining old workflows
             pending_enqueued_result = c.execute(
                 sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
