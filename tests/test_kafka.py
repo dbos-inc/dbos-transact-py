@@ -476,6 +476,55 @@ def test_kafka_duplicate_group_validation(dbos: DBOS) -> None:
             pass
 
 
+def test_kafka_two_groups_same_topic(dbos: DBOS) -> None:
+    # Distinct group IDs fan out: each consumer group independently sees every
+    # message on the shared topic (workflow IDs are namespaced by group.id).
+    server = "localhost:9092"
+    topic = f"dbos-kafka-fanout-{random.randrange(1_000_000_000)}"
+
+    if not send_test_messages(server, topic):
+        pytest.skip("Kafka not available")
+
+    lock = threading.Lock()
+    seen: dict[str, set[int]] = {"a": set(), "b": set()}
+    done = threading.Event()
+
+    def record(group: str, msg: KafkaMessage) -> None:
+        with lock:
+            seen[group].add(int(msg.value.decode().split()[-1]))  # type: ignore
+            if len(seen["a"]) == NUM_EVENTS and len(seen["b"]) == NUM_EVENTS:
+                done.set()
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": server,
+            "group.id": "dbos-test-fanout-a",
+            "auto.offset.reset": "earliest",
+        },
+        [topic],
+    )
+    @DBOS.workflow()
+    def consumer_a(msg: KafkaMessage) -> None:
+        record("a", msg)
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": server,
+            "group.id": "dbos-test-fanout-b",
+            "auto.offset.reset": "earliest",
+        },
+        [topic],
+    )
+    @DBOS.workflow()
+    def consumer_b(msg: KafkaMessage) -> None:
+        record("b", msg)
+
+    assert done.wait(timeout=30)
+    # Both groups saw every message, not a split of the topic between them.
+    assert seen["a"] == set(range(NUM_EVENTS))
+    assert seen["b"] == set(range(NUM_EVENTS))
+
+
 def test_kafka_config_not_mutated(dbos: DBOS) -> None:
     config = {
         "bootstrap.servers": "localhost:9092",
