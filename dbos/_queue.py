@@ -489,9 +489,12 @@ def queue_worker_thread(
                             local_running_count,
                         )
                     except OperationalError as e:
-                        # Another worker holds this partition's lock; skip it
-                        # until the next poll without aborting the other keys.
-                        if isinstance(e.orig, errors.LockNotAvailable):
+                        # Another worker is concurrently dequeueing this partition (lock held, or a
+                        # serialization conflict under REPEATABLE READ); skip this key, not the others.
+                        if isinstance(
+                            e.orig,
+                            (errors.LockNotAvailable, errors.SerializationFailure),
+                        ):
                             continue
                         raise
                     for id in dequeued_workflows:
