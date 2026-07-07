@@ -749,3 +749,128 @@ def test_kafka_ordering_across_batches(dbos: DBOS) -> None:
     # Exact Kafka per-partition delivery order, across every batch boundary.
     for p in range(num_partitions):
         assert seen[p] == list(range(num_per_partition))
+
+
+def test_kafka_topic_ordering_multi_partition(dbos: DBOS) -> None:
+    # ordering="topic" across many partitions: the whole topic runs serially (concurrency=1) while each partition stays in offset order.
+    from confluent_kafka.admin import AdminClient, NewTopic
+
+    server = "localhost:9092"
+    topic = f"dbos-kafka-topicorder-{random.randrange(1_000_000_000)}"
+    num_partitions = 4
+    num_per_partition = 3
+
+    admin = AdminClient({"bootstrap.servers": server})
+    try:
+        admin.create_topics([NewTopic(topic, num_partitions=num_partitions)])[
+            topic
+        ].result()
+    except Exception:
+        pytest.skip("Kafka not available")
+
+    producer = Producer({"bootstrap.servers": server})
+    for _ in range(30):
+        metadata = producer.list_topics(topic, timeout=5)
+        if len(metadata.topics[topic].partitions) == num_partitions:
+            break
+        time.sleep(0.5)
+    for p in range(num_partitions):
+        for i in range(num_per_partition):
+            producer.produce(topic, partition=p, value=f"{i}")
+    if producer.flush(10) > 0:
+        pytest.skip("Kafka not available")
+
+    lock = threading.Lock()
+    seen: dict[int, list[int]] = {p: [] for p in range(num_partitions)}
+    active = 0
+    max_active = 0
+    done = threading.Event()
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": server,
+            "group.id": "dbos-test-topic-ordering",
+            "auto.offset.reset": "earliest",
+        },
+        [topic],
+        ordering="topic",
+    )
+    @DBOS.workflow()
+    def topic_workflow(msg: KafkaMessage) -> None:
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.1)  # widen the window so any concurrent run is observed
+        with lock:
+            active -= 1
+            assert msg.partition is not None
+            seen[msg.partition].append(int(msg.value))  # type: ignore
+            if sum(len(v) for v in seen.values()) == num_partitions * num_per_partition:
+                done.set()
+
+    assert done.wait(timeout=60)
+    # Each partition's messages stayed in offset order.
+    for p in range(num_partitions):
+        assert seen[p] == list(range(num_per_partition))
+    # The whole topic ran serially: never two workflows at once.
+    assert max_active == 1
+
+
+def test_init_workflows_large_batch_per_key_ordering(dbos: DBOS) -> None:
+    # A large batch (past the 500-row insert chunk) over many partition keys: created_at must be monotonic within each key, and per-key cursors keep keys decoupled.
+    import sqlalchemy as sa
+
+    from dbos._core import prepare_enqueued_workflow
+    from dbos._schemas.system_database import SystemSchema
+
+    @DBOS.workflow()
+    def big_batch_workflow(value: str) -> None:
+        pass
+
+    queue_name = f"unpolled-{random.randrange(1_000_000_000)}"
+    prefix = f"bigbatch-{random.randrange(1_000_000_000)}"
+    num_keys = 3
+    per_key = 400  # num_keys * per_key = 1200 rows, past the 500-row chunk boundary
+
+    statuses = [
+        prepare_enqueued_workflow(
+            dbos,
+            big_batch_workflow,
+            (f"{k}-{i}",),
+            {},
+            queue_name=queue_name,
+            workflow_id=f"{prefix}-{k}-{i}",
+            queue_partition_key=f"{prefix}-key-{k}",
+        )
+        for i in range(per_key)
+        for k in range(num_keys)  # interleave keys so each key's rows span the batch
+    ]
+    assert len(dbos._sys_db.init_workflows(statuses)) == num_keys * per_key
+
+    with dbos._sys_db.engine.begin() as conn:
+        rows = conn.execute(
+            sa.select(
+                SystemSchema.workflow_status.c.workflow_uuid,
+                SystemSchema.workflow_status.c.created_at,
+                SystemSchema.workflow_status.c.queue_partition_key,
+            ).where(SystemSchema.workflow_status.c.workflow_uuid.like(f"{prefix}-%"))
+        ).fetchall()
+
+    assert len(rows) == num_keys * per_key
+    by_key: dict[str, list[tuple[int, int]]] = {
+        f"{prefix}-key-{k}": [] for k in range(num_keys)
+    }
+    for wfid, created_at, part_key in rows:
+        by_key[part_key].append((created_at, int(wfid.rsplit("-", 1)[1])))
+
+    for k in range(num_keys):
+        pairs = sorted(by_key[f"{prefix}-key-{k}"])  # by created_at
+        # created_at order equals enqueue (offset) order, strictly increasing, no ties
+        assert [offset for _, offset in pairs] == list(range(per_key))
+        created = [c for c, _ in pairs]
+        assert created == sorted(set(created))
+
+    all_created = [created_at for _, created_at, _ in rows]
+    # Per-key cursors keep keys decoupled: all rows fit one per_key-wide window (a process-wide cursor would span num_keys * per_key).
+    assert max(all_created) - min(all_created) == per_key - 1
