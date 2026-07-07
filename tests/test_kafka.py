@@ -524,3 +524,62 @@ def test_init_workflows_idempotent(dbos: DBOS) -> None:
     statuses = build_statuses()
     statuses[0]["workflow_uuid"] = f"{prefix}-new"
     assert dbos._sys_db.init_workflows(statuses) == {f"{prefix}-new"}
+
+
+def test_kafka_ordering_across_batches(dbos: DBOS) -> None:
+    # Per-partition order must hold when a partition's backlog spans many batches: a small
+    # batch_size splits each partition across ~20 batches, which reorder unless created_at is monotonic across batches.
+    from confluent_kafka.admin import AdminClient, NewTopic
+
+    server = "localhost:9092"
+    topic = f"dbos-kafka-batches-{random.randrange(1_000_000_000)}"
+    num_partitions = 6
+    num_per_partition = 20
+    batch_size = 5  # each partition's 20 msgs land in ~20 batches
+
+    admin = AdminClient({"bootstrap.servers": server})
+    try:
+        admin.create_topics([NewTopic(topic, num_partitions=num_partitions)])[
+            topic
+        ].result()
+    except Exception:
+        pytest.skip("Kafka not available")
+
+    producer = Producer({"bootstrap.servers": server})
+    for _ in range(30):
+        metadata = producer.list_topics(topic, timeout=5)
+        if len(metadata.topics[topic].partitions) == num_partitions:
+            break
+        time.sleep(0.5)
+    for p in range(num_partitions):
+        for i in range(num_per_partition):
+            producer.produce(topic, partition=p, value=f"{i}")
+    if producer.flush(10) > 0:
+        pytest.skip("Kafka not available")
+
+    lock = threading.Lock()
+    seen: dict[int, list[int]] = {p: [] for p in range(num_partitions)}
+    done = threading.Event()
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": server,
+            "group.id": f"dbos-test-batch-ordering-{random.randrange(1_000_000_000)}",
+            "auto.offset.reset": "earliest",
+        },
+        [topic],
+        ordering="partition",
+        batch_size=batch_size,
+    )
+    @DBOS.workflow()
+    def ordered_workflow(msg: KafkaMessage) -> None:
+        with lock:
+            assert msg.partition is not None
+            seen[msg.partition].append(int(msg.value))  # type: ignore
+            if sum(len(v) for v in seen.values()) == num_partitions * num_per_partition:
+                done.set()
+
+    assert done.wait(timeout=90)
+    # Exact Kafka per-partition delivery order, across every batch boundary.
+    for p in range(num_partitions):
+        assert seen[p] == list(range(num_per_partition))

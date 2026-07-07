@@ -633,6 +633,11 @@ class SystemDatabase(ABC):
         self._listener_thread_lock = threading.Lock()
         self._listener_running = False
 
+        # Monotonic created_at cursor for batch-enqueued rows so queue order
+        # (priority, created_at) never regresses across batches
+        self._batch_created_at_lock = threading.Lock()
+        self._batch_created_at_cursor = 0
+
         # Now we can run background processes
         self._run_background_processes = True
 
@@ -4158,10 +4163,12 @@ class SystemDatabase(ABC):
         """
         if len(statuses) == 0:
             return set()
-        # created_at's server default is the transaction timestamp, identical for
-        # every row in the batch; queues order by (priority, created_at), so stamp
-        # distinct, monotonically increasing values to preserve intra-batch order.
-        base_ms = int(time.time() * 1000)
+        # Stamp distinct created_at (base_ms + i) from a process-wide monotonic cursor
+        # so queue order (priority, created_at) never regresses across batches
+        n = len(statuses)
+        with self._batch_created_at_lock:
+            base_ms = max(int(time.time() * 1000), self._batch_created_at_cursor)
+            self._batch_created_at_cursor = base_ms + n
         rows: List[Dict[str, Any]] = []
         for i, status in enumerate(statuses):
             assert status["status"] == WorkflowStatusString.ENQUEUED.value
