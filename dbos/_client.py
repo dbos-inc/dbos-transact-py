@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from dbos._context import MaxPriority, MinPriority
+from dbos._context import MaxPriority, MinPriority, validate_workflow_id
 from dbos._core import DEFAULT_POLLING_INTERVAL
 from dbos._queue import (
     Queue,
@@ -95,6 +95,9 @@ def validate_enqueue_options(options: EnqueueOptions) -> None:
         raise DBOSException(
             f"Invalid priority {priority}. Priority must be between {MinPriority}~{MaxPriority}."
         )
+    workflow_id = options.get("workflow_id")
+    if workflow_id is not None:
+        validate_workflow_id(workflow_id)
 
 
 class WorkflowHandleClientPolling(Generic[R]):

@@ -35,6 +35,7 @@ from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSConflictingRegistrationError,
     DBOSException,
+    DBOSRecoveryError,
 )
 from dbos._schemas.system_database import SystemSchema
 from dbos._utils import GlobalParams
@@ -440,6 +441,42 @@ def test_recovery_workflow(dbos: DBOS) -> None:
     stat = workflow_handles[0].get_status()
     assert stat
     assert stat.recovery_attempts == 2  # original attempt + recovery attempt
+
+
+def test_recovery_empty_id_dead_letters(dbos: DBOS) -> None:
+    # A poisoned empty-string workflow_uuid must be dead-lettered as ERROR, never ghost-forked under a fresh UUID (#759).
+    from dbos._core import execute_workflow_by_id
+
+    wf_counter: int = 0
+
+    @DBOS.workflow()
+    def test_workflow(var: str) -> str:
+        nonlocal wf_counter
+        wf_counter += 1
+        return var
+
+    wfuuid = str(uuid.uuid4())
+    with SetWorkflowID(wfuuid):
+        assert test_workflow("bob") == "bob"
+    assert wf_counter == 1
+
+    # Poison the row: rename its id to the empty string and mark it PENDING.
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"workflow_uuid": "", "status": "PENDING"})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
+        )
+
+    # Recovery of the poisoned row must raise, not silently fork a new execution.
+    with pytest.raises(DBOSRecoveryError):
+        execute_workflow_by_id(dbos, "", True, False)
+
+    # The workflow body did not run again, and the row is now terminal ERROR.
+    assert wf_counter == 1
+    empty_status = dbos._sys_db.get_workflow_status("")
+    assert empty_status is not None
+    assert empty_status["status"] == WorkflowStatusString.ERROR.value
 
 
 def test_recovery_workflow_step(dbos: DBOS) -> None:

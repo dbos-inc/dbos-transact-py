@@ -887,6 +887,20 @@ def execute_workflow_by_id(
     status = dbos._sys_db.get_workflow_status(workflow_id)
     if not status:
         raise DBOSRecoveryError(workflow_id, "Workflow status not found")
+    if not workflow_id.strip():
+        # Empty or whitespace workflow IDs are not allowed
+        recovery_error = DBOSRecoveryError(
+            workflow_id, "Cannot recover a workflow with an empty or whitespace-only ID"
+        )
+        error_str = _serialize_exception_for_persistence(
+            recovery_error, status["serialization"], dbos._serializer
+        )
+        dbos._sys_db.update_workflow_outcome(
+            workflow_id,
+            WorkflowStatusString.ERROR.value,
+            error=error_str,
+        )
+        raise recovery_error
     try:
         inputs: WorkflowInputs = deserialize_args(
             status["inputs"], status["serialization"], dbos._serializer
@@ -1335,20 +1349,11 @@ def workflow_wrapper(
         wfOutcome = Outcome[R].make(functools.partial(func, *args, **kwargs))
 
         workflow_id = None
+        # Holds the initialized status so the invoke step can be built once the workflow is cleared to execute.
+        init_status: dict[str, WorkflowStatusInternal] = {}
 
-        def init_wf() -> Callable[[Callable[[], R]], R]:
-
-            def recorded_result(
-                c_wfid: str, dbos: "DBOS"
-            ) -> Callable[[Callable[[], R]], R]:
-                def recorded_result_inner(func: Callable[[], R]) -> R:
-                    r: R = dbos._sys_db.await_workflow_result(
-                        c_wfid, polling_interval=DEFAULT_POLLING_INTERVAL
-                    )
-                    return r
-
-                return recorded_result_inner
-
+        def check_and_init() -> Union[NoResult, R]:
+            """Initialize the workflow row, returning its recorded result to skip an already-completed workflow's body or NoResult to run it."""
             nonlocal workflow_id
             workflow_id = child_wfid
 
@@ -1359,12 +1364,17 @@ def workflow_wrapper(
                     get_dbos_func_name(func),
                 )
                 if r and r["error"]:
-                    e: Exception = deserialize_exception(
+                    raise deserialize_exception(
                         r["error"], r["serialization"], dbos._sys_db.serializer
                     )
-                    raise e
                 elif r and r["child_workflow_id"]:
-                    return recorded_result(r["child_workflow_id"], dbos)
+                    return cast(
+                        R,
+                        dbos._sys_db.await_workflow_result(
+                            r["child_workflow_id"],
+                            polling_interval=DEFAULT_POLLING_INTERVAL,
+                        ),
+                    )
 
             status, should_execute = _init_workflow(
                 dbos,
@@ -1384,15 +1394,6 @@ def workflow_wrapper(
                 child_workflow_id=child_wfid,
             )
 
-            def get_recorded_result(_func: Callable[[], R]) -> R:
-                return cast(
-                    R,
-                    dbos._sys_db.await_workflow_result(
-                        status["workflow_uuid"],
-                        polling_interval=DEFAULT_POLLING_INTERVAL,
-                    ),
-                )
-
             # TODO: maybe modify the parameters if they've been changed by `_init_workflow`
             dbos.logger.debug(
                 f"Running workflow, id: {child_wfid}, name: {get_dbos_func_name(func)}"
@@ -1407,12 +1408,22 @@ def workflow_wrapper(
                 )
 
             if should_execute:
-                return _get_wf_invoke_func(dbos, status)
-            else:
-                dbos.logger.debug(
-                    f"Workflow {status['workflow_uuid']} already run with status {status['status']}"
-                )
-                return get_recorded_result
+                init_status["status"] = status
+                return NoResult()
+            # Already completed: return the recorded result without re-running the body.
+            dbos.logger.debug(
+                f"Workflow {status['workflow_uuid']} already run with status {status['status']}"
+            )
+            return cast(
+                R,
+                dbos._sys_db.await_workflow_result(
+                    status["workflow_uuid"],
+                    polling_interval=DEFAULT_POLLING_INTERVAL,
+                ),
+            )
+
+        def get_wf_invoke() -> Callable[[Callable[[], R]], R]:
+            return _get_wf_invoke_func(dbos, init_status["status"])
 
         def record_get_result(func: Callable[[], R]) -> R:
             """
@@ -1438,7 +1449,8 @@ def workflow_wrapper(
             return r
 
         outcome = (
-            wfOutcome.wrap(init_wf, dbos=dbos)
+            wfOutcome.wrap(get_wf_invoke, dbos=dbos)
+            .intercept(check_and_init, dbos=dbos)
             .also(DBOSAssumeRole(rr))
             .also(EnterDBOSWorkflow(attributes, newwfctx))
             .then(record_get_result, dbos=dbos)

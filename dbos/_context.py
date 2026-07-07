@@ -443,6 +443,14 @@ class DBOSContextEnsure:
         return False  # Did not handle
 
 
+def validate_workflow_id(workflow_id: Optional[str]) -> None:
+    """Reject empty or whitespace-only workflow IDs."""
+    if workflow_id is None or not workflow_id.strip():
+        raise DBOSException(
+            f"Invalid workflow ID {workflow_id!r}: workflow IDs must be non-empty and cannot be only whitespace."
+        )
+
+
 class SetWorkflowID:
     """
     Set the workflow ID to be used for the enclosed workflow invocation. Note: Only the first workflow will be started with the specified workflow ID within a `with SetWorkflowID` block.
@@ -461,6 +469,7 @@ class SetWorkflowID:
     """
 
     def __init__(self, wfid: str) -> None:
+        validate_workflow_id(wfid)
         self.created_ctx = False
         self.wfid = wfid
 
