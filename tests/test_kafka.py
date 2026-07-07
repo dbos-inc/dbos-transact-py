@@ -392,7 +392,7 @@ def test_kafka_db_outage(dbos: DBOS, monkeypatch: pytest.MonkeyPatch) -> None:
     def outage_workflow(msg: KafkaMessage) -> None:
         assert msg.value is not None
         with lock:
-            processed.append(int(msg.value.decode().split()[-1]))
+            processed.append(int(msg.value.decode().split()[-1]))  # type: ignore
             if len(processed) == NUM_EVENTS:
                 event.set()
 
@@ -435,7 +435,7 @@ def test_kafka_listen_queues_still_polls_consumer(
     def listen_workflow(msg: KafkaMessage) -> None:
         assert msg.value is not None
         with lock:
-            seen.add(int(msg.value.decode().split()[-1]))
+            seen.add(int(msg.value.decode().split()[-1]))  # type: ignore
             if len(seen) == NUM_EVENTS:
                 event.set()
 
