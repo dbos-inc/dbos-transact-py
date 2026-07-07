@@ -214,6 +214,27 @@ class AsyncSQLAlchemyDatasource(ABC):
             )
             return _row_to_result(result.first())
 
+    async def _check_execution_with_retry(
+        self, workflow_id: str, step_id: int
+    ) -> Optional[RecordedResult]:
+        # Retry the OAOO pre-check read on transient concurrency errors (e.g. SQLite
+        # "database is locked"), matching the transaction body's retry policy (#761).
+        retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
+        while True:
+            try:
+                return await self._check_execution(workflow_id, step_id)
+            except DBAPIError as dbapi_error:
+                if retriable_postgres_exception(
+                    dbapi_error
+                ) or self._is_serialization_error(dbapi_error):
+                    await asyncio.sleep(retry_wait_seconds)
+                    retry_wait_seconds = min(
+                        retry_wait_seconds * _RETRY_BACKOFF_FACTOR,
+                        _MAX_RETRY_WAIT_SECONDS,
+                    )
+                    continue
+                raise
+
     async def _record_error(
         self,
         workflow_id: str,
@@ -271,7 +292,7 @@ class AsyncSQLAlchemyDatasource(ABC):
                 assert inner_ctx is not None
                 workflow_id = inner_ctx.workflow_id
                 step_id = inner_ctx.curr_step_function_id
-                recorded = await self._check_execution(workflow_id, step_id)
+                recorded = await self._check_execution_with_retry(workflow_id, step_id)
                 if recorded is not None:
                     return cast(R, _replay_recorded(recorded, self.serializer))
 
@@ -513,6 +534,27 @@ class SQLAlchemyDatasource(ABC):
             )
             return _row_to_result(result.first())
 
+    def _check_execution_with_retry(
+        self, workflow_id: str, step_id: int
+    ) -> Optional[RecordedResult]:
+        # Retry the OAOO pre-check read on transient concurrency errors (e.g. SQLite
+        # "database is locked"), matching the transaction body's retry policy (#761).
+        retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
+        while True:
+            try:
+                return self._check_execution(workflow_id, step_id)
+            except DBAPIError as dbapi_error:
+                if retriable_postgres_exception(
+                    dbapi_error
+                ) or self._is_serialization_error(dbapi_error):
+                    time.sleep(retry_wait_seconds)
+                    retry_wait_seconds = min(
+                        retry_wait_seconds * _RETRY_BACKOFF_FACTOR,
+                        _MAX_RETRY_WAIT_SECONDS,
+                    )
+                    continue
+                raise
+
     def _record_error(
         self,
         workflow_id: str,
@@ -568,7 +610,7 @@ class SQLAlchemyDatasource(ABC):
                 assert inner_ctx is not None
                 workflow_id = inner_ctx.workflow_id
                 step_id = inner_ctx.curr_step_function_id
-                recorded = self._check_execution(workflow_id, step_id)
+                recorded = self._check_execution_with_retry(workflow_id, step_id)
                 if recorded is not None:
                     return cast(R, _replay_recorded(recorded, self.serializer))
 
