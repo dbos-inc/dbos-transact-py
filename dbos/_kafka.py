@@ -28,8 +28,6 @@ KafkaOrdering = Literal["none", "partition", "topic"]
 KAFKA_QUEUE_NAME = "_dbos_kafka_queue"
 # Shared partitioned queue for ordered consumers
 KAFKA_ORDERED_QUEUE_NAME = "_dbos_kafka_ordered_queue"
-# Pre-redesign per-topic in-order queues, declared drain-only for compatibility
-_LEGACY_TOPIC_QUEUE_PREFIX = "_dbos_kafka_queue_topic_"
 
 _MIN_RETRY_WAIT_SEC = 1.0
 _MAX_RETRY_WAIT_SEC = 60.0
@@ -343,16 +341,6 @@ def kafka_consumer(
                 partition_queue=True,
                 concurrency=1,
             )
-            if resolved_ordering == "topic":
-                # Drain-only: pre-redesign releases enqueued in-order workflows on
-                # per-topic queues. Declare them so any leftover rows still execute.
-                for topic in topics:
-                    if not topic.startswith("^"):
-                        _get_or_create_queue(
-                            dbosreg,
-                            f"{_LEGACY_TOPIC_QUEUE_PREFIX}{topic}",
-                            concurrency=1,
-                        )
 
         stop_event = threading.Event()
         dbosreg.register_poller(
