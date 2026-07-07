@@ -17,6 +17,7 @@ from dbos._context import SetWorkflowID
 from dbos._scheduler import backfill_schedule, trigger_schedule
 from dbos._utils import GlobalParams, generate_uuid
 from dbos._workflow_commands import (
+    DEFAULT_GC_BATCH_SIZE,
     delete_workflow,
     garbage_collect,
     get_workflow,
@@ -594,6 +595,10 @@ class ConductorWebsocket(threading.Thread):
                                     rows_threshold=retention_message.body[
                                         "gc_rows_threshold"
                                     ],
+                                    # Older Conductor versions may not send gc_batch_size
+                                    batch_size=retention_message.body.get(
+                                        "gc_batch_size", DEFAULT_GC_BATCH_SIZE
+                                    ),
                                 )
                                 if (
                                     retention_message.body["timeout_cutoff_epoch_ms"]
