@@ -183,27 +183,37 @@ def _kafka_consumer_loop(
                         fatal_error = True
 
                 if valid:
-                    statuses = [
-                        _build_status(dbos, func, cmsg, group_id, ordering, queue_name)
-                        for cmsg in valid
-                    ]
-                    # Retry this same batch until durable: consume() advances the
-                    # fetch position regardless of offset storage, so dropping the
-                    # batch and continuing would lose these messages until the next
-                    # rebalance.
-                    if (
-                        _retry_until_success(
-                            stop_event,
-                            lambda: dbos._sys_db.init_workflows(statuses),
-                            "durably enqueue consumed messages",
-                        )
-                        is None
-                    ):
-                        # Stopped before the batch was durable; offsets weren't
-                        # stored, so Kafka redelivers.
-                        return
-                    # Workflows are durable; advance the offsets (auto-commit
-                    # flushes them later).
+                    # Build a status row per message; a build failure is deterministic, so drop that message rather than wedge the consumer (transient failures retry in init_workflows).
+                    statuses: list["WorkflowStatusInternal"] = []
+                    for cmsg in valid:
+                        try:
+                            statuses.append(
+                                _build_status(
+                                    dbos, func, cmsg, group_id, ordering, queue_name
+                                )
+                            )
+                        except Exception as e:
+                            dbos_logger.error(
+                                f"Dropping unprocessable Kafka message "
+                                f"{cmsg.topic()}[{cmsg.partition()}]@{cmsg.offset()}: {e}"
+                            )
+                    if statuses:
+                        # Retry this same batch until durable: consume() advances the
+                        # fetch position regardless of offset storage, so dropping the
+                        # batch and continuing would lose these messages until the next
+                        # rebalance.
+                        if (
+                            _retry_until_success(
+                                stop_event,
+                                lambda: dbos._sys_db.init_workflows(statuses),
+                                "durably enqueue consumed messages",
+                            )
+                            is None
+                        ):
+                            # Stopped before the batch was durable; offsets weren't
+                            # stored, so Kafka redelivers.
+                            return
+                    # Every valid message is now handled (enqueued or dropped); advance offsets past all of them so a poison message isn't redelivered forever (auto-commit flushes later).
                     for cmsg in _last_message_per_partition(valid):
                         try:
                             consumer.store_offsets(message=cmsg)
@@ -295,6 +305,14 @@ def kafka_consumer(
                 )
             cfg["enable.auto.offset.store"] = False
 
+        # DBOS stores offsets manually and relies on auto-commit to flush them; force it on (bool or string forms) so restarts don't reprocess from auto.offset.reset.
+        if str(cfg.get("enable.auto.commit", True)).strip().lower() in ("false", "0"):
+            dbos_logger.warning(
+                "Overriding enable.auto.commit=False: DBOS relies on Kafka auto-commit "
+                "to flush the offsets it stores after durable enqueue."
+            )
+            cfg["enable.auto.commit"] = True
+
         if cfg.get("group.id") is None:
             cfg["group.id"] = safe_group_name(func_name, topics)
             dbos_logger.warning(
@@ -341,6 +359,9 @@ def kafka_consumer(
                 partition_queue=True,
                 concurrency=1,
             )
+
+        # This process runs the poller and enqueues onto consumer_queue, so it must poll it even under a listen_queues filter.
+        dbosreg.poller_queue_names.add(consumer_queue.name)
 
         stop_event = threading.Event()
         dbosreg.register_poller(

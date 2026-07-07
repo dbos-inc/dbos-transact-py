@@ -224,6 +224,8 @@ class DBOSRegistry:
         self.dbos: Optional[DBOS] = None
         # Kafka consumer registrations, for cross-consumer validation
         self.kafka_registrations: list[KafkaConsumerRegistration] = []
+        # Queues fed by this process's pollers (e.g. Kafka); always polled, regardless of any listen_queues filter, so this process executes what it enqueues.
+        self.poller_queue_names: set[str] = set()
 
     def register_wf_function(self, name: str, wrapped_func: F, functype: str) -> None:
         if name in self.function_type_map:

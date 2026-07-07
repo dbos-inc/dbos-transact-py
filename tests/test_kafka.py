@@ -353,9 +353,10 @@ def test_kafka_partition_ordering(dbos: DBOS) -> None:
 
 
 def test_kafka_db_outage(dbos: DBOS, monkeypatch: pytest.MonkeyPatch) -> None:
-    # The consumer must survive transient enqueue failures with no message loss.
+    # The consumer must survive transient enqueue failures with no message loss and no duplicate execution: a failed init_workflows retries the same batch, and the idempotent insert runs each message exactly once.
     event = threading.Event()
-    kafka_count = 0
+    lock = threading.Lock()
+    processed: list[int] = []
     server = "localhost:9092"
     topic = f"dbos-kafka-outage-{random.randrange(1_000_000_000)}"
 
@@ -364,15 +365,18 @@ def test_kafka_db_outage(dbos: DBOS, monkeypatch: pytest.MonkeyPatch) -> None:
 
     fail_remaining = 3
     failures_injected = 0
+    inserted_total = 0
     original_init_workflows = dbos._sys_db.init_workflows
 
     def flaky_init_workflows(statuses: Any) -> Any:
-        nonlocal fail_remaining, failures_injected
+        nonlocal fail_remaining, failures_injected, inserted_total
         if fail_remaining > 0:
             fail_remaining -= 1
             failures_injected += 1
             raise Exception("Simulated database outage")
-        return original_init_workflows(statuses)
+        result = original_init_workflows(statuses)
+        inserted_total += len(result)
+        return result
 
     monkeypatch.setattr(dbos._sys_db, "init_workflows", flaky_init_workflows)
 
@@ -386,15 +390,61 @@ def test_kafka_db_outage(dbos: DBOS, monkeypatch: pytest.MonkeyPatch) -> None:
     )
     @DBOS.workflow()
     def outage_workflow(msg: KafkaMessage) -> None:
-        nonlocal kafka_count
-        kafka_count += 1
-        if kafka_count == NUM_EVENTS:
-            event.set()
+        assert msg.value is not None
+        with lock:
+            processed.append(int(msg.value.decode().split()[-1]))
+            if len(processed) == NUM_EVENTS:
+                event.set()
 
-    # Backoff between injected failures is 1s + 2s + 4s
+    # Backoff between the injected failures is 1s + 2s + 4s.
     assert event.wait(timeout=60)
-    assert kafka_count == NUM_EVENTS
+    # The retry path was actually exercised: the first three enqueue attempts failed.
     assert failures_injected == 3
+    # No message loss and no duplicate execution despite the retried batch: every message ran exactly once.
+    assert sorted(processed) == list(range(NUM_EVENTS))
+    # Idempotent insert: exactly NUM_EVENTS rows were durably created; the retried batch didn't double-insert or lose any.
+    assert inserted_total == NUM_EVENTS
+
+
+def test_kafka_listen_queues_still_polls_consumer(
+    dbos: DBOS, config: DBOSConfig
+) -> None:
+    # Regression: a Kafka consumer's queue must be polled even when listen_queues names only unrelated queues, else its messages would sit ENQUEUED forever.
+    server = "localhost:9092"
+    topic = f"dbos-kafka-listen-{random.randrange(1_000_000_000)}"
+
+    if not send_test_messages(server, topic):
+        pytest.skip("Kafka not available")
+
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+
+    event = threading.Event()
+    lock = threading.Lock()
+    seen: set[int] = set()
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": server,
+            "group.id": "dbos-test-listen-queues",
+            "auto.offset.reset": "earliest",
+        },
+        [topic],
+    )
+    @DBOS.workflow()
+    def listen_workflow(msg: KafkaMessage) -> None:
+        assert msg.value is not None
+        with lock:
+            seen.add(int(msg.value.decode().split()[-1]))
+            if len(seen) == NUM_EVENTS:
+                event.set()
+
+    # Listen only to an unrelated queue — deliberately NOT the internal Kafka queue.
+    DBOS.listen_queues(["dbos-test-unrelated-queue"])
+    DBOS.launch()
+
+    assert event.wait(timeout=30)
+    assert seen == set(range(NUM_EVENTS))
 
 
 def test_kafka_throughput(dbos: DBOS, monkeypatch: pytest.MonkeyPatch) -> None:

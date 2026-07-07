@@ -575,6 +575,11 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
                 dbos.logger.warning(f"Exception listing database-backed queues: {e}")
             # Always listen to the internal queue
             current_queues[INTERNAL_QUEUE_NAME] = dbos._registry.get_internal_queue()
+            # Always poll queues fed by this process's pollers (e.g. Kafka), else their enqueued workflows would sit ENQUEUED forever under a listen_queues filter.
+            for name in dbos._registry.poller_queue_names:
+                q = dbos._registry.queue_info_map.get(name)
+                if q is not None:
+                    current_queues[name] = q
         else:
             # Else, check all in-memory and database-backed queues
             current_queues = dict(dbos._registry.queue_info_map)
@@ -672,7 +677,8 @@ def log_queues(dbos: "DBOS", listening_queues: Optional[list[str]]) -> None:
         dbos.logger.warning(f"Exception listing database-backed queues: {e}")
 
     if listening_queues is not None:
-        listening_set = set(listening_queues)
+        # Poller-fed queues (e.g. Kafka) are always listened to, so reflect them here.
+        listening_set = set(listening_queues) | dbos._registry.poller_queue_names
         queues = {n: q for n, q in queues.items() if n in listening_set}
 
     queues.pop(INTERNAL_QUEUE_NAME, None)
