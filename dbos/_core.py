@@ -793,6 +793,20 @@ def execute_workflow_by_id(
     status = dbos._sys_db.get_workflow_status(workflow_id)
     if not status:
         raise DBOSRecoveryError(workflow_id, "Workflow status not found")
+    if not workflow_id.strip():
+        # Empty or whitespace workflow IDs are not allowed
+        recovery_error = DBOSRecoveryError(
+            workflow_id, "Cannot recover a workflow with an empty or whitespace-only ID"
+        )
+        error_str = _serialize_exception_for_persistence(
+            recovery_error, status["serialization"], dbos._serializer
+        )
+        dbos._sys_db.update_workflow_outcome(
+            workflow_id,
+            WorkflowStatusString.ERROR.value,
+            error=error_str,
+        )
+        raise recovery_error
     try:
         inputs: WorkflowInputs = deserialize_args(
             status["inputs"], status["serialization"], dbos._serializer

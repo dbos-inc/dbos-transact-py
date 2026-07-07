@@ -26,8 +26,8 @@ class FlaskMiddleware:
         }
         with EnterDBOSHandler(attributes):
             workflow_id = request.headers.get("dbos-idempotency-key")
-            if workflow_id is not None:
-                # Set the workflow ID for the handler
+            if workflow_id:
+                # Set the workflow ID for the handler (an empty header means none supplied)
                 with SetWorkflowID(workflow_id):
                     response = self.app(environ, start_response)
             else:

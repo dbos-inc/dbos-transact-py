@@ -110,6 +110,33 @@ def test_client_enqueue_and_get_result(dbos: DBOS, client: DBOSClient) -> None:
     assert list_results[0].input is None
 
 
+@pytest.mark.parametrize("bad_id", ["", "   ", "\t\n"])
+def test_client_enqueue_rejects_empty_workflow_id(
+    dbos: DBOS, client: DBOSClient, bad_id: str
+) -> None:
+    # An empty/whitespace workflow_id must be rejected, not inserted verbatim (#759).
+    run_client_collateral()
+
+    options: EnqueueOptions = {
+        "queue_name": "test_queue",
+        "workflow_name": "enqueue_test",
+        "workflow_id": bad_id,
+    }
+
+    with pytest.raises(Exception) as exc_info:
+        client.enqueue(options, 42, "test", {"first": "John", "last": "Doe", "age": 30})
+    assert "workflow ID" in str(exc_info.value)
+    assert not _workflow_exists(client, bad_id)
+
+
+@pytest.mark.parametrize("bad_id", ["", "   "])
+def test_set_workflow_id_rejects_empty(bad_id: str) -> None:
+    # SetWorkflowID is the public choke point; an empty ID must raise, not silently fork (#759).
+    with pytest.raises(Exception) as exc_info:
+        SetWorkflowID(bad_id)
+    assert "workflow ID" in str(exc_info.value)
+
+
 def test_enqueue_with_timeout(dbos: DBOS, client: DBOSClient) -> None:
     run_client_collateral()
 
