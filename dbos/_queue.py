@@ -489,12 +489,8 @@ def queue_worker_thread(
                             local_running_count,
                         )
                     except OperationalError as e:
-                        # Another worker is concurrently dequeueing this partition (lock held, or a
-                        # serialization conflict under REPEATABLE READ); skip this key, not the others.
-                        if isinstance(
-                            e.orig,
-                            (errors.LockNotAvailable, errors.SerializationFailure),
-                        ):
+                        # Lock held: another worker owns this partition, so skip it; let serialization failures propagate to the outer handler's backoff.
+                        if isinstance(e.orig, errors.LockNotAvailable):
                             continue
                         raise
                     for id in dequeued_workflows:
@@ -575,8 +571,8 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
                 dbos.logger.warning(f"Exception listing database-backed queues: {e}")
             # Always listen to the internal queue
             current_queues[INTERNAL_QUEUE_NAME] = dbos._registry.get_internal_queue()
-            # Always poll queues fed by this process's pollers (e.g. Kafka), else their enqueued workflows would sit ENQUEUED forever under a listen_queues filter.
-            for name in dbos._registry.poller_queue_names:
+            # Always poll this process's poller-fed queues (e.g. Kafka), else their workflows sit ENQUEUED forever under a listen_queues filter; snapshot since a late poller may mutate the set.
+            for name in list(dbos._registry.poller_queue_names):
                 q = dbos._registry.queue_info_map.get(name)
                 if q is not None:
                     current_queues[name] = q

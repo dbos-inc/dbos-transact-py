@@ -284,6 +284,12 @@ def kafka_consumer(
             'Error: a custom queue is only supported with ordering="none"; '
             "ordered consumers share an internal partitioned queue"
         )
+    if queue is not None and queue._partition_queue:
+        # ordering="none" enqueues no partition key, which a partitioned queue never dequeues, so rows would sit ENQUEUED forever.
+        raise DBOSInitializationError(
+            "Error: a custom Kafka queue must not be a partitioned queue; "
+            'use ordering="partition" or "topic" for ordered processing'
+        )
 
     def decorator(func: _KafkaConsumerWorkflow) -> _KafkaConsumerWorkflow:
         func_name = get_dbos_func_name(func)

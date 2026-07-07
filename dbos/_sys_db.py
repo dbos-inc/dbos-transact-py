@@ -6,7 +6,6 @@ import random
 import sys
 import threading
 import time
-import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -4207,7 +4206,7 @@ class SystemDatabase(ABC):
                     "serialization": status["serialization"],
                     "queue_partition_key": status["queue_partition_key"],
                     "parent_workflow_id": status["parent_workflow_id"],
-                    "owner_xid": str(uuid.uuid4()),
+                    "owner_xid": None,
                     "delay_until_epoch_ms": status["delay_until_epoch_ms"],
                     "attributes": status["attributes"],
                     "schedule_name": status["schedule_name"],
