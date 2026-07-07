@@ -72,22 +72,29 @@ def delete_workflow(
         dbos._app_db.delete_transaction_outputs(all_ids)
 
 
+# Default number of rows deleted per garbage collection batch
+DEFAULT_GC_BATCH_SIZE = 10_000
+
+
 def garbage_collect(
     dbos: "DBOS",
     cutoff_epoch_timestamp_ms: Optional[int],
     rows_threshold: Optional[int],
+    *,
+    batch_size: Optional[int] = DEFAULT_GC_BATCH_SIZE,
 ) -> None:
     if cutoff_epoch_timestamp_ms is None and rows_threshold is None:
         return
     result = dbos._sys_db.garbage_collect(
         cutoff_epoch_timestamp_ms=cutoff_epoch_timestamp_ms,
         rows_threshold=rows_threshold,
+        batch_size=batch_size,
     )
     if result is not None:
         cutoff_epoch_timestamp_ms, pending_workflow_ids = result
         if dbos._app_db:
             dbos._app_db.garbage_collect(
-                cutoff_epoch_timestamp_ms, pending_workflow_ids
+                cutoff_epoch_timestamp_ms, pending_workflow_ids, batch_size=batch_size
             )
 
 

@@ -474,6 +474,7 @@ class ForkFromFailureResponse(BaseMessage):
 class RetentionBody(TypedDict):
     gc_cutoff_epoch_ms: Optional[int]
     gc_rows_threshold: Optional[int]
+    gc_batch_size: Optional[int]
     timeout_cutoff_epoch_ms: Optional[int]
 
 
