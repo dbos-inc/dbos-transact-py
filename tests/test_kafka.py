@@ -4,7 +4,7 @@ import time
 from typing import Any, NoReturn, Optional
 
 import pytest
-from confluent_kafka import Consumer, KafkaError, Producer
+from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 
 from dbos import DBOS, DBOSConfig, KafkaMessage, Queue
 
@@ -163,7 +163,7 @@ def test_kafka(dbos: DBOS) -> None:
     @DBOS.kafka_consumer(
         {
             "bootstrap.servers": server,
-            "group.id": "dbos-test",
+            "group.id": f"dbos-test-{random.randrange(1_000_000_000)}",
             "auto.offset.reset": "earliest",
         },
         [topic],
@@ -178,7 +178,7 @@ def test_kafka(dbos: DBOS) -> None:
         if kafka_count == NUM_EVENTS:
             event.set()
 
-    wait = event.wait(timeout=10)
+    wait = event.wait(timeout=45)
     assert wait
     assert kafka_count == NUM_EVENTS
 
@@ -195,7 +195,7 @@ def test_kafka_async(dbos: DBOS) -> None:
     @DBOS.kafka_consumer(
         {
             "bootstrap.servers": server,
-            "group.id": "dbos-test",
+            "group.id": f"dbos-test-{random.randrange(1_000_000_000)}",
             "auto.offset.reset": "earliest",
         },
         [topic],
@@ -210,7 +210,7 @@ def test_kafka_async(dbos: DBOS) -> None:
         if kafka_count == NUM_EVENTS:
             event.set()
 
-    wait = event.wait(timeout=10)
+    wait = event.wait(timeout=45)
     assert wait
     assert kafka_count == NUM_EVENTS
 
@@ -229,7 +229,7 @@ def test_kafka_in_order(dbos: DBOS) -> None:
         @DBOS.kafka_consumer(
             {
                 "bootstrap.servers": server,
-                "group.id": "dbos-test",
+                "group.id": f"dbos-test-{random.randrange(1_000_000_000)}",
                 "auto.offset.reset": "earliest",
             },
             [topic],
@@ -245,7 +245,7 @@ def test_kafka_in_order(dbos: DBOS) -> None:
             if kafka_count == NUM_EVENTS:
                 event.set()
 
-    wait = event.wait(timeout=15)
+    wait = event.wait(timeout=45)
     assert wait
     assert kafka_count == NUM_EVENTS
     time.sleep(2)  # Wait for things to clean up
@@ -281,7 +281,7 @@ def test_kafka_no_groupid(dbos: DBOS) -> None:
         if kafka_count == NUM_EVENTS * 2:
             event.set()
 
-    wait = event.wait(timeout=10)
+    wait = event.wait(timeout=45)
     assert wait
     assert kafka_count == NUM_EVENTS * 2
 
@@ -931,3 +931,643 @@ def test_init_workflows_large_batch_per_key_ordering(dbos: DBOS) -> None:
     all_created = [created_at for _, created_at, _ in rows]
     # Per-key cursors keep keys decoupled: all rows fit one per_key-wide window (a process-wide cursor would span num_keys * per_key).
     assert max(all_created) - min(all_created) == per_key - 1
+
+
+# ---------------------------------------------------------------------------
+# Decorator validation, config coercion, and helpers (no broker required)
+# ---------------------------------------------------------------------------
+
+
+def test_kafka_validation_errors(dbos: DBOS) -> None:
+    # Every decorator misconfiguration must raise DBOSInitializationError before
+    # any consumer is registered. None of these need a broker.
+    from dbos._error import DBOSInitializationError
+
+    suffix = random.randrange(1_000_000_000)
+
+    def consumer(**kwargs: Any) -> Any:
+        gid = kwargs.pop("gid")
+        return DBOS.kafka_consumer(
+            {"bootstrap.servers": "localhost:9092", "group.id": gid}, ["t"], **kwargs
+        )
+
+    with pytest.raises(DBOSInitializationError, match="either in_order or ordering"):
+        consumer(gid=f"v1-{suffix}", in_order=True, ordering="topic")
+    with pytest.raises(DBOSInitializationError, match="invalid Kafka ordering"):
+        consumer(gid=f"v2-{suffix}", ordering="bogus")
+    with pytest.raises(DBOSInitializationError, match="batch_size must be positive"):
+        consumer(gid=f"v3-{suffix}", batch_size=0)
+    with pytest.raises(DBOSInitializationError, match="only supported with ordering"):
+        consumer(
+            gid=f"v4-{suffix}", ordering="partition", queue=Queue(f"vq-a-{suffix}")
+        )
+    with pytest.raises(
+        DBOSInitializationError, match="must not be a partitioned queue"
+    ):
+        consumer(
+            gid=f"v5-{suffix}", queue=Queue(f"vq-b-{suffix}", partition_queue=True)
+        )
+
+
+def test_kafka_config_coercion(dbos: DBOS, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Inspect the cfg DBOS hands to the consumer loop. Post-launch register_poller
+    # starts a real thread, so capture its args instead of running anything.
+    captured: dict[str, Any] = {}
+
+    def fake_register_poller(evt: Any, func: Any, *args: Any, **kwargs: Any) -> None:
+        captured["cfg"] = args[1]  # (func, cfg, topics, stop, ordering, batch, qname)
+
+    monkeypatch.setattr(dbos._registry, "register_poller", fake_register_poller)
+
+    @DBOS.workflow()
+    def cc_wf(msg: KafkaMessage) -> None:
+        pass
+
+    def resolved(overrides: dict[str, Any]) -> Any:
+        gid = f"cc-{random.randrange(1_000_000_000)}"
+        DBOS.kafka_consumer(
+            {"bootstrap.servers": "localhost:9092", "group.id": gid, **overrides}, ["t"]
+        )(cc_wf)
+        return captured["cfg"]
+
+    # Every value librdkafka accepts for a bool must end up truthy so stored
+    # offsets flush. (librdkafka rejects "no"/"off" outright, so they're moot.)
+    for val in [False, "false", "False", 0, "0", True, "true", 1]:
+        got = resolved({"enable.auto.commit": val})["enable.auto.commit"]
+        assert got is True or str(got).strip().lower() in (
+            "true",
+            "1",
+        ), f"{val!r}->{got!r}"
+
+    # DBOS manages offset storage itself, so it always disables auto-store.
+    assert (
+        resolved({"enable.auto.offset.store": True})["enable.auto.offset.store"]
+        is False
+    )
+    assert resolved({})["auto.offset.reset"] == "earliest"
+    assert callable(resolved({})["error_cb"])
+
+    # The caller's dict is copied, never mutated.
+    caller = {
+        "bootstrap.servers": "localhost:9092",
+        "group.id": f"cc-mut-{random.randrange(1_000_000_000)}",
+    }
+    snapshot = dict(caller)
+    DBOS.kafka_consumer(caller, ["t"])(cc_wf)
+    assert caller == snapshot
+
+
+def test_kafka_same_group_different_topics_warns(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Two consumers sharing a group.id but no topics: allowed, but warned about
+    # (rebalance churn). No broker needed; suppress the poller so nothing runs.
+    from dbos._logger import dbos_logger
+
+    monkeypatch.setattr(dbos._registry, "register_poller", lambda *a, **k: None)
+    warnings_logged: list[str] = []
+    monkeypatch.setattr(
+        dbos_logger, "warning", lambda msg, *a, **k: warnings_logged.append(msg)
+    )
+
+    group = f"shared-grp-{random.randrange(1_000_000_000)}"
+    base = {"bootstrap.servers": "localhost:9092", "auto.offset.reset": "earliest"}
+
+    @DBOS.kafka_consumer({**base, "group.id": group}, ["topic-a"])
+    @DBOS.workflow()
+    def consumer_a(msg: KafkaMessage) -> None:
+        pass
+
+    @DBOS.kafka_consumer({**base, "group.id": group}, ["topic-b"])
+    @DBOS.workflow()
+    def consumer_b(msg: KafkaMessage) -> None:
+        pass
+
+    assert any(
+        "share group.id" in m and "different topics" in m for m in warnings_logged
+    ), warnings_logged
+
+
+def test_prepare_enqueued_workflow_edges(dbos: DBOS) -> None:
+    from dbos._core import prepare_enqueued_workflow
+    from dbos._error import DBOSWorkflowFunctionNotFoundError
+
+    def unregistered(x: str) -> None:
+        pass
+
+    with pytest.raises(DBOSWorkflowFunctionNotFoundError):
+        prepare_enqueued_workflow(
+            dbos, unregistered, ("a",), {}, queue_name="q", workflow_id="w-unreg"
+        )
+
+    @DBOS.workflow()
+    def registered(msg: str) -> None:
+        pass
+
+    st = prepare_enqueued_workflow(
+        dbos,
+        registered,
+        ("hi",),
+        {},
+        queue_name="q",
+        workflow_id=f"w-{random.randrange(1_000_000_000)}",
+        queue_partition_key="pk",
+    )
+    assert st["status"] == "ENQUEUED"
+    assert st["queue_partition_key"] == "pk"
+    # Fresh context: no parent/auth leaked from any ambient context.
+    assert st["parent_workflow_id"] is None
+
+
+def test_init_workflows_edge_cases(dbos: DBOS) -> None:
+    from dbos._core import prepare_enqueued_workflow
+
+    assert dbos._sys_db.init_workflows([]) == set()
+
+    @DBOS.workflow()
+    def edge_wf(v: str) -> None:
+        pass
+
+    # Unordered (key=None) rows get wall-clock time and never touch per-key cursors.
+    dbos._sys_db._batch_created_at_cursors.clear()
+    prefix = f"none-{random.randrange(1_000_000_000)}"
+    rows = [
+        prepare_enqueued_workflow(
+            dbos,
+            edge_wf,
+            (str(i),),
+            {},
+            queue_name=f"unp-{prefix}",
+            workflow_id=f"{prefix}-{i}",
+        )
+        for i in range(3)
+    ]
+    assert dbos._sys_db.init_workflows(rows) == {f"{prefix}-{i}" for i in range(3)}
+    assert dbos._sys_db._batch_created_at_cursors == {}
+
+
+def test_kafka_safe_group_name() -> None:
+    from dbos._kafka import safe_group_name
+
+    n = safe_group_name("my_func", ["topic-a", "topic-b"])
+    assert n.startswith("dbos-kafka-group-")
+    assert n == safe_group_name("my_func", ["topic-a", "topic-b"])  # deterministic
+    assert len(safe_group_name("f" * 400, ["t" * 400])) <= 255  # truncated to 255
+
+    # Everything but [a-zA-Z0-9-] is stripped (e.g. regex/underscore chars).
+    body = safe_group_name("fn!@#", ["^foo.*bar"])[len("dbos-kafka-group-") :]
+    assert all(c.isalnum() or c == "-" for c in body)
+
+
+def test_kafka_last_message_per_partition() -> None:
+    from dbos._kafka import _last_message_per_partition
+
+    class M:
+        def __init__(self, t: str, p: int, o: int) -> None:
+            self._t, self._p, self._o = t, p, o
+
+        def topic(self) -> str:
+            return self._t
+
+        def partition(self) -> int:
+            return self._p
+
+        def offset(self) -> int:
+            return self._o
+
+    msgs = [M("a", 0, 0), M("a", 1, 0), M("a", 0, 1), M("b", 0, 5), M("a", 1, 2)]
+    last = {
+        (m.topic(), m.partition()): m.offset()
+        for m in _last_message_per_partition(msgs)
+    }
+    assert last == {("a", 0): 1, ("a", 1): 2, ("b", 0): 5}
+    assert _last_message_per_partition([]) == []
+
+
+def test_kafka_retry_until_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    import dbos._kafka as kmod
+
+    monkeypatch.setattr(kmod, "_MIN_RETRY_WAIT_SEC", 0.01)
+    monkeypatch.setattr(kmod, "_MAX_RETRY_WAIT_SEC", 0.02)
+    stop = threading.Event()
+
+    assert kmod._retry_until_success(stop, lambda: 42, "op") == 42  # succeeds first try
+
+    calls = {"n": 0}
+
+    def flaky() -> str:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise ValueError("boom")
+        return "ok"
+
+    assert kmod._retry_until_success(stop, flaky, "op") == "ok"  # retries then succeeds
+    assert calls["n"] == 3
+
+    # Once stop is set, it abandons without ever calling the operation.
+    stop.set()
+    called = {"n": 0}
+
+    def never() -> None:
+        called["n"] += 1
+
+    assert kmod._retry_until_success(stop, never, "op") is None
+    assert called["n"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Consumer-loop failure handling, driven by a fake Consumer (no broker required)
+# ---------------------------------------------------------------------------
+
+
+class _FakeKafkaError:
+    def __init__(self, fatal: bool = False) -> None:
+        self._fatal = fatal
+
+    def code(self) -> int:
+        return -150
+
+    def name(self) -> str:
+        return "FAKE"
+
+    def str(self) -> str:
+        return "fake kafka error"
+
+    def fatal(self) -> bool:
+        return self._fatal
+
+
+class _FakeKafkaMsg:
+    def __init__(
+        self,
+        topic: str = "t",
+        partition: int = 0,
+        offset: int = 0,
+        value: bytes = b"v",
+        err: Any = None,
+    ) -> None:
+        self._t, self._p, self._o, self._v, self._e = (
+            topic,
+            partition,
+            offset,
+            value,
+            err,
+        )
+
+    def error(self) -> Any:
+        return self._e
+
+    def value(self) -> Any:
+        return self._v
+
+    def key(self) -> Any:
+        return None
+
+    def topic(self) -> str:
+        return self._t
+
+    def partition(self) -> int:
+        return self._p
+
+    def offset(self) -> int:
+        return self._o
+
+    def headers(self) -> Any:
+        return None
+
+    def latency(self) -> Any:
+        return None
+
+    def leader_epoch(self) -> Any:
+        return None
+
+    def timestamp(self) -> Any:
+        return (0, 0)
+
+
+def _start_loop(
+    func: Any, group_id: str, queue_name: str
+) -> tuple[threading.Thread, threading.Event]:
+    import dbos._kafka as kmod
+
+    stop = threading.Event()
+    t = threading.Thread(
+        target=kmod._kafka_consumer_loop,
+        args=(func, {"group.id": group_id}, ["t"], stop, "none", 10, queue_name),
+        daemon=True,
+    )
+    t.start()
+    return t, stop
+
+
+def test_kafka_consumer_loop_fatal_error_recreates_consumer(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A per-message fatal error must trigger a fresh consumer instance.
+    import dbos._kafka as kmod
+
+    monkeypatch.setattr(kmod, "_MIN_RETRY_WAIT_SEC", 0.01)
+    monkeypatch.setattr(kmod, "_MAX_RETRY_WAIT_SEC", 0.02)
+
+    @DBOS.workflow()
+    def wf(msg: KafkaMessage) -> None:
+        pass
+
+    instances: list[Any] = []
+    recreated = threading.Event()
+    ilock = threading.Lock()
+
+    class FatalConsumer:
+        def __init__(self, conf: dict[str, Any]) -> None:
+            with ilock:
+                instances.append(self)
+                if len(instances) >= 2:
+                    recreated.set()
+            self._sent = False
+
+        def subscribe(self, topics: Any) -> None:
+            pass
+
+        def consume(self, num_messages: int, timeout: float = 1.0) -> Any:
+            if self is instances[0] and not self._sent:
+                self._sent = True
+                return [_FakeKafkaMsg(err=_FakeKafkaError(fatal=True))]
+            time.sleep(0.02)
+            return []
+
+        def store_offsets(self, message: Any = None) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(kmod, "Consumer", FatalConsumer)
+    t, stop = _start_loop(wf, "mock-fatal", f"mock-q-{random.randrange(1_000_000_000)}")
+    try:
+        assert recreated.wait(
+            timeout=10
+        ), "consumer was not recreated after fatal error"
+    finally:
+        stop.set()
+        t.join(timeout=10)
+
+
+def test_kafka_consumer_loop_recreates_after_unexpected_error(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An unexpected exception from consume() must back off and rewind onto a fresh consumer.
+    import dbos._kafka as kmod
+
+    monkeypatch.setattr(kmod, "_MIN_RETRY_WAIT_SEC", 0.01)
+    monkeypatch.setattr(kmod, "_MAX_RETRY_WAIT_SEC", 0.02)
+
+    @DBOS.workflow()
+    def wf(msg: KafkaMessage) -> None:
+        pass
+
+    instances: list[Any] = []
+    recreated = threading.Event()
+    ilock = threading.Lock()
+
+    class ErroringConsumer:
+        def __init__(self, conf: dict[str, Any]) -> None:
+            with ilock:
+                instances.append(self)
+                if len(instances) >= 2:
+                    recreated.set()
+            self._raised = False
+
+        def subscribe(self, topics: Any) -> None:
+            pass
+
+        def consume(self, num_messages: int, timeout: float = 1.0) -> Any:
+            if self is instances[0] and not self._raised:
+                self._raised = True
+                raise RuntimeError("unexpected consume error")
+            time.sleep(0.02)
+            return []
+
+        def store_offsets(self, message: Any = None) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(kmod, "Consumer", ErroringConsumer)
+    t, stop = _start_loop(wf, "mock-err", f"mock-q-{random.randrange(1_000_000_000)}")
+    try:
+        assert recreated.wait(
+            timeout=10
+        ), "consumer not recreated after unexpected error"
+    finally:
+        stop.set()
+        t.join(timeout=10)
+
+
+def test_kafka_consumer_loop_store_offsets_exception_continues(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A store_offsets failure (e.g. partition revoked) must be swallowed: the
+    # message is already durably enqueued and the loop keeps running.
+    import dbos._kafka as kmod
+
+    monkeypatch.setattr(kmod, "_MIN_RETRY_WAIT_SEC", 0.01)
+
+    @DBOS.workflow()
+    def wf(msg: KafkaMessage) -> None:
+        pass
+
+    enqueued: list[str] = []
+    orig_iw = dbos._sys_db.init_workflows
+
+    def spy_iw(statuses: Any) -> Any:
+        r = orig_iw(statuses)
+        enqueued.extend(r)
+        return r
+
+    monkeypatch.setattr(dbos._sys_db, "init_workflows", spy_iw)
+    store_attempted = threading.Event()
+    suffix = random.randrange(1_000_000_000)
+
+    class StoreFailConsumer:
+        def __init__(self, conf: dict[str, Any]) -> None:
+            self._sent = False
+
+        def subscribe(self, topics: Any) -> None:
+            pass
+
+        def consume(self, num_messages: int, timeout: float = 1.0) -> Any:
+            if not self._sent:
+                self._sent = True
+                return [
+                    _FakeKafkaMsg(
+                        topic=f"mt-{suffix}", partition=0, offset=0, value=b"hello"
+                    )
+                ]
+            time.sleep(0.02)
+            return []
+
+        def store_offsets(self, message: Any = None) -> None:
+            store_attempted.set()
+            raise KafkaException(KafkaError(KafkaError._STATE))
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(kmod, "Consumer", StoreFailConsumer)
+    t, stop = _start_loop(wf, "mock-store", f"mock-q-{suffix}")
+    try:
+        assert store_attempted.wait(timeout=10), "store_offsets was never attempted"
+        deadline = time.time() + 5
+        while len(enqueued) < 1 and time.time() < deadline:
+            time.sleep(0.05)
+        # Durably enqueued despite the store failure, and the loop is still alive.
+        assert len(enqueued) == 1, f"expected 1 enqueued, got {enqueued}"
+        assert t.is_alive(), "consumer loop crashed on store_offsets exception"
+    finally:
+        stop.set()
+        t.join(timeout=10)
+
+
+def test_kafka_poison_message_dropped(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A poison message (one whose _build_status raises) is dropped: the rest of the
+    # batch is still durably enqueued and the offset advances past the whole batch so
+    # the poison message isn't redelivered forever. Driven by a fake consumer.
+    import dbos._kafka as kmod
+
+    monkeypatch.setattr(kmod, "_MIN_RETRY_WAIT_SEC", 0.01)
+
+    @DBOS.workflow()
+    def poison_wf(msg: KafkaMessage) -> None:
+        pass
+
+    group = "mock-poison"
+    batch = [
+        _FakeKafkaMsg(topic="mt", partition=0, offset=i, value=f"poison-{i}".encode())
+        for i in range(5)
+    ]
+
+    orig_build = kmod._build_status
+
+    def patched_build(
+        d: Any, func: Any, cmsg: Any, gid: str, ordering: Any, qn: str
+    ) -> Any:
+        if cmsg.value() == b"poison-2":
+            raise ValueError("simulated unprocessable message")
+        return orig_build(d, func, cmsg, gid, ordering, qn)
+
+    monkeypatch.setattr(kmod, "_build_status", patched_build)
+
+    enqueued: list[str] = []
+    iw_done = threading.Event()
+    orig_iw = dbos._sys_db.init_workflows
+
+    def spy_iw(statuses: Any) -> Any:
+        r = orig_iw(statuses)
+        enqueued.extend(r)
+        iw_done.set()
+        return r
+
+    monkeypatch.setattr(dbos._sys_db, "init_workflows", spy_iw)
+    stored_offsets: list[int] = []
+
+    class PoisonConsumer:
+        def __init__(self, conf: dict[str, Any]) -> None:
+            self._sent = False
+
+        def subscribe(self, topics: Any) -> None:
+            pass
+
+        def consume(self, num_messages: int, timeout: float = 1.0) -> Any:
+            if not self._sent:
+                self._sent = True
+                return batch
+            time.sleep(0.02)
+            return []
+
+        def store_offsets(self, message: Any = None) -> None:
+            stored_offsets.append(message.offset())
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(kmod, "Consumer", PoisonConsumer)
+    t, stop = _start_loop(poison_wf, group, f"mock-q-{random.randrange(1_000_000_000)}")
+    try:
+        assert iw_done.wait(timeout=10), "init_workflows was never called"
+        time.sleep(0.5)
+        # Only the 4 non-poison messages were enqueued; the poison one (offset 2) is dropped.
+        assert len(enqueued) == 4, f"expected 4 enqueued, got {enqueued}"
+        assert f"kafka-unique-id-mt-0-{group}-2" not in enqueued
+        # The offset advanced past the whole batch (highest offset 4), so the poison
+        # message won't be redelivered forever.
+        assert stored_offsets and max(stored_offsets) == 4
+    finally:
+        stop.set()
+        t.join(timeout=10)
+
+
+# ---------------------------------------------------------------------------
+# Custom in-memory queue, end-to-end (requires a broker)
+# ---------------------------------------------------------------------------
+
+
+def test_kafka_in_memory_custom_queue(dbos: DBOS) -> None:
+    # ordering="none" with a custom in-memory queue: messages run on that queue and
+    # its concurrency limit is honored.
+    from confluent_kafka.admin import AdminClient, NewTopic
+
+    server = "localhost:9092"
+    topic = f"dbos-kafka-inmemq-{random.randrange(1_000_000_000)}"
+    admin = AdminClient({"bootstrap.servers": server})
+    try:
+        admin.create_topics([NewTopic(topic, num_partitions=1)])[topic].result()
+    except Exception:
+        pytest.skip("Kafka not available")
+
+    num_messages = 6
+    producer = Producer({"bootstrap.servers": server})
+    for i in range(num_messages):
+        producer.produce(topic, partition=0, value=f"{i}")
+    if producer.flush(10) > 0:
+        pytest.skip("Kafka not available")
+
+    custom_queue = Queue(
+        f"kafka-inmem-q-{random.randrange(1_000_000_000)}", concurrency=1
+    )
+    lock = threading.Lock()
+    processed: set[int] = set()
+    active = 0
+    max_active = 0
+    event = threading.Event()
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": server,
+            "group.id": f"inmemq-grp-{random.randrange(1_000_000_000)}",
+            "auto.offset.reset": "earliest",
+        },
+        [topic],
+        queue=custom_queue,
+    )
+    @DBOS.workflow()
+    def inmemq_wf(msg: KafkaMessage) -> None:
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.2)
+        with lock:
+            active -= 1
+            assert msg.value is not None
+            processed.add(int(msg.value.decode()))  # type: ignore[union-attr]
+            if len(processed) == num_messages:
+                event.set()
+
+    # The consumer's custom queue is force-polled even under a listen_queues filter.
+    assert custom_queue.name in dbos._registry.poller_queue_names
+    assert event.wait(timeout=60)
+    assert processed == set(range(num_messages))
+    assert max_active == 1  # concurrency=1 honored

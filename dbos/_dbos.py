@@ -259,8 +259,14 @@ class DBOSRegistry:
         self, evt: threading.Event, func: Callable[..., Any], *args: Any, **kwargs: Any
     ) -> None:
         if self.dbos and self.dbos._launched:
+            # Run on a tracked daemon thread (like the pre-launch pollers), not the
+            # executor, so destroy() joins it and the consumer doesn't leak between runs.
             self.dbos.poller_stop_events.append(evt)
-            self.dbos._executor.submit(func, *args, **kwargs)
+            poller_thread = threading.Thread(
+                target=func, args=args, kwargs=kwargs, daemon=True
+            )
+            poller_thread.start()
+            self.dbos._background_threads.append(poller_thread)
         else:
             self.pollers.append((evt, func, args, kwargs))
 
