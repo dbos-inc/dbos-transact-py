@@ -935,6 +935,67 @@ def test_init_workflows_large_batch_per_key_ordering(dbos: DBOS) -> None:
     assert max(all_created) - min(all_created) == per_key - 1
 
 
+def test_init_workflows_cursor_survives_restart(dbos: DBOS) -> None:
+    # Regression: a fresh owner (restart/rebalance) must re-seed the in-memory created_at cursor from the DB, else newer messages sort below a future-dated ENQUEUED backlog and invert per-key order.
+    import sqlalchemy as sa
+
+    from dbos._core import prepare_enqueued_workflow
+    from dbos._schemas.system_database import SystemSchema
+
+    @DBOS.workflow()
+    def restart_workflow(value: str) -> None:
+        pass
+
+    # Unpolled queue: the backlog sits ENQUEUED and is never dequeued.
+    queue_name = f"unpolled-{random.randrange(1_000_000_000)}"
+    prefix = f"restart-{random.randrange(1_000_000_000)}"
+    key = f"{prefix}-key"
+
+    def statuses(offsets: range) -> list[Any]:
+        return [
+            prepare_enqueued_workflow(
+                dbos,
+                restart_workflow,
+                (f"value-{i}",),
+                {},
+                queue_name=queue_name,
+                workflow_id=f"{prefix}-{i}",
+                queue_partition_key=key,
+            )
+            for i in offsets
+        ]
+
+    # Simulate drift: force the cursor an hour ahead so the backlog (offsets 0-4) is future-dated and stays ENQUEUED.
+    future = int(time.time() * 1000) + 3_600_000
+    with dbos._sys_db._batch_created_at_lock:
+        dbos._sys_db._batch_created_at_cursors[key] = future
+    assert len(dbos._sys_db.init_workflows(statuses(range(0, 5)))) == 5
+
+    # Process A restarts / the partition rebalances: a fresh owner has no in-memory cursor.
+    with dbos._sys_db._batch_created_at_lock:
+        dbos._sys_db._batch_created_at_cursors.clear()
+
+    # The new owner enqueues the next messages (offsets 5-9).
+    assert len(dbos._sys_db.init_workflows(statuses(range(5, 10)))) == 5
+
+    with dbos._sys_db.engine.begin() as conn:
+        rows = conn.execute(
+            sa.select(
+                SystemSchema.workflow_status.c.workflow_uuid,
+                SystemSchema.workflow_status.c.created_at,
+            ).where(SystemSchema.workflow_status.c.workflow_uuid.like(f"{prefix}-%"))
+        ).fetchall()
+
+    created_by_offset = {int(wfid.rsplit("-", 1)[1]): ca for wfid, ca in rows}
+    assert len(created_by_offset) == 10
+    ordered = [created_by_offset[i] for i in range(10)]
+    # created_at strictly increases in offset order: no inversion across the restart.
+    assert ordered == sorted(ordered)
+    assert len(set(ordered)) == 10
+    # Every post-restart message sorts after the entire pre-restart backlog.
+    assert min(ordered[5:]) > max(ordered[:5])
+
+
 # ---------------------------------------------------------------------------
 # Decorator validation, config coercion, and helpers (no broker required)
 # ---------------------------------------------------------------------------

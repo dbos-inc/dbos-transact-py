@@ -4151,6 +4151,29 @@ class SystemDatabase(ABC):
         DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_INITWF_COMMIT)
         return wf_status, workflow_deadline_epoch_ms, should_execute
 
+    def _max_partition_key_created_at(self, keys: List[str]) -> Dict[str, int]:
+        """Highest created_at among still-active (ENQUEUED/PENDING) rows per partition key, to seed the in-memory cursor so per-key order survives a restart/rebalance."""
+        if not keys:
+            return {}
+        with self.engine.begin() as c:
+            rows = c.execute(
+                sa.select(
+                    SystemSchema.workflow_status.c.queue_partition_key,
+                    sa.func.max(SystemSchema.workflow_status.c.created_at),
+                )
+                .where(SystemSchema.workflow_status.c.queue_partition_key.in_(keys))
+                .where(
+                    SystemSchema.workflow_status.c.status.in_(
+                        [
+                            WorkflowStatusString.ENQUEUED.value,
+                            WorkflowStatusString.PENDING.value,
+                        ]
+                    )
+                )
+                .group_by(SystemSchema.workflow_status.c.queue_partition_key)
+            ).fetchall()
+        return {row[0]: row[1] for row in rows if row[1] is not None}
+
     def init_workflows(self, statuses: List[WorkflowStatusInternal]) -> Set[str]:
         """
         Batch-insert ENQUEUED workflow status rows in a single transaction.
@@ -4163,8 +4186,24 @@ class SystemDatabase(ABC):
             return set()
         # Stamp created_at monotonic within each partition key so per-key order holds across batches; unordered rows (no key) get wall-clock time.
         now_ms = int(time.time() * 1000)
+        # On first sight of a key, seed its cursor from the DB high-water mark so per-key order survives a restart/rebalance instead of resetting to wall-clock.
+        batch_keys = {
+            s["queue_partition_key"]
+            for s in statuses
+            if s["queue_partition_key"] is not None
+        }
+        with self._batch_created_at_lock:
+            unseen_keys = [
+                k for k in batch_keys if k not in self._batch_created_at_cursors
+            ]
+        seeds = self._max_partition_key_created_at(unseen_keys)
         created_ats: List[int] = []
         with self._batch_created_at_lock:
+            for seeded_key, seeded_max in seeds.items():
+                # Advance past the DB high-water mark; max() guards a concurrent batch that already advanced this key.
+                self._batch_created_at_cursors[seeded_key] = max(
+                    self._batch_created_at_cursors.get(seeded_key, 0), seeded_max + 1
+                )
             next_for_key: Dict[str, int] = {}
             for status in statuses:
                 key = status["queue_partition_key"]
