@@ -573,7 +573,18 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
             current_queues[INTERNAL_QUEUE_NAME] = dbos._registry.get_internal_queue()
             # Always poll this process's poller-fed queues (e.g. Kafka), else their workflows sit ENQUEUED forever under a listen_queues filter; snapshot since a late poller may mutate the set.
             for name in list(dbos._registry.poller_queue_names):
+                if name in current_queues:
+                    continue
                 q = dbos._registry.queue_info_map.get(name)
+                if q is None:
+                    # Database-backed queues (e.g. from register_queue) aren't in the in-memory registry; resolve from the DB.
+                    try:
+                        q = dbos._sys_db.get_queue(name)
+                    except Exception as e:
+                        dbos.logger.warning(
+                            f"Exception resolving poller queue {name}: {e}"
+                        )
+                        continue
                 if q is not None:
                     current_queues[name] = q
         else:

@@ -6,7 +6,7 @@ from typing import Any, NoReturn, Optional
 import pytest
 from confluent_kafka import Consumer, KafkaError, Producer
 
-from dbos import DBOS, DBOSConfig, KafkaMessage
+from dbos import DBOS, DBOSConfig, KafkaMessage, Queue
 
 # These tests require local Kafka to run.
 # Without it, they're automatically skipped.
@@ -440,6 +440,63 @@ def test_kafka_listen_queues_still_polls_consumer(
                 event.set()
 
     # Listen only to an unrelated queue — deliberately NOT the internal Kafka queue.
+    DBOS.listen_queues(["dbos-test-unrelated-queue"])
+    DBOS.launch()
+
+    assert event.wait(timeout=30)
+    assert seen == set(range(NUM_EVENTS))
+
+
+def test_kafka_listen_queues_polls_db_backed_consumer_queue(
+    dbos: DBOS, config: DBOSConfig
+) -> None:
+    # Regression (M1): a consumer's custom queue must be polled even when it is
+    # database-backed — i.e. absent from the in-memory registry — and listen_queues
+    # names only unrelated queues. The poller must resolve it from the DB, else its
+    # messages sit ENQUEUED forever.
+    server = "localhost:9092"
+    topic = f"dbos-kafka-dbq-{random.randrange(1_000_000_000)}"
+
+    if not send_test_messages(server, topic):
+        pytest.skip("Kafka not available")
+
+    # Persist a database-backed queue via the public API: it lives in the DB, not the
+    # in-memory registry. The fixture instance is launched, so _sys_db is available.
+    queue_name = f"dbos-test-kafka-dbq-{random.randrange(1_000_000_000)}"
+    registered = DBOS.register_queue(queue_name, concurrency=10)
+    assert registered.database_backed_queue is True
+
+    # Fresh, un-launched instance so we control decoration, listen_queues, and launch.
+    # The queue row survives destroy (only connections are torn down).
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+
+    event = threading.Event()
+    lock = threading.Lock()
+    seen: set[int] = set()
+
+    # Reference the database-backed queue by name; this reference is NOT added to the
+    # in-memory registry, so the poller can only reach it by resolving it from the DB.
+    consumer_queue = Queue(queue_name, database_backed_queue=True)
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": server,
+            "group.id": "dbos-test-dbq-listen",
+            "auto.offset.reset": "earliest",
+        },
+        [topic],
+        queue=consumer_queue,
+    )
+    @DBOS.workflow()
+    def db_queue_workflow(msg: KafkaMessage) -> None:
+        assert msg.value is not None
+        with lock:
+            seen.add(int(msg.value.decode().split()[-1]))  # type: ignore
+            if len(seen) == NUM_EVENTS:
+                event.set()
+
+    # Listen only to an unrelated queue — deliberately NOT the consumer's queue.
     DBOS.listen_queues(["dbos-test-unrelated-queue"])
     DBOS.launch()
 
