@@ -504,7 +504,9 @@ def test_kafka_listen_queues_polls_db_backed_consumer_queue(
     assert seen == set(range(NUM_EVENTS))
 
 
-def test_kafka_throughput(dbos: DBOS, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_kafka_throughput(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, skip_with_sqlite: None
+) -> None:
     # Ingest throughput: batched enqueue must far exceed the old one-txn-per-message path.
     server = "localhost:9092"
     topic = f"dbos-kafka-bench-{random.randrange(1_000_000_000)}"
