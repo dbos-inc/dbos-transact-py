@@ -1,13 +1,17 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, TypedDict
 
-import psycopg
+try:
+    import psycopg
+except ImportError:  # optional: psycopg only needed for the psycopg driver / LISTEN-NOTIFY
+    psycopg = None  # type: ignore[assignment]
 import sqlalchemy as sa
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from dbos._migration import get_sqlite_timestamp_expr
+from dbos._pg_errors import is_serialization_error
 from dbos._serialization import Serializer
 
 from ._error import DBOSUnexpectedStepError, DBOSWorkflowConflictIDError
@@ -348,11 +352,7 @@ class PostgresApplicationDatabase(ApplicationDatabase):
         # 40001: serialization_failure (MVCC conflict)
         # 40P01: deadlock_detected
         driver_error = dbapi_error.orig
-        return (
-            driver_error is not None
-            and isinstance(driver_error, psycopg.OperationalError)
-            and driver_error.sqlstate in ("40001", "40P01")
-        )
+        return is_serialization_error(dbapi_error)
 
 
 class SQLiteApplicationDatabase(ApplicationDatabase):

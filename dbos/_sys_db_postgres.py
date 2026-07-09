@@ -1,7 +1,10 @@
 import time
 from typing import Any, Dict, Optional, cast
 
-import psycopg
+try:
+    import psycopg
+except ImportError:  # optional: psycopg only needed for the psycopg driver / LISTEN-NOTIFY
+    psycopg = None  # type: ignore[assignment]
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import DBAPIError

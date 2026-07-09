@@ -1,12 +1,16 @@
 from typing import Any, Dict
 
-import psycopg
+try:
+    import psycopg
+except ImportError:  # optional: psycopg only needed for the psycopg driver / LISTEN-NOTIFY
+    psycopg = None  # type: ignore[assignment]
 import sqlalchemy as sa
 from sqlalchemy import URL
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
+from dbos._pg_errors import is_serialization_error
 
 from ._logger import dbos_logger
 
@@ -19,12 +23,7 @@ def _is_postgres_serialization_error(error: Exception) -> bool:
     """
     if not isinstance(error, DBAPIError):
         return False
-    driver_error = error.orig
-    return (
-        driver_error is not None
-        and isinstance(driver_error, psycopg.OperationalError)
-        and driver_error.sqlstate in ("40001", "40P01")
-    )
+    return is_serialization_error(error)
 
 
 def _make_url(database_url: str) -> URL:

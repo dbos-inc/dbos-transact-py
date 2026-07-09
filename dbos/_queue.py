@@ -8,12 +8,12 @@ QueueConflictResolution = Literal[
     "update_if_latest_version", "always_update", "never_update"
 ]
 
-from psycopg import errors
 from sqlalchemy.exc import OperationalError
 
 from dbos._context import DBOSContext, get_local_dbos_context
 from dbos._error import DBOSException
 from dbos._logger import dbos_logger
+from dbos._pg_errors import is_serialization_or_lock_error
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 
 from ._core import P, R, execute_workflow_by_id, start_workflow, start_workflow_async
@@ -509,9 +509,7 @@ def queue_worker_thread(
                     except Exception as e:
                         dbos.logger.error(f"Error executing workflow {id}: {e}")
         except OperationalError as e:
-            if isinstance(
-                e.orig, (errors.SerializationFailure, errors.LockNotAvailable)
-            ):
+            if is_serialization_or_lock_error(e):
                 # If a serialization error is encountered, increase the polling interval
                 polling_interval = min(
                     max_polling_interval,
