@@ -5,7 +5,7 @@
 groups = ["default", "dev", "otel"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:77e0ccbba299921d897952c2ff53942b8465c3c545964bdeed5c8698e09718e0"
+content_hash = "sha256:3ade70212c5e99347db8082b028795d6cce74e009752a2506bf4cad843d8fcc9"
 
 [[metadata.targets]]
 requires_python = ">=3.10"
@@ -1138,7 +1138,7 @@ name = "psycopg"
 version = "3.2.12"
 requires_python = ">=3.8"
 summary = "PostgreSQL database adapter for Python"
-groups = ["default"]
+groups = ["dev"]
 dependencies = [
     "backports-zoneinfo>=0.2.0; python_version < \"3.9\"",
     "typing-extensions>=4.6; python_version < \"3.13\"",
@@ -1154,7 +1154,7 @@ name = "psycopg-binary"
 version = "3.2.12"
 requires_python = ">=3.8"
 summary = "PostgreSQL database adapter for Python -- C optimisation distribution"
-groups = ["default"]
+groups = ["dev"]
 marker = "implementation_name != \"pypy\""
 files = [
     {file = "psycopg_binary-3.2.12-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:13cd057f406d2c8063ae8b489395b089a7f23c39aff223b5ea39f0c4dd640550"},
@@ -1275,7 +1275,7 @@ version = "3.2.12"
 extras = ["binary"]
 requires_python = ">=3.8"
 summary = "PostgreSQL database adapter for Python"
-groups = ["default"]
+groups = ["dev"]
 dependencies = [
     "psycopg-binary==3.2.12; implementation_name != \"pypy\"",
     "psycopg==3.2.12",
@@ -2005,7 +2005,7 @@ name = "tzdata"
 version = "2024.2"
 requires_python = ">=2"
 summary = "Provider of IANA time zone data"
-groups = ["default"]
+groups = ["dev"]
 marker = "sys_platform == \"win32\""
 files = [
     {file = "tzdata-2024.2-py2.py3-none-any.whl", hash = "sha256:a48093786cdcde33cad18c2555e8532f34422074448fbc874186f0abd79565cd"},

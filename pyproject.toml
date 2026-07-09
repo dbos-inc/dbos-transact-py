@@ -8,7 +8,6 @@ authors = [
 dependencies = [
     "pyyaml>=6.0.2",
     "python-dateutil>=2.9.0.post0",
-    "psycopg[binary]>=3.1", # Keep compatibility with 3.1--older Python installations/machines can't always install 3.2
     "websockets>=14.0",
     "typer-slim>=0.17.4",
     "sqlalchemy[asyncio]>=2.0.43",
@@ -41,6 +40,12 @@ classifiers = [
 dbos = "dbos.cli.cli:app"
 
 [project.optional-dependencies]
+psycopg = [
+    "psycopg[binary]>=3.1",
+]
+pg8000 = [
+    "pg8000>=1.31",
+]
 otel = [
     "opentelemetry-api>=1.37.0",
     "opentelemetry-sdk>=1.37.0",
@@ -107,6 +112,7 @@ dev = [
     "uvicorn>=0.35.0",
     "fastapi>=0.121.0",
     "httpx>=0.28.1",
+    "psycopg[binary]>=3.1",
     "psycopg2-binary>=2.9.11",
     "sqlalchemy-cockroachdb>=2.0.3",
     "aiosqlite>=0.20.0",
