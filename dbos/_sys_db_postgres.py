@@ -226,10 +226,20 @@ class PostgresSystemDatabase(SystemDatabase):
         if not self.use_listen_notify:
             return
         while self._run_background_processes:
-            time.sleep(self._stream_notification_coalesce_sec)
-            self._flush_stream_notifications()
+            try:
+                time.sleep(self._stream_notification_coalesce_sec)
+                self._flush_stream_notifications()
+            except Exception as e:
+                # Never let an unexpected error kill the sole push path; log and back off, matching _notification_listener.
+                if self._run_background_processes:
+                    dbos_logger.warning(f"Stream notifier error: {e}")
+                    time.sleep(1)
         # Final flush so values written just before shutdown still wake readers promptly.
-        self._flush_stream_notifications()
+        try:
+            self._flush_stream_notifications()
+        except Exception as e:
+            if self._run_background_processes:
+                dbos_logger.warning(f"Stream notifier final flush error: {e}")
 
     def _flush_stream_notifications(self) -> None:
         """Emit one coalesced notifying transaction for all pending payloads; drop the batch if it fails."""

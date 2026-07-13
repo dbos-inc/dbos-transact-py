@@ -1,3 +1,4 @@
+import math
 import os
 import re
 from importlib import resources
@@ -201,9 +202,10 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         ] = interval
     if "stream_notification_coalesce_sec" in config:
         coalesce = config["stream_notification_coalesce_sec"]
-        if coalesce is not None and coalesce < 0.001:
+        # Reject NaN/inf too (they slip past a bare < 0.001) so run_stream_notifier's time.sleep can't crash.
+        if coalesce is not None and (not math.isfinite(coalesce) or coalesce < 0.001):
             raise DBOSInitializationError(
-                f"stream_notification_coalesce_sec must be at least 0.001 seconds, got {coalesce}"
+                f"stream_notification_coalesce_sec must be a finite number at least 0.001 seconds, got {coalesce}"
             )
         translated_config["runtimeConfig"][
             "stream_notification_coalesce_sec"
