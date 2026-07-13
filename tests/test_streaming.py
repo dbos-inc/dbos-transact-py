@@ -425,6 +425,38 @@ def test_stream_notifier_delivers_without_trigger(
     assert second_latency < 10.0, f"second value took {second_latency:.3f}s to arrive"
 
 
+def test_stream_notifier_drops_unsendable_payload(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    """A batch pg_notify rejects (e.g. a payload over the 8000-byte limit) is dropped, not requeued, so a poison payload can't permanently stall the notifier (H1); the notifier keeps delivering afterward and polling covers the dropped values."""
+    sys_db = dbos._sys_db
+    # A stream key past pg_notify's 8000-byte payload limit makes its batch unsendable.
+    poison_payload = f"{uuid.uuid4()}::{'x' * 9000}"
+
+    with sys_db._stream_notifier_lock:
+        sys_db._pending_stream_notifications = {poison_payload}
+    sys_db._flush_stream_notifications()
+
+    # The poison batch is dropped, not requeued (requeuing would loop forever).
+    with sys_db._stream_notifier_lock:
+        assert sys_db._pending_stream_notifications == set()
+
+    # The notifier still works afterward: a subsequent good payload is delivered.
+    good_wf = str(uuid.uuid4())
+    good_key = "deliverable"
+    event, payload_key = sys_db.register_stream_listener(good_wf, good_key)
+    try:
+        event.clear()
+        with sys_db._stream_notifier_lock:
+            sys_db._pending_stream_notifications = {f"{good_wf}::{good_key}"}
+        sys_db._flush_stream_notifications()
+        assert event.wait(
+            timeout=10
+        ), "notifier stopped delivering after a poison batch"
+    finally:
+        sys_db.unregister_stream_listener(payload_key)
+
+
 def test_stream_multiple_keys(dbos: DBOS) -> None:
     """Test multiple streams with different keys in the same workflow."""
 

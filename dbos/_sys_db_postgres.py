@@ -232,7 +232,7 @@ class PostgresSystemDatabase(SystemDatabase):
         self._flush_stream_notifications()
 
     def _flush_stream_notifications(self) -> None:
-        """Emit one coalesced notifying transaction for all pending payloads."""
+        """Emit one coalesced notifying transaction for all pending payloads; drop the batch if it fails."""
         with self._stream_notifier_lock:
             if not self._pending_stream_notifications:
                 return
@@ -247,8 +247,6 @@ class PostgresSystemDatabase(SystemDatabase):
                         {"payload": payload},
                     )
         except Exception as e:
-            # Requeue on failure so the wakeup retries next interval; a duplicate notify is harmless.
-            with self._stream_notifier_lock:
-                self._pending_stream_notifications |= batch
+            # Drop the batch (do not requeue) on failure, e.g. a payload over pg_notify's 8000-byte limit; readers' polling fallback delivers these values, so one poison payload can't stall the notifier forever.
             if self._run_background_processes:
                 dbos_logger.warning(f"Stream notifier flush error: {e}")
