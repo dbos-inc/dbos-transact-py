@@ -480,13 +480,19 @@ def queue_worker_thread(
                     local_running_count = dbos._active_workflows_set.count_for_queue(
                         queue.name, key
                     )
-                    dequeued_workflows = dbos._sys_db.start_queued_workflows(
-                        queue,
-                        GlobalParams.executor_id,
-                        GlobalParams.app_version,
-                        key,
-                        local_running_count,
-                    )
+                    try:
+                        dequeued_workflows = dbos._sys_db.start_queued_workflows(
+                            queue,
+                            GlobalParams.executor_id,
+                            GlobalParams.app_version,
+                            key,
+                            local_running_count,
+                        )
+                    except OperationalError as e:
+                        # Lock held: another worker owns this partition, so skip it; let serialization failures propagate to the outer handler's backoff.
+                        if isinstance(e.orig, errors.LockNotAvailable):
+                            continue
+                        raise
                     for id in dequeued_workflows:
                         try:
                             execute_workflow_by_id(dbos, id, False, True)
@@ -509,9 +515,13 @@ def queue_worker_thread(
                     except Exception as e:
                         dbos.logger.error(f"Error executing workflow {id}: {e}")
         except OperationalError as e:
-            if isinstance(
-                e.orig, (errors.SerializationFailure, errors.LockNotAvailable)
-            ):
+            if isinstance(e.orig, errors.LockNotAvailable):
+                # Another worker is dequeueing this queue right now; retry next
+                # poll without backing off.
+                dbos.logger.debug(
+                    f"Queue {queue.name} is locked by another worker; retrying next poll."
+                )
+            elif isinstance(e.orig, errors.SerializationFailure):
                 # If a serialization error is encountered, increase the polling interval
                 polling_interval = min(
                     max_polling_interval,
@@ -561,6 +571,22 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
                 dbos.logger.warning(f"Exception listing database-backed queues: {e}")
             # Always listen to the internal queue
             current_queues[INTERNAL_QUEUE_NAME] = dbos._registry.get_internal_queue()
+            # Always poll this process's poller-fed queues (e.g. Kafka), else their workflows sit ENQUEUED forever under a listen_queues filter; snapshot since a late poller may mutate the set.
+            for name in list(dbos._registry.poller_queue_names):
+                if name in current_queues:
+                    continue
+                q = dbos._registry.queue_info_map.get(name)
+                if q is None:
+                    # Database-backed queues (e.g. from register_queue) aren't in the in-memory registry; resolve from the DB.
+                    try:
+                        q = dbos._sys_db.get_queue(name)
+                    except Exception as e:
+                        dbos.logger.warning(
+                            f"Exception resolving poller queue {name}: {e}"
+                        )
+                        continue
+                if q is not None:
+                    current_queues[name] = q
         else:
             # Else, check all in-memory and database-backed queues
             current_queues = dict(dbos._registry.queue_info_map)
@@ -658,7 +684,8 @@ def log_queues(dbos: "DBOS", listening_queues: Optional[list[str]]) -> None:
         dbos.logger.warning(f"Exception listing database-backed queues: {e}")
 
     if listening_queues is not None:
-        listening_set = set(listening_queues)
+        # Poller-fed queues (e.g. Kafka) are always listened to, so reflect them here.
+        listening_set = set(listening_queues) | dbos._registry.poller_queue_names
         queues = {n: q for n, q in queues.items() if n in listening_set}
 
     queues.pop(INTERNAL_QUEUE_NAME, None)

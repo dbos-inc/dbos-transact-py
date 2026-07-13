@@ -632,6 +632,10 @@ class SystemDatabase(ABC):
         self._listener_thread_lock = threading.Lock()
         self._listener_running = False
 
+        # Per-partition-key created_at cursors: keep per-key queue order monotonic across batches
+        self._batch_created_at_lock = threading.Lock()
+        self._batch_created_at_cursors: Dict[str, int] = {}
+
         # Now we can run background processes
         self._run_background_processes = True
 
@@ -4143,6 +4147,123 @@ class SystemDatabase(ABC):
             )
         DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_INITWF_COMMIT)
         return wf_status, workflow_deadline_epoch_ms, should_execute
+
+    def _max_partition_key_created_at(self, keys: List[str]) -> Dict[str, int]:
+        """Highest created_at among still-active (ENQUEUED/PENDING) rows per partition key, to seed the in-memory cursor so per-key order survives a restart/rebalance."""
+        if not keys:
+            return {}
+        with self.engine.begin() as c:
+            rows = c.execute(
+                sa.select(
+                    SystemSchema.workflow_status.c.queue_partition_key,
+                    sa.func.max(SystemSchema.workflow_status.c.created_at),
+                )
+                .where(SystemSchema.workflow_status.c.queue_partition_key.in_(keys))
+                .where(
+                    SystemSchema.workflow_status.c.status.in_(
+                        [
+                            WorkflowStatusString.ENQUEUED.value,
+                            WorkflowStatusString.PENDING.value,
+                        ]
+                    )
+                )
+                .group_by(SystemSchema.workflow_status.c.queue_partition_key)
+            ).fetchall()
+        return {row[0]: row[1] for row in rows if row[1] is not None}
+
+    def init_workflows(self, statuses: List[WorkflowStatusInternal]) -> Set[str]:
+        """
+        Batch-insert ENQUEUED workflow status rows in a single transaction.
+
+        Rows whose workflow_uuid already exists are skipped rather than updated,
+        making this idempotent under redelivery (e.g. Kafka). Returns the IDs of
+        the rows actually inserted.
+        """
+        if len(statuses) == 0:
+            return set()
+        # Stamp created_at monotonic within each partition key so per-key order holds across batches; unordered rows (no key) get wall-clock time.
+        now_ms = int(time.time() * 1000)
+        # On first sight of a key, seed its cursor from the DB high-water mark so per-key order survives a restart/rebalance instead of resetting to wall-clock.
+        batch_keys = {
+            s["queue_partition_key"]
+            for s in statuses
+            if s["queue_partition_key"] is not None
+        }
+        with self._batch_created_at_lock:
+            unseen_keys = [
+                k for k in batch_keys if k not in self._batch_created_at_cursors
+            ]
+        seeds = self._max_partition_key_created_at(unseen_keys)
+        created_ats: List[int] = []
+        with self._batch_created_at_lock:
+            for seeded_key, seeded_max in seeds.items():
+                # Advance past the DB high-water mark; max() guards a concurrent batch that already advanced this key.
+                self._batch_created_at_cursors[seeded_key] = max(
+                    self._batch_created_at_cursors.get(seeded_key, 0), seeded_max + 1
+                )
+            next_for_key: Dict[str, int] = {}
+            for status in statuses:
+                key = status["queue_partition_key"]
+                if key is None:
+                    created_ats.append(now_ms)
+                    continue
+                value = next_for_key.get(key)
+                if value is None:
+                    value = max(now_ms, self._batch_created_at_cursors.get(key, 0))
+                created_ats.append(value)
+                next_for_key[key] = value + 1
+            self._batch_created_at_cursors.update(next_for_key)
+        rows: List[Dict[str, Any]] = []
+        for i, status in enumerate(statuses):
+            assert status["status"] == WorkflowStatusString.ENQUEUED.value
+            assert status["deduplication_id"] is None
+            rows.append(
+                {
+                    "workflow_uuid": status["workflow_uuid"],
+                    "status": status["status"],
+                    "name": status["name"],
+                    "class_name": status["class_name"],
+                    "config_name": status["config_name"],
+                    "output": None,
+                    "error": None,
+                    "executor_id": status["executor_id"],
+                    "application_version": status["app_version"],
+                    "application_id": status["app_id"],
+                    "authenticated_user": status["authenticated_user"],
+                    "authenticated_roles": status["authenticated_roles"],
+                    "assumed_role": status["assumed_role"],
+                    "queue_name": status["queue_name"],
+                    "recovery_attempts": 0,
+                    "workflow_timeout_ms": status["workflow_timeout_ms"],
+                    "workflow_deadline_epoch_ms": status["workflow_deadline_epoch_ms"],
+                    "deduplication_id": None,
+                    "priority": status["priority"],
+                    "inputs": status["inputs"],
+                    "serialization": status["serialization"],
+                    "queue_partition_key": status["queue_partition_key"],
+                    "parent_workflow_id": status["parent_workflow_id"],
+                    "owner_xid": None,
+                    "delay_until_epoch_ms": status["delay_until_epoch_ms"],
+                    "attributes": status["attributes"],
+                    "schedule_name": status["schedule_name"],
+                    "created_at": created_ats[i],
+                    "updated_at": created_ats[i],
+                }
+            )
+        inserted: Set[str] = set()
+        # Chunk to stay well under bind-parameter limits (~29 params per row).
+        chunk_size = 500
+        with self.engine.begin() as conn:
+            for start in range(0, len(rows), chunk_size):
+                chunk = rows[start : start + chunk_size]
+                result = conn.execute(
+                    self.dialect.insert(SystemSchema.workflow_status)
+                    .values(chunk)
+                    .on_conflict_do_nothing(index_elements=["workflow_uuid"])
+                    .returning(SystemSchema.workflow_status.c.workflow_uuid)
+                )
+                inserted.update(row[0] for row in result)
+        return inserted
 
     def _apply_caller_schema(self, conn: Union[sa.Connection, Session]) -> None:
         """Translate the placeholder schema on a caller-owned Connection/Session (the caller's own statements are unaffected)."""
