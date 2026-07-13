@@ -4,8 +4,11 @@ Lets DBOS's retry/serialization logic work with any PostgreSQL DBAPI driver
 (psycopg, pg8000, ...) without importing psycopg. pg8000 surfaces the Postgres
 error code in ``args[0]["C"]``; psycopg exposes ``.sqlstate`` — handle both.
 """
+
 from __future__ import annotations
+
 from typing import Optional
+
 from sqlalchemy.exc import DBAPIError, OperationalError
 
 
@@ -41,10 +44,20 @@ def retriable_postgres_exception(e: Exception) -> bool:
     orig = e.orig
     if orig is None:
         return False
-    msg = str(orig).lower()
-    if "connection failed" in msg or "server closed the connection unexpectedly" in msg:
-        return True
-    if "timeout" in msg and "connection" in msg:
-        return True
-    code = get_sqlstate(orig) or ""
-    return code.startswith(("53", "08", "57"))
+    code = get_sqlstate(orig)
+    if code:
+        # Classify by SQLSTATE class: 08 connection, 53 resources, 57 intervention.
+        # Don't fall through to text checks or deterministic errors retry forever.
+        return code.startswith(("08", "53", "57"))
+    # No SQLSTATE => a client-side connection failure; match by message, but only for
+    # OperationalError so deterministic errors can't match by text.
+    if isinstance(e, OperationalError):
+        msg = str(orig).lower()
+        if (
+            "connection failed" in msg
+            or "server closed the connection unexpectedly" in msg
+        ):
+            return True
+        if "timeout" in msg and "connection" in msg:
+            return True
+    return False

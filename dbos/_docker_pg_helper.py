@@ -6,7 +6,7 @@ import time
 
 try:
     import psycopg
-except ImportError:  # optional: psycopg only needed for the psycopg driver / LISTEN-NOTIFY
+except ImportError:  # optional: only the psycopg driver and LISTEN/NOTIFY use it
     psycopg = None  # type: ignore[assignment]
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")

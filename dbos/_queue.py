@@ -8,7 +8,7 @@ QueueConflictResolution = Literal[
     "update_if_latest_version", "always_update", "never_update"
 ]
 
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DBAPIError
 
 from dbos._context import DBOSContext, get_local_dbos_context
 from dbos._error import DBOSException
@@ -508,7 +508,9 @@ def queue_worker_thread(
                         execute_workflow_by_id(dbos, id, False, True)
                     except Exception as e:
                         dbos.logger.error(f"Error executing workflow {id}: {e}")
-        except OperationalError as e:
+        except DBAPIError as e:
+            # Not just OperationalError: pg8000 maps serialization failures to
+            # DatabaseError. is_serialization_or_lock_error classifies by SQLSTATE.
             if is_serialization_or_lock_error(e):
                 # If a serialization error is encountered, increase the polling interval
                 polling_interval = min(
@@ -518,7 +520,7 @@ def queue_worker_thread(
                 dbos.logger.warning(
                     f"Contention detected in queue thread for {queue.name}. Increasing polling interval to {polling_interval:.2f}."
                 )
-            else:
+            elif not stop_event.is_set():
                 dbos.logger.warning(
                     f"Exception encountered in queue thread for {queue.name}: {e}"
                 )

@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 
 try:
     import psycopg
-except ImportError:  # optional: psycopg only needed for the psycopg driver / LISTEN-NOTIFY
+except ImportError:  # optional: only the psycopg driver and LISTEN/NOTIFY use it
     psycopg = None  # type: ignore[assignment]
 import sqlalchemy as sa
 from sqlalchemy import inspect, text
@@ -11,7 +11,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from dbos._migration import get_sqlite_timestamp_expr
-from dbos._pg_errors import is_serialization_error
+from dbos._pg_errors import get_sqlstate, is_serialization_error
 from dbos._serialization import Serializer
 
 from ._error import DBOSUnexpectedStepError, DBOSWorkflowConflictIDError
@@ -345,7 +345,7 @@ class PostgresApplicationDatabase(ApplicationDatabase):
 
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a unique constraint violation in PostgreSQL."""
-        return dbapi_error.orig.sqlstate == "23505"  # type: ignore
+        return get_sqlstate(dbapi_error.orig) == "23505"
 
     def _is_serialization_error(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a serialization/concurrency error in PostgreSQL."""

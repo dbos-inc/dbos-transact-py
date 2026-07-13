@@ -74,6 +74,10 @@ atomic = true
 [tool.mypy]
 strict = true
 
+[[tool.mypy.overrides]]
+module = ["pg8000.*"] # pg8000 (test-only alternative driver) ships no type stubs
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 addopts = "-s"
 log_cli_format = "%(asctime)s [%(levelname)8s] (%(name)s:%(filename)s:%(lineno)s) %(message)s"
@@ -108,6 +112,7 @@ dev = [
     "fastapi>=0.121.0",
     "httpx>=0.28.1",
     "psycopg2-binary>=2.9.11",
+    "pg8000>=1.31.5", # Alternative PostgreSQL driver, used to test driver-neutral error handling
     "sqlalchemy-cockroachdb>=2.0.3",
     "aiosqlite>=0.20.0",
     "types-python-dateutil>=2.9.0.20260518",
