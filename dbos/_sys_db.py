@@ -507,6 +507,11 @@ def db_retry(
 # Fallback pool size for defaulting polling concurrency when the engine's is unknown (mirrors configure_db_engine_parameters).
 DEFAULT_SYS_DB_POOL_SIZE = 20
 
+# Debounce interval for coalescing stream-write notifications off the write path.
+# Bounds worst-case read latency; also caps the rate of notifying commits (which
+# serialize on Postgres's async-notify queue lock) independent of write throughput.
+DEFAULT_STREAM_NOTIFICATION_DEBOUNCE_SEC = 0.01
+
 
 class SystemDatabase(ABC):
 
@@ -520,6 +525,7 @@ class SystemDatabase(ABC):
         executor_id: Optional[str],
         use_listen_notify: bool = True,
         notification_listener_polling_interval_sec: float = 1.0,
+        stream_notification_debounce_sec: float = DEFAULT_STREAM_NOTIFICATION_DEBOUNCE_SEC,
         polling_concurrency: Optional[int] = None,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
@@ -535,6 +541,7 @@ class SystemDatabase(ABC):
                 executor_id=executor_id,
                 use_listen_notify=use_listen_notify,
                 notification_listener_polling_interval_sec=notification_listener_polling_interval_sec,
+                stream_notification_debounce_sec=stream_notification_debounce_sec,
                 polling_concurrency=polling_concurrency,
             )
         else:
@@ -549,6 +556,7 @@ class SystemDatabase(ABC):
                 executor_id=executor_id,
                 use_listen_notify=use_listen_notify,
                 notification_listener_polling_interval_sec=notification_listener_polling_interval_sec,
+                stream_notification_debounce_sec=stream_notification_debounce_sec,
                 polling_concurrency=polling_concurrency,
             )
 
@@ -563,6 +571,7 @@ class SystemDatabase(ABC):
         executor_id: Optional[str],
         use_listen_notify: bool = True,
         notification_listener_polling_interval_sec: float = 1.0,
+        stream_notification_debounce_sec: float = DEFAULT_STREAM_NOTIFICATION_DEBOUNCE_SEC,
         polling_concurrency: Optional[int] = None,
     ):
         import sqlalchemy.dialects.postgresql as pg
@@ -628,6 +637,12 @@ class SystemDatabase(ABC):
         self._notification_listener_polling_interval_sec = (
             notification_listener_polling_interval_sec
         )
+        self._stream_notification_debounce_sec = stream_notification_debounce_sec
+
+        # Stream-write notifications, coalesced by (workflow_uuid, key) and
+        # flushed off the write path by run_stream_notifier (Postgres + L/N only).
+        self._pending_stream_notifications: Set[str] = set()
+        self._stream_notifier_lock = threading.Lock()
 
         self._listener_thread_lock = threading.Lock()
         self._listener_running = False
@@ -3093,6 +3108,17 @@ class SystemDatabase(ABC):
         self._listener_running = True
         self._notification_listener()
 
+    def _signal_stream_write(self, workflow_uuid: str, key: str) -> None:
+        """Hint that a stream row was written to (workflow_uuid, key). Backends
+        that push notifications override this to coalesce a wakeup; polling
+        backends ignore it (readers re-read at their offset on the next poll)."""
+        pass
+
+    def run_stream_notifier(self) -> None:
+        """Background loop that flushes coalesced stream-write notifications.
+        No-op except on backends that push notifications (Postgres + L/N)."""
+        pass
+
     def recv(
         self,
         workflow_uuid: str,
@@ -4371,6 +4397,7 @@ class SystemDatabase(ABC):
             try:
                 with self.engine.begin() as c:
                     c.execute(stmt)
+                self._signal_stream_write(workflow_uuid, key)
                 return
             except sa.exc.IntegrityError:
                 dbos_logger.warning(
@@ -4444,6 +4471,7 @@ class SystemDatabase(ABC):
                 self._record_operation_result_txn(
                     output, int(time.time() * 1000), conn=c
                 )
+            self._signal_stream_write(workflow_uuid, key)
             return
 
     def close_stream(self, workflow_uuid: str, function_id: int, key: str) -> None:

@@ -212,3 +212,60 @@ class PostgresSystemDatabase(SystemDatabase):
                     # Then the loop will try to reconnect and restart the listener
             finally:
                 self._cleanup_connections()
+
+    def _signal_stream_write(self, workflow_uuid: str, key: str) -> None:
+        """Coalesce a wakeup for readers of (workflow_uuid, key).
+
+        The stream write itself no longer fires pg_notify (the per-row trigger
+        was dropped); instead we accumulate the payload and let
+        run_stream_notifier push it off the write path. Without L/N, readers
+        poll, so there is nothing to push.
+        """
+        if not self.use_listen_notify:
+            return
+        payload = f"{workflow_uuid}::{key}"
+        with self._stream_notifier_lock:
+            self._pending_stream_notifications.add(payload)
+
+    def run_stream_notifier(self) -> None:
+        """Flush coalesced stream-write notifications on a short debounce.
+
+        Firing pg_notify from a dedicated loop rather than inside each write's
+        commit keeps the async-notify queue lock (which serializes every
+        notifying commit) off the hot write path: its acquisition rate is
+        bounded by the debounce interval, not the stream write rate. Read
+        latency is bounded by the debounce interval.
+        """
+        if not self.use_listen_notify:
+            return
+        while self._run_background_processes:
+            time.sleep(self._stream_notification_debounce_sec)
+            self._flush_stream_notifications()
+        # Best-effort final flush so values written just before shutdown still
+        # wake readers promptly rather than waiting out their fallback interval.
+        self._flush_stream_notifications()
+
+    def _flush_stream_notifications(self) -> None:
+        """Emit one coalesced notifying transaction for all pending payloads."""
+        with self._stream_notifier_lock:
+            if not self._pending_stream_notifications:
+                return
+            batch = self._pending_stream_notifications
+            self._pending_stream_notifications = set()
+        try:
+            # One transaction, one commit: every payload's notification is
+            # appended under a single acquisition of the async-notify queue
+            # lock, no matter how many distinct streams changed this interval.
+            with self.engine.begin() as c:
+                for payload in batch:
+                    c.execute(
+                        sa.text("SELECT pg_notify('dbos_streams_channel', :payload)"),
+                        {"payload": payload},
+                    )
+        except Exception as e:
+            # Requeue on failure so the wakeup is retried next interval rather
+            # than lost; a duplicate notify is harmless (readers re-read anyway).
+            with self._stream_notifier_lock:
+                self._pending_stream_notifications |= batch
+            if self._run_background_processes:
+                dbos_logger.warning(f"Stream notifier flush error: {e}")

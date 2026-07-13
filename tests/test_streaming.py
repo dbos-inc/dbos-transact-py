@@ -280,8 +280,8 @@ def test_stream_low_latency_delivery(
     assert max_latency < 5.0, f"client delivery latency {max_latency:.3f}s too high"
 
     # Recreate the in-process DBOS with LISTEN/NOTIFY disabled and confirm the
-    # reader still receives every value via the polling fallback. The trigger
-    # installed earlier harmlessly fires notifications that nobody listens for;
+    # reader still receives every value via the polling fallback. With L/N off
+    # the app-side stream notifier stays idle, so no notifications fire at all;
     # the reader is woken by the polling listener thread instead.
     DBOS.destroy(destroy_registry=False)
     config["use_listen_notify"] = False
@@ -358,8 +358,8 @@ async def test_stream_low_latency_delivery_async(
     assert max_latency < 5.0, f"client delivery latency {max_latency:.3f}s too high"
 
     # Recreate the in-process DBOS with LISTEN/NOTIFY disabled and confirm the
-    # reader still receives every value via the polling fallback. The trigger
-    # installed earlier harmlessly fires notifications that nobody listens for;
+    # reader still receives every value via the polling fallback. With L/N off
+    # the app-side stream notifier stays idle, so no notifications fire at all;
     # the reader is woken by the polling listener thread instead.
     DBOS.destroy(destroy_registry=False)
     config["use_listen_notify"] = False
@@ -375,6 +375,68 @@ async def test_stream_low_latency_delivery_async(
     assert (
         max_latency < 20.0
     ), f"polling DBOS delivery latency {max_latency:.3f}s too high"
+
+
+def test_stream_notifier_delivers_without_trigger(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    """Stream writes no longer fire pg_notify inside their own commit: the
+    per-row NOTIFY trigger is dropped (migration 43) so high-throughput writers
+    don't serialize on the async-notify queue lock. Wakeups are instead pushed
+    by the coalescing app-side notifier. Assert the trigger is gone and that a
+    reader blocked with a long polling fallback is still woken by the notifier
+    rather than the poll."""
+    import sqlalchemy as sa
+
+    sys_db = dbos._sys_db
+
+    # No per-row trigger or its function may remain on the streams table.
+    with sys_db.engine.begin() as c:
+        trigger = c.execute(
+            sa.text(
+                "SELECT 1 FROM pg_trigger t "
+                "JOIN pg_class cl ON t.tgrelid = cl.oid "
+                "JOIN pg_namespace n ON cl.relnamespace = n.oid "
+                "WHERE n.nspname = :schema AND cl.relname = 'streams' "
+                "AND t.tgname = 'dbos_streams_trigger'"
+            ),
+            {"schema": sys_db.schema},
+        ).fetchone()
+    assert trigger is None, "dbos_streams_trigger should have been dropped"
+
+    stream_key = "notifier_stream"
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        DBOS.write_stream(stream_key, "first")
+        # Keep the stream open and the reader genuinely blocked, then write a
+        # second value that can only reach the reader via a notification.
+        DBOS.sleep(2.0)
+        DBOS.write_stream(stream_key, "second")
+        DBOS.close_stream(stream_key)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(writer_workflow)
+
+    # Force a fallback poll interval far longer than the write gap so any
+    # timely delivery must come from the notifier, not the poll.
+    original_interval = sys_db._notification_listener_polling_interval_sec
+    sys_db._notification_listener_polling_interval_sec = 30.0
+    try:
+        received = []
+        start = time.time()
+        for value in DBOS.read_stream(wfid, stream_key):
+            received.append((value, time.time() - start))
+        handle.get_result()
+    finally:
+        sys_db._notification_listener_polling_interval_sec = original_interval
+
+    assert [v for v, _ in received] == ["first", "second"]
+    # The second value is written ~2s in; the reader blocks on it and must be
+    # woken by the notifier well before the 30s poll would fire.
+    second_latency = received[1][1]
+    assert second_latency < 10.0, f"second value took {second_latency:.3f}s to arrive"
 
 
 def test_stream_multiple_keys(dbos: DBOS) -> None:
