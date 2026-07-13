@@ -8,16 +8,34 @@ must work with any PostgreSQL DBAPI driver. pg8000 is the interesting case:
 * it maps server errors to different DBAPI exception classes than psycopg (e.g.
   a serialization failure surfaces as ``ProgrammingError``, not ``OperationalError``).
 
-These tests pin the code paths that were previously psycopg-specific.
+The pg8000 tests import **only pg8000, never psycopg**, so they run unchanged in an
+environment where psycopg is not installed — that is what proves the classification
+layer is genuinely driver-neutral (see the ``pg8000-no-psycopg`` CI job, which
+uninstalls psycopg and runs this file). The psycopg-shape cross-checks at the bottom
+require psycopg and are ``skipif``-ed when it is absent.
 """
 
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pg8000.dbapi
-import psycopg
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError, OperationalError, ProgrammingError
+
+if TYPE_CHECKING:
+    # Type-check as if psycopg is present (it is, in the normal test env); the
+    # runtime guard below lets the pg8000 tests still run when it is absent.
+    import psycopg
+
+    HAS_PSYCOPG = True
+else:
+    try:
+        import psycopg
+
+        HAS_PSYCOPG = True
+    except ImportError:
+        psycopg = None
+        HAS_PSYCOPG = False
 
 from dbos._app_db import PostgresApplicationDatabase
 from dbos._pg_errors import (
@@ -29,6 +47,11 @@ from dbos._pg_errors import (
 from dbos._sys_db_postgres import PostgresSystemDatabase
 
 from .conftest import default_config
+
+requires_psycopg = pytest.mark.skipif(
+    not HAS_PSYCOPG,
+    reason="psycopg not installed (the driver-neutral path is covered via pg8000)",
+)
 
 
 def _wrap(
@@ -71,13 +94,11 @@ def _sys_db_probe() -> PostgresSystemDatabase:
     return object.__new__(PostgresSystemDatabase)
 
 
-def test_get_sqlstate_reads_pg8000_and_psycopg() -> None:
+def test_get_sqlstate_reads_pg8000() -> None:
     # pg8000: no .sqlstate attribute; the code is in args[0]["C"]
     pg_err = pg8000.dbapi.DatabaseError({"S": "ERROR", "C": "40001", "M": "serialize"})
     assert not hasattr(pg_err, "sqlstate")
     assert get_sqlstate(pg_err) == "40001"
-    # psycopg: exposes .sqlstate
-    assert get_sqlstate(psycopg.errors.SerializationFailure("x")) == "40001"
     # shapes that carry no code -> None, never an exception
     assert get_sqlstate(None) is None
     assert get_sqlstate(ValueError("nope")) is None
@@ -127,7 +148,7 @@ def test_unique_and_fk_violation_detected_for_pg8000() -> None:
     assert sys_db._is_foreign_key_violation(unique) is False
 
 
-def test_deterministic_error_is_not_retriable() -> None:
+def test_deterministic_error_is_not_retriable_pg8000() -> None:
     """H1 regression: a non-transient error whose message text merely mentions
     connection/timeout must NOT be treated as retriable — it carries a real SQLSTATE,
     and misclassifying it would hang the unbounded db_retry loop forever."""
@@ -139,13 +160,6 @@ def test_deterministic_error_is_not_retriable() -> None:
     )
     assert "connection" in str(pg.orig).lower() and "timeout" in str(pg.orig).lower()
     assert retriable_postgres_exception(pg) is False
-    # psycopg equivalent: message contains "server closed the connection unexpectedly"
-    ps = _psycopg(
-        psycopg.errors.UniqueViolation(
-            "Key (u)=(server closed the connection unexpectedly) already exists"
-        )
-    )
-    assert retriable_postgres_exception(ps) is False
     # A non-OperationalError error with NO SQLSTATE whose text mentions connection+timeout:
     # the message heuristics are gated on OperationalError, so this stays non-retriable.
     no_sqlstate = _wrap(
@@ -158,20 +172,13 @@ def test_deterministic_error_is_not_retriable() -> None:
     assert retriable_postgres_exception(no_sqlstate) is False
 
 
-def test_retriable_connection_errors() -> None:
+def test_retriable_connection_errors_pg8000() -> None:
     # connection/resource/intervention SQLSTATE classes are retriable for any driver
     for code in ("08006", "08003", "53300", "57P01"):
         assert retriable_postgres_exception(_pg8000(code)) is True
     # an invalidated connection short-circuits to retriable even for a deterministic code
     assert (
         retriable_postgres_exception(_pg8000("23505", connection_invalidated=True))
-        is True
-    )
-    # psycopg client-side ConnectionTimeout has no SQLSTATE; matched via message heuristic
-    assert (
-        retriable_postgres_exception(
-            _psycopg(psycopg.errors.ConnectionTimeout("connection timeout expired"))
-        )
         is True
     )
     # a plain non-connection error is not retriable
@@ -257,3 +264,39 @@ def test_pg8000_live_error_classification(skip_with_sqlite: None) -> None:
         with engine.begin() as conn:
             conn.execute(sa.text(f"DROP TABLE IF EXISTS {table}"))
         engine.dispose()
+
+
+# --- psycopg-shape cross-checks: the same classification layer must also read
+# psycopg's error shape (.sqlstate attribute, psycopg exception classes). These
+# require psycopg and are skipped in the pg8000-no-psycopg CI job. ---
+
+
+@requires_psycopg
+def test_get_sqlstate_reads_psycopg() -> None:
+    # psycopg exposes the SQLSTATE as a .sqlstate attribute (pg8000 does not)
+    assert get_sqlstate(psycopg.errors.SerializationFailure("x")) == "40001"
+
+
+@requires_psycopg
+def test_deterministic_error_is_not_retriable_psycopg() -> None:
+    """psycopg counterpart of the pg8000 H1 regression: an error carrying a real
+    SQLSTATE must not be retried just because its message mentions connection/timeout.
+    """
+    # message contains "server closed the connection unexpectedly" but SQLSTATE is 23505
+    ps = _psycopg(
+        psycopg.errors.UniqueViolation(
+            "Key (u)=(server closed the connection unexpectedly) already exists"
+        )
+    )
+    assert retriable_postgres_exception(ps) is False
+
+
+@requires_psycopg
+def test_retriable_connection_errors_psycopg() -> None:
+    # psycopg client-side ConnectionTimeout has no SQLSTATE; matched via message heuristic
+    assert (
+        retriable_postgres_exception(
+            _psycopg(psycopg.errors.ConnectionTimeout("connection timeout expired"))
+        )
+        is True
+    )
