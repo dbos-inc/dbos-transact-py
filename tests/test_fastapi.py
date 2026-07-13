@@ -16,6 +16,7 @@ from dbos import DBOS, DBOSConfig
 
 # Private API because this is a unit test
 from dbos._context import assert_current_dbos_context
+from tests.conftest import set_workflow_status
 
 
 def test_simple_endpoint(
@@ -134,7 +135,7 @@ def test_endpoint_recovery(dbos_fastapi: Tuple[DBOS, FastAPI]) -> None:
     assert response.json().get("id2") != workflow_id
 
     # Change the workflow status to pending
-    dbos._sys_db.update_workflow_outcome(workflow_id, "PENDING")
+    set_workflow_status(dbos._sys_db, workflow_id, "PENDING")
 
     # Recovery should execute the workflow again but skip the transaction
     workflow_handles = DBOS._recover_pending_workflows()

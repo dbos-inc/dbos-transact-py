@@ -7,6 +7,7 @@ import pytest
 # Public API
 from dbos import DBOS, DBOSConfig, SetWorkflowID
 from dbos._client import DBOSClient
+from tests.conftest import set_workflow_status
 
 
 def test_basic_stream_write_read(dbos: DBOS) -> None:
@@ -526,7 +527,7 @@ def test_stream_workflow_recovery(dbos: DBOS) -> None:
     assert values == ["step_1", "step_2"]
 
     # Reset call count and run the same workflow ID again (should replay)
-    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+    set_workflow_status(dbos._sys_db, wfid, "PENDING")
     dbos._execute_workflow_id(wfid).get_result()
 
     # The workflow should have been called again

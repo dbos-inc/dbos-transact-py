@@ -31,7 +31,7 @@ from dbos._serialization import DefaultSerializer, safe_deserialize
 from dbos._sys_db import WorkflowStatusString
 from dbos._sys_db_postgres import PostgresSystemDatabase
 
-from .conftest import queue_entries_are_cleaned_up, retry_until_success
+from .conftest import queue_entries_are_cleaned_up, retry_until_success, set_workflow_status
 
 
 def test_transaction_errors(dbos: DBOS, skip_with_sqlite: None) -> None:
@@ -178,14 +178,14 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
 
     # Attempt to recover the blocked workflow the maximum number of times
     for i in range(max_recovery_attempts):
-        dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+        set_workflow_status(dbos._sys_db, wfid, "PENDING")
         handles = DBOS._recover_pending_workflows()
         handles[0].get_result()
         assert recovery_count == i + 2
 
     # Verify an additional attempt (either through recovery or through a direct call) throws a DLQ error
     # and puts the workflow in the DLQ status.
-    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+    set_workflow_status(dbos._sys_db, wfid, "PENDING")
     DBOS._recover_pending_workflows()
     assert (
         handle.get_status().status

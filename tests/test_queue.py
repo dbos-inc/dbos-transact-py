@@ -40,6 +40,7 @@ from tests.conftest import (
     queue_entries_are_cleaned_up,
     retry_until_success,
     retry_until_success_async,
+    set_workflow_status,
 )
 
 
@@ -1263,7 +1264,7 @@ def test_queue_recovery(dbos: DBOS) -> None:
 
     # Recover the workflow, then resume it.
     for h in DBOS.list_workflows(workflow_id_prefix=wfid):
-        dbos._sys_db.update_workflow_outcome(h.workflow_id, "PENDING")
+        set_workflow_status(dbos._sys_db, h.workflow_id, "PENDING")
     recovery_handles = DBOS._recover_pending_workflows()
     # There should be one handle for the workflow and another for each queued step.
     assert len(recovery_handles) == queued_steps + 1
@@ -1769,7 +1770,7 @@ def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
     # Attempt to recover the blocked workflow the maximum number of times
     for i in range(max_recovery_attempts):
         start_event.clear()
-        dbos._sys_db.update_workflow_outcome(blocked_handle.workflow_id, "PENDING")
+        set_workflow_status(dbos._sys_db, blocked_handle.workflow_id, "PENDING")
         rh = DBOS._recover_pending_workflows()
         start_event.wait()
         assert recovery_count == i + 2
@@ -1778,7 +1779,7 @@ def test_dlq_enqueued_workflows(dbos: DBOS) -> None:
         rh[0].get_result()
 
     # Verify an additional recovery throws puts the workflow in the DLQ status.
-    dbos._sys_db.update_workflow_outcome(blocked_handle.workflow_id, "PENDING")
+    set_workflow_status(dbos._sys_db, blocked_handle.workflow_id, "PENDING")
     DBOS._recover_pending_workflows()
     time.sleep(2)
 
@@ -1930,7 +1931,7 @@ def test_queue_deduplication_recovery(dbos: DBOS) -> None:
     assert steps[0]["child_workflow_id"] == child_id
     assert isinstance(steps[1]["error"], DBOSQueueDeduplicatedError)
 
-    dbos._sys_db.update_workflow_outcome(parent_id, "PENDING")
+    set_workflow_status(dbos._sys_db, parent_id, "PENDING")
     assert dbos._execute_workflow_id(parent_id).get_result() == child_id
 
     assert queue_entries_are_cleaned_up(dbos)

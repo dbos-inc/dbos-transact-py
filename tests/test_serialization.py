@@ -29,6 +29,7 @@ from dbos._serialization import (
     deserialize_exception,
 )
 from dbos._sys_db import WorkflowStatusString
+from tests.conftest import set_workflow_status
 
 
 class JsonSerializer(Serializer):
@@ -446,7 +447,7 @@ def test_portable_ser(dbos: DBOS, client: DBOSClient) -> None:
     check_stream_ser(wfhd.workflow_id, "pstream", DBOSPortableJSON.name())
 
     # Reexecute
-    dbos._sys_db.update_workflow_outcome(wfhd.workflow_id, "PENDING")
+    set_workflow_status(dbos._sys_db, wfhd.workflow_id, "PENDING")
     wfhrex = dbos._execute_workflow_id(wfhd.workflow_id)
     assert wfhrex.get_result() == 's-1-k:v@"m"'
 
