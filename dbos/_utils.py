@@ -6,11 +6,7 @@ import uuid
 from types import TracebackType
 from typing import Optional, Type
 
-try:
-    import psycopg
-except ImportError:  # optional: only the psycopg driver and LISTEN/NOTIFY use it
-    psycopg = None  # type: ignore[assignment]
-from sqlalchemy.exc import DBAPIError, ResourceClosedError
+from sqlalchemy.exc import ResourceClosedError
 
 from dbos._pg_errors import retriable_postgres_exception as _pg_retriable
 

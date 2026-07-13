@@ -1,10 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, TypedDict
 
-try:
-    import psycopg
-except ImportError:  # optional: only the psycopg driver and LISTEN/NOTIFY use it
-    psycopg = None  # type: ignore[assignment]
 import sqlalchemy as sa
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import DBAPIError

@@ -104,8 +104,10 @@ def test_pg8000_serialization_error_is_not_operationalerror() -> None:
     failure, so a bare `except OperationalError` misses it. Classification is by
     SQLSTATE and the queue now catches DBAPIError."""
     err = _pg8000("40001", cls=pg8000.dbapi.ProgrammingError)
+    assert isinstance(
+        err, ProgrammingError
+    )  # a DBAPIError, but NOT an OperationalError
     assert not isinstance(err, OperationalError)
-    assert isinstance(err, (DBAPIError, ProgrammingError))
     assert is_serialization_or_lock_error(err) is True
 
 
@@ -144,6 +146,16 @@ def test_deterministic_error_is_not_retriable() -> None:
         )
     )
     assert retriable_postgres_exception(ps) is False
+    # A non-OperationalError error with NO SQLSTATE whose text mentions connection+timeout:
+    # the message heuristics are gated on OperationalError, so this stays non-retriable.
+    no_sqlstate = _wrap(
+        pg8000.dbapi.IntegrityError("connection timeout during unique check"),
+        pg8000.dbapi.Error,
+    )
+    assert get_sqlstate(no_sqlstate.orig) is None and not isinstance(
+        no_sqlstate, OperationalError
+    )
+    assert retriable_postgres_exception(no_sqlstate) is False
 
 
 def test_retriable_connection_errors() -> None:

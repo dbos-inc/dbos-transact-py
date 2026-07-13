@@ -1,9 +1,5 @@
 from typing import Any, Dict
 
-try:
-    import psycopg
-except ImportError:  # optional: only the psycopg driver and LISTEN/NOTIFY use it
-    psycopg = None  # type: ignore[assignment]
 import sqlalchemy as sa
 from sqlalchemy import URL
 from sqlalchemy.exc import DBAPIError
