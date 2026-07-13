@@ -883,11 +883,7 @@ ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "is_debounced"
 
 
 def get_dbos_migration_fortythree(schema: str, use_listen_notify: bool) -> str:
-    # The per-row streams NOTIFY trigger (migration 39) fired pg_notify inside
-    # every stream write's commit, serializing high-throughput writers on the
-    # async-notify queue lock. Notifications are now coalesced and pushed from
-    # the application layer (run_stream_notifier), so drop the trigger. Gated on
-    # use_listen_notify to match migration 39: the trigger only exists there.
+    # Drop the per-row streams NOTIFY trigger (migration 39): notifications are now coalesced and pushed by run_stream_notifier off the write path. Gated to match migration 39.
     if not use_listen_notify:
         return ""
     return f"""

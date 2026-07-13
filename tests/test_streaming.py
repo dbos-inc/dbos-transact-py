@@ -279,10 +279,7 @@ def test_stream_low_latency_delivery(
     assert count == num_values
     assert max_latency < 5.0, f"client delivery latency {max_latency:.3f}s too high"
 
-    # Recreate the in-process DBOS with LISTEN/NOTIFY disabled and confirm the
-    # reader still receives every value via the polling fallback. With L/N off
-    # the app-side stream notifier stays idle, so no notifications fire at all;
-    # the reader is woken by the polling listener thread instead.
+    # Recreate the in-process DBOS with LISTEN/NOTIFY disabled: the app-side notifier stays idle and no notifications fire, so the reader is woken by the polling listener thread instead.
     DBOS.destroy(destroy_registry=False)
     config["use_listen_notify"] = False
     DBOS(config=config)
@@ -357,10 +354,7 @@ async def test_stream_low_latency_delivery_async(
     assert count == num_values
     assert max_latency < 5.0, f"client delivery latency {max_latency:.3f}s too high"
 
-    # Recreate the in-process DBOS with LISTEN/NOTIFY disabled and confirm the
-    # reader still receives every value via the polling fallback. With L/N off
-    # the app-side stream notifier stays idle, so no notifications fire at all;
-    # the reader is woken by the polling listener thread instead.
+    # Recreate the in-process DBOS with LISTEN/NOTIFY disabled: the app-side notifier stays idle and no notifications fire, so the reader is woken by the polling listener thread instead.
     DBOS.destroy(destroy_registry=False)
     config["use_listen_notify"] = False
     DBOS(config=config)
@@ -380,17 +374,12 @@ async def test_stream_low_latency_delivery_async(
 def test_stream_notifier_delivers_without_trigger(
     dbos: DBOS, skip_with_sqlite: None
 ) -> None:
-    """Stream writes no longer fire pg_notify inside their own commit: the
-    per-row NOTIFY trigger is dropped (migration 43) so high-throughput writers
-    don't serialize on the async-notify queue lock. Wakeups are instead pushed
-    by the coalescing app-side notifier. Assert the trigger is gone and that a
-    reader blocked with a long polling fallback is still woken by the notifier
-    rather than the poll."""
+    """The per-row NOTIFY trigger is dropped (migration 43) and wakeups come from the coalescing app-side notifier: assert the trigger is gone and a reader on a long poll fallback is still woken by the notifier."""
     import sqlalchemy as sa
 
     sys_db = dbos._sys_db
 
-    # No per-row trigger or its function may remain on the streams table.
+    # No per-row trigger may remain on the streams table.
     with sys_db.engine.begin() as c:
         trigger = c.execute(
             sa.text(
@@ -409,8 +398,7 @@ def test_stream_notifier_delivers_without_trigger(
     @DBOS.workflow()
     def writer_workflow() -> None:
         DBOS.write_stream(stream_key, "first")
-        # Keep the stream open and the reader genuinely blocked, then write a
-        # second value that can only reach the reader via a notification.
+        # Keep the stream open so the reader blocks, then write a value it can only get via a notification.
         DBOS.sleep(2.0)
         DBOS.write_stream(stream_key, "second")
         DBOS.close_stream(stream_key)
@@ -419,8 +407,7 @@ def test_stream_notifier_delivers_without_trigger(
     with SetWorkflowID(wfid):
         handle = DBOS.start_workflow(writer_workflow)
 
-    # Force a fallback poll interval far longer than the write gap so any
-    # timely delivery must come from the notifier, not the poll.
+    # Force a poll interval far longer than the write gap so timely delivery must come from the notifier, not the poll.
     original_interval = sys_db._notification_listener_polling_interval_sec
     sys_db._notification_listener_polling_interval_sec = 30.0
     try:
@@ -433,8 +420,7 @@ def test_stream_notifier_delivers_without_trigger(
         sys_db._notification_listener_polling_interval_sec = original_interval
 
     assert [v for v, _ in received] == ["first", "second"]
-    # The second value is written ~2s in; the reader blocks on it and must be
-    # woken by the notifier well before the 30s poll would fire.
+    # The second value is written ~2s in; the notifier must wake the reader well before the 30s poll would.
     second_latency = received[1][1]
     assert second_latency < 10.0, f"second value took {second_latency:.3f}s to arrive"
 
