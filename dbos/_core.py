@@ -654,6 +654,7 @@ def _serialize_exception_for_persistence(
 def _get_wf_invoke_func(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
+    release_active: Callable[[], None] = lambda: None,
 ) -> Callable[[Callable[[], R]], R]:
     def persist(func: Callable[[], R]) -> R:
         if (
@@ -679,6 +680,11 @@ def _get_wf_invoke_func(
             serval, _serialization = serialize_value_as(
                 output, status["serialization"], dbos._serializer
             )
+            # Release the active-workflow-ID entry before the outcome becomes
+            # durable: once it is visible, a resume can re-dispatch this
+            # workflow to this executor, and a stale entry would send that
+            # dispatch down the non-owner path to wait forever.
+            release_active()
             dbos._sys_db.update_workflow_outcome(
                 status["workflow_uuid"],
                 WorkflowStatusString.SUCCESS.value,
@@ -695,11 +701,13 @@ def _get_wf_invoke_func(
             )
             return r
         except DBOSWorkflowCancelledError as error:
+            release_active()
             raise DBOSAwaitedWorkflowCancelledError(status["workflow_uuid"])
         except Exception as error:
             error_str = _serialize_exception_for_persistence(
                 error, status["serialization"], dbos._serializer
             )
+            release_active()
             dbos._sys_db.update_workflow_outcome(
                 status["workflow_uuid"],
                 WorkflowStatusString.ERROR.value,
@@ -811,9 +819,21 @@ def _execute_workflow_wthread(
                 status.get("queue_name"),
                 status.get("queue_partition_key"),
             )
+            # release_active is called both by persist (before the outcome
+            # write) and by the finally below. The guard makes the second call
+            # a no-op: between the two, a resumed execution of this workflow
+            # may have re-acquired the ID, and its entry must not be removed.
+            released = False
+
+            def release_active() -> None:
+                nonlocal released
+                if not released:
+                    released = True
+                    dbos._active_workflows_set.release(status["workflow_uuid"])
+
             try:
                 if owned:
-                    return _get_wf_invoke_func(dbos, status)(
+                    return _get_wf_invoke_func(dbos, status, release_active)(
                         functools.partial(func, *args, **kwargs)
                     )
                 else:
@@ -829,7 +849,7 @@ def _execute_workflow_wthread(
                 raise
             finally:
                 if owned:
-                    dbos._active_workflows_set.release(status["workflow_uuid"])
+                    release_active()
 
 
 async def _execute_workflow_async(
@@ -856,10 +876,22 @@ async def _execute_workflow_async(
                 status.get("queue_name"),
                 status.get("queue_partition_key"),
             )
+            # release_active is called both by persist (before the outcome
+            # write) and by the finally below. The guard makes the second call
+            # a no-op: between the two, a resumed execution of this workflow
+            # may have re-acquired the ID, and its entry must not be removed.
+            released = False
+
+            def release_active() -> None:
+                nonlocal released
+                if not released:
+                    released = True
+                    dbos._active_workflows_set.release(status["workflow_uuid"])
+
             try:
                 if owned:
                     result = Pending[R](functools.partial(func, *args, **kwargs)).then(
-                        _get_wf_invoke_func(dbos, status)
+                        _get_wf_invoke_func(dbos, status, release_active)
                     )
                     return await result()
                 else:
@@ -878,7 +910,7 @@ async def _execute_workflow_async(
                 raise
             finally:
                 if owned:
-                    dbos._active_workflows_set.release(status["workflow_uuid"])
+                    release_active()
 
 
 def execute_workflow_by_id(

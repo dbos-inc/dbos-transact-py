@@ -873,9 +873,9 @@ class SystemDatabase(ABC):
     ) -> None:
         with self.engine.begin() as c:
             now_ms = self._now_ms_sql()
-            # Record the outcome, but never overwrite the terminal CANCELLED
-            # status: a workflow can be cancelled during its final step, and if so
-            # it must not be able to subsequently complete.
+            # Record the outcome. Only a PENDING row can receive an outcome: any
+            # other status means this run was superseded (cancelled during its
+            # final step, re-enqueued by a concurrent resume, ...)
             result = c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .values(
@@ -890,22 +890,23 @@ class SystemDatabase(ABC):
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
                 .where(
                     SystemSchema.workflow_status.c.status
-                    != WorkflowStatusString.CANCELLED.value
+                    == WorkflowStatusString.PENDING.value
                 )
             )
-            # update_workflow_outcome is only called to finalize a workflow. If
-            # the guarded UPDATE above matched no rows, the workflow may have
-            # been cancelled: a cancelled workflow must not complete, so re-read
-            # the status and raise so it ends as cancelled rather than succeeding
-            # or erroring. The re-read only happens on this rare no-op path, not
-            # on every completion.
+            # If the guarded UPDATE matched no rows, re-read the status (only on
+            # this rare no-op path). A completed (SUCCESS/ERROR) row makes the
+            # refusal a no-op; anything else means this run was cancelled or
+            # superseded, so raise it as cancelled
             if result.rowcount == 0:
                 current_status = c.execute(
                     sa.select(SystemSchema.workflow_status.c.status).where(
                         SystemSchema.workflow_status.c.workflow_uuid == workflow_id
                     )
                 ).scalar_one_or_none()
-                if current_status == WorkflowStatusString.CANCELLED.value:
+                if current_status is not None and current_status not in (
+                    WorkflowStatusString.SUCCESS.value,
+                    WorkflowStatusString.ERROR.value,
+                ):
                     raise DBOSAwaitedWorkflowCancelledError(workflow_id)
 
     def cancel_workflows(
