@@ -720,7 +720,7 @@ class SystemDatabase(ABC):
                 ),
                 else_=SystemSchema.workflow_status.c.recovery_attempts,
             ),
-            "updated_at": sa.func.extract("epoch", sa.func.now()) * 1000,
+            "updated_at": self._now_ms_sql(),
         }
         # Don't update an existing executor ID when enqueueing a workflow.
         if wf_status not in _enqueued_statuses:
@@ -1016,7 +1016,7 @@ class SystemDatabase(ABC):
                 )
                 .values(
                     delay_until_epoch_ms=resolved,
-                    updated_at=func.extract("epoch", func.now()) * 1000,
+                    updated_at=self._now_ms_sql(),
                 )
             )
 
@@ -3987,10 +3987,7 @@ class SystemDatabase(ABC):
                                         None
                                     ),
                                 ),
-                                sa.cast(
-                                    sa.func.extract("epoch", sa.func.now()) * 1000,
-                                    sa.BigInteger,
-                                )
+                                start_time_ms
                                 + SystemSchema.workflow_status.c.workflow_timeout_ms,
                             ),
                             else_=SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
