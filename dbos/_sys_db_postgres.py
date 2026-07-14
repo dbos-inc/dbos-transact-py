@@ -212,3 +212,50 @@ class PostgresSystemDatabase(SystemDatabase):
                     # Then the loop will try to reconnect and restart the listener
             finally:
                 self._cleanup_connections()
+
+    def _signal_stream_write(self, workflow_uuid: str, key: str) -> None:
+        """Accumulate a coalesced wakeup for readers of (workflow_uuid, key); run_stream_notifier pushes it off the write path (no-op without L/N)."""
+        if not self.use_listen_notify:
+            return
+        payload = f"{workflow_uuid}::{key}"
+        with self._stream_notifier_lock:
+            self._pending_stream_notifications.add(payload)
+
+    def run_stream_notifier(self) -> None:
+        """Periodically flush coalesced stream-write notifications, keeping the async-notify queue lock (which serializes notifying commits) off the write path."""
+        if not self.use_listen_notify:
+            return
+        while self._run_background_processes:
+            try:
+                time.sleep(self._stream_notification_coalesce_sec)
+                self._flush_stream_notifications()
+            except Exception as e:
+                # Last resort: a failing flush logs and drops its batch internally, so this catches only unexpected errors, which must not kill the sole push path.
+                if self._run_background_processes:
+                    dbos_logger.warning(f"Stream notifier error: {e}")
+                    time.sleep(1)
+        # Final flush so values written just before shutdown still wake readers promptly.
+        try:
+            self._flush_stream_notifications()
+        except Exception as e:
+            dbos_logger.warning(f"Stream notifier final flush error: {e}")
+
+    def _flush_stream_notifications(self) -> None:
+        """Emit one coalesced notifying transaction for all pending payloads; drop the batch if it fails."""
+        with self._stream_notifier_lock:
+            if not self._pending_stream_notifications:
+                return
+            batch = self._pending_stream_notifications
+            self._pending_stream_notifications = set()
+        try:
+            # One statement, one transaction: one round trip and one acquisition of the async-notify queue lock; unnest emits one notification per payload.
+            with self.engine.begin() as c:
+                c.execute(
+                    sa.text(
+                        "SELECT pg_notify('dbos_streams_channel', p) FROM unnest(CAST(:payloads AS text[])) AS p"
+                    ),
+                    {"payloads": list(batch)},
+                )
+        except Exception as e:
+            # Drop the batch (do not requeue) on failure, e.g. a payload over pg_notify's 8000-byte limit; readers' polling fallback delivers these values, so one poison payload can't stall the notifier forever.
+            dbos_logger.warning(f"Stream notifier flush error: {e}")

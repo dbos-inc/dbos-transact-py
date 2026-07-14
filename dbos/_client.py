@@ -58,6 +58,7 @@ from dbos._sys_db import (
     WorkflowStatusInternal,
     WorkflowStatusString,
     _dbos_stream_closed_sentinel,
+    _no_stream_value,
     workflow_is_active,
 )
 from dbos._workflow_commands import fork_workflow, get_workflow
@@ -1191,30 +1192,29 @@ class DBOSClient:
                 # Clear before reading so a notification arriving after the read
                 # leaves the event set and the wait below returns immediately.
                 event.clear()
-                try:
-                    value = self._sys_db.read_stream(workflow_id, key, offset)
+                # One round trip for both the value and the workflow's status.
+                status, value = self._sys_db.read_stream_value(workflow_id, key, offset)
+                if status is None:
+                    break
+                if value is not _no_stream_value:
                     if value == _dbos_stream_closed_sentinel:
-                        break
+                        return
                     yield value
                     offset += 1
-                except ValueError:
-                    if final_read:
-                        break
-                    # No value yet: stop if the workflow is done, else wait for a
-                    # notification. Workflow completion fires none, so the wait
-                    # is bounded by the polling interval to notice termination.
-                    status = get_workflow(self._sys_db, workflow_id)
-                    if status is None:
-                        break
-                    if not workflow_is_active(status.status):
-                        # The workflow may have written between the read above and
-                        # this status check; all its writes are committed by now,
-                        # so read to the end of the stream before stopping.
-                        final_read = True
-                        continue
-                    event.wait(
-                        timeout=self._sys_db._notification_listener_polling_interval_sec
-                    )
+                    # More may be buffered; read the next offset before waiting.
+                    continue
+                if final_read:
+                    break
+                # No value yet: stop if the workflow is done, else wait for a
+                # notification. Workflow completion fires none, so the wait
+                # is bounded by the polling interval to notice termination.
+                if not workflow_is_active(status):
+                    # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
+                    final_read = True
+                    continue
+                event.wait(
+                    timeout=self._sys_db._notification_listener_polling_interval_sec
+                )
         finally:
             self._sys_db.unregister_stream_listener(payload)
 
@@ -1241,40 +1241,37 @@ class DBOSClient:
                 # Clear before reading so a notification arriving after the read
                 # leaves the event set and the wait below returns immediately.
                 event.clear()
-                try:
-                    value = await asyncio.to_thread(
-                        self._sys_db.read_stream, workflow_id, key, offset
-                    )
+                # One round trip for both the value and the workflow's status.
+                status, value = await asyncio.to_thread(
+                    self._sys_db.read_stream_value, workflow_id, key, offset
+                )
+                if status is None:
+                    break
+                if value is not _no_stream_value:
                     if value == _dbos_stream_closed_sentinel:
-                        break
+                        return
                     yield value
                     offset += 1
-                except ValueError:
-                    if final_read:
+                    # More may be buffered; read the next offset before waiting.
+                    continue
+                if final_read:
+                    break
+                # No value yet: stop if the workflow is done, else wait for a
+                # notification. Poll the event with short asyncio sleeps (no
+                # held thread), bounded by the fallback re-check interval.
+                if not workflow_is_active(status):
+                    # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
+                    final_read = True
+                    continue
+                deadline = (
+                    time.time()
+                    + self._sys_db._notification_listener_polling_interval_sec
+                )
+                while not event.is_set():
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
                         break
-                    # No value yet: stop if the workflow is done, else wait for a
-                    # notification. Poll the event with short asyncio sleeps (no
-                    # held thread), bounded by the fallback re-check interval.
-                    status = await asyncio.to_thread(
-                        get_workflow, self._sys_db, workflow_id
-                    )
-                    if status is None:
-                        break
-                    if not workflow_is_active(status.status):
-                        # The workflow may have written between the read above and
-                        # this status check; all its writes are committed by now,
-                        # so read to the end of the stream before stopping.
-                        final_read = True
-                        continue
-                    deadline = (
-                        time.time()
-                        + self._sys_db._notification_listener_polling_interval_sec
-                    )
-                    while not event.is_set():
-                        remaining = deadline - time.time()
-                        if remaining <= 0:
-                            break
-                        await asyncio.sleep(min(remaining, 0.1))
+                    await asyncio.sleep(min(remaining, 0.1))
         finally:
             self._sys_db.unregister_stream_listener(payload)
 

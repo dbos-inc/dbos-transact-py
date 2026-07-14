@@ -654,6 +654,22 @@ def test_translate_dbosconfig_full_input():
     assert "env" not in translated_config
 
 
+def test_translate_dbosconfig_stream_notification_coalesce_sec():
+    # A valid value is threaded into runtimeConfig.
+    ok: DBOSConfig = {"name": "test-app", "stream_notification_coalesce_sec": 0.001}
+    translated = translate_dbos_config_to_config_file(ok)
+    assert translated["runtimeConfig"]["stream_notification_coalesce_sec"] == 0.001
+
+    # Invalid values are rejected, including NaN/inf which slip past a bare < 0.001 check
+    # and would otherwise crash run_stream_notifier's time.sleep.
+    for bad in [0.0005, 0.0, -1.0, float("nan"), float("inf")]:
+        with pytest.raises(DBOSInitializationError) as exc_info:
+            translate_dbos_config_to_config_file(
+                {"name": "test-app", "stream_notification_coalesce_sec": bad}
+            )
+        assert "stream_notification_coalesce_sec" in str(exc_info.value)
+
+
 def test_translate_dbosconfig_minimal_input():
     config: DBOSConfig = {
         "name": "test-app",
