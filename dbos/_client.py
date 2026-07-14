@@ -48,7 +48,6 @@ from dbos._serialization import (
     serialize_args,
 )
 from dbos._sys_db import (
-    STREAM_READ_BATCH_SIZE,
     ClientScheduleInput,
     SendMessage,
     StepInfo,
@@ -59,6 +58,7 @@ from dbos._sys_db import (
     WorkflowStatusInternal,
     WorkflowStatusString,
     _dbos_stream_closed_sentinel,
+    _no_stream_value,
     workflow_is_active,
 )
 from dbos._workflow_commands import fork_workflow, get_workflow
@@ -1192,19 +1192,16 @@ class DBOSClient:
                 # Clear before reading so a notification arriving after the read
                 # leaves the event set and the wait below returns immediately.
                 event.clear()
-                # One round trip for both the next values and the workflow's status.
-                status, values = self._sys_db.read_stream_batch(
-                    workflow_id, key, offset, STREAM_READ_BATCH_SIZE
-                )
+                # One round trip for both the value and the workflow's status.
+                status, value = self._sys_db.read_stream_value(workflow_id, key, offset)
                 if status is None:
                     break
-                if values:
-                    for value in values:
-                        if value == _dbos_stream_closed_sentinel:
-                            return
-                        yield value
-                        offset += 1
-                    # A full batch means more may be buffered; fetch again before waiting.
+                if value is not _no_stream_value:
+                    if value == _dbos_stream_closed_sentinel:
+                        return
+                    yield value
+                    offset += 1
+                    # More may be buffered; read the next offset before waiting.
                     continue
                 if final_read:
                     break
@@ -1245,23 +1242,18 @@ class DBOSClient:
                 # Clear before reading so a notification arriving after the read
                 # leaves the event set and the wait below returns immediately.
                 event.clear()
-                # One round trip for both the next values and the workflow's status.
-                status, values = await asyncio.to_thread(
-                    self._sys_db.read_stream_batch,
-                    workflow_id,
-                    key,
-                    offset,
-                    STREAM_READ_BATCH_SIZE,
+                # One round trip for both the value and the workflow's status.
+                status, value = await asyncio.to_thread(
+                    self._sys_db.read_stream_value, workflow_id, key, offset
                 )
                 if status is None:
                     break
-                if values:
-                    for value in values:
-                        if value == _dbos_stream_closed_sentinel:
-                            return
-                        yield value
-                        offset += 1
-                    # A full batch means more may be buffered; fetch again before waiting.
+                if value is not _no_stream_value:
+                    if value == _dbos_stream_closed_sentinel:
+                        return
+                    yield value
+                    offset += 1
+                    # More may be buffered; read the next offset before waiting.
                     continue
                 if final_read:
                     break

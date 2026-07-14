@@ -100,7 +100,6 @@ from ._scheduler import (
 from ._scheduler_decorator import DecoratedScheduledWorkflow, scheduled
 from ._sys_db import (
     DEFAULT_STREAM_NOTIFICATION_COALESCE_SEC,
-    STREAM_READ_BATCH_SIZE,
     GetEventWorkflowContext,
     SendMessage,
     StepInfo,
@@ -109,6 +108,7 @@ from ._sys_db import (
     WorkflowSchedule,
     WorkflowStatus,
     _dbos_stream_closed_sentinel,
+    _no_stream_value,
     workflow_is_active,
 )
 from ._tracer import DBOSTracer, dbos_tracer
@@ -3279,19 +3279,16 @@ class DBOS:
                 # Clear before reading so a notification arriving after the read
                 # leaves the event set and the wait below returns immediately.
                 event.clear()
-                # One round trip for both the next values and the workflow's status.
-                status, values = sys_db.read_stream_batch(
-                    workflow_id, key, offset, STREAM_READ_BATCH_SIZE
-                )
+                # One round trip for both the value and the workflow's status.
+                status, value = sys_db.read_stream_value(workflow_id, key, offset)
                 if status is None:
                     raise DBOSNonExistentWorkflowError("target", workflow_id)
-                if values:
-                    for value in values:
-                        if value == _dbos_stream_closed_sentinel:
-                            return
-                        yield value
-                        offset += 1
-                    # A full batch means more may be buffered; fetch again before waiting.
+                if value is not _no_stream_value:
+                    if value == _dbos_stream_closed_sentinel:
+                        return
+                    yield value
+                    offset += 1
+                    # More may be buffered; read the next offset before waiting.
                     continue
                 if final_read:
                     break
@@ -3392,24 +3389,19 @@ class DBOS:
                 # Clear before reading so a notification arriving after the read
                 # leaves the event set and the wait below returns immediately.
                 event.clear()
-                # One round trip for both the next values and the workflow's status.
-                status, values = await asyncio.to_thread(
-                    sys_db.read_stream_batch,
-                    workflow_id,
-                    key,
-                    offset,
-                    STREAM_READ_BATCH_SIZE,
+                # One round trip for both the value and the workflow's status.
+                status, value = await asyncio.to_thread(
+                    sys_db.read_stream_value, workflow_id, key, offset
                 )
                 if status is None:
                     raise DBOSNonExistentWorkflowError("target", workflow_id)
-                if values:
-                    for value in values:
-                        if value == _dbos_stream_closed_sentinel:
-                            return
-                        yield value
-                        offset += 1
+                if value is not _no_stream_value:
+                    if value == _dbos_stream_closed_sentinel:
+                        return
+                    yield value
+                    offset += 1
                     wait_started_at = None
-                    # A full batch means more may be buffered; fetch again before waiting.
+                    # More may be buffered; read the next offset before waiting.
                     continue
                 if final_read:
                     break
