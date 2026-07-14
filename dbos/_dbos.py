@@ -172,6 +172,11 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 T = TypeVar("T")
 
+# read_stream_async sub-polls its in-memory notification event tightly for the first window (low push latency), then relaxes for long-idle streams to save event-loop wakeups.
+_STREAM_EVENT_FAST_POLL_SEC = 0.01
+_STREAM_EVENT_FAST_POLL_WINDOW_SEC = 10.0
+_STREAM_EVENT_SLOW_POLL_SEC = 1.0
+
 IsolationLevel = Literal[
     "SERIALIZABLE",
     "REPEATABLE READ",
@@ -3370,6 +3375,8 @@ class DBOS:
 
         event, payload = sys_db.register_stream_listener(workflow_id, key)
         final_read = False
+        # When the current value's wait began, or None once a value is delivered; drives the adaptive event sub-poll below.
+        wait_started_at: Optional[float] = None
         try:
             while True:
                 # Clear before reading so a notification arriving after the read
@@ -3383,6 +3390,7 @@ class DBOS:
                         break
                     yield value
                     offset += 1
+                    wait_started_at = None
                 except ValueError:
                     if final_read:
                         break
@@ -3399,12 +3407,21 @@ class DBOS:
                         # so read to the end of the stream before stopping.
                         final_read = True
                         continue
+                    if wait_started_at is None:
+                        wait_started_at = time.time()
                     deadline = time.time() + polling_interval
                     while not event.is_set():
                         remaining = deadline - time.time()
                         if remaining <= 0:
                             break
-                        await asyncio.sleep(min(remaining, 0.1))
+                        # Sub-poll tightly while the value is fresh-awaited, then relax.
+                        sub_poll = (
+                            _STREAM_EVENT_FAST_POLL_SEC
+                            if time.time() - wait_started_at
+                            < _STREAM_EVENT_FAST_POLL_WINDOW_SEC
+                            else _STREAM_EVENT_SLOW_POLL_SEC
+                        )
+                        await asyncio.sleep(min(remaining, sub_poll))
         finally:
             sys_db.unregister_stream_listener(payload)
 
