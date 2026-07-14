@@ -3284,8 +3284,13 @@ class DBOS:
                     # No value yet: stop if the workflow is done, else wait for a
                     # notification. Workflow completion fires none, so the wait
                     # is bounded by the polling interval to notice termination.
-                    status = cls.retrieve_workflow(workflow_id).get_status().status
-                    if not workflow_is_active(status):
+                    # One query, no input/output payloads (vs retrieve_workflow(...).get_status(), which queries twice).
+                    wf_status = get_workflow(
+                        sys_db, workflow_id, load_input=False, load_output=False
+                    )
+                    if wf_status is None:
+                        raise DBOSNonExistentWorkflowError("target", workflow_id)
+                    if not workflow_is_active(wf_status.status):
                         # The workflow may have written between the read above and
                         # this status check; all its writes are committed by now,
                         # so read to the end of the stream before stopping.
@@ -3397,11 +3402,17 @@ class DBOS:
                     # No value yet: stop if the workflow is done, else wait for a
                     # notification. Poll the event with short asyncio sleeps (no
                     # held thread), bounded by the fallback re-check interval.
-                    handle: WorkflowHandleAsync[Any] = (
-                        await cls.retrieve_workflow_async(workflow_id)
+                    # One query, no input/output payloads (vs retrieve_workflow_async(...).get_status(), which queries twice).
+                    wf_status = await asyncio.to_thread(
+                        get_workflow,
+                        sys_db,
+                        workflow_id,
+                        load_input=False,
+                        load_output=False,
                     )
-                    status = await handle.get_status()
-                    if not workflow_is_active(status.status):
+                    if wf_status is None:
+                        raise DBOSNonExistentWorkflowError("target", workflow_id)
+                    if not workflow_is_active(wf_status.status):
                         # The workflow may have written between the read above and
                         # this status check; all its writes are committed by now,
                         # so read to the end of the stream before stopping.
