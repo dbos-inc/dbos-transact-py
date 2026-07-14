@@ -6,7 +6,7 @@ from typing import Any, NoReturn, Optional
 import pytest
 from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 
-from dbos import DBOS, DBOSConfig, KafkaMessage, Queue
+from dbos import DBOS, DBOSConfig, KafkaMessage
 
 # These tests require local Kafka to run.
 # Without it, they're automatically skipped.
@@ -475,10 +475,7 @@ def test_kafka_listen_queues_polls_db_backed_consumer_queue(
     lock = threading.Lock()
     seen: set[int] = set()
 
-    # Reference the database-backed queue by name; this reference is NOT added to the
-    # in-memory registry, so the poller can only reach it by resolving it from the DB.
-    consumer_queue = Queue(queue_name, database_backed_queue=True)
-
+    # The queue is named, and nothing adds it to the in-memory registry, so the poller can only reach it by resolving it from the DB.
     @DBOS.kafka_consumer(
         {
             "bootstrap.servers": server,
@@ -486,7 +483,7 @@ def test_kafka_listen_queues_polls_db_backed_consumer_queue(
             "auto.offset.reset": "earliest",
         },
         [topic],
-        queue=consumer_queue,
+        queue_name=queue_name,
     )
     @DBOS.workflow()
     def db_queue_workflow(msg: KafkaMessage) -> None:
@@ -1021,15 +1018,84 @@ def test_kafka_validation_errors(dbos: DBOS) -> None:
     with pytest.raises(DBOSInitializationError, match="batch_size must be positive"):
         consumer(gid=f"v3-{suffix}", batch_size=0)
     with pytest.raises(DBOSInitializationError, match="only supported with ordering"):
-        consumer(
-            gid=f"v4-{suffix}", ordering="partition", queue=Queue(f"vq-a-{suffix}")
-        )
-    with pytest.raises(
-        DBOSInitializationError, match="must not be a partitioned queue"
-    ):
-        consumer(
-            gid=f"v5-{suffix}", queue=Queue(f"vq-b-{suffix}", partition_queue=True)
-        )
+        consumer(gid=f"v4-{suffix}", ordering="partition", queue_name=f"vq-a-{suffix}")
+
+
+def test_kafka_unknown_queue_name_is_allowed(dbos: DBOS, config: DBOSConfig) -> None:
+    # A consumer may name a queue that does not exist yet: it can be registered after launch, so neither decorating nor launching may reject it. No broker needed — nothing here waits on a message.
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": "localhost:9092",
+            "group.id": f"unknown-q-{random.randrange(1_000_000_000)}",
+        },
+        ["t"],
+        queue_name=f"never-registered-{random.randrange(1_000_000_000)}",
+    )
+    @DBOS.workflow()
+    def unknown_queue_wf(msg: KafkaMessage) -> None:
+        pass
+
+    DBOS.launch()
+
+
+def test_kafka_partitioned_queue_name_rejected_at_launch(
+    dbos: DBOS, config: DBOSConfig
+) -> None:
+    # ordering="none" enqueues no partition key, which a partitioned queue never dequeues, so a partitioned custom queue must be rejected rather than leave its workflows ENQUEUED forever. The queue is named, so the check lands at launch, before the consumer thread starts — no broker needed.
+    from dbos._error import DBOSInitializationError
+
+    # Register on the launched fixture instance; the row survives destroy.
+    queue_name = f"dbos-test-kafka-partq-{random.randrange(1_000_000_000)}"
+    DBOS.register_queue(queue_name, partition_queue=True)
+
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": "localhost:9092",
+            "group.id": f"partq-{random.randrange(1_000_000_000)}",
+        },
+        ["t"],
+        queue_name=queue_name,
+    )
+    @DBOS.workflow()
+    def partitioned_queue_wf(msg: KafkaMessage) -> None:
+        pass
+
+    with pytest.raises(DBOSInitializationError, match="is a partitioned queue"):
+        DBOS.launch()
+
+
+def test_kafka_partitioned_queue_name_rejected_when_launched(dbos: DBOS) -> None:
+    # Same check as above, but a consumer declared after launch can resolve its queue immediately, so the decorator itself must reject it.
+    from dbos._error import DBOSInitializationError
+
+    queue_name = f"dbos-test-kafka-partq-live-{random.randrange(1_000_000_000)}"
+    DBOS.register_queue(queue_name, partition_queue=True)
+
+    @DBOS.workflow()
+    def live_partitioned_queue_wf(msg: KafkaMessage) -> None:
+        pass
+
+    with pytest.raises(DBOSInitializationError, match="is a partitioned queue"):
+        DBOS.kafka_consumer(
+            {
+                "bootstrap.servers": "localhost:9092",
+                "group.id": f"partq-live-{random.randrange(1_000_000_000)}",
+            },
+            ["t"],
+            queue_name=queue_name,
+        )(live_partitioned_queue_wf)
+
+    # The rejected consumer left no trace: no registration, no forced poll.
+    assert all(
+        reg.queue_name != queue_name for reg in dbos._registry.kafka_registrations
+    )
+    assert queue_name not in dbos._registry.poller_queue_names
 
 
 def test_kafka_config_coercion(dbos: DBOS, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1573,17 +1639,16 @@ def test_kafka_poison_message_dropped(
 
 
 # ---------------------------------------------------------------------------
-# Custom in-memory queue, end-to-end (requires a broker)
+# Custom queue, end-to-end (requires a broker)
 # ---------------------------------------------------------------------------
 
 
-def test_kafka_in_memory_custom_queue(dbos: DBOS) -> None:
-    # ordering="none" with a custom in-memory queue: messages run on that queue and
-    # its concurrency limit is honored.
+def test_kafka_custom_queue(dbos: DBOS) -> None:
+    # ordering="none" with a custom queue: messages run on that queue and its concurrency limit is honored.
     from confluent_kafka.admin import AdminClient, NewTopic
 
     server = "localhost:9092"
-    topic = f"dbos-kafka-inmemq-{random.randrange(1_000_000_000)}"
+    topic = f"dbos-kafka-customq-{random.randrange(1_000_000_000)}"
     admin = AdminClient({"bootstrap.servers": server})
     try:
         admin.create_topics([NewTopic(topic, num_partitions=1)])[topic].result()
@@ -1597,9 +1662,8 @@ def test_kafka_in_memory_custom_queue(dbos: DBOS) -> None:
     if producer.flush(10) > 0:
         pytest.skip("Kafka not available")
 
-    custom_queue = Queue(
-        f"kafka-inmem-q-{random.randrange(1_000_000_000)}", concurrency=1
-    )
+    queue_name = f"kafka-custom-q-{random.randrange(1_000_000_000)}"
+    DBOS.register_queue(queue_name, concurrency=1)
     lock = threading.Lock()
     processed: set[int] = set()
     active = 0
@@ -1609,14 +1673,14 @@ def test_kafka_in_memory_custom_queue(dbos: DBOS) -> None:
     @DBOS.kafka_consumer(
         {
             "bootstrap.servers": server,
-            "group.id": f"inmemq-grp-{random.randrange(1_000_000_000)}",
+            "group.id": f"customq-grp-{random.randrange(1_000_000_000)}",
             "auto.offset.reset": "earliest",
         },
         [topic],
-        queue=custom_queue,
+        queue_name=queue_name,
     )
     @DBOS.workflow()
-    def inmemq_wf(msg: KafkaMessage) -> None:
+    def customq_wf(msg: KafkaMessage) -> None:
         nonlocal active, max_active
         with lock:
             active += 1
@@ -1630,7 +1694,7 @@ def test_kafka_in_memory_custom_queue(dbos: DBOS) -> None:
                 event.set()
 
     # The consumer's custom queue is force-polled even under a listen_queues filter.
-    assert custom_queue.name in dbos._registry.poller_queue_names
+    assert queue_name in dbos._registry.poller_queue_names
     assert event.wait(timeout=60)
     assert processed == set(range(num_messages))
     assert max_active == 1  # concurrency=1 honored
