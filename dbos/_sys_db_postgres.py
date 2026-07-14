@@ -230,7 +230,7 @@ class PostgresSystemDatabase(SystemDatabase):
                 time.sleep(self._stream_notification_coalesce_sec)
                 self._flush_stream_notifications()
             except Exception as e:
-                # Never let an unexpected error kill the sole push path; log and back off, matching _notification_listener.
+                # Last resort: a failing flush logs and drops its batch internally, so this catches only unexpected errors, which must not kill the sole push path.
                 if self._run_background_processes:
                     dbos_logger.warning(f"Stream notifier error: {e}")
                     time.sleep(1)
@@ -238,8 +238,7 @@ class PostgresSystemDatabase(SystemDatabase):
         try:
             self._flush_stream_notifications()
         except Exception as e:
-            if self._run_background_processes:
-                dbos_logger.warning(f"Stream notifier final flush error: {e}")
+            dbos_logger.warning(f"Stream notifier final flush error: {e}")
 
     def _flush_stream_notifications(self) -> None:
         """Emit one coalesced notifying transaction for all pending payloads; drop the batch if it fails."""
@@ -259,5 +258,4 @@ class PostgresSystemDatabase(SystemDatabase):
                 )
         except Exception as e:
             # Drop the batch (do not requeue) on failure, e.g. a payload over pg_notify's 8000-byte limit; readers' polling fallback delivers these values, so one poison payload can't stall the notifier forever.
-            if self._run_background_processes:
-                dbos_logger.warning(f"Stream notifier flush error: {e}")
+            dbos_logger.warning(f"Stream notifier flush error: {e}")

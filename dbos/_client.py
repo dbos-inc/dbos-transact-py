@@ -1209,8 +1209,7 @@ class DBOSClient:
                 # notification. Workflow completion fires none, so the wait
                 # is bounded by the polling interval to notice termination.
                 if not workflow_is_active(status):
-                    # Re-read once before stopping. The status shares this read's snapshot, so a
-                    # terminal status already implies the stream is drained; this only guards that.
+                    # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
                     final_read = True
                     continue
                 event.wait(
@@ -1261,8 +1260,7 @@ class DBOSClient:
                 # notification. Poll the event with short asyncio sleeps (no
                 # held thread), bounded by the fallback re-check interval.
                 if not workflow_is_active(status):
-                    # Re-read once before stopping. The status shares this read's snapshot, so a
-                    # terminal status already implies the stream is drained; this only guards that.
+                    # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
                     final_read = True
                     continue
                 deadline = (

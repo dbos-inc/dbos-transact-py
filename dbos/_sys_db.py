@@ -4508,7 +4508,9 @@ class SystemDatabase(ABC):
 
         Returns (status, value). status is None if the workflow does not exist; value is
         _no_stream_value if nothing is written at offset. Both come from one statement, so they
-        share a snapshot: a terminal status is never observed alongside a stale view of the stream.
+        share a snapshot. A terminal status does not imply the stream is complete: cancel and
+        timeout set it out-of-band while the workflow is still running, so a caller that stops
+        reading must first drain to the first empty offset.
         """
         # LEFT JOIN so a workflow with nothing at offset still reports its status. Matching offset
         # exactly keeps this a single index lookup on the (workflow_uuid, key, offset) primary key.

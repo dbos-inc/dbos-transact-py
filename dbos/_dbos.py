@@ -622,7 +622,7 @@ class DBOS:
                     f"Latest version is '{latest['version_name']}'."
                 )
 
-            # Kafka consumers name their queue, so it is only resolvable now that every queue is registered; check before starting any thread, so a rejected consumer fails launch with nothing to unwind.
+            # Kafka consumers name their queue, so it is only resolvable now that every queue is registered; check here so a rejected consumer fails launch before any consumer or queue thread starts.
             if self._registry.kafka_registrations:
                 from ._kafka import validate_kafka_consumers
 
@@ -3298,8 +3298,7 @@ class DBOS:
                 # notification. Workflow completion fires none, so the wait
                 # is bounded by the polling interval to notice termination.
                 if not workflow_is_active(status):
-                    # Re-read once before stopping. The status shares this read's snapshot, so a
-                    # terminal status already implies the stream is drained; this only guards that.
+                    # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
                     final_read = True
                     continue
                 event.wait(timeout=sys_db._notification_listener_polling_interval_sec)
@@ -3411,8 +3410,7 @@ class DBOS:
                 # notification. Poll the event with short asyncio sleeps (no
                 # held thread), bounded by the fallback re-check interval.
                 if not workflow_is_active(status):
-                    # Re-read once before stopping. The status shares this read's snapshot, so a
-                    # terminal status already implies the stream is drained; this only guards that.
+                    # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
                     final_read = True
                     continue
                 if wait_started_at is None:

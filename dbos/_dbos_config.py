@@ -193,9 +193,10 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         ]
     if "notification_listener_polling_interval_sec" in config:
         interval = config["notification_listener_polling_interval_sec"]
-        if interval is not None and interval < 0.001:
+        # Reject NaN/inf too (they slip past a bare < 0.001) so the listener's time.sleep can't crash.
+        if interval is not None and (not math.isfinite(interval) or interval < 0.001):
             raise DBOSInitializationError(
-                f"notification_listener_polling_interval_sec must be at least 0.001 seconds, got {interval}"
+                f"notification_listener_polling_interval_sec must be a finite number at least 0.001 seconds, got {interval}"
             )
         translated_config["runtimeConfig"][
             "notification_listener_polling_interval_sec"
