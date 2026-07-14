@@ -41,6 +41,8 @@ class KafkaConsumerRegistration:
     group_id: str
     topics: list[str]
     ordering: KafkaOrdering
+    # Custom queue the consumer was registered with, or None for an internal one
+    queue_name: Optional[str]
 
 
 def safe_group_name(method_name: str, topics: list[str]) -> str:
@@ -56,6 +58,36 @@ def _get_or_create_queue(dbosreg: "DBOSRegistry", name: str, **kwargs: Any) -> Q
     if queue is None:
         queue = Queue(name, **kwargs)
     return queue
+
+
+def _validate_consumer_queue(dbos: "DBOS", func_name: str, queue_name: str) -> None:
+    """Raise if a consumer's custom queue is partitioned: ordering="none" enqueues no partition key, which a partitioned queue never dequeues, so its workflows would sit ENQUEUED forever."""
+    queue = dbos._registry.queue_info_map.get(queue_name)
+    if queue is None:
+        try:
+            queue = dbos._sys_db.get_queue(queue_name)
+        except Exception as e:
+            dbos_logger.warning(
+                f"Could not check the configuration of Kafka consumer "
+                f"{func_name}'s queue {queue_name}: {e}"
+            )
+            return
+    if queue is None:
+        return
+    # Read the cached field: the property would re-fetch a database-backed queue.
+    if queue._partition_queue:
+        raise DBOSInitializationError(
+            f"Error: Kafka consumer {func_name}'s queue {queue_name} is a "
+            "partitioned queue, which a custom Kafka queue must not be; "
+            'use ordering="partition" or "topic" for ordered processing'
+        )
+
+
+def validate_kafka_consumers(dbos: "DBOS") -> None:
+    """Validate the custom queue of every consumer registered before launch."""
+    for reg in dbos._registry.kafka_registrations:
+        if reg.queue_name is not None:
+            _validate_consumer_queue(dbos, reg.func_name, reg.queue_name)
 
 
 def _retry_until_success(
@@ -253,7 +285,7 @@ def kafka_consumer(
     *,
     ordering: Optional[KafkaOrdering] = None,
     batch_size: int = 250,
-    queue: Optional[Queue] = None,
+    queue_name: Optional[str] = None,
 ) -> Callable[[_KafkaConsumerWorkflow], _KafkaConsumerWorkflow]:
     if ordering is not None and in_order:
         raise DBOSInitializationError(
@@ -279,20 +311,21 @@ def kafka_consumer(
         )
     if batch_size < 1:
         raise DBOSInitializationError("Error: Kafka batch_size must be positive")
-    if queue is not None and resolved_ordering != "none":
+    if queue_name is not None and resolved_ordering != "none":
         raise DBOSInitializationError(
             'Error: a custom queue is only supported with ordering="none"; '
             "ordered consumers share an internal partitioned queue"
         )
-    if queue is not None and queue._partition_queue:
-        # ordering="none" enqueues no partition key, which a partitioned queue never dequeues, so rows would sit ENQUEUED forever.
-        raise DBOSInitializationError(
-            "Error: a custom Kafka queue must not be a partitioned queue; "
-            'use ordering="partition" or "topic" for ordered processing'
-        )
 
     def decorator(func: _KafkaConsumerWorkflow) -> _KafkaConsumerWorkflow:
         func_name = get_dbos_func_name(func)
+        # Validate before registering anything below, so a rejected consumer leaves no trace; a consumer declared pre-launch is validated at launch instead, once its queue is resolvable.
+        if (
+            queue_name is not None
+            and dbosreg.dbos is not None
+            and dbosreg.dbos._launched
+        ):
+            _validate_consumer_queue(dbosreg.dbos, func_name, queue_name)
         cfg = dict(config)  # copy: never mutate the caller's dict
 
         def on_error(err: KafkaError) -> None:
@@ -347,27 +380,29 @@ def kafka_consumer(
                 group_id=group_id,
                 topics=list(topics),
                 ordering=resolved_ordering,
+                queue_name=queue_name,
             )
         )
 
+        consumer_queue_name: str
         if resolved_ordering == "none":
-            consumer_queue = (
-                queue
-                if queue is not None
-                else _get_or_create_queue(dbosreg, KAFKA_QUEUE_NAME)
+            consumer_queue_name = (
+                queue_name
+                if queue_name is not None
+                else _get_or_create_queue(dbosreg, KAFKA_QUEUE_NAME).name
             )
         else:
             # One shared partitioned queue: concurrency=1 is enforced per partition
             # key, so execution is serial per key and parallel across keys.
-            consumer_queue = _get_or_create_queue(
+            consumer_queue_name = _get_or_create_queue(
                 dbosreg,
                 KAFKA_ORDERED_QUEUE_NAME,
                 partition_queue=True,
                 concurrency=1,
-            )
+            ).name
 
-        # This process runs the poller and enqueues onto consumer_queue, so it must poll it even under a listen_queues filter.
-        dbosreg.poller_queue_names.add(consumer_queue.name)
+        # This process runs the poller and enqueues onto the consumer's queue, so it must poll it even under a listen_queues filter.
+        dbosreg.poller_queue_names.add(consumer_queue_name)
 
         stop_event = threading.Event()
         dbosreg.register_poller(
@@ -379,7 +414,7 @@ def kafka_consumer(
             stop_event,
             resolved_ordering,
             batch_size,
-            consumer_queue.name,
+            consumer_queue_name,
         )
         return func
 
