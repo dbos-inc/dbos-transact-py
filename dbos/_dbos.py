@@ -1169,8 +1169,8 @@ class DBOS:
             batch_size: Maximum number of messages consumed and durably
                 enqueued per batch.
             queue_name: Name of an optional queue on which consumer workflows
-                run. It must not be a partitioned queue, and is only valid 
-                with ordering="none"; ordered consumers share an internal 
+                run. It must not be a partitioned queue, and is only valid
+                with ordering="none"; ordered consumers share an internal
                 partitioned queue.
         """
         try:

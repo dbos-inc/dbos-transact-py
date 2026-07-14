@@ -6,7 +6,7 @@ from typing import Any, NoReturn, Optional
 import pytest
 from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 
-from dbos import DBOS, DBOSConfig, KafkaMessage
+from dbos import DBOS, DBOSConfig, KafkaMessage, Queue
 
 # These tests require local Kafka to run.
 # Without it, they're automatically skipped.
@@ -1064,6 +1064,34 @@ def test_kafka_partitioned_queue_name_rejected_at_launch(
     )
     @DBOS.workflow()
     def partitioned_queue_wf(msg: KafkaMessage) -> None:
+        pass
+
+    with pytest.raises(DBOSInitializationError, match="is a partitioned queue"):
+        DBOS.launch()
+
+
+def test_kafka_partitioned_in_memory_queue_rejected_at_launch(
+    dbos: DBOS, config: DBOSConfig
+) -> None:
+    # Same rejection, but for an in-memory queue, which lives only in the registry and has no database row: this is the sole cover for resolving a named queue from queue_info_map rather than from the DB.
+    from dbos._error import DBOSInitializationError
+
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+
+    queue_name = f"dbos-test-kafka-partq-inmem-{random.randrange(1_000_000_000)}"
+    Queue(queue_name, partition_queue=True)
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": "localhost:9092",
+            "group.id": f"partq-inmem-{random.randrange(1_000_000_000)}",
+        },
+        ["t"],
+        queue_name=queue_name,
+    )
+    @DBOS.workflow()
+    def in_memory_partitioned_queue_wf(msg: KafkaMessage) -> None:
         pass
 
     with pytest.raises(DBOSInitializationError, match="is a partitioned queue"):
