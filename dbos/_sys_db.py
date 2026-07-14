@@ -893,20 +893,19 @@ class SystemDatabase(ABC):
                     == WorkflowStatusString.PENDING.value
                 )
             )
-            # If the guarded UPDATE matched no rows, re-read the status (only on
-            # this rare no-op path). A completed (SUCCESS/ERROR) row makes the
-            # refusal a no-op; anything else means this run was cancelled or
-            # superseded, so raise it as cancelled
+            # update_workflow_outcome is only called to finalize a workflow. If
+            # the guarded UPDATE above matched no rows, the workflow may have
+            # been cancelled: a cancelled workflow must not complete, so re-read
+            # the status and raise so it ends as cancelled rather than succeeding
+            # or erroring. The re-read only happens on this rare no-op path, not
+            # on every completion.
             if result.rowcount == 0:
                 current_status = c.execute(
                     sa.select(SystemSchema.workflow_status.c.status).where(
                         SystemSchema.workflow_status.c.workflow_uuid == workflow_id
                     )
                 ).scalar_one_or_none()
-                if current_status is not None and current_status not in (
-                    WorkflowStatusString.SUCCESS.value,
-                    WorkflowStatusString.ERROR.value,
-                ):
+                if current_status == WorkflowStatusString.CANCELLED.value:
                     raise DBOSAwaitedWorkflowCancelledError(workflow_id)
 
     def cancel_workflows(
