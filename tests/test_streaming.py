@@ -3,7 +3,7 @@ import uuid
 from typing import Any, cast
 
 import pytest
-import sqlalchemy as sa
+from sqlalchemy import event as sa_event
 
 # Public API
 from dbos import DBOS, DBOSConfig, SetWorkflowID
@@ -177,11 +177,11 @@ def test_stream_read_is_one_round_trip_per_batch(dbos: DBOS) -> None:
             reads.append(statement)
 
     engine = dbos._sys_db.engine
-    sa.event.listen(engine, "before_cursor_execute", count)
+    sa_event.listen(engine, "before_cursor_execute", count)
     try:
         values = list(DBOS.read_stream(wfid, "s"))
     finally:
-        sa.event.remove(engine, "before_cursor_execute", count)
+        sa_event.remove(engine, "before_cursor_execute", count)
 
     assert values == list(range(n))
     # Guards against passing vacuously: a per-offset read issues no joined query at all.
@@ -1135,11 +1135,11 @@ def test_client_read_stream_batches(dbos: DBOS, client: DBOSClient) -> None:
             reads.append(statement)
 
     engine = client._sys_db.engine
-    sa.event.listen(engine, "before_cursor_execute", count)
+    sa_event.listen(engine, "before_cursor_execute", count)
     try:
         values = list(client.read_stream(wfid, "s"))
     finally:
-        sa.event.remove(engine, "before_cursor_execute", count)
+        sa_event.remove(engine, "before_cursor_execute", count)
 
     assert values == list(range(n))
     # Guards against passing vacuously: a per-offset read issues no joined query at all.

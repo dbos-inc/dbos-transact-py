@@ -4501,30 +4501,6 @@ class SystemDatabase(ABC):
         self.streams_map.pop(payload)
 
     @db_retry()
-    def read_stream(self, workflow_uuid: str, key: str, offset: int) -> Any:
-        """Read the value at the specified offset for the given workflow_uuid and key."""
-
-        # Polling read (listener-less clients poll the offset) under the limiter; inside db_retry so the permit frees across backoff.
-        with self.poll_limiter, self.engine.begin() as c:
-            result = c.execute(
-                sa.select(
-                    SystemSchema.streams.c.value, SystemSchema.streams.c.serialization
-                ).where(
-                    SystemSchema.streams.c.workflow_uuid == workflow_uuid,
-                    SystemSchema.streams.c.key == key,
-                    SystemSchema.streams.c.offset == offset,
-                )
-            ).fetchone()
-
-            if result is None:
-                raise ValueError(
-                    f"No value found for workflow_uuid={workflow_uuid}, key={key}, offset={offset}"
-                )
-
-            # Deserialize the value before returning
-            return deserialize_value(result[0], result[1], self.serializer)
-
-    @db_retry()
     def read_stream_batch(
         self, workflow_uuid: str, key: str, offset: int, limit: int
     ) -> Tuple[Optional[str], List[Any]]:
