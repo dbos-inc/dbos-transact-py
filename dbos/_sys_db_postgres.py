@@ -249,13 +249,14 @@ class PostgresSystemDatabase(SystemDatabase):
             batch = self._pending_stream_notifications
             self._pending_stream_notifications = set()
         try:
-            # One transaction: all payloads share a single acquisition of the async-notify queue lock.
+            # One statement, one transaction: one round trip and one acquisition of the async-notify queue lock; unnest emits one notification per payload.
             with self.engine.begin() as c:
-                for payload in batch:
-                    c.execute(
-                        sa.text("SELECT pg_notify('dbos_streams_channel', :payload)"),
-                        {"payload": payload},
-                    )
+                c.execute(
+                    sa.text(
+                        "SELECT pg_notify('dbos_streams_channel', p) FROM unnest(CAST(:payloads AS text[])) AS p"
+                    ),
+                    {"payloads": list(batch)},
+                )
         except Exception as e:
             # Drop the batch (do not requeue) on failure, e.g. a payload over pg_notify's 8000-byte limit; readers' polling fallback delivers these values, so one poison payload can't stall the notifier forever.
             if self._run_background_processes:
