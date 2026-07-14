@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 
 
 def get_sqlstate(orig: Optional[BaseException]) -> Optional[str]:
@@ -49,13 +49,16 @@ def retriable_postgres_exception(e: Exception) -> bool:
         # Classify by SQLSTATE class: 08 connection, 53 resources, 57 intervention.
         # Don't fall through to text checks or deterministic errors retry forever.
         return code.startswith(("08", "53", "57"))
-    # No SQLSTATE => a client-side connection failure; match by message, but only for
-    # OperationalError so deterministic errors can't match by text.
-    if isinstance(e, OperationalError):
+    # No SQLSTATE => a client-side connection failure; match by message, but only for the
+    # connection-level classes so deterministic errors can't match by text. psycopg raises
+    # OperationalError; pg8000 raises InterfaceError and never OperationalError at all.
+    if isinstance(e, (OperationalError, InterfaceError)):
         msg = str(orig).lower()
         if (
             "connection failed" in msg
             or "server closed the connection unexpectedly" in msg
+            # pg8000's connect-time wording; matched explicitly, not via its "(timeout is ...)" aside
+            or "can't create a connection to host" in msg
         ):
             return True
         if "timeout" in msg and "connection" in msg:

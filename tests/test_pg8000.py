@@ -20,7 +20,12 @@ from typing import TYPE_CHECKING, cast
 import pg8000.dbapi
 import pytest
 import sqlalchemy as sa
-from sqlalchemy.exc import DBAPIError, OperationalError, ProgrammingError
+from sqlalchemy.exc import (
+    DBAPIError,
+    InterfaceError,
+    OperationalError,
+    ProgrammingError,
+)
 
 if TYPE_CHECKING:
     # Type-check as if psycopg is present (it is, in the normal test env); the
@@ -160,8 +165,8 @@ def test_deterministic_error_is_not_retriable_pg8000() -> None:
     )
     assert "connection" in str(pg.orig).lower() and "timeout" in str(pg.orig).lower()
     assert retriable_postgres_exception(pg) is False
-    # A non-OperationalError error with NO SQLSTATE whose text mentions connection+timeout:
-    # the message heuristics are gated on OperationalError, so this stays non-retriable.
+    # A deterministic error with NO SQLSTATE whose text mentions connection+timeout: the
+    # heuristics apply only to the connection-level classes, so this stays non-retriable.
     no_sqlstate = _wrap(
         pg8000.dbapi.IntegrityError("connection timeout during unique check"),
         pg8000.dbapi.Error,
@@ -185,6 +190,33 @@ def test_retriable_connection_errors_pg8000() -> None:
     assert retriable_postgres_exception(_pg8000("42601")) is False
     # non-DBAPI inputs are rejected without raising
     assert retriable_postgres_exception(ValueError("x")) is False
+
+
+def test_pg8000_connect_failure_is_retriable() -> None:
+    """A failed connect must be retriable on pg8000 as it already is on psycopg.
+
+    pg8000 raises InterfaceError with a plain-str arg (no SQLSTATE) and never raises
+    OperationalError at all, so gating the message heuristics on OperationalError alone
+    made every pg8000 connection failure non-retriable: db_retry would abort a workflow
+    mid-outage instead of pausing until the database came back.
+    """
+    # Port 1 is reserved and never listening, so this is a real driver-level connect
+    # failure against the loopback interface — no PostgreSQL server involved.
+    engine = sa.create_engine("postgresql+pg8000://u:p@127.0.0.1:1/db")
+    with pytest.raises(DBAPIError) as exc_info:
+        engine.connect()
+    err = exc_info.value
+
+    # Pin the real driver shape, so this keeps testing the thing it claims to test.
+    assert isinstance(err, InterfaceError)
+    assert not isinstance(err, OperationalError)
+    assert get_sqlstate(err.orig) is None
+    assert isinstance(err.orig.args[0], str)  # a bare message, not the server's dict
+    # Not rescued by the connection_invalidated short-circuit: a connect that never
+    # succeeded has no pooled connection to invalidate.
+    assert err.connection_invalidated is False
+
+    assert retriable_postgres_exception(err) is True
 
 
 def test_pg8000_live_error_classification(skip_with_sqlite: None) -> None:
