@@ -145,7 +145,10 @@ jobs:
       working-directory: ./
 
     - name: Uninstall psycopg (simulate a driver-optional install)
-      run: pdm run python -m pip uninstall -y psycopg psycopg-binary
+      # PDM builds its venv without pip, so bootstrap pip before uninstalling.
+      run: |
+        pdm run python -m ensurepip
+        pdm run python -m pip uninstall -y psycopg psycopg-binary
       working-directory: ./
 
     - name: Verify psycopg is absent
