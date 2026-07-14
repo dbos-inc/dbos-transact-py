@@ -100,6 +100,7 @@ from ._scheduler import (
 from ._scheduler_decorator import DecoratedScheduledWorkflow, scheduled
 from ._sys_db import (
     DEFAULT_STREAM_NOTIFICATION_COALESCE_SEC,
+    STREAM_READ_BATCH_SIZE,
     GetEventWorkflowContext,
     SendMessage,
     StepInfo,
@@ -3272,33 +3273,31 @@ class DBOS:
                 # Clear before reading so a notification arriving after the read
                 # leaves the event set and the wait below returns immediately.
                 event.clear()
-                try:
-                    value = sys_db.read_stream(workflow_id, key, offset)
-                    if value == _dbos_stream_closed_sentinel:
-                        break
-                    yield value
-                    offset += 1
-                except ValueError:
-                    if final_read:
-                        break
-                    # No value yet: stop if the workflow is done, else wait for a
-                    # notification. Workflow completion fires none, so the wait
-                    # is bounded by the polling interval to notice termination.
-                    # One query, no input/output payloads (vs retrieve_workflow(...).get_status(), which queries twice).
-                    wf_status = get_workflow(
-                        sys_db, workflow_id, load_input=False, load_output=False
-                    )
-                    if wf_status is None:
-                        raise DBOSNonExistentWorkflowError("target", workflow_id)
-                    if not workflow_is_active(wf_status.status):
-                        # The workflow may have written between the read above and
-                        # this status check; all its writes are committed by now,
-                        # so read to the end of the stream before stopping.
-                        final_read = True
-                        continue
-                    event.wait(
-                        timeout=sys_db._notification_listener_polling_interval_sec
-                    )
+                # One round trip for both the next values and the workflow's status.
+                status, values = sys_db.read_stream_batch(
+                    workflow_id, key, offset, STREAM_READ_BATCH_SIZE
+                )
+                if status is None:
+                    raise DBOSNonExistentWorkflowError("target", workflow_id)
+                if values:
+                    for value in values:
+                        if value == _dbos_stream_closed_sentinel:
+                            return
+                        yield value
+                        offset += 1
+                    # A full batch means more may be buffered; fetch again before waiting.
+                    continue
+                if final_read:
+                    break
+                # No value yet: stop if the workflow is done, else wait for a
+                # notification. Workflow completion fires none, so the wait
+                # is bounded by the polling interval to notice termination.
+                if not workflow_is_active(status):
+                    # Re-read once before stopping. The status shares this read's snapshot, so a
+                    # terminal status already implies the stream is drained; this only guards that.
+                    final_read = True
+                    continue
+                event.wait(timeout=sys_db._notification_listener_polling_interval_sec)
         finally:
             sys_db.unregister_stream_listener(payload)
 
@@ -3387,52 +3386,50 @@ class DBOS:
                 # Clear before reading so a notification arriving after the read
                 # leaves the event set and the wait below returns immediately.
                 event.clear()
-                try:
-                    value = await asyncio.to_thread(
-                        sys_db.read_stream, workflow_id, key, offset
-                    )
-                    if value == _dbos_stream_closed_sentinel:
-                        break
-                    yield value
-                    offset += 1
+                # One round trip for both the next values and the workflow's status.
+                status, values = await asyncio.to_thread(
+                    sys_db.read_stream_batch,
+                    workflow_id,
+                    key,
+                    offset,
+                    STREAM_READ_BATCH_SIZE,
+                )
+                if status is None:
+                    raise DBOSNonExistentWorkflowError("target", workflow_id)
+                if values:
+                    for value in values:
+                        if value == _dbos_stream_closed_sentinel:
+                            return
+                        yield value
+                        offset += 1
                     wait_started_at = None
-                except ValueError:
-                    if final_read:
+                    # A full batch means more may be buffered; fetch again before waiting.
+                    continue
+                if final_read:
+                    break
+                # No value yet: stop if the workflow is done, else wait for a
+                # notification. Poll the event with short asyncio sleeps (no
+                # held thread), bounded by the fallback re-check interval.
+                if not workflow_is_active(status):
+                    # Re-read once before stopping. The status shares this read's snapshot, so a
+                    # terminal status already implies the stream is drained; this only guards that.
+                    final_read = True
+                    continue
+                if wait_started_at is None:
+                    wait_started_at = time.time()
+                deadline = time.time() + polling_interval
+                while not event.is_set():
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
                         break
-                    # No value yet: stop if the workflow is done, else wait for a
-                    # notification. Poll the event with short asyncio sleeps (no
-                    # held thread), bounded by the fallback re-check interval.
-                    # One query, no input/output payloads (vs retrieve_workflow_async(...).get_status(), which queries twice).
-                    wf_status = await asyncio.to_thread(
-                        get_workflow,
-                        sys_db,
-                        workflow_id,
-                        load_input=False,
-                        load_output=False,
+                    # Sub-poll tightly while the value is fresh-awaited, then relax.
+                    sub_poll = (
+                        _STREAM_EVENT_FAST_POLL_SEC
+                        if time.time() - wait_started_at
+                        < _STREAM_EVENT_FAST_POLL_WINDOW_SEC
+                        else _STREAM_EVENT_SLOW_POLL_SEC
                     )
-                    if wf_status is None:
-                        raise DBOSNonExistentWorkflowError("target", workflow_id)
-                    if not workflow_is_active(wf_status.status):
-                        # The workflow may have written between the read above and
-                        # this status check; all its writes are committed by now,
-                        # so read to the end of the stream before stopping.
-                        final_read = True
-                        continue
-                    if wait_started_at is None:
-                        wait_started_at = time.time()
-                    deadline = time.time() + polling_interval
-                    while not event.is_set():
-                        remaining = deadline - time.time()
-                        if remaining <= 0:
-                            break
-                        # Sub-poll tightly while the value is fresh-awaited, then relax.
-                        sub_poll = (
-                            _STREAM_EVENT_FAST_POLL_SEC
-                            if time.time() - wait_started_at
-                            < _STREAM_EVENT_FAST_POLL_WINDOW_SEC
-                            else _STREAM_EVENT_SLOW_POLL_SEC
-                        )
-                        await asyncio.sleep(min(remaining, sub_poll))
+                    await asyncio.sleep(min(remaining, sub_poll))
         finally:
             sys_db.unregister_stream_listener(payload)
 

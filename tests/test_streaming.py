@@ -3,10 +3,12 @@ import uuid
 from typing import Any, cast
 
 import pytest
+import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, DBOSConfig, SetWorkflowID
 from dbos._client import DBOSClient
+from dbos._sys_db import STREAM_READ_BATCH_SIZE
 from dbos._sys_db_postgres import PostgresSystemDatabase
 from tests.conftest import retry_until_success
 
@@ -86,6 +88,108 @@ async def test_stream_read_offset_async(dbos: DBOS) -> None:
 
     values = [v async for v in DBOS.read_stream_async(wfid, stream_key, offset=3)]
     assert values == [3, 4]
+
+
+@pytest.mark.parametrize(
+    "n",
+    [
+        0,
+        1,
+        STREAM_READ_BATCH_SIZE - 1,
+        STREAM_READ_BATCH_SIZE,
+        STREAM_READ_BATCH_SIZE + 1,
+        2 * STREAM_READ_BATCH_SIZE + 1,
+    ],
+)
+def test_stream_read_batch_boundaries(dbos: DBOS, n: int) -> None:
+    """Reads are fetched in batches of STREAM_READ_BATCH_SIZE, so a stream whose length lands on a batch edge must still deliver every value exactly once, in order."""
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for i in range(n):
+            DBOS.write_stream("s", i)
+        DBOS.close_stream("s")
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        DBOS.start_workflow(writer_workflow).get_result()
+
+    assert list(DBOS.read_stream(wfid, "s")) == list(range(n))
+
+
+def test_stream_read_batch_returns_status_and_values(dbos: DBOS) -> None:
+    """read_stream_batch answers both questions a reader tick asks -- 'any new values?' and 'is the workflow still running?' -- in one round trip, from one snapshot."""
+    sys_db = dbos._sys_db
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for i in range(3):
+            DBOS.write_stream("s", i)
+        DBOS.close_stream("s")
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        DBOS.start_workflow(writer_workflow).get_result()
+
+    # Status plus the values at the requested offset, together.
+    status, values = sys_db.read_stream_batch(wfid, "s", 0, STREAM_READ_BATCH_SIZE)
+    assert status == "SUCCESS"
+    assert values[:3] == [0, 1, 2]
+
+    # Past the end: still reports status, so the reader can tell "not yet" from "never".
+    status, values = sys_db.read_stream_batch(wfid, "s", 99, STREAM_READ_BATCH_SIZE)
+    assert status == "SUCCESS"
+    assert values == []
+
+    # The limit is respected.
+    _, values = sys_db.read_stream_batch(wfid, "s", 0, 2)
+    assert values == [0, 1]
+
+    # A non-existent workflow is distinguishable from one with no values.
+    status, values = sys_db.read_stream_batch(str(uuid.uuid4()), "s", 0, 10)
+    assert status is None
+    assert values == []
+
+
+def test_stream_read_is_one_round_trip_per_batch(dbos: DBOS) -> None:
+    """Draining N values costs ~N/STREAM_READ_BATCH_SIZE queries rather than N, and each tick reads the stream and the workflow status in a single joined statement rather than two."""
+    n = 2 * STREAM_READ_BATCH_SIZE + 5
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for i in range(n):
+            DBOS.write_stream("s", i)
+        DBOS.close_stream("s")
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        DBOS.start_workflow(writer_workflow).get_result()
+
+    # Only the reader joins streams to workflow_status, so background threads sharing the engine cannot match.
+    # Matched loosely rather than by table name, which is schema-qualified.
+    reads = []
+
+    def count(
+        conn: Any, cursor: Any, statement: str, params: Any, context: Any, many: bool
+    ) -> None:
+        s = " ".join(statement.lower().split())
+        if "outer join" in s and "streams" in s and "workflow_status" in s:
+            reads.append(statement)
+
+    engine = dbos._sys_db.engine
+    sa.event.listen(engine, "before_cursor_execute", count)
+    try:
+        values = list(DBOS.read_stream(wfid, "s"))
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", count)
+
+    assert values == list(range(n))
+    # Guards against passing vacuously: a per-offset read issues no joined query at all.
+    assert reads, "reader did not fetch values and status in one joined query"
+    # 3 batches cover 205 values + the sentinel's batch + one final re-read; well under one query per value.
+    assert (
+        len(reads) <= 6
+    ), f"expected ~4 batched reads for {n} values, got {len(reads)}"
 
 
 def test_client_read_stream_offset(dbos: DBOS, client: DBOSClient) -> None:
@@ -1005,6 +1109,51 @@ async def test_client_read_stream_async(dbos: DBOS, client: DBOSClient) -> None:
         assert read_values == test_values
     finally:
         client.destroy()
+
+
+def test_client_read_stream_batches(dbos: DBOS, client: DBOSClient) -> None:
+    """The client reader batches like the in-process one: draining N values costs ~N/STREAM_READ_BATCH_SIZE joined queries rather than N, each reading values and status together."""
+    n = 2 * STREAM_READ_BATCH_SIZE + 5
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for i in range(n):
+            DBOS.write_stream("s", i)
+        DBOS.close_stream("s")
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        DBOS.start_workflow(writer_workflow).get_result()
+
+    reads = []
+
+    def count(
+        conn: Any, cursor: Any, statement: str, params: Any, context: Any, many: bool
+    ) -> None:
+        s = " ".join(statement.lower().split())
+        if "outer join" in s and "streams" in s and "workflow_status" in s:
+            reads.append(statement)
+
+    engine = client._sys_db.engine
+    sa.event.listen(engine, "before_cursor_execute", count)
+    try:
+        values = list(client.read_stream(wfid, "s"))
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", count)
+
+    assert values == list(range(n))
+    # Guards against passing vacuously: a per-offset read issues no joined query at all.
+    assert reads, "client did not fetch values and status in one joined query"
+    assert (
+        len(reads) <= 6
+    ), f"expected ~4 batched reads for {n} values, got {len(reads)}"
+
+
+def test_client_read_stream_nonexistent_workflow(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    """A stream on an unknown workflow ends the client's generator quietly, where the in-process reader raises. Preserved deliberately: the batch read reports a missing workflow the same way as a workflow with nothing buffered."""
+    assert list(client.read_stream(str(uuid.uuid4()), "s")) == []
 
 
 def test_client_read_stream_workflow_termination(

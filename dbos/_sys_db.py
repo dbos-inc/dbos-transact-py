@@ -510,6 +510,9 @@ DEFAULT_SYS_DB_POOL_SIZE = 20
 # Interval for coalescing stream-write notifications off the write path; caps the rate of notifying commits regardless of write throughput.
 DEFAULT_STREAM_NOTIFICATION_COALESCE_SEC = 0.01
 
+# Values a stream reader fetches per round trip; amortizes the trip over a backlog while bounding how much it buffers at once.
+STREAM_READ_BATCH_SIZE = 100
+
 
 class SystemDatabase(ABC):
 
@@ -4520,6 +4523,53 @@ class SystemDatabase(ABC):
 
             # Deserialize the value before returning
             return deserialize_value(result[0], result[1], self.serializer)
+
+    @db_retry()
+    def read_stream_batch(
+        self, workflow_uuid: str, key: str, offset: int, limit: int
+    ) -> Tuple[Optional[str], List[Any]]:
+        """Read a stream reader's next values and the owning workflow's status in one round trip.
+
+        Returns (status, values), where status is None if the workflow does not exist and values
+        holds up to `limit` consecutive values starting at `offset` (empty if none are buffered).
+        Both come from one statement, so they share a snapshot: a terminal status is never
+        observed alongside a stale view of the stream.
+        """
+        # LEFT JOIN so a workflow with nothing buffered at offset still reports its status.
+        join = SystemSchema.workflow_status.outerjoin(
+            SystemSchema.streams,
+            sa.and_(
+                SystemSchema.streams.c.workflow_uuid
+                == SystemSchema.workflow_status.c.workflow_uuid,
+                SystemSchema.streams.c.key == key,
+                SystemSchema.streams.c.offset >= offset,
+            ),
+        )
+        # Polling read (listener-less clients poll the offset) under the limiter; inside db_retry so the permit frees across backoff.
+        with self.poll_limiter, self.engine.begin() as c:
+            rows = c.execute(
+                sa.select(
+                    SystemSchema.workflow_status.c.status,
+                    SystemSchema.streams.c.value,
+                    SystemSchema.streams.c.serialization,
+                    SystemSchema.streams.c.offset,
+                )
+                .select_from(join)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
+                .order_by(SystemSchema.streams.c.offset)
+                .limit(limit)
+            ).fetchall()
+
+        if not rows:
+            return None, []
+        values: List[Any] = []
+        # Stop at the first gap so this reports exactly what a per-offset read would: writers commit
+        # offsets contiguously, but reading across a hole would silently yield a later value as an earlier one.
+        for expected, row in enumerate(rows, start=offset):
+            if row[3] != expected:
+                break
+            values.append(deserialize_value(row[1], row[2], self.serializer))
+        return rows[0][0], values
 
     def garbage_collect(
         self,
