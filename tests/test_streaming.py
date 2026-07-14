@@ -7,6 +7,7 @@ from sqlalchemy import event as sa_event
 
 # Public API
 from dbos import DBOS, DBOSConfig, SetWorkflowID
+from dbos import _dbos as dbos_module
 from dbos._client import DBOSClient
 from dbos._sys_db import _no_stream_value
 from dbos._sys_db_postgres import PostgresSystemDatabase
@@ -123,6 +124,49 @@ def test_stream_read_value_returns_status_and_value(dbos: DBOS) -> None:
     status, value = sys_db.read_stream_value(str(uuid.uuid4()), "s", 0)
     assert status is None
     assert value is _no_stream_value
+
+
+@pytest.mark.asyncio
+async def test_stream_read_async_sub_poll_observes_notifications(
+    dbos: DBOS, skip_with_sqlite: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """read_stream_async waits on the notification event by sub-polling it, tightly at first and
+    relaxed once a value has been awaited a while. Both branches must observe the event promptly.
+
+    This passes a long polling_interval_sec on purpose. The suite's default (0.01s, conftest.py)
+    makes `min(remaining, sub_poll) == remaining` whichever branch is taken, so under it the sub-poll
+    constants have no effect and a regression in either is invisible.
+    """
+    # Relax after 0.2s rather than the real 10s, so the test need not idle for the full window.
+    monkeypatch.setattr(dbos_module, "_STREAM_EVENT_FAST_POLL_WINDOW_SEC", 0.2)
+    # First gap stays inside the window (fast branch); the rest exceed it (relaxed branch).
+    gaps = [0.1, 0.5, 0.5]
+    written: dict[int, float] = {}
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for i, gap in enumerate(gaps):
+            DBOS.sleep(gap)
+            written[i] = time.time()
+            DBOS.write_stream("s", i)
+        DBOS.close_stream("s")
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        DBOS.start_workflow(writer_workflow)
+
+    # A fallback re-read interval far longer than any gap: prompt delivery can only come from the
+    # sub-poll observing the notification, never from the fallback.
+    latencies = []
+    async for value in DBOS.read_stream_async(wfid, "s", polling_interval_sec=30.0):
+        latencies.append(time.time() - written[value])
+
+    assert len(latencies) == len(gaps)
+    # Fast branch: sub-polls at 0.01s, so the value lands almost immediately.
+    assert latencies[0] < 0.15, f"fast-branch latency {latencies[0]:.3f}s"
+    # Relaxed branch: sub-polls at 0.1s. Raising it to the 1.0s default fallback interval would make
+    # the reader sleep clean past each write and land near 0.7s here.
+    assert max(latencies[1:]) < 0.3, f"relaxed-branch latencies {latencies[1:]}"
 
 
 def test_stream_read_is_one_round_trip_per_value(dbos: DBOS) -> None:
@@ -339,10 +383,18 @@ def test_stream_low_latency_delivery(
     # In-process DBOS reader: woken by LISTEN/NOTIFY, so delivery is single-digit
     # milliseconds. The threshold leaves headroom for CI stalls while staying
     # well below what a broken wakeup path would produce.
+    # The fallback re-read interval is raised for this phase so that a working notification is the
+    # only thing that can deliver within the threshold; at the suite default (0.01s, conftest.py)
+    # the fallback delivers every value in ~10ms and this phase passes even with no notifier at all.
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         handle = DBOS.start_workflow(writer_workflow)
-    count, max_latency = measure(DBOS.read_stream(wfid, stream_key))
+    original_interval = dbos._sys_db._notification_listener_polling_interval_sec
+    dbos._sys_db._notification_listener_polling_interval_sec = 10.0
+    try:
+        count, max_latency = measure(DBOS.read_stream(wfid, stream_key))
+    finally:
+        dbos._sys_db._notification_listener_polling_interval_sec = original_interval
     handle.get_result()
     assert count == num_values
     assert max_latency < 2.0, f"DBOS delivery latency {max_latency:.3f}s too high"

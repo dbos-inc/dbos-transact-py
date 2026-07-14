@@ -176,7 +176,9 @@ T = TypeVar("T")
 # read_stream_async sub-polls its in-memory notification event tightly for the first window (low push latency), then relaxes for long-idle streams to save event-loop wakeups.
 _STREAM_EVENT_FAST_POLL_SEC = 0.01
 _STREAM_EVENT_FAST_POLL_WINDOW_SEC = 10.0
-_STREAM_EVENT_SLOW_POLL_SEC = 1.0
+# Must stay well under the fallback poll interval: at or above it, min(remaining, sub_poll) becomes one
+# sleep to the deadline and the notification event is never observed mid-wait.
+_STREAM_EVENT_SLOW_POLL_SEC = 0.1
 
 IsolationLevel = Literal[
     "SERIALIZABLE",
