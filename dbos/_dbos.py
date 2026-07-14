@@ -606,6 +606,12 @@ class DBOS:
                     f"Latest version is '{latest['version_name']}'."
                 )
 
+            # Kafka consumers name their queue, so it is only resolvable now that every queue is registered; check before starting any thread, so a rejected consumer fails launch with nothing to unwind.
+            if self._registry.kafka_registrations:
+                from ._kafka import validate_kafka_consumers
+
+                validate_kafka_consumers(self)
+
             admin_port = self._config.get("runtimeConfig", {}).get("admin_port")
             if admin_port is None:
                 admin_port = 3001
@@ -1148,7 +1154,7 @@ class DBOS:
         *,
         ordering: Optional[KafkaOrdering] = None,
         batch_size: int = 250,
-        queue: Optional[Queue] = None,
+        queue_name: Optional[str] = None,
     ) -> Callable[[_KafkaConsumerWorkflow], _KafkaConsumerWorkflow]:
         """Decorate a function to be used as a Kafka consumer.
 
@@ -1162,9 +1168,9 @@ class DBOS:
                 partitions; "topic" processes them serially per topic.
             batch_size: Maximum number of messages consumed and durably
                 enqueued per batch.
-            queue: Optional queue on which consumer workflows run, for
-                configuring concurrency limits. Only valid with
-                ordering="none"; ordered consumers share an internal
+            queue_name: Name of an optional queue on which consumer workflows
+                run. It must not be a partitioned queue, and is only valid
+                with ordering="none"; ordered consumers share an internal
                 partitioned queue.
         """
         try:
@@ -1177,7 +1183,7 @@ class DBOS:
                 in_order,
                 ordering=ordering,
                 batch_size=batch_size,
-                queue=queue,
+                queue_name=queue_name,
             )
         except ModuleNotFoundError as e:
             raise DBOSException(
