@@ -20,6 +20,7 @@ from dbos._error import DBOSException, DBOSQueueDeduplicatedError
 from dbos._queue import Queue
 from dbos._registrations import get_dbos_func_name
 from dbos._utils import GlobalParams
+from tests.conftest import set_workflow_status
 
 
 def test_debouncer(dbos: DBOS) -> None:
@@ -71,7 +72,7 @@ def test_debouncer(dbos: DBOS) -> None:
         debouncer_test_workflow()
 
     # Rerun the workflow, verify it looks up by name and still works
-    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+    set_workflow_status(dbos._sys_db, wfid, "PENDING")
     dbos._execute_workflow_id(wfid).get_result()
 
 
@@ -523,7 +524,7 @@ def test_debounce_inworkflow_replay_is_deterministic(dbos: DBOS) -> None:
     assert parent_body_runs["count"] == 1
 
     # Force the parent to replay from its checkpoint: the bounce step and enqueue are checkpointed, so replay must re-run the body, return the same child id, and not enqueue a second child.
-    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+    set_workflow_status(dbos._sys_db, wfid, "PENDING")
     recovery_handles = DBOS._recover_pending_workflows()
     replayed = [h for h in recovery_handles if h.workflow_id == wfid]
     assert len(replayed) == 1
@@ -831,7 +832,7 @@ def test_debounce_bounce_atomic_with_checkpoint(
     assert status["delay_until_epoch_ms"] == delay_before
 
     # Recovery replays the parent: no checkpoint exists, so the bounce re-executes and lands exactly once.
-    dbos._sys_db.update_workflow_outcome(pwfid, "PENDING")
+    set_workflow_status(dbos._sys_db, pwfid, "PENDING")
     recovery_handles = DBOS._recover_pending_workflows()
     replayed = [h for h in recovery_handles if h.workflow_id == pwfid]
     assert len(replayed) == 1
@@ -894,7 +895,7 @@ def test_debounce_bounce_checkpoint_survives_post_commit_crash(dbos: DBOS) -> No
     delay_after_crash = status["delay_until_epoch_ms"]
 
     # Replay short-circuits through the checkpoint: same handle, and no re-executed bounce re-extends the delay.
-    dbos._sys_db.update_workflow_outcome(pwfid, "PENDING")
+    set_workflow_status(dbos._sys_db, pwfid, "PENDING")
     recovery_handles = DBOS._recover_pending_workflows()
     replayed = [h for h in recovery_handles if h.workflow_id == pwfid]
     assert len(replayed) == 1

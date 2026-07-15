@@ -39,7 +39,7 @@ from dbos._error import (
 )
 from dbos._schemas.system_database import SystemSchema
 from dbos._utils import GlobalParams
-from tests.conftest import retry_until_success, using_sqlite
+from tests.conftest import retry_until_success, set_workflow_status, using_sqlite
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -636,7 +636,7 @@ def test_recovery_thread(config: DBOSConfig) -> None:
         assert test_workflow(test_var) == test_var
 
     # Change the workflow status to pending
-    dbos._sys_db.update_workflow_outcome(wfuuid, "PENDING")
+    set_workflow_status(dbos._sys_db, wfuuid, "PENDING")
 
     DBOS.destroy(destroy_registry=True)
     DBOS(config=config)

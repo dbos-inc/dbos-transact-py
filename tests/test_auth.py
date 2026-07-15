@@ -15,7 +15,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from dbos import DBOS, DBOSContextSetAuth, Queue
 from dbos._error import DBOSInitializationError, DBOSNotAuthorizedError
 from dbos._sys_db import WorkflowStatusString
-from tests.conftest import TestOtelType, retry_until_success
+from tests.conftest import TestOtelType, retry_until_success, set_workflow_status
 
 
 @pytest.mark.order(1)
@@ -170,7 +170,7 @@ def test_roles_recovery(dbos: DBOS) -> None:
     assert handle.get_result() is None
 
     # Recover the workflow, verify roles are set right
-    dbos._sys_db.update_workflow_outcome(handle.workflow_id, "PENDING")
+    set_workflow_status(dbos._sys_db, handle.workflow_id, "PENDING")
     recovery_handles = DBOS._recover_pending_workflows()
     assert len(recovery_handles) == 1
     recovery_handle = recovery_handles[0]
@@ -193,7 +193,7 @@ async def test_roles_recovery_async(dbos: DBOS) -> None:
     await handle.get_result()
 
     # Recover the workflow, verify roles are set right
-    dbos._sys_db.update_workflow_outcome(handle.workflow_id, "PENDING")
+    set_workflow_status(dbos._sys_db, handle.workflow_id, "PENDING")
     recovery_handles = DBOS._recover_pending_workflows()
     assert len(recovery_handles) == 1
     recovery_handle = recovery_handles[0]
@@ -276,7 +276,7 @@ def test_roles_denied_recovery(dbos: DBOS) -> None:
         handle.get_result()
 
     # Reset to PENDING and recover; the role check should fail it again to ERROR.
-    dbos._sys_db.update_workflow_outcome(handle.workflow_id, "PENDING")
+    set_workflow_status(dbos._sys_db, handle.workflow_id, "PENDING")
     recovery_handles = DBOS._recover_pending_workflows()
     assert len(recovery_handles) == 1
     with pytest.raises(DBOSNotAuthorizedError):
@@ -318,7 +318,7 @@ def test_roles_denied_queue_recovery(dbos: DBOS) -> None:
 
     # Reset to PENDING (queue_name is preserved) and recover. Because the row is
     # queued, recovery returns it to the queue rather than executing it directly.
-    dbos._sys_db.update_workflow_outcome(handle.workflow_id, "PENDING")
+    set_workflow_status(dbos._sys_db, handle.workflow_id, "PENDING")
     recovery_handles = DBOS._recover_pending_workflows()
     assert len(recovery_handles) == 1
     with pytest.raises(DBOSNotAuthorizedError):

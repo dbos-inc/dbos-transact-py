@@ -99,6 +99,7 @@ from ._scheduler import (
 )
 from ._scheduler_decorator import DecoratedScheduledWorkflow, scheduled
 from ._sys_db import (
+    DEFAULT_STREAM_NOTIFICATION_COALESCE_SEC,
     GetEventWorkflowContext,
     SendMessage,
     StepInfo,
@@ -107,6 +108,7 @@ from ._sys_db import (
     WorkflowSchedule,
     WorkflowStatus,
     _dbos_stream_closed_sentinel,
+    _no_stream_value,
     workflow_is_active,
 )
 from ._tracer import DBOSTracer, dbos_tracer
@@ -567,6 +569,12 @@ class DBOS:
                 )
                 or 1.0
             )
+            stream_notification_coalesce_sec = (
+                self._config.get("runtimeConfig", {}).get(
+                    "stream_notification_coalesce_sec"
+                )
+                or DEFAULT_STREAM_NOTIFICATION_COALESCE_SEC
+            )
             self._sys_db_field = SystemDatabase.create(
                 system_database_url=get_system_database_url(self._config),
                 engine_kwargs=self._config["database"]["sys_db_engine_kwargs"],
@@ -576,6 +584,7 @@ class DBOS:
                 use_listen_notify=self._config["use_listen_notify"],
                 executor_id=GlobalParams.executor_id,
                 notification_listener_polling_interval_sec=self._notification_listener_polling_interval_sec,
+                stream_notification_coalesce_sec=stream_notification_coalesce_sec,
                 polling_concurrency=self._config["database"].get(
                     "sys_db_polling_concurrency"
                 ),
@@ -606,7 +615,7 @@ class DBOS:
                     f"Latest version is '{latest['version_name']}'."
                 )
 
-            # Kafka consumers name their queue, so it is only resolvable now that every queue is registered; check before starting any thread, so a rejected consumer fails launch with nothing to unwind.
+            # Kafka consumers name their queue, so it is only resolvable now that every queue is registered; check here so a rejected consumer fails launch before any consumer or queue thread starts.
             if self._registry.kafka_registrations:
                 from ._kafka import validate_kafka_consumers
 
@@ -649,6 +658,15 @@ class DBOS:
             )
             notification_listener_thread.start()
             self._background_threads.append(notification_listener_thread)
+
+            # Push coalesced stream-write notifications off the write path (no-op unless Postgres + L/N).
+            dbos_logger.debug("Starting stream notifier thread")
+            stream_notifier_thread = threading.Thread(
+                target=self._sys_db.run_stream_notifier,
+                daemon=True,
+            )
+            stream_notifier_thread.start()
+            self._background_threads.append(stream_notifier_thread)
 
             # Create the internal queue if it has not yet been created
             self._registry.get_internal_queue()
@@ -3256,28 +3274,27 @@ class DBOS:
                 # Clear before reading so a notification arriving after the read
                 # leaves the event set and the wait below returns immediately.
                 event.clear()
-                try:
-                    value = sys_db.read_stream(workflow_id, key, offset)
+                # One round trip for both the value and the workflow's status.
+                status, value = sys_db.read_stream_value(workflow_id, key, offset)
+                if status is None:
+                    raise DBOSNonExistentWorkflowError("target", workflow_id)
+                if value is not _no_stream_value:
                     if value == _dbos_stream_closed_sentinel:
-                        break
+                        return
                     yield value
                     offset += 1
-                except ValueError:
-                    if final_read:
-                        break
-                    # No value yet: stop if the workflow is done, else wait for a
-                    # notification. Workflow completion fires none, so the wait
-                    # is bounded by the polling interval to notice termination.
-                    status = cls.retrieve_workflow(workflow_id).get_status().status
-                    if not workflow_is_active(status):
-                        # The workflow may have written between the read above and
-                        # this status check; all its writes are committed by now,
-                        # so read to the end of the stream before stopping.
-                        final_read = True
-                        continue
-                    event.wait(
-                        timeout=sys_db._notification_listener_polling_interval_sec
-                    )
+                    # More may be buffered; read the next offset before waiting.
+                    continue
+                if final_read:
+                    break
+                # No value yet: stop if the workflow is done, else wait for a
+                # notification. Workflow completion fires none, so the wait
+                # is bounded by the polling interval to notice termination.
+                if not workflow_is_active(status):
+                    # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
+                    final_read = True
+                    continue
+                event.wait(timeout=sys_db._notification_listener_polling_interval_sec)
         finally:
             sys_db.unregister_stream_listener(payload)
 
@@ -3364,36 +3381,29 @@ class DBOS:
                 # Clear before reading so a notification arriving after the read
                 # leaves the event set and the wait below returns immediately.
                 event.clear()
-                try:
-                    value = await asyncio.to_thread(
-                        sys_db.read_stream, workflow_id, key, offset
-                    )
+                # One round trip for both the value and the workflow's status.
+                status, value = await asyncio.to_thread(
+                    sys_db.read_stream_value, workflow_id, key, offset
+                )
+                if status is None:
+                    raise DBOSNonExistentWorkflowError("target", workflow_id)
+                if value is not _no_stream_value:
                     if value == _dbos_stream_closed_sentinel:
-                        break
+                        return
                     yield value
                     offset += 1
-                except ValueError:
-                    if final_read:
-                        break
-                    # No value yet: stop if the workflow is done, else wait for a
-                    # notification. Poll the event with short asyncio sleeps (no
-                    # held thread), bounded by the fallback re-check interval.
-                    handle: WorkflowHandleAsync[Any] = (
-                        await cls.retrieve_workflow_async(workflow_id)
-                    )
-                    status = await handle.get_status()
-                    if not workflow_is_active(status.status):
-                        # The workflow may have written between the read above and
-                        # this status check; all its writes are committed by now,
-                        # so read to the end of the stream before stopping.
-                        final_read = True
-                        continue
-                    deadline = time.time() + polling_interval
-                    while not event.is_set():
-                        remaining = deadline - time.time()
-                        if remaining <= 0:
-                            break
-                        await asyncio.sleep(min(remaining, 0.1))
+                    # More may be buffered; read the next offset before waiting.
+                    continue
+                if final_read:
+                    break
+                # No value yet: stop if the workflow is done, else await a
+                # notification, re-reading at the fallback interval in case one
+                # was dropped.
+                if not workflow_is_active(status):
+                    # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
+                    final_read = True
+                    continue
+                await event.wait_async(timeout=polling_interval)
         finally:
             sys_db.unregister_stream_listener(payload)
 

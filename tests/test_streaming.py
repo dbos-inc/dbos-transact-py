@@ -1,12 +1,16 @@
 import time
 import uuid
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from sqlalchemy import event as sa_event
 
 # Public API
 from dbos import DBOS, DBOSConfig, SetWorkflowID
 from dbos._client import DBOSClient
+from dbos._sys_db import _no_stream_value
+from dbos._sys_db_postgres import PostgresSystemDatabase
+from tests.conftest import retry_until_success, set_workflow_status
 
 
 def test_basic_stream_write_read(dbos: DBOS) -> None:
@@ -84,6 +88,120 @@ async def test_stream_read_offset_async(dbos: DBOS) -> None:
 
     values = [v async for v in DBOS.read_stream_async(wfid, stream_key, offset=3)]
     assert values == [3, 4]
+
+
+def test_stream_read_value_returns_status_and_value(dbos: DBOS) -> None:
+    """read_stream_value answers both questions a reader tick asks -- 'is there a value at this offset?' and 'is the workflow still running?' -- in one round trip, from one snapshot."""
+    sys_db = dbos._sys_db
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        DBOS.write_stream("s", 0)
+        DBOS.write_stream("s", None)
+        DBOS.close_stream("s")
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        DBOS.start_workflow(writer_workflow).get_result()
+
+    # The value at the offset and the status, together.
+    status, value = sys_db.read_stream_value(wfid, "s", 0)
+    assert status == "SUCCESS"
+    assert value == 0
+
+    # A written None is a value, not an absence -- which is why absence needs its own sentinel.
+    status, value = sys_db.read_stream_value(wfid, "s", 1)
+    assert status == "SUCCESS"
+    assert value is None
+
+    # Past the end: still reports status, so the reader can tell "not yet" from "never".
+    status, value = sys_db.read_stream_value(wfid, "s", 99)
+    assert status == "SUCCESS"
+    assert value is _no_stream_value
+
+    # A non-existent workflow is distinguishable from a workflow with no value at the offset.
+    status, value = sys_db.read_stream_value(str(uuid.uuid4()), "s", 0)
+    assert status is None
+    assert value is _no_stream_value
+
+
+@pytest.mark.asyncio
+async def test_stream_read_async_wakes_on_notification(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    """read_stream_async awaits the notification event, so a write wakes it immediately
+    rather than at the next fallback re-read.
+
+    This passes a long polling_interval_sec on purpose. The suite's default (0.01s, conftest.py)
+    re-reads faster than any notification arrives, so under it a regression in the wakeup path
+    would be invisible.
+    """
+    gaps = [0.1, 0.5, 0.5]
+    written: dict[int, float] = {}
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for i, gap in enumerate(gaps):
+            DBOS.sleep(gap)
+            written[i] = time.time()
+            DBOS.write_stream("s", i)
+        DBOS.close_stream("s")
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        DBOS.start_workflow(writer_workflow)
+
+    # A fallback re-read interval far longer than any gap: prompt delivery can only come from
+    # the notification waking the reader, never from the fallback.
+    latencies = []
+    async for value in DBOS.read_stream_async(wfid, "s", polling_interval_sec=30.0):
+        latencies.append(time.time() - written[value])
+
+    assert len(latencies) == len(gaps)
+    # Without the wakeup the reader sleeps to the 30s deadline, drains all three at once, and fails here with ~30s latencies.
+    assert max(latencies) < 0.15, f"notification latencies {latencies}"
+
+
+def test_stream_read_is_one_round_trip_per_value(dbos: DBOS) -> None:
+    """Each reader tick issues a single query fetching the value and the workflow status together, rather than reading the stream and then looking the status up separately."""
+    n = 25
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for i in range(n):
+            DBOS.write_stream("s", i)
+        DBOS.close_stream("s")
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        DBOS.start_workflow(writer_workflow).get_result()
+
+    # Only the reader joins streams to workflow_status, so background threads sharing the engine cannot match.
+    # Matched loosely rather than by table name, which is schema-qualified.
+    reads = []
+
+    def count(
+        conn: Any, cursor: Any, statement: str, params: Any, context: Any, many: bool
+    ) -> None:
+        s = " ".join(statement.lower().split())
+        if "outer join" in s and "streams" in s and "workflow_status" in s:
+            reads.append(statement)
+
+    engine = dbos._sys_db.engine
+    sa_event.listen(engine, "before_cursor_execute", count)
+    try:
+        values = list(DBOS.read_stream(wfid, "s"))
+    finally:
+        sa_event.remove(engine, "before_cursor_execute", count)
+
+    assert values == list(range(n))
+    # Guards against passing vacuously: reading the status separately issues no joined query at all.
+    assert reads, "reader did not fetch value and status in one joined query"
+    # One query per delivered value, plus the one that finds the close sentinel. Two queries per
+    # tick (a read then a status lookup) would double this.
+    assert (
+        len(reads) == n + 1
+    ), f"expected {n + 1} reads for {n} values, got {len(reads)}"
 
 
 def test_client_read_stream_offset(dbos: DBOS, client: DBOSClient) -> None:
@@ -258,10 +376,18 @@ def test_stream_low_latency_delivery(
     # In-process DBOS reader: woken by LISTEN/NOTIFY, so delivery is single-digit
     # milliseconds. The threshold leaves headroom for CI stalls while staying
     # well below what a broken wakeup path would produce.
+    # The fallback re-read interval is raised for this phase so that a working notification is the
+    # only thing that can deliver within the threshold; at the suite default (0.01s, conftest.py)
+    # the fallback delivers every value in ~10ms and this phase passes even with no notifier at all.
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         handle = DBOS.start_workflow(writer_workflow)
-    count, max_latency = measure(DBOS.read_stream(wfid, stream_key))
+    original_interval = dbos._sys_db._notification_listener_polling_interval_sec
+    dbos._sys_db._notification_listener_polling_interval_sec = 10.0
+    try:
+        count, max_latency = measure(DBOS.read_stream(wfid, stream_key))
+    finally:
+        dbos._sys_db._notification_listener_polling_interval_sec = original_interval
     handle.get_result()
     assert count == num_values
     assert max_latency < 2.0, f"DBOS delivery latency {max_latency:.3f}s too high"
@@ -279,10 +405,7 @@ def test_stream_low_latency_delivery(
     assert count == num_values
     assert max_latency < 5.0, f"client delivery latency {max_latency:.3f}s too high"
 
-    # Recreate the in-process DBOS with LISTEN/NOTIFY disabled and confirm the
-    # reader still receives every value via the polling fallback. The trigger
-    # installed earlier harmlessly fires notifications that nobody listens for;
-    # the reader is woken by the polling listener thread instead.
+    # Recreate the in-process DBOS with LISTEN/NOTIFY disabled: the app-side notifier stays idle and no notifications fire, so the reader is woken by the polling listener thread instead.
     DBOS.destroy(destroy_registry=False)
     config["use_listen_notify"] = False
     DBOS(config=config)
@@ -357,10 +480,7 @@ async def test_stream_low_latency_delivery_async(
     assert count == num_values
     assert max_latency < 5.0, f"client delivery latency {max_latency:.3f}s too high"
 
-    # Recreate the in-process DBOS with LISTEN/NOTIFY disabled and confirm the
-    # reader still receives every value via the polling fallback. The trigger
-    # installed earlier harmlessly fires notifications that nobody listens for;
-    # the reader is woken by the polling listener thread instead.
+    # Recreate the in-process DBOS with LISTEN/NOTIFY disabled: the app-side notifier stays idle and no notifications fire, so the reader is woken by the polling listener thread instead.
     DBOS.destroy(destroy_registry=False)
     config["use_listen_notify"] = False
     DBOS(config=config)
@@ -375,6 +495,131 @@ async def test_stream_low_latency_delivery_async(
     assert (
         max_latency < 20.0
     ), f"polling DBOS delivery latency {max_latency:.3f}s too high"
+
+
+def test_stream_notifier_delivers_without_trigger(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    """The per-row NOTIFY trigger is dropped (migration 43) and wakeups come from the coalescing app-side notifier: assert the trigger is gone and a reader on a long poll fallback is still woken by the notifier."""
+    import sqlalchemy as sa
+
+    sys_db = dbos._sys_db
+
+    # No per-row trigger may remain on the streams table.
+    with sys_db.engine.begin() as c:
+        trigger = c.execute(
+            sa.text(
+                "SELECT 1 FROM pg_trigger t "
+                "JOIN pg_class cl ON t.tgrelid = cl.oid "
+                "JOIN pg_namespace n ON cl.relnamespace = n.oid "
+                "WHERE n.nspname = :schema AND cl.relname = 'streams' "
+                "AND t.tgname = 'dbos_streams_trigger'"
+            ),
+            {"schema": sys_db.schema},
+        ).fetchone()
+    assert trigger is None, "dbos_streams_trigger should have been dropped"
+
+    stream_key = "notifier_stream"
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        DBOS.write_stream(stream_key, "first")
+        # Keep the stream open so the reader blocks, then write a value it can only get via a notification.
+        DBOS.sleep(2.0)
+        DBOS.write_stream(stream_key, "second")
+        DBOS.close_stream(stream_key)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(writer_workflow)
+
+    # Force a poll interval far longer than the write gap so timely delivery must come from the notifier, not the poll.
+    original_interval = sys_db._notification_listener_polling_interval_sec
+    sys_db._notification_listener_polling_interval_sec = 30.0
+    try:
+        received = []
+        start = time.time()
+        for value in DBOS.read_stream(wfid, stream_key):
+            received.append((value, time.time() - start))
+        handle.get_result()
+    finally:
+        sys_db._notification_listener_polling_interval_sec = original_interval
+
+    assert [v for v, _ in received] == ["first", "second"]
+    # The second value is written ~2s in; the notifier must wake the reader well before the 30s poll would.
+    second_latency = received[1][1]
+    assert second_latency < 10.0, f"second value took {second_latency:.3f}s to arrive"
+
+
+def test_stream_notifier_drops_unsendable_payload(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    """A batch pg_notify rejects (e.g. a payload over the 8000-byte limit) is dropped, not requeued, so a poison payload can't permanently stall the notifier (H1); the notifier keeps delivering afterward and polling covers the dropped values."""
+    sys_db = cast(PostgresSystemDatabase, dbos._sys_db)
+    # A stream key past pg_notify's 8000-byte payload limit makes its batch unsendable.
+    poison_payload = f"{uuid.uuid4()}::{'x' * 9000}"
+
+    with sys_db._stream_notifier_lock:
+        sys_db._pending_stream_notifications = {poison_payload}
+    sys_db._flush_stream_notifications()
+
+    # The poison batch is dropped, not requeued (requeuing would loop forever).
+    with sys_db._stream_notifier_lock:
+        assert sys_db._pending_stream_notifications == set()
+
+    # The notifier still works afterward: a subsequent good payload is delivered.
+    good_wf = str(uuid.uuid4())
+    good_key = "deliverable"
+    event, payload_key = sys_db.register_stream_listener(good_wf, good_key)
+    try:
+        event.clear()
+        with sys_db._stream_notifier_lock:
+            sys_db._pending_stream_notifications = {f"{good_wf}::{good_key}"}
+        sys_db._flush_stream_notifications()
+        assert event.wait(
+            timeout=10
+        ), "notifier stopped delivering after a poison batch"
+    finally:
+        sys_db.unregister_stream_listener(payload_key)
+
+
+def test_stream_notifier_survives_flush_error(
+    dbos: DBOS, skip_with_sqlite: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An exception escaping a flush must not kill the notifier thread (M1): it logs, backs off, and resumes delivering. Without the loop guard the thread would die and stop all stream push notifications for the process."""
+    sys_db = cast(PostgresSystemDatabase, dbos._sys_db)
+    real_flush = sys_db._flush_stream_notifications
+    state = {"raised": False}
+
+    def flaky_flush() -> None:
+        # Raise once (even on an empty batch) to simulate an unexpected error; then behave normally.
+        if not state["raised"]:
+            state["raised"] = True
+            raise RuntimeError("simulated flush failure")
+        real_flush()
+
+    monkeypatch.setattr(sys_db, "_flush_stream_notifications", flaky_flush)
+
+    # Wait until the running notifier thread has hit the injected failure.
+    def failure_injected() -> bool:
+        assert state["raised"], "notifier has not called flush yet"
+        return True
+
+    retry_until_success(failure_injected)
+
+    # The thread must have survived it and still deliver a subsequently signaled stream.
+    good_wf = str(uuid.uuid4())
+    good_key = "post_error"
+    event, payload_key = sys_db.register_stream_listener(good_wf, good_key)
+    try:
+        event.clear()
+        with sys_db._stream_notifier_lock:
+            sys_db._pending_stream_notifications.add(f"{good_wf}::{good_key}")
+        assert event.wait(
+            timeout=10
+        ), "notifier did not resume delivering after a flush error"
+    finally:
+        sys_db.unregister_stream_listener(payload_key)
 
 
 def test_stream_multiple_keys(dbos: DBOS) -> None:
@@ -526,7 +771,7 @@ def test_stream_workflow_recovery(dbos: DBOS) -> None:
     assert values == ["step_1", "step_2"]
 
     # Reset call count and run the same workflow ID again (should replay)
-    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+    set_workflow_status(dbos._sys_db, wfid, "PENDING")
     dbos._execute_workflow_id(wfid).get_result()
 
     # The workflow should have been called again
@@ -884,6 +1129,54 @@ async def test_client_read_stream_async(dbos: DBOS, client: DBOSClient) -> None:
         assert read_values == test_values
     finally:
         client.destroy()
+
+
+def test_client_read_stream_is_one_round_trip_per_value(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    """The client reader fetches value and status in one joined query per tick, like the in-process one."""
+    n = 25
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for i in range(n):
+            DBOS.write_stream("s", i)
+        DBOS.close_stream("s")
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        DBOS.start_workflow(writer_workflow).get_result()
+
+    reads = []
+
+    def count(
+        conn: Any, cursor: Any, statement: str, params: Any, context: Any, many: bool
+    ) -> None:
+        s = " ".join(statement.lower().split())
+        if "outer join" in s and "streams" in s and "workflow_status" in s:
+            reads.append(statement)
+
+    engine = client._sys_db.engine
+    sa_event.listen(engine, "before_cursor_execute", count)
+    try:
+        values = list(client.read_stream(wfid, "s"))
+    finally:
+        sa_event.remove(engine, "before_cursor_execute", count)
+
+    assert values == list(range(n))
+    # Guards against passing vacuously: reading the status separately issues no joined query at all.
+    assert reads, "client did not fetch value and status in one joined query"
+    # One query per delivered value, plus the one that finds the close sentinel.
+    assert (
+        len(reads) == n + 1
+    ), f"expected {n + 1} reads for {n} values, got {len(reads)}"
+
+
+def test_client_read_stream_nonexistent_workflow(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    """A stream on an unknown workflow ends the client's generator quietly, where the in-process reader raises. Preserved deliberately: the batch read reports a missing workflow the same way as a workflow with nothing buffered."""
+    assert list(client.read_stream(str(uuid.uuid4()), "s")) == []
 
 
 def test_client_read_stream_workflow_termination(

@@ -34,6 +34,7 @@ from sqlalchemy.sql import func
 from dbos._debug_trigger import DebugTriggers
 from dbos._utils import (
     INTERNAL_QUEUE_NAME,
+    LoopAwareEvent,
     PollingLimiter,
     generate_uuid,
     retriable_postgres_exception,
@@ -387,6 +388,9 @@ class NotificationInfo(TypedDict):
 _dbos_null_topic = "__null__topic__"
 _dbos_stream_closed_sentinel = "__DBOS_STREAM_CLOSED__"
 
+# Returned by read_stream_value when nothing is written at the requested offset. Not None, which is itself a valid stream value.
+_no_stream_value = object()
+
 
 @dataclass
 class SendMessage:
@@ -399,7 +403,7 @@ class SendMessage:
 
 
 class EventCount(TypedDict):
-    event: threading.Event
+    event: LoopAwareEvent
     count: int
     components: Tuple[str, str]
 
@@ -409,7 +413,7 @@ class ThreadSafeEventDict:
         self._dict: Dict[str, EventCount] = {}
         self._lock = threading.Lock()
 
-    def get(self, key: str) -> Optional[threading.Event]:
+    def get(self, key: str) -> Optional[LoopAwareEvent]:
         with self._lock:
             if key not in self._dict:
                 return None
@@ -418,9 +422,9 @@ class ThreadSafeEventDict:
     def set(
         self,
         key: str,
-        value: threading.Event,
+        value: LoopAwareEvent,
         components: Tuple[str, str],
-    ) -> tuple[bool, threading.Event]:
+    ) -> tuple[bool, LoopAwareEvent]:
         with self._lock:
             if key in self._dict:
                 # Key already exists, do not overwrite. Increment the wait count.
@@ -440,7 +444,7 @@ class ThreadSafeEventDict:
             else:
                 dbos_logger.warning(f"Key {key} not found in event dictionary.")
 
-    def snapshot(self) -> List[Tuple[str, Tuple[str, str], threading.Event]]:
+    def snapshot(self) -> List[Tuple[str, Tuple[str, str], LoopAwareEvent]]:
         """Return a snapshot of (key, components, event) for every entry."""
         with self._lock:
             return [
@@ -453,7 +457,7 @@ class ThreadSafeEventDict:
 # caller must wait on.
 EventSetupResult = Union[
     tuple[Literal[True], Any],
-    tuple[Literal[False], threading.Event, float, str, int],
+    tuple[Literal[False], LoopAwareEvent, float, str, int],
 ]
 
 
@@ -507,6 +511,9 @@ def db_retry(
 # Fallback pool size for defaulting polling concurrency when the engine's is unknown (mirrors configure_db_engine_parameters).
 DEFAULT_SYS_DB_POOL_SIZE = 20
 
+# Interval for coalescing stream-write notifications off the write path; caps the rate of notifying commits regardless of write throughput.
+DEFAULT_STREAM_NOTIFICATION_COALESCE_SEC = 0.01
+
 
 class SystemDatabase(ABC):
 
@@ -520,6 +527,7 @@ class SystemDatabase(ABC):
         executor_id: Optional[str],
         use_listen_notify: bool = True,
         notification_listener_polling_interval_sec: float = 1.0,
+        stream_notification_coalesce_sec: float = DEFAULT_STREAM_NOTIFICATION_COALESCE_SEC,
         polling_concurrency: Optional[int] = None,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
@@ -535,6 +543,7 @@ class SystemDatabase(ABC):
                 executor_id=executor_id,
                 use_listen_notify=use_listen_notify,
                 notification_listener_polling_interval_sec=notification_listener_polling_interval_sec,
+                stream_notification_coalesce_sec=stream_notification_coalesce_sec,
                 polling_concurrency=polling_concurrency,
             )
         else:
@@ -549,6 +558,7 @@ class SystemDatabase(ABC):
                 executor_id=executor_id,
                 use_listen_notify=use_listen_notify,
                 notification_listener_polling_interval_sec=notification_listener_polling_interval_sec,
+                stream_notification_coalesce_sec=stream_notification_coalesce_sec,
                 polling_concurrency=polling_concurrency,
             )
 
@@ -563,6 +573,7 @@ class SystemDatabase(ABC):
         executor_id: Optional[str],
         use_listen_notify: bool = True,
         notification_listener_polling_interval_sec: float = 1.0,
+        stream_notification_coalesce_sec: float = DEFAULT_STREAM_NOTIFICATION_COALESCE_SEC,
         polling_concurrency: Optional[int] = None,
     ):
         import sqlalchemy.dialects.postgresql as pg
@@ -628,6 +639,11 @@ class SystemDatabase(ABC):
         self._notification_listener_polling_interval_sec = (
             notification_listener_polling_interval_sec
         )
+        self._stream_notification_coalesce_sec = stream_notification_coalesce_sec
+
+        # Coalesced stream-write notification payloads, flushed off the write path by run_stream_notifier (Postgres + L/N only).
+        self._pending_stream_notifications: Set[str] = set()
+        self._stream_notifier_lock = threading.Lock()
 
         self._listener_thread_lock = threading.Lock()
         self._listener_running = False
@@ -2942,7 +2958,7 @@ class SystemDatabase(ABC):
 
         # Insert an event to the notifications map, so the listener can signal it when a message is received.
         payload = f"{workflow_uuid}::{topic}"
-        event = threading.Event()
+        event = LoopAwareEvent()
         success, _ = self.notifications_map.set(payload, event, (workflow_uuid, topic))
         if not success:
             # This should not happen, but if it does, it means the workflow is executed concurrently.
@@ -3050,7 +3066,7 @@ class SystemDatabase(ABC):
         self,
         workflow_uuid: str,
         topic: Optional[str],
-        event: threading.Event,
+        event: LoopAwareEvent,
     ) -> None:
         """Poll the database directly for a pending notification and signal the event if found.
         Used as a fallback in case the notification listener thread drops a notification.
@@ -3092,6 +3108,14 @@ class SystemDatabase(ABC):
         only re-check the database as a fallback."""
         self._listener_running = True
         self._notification_listener()
+
+    def _signal_stream_write(self, workflow_uuid: str, key: str) -> None:
+        """Hint that (workflow_uuid, key) was written; push-notification backends override to coalesce a wakeup, pollers ignore it."""
+        pass
+
+    def run_stream_notifier(self) -> None:
+        """Background loop flushing coalesced stream-write notifications; no-op except on push-notification backends (Postgres + L/N)."""
+        pass
 
     def recv(
         self,
@@ -3195,18 +3219,14 @@ class SystemDatabase(ABC):
         _, event, actual_timeout, payload, start_time = setup
         try:
             deadline = time.time() + actual_timeout
-            last_poll = time.time()
             while not event.is_set():
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     break
-                await asyncio.sleep(min(remaining, 0.1))
-                now = time.time()
-                if (
-                    not event.is_set()
-                    and now - last_poll >= self._event_recheck_interval()
-                ):
-                    last_poll = now
+                await event.wait_async(
+                    timeout=min(remaining, self._event_recheck_interval())
+                )
+                if not event.is_set() and time.time() < deadline:
                     await asyncio.to_thread(
                         self.recv_check, workflow_uuid, topic, event
                     )
@@ -3600,7 +3620,7 @@ class SystemDatabase(ABC):
                 )
 
         payload = f"{target_uuid}::{key}"
-        event = threading.Event()
+        event = LoopAwareEvent()
         success, existing_event = self.workflow_events_map.set(
             payload, event, (target_uuid, key)
         )
@@ -3677,7 +3697,7 @@ class SystemDatabase(ABC):
         self,
         target_uuid: str,
         key: str,
-        event: threading.Event,
+        event: LoopAwareEvent,
     ) -> None:
         """Poll the database directly for a workflow event and signal the event if found.
         Used as a fallback in case the notification listener thread drops a notification.
@@ -3742,18 +3762,14 @@ class SystemDatabase(ABC):
         _, event, actual_timeout, payload, start_time = setup
         try:
             deadline = time.time() + actual_timeout
-            last_poll = time.time()
             while not event.is_set():
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     break
-                await asyncio.sleep(min(remaining, 0.1))
-                now = time.time()
-                if (
-                    not event.is_set()
-                    and now - last_poll >= self._event_recheck_interval()
-                ):
-                    last_poll = now
+                await event.wait_async(
+                    timeout=min(remaining, self._event_recheck_interval())
+                )
+                if not event.is_set() and time.time() < deadline:
                     await asyncio.to_thread(
                         self.get_event_check, target_uuid, key, event
                     )
@@ -4371,6 +4387,7 @@ class SystemDatabase(ABC):
             try:
                 with self.engine.begin() as c:
                     c.execute(stmt)
+                self._signal_stream_write(workflow_uuid, key)
                 return
             except sa.exc.IntegrityError:
                 dbos_logger.warning(
@@ -4444,6 +4461,7 @@ class SystemDatabase(ABC):
                 self._record_operation_result_txn(
                     output, int(time.time() * 1000), conn=c
                 )
+            self._signal_stream_write(workflow_uuid, key)
             return
 
     def close_stream(self, workflow_uuid: str, function_id: int, key: str) -> None:
@@ -4458,7 +4476,7 @@ class SystemDatabase(ABC):
 
     def register_stream_listener(
         self, workflow_uuid: str, key: str
-    ) -> Tuple[threading.Event, str]:
+    ) -> Tuple[LoopAwareEvent, str]:
         """Register an event for the listener to signal when the stream is written.
 
         Returns the event to wait on and the payload key to unregister later.
@@ -4466,9 +4484,7 @@ class SystemDatabase(ABC):
         and the wait is not lost.
         """
         payload = f"{workflow_uuid}::{key}"
-        _, event = self.streams_map.set(
-            payload, threading.Event(), (workflow_uuid, key)
-        )
+        _, event = self.streams_map.set(payload, LoopAwareEvent(), (workflow_uuid, key))
         return event, payload
 
     def unregister_stream_listener(self, payload: str) -> None:
@@ -4476,28 +4492,47 @@ class SystemDatabase(ABC):
         self.streams_map.pop(payload)
 
     @db_retry()
-    def read_stream(self, workflow_uuid: str, key: str, offset: int) -> Any:
-        """Read the value at the specified offset for the given workflow_uuid and key."""
+    def read_stream_value(
+        self, workflow_uuid: str, key: str, offset: int
+    ) -> Tuple[Optional[str], Any]:
+        """Read the stream value at offset and the owning workflow's status in one round trip.
 
+        Returns (status, value). status is None if the workflow does not exist; value is
+        _no_stream_value if nothing is written at offset. Both come from one statement, so they
+        share a snapshot. A terminal status does not imply the stream is complete: cancel and
+        timeout set it out-of-band while the workflow is still running, so a caller that stops
+        reading must first drain to the first empty offset.
+        """
+        # LEFT JOIN so a workflow with nothing at offset still reports its status. Matching offset
+        # exactly keeps this a single index lookup on the (workflow_uuid, key, offset) primary key.
+        join = SystemSchema.workflow_status.outerjoin(
+            SystemSchema.streams,
+            sa.and_(
+                SystemSchema.streams.c.workflow_uuid
+                == SystemSchema.workflow_status.c.workflow_uuid,
+                SystemSchema.streams.c.key == key,
+                SystemSchema.streams.c.offset == offset,
+            ),
+        )
         # Polling read (listener-less clients poll the offset) under the limiter; inside db_retry so the permit frees across backoff.
         with self.poll_limiter, self.engine.begin() as c:
-            result = c.execute(
+            row = c.execute(
                 sa.select(
-                    SystemSchema.streams.c.value, SystemSchema.streams.c.serialization
-                ).where(
-                    SystemSchema.streams.c.workflow_uuid == workflow_uuid,
-                    SystemSchema.streams.c.key == key,
-                    SystemSchema.streams.c.offset == offset,
+                    SystemSchema.workflow_status.c.status,
+                    SystemSchema.streams.c.value,
+                    SystemSchema.streams.c.serialization,
+                    SystemSchema.streams.c.offset,
                 )
+                .select_from(join)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
 
-            if result is None:
-                raise ValueError(
-                    f"No value found for workflow_uuid={workflow_uuid}, key={key}, offset={offset}"
-                )
-
-            # Deserialize the value before returning
-            return deserialize_value(result[0], result[1], self.serializer)
+        if row is None:
+            return None, _no_stream_value
+        # streams.offset is non-nullable, so a NULL here means the join matched nothing at offset.
+        if row[3] is None:
+            return row[0], _no_stream_value
+        return row[0], deserialize_value(row[1], row[2], self.serializer)
 
     def garbage_collect(
         self,

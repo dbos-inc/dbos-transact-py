@@ -1,3 +1,4 @@
+import math
 import os
 import re
 from importlib import resources
@@ -47,6 +48,7 @@ class DBOSConfig(TypedDict, total=False):
         serializer (Serializer): A custom serializer and deserializer DBOS uses when storing program data in the system database
         use_listen_notify (bool): Whether to use LISTEN/NOTIFY or polling to listen for notifications and events.  Defaults to True. As this affects migrations, may not be changed after the system database is first created.
         notification_listener_polling_interval_sec (float): Polling interval in seconds for the notification listener background process. Defaults to 1.0. Minimum value is 0.001. Lower values can speed up test execution.
+        stream_notification_coalesce_sec (float): Interval in seconds for coalescing stream-write notifications pushed via LISTEN/NOTIFY. Bounds stream read latency and caps the rate of notifying commits independent of write throughput. Defaults to 0.01. Minimum value is 0.001.
         scheduler_polling_interval_sec (float): Polling interval in seconds for the scheduler thread to detect new workflow schedules. Defaults to 30.0.
         otel_attribute_format (Literal["legacy", "semconv"]): How span attribute names are emitted to OTLP.
             "legacy" (default) keeps DBOS's original names (e.g. operationUUID, applicationID) for backward
@@ -83,6 +85,7 @@ class DBOSConfig(TypedDict, total=False):
     use_listen_notify: Optional[bool]
     max_executor_threads: Optional[int]
     notification_listener_polling_interval_sec: Optional[float]
+    stream_notification_coalesce_sec: Optional[float]
     scheduler_polling_interval_sec: Optional[float]
     otel_attribute_format: Optional[Literal["legacy", "semconv"]]
 
@@ -94,6 +97,7 @@ class RuntimeConfig(TypedDict, total=False):
     run_admin_server: Optional[bool]
     max_executor_threads: Optional[int]
     notification_listener_polling_interval_sec: Optional[float]
+    stream_notification_coalesce_sec: Optional[float]
     scheduler_polling_interval_sec: Optional[float]
 
 
@@ -189,13 +193,24 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         ]
     if "notification_listener_polling_interval_sec" in config:
         interval = config["notification_listener_polling_interval_sec"]
-        if interval is not None and interval < 0.001:
+        # Reject NaN/inf too (they slip past a bare < 0.001) so the listener's time.sleep can't crash.
+        if interval is not None and (not math.isfinite(interval) or interval < 0.001):
             raise DBOSInitializationError(
-                f"notification_listener_polling_interval_sec must be at least 0.001 seconds, got {interval}"
+                f"notification_listener_polling_interval_sec must be a finite number at least 0.001 seconds, got {interval}"
             )
         translated_config["runtimeConfig"][
             "notification_listener_polling_interval_sec"
         ] = interval
+    if "stream_notification_coalesce_sec" in config:
+        coalesce = config["stream_notification_coalesce_sec"]
+        # Reject NaN/inf too (they slip past a bare < 0.001) so run_stream_notifier's time.sleep can't crash.
+        if coalesce is not None and (not math.isfinite(coalesce) or coalesce < 0.001):
+            raise DBOSInitializationError(
+                f"stream_notification_coalesce_sec must be a finite number at least 0.001 seconds, got {coalesce}"
+            )
+        translated_config["runtimeConfig"][
+            "stream_notification_coalesce_sec"
+        ] = coalesce
     if "scheduler_polling_interval_sec" in config:
         translated_config["runtimeConfig"]["scheduler_polling_interval_sec"] = config[
             "scheduler_polling_interval_sec"
