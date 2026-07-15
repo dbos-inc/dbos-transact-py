@@ -28,7 +28,7 @@ from dbos._error import DBOSNonExistentWorkflowError
 from dbos._schemas.system_database import SystemSchema
 from tests import client_collateral
 from tests.client_collateral import event_test, retrieve_test, send_test
-from tests.conftest import set_workflow_status
+from tests.conftest import set_workflow_status, wait_for_client_listener
 
 
 class Person(TypedDict):
@@ -479,6 +479,9 @@ def test_client_listen_notify_get_event(
 
         key = "listen_notify_key"
         value = "listen_notify_value"
+        # A live thread does not mean its LISTENs landed; subscribe before the
+        # workflow can fire the notification, or it is dropped and this waits 60s.
+        wait_for_client_listener(client)
         wfid = str(uuid.uuid4())
         with SetWorkflowID(wfid):
             handle = DBOS.start_workflow(listen_notify_event_workflow, key, value)

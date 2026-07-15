@@ -10,7 +10,11 @@ from dbos import DBOS, DBOSConfig, SetWorkflowID
 from dbos._client import DBOSClient
 from dbos._sys_db import _no_stream_value
 from dbos._sys_db_postgres import PostgresSystemDatabase
-from tests.conftest import retry_until_success, set_workflow_status
+from tests.conftest import (
+    retry_until_success,
+    set_workflow_status,
+    wait_for_client_listener,
+)
 
 
 def test_basic_stream_write_read(dbos: DBOS) -> None:
@@ -1100,21 +1104,25 @@ def test_client_read_stream(dbos: DBOS, client: DBOSClient) -> None:
 def test_client_read_stream_listen_notify(
     config: DBOSConfig, dbos: DBOS, skip_with_sqlite: None
 ) -> None:
-    """A client with use_listen_notify=True has the listener signal its stream events
-    rather than relying only on its own re-reads. Values must still arrive in order and
-    the reader must still stop at the close sentinel."""
-    test_values = ["ln_hello", 7, {"ln_key": "ln_value"}, None]
+    """A client with use_listen_notify=True has the app's notifications wake its
+    blocked stream reader, rather than the reader noticing values only on its own
+    re-read. Each value carries the time it was written; the reader's re-read
+    interval is raised so that a delivered notification is the only thing that can
+    meet the latency bound. Without one, every value arrives a re-read interval
+    late (~10s) and the assertion fails.
+
+    Skipped on SQLite, which has no LISTEN/NOTIFY."""
     stream_key = "listen_notify_client_stream"
+    num_values = 3
 
     @DBOS.workflow()
     def listen_notify_writer_workflow() -> None:
-        for value in test_values:
-            DBOS.write_stream(stream_key, value)
+        for _ in range(num_values):
+            # Capture the write time as close to the write as possible, then pause
+            # so the reader is genuinely blocked waiting for the next value.
+            DBOS.write_stream(stream_key, time.time())
+            DBOS.sleep(1.0)
         DBOS.close_stream(stream_key)
-
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        listen_notify_writer_workflow()
 
     assert config["system_database_url"] is not None
     client = DBOSClient(
@@ -1122,9 +1130,24 @@ def test_client_read_stream_listen_notify(
         use_listen_notify=True,
     )
     try:
-        assert list(client.read_stream(wfid, stream_key)) == test_values
+        # Subscribe before any value is written, so no notification can be missed.
+        wait_for_client_listener(client)
+        client._sys_db._notification_listener_polling_interval_sec = 10.0
+        wfid = str(uuid.uuid4())
+        with SetWorkflowID(wfid):
+            handle = DBOS.start_workflow(listen_notify_writer_workflow)
+
+        max_latency = 0.0
+        count = 0
+        for written_at in client.read_stream(wfid, stream_key):
+            max_latency = max(max_latency, time.time() - written_at)
+            count += 1
+        handle.get_result()
     finally:
         client.destroy()
+
+    assert count == num_values
+    assert max_latency < 2.0, f"client delivery latency {max_latency:.3f}s too high"
 
 
 @pytest.mark.asyncio

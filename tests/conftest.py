@@ -6,7 +6,7 @@ import sys
 import threading
 import time
 import traceback
-from typing import Any, Callable, Generator, Optional, Tuple, TypeVar
+from typing import Any, Callable, Generator, Optional, Tuple, TypeVar, cast
 
 T = TypeVar("T")
 from urllib.parse import quote
@@ -26,6 +26,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from dbos import DBOS, DBOSClient, DBOSConfig
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
+from dbos._sys_db_postgres import PostgresSystemDatabase
 
 
 @pytest.fixture(scope="session")
@@ -287,6 +288,26 @@ def retry_until_success(
     if error is not None:
         raise error
     raise RuntimeError("retry_until_success failed without an exception")
+
+
+def wait_for_client_listener(client: DBOSClient) -> None:
+    """Block until a use_listen_notify client's listener has issued its LISTENs.
+
+    The listener thread starts asynchronously in the constructor, so a notification
+    committed before its LISTEN lands is dropped (Postgres does not replay to a
+    session that subscribes late) and the waiter then blocks until its 60s fallback
+    re-check. Tests that fire a notification must gate on this first.
+
+    The listener holds _listener_thread_lock across connecting and issuing every
+    LISTEN, so acquiring that lock and observing a connection proves they are live.
+    """
+    sys_db = cast(PostgresSystemDatabase, client._sys_db)
+
+    def listener_ready() -> None:
+        with sys_db._listener_thread_lock:
+            assert sys_db.notification_conn is not None
+
+    retry_until_success(listener_ready, interval=0.05, max_attempts=100)
 
 
 async def retry_until_success_async(
