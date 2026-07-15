@@ -25,6 +25,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from dbos import DBOS, DBOSClient, DBOSConfig
 from dbos._schemas.system_database import SystemSchema
+from dbos._sys_db import SystemDatabase
 
 
 @pytest.fixture(scope="session")
@@ -232,6 +233,18 @@ def setup_in_memory_otlp_collector() -> Generator[
 def pytest_collection_modifyitems(session: Any, config: Any, items: Any) -> None:
     for item in items:
         item._nodeid = "\n" + item.nodeid + "\n"
+
+
+def set_workflow_status(sys_db: SystemDatabase, workflow_id: str, status: str) -> None:
+    # Force a workflow's status directly, bypassing the guards in
+    # update_workflow_outcome (which only finalizes PENDING workflows).
+    # Used by tests to reset completed workflows to PENDING for recovery.
+    with sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"status": status})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+        )
 
 
 def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:

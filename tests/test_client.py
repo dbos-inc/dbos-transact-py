@@ -28,6 +28,7 @@ from dbos._error import DBOSNonExistentWorkflowError
 from dbos._schemas.system_database import SystemSchema
 from tests import client_collateral
 from tests.client_collateral import event_test, retrieve_test, send_test
+from tests.conftest import set_workflow_status
 
 
 class Person(TypedDict):
@@ -375,7 +376,7 @@ def test_client_send_idempotent(
 
 
 def reexecute_workflow_by_id(dbos: DBOS, wfid: str) -> "WorkflowHandle[Any]":
-    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+    set_workflow_status(dbos._sys_db, wfid, "PENDING")
     return dbos._execute_workflow_id(wfid)
 
 

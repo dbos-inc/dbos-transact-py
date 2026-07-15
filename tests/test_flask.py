@@ -8,6 +8,7 @@ from flask import Flask, Response, jsonify
 
 from dbos import DBOS
 from dbos._context import assert_current_dbos_context
+from tests.conftest import set_workflow_status
 
 
 def test_flask_endpoint(
@@ -96,7 +97,7 @@ def test_endpoint_recovery(dbos_flask: Tuple[DBOS, Flask]) -> None:
     assert response.json.get("id2") != wfuuid
 
     # Change the workflow status to pending
-    dbos._sys_db.update_workflow_outcome(wfuuid, "PENDING")
+    set_workflow_status(dbos._sys_db, wfuuid, "PENDING")
 
     # Recovery should execute the workflow again but skip the transaction
     workflow_handles = DBOS._recover_pending_workflows()

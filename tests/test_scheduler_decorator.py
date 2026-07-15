@@ -11,7 +11,7 @@ from dbos import DBOS
 from dbos._error import DBOSWorkflowFunctionNotFoundError
 from dbos._registrations import get_dbos_func_name
 
-from .conftest import retry_until_success
+from .conftest import retry_until_success, set_workflow_status
 
 
 def simulate_db_restart(engine: Engine, downtime: float) -> None:
@@ -291,7 +291,7 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
     # Wait for workflows to finish
     time.sleep(3)
 
-    dbos._sys_db.update_workflow_outcome(workflow_id, "PENDING")
+    set_workflow_status(dbos._sys_db, workflow_id, "PENDING")
 
     workflow_handles = DBOS._recover_pending_workflows()
     assert len(workflow_handles) == 1

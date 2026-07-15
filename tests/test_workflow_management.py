@@ -73,6 +73,79 @@ def test_cancel_resume(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
+def test_active_id_released_before_outcome_write(dbos: DBOS) -> None:
+    # The executor's active-workflow-ID entry must be released BEFORE the
+    # terminal outcome write becomes durable. Otherwise: run 1's stale write is
+    # in flight, a client observes CANCELLED and resumes, this same executor
+    # dequeues the resumed workflow, but the dispatch finds the stale active-ID
+    # entry, takes the non-owner path, and waits forever on a row nobody is
+    # executing.
+    runs = 0
+    entered = threading.Event()
+    release_workflow = threading.Event()
+    parked = threading.Event()
+    release_stale_write = threading.Event()
+    second_run_done = threading.Event()
+
+    @DBOS.workflow()
+    def blocking_workflow() -> str:
+        nonlocal runs
+        runs += 1
+        if runs == 1:
+            entered.set()
+            assert release_workflow.wait(timeout=30)
+            return ""
+        second_run_done.set()
+        return "completed"
+
+    wfid = str(uuid.uuid4())
+
+    # Park run 1's terminal outcome write, holding open the window between the
+    # function returning and its outcome becoming durable.
+    original_update_outcome = dbos._sys_db.update_workflow_outcome
+    parked_once = threading.Event()
+
+    def parking_update_outcome(
+        workflow_id: str, status: Any, *, output: Any = None, error: Any = None
+    ) -> None:
+        if workflow_id == wfid and not parked_once.is_set():
+            parked_once.set()
+            parked.set()
+            assert release_stale_write.wait(timeout=30)
+        original_update_outcome(workflow_id, status, output=output, error=error)
+
+    dbos._sys_db.update_workflow_outcome = parking_update_outcome  # type: ignore[method-assign]
+
+    try:
+        with SetWorkflowID(wfid):
+            DBOS.start_workflow(blocking_workflow)
+        assert entered.wait(timeout=15)
+
+        DBOS.cancel_workflow(wfid)
+
+        # Run 1 returns; its stale outcome write parks. The active-ID entry
+        # must already be released at this point.
+        release_workflow.set()
+        assert parked.wait(timeout=15)
+        assert DBOS.get_workflow_status(wfid).status == "CANCELLED"  # type: ignore[union-attr]
+
+        resumed_handle = DBOS.resume_workflow(wfid)
+
+        # While the stale write is still parked, the resumed workflow must be
+        # dequeued and executed by this same executor.
+        assert second_run_done.wait(
+            timeout=15
+        ), "resumed dispatch was blocked by a stale active workflow ID"
+
+        assert resumed_handle.get_result() == "completed"
+        assert runs == 2
+    finally:
+        release_stale_write.set()
+        dbos._sys_db.update_workflow_outcome = original_update_outcome  # type: ignore[method-assign]
+
+    assert queue_entries_are_cleaned_up(dbos)
+
+
 def test_cancel_after_final_step(dbos: DBOS) -> None:
     # A workflow cancelled after its final step completes (but before it
     # finishes) must not be able to complete successfully. CANCELLED is terminal.

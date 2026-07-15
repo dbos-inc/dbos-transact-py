@@ -13,7 +13,7 @@ from dbos import DBOS, DBOSConfiguredInstance, Queue, SetWorkflowID
 # Private API used because this is a test
 from dbos._context import DBOSContextEnsure, assert_current_dbos_context
 from dbos._dbos_config import DBOSConfig
-from tests.conftest import queue_entries_are_cleaned_up
+from tests.conftest import queue_entries_are_cleaned_up, set_workflow_status
 
 
 def test_required_roles(dbos: DBOS) -> None:
@@ -637,7 +637,7 @@ def test_class_queue_recovery(dbos: DBOS) -> None:
 
     # Recover the workflow and all children
     for h in DBOS.list_workflows(workflow_id_prefix=wfid):
-        dbos._sys_db.update_workflow_outcome(h.workflow_id, "PENDING")
+        set_workflow_status(dbos._sys_db, h.workflow_id, "PENDING")
     recovery_handles = DBOS._recover_pending_workflows()
 
     # There should be one handle for the workflow and another for each queued step.
@@ -706,7 +706,7 @@ def test_class_static_queue_recovery(dbos: DBOS) -> None:
 
     # Recover the workflow, then resume it.
     for h in DBOS.list_workflows(workflow_id_prefix=wfid):
-        dbos._sys_db.update_workflow_outcome(h.workflow_id, "PENDING")
+        set_workflow_status(dbos._sys_db, h.workflow_id, "PENDING")
     recovery_handles = DBOS._recover_pending_workflows()
 
     # There should be one handle for the workflow and another for each queued step.
@@ -780,7 +780,7 @@ def test_class_classmethod_queue_recovery(dbos: DBOS) -> None:
     # Recover the workflow, then resume it.
     # There should be one handle for the workflow and another for each queued step.
     for h in DBOS.list_workflows(workflow_id_prefix=wfid):
-        dbos._sys_db.update_workflow_outcome(h.workflow_id, "PENDING")
+        set_workflow_status(dbos._sys_db, h.workflow_id, "PENDING")
     recovery_handles = DBOS._recover_pending_workflows()
     assert len(recovery_handles) == queued_steps + 1
 
@@ -939,7 +939,7 @@ def test_inst_recovery_missing_instance(
     assert handle.get_result() == 1
 
     # Mark the workflow pending so startup recovery will attempt to recover it.
-    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+    set_workflow_status(dbos._sys_db, wfid, "PENDING")
 
     # Restart DBOS, re-registering the class but NOT creating the instance.
     DBOS.destroy(destroy_registry=True)

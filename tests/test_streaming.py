@@ -11,7 +11,7 @@ from dbos import _dbos as dbos_module
 from dbos._client import DBOSClient
 from dbos._sys_db import _no_stream_value
 from dbos._sys_db_postgres import PostgresSystemDatabase
-from tests.conftest import retry_until_success
+from tests.conftest import retry_until_success, set_workflow_status
 
 
 def test_basic_stream_write_read(dbos: DBOS) -> None:
@@ -778,7 +778,7 @@ def test_stream_workflow_recovery(dbos: DBOS) -> None:
     assert values == ["step_1", "step_2"]
 
     # Reset call count and run the same workflow ID again (should replay)
-    dbos._sys_db.update_workflow_outcome(wfid, "PENDING")
+    set_workflow_status(dbos._sys_db, wfid, "PENDING")
     dbos._execute_workflow_id(wfid).get_result()
 
     # The workflow should have been called again
