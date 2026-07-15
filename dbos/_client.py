@@ -726,9 +726,7 @@ class DBOSClient:
     async def get_event_async(
         self, workflow_id: str, key: str, timeout_seconds: float = 60
     ) -> Any:
-        return await asyncio.to_thread(
-            self.get_event, workflow_id, key, timeout_seconds
-        )
+        return await self._sys_db.get_event_async(workflow_id, key, timeout_seconds)
 
     def cancel_workflow(
         self, workflow_id: str, *, cancel_children: bool = False
@@ -1256,22 +1254,16 @@ class DBOSClient:
                     continue
                 if final_read:
                     break
-                # No value yet: stop if the workflow is done, else wait for a
-                # notification. Poll the event with short asyncio sleeps (no
-                # held thread), bounded by the fallback re-check interval.
+                # No value yet: stop if the workflow is done, else await a
+                # notification, re-reading at the fallback interval in case one
+                # was dropped.
                 if not workflow_is_active(status):
                     # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
                     final_read = True
                     continue
-                deadline = (
-                    time.time()
-                    + self._sys_db._notification_listener_polling_interval_sec
+                await event.wait_async(
+                    timeout=self._sys_db._notification_listener_polling_interval_sec
                 )
-                while not event.is_set():
-                    remaining = deadline - time.time()
-                    if remaining <= 0:
-                        break
-                    await asyncio.sleep(min(remaining, 0.1))
         finally:
             self._sys_db.unregister_stream_listener(payload)
 

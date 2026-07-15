@@ -173,13 +173,6 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 T = TypeVar("T")
 
-# read_stream_async sub-polls its in-memory notification event tightly for the first window (low push latency), then relaxes for long-idle streams to save event-loop wakeups.
-_STREAM_EVENT_FAST_POLL_SEC = 0.01
-_STREAM_EVENT_FAST_POLL_WINDOW_SEC = 10.0
-# Must stay well under the fallback poll interval: at or above it, min(remaining, sub_poll) becomes one
-# sleep to the deadline and the notification event is never observed mid-wait.
-_STREAM_EVENT_SLOW_POLL_SEC = 0.1
-
 IsolationLevel = Literal[
     "SERIALIZABLE",
     "REPEATABLE READ",
@@ -3383,8 +3376,6 @@ class DBOS:
 
         event, payload = sys_db.register_stream_listener(workflow_id, key)
         final_read = False
-        # When the current value's wait began, or None once a value is delivered; drives the adaptive event sub-poll below.
-        wait_started_at: Optional[float] = None
         try:
             while True:
                 # Clear before reading so a notification arriving after the read
@@ -3401,33 +3392,18 @@ class DBOS:
                         return
                     yield value
                     offset += 1
-                    wait_started_at = None
                     # More may be buffered; read the next offset before waiting.
                     continue
                 if final_read:
                     break
-                # No value yet: stop if the workflow is done, else wait for a
-                # notification. Poll the event with short asyncio sleeps (no
-                # held thread), bounded by the fallback re-check interval.
+                # No value yet: stop if the workflow is done, else await a
+                # notification, re-reading at the fallback interval in case one
+                # was dropped.
                 if not workflow_is_active(status):
                     # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
                     final_read = True
                     continue
-                if wait_started_at is None:
-                    wait_started_at = time.time()
-                deadline = time.time() + polling_interval
-                while not event.is_set():
-                    remaining = deadline - time.time()
-                    if remaining <= 0:
-                        break
-                    # Sub-poll tightly while the value is fresh-awaited, then relax.
-                    sub_poll = (
-                        _STREAM_EVENT_FAST_POLL_SEC
-                        if time.time() - wait_started_at
-                        < _STREAM_EVENT_FAST_POLL_WINDOW_SEC
-                        else _STREAM_EVENT_SLOW_POLL_SEC
-                    )
-                    await asyncio.sleep(min(remaining, sub_poll))
+                await event.wait_async(timeout=polling_interval)
         finally:
             sys_db.unregister_stream_listener(payload)
 
