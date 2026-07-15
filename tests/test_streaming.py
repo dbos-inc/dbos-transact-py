@@ -7,7 +7,6 @@ from sqlalchemy import event as sa_event
 
 # Public API
 from dbos import DBOS, DBOSConfig, SetWorkflowID
-from dbos import _dbos as dbos_module
 from dbos._client import DBOSClient
 from dbos._sys_db import _no_stream_value
 from dbos._sys_db_postgres import PostgresSystemDatabase
@@ -127,19 +126,16 @@ def test_stream_read_value_returns_status_and_value(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_read_async_sub_poll_observes_notifications(
-    dbos: DBOS, skip_with_sqlite: None, monkeypatch: pytest.MonkeyPatch
+async def test_stream_read_async_wakes_on_notification(
+    dbos: DBOS, skip_with_sqlite: None
 ) -> None:
-    """read_stream_async waits on the notification event by sub-polling it, tightly at first and
-    relaxed once a value has been awaited a while. Both branches must observe the event promptly.
+    """read_stream_async awaits the notification event, so a write wakes it immediately
+    rather than at the next fallback re-read.
 
     This passes a long polling_interval_sec on purpose. The suite's default (0.01s, conftest.py)
-    makes `min(remaining, sub_poll) == remaining` whichever branch is taken, so under it the sub-poll
-    constants have no effect and a regression in either is invisible.
+    re-reads faster than any notification arrives, so under it a regression in the wakeup path
+    would be invisible.
     """
-    # Relax after 0.2s rather than the real 10s, so the test need not idle for the full window.
-    monkeypatch.setattr(dbos_module, "_STREAM_EVENT_FAST_POLL_WINDOW_SEC", 0.2)
-    # First gap stays inside the window (fast branch); the rest exceed it (relaxed branch).
     gaps = [0.1, 0.5, 0.5]
     written: dict[int, float] = {}
 
@@ -155,18 +151,16 @@ async def test_stream_read_async_sub_poll_observes_notifications(
     with SetWorkflowID(wfid):
         DBOS.start_workflow(writer_workflow)
 
-    # A fallback re-read interval far longer than any gap: prompt delivery can only come from the
-    # sub-poll observing the notification, never from the fallback.
+    # A fallback re-read interval far longer than any gap: prompt delivery can only come from
+    # the notification waking the reader, never from the fallback.
     latencies = []
     async for value in DBOS.read_stream_async(wfid, "s", polling_interval_sec=30.0):
         latencies.append(time.time() - written[value])
 
     assert len(latencies) == len(gaps)
-    # Fast branch: sub-polls at 0.01s, so the value lands almost immediately.
-    assert latencies[0] < 0.15, f"fast-branch latency {latencies[0]:.3f}s"
-    # Relaxed branch: sub-polls at 0.1s. Raising it to the 1.0s default fallback interval would make
-    # the reader sleep clean past each write and land near 0.7s here.
-    assert max(latencies[1:]) < 0.3, f"relaxed-branch latencies {latencies[1:]}"
+    # Each value lands as soon as the listener signals the event. Without the wakeup the reader
+    # would sleep to the 30s deadline and the test would time out rather than fail here.
+    assert max(latencies) < 0.15, f"notification latencies {latencies}"
 
 
 def test_stream_read_is_one_round_trip_per_value(dbos: DBOS) -> None:

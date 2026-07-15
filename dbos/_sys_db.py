@@ -34,6 +34,7 @@ from sqlalchemy.sql import func
 from dbos._debug_trigger import DebugTriggers
 from dbos._utils import (
     INTERNAL_QUEUE_NAME,
+    LoopAwareEvent,
     PollingLimiter,
     generate_uuid,
     retriable_postgres_exception,
@@ -402,7 +403,7 @@ class SendMessage:
 
 
 class EventCount(TypedDict):
-    event: threading.Event
+    event: LoopAwareEvent
     count: int
     components: Tuple[str, str]
 
@@ -412,7 +413,7 @@ class ThreadSafeEventDict:
         self._dict: Dict[str, EventCount] = {}
         self._lock = threading.Lock()
 
-    def get(self, key: str) -> Optional[threading.Event]:
+    def get(self, key: str) -> Optional[LoopAwareEvent]:
         with self._lock:
             if key not in self._dict:
                 return None
@@ -421,9 +422,9 @@ class ThreadSafeEventDict:
     def set(
         self,
         key: str,
-        value: threading.Event,
+        value: LoopAwareEvent,
         components: Tuple[str, str],
-    ) -> tuple[bool, threading.Event]:
+    ) -> tuple[bool, LoopAwareEvent]:
         with self._lock:
             if key in self._dict:
                 # Key already exists, do not overwrite. Increment the wait count.
@@ -443,7 +444,7 @@ class ThreadSafeEventDict:
             else:
                 dbos_logger.warning(f"Key {key} not found in event dictionary.")
 
-    def snapshot(self) -> List[Tuple[str, Tuple[str, str], threading.Event]]:
+    def snapshot(self) -> List[Tuple[str, Tuple[str, str], LoopAwareEvent]]:
         """Return a snapshot of (key, components, event) for every entry."""
         with self._lock:
             return [
@@ -456,7 +457,7 @@ class ThreadSafeEventDict:
 # caller must wait on.
 EventSetupResult = Union[
     tuple[Literal[True], Any],
-    tuple[Literal[False], threading.Event, float, str, int],
+    tuple[Literal[False], LoopAwareEvent, float, str, int],
 ]
 
 
@@ -2957,7 +2958,7 @@ class SystemDatabase(ABC):
 
         # Insert an event to the notifications map, so the listener can signal it when a message is received.
         payload = f"{workflow_uuid}::{topic}"
-        event = threading.Event()
+        event = LoopAwareEvent()
         success, _ = self.notifications_map.set(payload, event, (workflow_uuid, topic))
         if not success:
             # This should not happen, but if it does, it means the workflow is executed concurrently.
@@ -3065,7 +3066,7 @@ class SystemDatabase(ABC):
         self,
         workflow_uuid: str,
         topic: Optional[str],
-        event: threading.Event,
+        event: LoopAwareEvent,
     ) -> None:
         """Poll the database directly for a pending notification and signal the event if found.
         Used as a fallback in case the notification listener thread drops a notification.
@@ -3218,18 +3219,14 @@ class SystemDatabase(ABC):
         _, event, actual_timeout, payload, start_time = setup
         try:
             deadline = time.time() + actual_timeout
-            last_poll = time.time()
             while not event.is_set():
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     break
-                await asyncio.sleep(min(remaining, 0.1))
-                now = time.time()
-                if (
-                    not event.is_set()
-                    and now - last_poll >= self._event_recheck_interval()
-                ):
-                    last_poll = now
+                await event.wait_async(
+                    timeout=min(remaining, self._event_recheck_interval())
+                )
+                if not event.is_set():
                     await asyncio.to_thread(
                         self.recv_check, workflow_uuid, topic, event
                     )
@@ -3623,7 +3620,7 @@ class SystemDatabase(ABC):
                 )
 
         payload = f"{target_uuid}::{key}"
-        event = threading.Event()
+        event = LoopAwareEvent()
         success, existing_event = self.workflow_events_map.set(
             payload, event, (target_uuid, key)
         )
@@ -3700,7 +3697,7 @@ class SystemDatabase(ABC):
         self,
         target_uuid: str,
         key: str,
-        event: threading.Event,
+        event: LoopAwareEvent,
     ) -> None:
         """Poll the database directly for a workflow event and signal the event if found.
         Used as a fallback in case the notification listener thread drops a notification.
@@ -3765,18 +3762,14 @@ class SystemDatabase(ABC):
         _, event, actual_timeout, payload, start_time = setup
         try:
             deadline = time.time() + actual_timeout
-            last_poll = time.time()
             while not event.is_set():
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     break
-                await asyncio.sleep(min(remaining, 0.1))
-                now = time.time()
-                if (
-                    not event.is_set()
-                    and now - last_poll >= self._event_recheck_interval()
-                ):
-                    last_poll = now
+                await event.wait_async(
+                    timeout=min(remaining, self._event_recheck_interval())
+                )
+                if not event.is_set():
                     await asyncio.to_thread(
                         self.get_event_check, target_uuid, key, event
                     )
@@ -4483,7 +4476,7 @@ class SystemDatabase(ABC):
 
     def register_stream_listener(
         self, workflow_uuid: str, key: str
-    ) -> Tuple[threading.Event, str]:
+    ) -> Tuple[LoopAwareEvent, str]:
         """Register an event for the listener to signal when the stream is written.
 
         Returns the event to wait on and the payload key to unregister later.
@@ -4491,9 +4484,7 @@ class SystemDatabase(ABC):
         and the wait is not lost.
         """
         payload = f"{workflow_uuid}::{key}"
-        _, event = self.streams_map.set(
-            payload, threading.Event(), (workflow_uuid, key)
-        )
+        _, event = self.streams_map.set(payload, LoopAwareEvent(), (workflow_uuid, key))
         return event, payload
 
     def unregister_stream_listener(self, payload: str) -> None:

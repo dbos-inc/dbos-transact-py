@@ -1,10 +1,11 @@
+import asyncio
 import importlib.metadata
 import os
 import sys
 import threading
 import uuid
 from types import TracebackType
-from typing import Optional, Type
+from typing import Optional, Set, Tuple, Type
 
 import psycopg
 from sqlalchemy.exc import DBAPIError, ResourceClosedError
@@ -12,6 +13,72 @@ from sqlalchemy.exc import DBAPIError, ResourceClosedError
 INTERNAL_QUEUE_NAME = "_dbos_internal_queue"
 
 request_id_header = "x-request-id"
+
+
+def _resolve_waiter(future: "asyncio.Future[None]") -> None:
+    """Wake one async waiter. Runs on that waiter's event loop."""
+    if not future.done():
+        future.set_result(None)
+
+
+class LoopAwareEvent(threading.Event):
+    """A ``threading.Event`` that async callers can also await.
+
+    DBOS signals these events from background threads: the Postgres LISTEN
+    listener, the polling listener, or a fallback database re-check. A
+    coroutine cannot wait on a plain ``threading.Event`` without either
+    holding a thread-pool thread for the whole wait or sub-polling
+    ``is_set()``. So each async waiter registers a future on its own event
+    loop and ``set()`` wakes every registered waiter via
+    ``call_soon_threadsafe``. Sync waiters use the inherited ``wait()``,
+    unchanged.
+
+    A single event may be awaited concurrently by any number of waiters,
+    across any mix of event loops and threads.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._waiters: Set[Tuple[asyncio.AbstractEventLoop, "asyncio.Future[None]"]] = (
+            set()
+        )
+        self._waiters_lock = threading.Lock()
+
+    def set(self) -> None:
+        # Set the flag before taking the lock so no wakeup is lost: a concurrent
+        # wait_async either sees the flag under the lock and skips registering,
+        # or is already in _waiters when the snapshot below drains it.
+        super().set()
+        with self._waiters_lock:
+            waiters, self._waiters = self._waiters, set()
+        for loop, future in waiters:
+            try:
+                loop.call_soon_threadsafe(_resolve_waiter, future)
+            except RuntimeError:
+                pass  # The waiter's loop is closed; it has nothing left to wake.
+
+    async def wait_async(self, timeout: float) -> bool:
+        """Await the event, yielding to the loop. Returns whether it is set.
+
+        May return False on a timeout, or spuriously if the event was cleared
+        between the wakeup and this check, so callers must re-check their own
+        condition rather than treat a return as delivery.
+        """
+        loop = asyncio.get_running_loop()
+        with self._waiters_lock:
+            if self.is_set():
+                return True
+            future: "asyncio.Future[None]" = loop.create_future()
+            waiter = (loop, future)
+            self._waiters.add(waiter)
+        try:
+            await asyncio.wait_for(future, timeout)
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            with self._waiters_lock:
+                self._waiters.discard(waiter)
+        return self.is_set()
 
 
 class PollingLimiter:
