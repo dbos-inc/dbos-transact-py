@@ -3,7 +3,7 @@ import statistics
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, List
+from typing import Any, List, Optional
 
 import pytest
 import sqlalchemy as sa
@@ -13,7 +13,7 @@ from dbos import DBOS, DBOSClient
 from dbos._client import DEFAULT_CLIENT_POOL_SIZE
 from dbos._serialization import DefaultSerializer
 from dbos._sys_db import DEFAULT_SYS_DB_POOL_SIZE, SystemDatabase
-from dbos._utils import PollingLimiter
+from dbos._utils import LoopAwareEvent, PollingLimiter
 
 
 def _run_under_limiter(limit: int, tasks: int) -> int:
@@ -288,3 +288,270 @@ async def test_control_plane_responsive_under_polling_storm(
     msg = f"control-plane median latency with limiter={with_limiter * 1000:.1f}ms"
     # With the limiter, control-plane work finds a reserved connection and stays fast, well below the 30s pool_timeout.
     assert with_limiter < 2.0, msg
+
+
+# ── LoopAwareEvent ────────────────────────────────────────────
+
+
+async def _await_waiter_count(event: LoopAwareEvent, count: int) -> None:
+    """Wait until `count` async waiters have registered on the event."""
+    for _ in range(1000):
+        with event._waiters_lock:
+            if len(event._waiters) >= count:
+                return
+        await asyncio.sleep(0.005)
+    raise AssertionError(f"only {len(event._waiters)} waiters registered, want {count}")
+
+
+def _wait_on_own_loop(
+    event: LoopAwareEvent, results: List[Optional[bool]], idx: int
+) -> None:
+    """Await the event on a private event loop, as a caller on another loop would."""
+
+    async def run() -> bool:
+        return await event.wait_async(timeout=5.0)
+
+    results[idx] = asyncio.run(run())
+
+
+@pytest.mark.asyncio
+async def test_event_wakes_async_waiter_signaled_from_another_thread() -> None:
+    """The core contract: the listener thread's set() wakes a coroutine awaiting it."""
+    event = LoopAwareEvent()
+    threading.Timer(0.05, event.set).start()
+
+    start = time.perf_counter()
+    assert await event.wait_async(timeout=5.0) is True
+    # Woken by the set, not by the timeout expiring.
+    assert time.perf_counter() - start < 1.0
+    assert not event._waiters
+
+
+@pytest.mark.asyncio
+async def test_event_already_set_returns_immediately() -> None:
+    event = LoopAwareEvent()
+    event.set()
+    assert await event.wait_async(timeout=5.0) is True
+    assert not event._waiters
+
+
+@pytest.mark.asyncio
+async def test_event_returns_false_on_timeout_and_drops_its_waiter() -> None:
+    """recv/get_event/stream events are long-lived and shared, so a waiter left
+    behind on every timeout would grow _waiters without bound."""
+    event = LoopAwareEvent()
+
+    start = time.perf_counter()
+    assert await event.wait_async(timeout=0.1) is False
+    assert time.perf_counter() - start >= 0.1
+    assert not event._waiters
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeout", [0.0, -1.0])
+async def test_event_non_positive_timeout_does_not_wait(timeout: float) -> None:
+    event = LoopAwareEvent()
+    assert await event.wait_async(timeout=timeout) is False
+    assert not event._waiters
+    event.set()
+    assert await event.wait_async(timeout=timeout) is True
+
+
+@pytest.mark.asyncio
+async def test_event_drops_its_waiter_on_cancellation() -> None:
+    """Callers cancel recv_async/get_event_async mid-wait; a stranded waiter would
+    pin its future and event loop for the life of the event."""
+    event = LoopAwareEvent()
+    task = asyncio.create_task(event.wait_async(timeout=30.0))
+    await _await_waiter_count(event, 1)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not event._waiters
+
+
+@pytest.mark.asyncio
+async def test_event_wakes_every_waiter_on_one_set() -> None:
+    """get_event and stream readers share one event object between concurrent
+    waiters, so a single signal must resolve every registered waiter."""
+    event = LoopAwareEvent()
+    waiters = [asyncio.create_task(event.wait_async(timeout=5.0)) for _ in range(10)]
+    await _await_waiter_count(event, 10)
+
+    threading.Thread(target=event.set).start()
+    assert await asyncio.wait_for(asyncio.gather(*waiters), timeout=5.0) == [True] * 10
+    assert not event._waiters
+
+
+@pytest.mark.asyncio
+async def test_event_wakes_waiters_on_distinct_loops() -> None:
+    """DBOS runs a background event loop alongside the caller's, so one set() must
+    reach waiters on any mix of loops."""
+    event = LoopAwareEvent()
+    results: List[Optional[bool]] = [None] * 3
+    threads = [
+        threading.Thread(target=_wait_on_own_loop, args=(event, results, i))
+        for i in range(3)
+    ]
+    for thread in threads:
+        thread.start()
+    await _await_waiter_count(event, 3)
+
+    event.set()
+    for thread in threads:
+        thread.join(timeout=5.0)
+    assert results == [True, True, True]
+    assert not event._waiters
+
+
+@pytest.mark.asyncio
+async def test_event_latches_a_wakeup_against_a_later_clear() -> None:
+    """Stream readers share an event and clear() it each iteration, so one reader's
+    clear() can land right after a set() destined for another. The wakeup is latched
+    in the waiter's future and survives; the old `while not is_set(): sleep()` loop
+    was level-triggered and lost it for the whole remaining wait. The waiter still
+    wakes promptly here, and reports False because the flag was cleared -- callers
+    must re-check their own condition rather than trust the return.
+    """
+    event = LoopAwareEvent()
+    task = asyncio.create_task(event.wait_async(timeout=5.0))
+    await _await_waiter_count(event, 1)
+
+    event.set()
+    event.clear()
+    assert await asyncio.wait_for(task, timeout=1.0) is False
+    assert not event._waiters
+
+
+@pytest.mark.asyncio
+async def test_event_set_survives_a_waiter_whose_loop_closed() -> None:
+    """The listener thread signals events whose waiters may already be gone; a dead
+    loop must neither raise out of set() nor strand the remaining waiters."""
+    event = LoopAwareEvent()
+    live = asyncio.create_task(event.wait_async(timeout=5.0))
+    await _await_waiter_count(event, 1)
+
+    # Register a waiter directly, then close its loop out from under it.
+    dead_loop = asyncio.new_event_loop()
+    with event._waiters_lock:
+        event._waiters.add((dead_loop, dead_loop.create_future()))
+    dead_loop.close()
+
+    event.set()
+    assert await asyncio.wait_for(live, timeout=1.0) is True
+
+
+@pytest.mark.asyncio
+async def test_event_one_set_wakes_both_sync_and_async_waiters() -> None:
+    """set() calls super().set() before draining async waiters, so sync recv and
+    get_event -- which still call wait() on these events -- wake from the same signal.
+    """
+    event = LoopAwareEvent()
+    sync_woke = threading.Event()
+
+    def sync_waiter() -> None:
+        if event.wait(timeout=5.0):
+            sync_woke.set()
+
+    thread = threading.Thread(target=sync_waiter)
+    thread.start()
+    async_waiter = asyncio.create_task(event.wait_async(timeout=5.0))
+    await _await_waiter_count(event, 1)
+
+    threading.Thread(target=event.set).start()
+    assert await asyncio.wait_for(async_waiter, timeout=5.0) is True
+    thread.join(timeout=5.0)
+    assert sync_woke.is_set()
+
+
+def test_event_sync_wait_times_out() -> None:
+    # The subclass must not disturb the inherited timeout path.
+    assert LoopAwareEvent().wait(timeout=0.05) is False
+
+
+@pytest.mark.asyncio
+async def test_event_can_be_awaited_again_after_clear() -> None:
+    """Stream readers clear() and re-wait on the same event on every iteration."""
+    event = LoopAwareEvent()
+    event.set()
+    assert await event.wait_async(timeout=5.0) is True
+
+    event.clear()
+    assert await event.wait_async(timeout=0.05) is False
+
+    threading.Timer(0.05, event.set).start()
+    assert await event.wait_async(timeout=5.0) is True
+
+
+class _LingeringLock:
+    """Stand-in for LoopAwareEvent._waiters_lock that holds the window after its
+    first release open, letting a waiter register in the gap between set()'s drain
+    and its flag write. Widening the window is the only way to exercise that
+    ordering reliably: a plain thread race almost never lands inside it."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.released = threading.Event()
+
+    def __enter__(self) -> None:
+        self._lock.acquire()
+
+    def __exit__(self, *exc: object) -> None:
+        self._lock.release()
+        if not self.released.is_set():
+            self.released.set()
+            time.sleep(0.2)
+
+
+@pytest.mark.asyncio
+async def test_event_waiter_registering_inside_set_is_not_lost() -> None:
+    """set() must write the flag BEFORE draining waiters, as documented in _utils.py.
+    Inverted, a waiter registering between the drain and the flag write falls through
+    both paths -- it is absent from the drained snapshot and it saw an unset flag --
+    so it parks until its timeout rather than waking. This holds set() open in exactly
+    that window after a drain that found no waiters, then registers.
+
+    Note the return value cannot detect this: wait_async ends in `return self.is_set()`,
+    so a lost wakeup still reports True once the flag lands. Only the latency shows it.
+    """
+    event = LoopAwareEvent()
+    window = _LingeringLock()
+    event._waiters_lock = window  # type: ignore[assignment]
+
+    threading.Thread(target=event.set).start()
+    for _ in range(1000):
+        if window.released.is_set():
+            break
+        await asyncio.sleep(0.005)
+    else:
+        raise AssertionError("set() never reached the window")
+
+    start = time.perf_counter()
+    assert await event.wait_async(timeout=5.0) is True
+    # Correct ordering: the flag is already set, so this returns without parking.
+    assert time.perf_counter() - start < 1.0
+
+
+@pytest.mark.asyncio
+async def test_event_never_loses_a_wakeup_racing_registration() -> None:
+    """Stress the same invariant across whatever orderings the scheduler produces:
+    a barrier releases set() and a registration together. A lost wakeup parks the
+    waiter until its timeout, so latency -- not the return value -- is the signal.
+    """
+    slowest = 0.0
+    for _ in range(200):
+        event = LoopAwareEvent()
+        barrier = threading.Barrier(2)
+
+        def setter(event: LoopAwareEvent = event) -> None:
+            barrier.wait()
+            event.set()
+
+        threading.Thread(target=setter).start()
+        barrier.wait()
+        start = time.perf_counter()
+        assert await event.wait_async(timeout=5.0) is True
+        slowest = max(slowest, time.perf_counter() - start)
+        assert not event._waiters
+    assert slowest < 1.0, f"a waiter parked for {slowest:.2f}s -- wakeup lost"
