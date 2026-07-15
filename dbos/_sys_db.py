@@ -3138,8 +3138,7 @@ class SystemDatabase(ABC):
                 if remaining <= 0:
                     break
                 event.wait(timeout=min(remaining, self._event_recheck_interval()))
-                # Past the deadline the consume below reads the database anyway, so a re-check is a wasted poll-limited query.
-                if not event.is_set() and time.time() < deadline:
+                if not event.is_set():
                     self.recv_check(workflow_uuid, topic, event)
             return self.recv_consume(workflow_uuid, function_id, topic, start_time)
         finally:
@@ -3227,7 +3226,6 @@ class SystemDatabase(ABC):
                 await event.wait_async(
                     timeout=min(remaining, self._event_recheck_interval())
                 )
-                # Past the deadline the consume below reads the database anyway, so a re-check is a wasted poll-limited query.
                 if not event.is_set() and time.time() < deadline:
                     await asyncio.to_thread(
                         self.recv_check, workflow_uuid, topic, event
@@ -3738,8 +3736,7 @@ class SystemDatabase(ABC):
                 if remaining <= 0:
                     break
                 event.wait(timeout=min(remaining, self._event_recheck_interval()))
-                # Past the deadline the consume below reads the database anyway, so a re-check is a wasted poll-limited query.
-                if not event.is_set() and time.time() < deadline:
+                if not event.is_set():
                     self.get_event_check(target_uuid, key, event)
             return self.get_event_consume(target_uuid, key, start_time, caller_ctx)
         finally:
@@ -3772,7 +3769,6 @@ class SystemDatabase(ABC):
                 await event.wait_async(
                     timeout=min(remaining, self._event_recheck_interval())
                 )
-                # Past the deadline the consume below reads the database anyway, so a re-check is a wasted poll-limited query.
                 if not event.is_set() and time.time() < deadline:
                     await asyncio.to_thread(
                         self.get_event_check, target_uuid, key, event
