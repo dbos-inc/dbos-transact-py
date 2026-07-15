@@ -374,6 +374,55 @@ async def test_get_event_async_cancelled_during_setup(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("wait_op", ["get_event", "recv"])
+async def test_async_wait_does_not_recheck_past_its_deadline(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, wait_op: str
+) -> None:
+    """A timed-out recv/get_event must not re-check the database once its deadline has
+    passed. The consume phase reads unconditionally, so a re-check at the deadline only
+    burns a poll-limited query whose result is discarded -- and under fan-out those
+    queries serialize behind the limiter and push the wait well past its own timeout.
+
+    The recheck interval is set above the timeout, as when a notification listener is
+    running, so the only re-check that may fire is the one in the setup phase.
+    """
+
+    @DBOS.workflow()
+    async def noop_workflow() -> None:
+        return None
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        await noop_workflow()
+
+    sys_db = dbos._sys_db
+    monkeypatch.setattr(sys_db, "_event_recheck_interval", lambda: 60.0)
+
+    check_name = f"{wait_op}_check"
+    original_check = getattr(sys_db, check_name)
+    calls = []
+
+    def counting_check(*args: Any, **kwargs: Any) -> None:
+        calls.append(time.time())
+        original_check(*args, **kwargs)
+
+    monkeypatch.setattr(sys_db, check_name, counting_check)
+
+    timeout = 1.0
+    start = time.time()
+    if wait_op == "get_event":
+        assert await sys_db.get_event_async(wfid, "k", timeout) is None
+    else:
+        assert await sys_db.recv_async(wfid, 100, 101, "topic", timeout) is None
+    deadline = start + timeout
+
+    late = [c for c in calls if c > deadline]
+    assert not late, f"{check_name} re-checked {len(late)} time(s) past the deadline"
+    # Only the setup check; the wait itself adds none at this recheck interval.
+    assert len(calls) == 1, f"{check_name} called {len(calls)} times, expected 1"
+
+
+@pytest.mark.asyncio
 async def test_send_bulk_async(dbos: DBOS) -> None:
     @DBOS.workflow()
     async def recv_two() -> str:
