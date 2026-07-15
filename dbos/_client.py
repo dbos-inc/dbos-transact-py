@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 import time
 from datetime import datetime
 from typing import (
@@ -23,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from dbos._context import MaxPriority, MinPriority, validate_workflow_id
 from dbos._core import DEFAULT_POLLING_INTERVAL
+from dbos._logger import dbos_logger
 from dbos._queue import (
     Queue,
     QueueConflictResolution,
@@ -166,7 +168,32 @@ class DBOSClient:
         serializer: Serializer = DefaultSerializer(),
         system_database_pool_size: Optional[int] = None,
         system_database_polling_concurrency: Optional[int] = None,
+        use_listen_notify: bool = False,
     ):
+        """Create a client for interacting with a DBOS application from outside it.
+
+        The client talks only to the system database, so it can enqueue workflows,
+        send messages, read events and streams, and manage workflows, queues, and
+        schedules without registering or running any workflow code itself. It
+        connects on construction and raises if the system database is unreachable.
+
+        Unlike DBOS itself, the client never runs schema migrations: the system
+        database must already have been created by a DBOS application.
+
+        Args:
+            database_url (str): (DEPRECATED) Use system_database_url instead.
+            system_database_url (str): Connection string for the DBOS system database.
+            system_database_engine (sa.Engine): A custom system database engine. If provided, the client uses it as-is instead of creating one, the database URL and pool size arguments are ignored, and destroy() does not dispose of it.
+            application_database_url (str): (DEPRECATED) Use system_database_url instead.
+            dbos_system_schema (str): Schema name for DBOS system tables. Defaults to "dbos". Must match the schema the application uses.
+            serializer (Serializer): A custom serializer and deserializer for program data the client reads from and writes to the system database. Must match the application's serializer.
+            system_database_pool_size (int): System database pool size. Defaults to 5.
+            system_database_polling_concurrency (int): Maximum number of DB-backed polling reads (from wait operations such as get_result, get_event, and read_stream) that may run concurrently against the system database pool. Defaults to half the system database pool size (minimum 1). Set to a non-positive value to disable the limiter.
+            use_listen_notify (bool): Whether to run a listener thread so get_event and read_stream are woken by notifications rather than polling the database. Defaults to False. Only enable this if the system database was created with use_listen_notify=True (the DBOS default).
+
+        Raises:
+            Exception: If the system database cannot be reached.
+        """
         self._serializer = serializer
         if system_database_engine:
             if "sqlite" in system_database_engine.dialect.name:
@@ -202,13 +229,30 @@ class DBOSClient:
             schema=dbos_system_schema,
             serializer=serializer,
             executor_id=None,
-            # No notification listener in the client, so stream reads poll the offset.
-            use_listen_notify=False,
+            use_listen_notify=use_listen_notify,
             polling_concurrency=system_database_polling_concurrency,
         )
         self._sys_db.check_connection()
+        self._notification_listener_thread: Optional[threading.Thread] = None
+        if use_listen_notify:
+            # Without this thread, get_event polls the database on every wait instead.
+            self._notification_listener_thread = threading.Thread(
+                target=self._sys_db.run_notification_listener,
+                daemon=True,
+            )
+            self._notification_listener_thread.start()
 
     def destroy(self) -> None:
+        if self._notification_listener_thread is not None:
+            # Close the listener connection first so its blocking wait breaks and it can exit.
+            self._sys_db._run_background_processes = False
+            self._sys_db._cleanup_connections()
+            self._notification_listener_thread.join(timeout=10.0)
+            if self._notification_listener_thread.is_alive():
+                dbos_logger.warning(
+                    "Notification listener thread did not exit within timeout"
+                )
+            self._notification_listener_thread = None
         self._sys_db.destroy()
 
     def _build_enqueue_status(

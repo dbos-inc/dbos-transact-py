@@ -1097,6 +1097,36 @@ def test_client_read_stream(dbos: DBOS, client: DBOSClient) -> None:
         client.destroy()
 
 
+def test_client_read_stream_listen_notify(
+    config: DBOSConfig, dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    """A client with use_listen_notify=True has the listener signal its stream events
+    rather than relying only on its own re-reads. Values must still arrive in order and
+    the reader must still stop at the close sentinel."""
+    test_values = ["ln_hello", 7, {"ln_key": "ln_value"}, None]
+    stream_key = "listen_notify_client_stream"
+
+    @DBOS.workflow()
+    def listen_notify_writer_workflow() -> None:
+        for value in test_values:
+            DBOS.write_stream(stream_key, value)
+        DBOS.close_stream(stream_key)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        listen_notify_writer_workflow()
+
+    assert config["system_database_url"] is not None
+    client = DBOSClient(
+        system_database_url=config["system_database_url"],
+        use_listen_notify=True,
+    )
+    try:
+        assert list(client.read_stream(wfid, stream_key)) == test_values
+    finally:
+        client.destroy()
+
+
 @pytest.mark.asyncio
 async def test_client_read_stream_async(dbos: DBOS, client: DBOSClient) -> None:
     """Test async reading streams from a DBOS client."""

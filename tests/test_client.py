@@ -453,6 +453,49 @@ async def test_client_get_event_async_prompt_delivery(
     assert elapsed < 30, f"client.get_event_async took {elapsed:.1f}s"
 
 
+def test_client_no_listener_by_default(client: DBOSClient) -> None:
+    assert client._notification_listener_thread is None
+
+
+def test_client_listen_notify_get_event(
+    config: DBOSConfig, dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    """With use_listen_notify=True the client runs a listener thread, so waits stop
+    polling the database and rely on notifications: the fallback re-check is 60s, so
+    only a delivered NOTIFY can return the value within the bound asserted below."""
+    assert config["system_database_url"] is not None
+    client = DBOSClient(
+        system_database_url=config["system_database_url"],
+        use_listen_notify=True,
+    )
+    try:
+        listener = client._notification_listener_thread
+        assert listener is not None and listener.is_alive()
+
+        @DBOS.workflow()
+        def listen_notify_event_workflow(key: str, value: str) -> None:
+            DBOS.sleep(2.0)
+            DBOS.set_event(key, value)
+
+        key = "listen_notify_key"
+        value = "listen_notify_value"
+        wfid = str(uuid.uuid4())
+        with SetWorkflowID(wfid):
+            handle = DBOS.start_workflow(listen_notify_event_workflow, key, value)
+
+        start = time.time()
+        assert client.get_event(wfid, key, 60) == value
+        elapsed = time.time() - start
+        handle.get_result()
+
+        # The event is set ~2s in. Without a working notification the wait would
+        # run out the full 60s timeout, since the re-check no longer polls.
+        assert elapsed < 30, f"client.get_event took {elapsed:.1f}s"
+    finally:
+        client.destroy()
+    assert not listener.is_alive()
+
+
 @pytest.mark.asyncio
 async def test_client_get_event_async_does_not_pin_a_thread_per_wait(
     client: DBOSClient, dbos: DBOS
