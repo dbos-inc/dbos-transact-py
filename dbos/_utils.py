@@ -15,12 +15,6 @@ INTERNAL_QUEUE_NAME = "_dbos_internal_queue"
 request_id_header = "x-request-id"
 
 
-def _resolve_waiter(future: "asyncio.Future[None]") -> None:
-    """Wake one async waiter. Runs on that waiter's event loop."""
-    if not future.done():
-        future.set_result(None)
-
-
 class LoopAwareEvent(threading.Event):
     """A ``threading.Event`` that async callers can also await.
 
@@ -51,9 +45,15 @@ class LoopAwareEvent(threading.Event):
         super().set()
         with self._waiters_lock:
             waiters, self._waiters = self._waiters, set()
-        for loop, future in waiters:
+
+        def resolve(future: "asyncio.Future[None]") -> None:
+            """Wake one async waiter. Runs on that waiter's event loop."""
+            if not future.done():
+                future.set_result(None)
+
+        for loop, waiter_future in waiters:
             try:
-                loop.call_soon_threadsafe(_resolve_waiter, future)
+                loop.call_soon_threadsafe(resolve, waiter_future)
             except RuntimeError:
                 pass  # The waiter's loop is closed; it has nothing left to wake.
 
