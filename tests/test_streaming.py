@@ -13,6 +13,7 @@ from dbos._sys_db import _no_stream_value
 from dbos._sys_db_postgres import PostgresSystemDatabase
 from tests.conftest import retry_until_success, set_workflow_status
 
+
 def test_basic_stream_write_read(dbos: DBOS) -> None:
     """Test basic stream write and read functionality."""
     test_values = ["hello", 42, {"key": "value"}, [1, 2, 3], None]

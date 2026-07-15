@@ -31,7 +31,11 @@ from dbos._serialization import DefaultSerializer, safe_deserialize
 from dbos._sys_db import WorkflowStatusString
 from dbos._sys_db_postgres import PostgresSystemDatabase
 
-from .conftest import queue_entries_are_cleaned_up, retry_until_success, set_workflow_status
+from .conftest import (
+    queue_entries_are_cleaned_up,
+    retry_until_success,
+    set_workflow_status,
+)
 
 
 def test_transaction_errors(dbos: DBOS, skip_with_sqlite: None) -> None:
