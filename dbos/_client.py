@@ -726,9 +726,7 @@ class DBOSClient:
     async def get_event_async(
         self, workflow_id: str, key: str, timeout_seconds: float = 60
     ) -> Any:
-        return await asyncio.to_thread(
-            self.get_event, workflow_id, key, timeout_seconds
-        )
+        return await self._sys_db.get_event_async(workflow_id, key, timeout_seconds)
 
     def cancel_workflow(
         self, workflow_id: str, *, cancel_children: bool = False

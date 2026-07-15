@@ -158,8 +158,7 @@ async def test_stream_read_async_wakes_on_notification(
         latencies.append(time.time() - written[value])
 
     assert len(latencies) == len(gaps)
-    # Each value lands as soon as the listener signals the event. Without the wakeup the reader
-    # would sleep to the 30s deadline and the test would time out rather than fail here.
+    # Without the wakeup the reader sleeps to the 30s deadline, drains all three at once, and fails here with ~30s latencies.
     assert max(latencies) < 0.15, f"notification latencies {latencies}"
 
 
