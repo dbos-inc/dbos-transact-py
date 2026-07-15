@@ -372,6 +372,29 @@ async def test_event_drops_its_waiter_on_cancellation() -> None:
 
 
 @pytest.mark.asyncio
+async def test_event_cancellation_is_not_swallowed_by_a_concurrent_set() -> None:
+    """A cancellation landing after a set() resolved the waiter's future, but before
+    the waiter resumes, must still propagate. asyncio.wait_for swallows it on Python
+    <3.12 -- it catches the CancelledError, sees the future is done, and returns
+    normally. recv_async would then break out of `while not event.is_set()` and
+    consume the message, handing it to a caller that believes it was cancelled.
+
+    The set() below queues the wakeup; one loop pass lets it resolve the future while
+    leaving the waiter's resumption still queued behind it -- exactly that window.
+    """
+    event = LoopAwareEvent()
+    task = asyncio.create_task(event.wait_async(timeout=30.0))
+    await _await_waiter_count(event, 1)
+
+    event.set()
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not event._waiters
+
+
+@pytest.mark.asyncio
 async def test_event_wakes_every_waiter_on_one_set() -> None:
     """get_event and stream readers share one event object between concurrent
     waiters, so a single signal must resolve every registered waiter."""

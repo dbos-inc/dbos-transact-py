@@ -38,6 +38,12 @@ class LoopAwareEvent(threading.Event):
         )
         self._waiters_lock = threading.Lock()
 
+    @staticmethod
+    def _resolve(future: "asyncio.Future[None]") -> None:
+        """Wake one async waiter. Runs on that waiter's event loop."""
+        if not future.done():
+            future.set_result(None)
+
     def set(self) -> None:
         # Set the flag before taking the lock so no wakeup is lost: a concurrent
         # wait_async either sees the flag under the lock and skips registering,
@@ -45,15 +51,9 @@ class LoopAwareEvent(threading.Event):
         super().set()
         with self._waiters_lock:
             waiters, self._waiters = self._waiters, set()
-
-        def resolve(future: "asyncio.Future[None]") -> None:
-            """Wake one async waiter. Runs on that waiter's event loop."""
-            if not future.done():
-                future.set_result(None)
-
         for loop, waiter_future in waiters:
             try:
-                loop.call_soon_threadsafe(resolve, waiter_future)
+                loop.call_soon_threadsafe(self._resolve, waiter_future)
             except RuntimeError:
                 pass  # The waiter's loop is closed; it has nothing left to wake.
 
@@ -71,11 +71,12 @@ class LoopAwareEvent(threading.Event):
             future: "asyncio.Future[None]" = loop.create_future()
             waiter = (loop, future)
             self._waiters.add(waiter)
+        # Time out by resolving the waiter's own future rather than via asyncio.wait_for, which before Python 3.12 returns normally instead of re-raising when a cancellation lands after the future resolved, silently dropping it.
+        timer = loop.call_later(max(timeout, 0), self._resolve, future)
         try:
-            await asyncio.wait_for(future, timeout)
-        except asyncio.TimeoutError:
-            pass
+            await future
         finally:
+            timer.cancel()
             with self._waiters_lock:
                 self._waiters.discard(waiter)
         return self.is_set()
