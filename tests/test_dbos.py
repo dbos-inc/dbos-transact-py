@@ -3062,14 +3062,10 @@ def test_notification_fallback_polling(dbos: DBOS) -> None:
 
 
 def test_recv_wakeup_trigger_is_kept(dbos: DBOS, skip_with_sqlite: None) -> None:
-    """The notifications NOTIFY trigger is deliberately NOT dropped: recv destructively
-    consumes on wakeup, so it must only be woken after the message row commits, which the
-    in-transaction trigger guarantees but a batched app-side notify does not. Assert the
-    trigger is present and that with the fallback recheck forced far out, a send still wakes
-    a blocked recv promptly -- which can only come from the trigger's NOTIFY."""
+    """The notifications trigger must wake a blocked recv: assert it exists and that, with the fallback recheck forced far out, a send still delivers promptly via the trigger's NOTIFY."""
     sys_db = dbos._sys_db
 
-    # The per-row trigger on the notifications table must still exist.
+    # The trigger on the notifications table must exist.
     with sys_db.engine.begin() as c:
         trigger = c.execute(
             sa.text(
@@ -3089,16 +3085,14 @@ def test_recv_wakeup_trigger_is_kept(dbos: DBOS, skip_with_sqlite: None) -> None
     def recv_workflow() -> str:
         return str(DBOS.recv(timeout_seconds=30))
 
-    # Force the fallback recheck far longer than the delivery we expect, so a timely
-    # wakeup must come from the trigger's NOTIFY, not the periodic recheck.
+    # Force the fallback recheck far out so a timely wakeup must come from the trigger's NOTIFY.
     original = sys_db._notification_fallback_polling_interval
     sys_db._notification_fallback_polling_interval = 30.0
     try:
         with SetWorkflowID(dest_uuid):
             handle = DBOS.start_workflow(recv_workflow)
 
-        # Wait until the recv is actually blocked (registered its listener) before sending,
-        # so delivery exercises the notification wakeup path rather than recv's initial check.
+        # Wait until the recv is blocked (listener registered) so delivery exercises the wakeup path.
         payload = f"{dest_uuid}::{_dbos_null_topic}"
 
         def recv_blocked() -> None:
@@ -3121,10 +3115,10 @@ def test_recv_wakeup_trigger_is_kept(dbos: DBOS, skip_with_sqlite: None) -> None
 def test_get_event_delivered_by_notifier_without_trigger(
     dbos: DBOS, skip_with_sqlite: None
 ) -> None:
-    """The per-row workflow_events NOTIFY trigger is dropped (migration 44); a blocked get_event is woken by the coalescing app-side notifier instead. Assert the trigger is gone and that with the fallback recheck forced far out, a set_event still wakes the get_event promptly."""
+    """get_event is woken by the app-side notifier: assert no workflow_events trigger exists and that, with the fallback recheck forced far out, a set_event still wakes a blocked get_event promptly."""
     sys_db = dbos._sys_db
 
-    # No per-row trigger may remain on the workflow_events table.
+    # No trigger may exist on the workflow_events table.
     with sys_db.engine.begin() as c:
         trigger = c.execute(
             sa.text(

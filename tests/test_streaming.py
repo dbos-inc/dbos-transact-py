@@ -162,9 +162,7 @@ async def test_stream_read_async_wakes_on_notification(
         latencies.append(time.time() - written[value])
 
     assert len(latencies) == len(gaps)
-    # Without the wakeup the reader sleeps to the 30s deadline, drains all three at once, and shows ~30s latencies.
-    # Each value should arrive within a notification cycle, but the post-wakeup path hops through a thread pool and a
-    # DB re-read, so tolerate a single CI stall: the rest must stay prompt, and none may approach the 30s fallback.
+    # Each value should arrive within a notification cycle; tolerate one CI stall but keep the rest prompt and none near the 30s fallback (a broken wakeup drains all three at ~30s).
     ordered = sorted(latencies)
     assert ordered[1] < 0.15, f"notification latencies {latencies}"
     assert ordered[-1] < 2.0, f"notification latencies {latencies}"

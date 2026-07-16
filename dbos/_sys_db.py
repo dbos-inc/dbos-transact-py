@@ -388,10 +388,7 @@ class NotificationInfo(TypedDict):
 _dbos_null_topic = "__null__topic__"
 _dbos_stream_closed_sentinel = "__DBOS_STREAM_CLOSED__"
 
-# LISTEN/NOTIFY channels; the listener fans each channel's payload back to its waiting event.
-# streams and workflow_events are coalesced and pushed off the write path by run_notifier; notifications
-# still fires from an in-transaction DB trigger, because recv destructively consumes on wakeup and must
-# not be woken before the message row commits (which the trigger guarantees but a batched notify does not).
+# LISTEN/NOTIFY channels; streams and workflow_events are pushed by run_notifier, while notifications fires from an in-transaction DB trigger so recv is never woken before its row commits.
 _dbos_notifications_channel = "dbos_notifications_channel"
 _dbos_workflow_events_channel = "dbos_workflow_events_channel"
 _dbos_streams_channel = "dbos_streams_channel"

@@ -883,7 +883,7 @@ ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "is_debounced"
 
 
 def get_dbos_migration_fortythree(schema: str, use_listen_notify: bool) -> str:
-    # Drop the per-row streams NOTIFY trigger (migration 39): notifications are now coalesced and pushed by run_notifier off the write path. Gated to match migration 39.
+    # Drop the streams NOTIFY trigger; stream writes are pushed by run_notifier off the write path.
     if not use_listen_notify:
         return ""
     return f"""
@@ -893,8 +893,7 @@ DROP FUNCTION IF EXISTS "{schema}".streams_function();
 
 
 def get_dbos_migration_fortyfour(schema: str, use_listen_notify: bool) -> str:
-    # Drop the per-row workflow_events NOTIFY trigger (migration 1): like streams, events are now coalesced and pushed by run_notifier off the write path. Gated to match migration 1.
-    # The notifications trigger is deliberately kept: recv destructively consumes on wakeup, so it must not be woken before the message row commits, which the in-transaction trigger guarantees but a batched app-side notify does not.
+    # Drop the workflow_events NOTIFY trigger (events are pushed by run_notifier); keep the notifications trigger since recv consumes destructively on wakeup and must not fire before the row commits.
     if not use_listen_notify:
         return ""
     return f"""
