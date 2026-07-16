@@ -3096,9 +3096,10 @@ class SystemDatabase(ABC):
 
         With a notification listener running, the listener signals the event
         promptly and the re-check is only a safety net against dropped
-        notifications. Without one (e.g. in DBOSClient, which never starts a
-        listener thread), the re-check is the only delivery mechanism, so use
-        the much shorter polling interval instead."""
+        notifications. Without one (e.g. in DBOSClient, which starts a listener
+        thread only when created with use_listen_notify=True), the re-check is
+        the only delivery mechanism, so use the much shorter polling interval
+        instead."""
         if self._listener_running:
             return self._notification_fallback_polling_interval
         return self._notification_listener_polling_interval_sec
