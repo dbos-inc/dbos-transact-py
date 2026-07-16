@@ -733,7 +733,13 @@ def test_migrate_print_only(
     db_url_string = db_url.render_as_string(hide_password=False)
     latest_version = len(get_dbos_migrations("dbos", True))
 
-    # Printing requires no database connection and includes grants for the role
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(
+            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+        )
+
+    # Printing works without a reachable database and includes grants for the role
     print_dbos_database_migrations(
         db_url_string,
         app_database_url=db_url_string,
@@ -742,10 +748,8 @@ def test_migrate_print_only(
     )
     out = capsys.readouterr().out
     assert 'CREATE SCHEMA IF NOT EXISTS "dbos";' in out
-    assert (
-        f'INSERT INTO "dbos".dbos_migrations (version) VALUES ({latest_version});'
-        in out
-    )
+    assert 'INSERT INTO "dbos".dbos_migrations (version) VALUES (1);' in out
+    assert f'UPDATE "dbos".dbos_migrations SET version = {latest_version};' in out
     assert 'GRANT USAGE ON SCHEMA "dbos" TO "print-only-role";' in out
     assert "transaction_outputs" in out
     for line in out.splitlines():
@@ -814,6 +818,12 @@ def test_migrate_print_only_custom_schema(
     db_url_string = db_url.render_as_string(hide_password=False)
     latest_version = len(get_dbos_migrations(schema, True))
 
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(
+            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+        )
+
     print_dbos_database_migrations(db_url_string, app_database_url=None, schema=schema)
     sql = capsys.readouterr().out
     assert f'CREATE SCHEMA IF NOT EXISTS "{schema}";' in sql
@@ -826,10 +836,8 @@ def test_migrate_print_only_custom_schema(
     assert (
         f'ALTER TABLE "{schema}".notifications ADD PRIMARY KEY (message_uuid);' in sql
     )
-    assert (
-        f'INSERT INTO "{schema}".dbos_migrations (version) VALUES ({latest_version});'
-        in sql
-    )
+    assert f'INSERT INTO "{schema}".dbos_migrations (version) VALUES (1);' in sql
+    assert f'UPDATE "{schema}".dbos_migrations SET version = {latest_version};' in sql
     # The unquoted schema name must never appear outside quotes or literals
     assert f"CREATE TABLE {schema}." not in sql
 
@@ -900,6 +908,135 @@ def test_migrate_print_only_custom_schema(
             )
     finally:
         engine.dispose()
+
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(
+            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+        )
+
+
+def test_migrate_print_only_connection_failure(skip_with_sqlite: None) -> None:
+    """An unreachable database silently falls back to the full fresh script:
+    stdout is pure SQL/comments, stderr is empty, and the exit code is 0."""
+    unreachable_url = "postgresql://postgres:x@127.0.0.1:1/no_such_db"
+    result = subprocess.run(
+        ["dbos", "migrate", "-s", unreachable_url, "--print-only"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert 'CREATE SCHEMA IF NOT EXISTS "dbos";' in result.stdout
+    assert "-- Abort if this is not a fresh database" in result.stdout
+    latest_version = len(get_dbos_migrations("dbos", True))
+    assert f'UPDATE "dbos".dbos_migrations SET version = {latest_version};' in (
+        result.stdout
+    )
+    for line in result.stdout.splitlines():
+        assert not line.startswith(("Starting", "Granting", "System database"))
+
+
+def test_migrate_print_only_delta(
+    db_engine: sa.Engine,
+    skip_with_sqlite: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Against a reachable database at version N, --print-only emits a delta
+    script covering only migrations N+1..latest, guarded on version N."""
+    if shutil.which("psql") is None:
+        pytest.skip("psql not available")
+
+    database_name = "print_only_delta_test"
+    schema = "F8nny_sCHem@-n@m3"
+    db_url = db_engine.url.set(database=database_name).set(drivername="postgresql")
+    db_url_string = db_url.render_as_string(hide_password=False)
+    migrations = get_dbos_migrations(schema, True)
+    latest_version = len(migrations)
+    delta_from = latest_version - 5
+
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(
+            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+        )
+        connection.execute(sa.text(f"CREATE DATABASE {database_name}"))
+
+    # The database is reachable but empty, so this still prints the fresh script
+    print_dbos_database_migrations(db_url_string, app_database_url=None, schema=schema)
+    sql = capsys.readouterr().out
+    assert "FRESH databases only" in sql
+
+    # Build a genuinely partial database: apply the fresh script only up
+    # through migration delta_from's version bookkeeping
+    marker = f'UPDATE "{schema}".dbos_migrations SET version = {delta_from};'
+    partial_sql = sql[: sql.index(marker) + len(marker)] + "\n"
+    with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
+        f.write(partial_sql)
+        f.flush()
+        subprocess.check_call(
+            ["psql", db_url_string, "-v", "ON_ERROR_STOP=1", "-q", "-f", f.name]
+        )
+
+    # The CLI now prints a delta script for migrations delta_from+1..latest
+    delta = subprocess.check_output(
+        ["dbos", "migrate", "-s", db_url_string, "--schema", schema, "--print-only"],
+        text=True,
+    )
+    lines = delta.splitlines()
+    assert f"IF v IS DISTINCT FROM {delta_from} THEN" in delta
+    assert "CREATE SCHEMA" not in delta
+    assert f'INSERT INTO "{schema}".dbos_migrations' not in delta
+    # Migration 10's conditional block only appears when 10 is in range
+    assert "table_constraints" not in delta
+    for i in range(1, delta_from + 1):
+        assert f"-- Migration {i}" not in lines
+    for i in range(delta_from + 1, latest_version + 1):
+        if migrations[i - 1].strip():
+            assert f"-- Migration {i}" in lines
+        assert f'UPDATE "{schema}".dbos_migrations SET version = {i};' in lines
+
+    # Applying the delta brings the database to the latest version
+    with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
+        f.write(delta)
+        f.flush()
+        subprocess.check_call(
+            ["psql", db_url_string, "-v", "ON_ERROR_STOP=1", "-q", "-f", f.name]
+        )
+
+    engine = sa.create_engine(db_url.set(drivername="postgresql+psycopg"))
+    try:
+        assert should_migrate(engine, schema, True) is False
+        with engine.connect() as conn:
+            version = conn.execute(
+                sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+            ).scalar()
+            assert version == latest_version
+    finally:
+        engine.dispose()
+
+    # An up-to-date database prints only the nothing-to-do comment
+    up_to_date = subprocess.check_output(
+        ["dbos", "migrate", "-s", db_url_string, "--schema", schema, "--print-only"],
+        text=True,
+    )
+    assert (
+        f"-- Database is already at the latest DBOS schema version ({latest_version}); nothing to do."
+        in up_to_date
+    )
+    assert "CREATE" not in up_to_date
+    assert "UPDATE" not in up_to_date
+
+    # A delta generated for version delta_from must fail fast against a
+    # database at a different version
+    with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
+        f.write(delta)
+        f.flush()
+        with pytest.raises(subprocess.CalledProcessError):
+            subprocess.check_call(
+                ["psql", db_url_string, "-v", "ON_ERROR_STOP=1", "-q", "-f", f.name],
+                stderr=subprocess.DEVNULL,
+            )
 
     with db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")

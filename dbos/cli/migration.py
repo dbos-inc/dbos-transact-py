@@ -123,6 +123,40 @@ def grant_dbos_schema_permissions(
             engine.dispose()
 
 
+def _get_current_dbos_schema_version(
+    system_database_url: str, schema: str
+) -> Optional[int]:
+    """Read the current DBOS schema version with read-only queries.
+
+    Returns 0 if the schema or dbos_migrations table is missing or empty
+    (fresh database), and None if no connection could be established."""
+    engine = None
+    try:
+        engine = sa.create_engine(
+            sa.make_url(system_database_url).set(drivername="postgresql+psycopg"),
+            connect_args={"connect_timeout": 10},
+        )
+        with engine.connect() as conn:
+            table_exists = conn.execute(
+                sa.text(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = :schema AND table_name = 'dbos_migrations'"
+                ),
+                {"schema": schema},
+            ).fetchone()
+            if table_exists is None:
+                return 0
+            row = conn.execute(
+                sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+            ).fetchone()
+            return int(row[0]) if row else 0
+    except Exception:
+        return None
+    finally:
+        if engine:
+            engine.dispose()
+
+
 def print_dbos_database_migrations(
     system_database_url: str,
     *,
@@ -130,8 +164,10 @@ def print_dbos_database_migrations(
     schema: str = "dbos",
     application_role: Optional[str] = None,
 ) -> None:
-    """Print to stdout the SQL that DBOS migrations would execute on a fresh database,
-    without connecting to any database."""
+    """Print to stdout the SQL that DBOS migrations would execute, without
+    writing to any database. If the system database is reachable, only the
+    migrations past its current version are printed; otherwise a full
+    fresh-database script is printed. Stdout is pure SQL and comments."""
     if system_database_url.startswith("sqlite") or (
         app_database_url and app_database_url.startswith("sqlite")
     ):
@@ -142,6 +178,21 @@ def print_dbos_database_migrations(
     if '"' in schema or "'" in schema:
         typer.echo("Schema names containing quotes are not supported", err=True)
         raise typer.Exit(code=1)
+
+    migrations = get_dbos_migrations(schema, use_listen_notify=True)
+    latest_version = len(migrations)
+
+    # If the database is unreachable, silently fall back to a fresh-database
+    # script: the apply-time guard below protects against misuse.
+    current_version = _get_current_dbos_schema_version(system_database_url, schema)
+    if current_version is None:
+        current_version = 0
+
+    if current_version >= latest_version:
+        typer.echo(
+            f"-- Database is already at the latest DBOS schema version ({current_version}); nothing to do."
+        )
+        return
 
     def emit(sql: str) -> None:
         sql = sql.strip()
@@ -154,15 +205,16 @@ def print_dbos_database_migrations(
     typer.echo(
         "-- Contains CREATE/DROP INDEX CONCURRENTLY: run outside a transaction block (e.g. plain psql, not psql -1)."
     )
-    typer.echo(
-        "-- This script is for FRESH databases only and aborts if DBOS migrations were already applied. Use `dbos migrate` to upgrade an existing database."
-    )
-    emit(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
-    emit(
-        f'CREATE TABLE IF NOT EXISTS "{schema}".dbos_migrations (version BIGINT NOT NULL PRIMARY KEY)'
-    )
-    typer.echo("-- Abort if this is not a fresh database")
-    emit(f"""DO $$
+    if current_version == 0:
+        typer.echo(
+            "-- This script is for FRESH databases only and aborts if DBOS migrations were already applied. Use `dbos migrate` to upgrade an existing database."
+        )
+        emit(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+        emit(
+            f'CREATE TABLE IF NOT EXISTS "{schema}".dbos_migrations (version BIGINT NOT NULL PRIMARY KEY)'
+        )
+        typer.echo("-- Abort if this is not a fresh database")
+        emit(f"""DO $$
 DECLARE
     existing_version BIGINT;
 BEGIN
@@ -171,27 +223,51 @@ BEGIN
         RAISE EXCEPTION 'DBOS schema % is already at version %; this script is for fresh databases only. Use dbos migrate instead.', '{schema}', existing_version;
     END IF;
 END $$""")
-    migrations = get_dbos_migrations(schema, use_listen_notify=True)
+    else:
+        typer.echo(
+            f"-- Delta script: migrations {current_version + 1} through {latest_version}, generated for a database at version {current_version}."
+        )
+        typer.echo(
+            f"-- Abort unless the database is exactly at version {current_version}"
+        )
+        emit(f"""DO $$
+DECLARE
+    v BIGINT;
+BEGIN
+    SELECT version INTO v FROM "{schema}".dbos_migrations LIMIT 1;
+    IF v IS DISTINCT FROM {current_version} THEN
+        RAISE EXCEPTION 'expected DBOS schema version {current_version}, found %; regenerate this script with dbos migrate --print-only', v;
+    END IF;
+END $$""")
+
+    version_row_exists = current_version > 0
     for i, migration_sql in enumerate(migrations, 1):
-        if not migration_sql.strip():
+        if i <= current_version:
             continue
-        typer.echo(f"-- Migration {i}")
-        if i == 10:
-            # Mirrors the runner's guard in run_dbos_migrations: migration 10
-            # backfills the notifications primary key, which migration 1
-            # already creates on a fresh database.
-            typer.echo(
-                "-- Applied only if the notifications table has no primary key, mirroring the migration runner's guard"
-            )
-            emit(f"""DO $$
+        if migration_sql.strip():
+            typer.echo(f"-- Migration {i}")
+            if i == 10:
+                # Mirrors the runner's guard in run_dbos_migrations: migration
+                # 10 backfills the notifications primary key, which migration
+                # 1 already creates on a fresh database.
+                typer.echo(
+                    "-- Applied only if the notifications table has no primary key, mirroring the migration runner's guard"
+                )
+                emit(f"""DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema = '{schema}' AND table_name = 'notifications' AND constraint_type = 'PRIMARY KEY') THEN
         {migration_sql.strip()}
     END IF;
 END $$""")
-            continue
-        emit(migration_sql)
-    emit(f'INSERT INTO "{schema}".dbos_migrations (version) VALUES ({len(migrations)})')
+            else:
+                emit(migration_sql)
+        # Per-migration version bookkeeping, mirroring the runner: an
+        # interrupted apply can be resumed by regenerating the delta.
+        if version_row_exists:
+            emit(f'UPDATE "{schema}".dbos_migrations SET version = {i}')
+        else:
+            emit(f'INSERT INTO "{schema}".dbos_migrations (version) VALUES ({i})')
+            version_row_exists = True
     if application_role:
         typer.echo(f"-- Permissions for role {application_role}")
         for sql in get_dbos_schema_permissions_sql(schema, application_role):
