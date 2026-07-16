@@ -10,7 +10,12 @@ from dbos._migration import ensure_dbos_schema, run_dbos_migrations, should_migr
 
 from ._logger import dbos_logger
 from ._schemas.system_database import SystemSchema
-from ._sys_db import SystemDatabase
+from ._sys_db import (
+    SystemDatabase,
+    _dbos_notifications_channel,
+    _dbos_streams_channel,
+    _dbos_workflow_events_channel,
+)
 
 
 class PostgresSystemDatabase(SystemDatabase):
@@ -166,9 +171,9 @@ class PostgresSystemDatabase(SystemDatabase):
                     )
                     psycopg_conn.set_autocommit(True)
 
-                    psycopg_conn.execute("LISTEN dbos_notifications_channel")
-                    psycopg_conn.execute("LISTEN dbos_workflow_events_channel")
-                    psycopg_conn.execute("LISTEN dbos_streams_channel")
+                    psycopg_conn.execute(f"LISTEN {_dbos_notifications_channel}")
+                    psycopg_conn.execute(f"LISTEN {_dbos_workflow_events_channel}")
+                    psycopg_conn.execute(f"LISTEN {_dbos_streams_channel}")
                 while self._run_background_processes:
                     gen = psycopg_conn.notifies()
                     for notify in gen:
@@ -176,7 +181,7 @@ class PostgresSystemDatabase(SystemDatabase):
                         dbos_logger.debug(
                             f"Received notification on channel: {channel}, payload: {notify.payload}"
                         )
-                        if channel == "dbos_notifications_channel":
+                        if channel == _dbos_notifications_channel:
                             if notify.payload:
                                 event = self.notifications_map.get(notify.payload)
                                 if event is None:
@@ -185,7 +190,7 @@ class PostgresSystemDatabase(SystemDatabase):
                                 dbos_logger.debug(
                                     f"Signaled notifications event for {notify.payload}"
                                 )
-                        elif channel == "dbos_workflow_events_channel":
+                        elif channel == _dbos_workflow_events_channel:
                             if notify.payload:
                                 event = self.workflow_events_map.get(notify.payload)
                                 if event is None:
@@ -194,7 +199,7 @@ class PostgresSystemDatabase(SystemDatabase):
                                 dbos_logger.debug(
                                     f"Signaled workflow_events event for {notify.payload}"
                                 )
-                        elif channel == "dbos_streams_channel":
+                        elif channel == _dbos_streams_channel:
                             if notify.payload:
                                 event = self.streams_map.get(notify.payload)
                                 if event is None:
@@ -213,49 +218,52 @@ class PostgresSystemDatabase(SystemDatabase):
             finally:
                 self._cleanup_connections()
 
-    def _signal_stream_write(self, workflow_uuid: str, key: str) -> None:
-        """Accumulate a coalesced wakeup for readers of (workflow_uuid, key); run_stream_notifier pushes it off the write path (no-op without L/N)."""
+    def _signal_notification(self, channel: str, payload: str) -> None:
+        """Accumulate a coalesced wakeup on `channel` for `payload`; run_notifier pushes it off the write path (no-op without L/N)."""
         if not self.use_listen_notify:
             return
-        payload = f"{workflow_uuid}::{key}"
-        with self._stream_notifier_lock:
-            self._pending_stream_notifications.add(payload)
+        with self._notifier_lock:
+            self._pending_notifications.setdefault(channel, set()).add(payload)
 
-    def run_stream_notifier(self) -> None:
-        """Periodically flush coalesced stream-write notifications, keeping the async-notify queue lock (which serializes notifying commits) off the write path."""
+    def run_notifier(self) -> None:
+        """Periodically flush coalesced notifications across all channels, keeping the async-notify queue lock (which serializes notifying commits) off the write path."""
         if not self.use_listen_notify:
             return
         while self._run_background_processes:
             try:
-                time.sleep(self._stream_notification_coalesce_sec)
-                self._flush_stream_notifications()
+                time.sleep(self._notification_coalesce_sec)
+                self._flush_notifications()
             except Exception as e:
                 # Last resort: a failing flush logs and drops its batch internally, so this catches only unexpected errors, which must not kill the sole push path.
                 if self._run_background_processes:
-                    dbos_logger.warning(f"Stream notifier error: {e}")
+                    dbos_logger.warning(f"Notifier error: {e}")
                     time.sleep(1)
         # Final flush so values written just before shutdown still wake readers promptly.
         try:
-            self._flush_stream_notifications()
+            self._flush_notifications()
         except Exception as e:
-            dbos_logger.warning(f"Stream notifier final flush error: {e}")
+            dbos_logger.warning(f"Notifier final flush error: {e}")
 
-    def _flush_stream_notifications(self) -> None:
-        """Emit one coalesced notifying transaction for all pending payloads; drop the batch if it fails."""
-        with self._stream_notifier_lock:
-            if not self._pending_stream_notifications:
+    def _flush_notifications(self) -> None:
+        """Emit one coalesced notifying transaction per channel for all pending payloads; drop a channel's batch if it fails."""
+        with self._notifier_lock:
+            if not any(self._pending_notifications.values()):
                 return
-            batch = self._pending_stream_notifications
-            self._pending_stream_notifications = set()
-        try:
-            # One statement, one transaction: one round trip and one acquisition of the async-notify queue lock; unnest emits one notification per payload.
-            with self.engine.begin() as c:
-                c.execute(
-                    sa.text(
-                        "SELECT pg_notify('dbos_streams_channel', p) FROM unnest(CAST(:payloads AS text[])) AS p"
-                    ),
-                    {"payloads": list(batch)},
-                )
-        except Exception as e:
-            # Drop the batch (do not requeue) on failure, e.g. a payload over pg_notify's 8000-byte limit; readers' polling fallback delivers these values, so one poison payload can't stall the notifier forever.
-            dbos_logger.warning(f"Stream notifier flush error: {e}")
+            batches = self._pending_notifications
+            self._pending_notifications = {}
+        # One transaction per channel so an unsendable payload on one channel drops only its own batch.
+        for channel, batch in batches.items():
+            if not batch:
+                continue
+            try:
+                # One statement, one transaction: one round trip and one acquisition of the async-notify queue lock; unnest emits one notification per payload.
+                with self.engine.begin() as c:
+                    c.execute(
+                        sa.text(
+                            "SELECT pg_notify(:channel, p) FROM unnest(CAST(:payloads AS text[])) AS p"
+                        ),
+                        {"channel": channel, "payloads": list(batch)},
+                    )
+            except Exception as e:
+                # Drop the batch (do not requeue) on failure, e.g. a payload over pg_notify's 8000-byte limit; readers' polling fallback delivers these values, so one poison payload can't stall the notifier forever.
+                dbos_logger.warning(f"Notifier flush error on {channel}: {e}")

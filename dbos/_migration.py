@@ -883,12 +883,22 @@ ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "is_debounced"
 
 
 def get_dbos_migration_fortythree(schema: str, use_listen_notify: bool) -> str:
-    # Drop the per-row streams NOTIFY trigger (migration 39): notifications are now coalesced and pushed by run_stream_notifier off the write path. Gated to match migration 39.
+    # Drop the streams NOTIFY trigger; stream writes are pushed by run_notifier off the write path.
     if not use_listen_notify:
         return ""
     return f"""
 DROP TRIGGER IF EXISTS dbos_streams_trigger ON "{schema}".streams;
 DROP FUNCTION IF EXISTS "{schema}".streams_function();
+"""
+
+
+def get_dbos_migration_fortyfour(schema: str, use_listen_notify: bool) -> str:
+    # Drop the workflow_events NOTIFY trigger (events are pushed by run_notifier)
+    if not use_listen_notify:
+        return ""
+    return f"""
+DROP TRIGGER IF EXISTS dbos_workflow_events_trigger ON "{schema}".workflow_events;
+DROP FUNCTION IF EXISTS "{schema}".workflow_events_function();
 """
 
 
@@ -939,6 +949,7 @@ def get_dbos_migrations(
         get_dbos_migration_fortyone(schema),
         get_dbos_migration_fortytwo(schema),
         get_dbos_migration_fortythree(schema, use_listen_notify),
+        get_dbos_migration_fortyfour(schema, use_listen_notify),
     ]
 
 

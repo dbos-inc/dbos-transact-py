@@ -388,6 +388,11 @@ class NotificationInfo(TypedDict):
 _dbos_null_topic = "__null__topic__"
 _dbos_stream_closed_sentinel = "__DBOS_STREAM_CLOSED__"
 
+# LISTEN/NOTIFY channels; streams and workflow_events are pushed by run_notifier, while notifications fires from an in-transaction DB trigger so recv is never woken before its row commits.
+_dbos_notifications_channel = "dbos_notifications_channel"
+_dbos_workflow_events_channel = "dbos_workflow_events_channel"
+_dbos_streams_channel = "dbos_streams_channel"
+
 # Returned by read_stream_value when nothing is written at the requested offset. Not None, which is itself a valid stream value.
 _no_stream_value = object()
 
@@ -511,8 +516,8 @@ def db_retry(
 # Fallback pool size for defaulting polling concurrency when the engine's is unknown (mirrors configure_db_engine_parameters).
 DEFAULT_SYS_DB_POOL_SIZE = 20
 
-# Interval for coalescing stream-write notifications off the write path; caps the rate of notifying commits regardless of write throughput.
-DEFAULT_STREAM_NOTIFICATION_COALESCE_SEC = 0.01
+# Interval for coalescing LISTEN/NOTIFY notifications off the write path; caps the rate of notifying commits regardless of write throughput.
+DEFAULT_NOTIFICATION_COALESCE_SEC = 0.01
 
 
 class SystemDatabase(ABC):
@@ -527,7 +532,7 @@ class SystemDatabase(ABC):
         executor_id: Optional[str],
         use_listen_notify: bool = True,
         notification_listener_polling_interval_sec: float = 1.0,
-        stream_notification_coalesce_sec: float = DEFAULT_STREAM_NOTIFICATION_COALESCE_SEC,
+        notification_coalesce_sec: float = DEFAULT_NOTIFICATION_COALESCE_SEC,
         polling_concurrency: Optional[int] = None,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
@@ -543,7 +548,7 @@ class SystemDatabase(ABC):
                 executor_id=executor_id,
                 use_listen_notify=use_listen_notify,
                 notification_listener_polling_interval_sec=notification_listener_polling_interval_sec,
-                stream_notification_coalesce_sec=stream_notification_coalesce_sec,
+                notification_coalesce_sec=notification_coalesce_sec,
                 polling_concurrency=polling_concurrency,
             )
         else:
@@ -558,7 +563,7 @@ class SystemDatabase(ABC):
                 executor_id=executor_id,
                 use_listen_notify=use_listen_notify,
                 notification_listener_polling_interval_sec=notification_listener_polling_interval_sec,
-                stream_notification_coalesce_sec=stream_notification_coalesce_sec,
+                notification_coalesce_sec=notification_coalesce_sec,
                 polling_concurrency=polling_concurrency,
             )
 
@@ -573,7 +578,7 @@ class SystemDatabase(ABC):
         executor_id: Optional[str],
         use_listen_notify: bool = True,
         notification_listener_polling_interval_sec: float = 1.0,
-        stream_notification_coalesce_sec: float = DEFAULT_STREAM_NOTIFICATION_COALESCE_SEC,
+        notification_coalesce_sec: float = DEFAULT_NOTIFICATION_COALESCE_SEC,
         polling_concurrency: Optional[int] = None,
     ):
         import sqlalchemy.dialects.postgresql as pg
@@ -639,11 +644,11 @@ class SystemDatabase(ABC):
         self._notification_listener_polling_interval_sec = (
             notification_listener_polling_interval_sec
         )
-        self._stream_notification_coalesce_sec = stream_notification_coalesce_sec
+        self._notification_coalesce_sec = notification_coalesce_sec
 
-        # Coalesced stream-write notification payloads, flushed off the write path by run_stream_notifier (Postgres + L/N only).
-        self._pending_stream_notifications: Set[str] = set()
-        self._stream_notifier_lock = threading.Lock()
+        # Coalesced NOTIFY payloads keyed by channel, flushed off the write path by run_notifier (Postgres + L/N only).
+        self._pending_notifications: Dict[str, Set[str]] = {}
+        self._notifier_lock = threading.Lock()
 
         self._listener_thread_lock = threading.Lock()
         self._listener_running = False
@@ -3110,12 +3115,12 @@ class SystemDatabase(ABC):
         self._listener_running = True
         self._notification_listener()
 
-    def _signal_stream_write(self, workflow_uuid: str, key: str) -> None:
-        """Hint that (workflow_uuid, key) was written; push-notification backends override to coalesce a wakeup, pollers ignore it."""
+    def _signal_notification(self, channel: str, payload: str) -> None:
+        """Hint that `payload` was written on `channel`; push-notification backends override to coalesce a wakeup, pollers ignore it."""
         pass
 
-    def run_stream_notifier(self) -> None:
-        """Background loop flushing coalesced stream-write notifications; no-op except on push-notification backends (Postgres + L/N)."""
+    def run_notifier(self) -> None:
+        """Background loop flushing coalesced NOTIFY payloads across all channels; no-op except on push-notification backends (Postgres + L/N)."""
         pass
 
     def recv(
@@ -3445,6 +3450,10 @@ class SystemDatabase(ABC):
                 "serialization": None,
             }
             self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
+        # Notify only after commit, so a woken get_event sees the value.
+        self._signal_notification(
+            _dbos_workflow_events_channel, f"{workflow_uuid}::{key}"
+        )
 
     def set_event_from_step(
         self,
@@ -3495,6 +3504,10 @@ class SystemDatabase(ABC):
                     },
                 )
             )
+        # Notify only after commit, so a woken get_event sees the value.
+        self._signal_notification(
+            _dbos_workflow_events_channel, f"{workflow_uuid}::{key}"
+        )
 
     def get_all_events(self, workflow_id: str) -> Dict[str, Any]:
         """
@@ -4388,7 +4401,9 @@ class SystemDatabase(ABC):
             try:
                 with self.engine.begin() as c:
                     c.execute(stmt)
-                self._signal_stream_write(workflow_uuid, key)
+                self._signal_notification(
+                    _dbos_streams_channel, f"{workflow_uuid}::{key}"
+                )
                 return
             except sa.exc.IntegrityError:
                 dbos_logger.warning(
@@ -4462,7 +4477,7 @@ class SystemDatabase(ABC):
                 self._record_operation_result_txn(
                     output, int(time.time() * 1000), conn=c
                 )
-            self._signal_stream_write(workflow_uuid, key)
+            self._signal_notification(_dbos_streams_channel, f"{workflow_uuid}::{key}")
             return
 
     def close_stream(self, workflow_uuid: str, function_id: int, key: str) -> None:

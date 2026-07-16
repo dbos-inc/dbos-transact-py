@@ -38,6 +38,7 @@ from dbos._error import (
     DBOSRecoveryError,
 )
 from dbos._schemas.system_database import SystemSchema
+from dbos._sys_db import _dbos_null_topic
 from dbos._utils import GlobalParams
 from tests.conftest import retry_until_success, set_workflow_status, using_sqlite
 
@@ -3058,6 +3059,104 @@ def test_notification_fallback_polling(dbos: DBOS) -> None:
     duration = time.time() - begin_time
     assert event_result == "fallback_value"
     assert duration < 5.0
+
+
+def test_recv_wakeup_trigger_is_kept(dbos: DBOS, skip_with_sqlite: None) -> None:
+    """The notifications trigger must wake a blocked recv: assert it exists and that, with the fallback recheck forced far out, a send still delivers promptly via the trigger's NOTIFY."""
+    sys_db = dbos._sys_db
+
+    # The trigger on the notifications table must exist.
+    with sys_db.engine.begin() as c:
+        trigger = c.execute(
+            sa.text(
+                "SELECT 1 FROM pg_trigger t "
+                "JOIN pg_class cl ON t.tgrelid = cl.oid "
+                "JOIN pg_namespace n ON cl.relnamespace = n.oid "
+                "WHERE n.nspname = :schema AND cl.relname = 'notifications' "
+                "AND t.tgname = 'dbos_notifications_trigger'"
+            ),
+            {"schema": sys_db.schema},
+        ).fetchone()
+    assert trigger is not None, "dbos_notifications_trigger must be kept"
+
+    dest_uuid = str(uuid.uuid4())
+
+    @DBOS.workflow()
+    def recv_workflow() -> str:
+        return str(DBOS.recv(timeout_seconds=30))
+
+    # Force the fallback recheck far out so a timely wakeup must come from the trigger's NOTIFY.
+    original = sys_db._notification_fallback_polling_interval
+    sys_db._notification_fallback_polling_interval = 30.0
+    try:
+        with SetWorkflowID(dest_uuid):
+            handle = DBOS.start_workflow(recv_workflow)
+
+        # Wait until the recv is blocked (listener registered) so delivery exercises the wakeup path.
+        payload = f"{dest_uuid}::{_dbos_null_topic}"
+
+        def recv_blocked() -> None:
+            assert sys_db.notifications_map.get(payload) is not None
+
+        retry_until_success(recv_blocked, interval=0.05, max_attempts=200)
+
+        begin_time = time.time()
+        DBOS.send(dest_uuid, "hello_trigger")
+        result = handle.get_result()
+        duration = time.time() - begin_time
+    finally:
+        sys_db._notification_fallback_polling_interval = original
+
+    assert result == "hello_trigger"
+    # Well under the 30s fallback: delivery came from the trigger's NOTIFY, not the recheck.
+    assert duration < 10.0, f"recv took {duration:.3f}s, trigger did not wake it"
+
+
+def test_get_event_delivered_by_notifier_without_trigger(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    """get_event is woken by the app-side notifier: assert no workflow_events trigger exists and that, with the fallback recheck forced far out, a set_event still wakes a blocked get_event promptly."""
+    sys_db = dbos._sys_db
+
+    # No trigger may exist on the workflow_events table.
+    with sys_db.engine.begin() as c:
+        trigger = c.execute(
+            sa.text(
+                "SELECT 1 FROM pg_trigger t "
+                "JOIN pg_class cl ON t.tgrelid = cl.oid "
+                "JOIN pg_namespace n ON cl.relnamespace = n.oid "
+                "WHERE n.nspname = :schema AND cl.relname = 'workflow_events' "
+                "AND t.tgname = 'dbos_workflow_events_trigger'"
+            ),
+            {"schema": sys_db.schema},
+        ).fetchone()
+    assert trigger is None, "dbos_workflow_events_trigger should have been dropped"
+
+    target_uuid = str(uuid.uuid4())
+    key = "notifier_key"
+
+    @DBOS.workflow()
+    def setter_workflow() -> None:
+        DBOS.sleep(2.0)
+        DBOS.set_event(key, "notifier_value")
+
+    original = sys_db._notification_fallback_polling_interval
+    sys_db._notification_fallback_polling_interval = 30.0
+    try:
+        with SetWorkflowID(target_uuid):
+            handle = DBOS.start_workflow(setter_workflow)
+
+        # get_event blocks (the value is set ~2s in); prompt delivery must come from the notifier.
+        begin_time = time.time()
+        value = DBOS.get_event(target_uuid, key, timeout_seconds=30)
+        duration = time.time() - begin_time
+        handle.get_result()
+    finally:
+        sys_db._notification_fallback_polling_interval = original
+
+    assert value == "notifier_value"
+    # Well under the 30s fallback: delivery came from the notifier, not the recheck.
+    assert duration < 10.0, f"get_event took {duration:.3f}s, notifier did not wake it"
 
 
 @pytest.mark.asyncio

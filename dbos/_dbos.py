@@ -99,7 +99,7 @@ from ._scheduler import (
 )
 from ._scheduler_decorator import DecoratedScheduledWorkflow, scheduled
 from ._sys_db import (
-    DEFAULT_STREAM_NOTIFICATION_COALESCE_SEC,
+    DEFAULT_NOTIFICATION_COALESCE_SEC,
     GetEventWorkflowContext,
     SendMessage,
     StepInfo,
@@ -569,11 +569,9 @@ class DBOS:
                 )
                 or 1.0
             )
-            stream_notification_coalesce_sec = (
-                self._config.get("runtimeConfig", {}).get(
-                    "stream_notification_coalesce_sec"
-                )
-                or DEFAULT_STREAM_NOTIFICATION_COALESCE_SEC
+            notification_coalesce_sec = (
+                self._config.get("runtimeConfig", {}).get("notification_coalesce_sec")
+                or DEFAULT_NOTIFICATION_COALESCE_SEC
             )
             self._sys_db_field = SystemDatabase.create(
                 system_database_url=get_system_database_url(self._config),
@@ -584,7 +582,7 @@ class DBOS:
                 use_listen_notify=self._config["use_listen_notify"],
                 executor_id=GlobalParams.executor_id,
                 notification_listener_polling_interval_sec=self._notification_listener_polling_interval_sec,
-                stream_notification_coalesce_sec=stream_notification_coalesce_sec,
+                notification_coalesce_sec=notification_coalesce_sec,
                 polling_concurrency=self._config["database"].get(
                     "sys_db_polling_concurrency"
                 ),
@@ -659,14 +657,14 @@ class DBOS:
             notification_listener_thread.start()
             self._background_threads.append(notification_listener_thread)
 
-            # Push coalesced stream-write notifications off the write path (no-op unless Postgres + L/N).
-            dbos_logger.debug("Starting stream notifier thread")
-            stream_notifier_thread = threading.Thread(
-                target=self._sys_db.run_stream_notifier,
+            # Push coalesced NOTIFY payloads off the write path (no-op unless Postgres + L/N).
+            dbos_logger.debug("Starting notifier thread")
+            notifier_thread = threading.Thread(
+                target=self._sys_db.run_notifier,
                 daemon=True,
             )
-            stream_notifier_thread.start()
-            self._background_threads.append(stream_notifier_thread)
+            notifier_thread.start()
+            self._background_threads.append(notifier_thread)
 
             # Create the internal queue if it has not yet been created
             self._registry.get_internal_queue()
