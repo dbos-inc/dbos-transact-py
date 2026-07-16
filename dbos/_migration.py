@@ -893,7 +893,7 @@ DROP FUNCTION IF EXISTS "{schema}".streams_function();
 
 
 def get_dbos_migration_fortyfour(schema: str, use_listen_notify: bool) -> str:
-    # Drop the workflow_events NOTIFY trigger (events are pushed by run_notifier); keep the notifications trigger since recv consumes destructively on wakeup and must not fire before the row commits.
+    # Drop the workflow_events NOTIFY trigger (events are pushed by run_notifier)
     if not use_listen_notify:
         return ""
     return f"""
