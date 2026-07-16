@@ -785,6 +785,122 @@ def test_migrate_print_only(
     finally:
         engine.dispose()
 
+    # Re-applying the script to a non-fresh database must fail fast
+    with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
+        f.write(sql)
+        f.flush()
+        with pytest.raises(subprocess.CalledProcessError):
+            subprocess.check_call(
+                ["psql", db_url_string, "-v", "ON_ERROR_STOP=1", "-q", "-f", f.name],
+                stderr=subprocess.DEVNULL,
+            )
+
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(
+            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+        )
+
+
+def test_migrate_print_only_custom_schema(
+    db_engine: sa.Engine,
+    skip_with_sqlite: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--print-only must quote identifiers correctly for unusual schema names."""
+    database_name = "print_only_schema_test"
+    schema = "F8nny_sCHem@-n@m3"
+    db_url = db_engine.url.set(database=database_name).set(drivername="postgresql")
+    db_url_string = db_url.render_as_string(hide_password=False)
+    latest_version = len(get_dbos_migrations(schema, True))
+
+    print_dbos_database_migrations(db_url_string, app_database_url=None, schema=schema)
+    sql = capsys.readouterr().out
+    assert f'CREATE SCHEMA IF NOT EXISTS "{schema}";' in sql
+    assert (
+        f'CREATE TABLE IF NOT EXISTS "{schema}".dbos_migrations (version BIGINT NOT NULL PRIMARY KEY);'
+        in sql
+    )
+    # Migration 10's guard embeds the schema in a single-quoted literal
+    assert f"WHERE table_schema = '{schema}'" in sql
+    assert (
+        f'ALTER TABLE "{schema}".notifications ADD PRIMARY KEY (message_uuid);' in sql
+    )
+    assert (
+        f'INSERT INTO "{schema}".dbos_migrations (version) VALUES ({latest_version});'
+        in sql
+    )
+    # The unquoted schema name must never appear outside quotes or literals
+    assert f"CREATE TABLE {schema}." not in sql
+
+    # Schema names containing quotes are rejected
+    with pytest.raises(Exception):
+        print_dbos_database_migrations(
+            db_url_string, app_database_url=None, schema='bad"schema'
+        )
+    capsys.readouterr()
+
+    # The CLI flag path accepts the funny schema name
+    cli_out = subprocess.check_output(
+        ["dbos", "migrate", "-s", db_url_string, "--schema", schema, "--print-only"],
+        text=True,
+    )
+    assert f'CREATE SCHEMA IF NOT EXISTS "{schema}";' in cli_out
+
+    if shutil.which("psql") is None:
+        pytest.skip("psql not available")
+
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(
+            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+        )
+        connection.execute(sa.text(f"CREATE DATABASE {database_name}"))
+
+    with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
+        f.write(sql)
+        f.flush()
+        subprocess.check_call(
+            ["psql", db_url_string, "-v", "ON_ERROR_STOP=1", "-q", "-f", f.name]
+        )
+
+    engine = sa.create_engine(db_url.set(drivername="postgresql+psycopg"))
+    try:
+        assert should_migrate(engine, schema, True) is False
+        with engine.connect() as conn:
+            assert (
+                conn.execute(
+                    sa.text(
+                        "SELECT 1 FROM information_schema.schemata WHERE schema_name = :s"
+                    ),
+                    {"s": schema},
+                ).scalar()
+                == 1
+            )
+            for table in ["workflow_status", "notifications", "dbos_migrations"]:
+                assert conn.execute(
+                    sa.text(f'SELECT COUNT(*) FROM "{schema}".{table}')
+                ).scalar() in (0, 1)
+            version = conn.execute(
+                sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+            ).scalar()
+            assert version == latest_version
+            # The notifications primary key exists (created by migration 1;
+            # migration 10's guarded backfill was a no-op)
+            assert (
+                conn.execute(
+                    sa.text(
+                        "SELECT COUNT(*) FROM information_schema.table_constraints "
+                        "WHERE table_schema = :s AND table_name = 'notifications' "
+                        "AND constraint_type = 'PRIMARY KEY'"
+                    ),
+                    {"s": schema},
+                ).scalar()
+                == 1
+            )
+    finally:
+        engine.dispose()
+
     with db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         connection.execute(

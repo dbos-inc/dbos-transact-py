@@ -137,6 +137,11 @@ def print_dbos_database_migrations(
     ):
         typer.echo("--print-only is only supported for Postgres databases", err=True)
         raise typer.Exit(code=1)
+    # The execute path interpolates the schema into quoted identifiers and
+    # string literals, so names containing quotes fail there too.
+    if '"' in schema or "'" in schema:
+        typer.echo("Schema names containing quotes are not supported", err=True)
+        raise typer.Exit(code=1)
 
     def emit(sql: str) -> None:
         sql = sql.strip()
@@ -149,22 +154,42 @@ def print_dbos_database_migrations(
     typer.echo(
         "-- Contains CREATE/DROP INDEX CONCURRENTLY: run outside a transaction block (e.g. plain psql, not psql -1)."
     )
+    typer.echo(
+        "-- This script is for FRESH databases only and aborts if DBOS migrations were already applied. Use `dbos migrate` to upgrade an existing database."
+    )
     emit(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
     emit(
         f'CREATE TABLE IF NOT EXISTS "{schema}".dbos_migrations (version BIGINT NOT NULL PRIMARY KEY)'
     )
+    typer.echo("-- Abort if this is not a fresh database")
+    emit(f"""DO $$
+DECLARE
+    existing_version BIGINT;
+BEGIN
+    SELECT version INTO existing_version FROM "{schema}".dbos_migrations LIMIT 1;
+    IF existing_version IS NOT NULL THEN
+        RAISE EXCEPTION 'DBOS schema % is already at version %; this script is for fresh databases only. Use dbos migrate instead.', '{schema}', existing_version;
+    END IF;
+END $$""")
     migrations = get_dbos_migrations(schema, use_listen_notify=True)
     for i, migration_sql in enumerate(migrations, 1):
-        if i == 10:
-            # Migration 10 backfills the notifications primary key, which
-            # migration 1 already creates on a fresh database.
-            typer.echo(
-                "-- Migration 10 skipped: the notifications primary key is created in migration 1"
-            )
-            continue
         if not migration_sql.strip():
             continue
         typer.echo(f"-- Migration {i}")
+        if i == 10:
+            # Mirrors the runner's guard in run_dbos_migrations: migration 10
+            # backfills the notifications primary key, which migration 1
+            # already creates on a fresh database.
+            typer.echo(
+                "-- Applied only if the notifications table has no primary key, mirroring the migration runner's guard"
+            )
+            emit(f"""DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema = '{schema}' AND table_name = 'notifications' AND constraint_type = 'PRIMARY KEY') THEN
+        {migration_sql.strip()}
+    END IF;
+END $$""")
+            continue
         emit(migration_sql)
     emit(f'INSERT INTO "{schema}".dbos_migrations (version) VALUES ({len(migrations)})')
     if application_role:
