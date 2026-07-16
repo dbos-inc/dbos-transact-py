@@ -1,9 +1,11 @@
-from typing import Optional
+from typing import List, Optional
 
 import sqlalchemy as sa
 import typer
 
 from dbos._app_db import ApplicationDatabase
+from dbos._migration import get_dbos_migrations
+from dbos._schemas.application_database import ApplicationSchema
 from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
 
@@ -76,6 +78,24 @@ def migrate_dbos_databases(
             app_db.destroy()
 
 
+def get_dbos_schema_permissions_sql(schema: str, role_name: str) -> List[str]:
+    """The statements granting permissions on all entities in the system schema to a role."""
+    return [
+        # Grant usage on the system schema
+        f'GRANT USAGE ON SCHEMA "{schema}" TO "{role_name}"',
+        # Grant all privileges on all existing tables in the system schema (includes views)
+        f'GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA "{schema}" TO "{role_name}"',
+        # Grant all privileges on all sequences in the system schema
+        f'GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA "{schema}" TO "{role_name}"',
+        # Grant execute on all functions and procedures in the system schema
+        f'GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA "{schema}" TO "{role_name}"',
+        # Grant default privileges for future objects in the system schema
+        f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" GRANT ALL ON TABLES TO "{role_name}"',
+        f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" GRANT ALL ON SEQUENCES TO "{role_name}"',
+        f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" GRANT EXECUTE ON FUNCTIONS TO "{role_name}"',
+    ]
+
+
 def grant_dbos_schema_permissions(
     database_url: str, role_name: str, schema: str
 ) -> None:
@@ -92,45 +112,92 @@ def grant_dbos_schema_permissions(
         )
         with engine.connect() as connection:
             connection.execution_options(isolation_level="AUTOCOMMIT")
-
-            # Grant usage on the system schema
-            sql = f'GRANT USAGE ON SCHEMA "{schema}" TO "{role_name}"'
-            typer.echo(sql)
-            connection.execute(sa.text(sql))
-
-            # Grant all privileges on all existing tables in the system schema (includes views)
-            sql = f'GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA "{schema}" TO "{role_name}"'
-            typer.echo(sql)
-            connection.execute(sa.text(sql))
-
-            # Grant all privileges on all sequences in the system schema
-            sql = f'GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA "{schema}" TO "{role_name}"'
-            typer.echo(sql)
-            connection.execute(sa.text(sql))
-
-            # Grant execute on all functions and procedures in the system schema
-            sql = (
-                f'GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA "{schema}" TO "{role_name}"'
-            )
-            typer.echo(sql)
-            connection.execute(sa.text(sql))
-
-            # Grant default privileges for future objects in the system schema
-            sql = f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" GRANT ALL ON TABLES TO "{role_name}"'
-            typer.echo(sql)
-            connection.execute(sa.text(sql))
-
-            sql = f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" GRANT ALL ON SEQUENCES TO "{role_name}"'
-            typer.echo(sql)
-            connection.execute(sa.text(sql))
-
-            sql = f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" GRANT EXECUTE ON FUNCTIONS TO "{role_name}"'
-            typer.echo(sql)
-            connection.execute(sa.text(sql))
-
+            for sql in get_dbos_schema_permissions_sql(schema, role_name):
+                typer.echo(sql)
+                connection.execute(sa.text(sql))
     except Exception as e:
         typer.echo(f"Failed to grant permissions to role {role_name}: {e}")
         raise typer.Exit(code=1)
     finally:
         if engine:
             engine.dispose()
+
+
+def print_dbos_database_migrations(
+    system_database_url: str,
+    *,
+    app_database_url: Optional[str] = None,
+    schema: str = "dbos",
+    application_role: Optional[str] = None,
+) -> None:
+    """Print to stdout the SQL that DBOS migrations would execute on a fresh database,
+    without connecting to any database."""
+    if system_database_url.startswith("sqlite") or (
+        app_database_url and app_database_url.startswith("sqlite")
+    ):
+        typer.echo("--print-only is only supported for Postgres databases", err=True)
+        raise typer.Exit(code=1)
+
+    def emit(sql: str) -> None:
+        sql = sql.strip()
+        if sql:
+            typer.echo(sql if sql.endswith(";") else sql + ";")
+
+    typer.echo(
+        f"-- DBOS system database migrations for {sa.make_url(system_database_url)}"
+    )
+    typer.echo(
+        "-- Contains CREATE/DROP INDEX CONCURRENTLY: run outside a transaction block (e.g. plain psql, not psql -1)."
+    )
+    emit(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+    emit(
+        f'CREATE TABLE IF NOT EXISTS "{schema}".dbos_migrations (version BIGINT NOT NULL PRIMARY KEY)'
+    )
+    migrations = get_dbos_migrations(schema, use_listen_notify=True)
+    for i, migration_sql in enumerate(migrations, 1):
+        if i == 10:
+            # Migration 10 backfills the notifications primary key, which
+            # migration 1 already creates on a fresh database.
+            typer.echo(
+                "-- Migration 10 skipped: the notifications primary key is created in migration 1"
+            )
+            continue
+        if not migration_sql.strip():
+            continue
+        typer.echo(f"-- Migration {i}")
+        emit(migration_sql)
+    emit(f'INSERT INTO "{schema}".dbos_migrations (version) VALUES ({len(migrations)})')
+    if application_role:
+        typer.echo(f"-- Permissions for role {application_role}")
+        for sql in get_dbos_schema_permissions_sql(schema, application_role):
+            emit(sql)
+
+    if app_database_url:
+        typer.echo(
+            f"-- DBOS application database migrations for {sa.make_url(app_database_url)}: run these against the application database"
+        )
+        dialect = sa.make_url("postgresql+psycopg://").get_dialect()()
+        emit(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+        # Clone the table into the real schema (it is defined with a placeholder schema)
+        table = ApplicationSchema.transaction_outputs.to_metadata(
+            sa.MetaData(), schema=schema
+        )
+        emit(
+            str(
+                sa.schema.CreateTable(table, if_not_exists=True).compile(
+                    dialect=dialect
+                )
+            )
+        )
+        for index in table.indexes:
+            emit(
+                str(
+                    sa.schema.CreateIndex(index, if_not_exists=True).compile(
+                        dialect=dialect
+                    )
+                )
+            )
+        if application_role:
+            typer.echo(f"-- Permissions for role {application_role}")
+            for sql in get_dbos_schema_permissions_sql(schema, application_role):
+                emit(sql)

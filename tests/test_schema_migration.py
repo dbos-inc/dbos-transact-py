@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -8,12 +9,13 @@ import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, DBOSConfig, run_dbos_database_migrations
-from dbos._migration import get_dbos_migrations, sqlite_migrations
+from dbos._migration import get_dbos_migrations, should_migrate, sqlite_migrations
 
 # Private API because this is a unit test
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
+from dbos.cli.migration import print_dbos_database_migrations
 
 
 def test_systemdb_migration(dbos: DBOS, skip_with_sqlite: None) -> None:
@@ -718,3 +720,73 @@ def test_runner_resumes_after_invalid_index(dbos: DBOS, skip_with_sqlite: None) 
             sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
         ).scalar()
         assert version == final_version
+
+
+def test_migrate_print_only(
+    db_engine: sa.Engine,
+    skip_with_sqlite: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test that --print-only emits complete SQL that psql can apply to a fresh database."""
+    database_name = "print_only_test"
+    db_url = db_engine.url.set(database=database_name).set(drivername="postgresql")
+    db_url_string = db_url.render_as_string(hide_password=False)
+    latest_version = len(get_dbos_migrations("dbos", True))
+
+    # Printing requires no database connection and includes grants for the role
+    print_dbos_database_migrations(
+        db_url_string,
+        app_database_url=db_url_string,
+        schema="dbos",
+        application_role="print-only-role",
+    )
+    out = capsys.readouterr().out
+    assert 'CREATE SCHEMA IF NOT EXISTS "dbos";' in out
+    assert (
+        f'INSERT INTO "dbos".dbos_migrations (version) VALUES ({latest_version});'
+        in out
+    )
+    assert 'GRANT USAGE ON SCHEMA "dbos" TO "print-only-role";' in out
+    assert "transaction_outputs" in out
+    for line in out.splitlines():
+        assert line.startswith("--") or not line.startswith(
+            ("Starting", "Granting", "System database")
+        )
+
+    if shutil.which("psql") is None:
+        pytest.skip("psql not available")
+
+    # Print without a role (the role does not exist) and apply the SQL to a fresh database
+    print_dbos_database_migrations(db_url_string, app_database_url=None, schema="dbos")
+    sql = capsys.readouterr().out
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(
+            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+        )
+        connection.execute(sa.text(f"CREATE DATABASE {database_name}"))
+
+    with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
+        f.write(sql)
+        f.flush()
+        subprocess.check_call(
+            ["psql", db_url_string, "-v", "ON_ERROR_STOP=1", "-q", "-f", f.name]
+        )
+
+    # A real migration now considers the database up to date
+    engine = sa.create_engine(db_url.set(drivername="postgresql+psycopg"))
+    try:
+        assert should_migrate(engine, "dbos", True) is False
+        with engine.connect() as conn:
+            version = conn.execute(
+                sa.text('SELECT version FROM "dbos".dbos_migrations')
+            ).scalar()
+            assert version == latest_version
+    finally:
+        engine.dispose()
+
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(
+            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+        )

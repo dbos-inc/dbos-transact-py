@@ -12,7 +12,10 @@ import sqlalchemy as sa
 import typer
 
 from dbos._context import SetWorkflowID
-from dbos.cli.migration import run_dbos_database_migrations
+from dbos.cli.migration import (
+    print_dbos_database_migrations,
+    run_dbos_database_migrations,
+)
 
 from .._client import DBOSClient
 from .._dbos_config import (
@@ -281,11 +284,37 @@ def migrate(
             help='Schema name for DBOS system tables. Defaults to "dbos".',
         ),
     ] = "dbos",
+    print_only: Annotated[
+        bool,
+        typer.Option(
+            "--print-only",
+            help="Print the migration SQL without executing anything against the database",
+        ),
+    ] = False,
 ) -> None:
     system_database_url, application_database_url = _get_db_url(
         system_database_url=system_database_url,
         application_database_url=application_database_url,
     )
+    if schema is None:
+        schema = "dbos"
+
+    if print_only:
+        print_dbos_database_migrations(
+            system_database_url=system_database_url,
+            app_database_url=application_database_url,
+            schema=schema,
+            application_role=application_role,
+        )
+        if os.path.exists("dbos-config.yaml"):
+            config = load_config(silent=True)
+            if "database" in config and config["database"].get("migrate"):
+                typer.echo(
+                    "Warning: skipping migration commands from 'dbos-config.yaml' in --print-only mode",
+                    err=True,
+                )
+        return
+
     # Emit INFO logs from migrations
     init_logger()
     dbos_logger.setLevel(logging.INFO)
@@ -293,8 +322,6 @@ def migrate(
     if application_database_url:
         typer.echo(f"Application database: {sa.make_url(application_database_url)}")
     typer.echo(f"System database: {sa.make_url(system_database_url)}")
-    if schema is None:
-        schema = "dbos"
     typer.echo(f"DBOS system schema: {schema}")
 
     run_dbos_database_migrations(
