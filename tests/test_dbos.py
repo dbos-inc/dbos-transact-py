@@ -3061,13 +3061,15 @@ def test_notification_fallback_polling(dbos: DBOS) -> None:
     assert duration < 5.0
 
 
-def test_recv_delivered_by_notifier_without_trigger(
-    dbos: DBOS, skip_with_sqlite: None
-) -> None:
-    """The per-row notifications NOTIFY trigger is dropped (migration 44); a blocked recv is woken by the coalescing app-side notifier instead. Assert the trigger is gone and that with the fallback recheck forced far out, a send still wakes the recv promptly -- which can only happen via the notifier."""
+def test_recv_wakeup_trigger_is_kept(dbos: DBOS, skip_with_sqlite: None) -> None:
+    """The notifications NOTIFY trigger is deliberately NOT dropped: recv destructively
+    consumes on wakeup, so it must only be woken after the message row commits, which the
+    in-transaction trigger guarantees but a batched app-side notify does not. Assert the
+    trigger is present and that with the fallback recheck forced far out, a send still wakes
+    a blocked recv promptly -- which can only come from the trigger's NOTIFY."""
     sys_db = dbos._sys_db
 
-    # No per-row trigger may remain on the notifications table.
+    # The per-row trigger on the notifications table must still exist.
     with sys_db.engine.begin() as c:
         trigger = c.execute(
             sa.text(
@@ -3079,7 +3081,7 @@ def test_recv_delivered_by_notifier_without_trigger(
             ),
             {"schema": sys_db.schema},
         ).fetchone()
-    assert trigger is None, "dbos_notifications_trigger should have been dropped"
+    assert trigger is not None, "dbos_notifications_trigger must be kept"
 
     dest_uuid = str(uuid.uuid4())
 
@@ -3088,7 +3090,7 @@ def test_recv_delivered_by_notifier_without_trigger(
         return str(DBOS.recv(timeout_seconds=30))
 
     # Force the fallback recheck far longer than the delivery we expect, so a timely
-    # wakeup must come from the notifier, not the periodic recheck.
+    # wakeup must come from the trigger's NOTIFY, not the periodic recheck.
     original = sys_db._notification_fallback_polling_interval
     sys_db._notification_fallback_polling_interval = 30.0
     try:
@@ -3105,15 +3107,15 @@ def test_recv_delivered_by_notifier_without_trigger(
         retry_until_success(recv_blocked, interval=0.05, max_attempts=200)
 
         begin_time = time.time()
-        DBOS.send(dest_uuid, "hello_notifier")
+        DBOS.send(dest_uuid, "hello_trigger")
         result = handle.get_result()
         duration = time.time() - begin_time
     finally:
         sys_db._notification_fallback_polling_interval = original
 
-    assert result == "hello_notifier"
-    # Well under the 30s fallback: delivery came from the notifier, not the recheck.
-    assert duration < 10.0, f"recv took {duration:.3f}s, notifier did not wake it"
+    assert result == "hello_trigger"
+    # Well under the 30s fallback: delivery came from the trigger's NOTIFY, not the recheck.
+    assert duration < 10.0, f"recv took {duration:.3f}s, trigger did not wake it"
 
 
 def test_get_event_delivered_by_notifier_without_trigger(

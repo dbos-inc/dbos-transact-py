@@ -388,7 +388,10 @@ class NotificationInfo(TypedDict):
 _dbos_null_topic = "__null__topic__"
 _dbos_stream_closed_sentinel = "__DBOS_STREAM_CLOSED__"
 
-# LISTEN/NOTIFY channels. Writers coalesce payloads per channel and the notifier pushes them off the write path; the listener fans each channel's payload back to its waiting event.
+# LISTEN/NOTIFY channels; the listener fans each channel's payload back to its waiting event.
+# streams and workflow_events are coalesced and pushed off the write path by run_notifier; notifications
+# still fires from an in-transaction DB trigger, because recv destructively consumes on wakeup and must
+# not be woken before the message row commits (which the trigger guarantees but a batched notify does not).
 _dbos_notifications_channel = "dbos_notifications_channel"
 _dbos_workflow_events_channel = "dbos_workflow_events_channel"
 _dbos_streams_channel = "dbos_streams_channel"
@@ -2772,7 +2775,7 @@ class SystemDatabase(ABC):
         (forks, forks of forks, ...) that exists at send time.
         """
         with self.engine.begin() as c:
-            payloads = self._send_bulk_txn(
+            self._send_bulk_txn(
                 messages,
                 c,
                 serialization_type=serialization_type,
@@ -2781,9 +2784,6 @@ class SystemDatabase(ABC):
                 function_name=function_name,
                 send_to_forks=send_to_forks,
             )
-        # Notify only after commit, so a woken recv sees the rows.
-        for payload in payloads:
-            self._signal_notification(_dbos_notifications_channel, payload)
 
     def send_bulk_with_connection(
         self,
@@ -2803,7 +2803,7 @@ class SystemDatabase(ABC):
         database.
         """
         self._apply_caller_schema(conn)
-        payloads = self._send_bulk_txn(
+        self._send_bulk_txn(
             messages,
             conn,
             serialization_type=serialization_type,
@@ -2812,10 +2812,6 @@ class SystemDatabase(ABC):
             function_name=function_name,
             send_to_forks=send_to_forks,
         )
-        # The caller owns the commit, so this may notify slightly before the rows
-        # are visible; the recv listener's periodic recheck covers that window.
-        for payload in payloads:
-            self._signal_notification(_dbos_notifications_channel, payload)
 
     def _send_bulk_txn(
         self,
@@ -2827,10 +2823,7 @@ class SystemDatabase(ABC):
         function_id: Optional[int],
         function_name: str,
         send_to_forks: bool,
-    ) -> Set[str]:
-        """Insert the messages within `conn`'s transaction and return the set of
-        `destination_uuid::topic` payloads to notify once it commits (empty on replay).
-        """
+    ) -> None:
         start_time = int(time.time() * 1000)
 
         # Reject duplicate idempotency keys
@@ -2859,7 +2852,7 @@ class SystemDatabase(ABC):
                 dbos_logger.debug(
                     f"Replaying {function_name}, id: {function_id}, messages: {len(messages)}"
                 )
-                return set()  # Already sent before
+                return  # Already sent before
             else:
                 dbos_logger.debug(
                     f"Running {function_name}, id: {function_id}, messages: {len(messages)}"
@@ -2936,9 +2929,6 @@ class SystemDatabase(ABC):
             self._record_operation_result_txn(
                 output, int(time.time() * 1000), conn=conn
             )
-
-        # One notification per (destination, topic) a recv listener registers on.
-        return {f"{r['destination_uuid']}::{r['topic']}" for r in rows}
 
     @db_retry()
     def recv_setup(
