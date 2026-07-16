@@ -8,7 +8,7 @@ from sqlalchemy import event as sa_event
 # Public API
 from dbos import DBOS, DBOSConfig, SetWorkflowID
 from dbos._client import DBOSClient
-from dbos._sys_db import _no_stream_value
+from dbos._sys_db import _dbos_streams_channel, _no_stream_value
 from dbos._sys_db_postgres import PostgresSystemDatabase
 from tests.conftest import (
     retry_until_success,
@@ -563,13 +563,13 @@ def test_stream_notifier_drops_unsendable_payload(
     # A stream key past pg_notify's 8000-byte payload limit makes its batch unsendable.
     poison_payload = f"{uuid.uuid4()}::{'x' * 9000}"
 
-    with sys_db._stream_notifier_lock:
-        sys_db._pending_stream_notifications = {poison_payload}
-    sys_db._flush_stream_notifications()
+    with sys_db._notifier_lock:
+        sys_db._pending_notifications = {_dbos_streams_channel: {poison_payload}}
+    sys_db._flush_notifications()
 
     # The poison batch is dropped, not requeued (requeuing would loop forever).
-    with sys_db._stream_notifier_lock:
-        assert sys_db._pending_stream_notifications == set()
+    with sys_db._notifier_lock:
+        assert sys_db._pending_notifications.get(_dbos_streams_channel, set()) == set()
 
     # The notifier still works afterward: a subsequent good payload is delivered.
     good_wf = str(uuid.uuid4())
@@ -577,9 +577,11 @@ def test_stream_notifier_drops_unsendable_payload(
     event, payload_key = sys_db.register_stream_listener(good_wf, good_key)
     try:
         event.clear()
-        with sys_db._stream_notifier_lock:
-            sys_db._pending_stream_notifications = {f"{good_wf}::{good_key}"}
-        sys_db._flush_stream_notifications()
+        with sys_db._notifier_lock:
+            sys_db._pending_notifications = {
+                _dbos_streams_channel: {f"{good_wf}::{good_key}"}
+            }
+        sys_db._flush_notifications()
         assert event.wait(
             timeout=10
         ), "notifier stopped delivering after a poison batch"
@@ -592,7 +594,7 @@ def test_stream_notifier_survives_flush_error(
 ) -> None:
     """An exception escaping a flush must not kill the notifier thread (M1): it logs, backs off, and resumes delivering. Without the loop guard the thread would die and stop all stream push notifications for the process."""
     sys_db = cast(PostgresSystemDatabase, dbos._sys_db)
-    real_flush = sys_db._flush_stream_notifications
+    real_flush = sys_db._flush_notifications
     state = {"raised": False}
 
     def flaky_flush() -> None:
@@ -602,7 +604,7 @@ def test_stream_notifier_survives_flush_error(
             raise RuntimeError("simulated flush failure")
         real_flush()
 
-    monkeypatch.setattr(sys_db, "_flush_stream_notifications", flaky_flush)
+    monkeypatch.setattr(sys_db, "_flush_notifications", flaky_flush)
 
     # Wait until the running notifier thread has hit the injected failure.
     def failure_injected() -> bool:
@@ -617,8 +619,10 @@ def test_stream_notifier_survives_flush_error(
     event, payload_key = sys_db.register_stream_listener(good_wf, good_key)
     try:
         event.clear()
-        with sys_db._stream_notifier_lock:
-            sys_db._pending_stream_notifications.add(f"{good_wf}::{good_key}")
+        with sys_db._notifier_lock:
+            sys_db._pending_notifications.setdefault(_dbos_streams_channel, set()).add(
+                f"{good_wf}::{good_key}"
+            )
         assert event.wait(
             timeout=10
         ), "notifier did not resume delivering after a flush error"
