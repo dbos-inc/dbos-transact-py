@@ -7,11 +7,15 @@ from dataclasses import dataclass
 from typing import Any, Callable, ClassVar, Coroutine, List, Tuple, Union, cast
 
 import pytest
+import sqlalchemy as sa
 
 # Public API
-from dbos import DBOS, SetWorkflowID, StepInfo
+from dbos import DBOS, SetWorkflowID, StepInfo, WorkflowHandleAsync
 from dbos._dbos_config import DBOSConfig
 from dbos._error import DBOSNonExistentWorkflowError
+from dbos._schemas.system_database import SystemSchema
+
+from .conftest import set_workflow_status
 
 
 def test_concurrent_workflows(dbos: DBOS) -> None:
@@ -711,6 +715,82 @@ async def test_high_async_concurrency(dbos: DBOS, config: DBOSConfig) -> None:
     # concurrently. 90s keeps the same 6x headroom as the steps assertion above,
     # avoiding flakes from SQLite write contention under CI load.
     assert elapsed < 90
+
+
+@pytest.mark.asyncio
+async def test_async_recovery_direct_child_no_thread_starvation(
+    dbos: DBOS, config: DBOSConfig
+) -> None:
+    # Recovering async parents that DIRECTLY invoke a child (not via
+    # start_workflow_async/enqueue) must not pin one thread-pool worker per
+    # waiting parent. Before the fix, each re-executing parent blocked a
+    # to_thread worker in the synchronous await_workflow_result while waiting for
+    # its already-recorded child; with more parents than pool threads this
+    # starved the shared executor so the children (also recovered) could never
+    # run, deadlocking recovery. The wait is now deferred onto the event loop.
+
+    # Bound the shared executor well below the parent count so per-parent
+    # blocking waits would exhaust it.
+    config["max_executor_threads"] = 4
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    async def child_wf(x: int) -> int:
+        # Depend on an executor slot so progress requires a free pool thread.
+        return await asyncio.to_thread(lambda: x * 2)
+
+    @DBOS.workflow()
+    async def parent_wf(x: int) -> int:
+        # Direct child invocation.
+        return await child_wf(x)
+
+    DBOS.launch()
+
+    num_parents = 12
+    parent_ids = [f"starve-parent-{i}" for i in range(num_parents)]
+    # Child ids are deterministic: "<parent_id>-1" (the parent's first call).
+    child_ids = [f"{pid}-1" for pid in parent_ids]
+
+    # Run each parent once so the parent->child relationship is recorded.
+    for i, pid in enumerate(parent_ids):
+        with SetWorkflowID(pid):
+            assert await parent_wf(i) == i * 2
+
+    # Reset both to PENDING, but reassign the children to a separate executor so
+    # recovery can run them in a SECOND pass. This forces every parent to be
+    # waiting on its (not-yet-running) child at once, which is exactly what
+    # exhausts the pool if each wait pins a thread.
+    for pid in parent_ids:
+        set_workflow_status(dbos._sys_db, pid, "PENDING")
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values(status="PENDING", executor_id="child-executor")
+            .where(SystemSchema.workflow_status.c.workflow_uuid.in_(child_ids))
+        )
+
+    # Pass 1: recover the parents. Each re-executes, finds its recorded child,
+    # and waits for it. With the old blocking wait, 12 parents pinning a pool of
+    # 4 threads deadlocks here (the recovery worker itself stalls dispatching);
+    # with the deferred wait they all park on the event loop and this returns.
+    await asyncio.to_thread(DBOS._recover_pending_workflows, ["local"])
+
+    # Pass 2: recover the children (on their executor). They need pool threads to
+    # run — available only if the parents' waits did not pin them.
+    await asyncio.to_thread(DBOS._recover_pending_workflows, ["child-executor"])
+
+    # Every parent must now finish. Bound each wait; the async polling handle
+    # waits on the loop, not a pool thread, so it cannot itself starve the pool.
+    async def parent_result(pid: str, expected: int) -> None:
+        handle: WorkflowHandleAsync[int] = await DBOS.retrieve_workflow_async(
+            pid, existing_workflow=False
+        )
+        assert await asyncio.wait_for(handle.get_result(), timeout=30) == expected
+
+    await asyncio.gather(
+        *[parent_result(pid, i * 2) for i, pid in enumerate(parent_ids)]
+    )
 
 
 @pytest.mark.asyncio

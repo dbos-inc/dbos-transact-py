@@ -8,6 +8,7 @@ from typing import (
     Awaitable,
     Callable,
     Coroutine,
+    Generic,
     Optional,
     Protocol,
     TypeVar,
@@ -33,6 +34,33 @@ class NoResult:
         if not cls._instance:
             cls._instance = super(NoResult, cls).__new__(cls, *args, **kwargs)
         return cls._instance
+
+
+class DeferredResult(Generic[T]):
+    """An interceptor return value that short-circuits the body with a result
+    that must be *waited* for (e.g. another workflow's output).
+
+    The Outcome layer resolves it: ``Immediate`` blocks in-thread, while
+    ``Pending`` awaits it on the event loop. This lets an async workflow that
+    directly invokes a child await the child's result without pinning a
+    thread-pool worker in a blocking poll (which can starve the shared executor
+    during recovery)."""
+
+    __slots__ = ("_sync_resolve", "_async_resolve")
+
+    def __init__(
+        self,
+        sync_resolve: Callable[[], T],
+        async_resolve: Callable[[], Coroutine[Any, Any, T]],
+    ):
+        self._sync_resolve = sync_resolve
+        self._async_resolve = async_resolve
+
+    def resolve(self) -> T:
+        return self._sync_resolve()
+
+    async def resolve_async(self) -> T:
+        return await self._async_resolve()
 
 
 # define Outcome protocol w/ common composition methods
@@ -65,7 +93,7 @@ class Outcome(Protocol[T]):
 
     def intercept(
         self,
-        interceptor: Callable[[], Union[NoResult, T]],
+        interceptor: Callable[[], Union[NoResult, "DeferredResult[T]", T]],
         *,
         dbos: Optional["DBOS"] = None,
     ) -> "Outcome[T]": ...
@@ -105,14 +133,19 @@ class Immediate(Outcome[T]):
 
     @staticmethod
     def _intercept(
-        func: Callable[[], T], interceptor: Callable[[], Union[NoResult, T]]
+        func: Callable[[], T],
+        interceptor: Callable[[], Union[NoResult, "DeferredResult[T]", T]],
     ) -> T:
         intercepted = interceptor()
-        return intercepted if not isinstance(intercepted, NoResult) else func()
+        if isinstance(intercepted, NoResult):
+            return func()
+        if isinstance(intercepted, DeferredResult):
+            return intercepted.resolve()
+        return intercepted
 
     def intercept(
         self,
-        interceptor: Callable[[], Union[NoResult, T]],
+        interceptor: Callable[[], Union[NoResult, "DeferredResult[T]", T]],
         *,
         dbos: Optional["DBOS"] = None,
     ) -> "Immediate[T]":
@@ -237,7 +270,7 @@ class Pending(Outcome[T]):
     @staticmethod
     async def _intercept(
         func: Callable[[], Coroutine[Any, Any, T]],
-        interceptor: Callable[[], Union[NoResult, T]],
+        interceptor: Callable[[], Union[NoResult, "DeferredResult[T]", T]],
         *,
         dbos: Optional["DBOS"] = None,
     ) -> T:
@@ -245,11 +278,16 @@ class Pending(Outcome[T]):
         if dbos is not None:
             await dbos._configure_asyncio_thread_pool()
         intercepted = await asyncio.to_thread(interceptor)
-        return intercepted if not isinstance(intercepted, NoResult) else await func()
+        if isinstance(intercepted, NoResult):
+            return await func()
+        # Resolve the wait on the event loop so it does not pin a to_thread worker.
+        if isinstance(intercepted, DeferredResult):
+            return await intercepted.resolve_async()
+        return intercepted
 
     def intercept(
         self,
-        interceptor: Callable[[], Union[NoResult, T]],
+        interceptor: Callable[[], Union[NoResult, "DeferredResult[T]", T]],
         *,
         dbos: Optional["DBOS"] = None,
     ) -> "Pending[T]":
