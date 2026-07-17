@@ -610,6 +610,63 @@ def test_list_workflow_steps_limit(dbos: DBOS) -> None:
     assert steps[0]["function_name"] == step_c.__qualname__
 
 
+def test_list_workflow_steps_load_output(dbos: DBOS) -> None:
+
+    @DBOS.step()
+    def step_a() -> str:
+        return "a"
+
+    @DBOS.workflow()
+    def output_workflow() -> None:
+        step_a()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        output_workflow()
+
+    # By default outputs are loaded
+    steps = DBOS.list_workflow_steps(wfid)
+    assert len(steps) == 1
+    assert steps[0]["output"] == "a"
+    assert steps[0]["error"] is None
+
+    # load_output=False skips deserializing outputs
+    steps = DBOS.list_workflow_steps(wfid, load_output=False)
+    assert len(steps) == 1
+    assert steps[0]["function_name"] == step_a.__qualname__
+    assert steps[0]["output"] is None
+    assert steps[0]["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_workflow_steps_load_output_async(dbos: DBOS) -> None:
+
+    @DBOS.step()
+    async def step_a() -> str:
+        return "a"
+
+    @DBOS.workflow()
+    async def output_workflow() -> None:
+        await step_a()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        await output_workflow()
+
+    # By default outputs are loaded
+    steps = await DBOS.list_workflow_steps_async(wfid)
+    assert len(steps) == 1
+    assert steps[0]["output"] == "a"
+    assert steps[0]["error"] is None
+
+    # load_output=False skips deserializing outputs
+    steps = await DBOS.list_workflow_steps_async(wfid, load_output=False)
+    assert len(steps) == 1
+    assert steps[0]["function_name"] == step_a.__qualname__
+    assert steps[0]["output"] is None
+    assert steps[0]["error"] is None
+
+
 def test_send_recv(dbos: DBOS) -> None:
 
     @DBOS.workflow()
