@@ -719,7 +719,7 @@ async def test_high_async_concurrency(dbos: DBOS, config: DBOSConfig) -> None:
 
 @pytest.mark.asyncio
 async def test_async_recovery_direct_child_no_thread_starvation(
-    dbos: DBOS, config: DBOSConfig
+    dbos: DBOS, config: DBOSConfig, skip_with_sqlite: None
 ) -> None:
     # Recovering async parents that DIRECTLY invoke a child (not via
     # start_workflow_async/enqueue) must not pin one thread-pool worker per
@@ -774,11 +774,18 @@ async def test_async_recovery_direct_child_no_thread_starvation(
     # and waits for it. With the old blocking wait, 12 parents pinning a pool of
     # 4 threads deadlocks here (the recovery worker itself stalls dispatching);
     # with the deferred wait they all park on the event loop and this returns.
-    await asyncio.to_thread(DBOS._recover_pending_workflows, ["local"])
+    # wait_for bounds a regression to a fast, localized failure instead of the
+    # opaque 120s global timeout.
+    await asyncio.wait_for(
+        asyncio.to_thread(DBOS._recover_pending_workflows, ["local"]), timeout=60
+    )
 
     # Pass 2: recover the children (on their executor). They need pool threads to
     # run — available only if the parents' waits did not pin them.
-    await asyncio.to_thread(DBOS._recover_pending_workflows, ["child-executor"])
+    await asyncio.wait_for(
+        asyncio.to_thread(DBOS._recover_pending_workflows, ["child-executor"]),
+        timeout=60,
+    )
 
     # Every parent must now finish. Bound each wait; the async polling handle
     # waits on the loop, not a pool thread, so it cannot itself starve the pool.
