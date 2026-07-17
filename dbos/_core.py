@@ -26,7 +26,7 @@ from typing import (
     cast,
 )
 
-from dbos._outcome import NoResult, Outcome, Pending
+from dbos._outcome import DeferredResult, NoResult, Outcome, Pending
 from dbos._utils import GlobalParams, retriable_postgres_exception
 
 from ._app_db import ApplicationDatabase, TransactionResultInternal
@@ -113,6 +113,22 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 DEFAULT_POLLING_INTERVAL = 1.0
+
+
+def _deferred_workflow_result(dbos: "DBOS", workflow_id: str) -> DeferredResult[Any]:
+    """Wait for a workflow's result, deferred so the Outcome layer picks the mode:
+    a sync (Immediate) caller blocks in-thread, but an async (Pending) workflow
+    awaits on the event loop instead of pinning a thread-pool worker in a blocking
+    poll. Pinning could otherwise starve the shared executor and deadlock recovery
+    when many async parents wait on directly-invoked children."""
+    return DeferredResult(
+        lambda: dbos._sys_db.await_workflow_result(
+            workflow_id, polling_interval=DEFAULT_POLLING_INTERVAL
+        ),
+        lambda: dbos._sys_db.await_workflow_result_async(
+            workflow_id, polling_interval=DEFAULT_POLLING_INTERVAL
+        ),
+    )
 
 
 class WorkflowHandleFuture(Generic[R]):
@@ -895,14 +911,14 @@ async def _execute_workflow_async(
                     )
                     return await result()
                 else:
-
-                    def fn() -> Any:
-                        return dbos._sys_db.await_workflow_result(
+                    # Wait on the event loop rather than pinning a to_thread worker in a blocking poll.
+                    return cast(
+                        R,
+                        await dbos._sys_db.await_workflow_result_async(
                             status["workflow_uuid"],
                             polling_interval=DEFAULT_POLLING_INTERVAL,
-                        )
-
-                    return await asyncio.to_thread(fn)
+                        ),
+                    )
             except Exception as e:
                 dbos.logger.error(
                     f"Exception encountered in asynchronous workflow:", exc_info=e
@@ -1384,8 +1400,8 @@ def workflow_wrapper(
         # Holds the initialized status so the invoke step can be built once the workflow is cleared to execute.
         init_status: dict[str, WorkflowStatusInternal] = {}
 
-        def check_and_init() -> Union[NoResult, R]:
-            """Initialize the workflow row, returning its recorded result to skip an already-completed workflow's body or NoResult to run it."""
+        def check_and_init() -> Union[NoResult, "DeferredResult[R]", R]:
+            """Initialize the workflow row, returning a deferred wait for an existing workflow's result to skip re-running its body, or NoResult to run it."""
             nonlocal workflow_id
             workflow_id = child_wfid
 
@@ -1400,13 +1416,7 @@ def workflow_wrapper(
                         r["error"], r["serialization"], dbos._sys_db.serializer
                     )
                 elif r and r["child_workflow_id"]:
-                    return cast(
-                        R,
-                        dbos._sys_db.await_workflow_result(
-                            r["child_workflow_id"],
-                            polling_interval=DEFAULT_POLLING_INTERVAL,
-                        ),
-                    )
+                    return _deferred_workflow_result(dbos, r["child_workflow_id"])
 
             status, should_execute = _init_workflow(
                 dbos,
@@ -1442,17 +1452,11 @@ def workflow_wrapper(
             if should_execute:
                 init_status["status"] = status
                 return NoResult()
-            # Already completed: return the recorded result without re-running the body.
+            # Already completed or running elsewhere: wait for its result instead of re-running the body.
             dbos.logger.debug(
                 f"Workflow {status['workflow_uuid']} already run with status {status['status']}"
             )
-            return cast(
-                R,
-                dbos._sys_db.await_workflow_result(
-                    status["workflow_uuid"],
-                    polling_interval=DEFAULT_POLLING_INTERVAL,
-                ),
-            )
+            return _deferred_workflow_result(dbos, status["workflow_uuid"])
 
         def get_wf_invoke() -> Callable[[Callable[[], R]], R]:
             return _get_wf_invoke_func(dbos, init_status["status"])
