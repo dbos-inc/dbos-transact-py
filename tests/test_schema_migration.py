@@ -742,7 +742,6 @@ def test_migrate_print_only(
     # Printing works without a reachable database and includes grants for the role
     print_dbos_database_migrations(
         db_url_string,
-        app_database_url=db_url_string,
         schema="dbos",
         application_role="print-only-role",
     )
@@ -751,7 +750,6 @@ def test_migrate_print_only(
     assert 'INSERT INTO "dbos".dbos_migrations (version) VALUES (1);' in out
     assert f'UPDATE "dbos".dbos_migrations SET version = {latest_version};' in out
     assert 'GRANT USAGE ON SCHEMA "dbos" TO "print-only-role";' in out
-    assert "transaction_outputs" in out
     for line in out.splitlines():
         assert line.startswith("--") or not line.startswith(
             ("Starting", "Granting", "System database")
@@ -761,7 +759,7 @@ def test_migrate_print_only(
         pytest.skip("psql not available")
 
     # Print without a role (the role does not exist) and apply the SQL to a fresh database
-    print_dbos_database_migrations(db_url_string, app_database_url=None, schema="dbos")
+    print_dbos_database_migrations(db_url_string, schema="dbos")
     sql = capsys.readouterr().out
     with db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
@@ -824,7 +822,7 @@ def test_migrate_print_only_custom_schema(
             sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
         )
 
-    print_dbos_database_migrations(db_url_string, app_database_url=None, schema=schema)
+    print_dbos_database_migrations(db_url_string, schema=schema)
     sql = capsys.readouterr().out
     assert f'CREATE SCHEMA IF NOT EXISTS "{schema}";' in sql
     assert (
@@ -843,9 +841,7 @@ def test_migrate_print_only_custom_schema(
 
     # Schema names containing quotes are rejected
     with pytest.raises(Exception):
-        print_dbos_database_migrations(
-            db_url_string, app_database_url=None, schema='bad"schema'
-        )
+        print_dbos_database_migrations(db_url_string, schema='bad"schema')
     capsys.readouterr()
 
     # The CLI flag path accepts the funny schema name
@@ -963,7 +959,7 @@ def test_migrate_print_only_delta(
         connection.execute(sa.text(f"CREATE DATABASE {database_name}"))
 
     # The database is reachable but empty, so this still prints the fresh script
-    print_dbos_database_migrations(db_url_string, app_database_url=None, schema=schema)
+    print_dbos_database_migrations(db_url_string, schema=schema)
     sql = capsys.readouterr().out
     assert "FRESH databases only" in sql
 

@@ -302,7 +302,6 @@ def migrate(
     if print_only:
         print_dbos_database_migrations(
             system_database_url=system_database_url,
-            app_database_url=application_database_url,
             schema=schema,
             application_role=application_role,
         )

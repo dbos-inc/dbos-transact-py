@@ -5,7 +5,6 @@ import typer
 
 from dbos._app_db import ApplicationDatabase
 from dbos._migration import get_dbos_migrations
-from dbos._schemas.application_database import ApplicationSchema
 from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
 
@@ -160,7 +159,6 @@ def _get_current_dbos_schema_version(
 def print_dbos_database_migrations(
     system_database_url: str,
     *,
-    app_database_url: Optional[str] = None,
     schema: str = "dbos",
     application_role: Optional[str] = None,
 ) -> None:
@@ -168,9 +166,7 @@ def print_dbos_database_migrations(
     writing to any database. If the system database is reachable, only the
     migrations past its current version are printed; otherwise a full
     fresh-database script is printed. Stdout is pure SQL and comments."""
-    if system_database_url.startswith("sqlite") or (
-        app_database_url and app_database_url.startswith("sqlite")
-    ):
+    if system_database_url.startswith("sqlite"):
         typer.echo("--print-only is only supported for Postgres databases", err=True)
         raise typer.Exit(code=1)
     # The execute path interpolates the schema into quoted identifiers and
@@ -272,33 +268,3 @@ END $$""")
         typer.echo(f"-- Permissions for role {application_role}")
         for sql in get_dbos_schema_permissions_sql(schema, application_role):
             emit(sql)
-
-    if app_database_url:
-        typer.echo(
-            f"-- DBOS application database migrations for {sa.make_url(app_database_url)}: run these against the application database"
-        )
-        dialect = sa.make_url("postgresql+psycopg://").get_dialect()()
-        emit(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
-        # Clone the table into the real schema (it is defined with a placeholder schema)
-        table = ApplicationSchema.transaction_outputs.to_metadata(
-            sa.MetaData(), schema=schema
-        )
-        emit(
-            str(
-                sa.schema.CreateTable(table, if_not_exists=True).compile(
-                    dialect=dialect
-                )
-            )
-        )
-        for index in table.indexes:
-            emit(
-                str(
-                    sa.schema.CreateIndex(index, if_not_exists=True).compile(
-                        dialect=dialect
-                    )
-                )
-            )
-        if application_role:
-            typer.echo(f"-- Permissions for role {application_role}")
-            for sql in get_dbos_schema_permissions_sql(schema, application_role):
-                emit(sql)
