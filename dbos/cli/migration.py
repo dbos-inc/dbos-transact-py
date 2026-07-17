@@ -207,7 +207,7 @@ def print_dbos_database_migrations(
     )
     if current_version == 0:
         typer.echo(
-            "-- This script is for FRESH databases only and aborts if DBOS migrations were already applied. Use `dbos migrate` to upgrade an existing database."
+            "-- This script is for FRESH databases only and aborts if DBOS migrations were already applied."
         )
         emit(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
         emit(
