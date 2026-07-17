@@ -203,7 +203,7 @@ def print_dbos_database_migrations(
         f"-- DBOS system database migrations for {sa.make_url(system_database_url)}"
     )
     typer.echo(
-        "-- Contains CREATE/DROP INDEX CONCURRENTLY: run outside a transaction block (e.g. plain psql, not psql -1)."
+        "-- Contains CREATE/DROP INDEX CONCURRENTLY: run outside a transaction block (e.g. plain psql, not psql --single-transaction)."
     )
     if current_version == 0:
         typer.echo(
