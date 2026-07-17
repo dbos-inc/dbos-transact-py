@@ -2639,6 +2639,7 @@ class DBOS:
         cls,
         workflow_id: str,
         *,
+        load_output: bool = True,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
     ) -> List[StepInfo]:
@@ -2646,7 +2647,7 @@ class DBOS:
 
         def fn() -> List[StepInfo]:
             return _get_dbos_instance()._sys_db.list_workflow_steps(
-                workflow_id, limit=limit, offset=offset
+                workflow_id, load_output=load_output, limit=limit, offset=offset
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
@@ -2658,6 +2659,7 @@ class DBOS:
         cls,
         workflow_id: str,
         *,
+        load_output: bool = True,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
     ) -> List[StepInfo]:
@@ -2666,7 +2668,7 @@ class DBOS:
 
         def fn() -> List[StepInfo]:
             return _get_dbos_instance()._sys_db.list_workflow_steps(
-                workflow_id, limit=limit, offset=offset
+                workflow_id, load_output=load_output, limit=limit, offset=offset
             )
 
         return await asyncio.to_thread(

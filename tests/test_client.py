@@ -628,7 +628,13 @@ def test_client_fork(dbos: DBOS, client: DBOSClient) -> None:
     input = 5
     handle: WorkflowHandle[int] = client.enqueue(options, input)
     assert handle.get_result() == input * 2
-    assert len(client.list_workflow_steps(handle.workflow_id)) == 2
+    steps = client.list_workflow_steps(handle.workflow_id)
+    assert len(steps) == 2
+    assert all(s["output"] == input for s in steps)
+    # load_output=False skips deserializing outputs
+    steps = client.list_workflow_steps(handle.workflow_id, load_output=False)
+    assert len(steps) == 2
+    assert all(s["output"] is None for s in steps)
 
     fork_id = str(uuid.uuid4())
     with SetWorkflowID(fork_id):
@@ -658,7 +664,15 @@ async def test_client_fork_async(dbos: DBOS, client: DBOSClient) -> None:
     input = 5
     handle: WorkflowHandleAsync[int] = await client.enqueue_async(options, input)
     assert await handle.get_result() == input * 2
-    assert len(await client.list_workflow_steps_async(handle.workflow_id)) == 2
+    steps = await client.list_workflow_steps_async(handle.workflow_id)
+    assert len(steps) == 2
+    assert all(s["output"] == input for s in steps)
+    # load_output=False skips deserializing outputs
+    steps = await client.list_workflow_steps_async(
+        handle.workflow_id, load_output=False
+    )
+    assert len(steps) == 2
+    assert all(s["output"] is None for s in steps)
 
     forked_handle: WorkflowHandleAsync[int] = await client.fork_workflow_async(
         handle.workflow_id, 1
