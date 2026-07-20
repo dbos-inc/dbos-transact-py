@@ -2377,7 +2377,6 @@ def _validate_enqueue_only_options(
         for name, value in (
             ("deduplication_id", ctx.deduplication_id),
             ("priority", ctx.priority),
-            ("app_version", ctx.app_version),
             ("queue_partition_key", ctx.queue_partition_key),
             ("delay_seconds", ctx.delay_until_epoch_ms),
         )

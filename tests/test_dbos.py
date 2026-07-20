@@ -522,11 +522,12 @@ def test_recovery_reenqueue_is_ownership_conditional(dbos: DBOS) -> None:
 
 
 def test_duplicate_recovery_does_not_rerun_running_workflow(dbos: DBOS) -> None:
-    """Repeatedly recovering an executor that is alive and running the workflow must not re-run its body.
+    """Recovery hands a running workflow back to the queue, and each sweep yields exactly one dequeue.
 
-    Recovery only re-enqueues, so each assertion has to wait for the queue to
-    actually dequeue the row: that dequeue is the point at which a missing
-    ownership check would start a second copy of the body.
+    This pins the mechanism this PR introduced rather than the pre-existing
+    in-process ownership guard: a workflow that was never enqueued acquires the
+    internal queue's name and is restarted by the queue, where before the sweep
+    executed it directly and the row's queue_name stayed None.
     """
     start_count = 0
     blocker = threading.Event()
@@ -551,12 +552,24 @@ def test_duplicate_recovery_does_not_rerun_running_workflow(dbos: DBOS) -> None:
 
         retry_until_success(check_running)
 
+        # Started directly, so it carries no queue at all.
+        before = DBOS.get_workflow_status(wfuuid)
+        assert before is not None and before.queue_name is None
+
         # Each sweep re-enqueues the running workflow (recovering a live executor
-        # is not prevented); the dequeue that follows bumps recovery_attempts, so
-        # wait for it before asserting the body did not run a second time.
+        # is not prevented).
         for expected_attempts in (2, 3):
             DBOS._recover_pending_workflows([GlobalParams.executor_id])
 
+            # Recovery re-enqueued rather than executing: the row now belongs to
+            # the internal queue, which is what restarts it. queue_name is never
+            # cleared afterwards, so reading it here is not a race.
+            requeued = DBOS.get_workflow_status(wfuuid)
+            assert requeued is not None
+            assert requeued.queue_name == INTERNAL_QUEUE_NAME
+
+            # The queue restarts it exactly once per sweep: the ENQUEUED->PENDING
+            # dequeue admits a single runner, so recovery_attempts advances by one.
             def dequeued(expected: int = expected_attempts) -> None:
                 status = DBOS.get_workflow_status(wfuuid)
                 assert status is not None
