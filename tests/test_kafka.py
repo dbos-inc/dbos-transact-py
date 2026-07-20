@@ -713,6 +713,71 @@ def test_kafka_config_not_mutated(dbos: DBOS) -> None:
     assert config == snapshot
 
 
+def test_kafka_queue_polling_interval(
+    config: DBOSConfig, cleanup_test_databases: None
+) -> None:
+    # The internal Kafka queues take their polling interval from DBOSConfig, whether a
+    # consumer is declared before DBOS is constructed (queue created before the config is
+    # known, so launch applies it) or after (queue created with it).
+    from dbos._kafka import KAFKA_ORDERED_QUEUE_NAME, KAFKA_QUEUE_NAME
+
+    DBOS.destroy(destroy_registry=True)
+    config["kafka_queue_polling_interval_sec"] = 7.5
+    server = "localhost:9092"
+    suffix = random.randrange(1_000_000_000)
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": server,
+            "group.id": f"dbos-kafka-interval-early-{suffix}",
+        },
+        [f"dbos-kafka-interval-early-{suffix}"],
+        ordering="partition",
+    )
+    @DBOS.workflow()
+    def early_consumer(msg: KafkaMessage) -> None:
+        pass
+
+    dbos = DBOS(config=config)
+
+    @DBOS.kafka_consumer(
+        {"bootstrap.servers": server, "group.id": f"dbos-kafka-interval-late-{suffix}"},
+        [f"dbos-kafka-interval-late-{suffix}"],
+    )
+    @DBOS.workflow()
+    def late_consumer(msg: KafkaMessage) -> None:
+        pass
+
+    queues = dbos._registry.queue_info_map
+    # The late consumer's queue was created after the config was known.
+    assert queues[KAFKA_QUEUE_NAME]._polling_interval_sec == 7.5
+    # The early consumer's still has the Queue default until launch applies the config.
+    assert queues[KAFKA_ORDERED_QUEUE_NAME]._polling_interval_sec == 1.0
+
+    DBOS.launch()
+    assert queues[KAFKA_ORDERED_QUEUE_NAME]._polling_interval_sec == 7.5
+    assert queues[KAFKA_QUEUE_NAME]._polling_interval_sec == 7.5
+    DBOS.destroy(destroy_registry=True)
+
+
+def test_kafka_queue_polling_interval_default(dbos: DBOS) -> None:
+    # Unconfigured, the internal Kafka queues keep the Queue default.
+    from dbos._kafka import KAFKA_QUEUE_NAME
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": "localhost:9092",
+            "group.id": "dbos-kafka-interval-unset",
+        },
+        ["dbos-kafka-interval-unset"],
+    )
+    @DBOS.workflow()
+    def unset_consumer(msg: KafkaMessage) -> None:
+        pass
+
+    assert dbos._registry.queue_info_map[KAFKA_QUEUE_NAME]._polling_interval_sec == 1.0
+
+
 def test_init_workflows_idempotent(dbos: DBOS) -> None:
     # Batch insert dedups on workflow ID, making Kafka redelivery a no-op.
     from dbos._core import prepare_enqueued_workflow

@@ -56,8 +56,27 @@ def safe_group_name(method_name: str, topics: list[str]) -> str:
 def _get_or_create_queue(dbosreg: "DBOSRegistry", name: str, **kwargs: Any) -> Queue:
     queue = dbosreg.queue_info_map.get(name)
     if queue is None:
+        # Only the internal Kafka queues are created here, so the configured interval always applies.
+        if dbosreg.kafka_queue_polling_interval_sec is not None:
+            kwargs["polling_interval_sec"] = dbosreg.kafka_queue_polling_interval_sec
         queue = Queue(name, **kwargs)
     return queue
+
+
+def configure_kafka_queues(dbos: "DBOS") -> None:
+    """Apply kafka_queue_polling_interval_sec to the internal Kafka queues at launch.
+
+    A consumer declared before DBOS was constructed created its queue before the
+    configured interval was known, so set it here rather than only at creation.
+    """
+    interval = dbos._registry.kafka_queue_polling_interval_sec
+    if interval is None:
+        return
+    for name in (KAFKA_QUEUE_NAME, KAFKA_ORDERED_QUEUE_NAME):
+        queue = dbos._registry.queue_info_map.get(name)
+        if queue is not None:
+            # Assign directly: these in-memory queues have no database row to update, and the queue worker re-reads this each iteration.
+            queue._polling_interval_sec = interval
 
 
 def _validate_consumer_queue(dbos: "DBOS", func_name: str, queue_name: str) -> None:

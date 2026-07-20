@@ -228,6 +228,8 @@ class DBOSRegistry:
         self.kafka_registrations: list[KafkaConsumerRegistration] = []
         # Queues fed by this process's pollers (e.g. Kafka); always polled, regardless of any listen_queues filter, so this process executes what it enqueues.
         self.poller_queue_names: set[str] = set()
+        # Polling interval for the internal Kafka queues, from DBOSConfig; None keeps the Queue default.
+        self.kafka_queue_polling_interval_sec: Optional[float] = None
 
     def register_wf_function(self, name: str, wrapped_func: F, functype: str) -> None:
         if name in self.function_type_map:
@@ -479,6 +481,11 @@ class DBOS:
         else:
             raise ValueError("No valid configuration was loaded.")
 
+        # Read now so consumers registered after this point create their queues with it.
+        self._registry.kafka_queue_polling_interval_sec = self._config.get(
+            "runtimeConfig", {}
+        ).get("kafka_queue_polling_interval_sec")
+
         config_logger(self._config)
         dbos_tracer.config(self._config)
         dbos_logger.info(f"Initializing DBOS (v{GlobalParams.dbos_version})")
@@ -615,9 +622,10 @@ class DBOS:
 
             # Kafka consumers name their queue, so it is only resolvable now that every queue is registered; check here so a rejected consumer fails launch before any consumer or queue thread starts.
             if self._registry.kafka_registrations:
-                from ._kafka import validate_kafka_consumers
+                from ._kafka import configure_kafka_queues, validate_kafka_consumers
 
                 validate_kafka_consumers(self)
+                configure_kafka_queues(self)
 
             admin_port = self._config.get("runtimeConfig", {}).get("admin_port")
             if admin_port is None:
@@ -1188,6 +1196,10 @@ class DBOS:
                 run. It must not be a partitioned queue, and is only valid
                 with ordering="none"; ordered consumers share an internal
                 partitioned queue.
+
+        All consumers without a custom queue share process-global internal
+        queues, so those queues' polling interval is set once for the process
+        with the kafka_queue_polling_interval_sec DBOSConfig field, not here.
         """
         try:
             from ._kafka import kafka_consumer
