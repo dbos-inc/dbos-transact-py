@@ -1943,14 +1943,14 @@ class DBOS:
 
     @classmethod
     def _execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
-        """Execute a workflow by ID directly. Used only in testing."""
+        """Execute a workflow by ID directly. Internal, used only for testing."""
         return execute_workflow_by_id(_get_dbos_instance(), workflow_id, True, False)
 
     @classmethod
     def _recover_pending_workflows(
         cls, executor_ids: List[str] = ["local"]
     ) -> List[WorkflowHandle[Any]]:
-        """Find all PENDING workflows and execute them."""
+        """Find all PENDING workflows and execute them. Internal, used only for testing."""
         return recover_pending_workflows(_get_dbos_instance(), executor_ids)
 
     @classmethod
