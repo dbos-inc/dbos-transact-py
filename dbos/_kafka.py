@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Callable, Coroutine, Literal, Optional, T
 
 from confluent_kafka import Consumer, KafkaError, KafkaException
 
-from ._queue import Queue
+from ._queue import DEFAULT_QUEUE_POLLING_INTERVAL_SEC, Queue
 
 if TYPE_CHECKING:
     from ._dbos import DBOS, DBOSRegistry
@@ -69,13 +69,14 @@ def configure_kafka_queues(dbos: "DBOS") -> None:
     A consumer declared before DBOS was constructed created its queue before the
     configured interval was known, so set it here rather than only at creation.
     """
-    interval = dbos._registry.kafka_queue_polling_interval_sec
-    if interval is None:
-        return
+    interval = (
+        dbos._registry.kafka_queue_polling_interval_sec
+        or DEFAULT_QUEUE_POLLING_INTERVAL_SEC
+    )
     for name in (KAFKA_QUEUE_NAME, KAFKA_ORDERED_QUEUE_NAME):
         queue = dbos._registry.queue_info_map.get(name)
         if queue is not None:
-            # Assign directly: these in-memory queues have no database row to update, and the queue worker re-reads this each iteration.
+            # Assign directly: these in-memory queues have no database row to update, and this runs before the queue thread starts, so no worker has read it yet.
             queue._polling_interval_sec = interval
 
 

@@ -739,43 +739,101 @@ def test_kafka_queue_polling_interval(
         pass
 
     dbos = DBOS(config=config)
+    try:
 
-    @DBOS.kafka_consumer(
-        {"bootstrap.servers": server, "group.id": f"dbos-kafka-interval-late-{suffix}"},
-        [f"dbos-kafka-interval-late-{suffix}"],
-    )
-    @DBOS.workflow()
-    def late_consumer(msg: KafkaMessage) -> None:
-        pass
+        @DBOS.kafka_consumer(
+            {
+                "bootstrap.servers": server,
+                "group.id": f"dbos-kafka-interval-late-{suffix}",
+            },
+            [f"dbos-kafka-interval-late-{suffix}"],
+        )
+        @DBOS.workflow()
+        def late_consumer(msg: KafkaMessage) -> None:
+            pass
 
-    queues = dbos._registry.queue_info_map
-    # The late consumer's queue was created after the config was known.
-    assert queues[KAFKA_QUEUE_NAME]._polling_interval_sec == 7.5
-    # The early consumer's still has the Queue default until launch applies the config.
-    assert queues[KAFKA_ORDERED_QUEUE_NAME]._polling_interval_sec == 1.0
-
-    DBOS.launch()
-    assert queues[KAFKA_ORDERED_QUEUE_NAME]._polling_interval_sec == 7.5
-    assert queues[KAFKA_QUEUE_NAME]._polling_interval_sec == 7.5
-    DBOS.destroy(destroy_registry=True)
+        queues = dbos._registry.queue_info_map
+        # The late consumer's queue was created after the config was known.
+        assert queues[KAFKA_QUEUE_NAME].polling_interval_sec == 7.5
+        DBOS.launch()
+        assert queues[KAFKA_ORDERED_QUEUE_NAME].polling_interval_sec == 7.5
+        assert queues[KAFKA_QUEUE_NAME].polling_interval_sec == 7.5
+    finally:
+        DBOS.destroy(destroy_registry=True)
 
 
-def test_kafka_queue_polling_interval_default(dbos: DBOS) -> None:
-    # Unconfigured, the internal Kafka queues keep the Queue default.
+def test_kafka_queue_polling_interval_default(
+    config: DBOSConfig, cleanup_test_databases: None
+) -> None:
+    # Unconfigured, launch applies the Queue default. Registered pre-launch so
+    # configure_kafka_queues actually runs: it must resolve the unset config to the
+    # default rather than assigning None, which would break the queue worker's wait.
     from dbos._kafka import KAFKA_QUEUE_NAME
+
+    DBOS.destroy(destroy_registry=True)
+    suffix = random.randrange(1_000_000_000)
 
     @DBOS.kafka_consumer(
         {
             "bootstrap.servers": "localhost:9092",
-            "group.id": "dbos-kafka-interval-unset",
+            "group.id": f"dbos-kafka-interval-unset-{suffix}",
         },
-        ["dbos-kafka-interval-unset"],
+        [f"dbos-kafka-interval-unset-{suffix}"],
     )
     @DBOS.workflow()
     def unset_consumer(msg: KafkaMessage) -> None:
         pass
 
-    assert dbos._registry.queue_info_map[KAFKA_QUEUE_NAME]._polling_interval_sec == 1.0
+    dbos = DBOS(config=config)
+    try:
+        queues = dbos._registry.queue_info_map
+        assert queues[KAFKA_QUEUE_NAME].polling_interval_sec == 1.0
+        DBOS.launch()
+        assert queues[KAFKA_QUEUE_NAME].polling_interval_sec == 1.0
+    finally:
+        DBOS.destroy(destroy_registry=True)
+
+
+def test_kafka_queue_polling_interval_not_stale_across_reinit(
+    config: DBOSConfig, cleanup_test_databases: None
+) -> None:
+    # destroy() without destroy_registry keeps the queue objects, so a second DBOS
+    # that does not configure an interval must reset them to the default rather than
+    # inherit the previous run's value.
+    from dbos._kafka import KAFKA_QUEUE_NAME
+
+    DBOS.destroy(destroy_registry=True)
+    suffix = random.randrange(1_000_000_000)
+
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": "localhost:9092",
+            "group.id": f"dbos-kafka-interval-stale-{suffix}",
+        },
+        [f"dbos-kafka-interval-stale-{suffix}"],
+    )
+    @DBOS.workflow()
+    def stale_consumer(msg: KafkaMessage) -> None:
+        pass
+
+    try:
+        config["kafka_queue_polling_interval_sec"] = 7.5
+        dbos = DBOS(config=config)
+        DBOS.launch()
+        assert (
+            dbos._registry.queue_info_map[KAFKA_QUEUE_NAME].polling_interval_sec == 7.5
+        )
+
+        # Keep the registry, so the same Queue object carries 7.5 into the next run.
+        DBOS.destroy()
+        del config["kafka_queue_polling_interval_sec"]
+        dbos = DBOS(config=config)
+        DBOS.launch()
+        assert (
+            dbos._registry.queue_info_map[KAFKA_QUEUE_NAME].polling_interval_sec == 1.0
+        )
+    finally:
+        DBOS.destroy(destroy_registry=True)
 
 
 def test_init_workflows_idempotent(dbos: DBOS) -> None:
