@@ -4035,9 +4035,45 @@ class SystemDatabase(ABC):
             return ret_ids
 
     @db_retry()
-    def clear_queue_assignment(self, workflow_id: str) -> None:
+    def reenqueue_for_recovery(
+        self, workflow_id: str, executor_ids: List[str], recovery_queue_name: str
+    ) -> bool:
+        """Return a PENDING workflow to a queue so it is re-dispatched. Returns
+        whether the row was re-enqueued.
+
+        The executor_ids predicate makes recovery idempotent. Recovery declares a
+        set of executors dead; once any live executor dequeues the workflow,
+        start_queued_workflows sets the workflow's executor ID on the row, so a
+        duplicate recovery request for the original (dead) executor matches
+        nothing instead of re-enqueueing a running workflow.
+        """
+        if not executor_ids:
+            return False
         with self.engine.begin() as c:
-            # Reset the task to "ENQUEUED" so the queue re-dispatches it; a no-op if the row is no longer PENDING-queued.
+            res = c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                .where(
+                    SystemSchema.workflow_status.c.status
+                    == WorkflowStatusString.PENDING.value
+                )
+                .where(SystemSchema.workflow_status.c.executor_id.in_(executor_ids))
+                .values(
+                    status=WorkflowStatusString.ENQUEUED.value,
+                    started_at_epoch_ms=None,
+                    queue_name=sa.func.coalesce(
+                        SystemSchema.workflow_status.c.queue_name, recovery_queue_name
+                    ),
+                )
+            )
+            return res.rowcount > 0
+
+    @db_retry()
+    def requeue_dequeued_workflow(self, workflow_id: str) -> None:
+        """Return a workflow this executor just dequeued to its queue, to be
+        retried on a later poll.
+        """
+        with self.engine.begin() as c:
             c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)

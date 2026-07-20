@@ -39,7 +39,7 @@ from dbos._error import (
 )
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import _dbos_null_topic
-from dbos._utils import GlobalParams
+from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from tests.conftest import retry_until_success, set_workflow_status, using_sqlite
 
 
@@ -442,6 +442,104 @@ def test_recovery_workflow(dbos: DBOS) -> None:
     stat = workflow_handles[0].get_status()
     assert stat
     assert stat.recovery_attempts == 2  # original attempt + recovery attempt
+
+
+def test_recovery_reenqueue_is_ownership_conditional(dbos: DBOS) -> None:
+    """Recovery only re-enqueues workflows still owned by an executor it declared dead.
+
+    Once a live executor dequeues a recovered workflow, the dequeue stamps its own
+    ID on the row, so a duplicate (or delayed) recovery sweep for the dead executor
+    must not yank the running workflow back to ENQUEUED.
+    """
+
+    @DBOS.workflow()
+    def test_workflow(var: str) -> str:
+        return var
+
+    wfuuid = str(uuid.uuid4())
+    with SetWorkflowID(wfuuid):
+        assert test_workflow("bob") == "bob"
+
+    # Orphan the workflow: PENDING, owned by an executor that is now dead.
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"status": "PENDING", "executor_id": "deadexecutor"})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
+        )
+
+    # A sweep naming a different executor must not touch the row.
+    assert (
+        dbos._sys_db.reenqueue_for_recovery(
+            wfuuid, ["someotherexecutor"], INTERNAL_QUEUE_NAME
+        )
+        is False
+    )
+    unchanged = DBOS.get_workflow_status(wfuuid)
+    assert unchanged and unchanged.status == "PENDING"
+
+    # A sweep naming the dead executor re-enqueues it onto the internal queue.
+    assert (
+        dbos._sys_db.reenqueue_for_recovery(
+            wfuuid, ["deadexecutor"], INTERNAL_QUEUE_NAME
+        )
+        is True
+    )
+
+    # A duplicate sweep for the dead executor is a no-op, whether the row is
+    # still ENQUEUED or has since been dequeued and stamped with the live
+    # executor's ID. Either way the workflow starts exactly once.
+    assert (
+        dbos._sys_db.reenqueue_for_recovery(
+            wfuuid, ["deadexecutor"], INTERNAL_QUEUE_NAME
+        )
+        is False
+    )
+
+    assert DBOS.retrieve_workflow(wfuuid).get_result() == "bob"
+
+    def check_recovered_once() -> None:
+        status = DBOS.get_workflow_status(wfuuid)
+        assert status is not None
+        assert status.status == WorkflowStatusString.SUCCESS.value
+        # Original attempt + the single dequeue that recovered it.
+        assert status.recovery_attempts == 2
+
+    retry_until_success(check_recovered_once)
+
+
+def test_duplicate_recovery_does_not_rerun_running_workflow(dbos: DBOS) -> None:
+    """Repeatedly recovering an executor that is alive and running the workflow must not re-run its body.
+
+    Recovery re-enqueues the row, but the ownership check in the execution path
+    makes the re-dequeued copy await the running one instead of executing again.
+    """
+    start_count = 0
+    blocker = threading.Event()
+
+    @DBOS.workflow()
+    def blocked_workflow() -> str:
+        nonlocal start_count
+        start_count += 1
+        blocker.wait()
+        return "done"
+
+    wfuuid = str(uuid.uuid4())
+    with SetWorkflowID(wfuuid):
+        handle = DBOS.start_workflow(blocked_workflow)
+
+    def check_running() -> None:
+        assert start_count == 1
+
+    retry_until_success(check_running)
+
+    for _ in range(3):
+        DBOS._recover_pending_workflows([GlobalParams.executor_id])
+    assert start_count == 1
+
+    blocker.set()
+    assert handle.get_result() == "done"
+    assert start_count == 1
 
 
 def test_recovery_empty_id_dead_letters(dbos: DBOS) -> None:
