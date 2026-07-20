@@ -310,9 +310,8 @@ class ExportedWorkflow(TypedDict):
 
 
 class GetPendingWorkflowsOutput:
-    def __init__(self, *, workflow_id: str, queue_name: Optional[str] = None):
+    def __init__(self, *, workflow_id: str):
         self.workflow_id: str = workflow_id
-        self.queue_name: Optional[str] = queue_name
 
 
 class WorkflowSchedule(TypedDict):
@@ -1971,7 +1970,6 @@ class SystemDatabase(ABC):
             rows = c.execute(
                 sa.select(
                     SystemSchema.workflow_status.c.workflow_uuid,
-                    SystemSchema.workflow_status.c.queue_name,
                 ).where(
                     SystemSchema.workflow_status.c.status
                     == WorkflowStatusString.PENDING.value,
@@ -1981,11 +1979,7 @@ class SystemDatabase(ABC):
             ).fetchall()
 
             return [
-                GetPendingWorkflowsOutput(
-                    workflow_id=row.workflow_uuid,
-                    queue_name=row.queue_name,
-                )
-                for row in rows
+                GetPendingWorkflowsOutput(workflow_id=row.workflow_uuid) for row in rows
             ]
 
     def list_workflow_steps(

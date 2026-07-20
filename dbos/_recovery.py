@@ -34,18 +34,17 @@ def startup_recovery_thread(
     stop_event = threading.Event()
     dbos.background_thread_stop_events.append(stop_event)
     executor_ids = [GlobalParams.executor_id]
-    while not stop_event.is_set() and len(pending_workflows) > 0:
-        for pending_workflow in list(pending_workflows):
-            try:
-                _recover_workflow(dbos, pending_workflow, executor_ids)
-                pending_workflows.remove(pending_workflow)
-            except Exception as e:
-                with UseLogAttributes(workflow_id=pending_workflow.workflow_id):
-                    dbos.logger.error(
-                        f"Exception encountered when recovering workflow {pending_workflow.workflow_id}:",
-                        exc_info=e,
-                    )
-                pending_workflows.remove(pending_workflow)
+    for pending_workflow in pending_workflows:
+        if stop_event.is_set():
+            return
+        try:
+            _recover_workflow(dbos, pending_workflow, executor_ids)
+        except Exception as e:
+            with UseLogAttributes(workflow_id=pending_workflow.workflow_id):
+                dbos.logger.error(
+                    f"Exception encountered when recovering workflow {pending_workflow.workflow_id}:",
+                    exc_info=e,
+                )
 
 
 def recover_pending_workflows(
