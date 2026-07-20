@@ -1950,7 +1950,7 @@ class DBOS:
     def _recover_pending_workflows(
         cls, executor_ids: List[str] = ["local"]
     ) -> List[WorkflowHandle[Any]]:
-        """Find all PENDING workflows and execute them. Internal, used only for testing."""
+        """Find all PENDING workflows and recover them. Internal."""
         return recover_pending_workflows(_get_dbos_instance(), executor_ids)
 
     @classmethod
