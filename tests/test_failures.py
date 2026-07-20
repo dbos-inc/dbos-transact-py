@@ -184,7 +184,12 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
     for i in range(max_recovery_attempts):
         set_workflow_status(dbos._sys_db, wfid, "PENDING")
         handles = DBOS._recover_pending_workflows()
-        handles[0].get_result()
+        # Select our workflow rather than trusting ordering: recovery returns a
+        # polling handle for every pending row, and get_result() on the wrong one
+        # polls forever, turning a failure into a suite-level timeout.
+        recovered = [h for h in handles if h.workflow_id == wfid]
+        assert len(recovered) == 1
+        recovered[0].get_result()
         assert recovery_count == i + 2
 
     # Verify an additional attempt (either through recovery or through a direct call) throws a DLQ error
