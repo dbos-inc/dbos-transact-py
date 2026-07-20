@@ -309,6 +309,11 @@ def migrate(
         schema = "dbos"
 
     if print_migrations is not None or print_user_role:
+        if print_migrations is not None and print_user_role:
+            typer.echo(
+                "--print-user-role cannot be combined with --print-migrations", err=True
+            )
+            raise typer.Exit(code=1)
         if print_user_role and application_role is None:
             typer.echo("--print-user-role requires --app-role", err=True)
             raise typer.Exit(code=1)
@@ -321,13 +326,6 @@ def migrate(
         if print_user_role:
             assert application_role is not None
             print_dbos_user_role_sql(schema=schema, role_name=application_role)
-        if os.path.exists("dbos-config.yaml"):
-            config = load_config(silent=True)
-            if "database" in config and config["database"].get("migrate"):
-                typer.echo(
-                    "Warning: skipping migration commands from 'dbos-config.yaml' in print mode",
-                    err=True,
-                )
         return
 
     # Emit INFO logs from migrations

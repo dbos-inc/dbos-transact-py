@@ -1081,7 +1081,7 @@ def test_migrate_print_user_role(
         print_dbos_user_role_sql(schema="dbos", role_name='bad"role')
     capsys.readouterr()
 
-    # Combined with --print-migrations, migrations come first, then grants
+    # --print-user-role cannot be combined with --print-migrations
     result = subprocess.run(
         [
             "dbos",
@@ -1097,8 +1097,6 @@ def test_migrate_print_user_role(
         capture_output=True,
         text=True,
     )
-    assert result.returncode == 0
-    assert 'CREATE SCHEMA IF NOT EXISTS "dbos";' in result.stdout
-    assert result.stdout.index('CREATE SCHEMA IF NOT EXISTS "dbos";') < (
-        result.stdout.index('GRANT USAGE ON SCHEMA "dbos" TO "my-app-role";')
-    )
+    assert result.returncode != 0
+    assert "cannot be combined" in result.stderr
+    assert result.stdout == ""
