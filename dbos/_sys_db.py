@@ -4055,6 +4055,7 @@ class SystemDatabase(ABC):
                 .values(
                     status=WorkflowStatusString.ENQUEUED.value,
                     started_at_epoch_ms=None,
+                    updated_at=self._now_ms_sql(),
                     queue_name=sa.func.coalesce(
                         SystemSchema.workflow_status.c.queue_name, recovery_queue_name
                     ),

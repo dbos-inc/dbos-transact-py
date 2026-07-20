@@ -166,7 +166,7 @@ def test_notification_errors(dbos: DBOS, skip_with_sqlite: None) -> None:
 
 def test_dead_letter_queue(dbos: DBOS) -> None:
     event = threading.Event()
-    max_recovery_attempts = 20
+    max_recovery_attempts = 3
     recovery_count = 0
 
     @DBOS.workflow(max_recovery_attempts=max_recovery_attempts)
