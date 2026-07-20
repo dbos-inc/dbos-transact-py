@@ -452,13 +452,16 @@ def test_recovery_reenqueue_is_ownership_conditional(dbos: DBOS) -> None:
     must not yank the running workflow back to ENQUEUED.
     """
 
+    blocker = threading.Event()
+
     @DBOS.workflow()
-    def test_workflow(var: str) -> str:
+    def blocked_workflow(var: str) -> str:
+        blocker.wait()
         return var
 
     wfuuid = str(uuid.uuid4())
     with SetWorkflowID(wfuuid):
-        assert test_workflow("bob") == "bob"
+        handle = DBOS.start_workflow(blocked_workflow, "bob")
 
     # Orphan the workflow: PENDING, owned by an executor that is now dead.
     with dbos._sys_db.engine.begin() as c:
@@ -468,51 +471,62 @@ def test_recovery_reenqueue_is_ownership_conditional(dbos: DBOS) -> None:
             .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
         )
 
-    # A sweep naming a different executor must not touch the row.
-    assert (
-        dbos._sys_db.reenqueue_for_recovery(
-            wfuuid, ["someotherexecutor"], INTERNAL_QUEUE_NAME
+    # The workflow stays blocked for the whole check, so release it even on
+    # failure: an assertion that escapes with the workflow still running wedges
+    # DBOS.destroy() in fixture teardown and hangs the suite instead of failing.
+    try:
+        # A sweep naming a different executor must not touch the row.
+        assert (
+            dbos._sys_db.reenqueue_for_recovery(
+                wfuuid, ["someotherexecutor"], INTERNAL_QUEUE_NAME
+            )
+            is False
         )
-        is False
-    )
-    unchanged = DBOS.get_workflow_status(wfuuid)
-    assert unchanged and unchanged.status == "PENDING"
+        unchanged = DBOS.get_workflow_status(wfuuid)
+        assert unchanged and unchanged.status == "PENDING"
 
-    # A sweep naming the dead executor re-enqueues it onto the internal queue.
-    assert (
-        dbos._sys_db.reenqueue_for_recovery(
-            wfuuid, ["deadexecutor"], INTERNAL_QUEUE_NAME
+        # A sweep naming the dead executor re-enqueues it onto the internal queue.
+        assert (
+            dbos._sys_db.reenqueue_for_recovery(
+                wfuuid, ["deadexecutor"], INTERNAL_QUEUE_NAME
+            )
+            is True
         )
-        is True
-    )
 
-    # A duplicate sweep for the dead executor is a no-op, whether the row is
-    # still ENQUEUED or has since been dequeued and stamped with the live
-    # executor's ID. Either way the workflow starts exactly once.
-    assert (
-        dbos._sys_db.reenqueue_for_recovery(
-            wfuuid, ["deadexecutor"], INTERNAL_QUEUE_NAME
+        # Wait for the queue to dequeue it. The row returns to PENDING, now
+        # stamped with this live executor's ID -- the state the claim rests on.
+        def dequeued_by_live_executor() -> None:
+            status = DBOS.get_workflow_status(wfuuid)
+            assert status is not None
+            assert status.status == WorkflowStatusString.PENDING.value
+            assert status.executor_id == GlobalParams.executor_id
+
+        retry_until_success(dequeued_by_live_executor)
+
+        # Because the row is PENDING again, only the executor predicate can
+        # reject this duplicate sweep. It must not yank the running workflow.
+        assert (
+            dbos._sys_db.reenqueue_for_recovery(
+                wfuuid, ["deadexecutor"], INTERNAL_QUEUE_NAME
+            )
+            is False
         )
-        is False
-    )
+        still_running = DBOS.get_workflow_status(wfuuid)
+        assert (
+            still_running and still_running.status == WorkflowStatusString.PENDING.value
+        )
+    finally:
+        blocker.set()
 
-    assert DBOS.retrieve_workflow(wfuuid).get_result() == "bob"
-
-    def check_recovered_once() -> None:
-        status = DBOS.get_workflow_status(wfuuid)
-        assert status is not None
-        assert status.status == WorkflowStatusString.SUCCESS.value
-        # Original attempt + the single dequeue that recovered it.
-        assert status.recovery_attempts == 2
-
-    retry_until_success(check_recovered_once)
+    assert handle.get_result() == "bob"
 
 
 def test_duplicate_recovery_does_not_rerun_running_workflow(dbos: DBOS) -> None:
     """Repeatedly recovering an executor that is alive and running the workflow must not re-run its body.
 
-    Recovery re-enqueues the row, but the ownership check in the execution path
-    makes the re-dequeued copy await the running one instead of executing again.
+    Recovery only re-enqueues, so each assertion has to wait for the queue to
+    actually dequeue the row: that dequeue is the point at which a missing
+    ownership check would start a second copy of the body.
     """
     start_count = 0
     blocker = threading.Event()
@@ -528,16 +542,32 @@ def test_duplicate_recovery_does_not_rerun_running_workflow(dbos: DBOS) -> None:
     with SetWorkflowID(wfuuid):
         handle = DBOS.start_workflow(blocked_workflow)
 
-    def check_running() -> None:
-        assert start_count == 1
+    # Release the workflow even on failure: an assertion that escapes while it is
+    # still blocked wedges DBOS.destroy() in teardown and hangs the suite.
+    try:
 
-    retry_until_success(check_running)
+        def check_running() -> None:
+            assert start_count == 1
 
-    for _ in range(3):
-        DBOS._recover_pending_workflows([GlobalParams.executor_id])
-    assert start_count == 1
+        retry_until_success(check_running)
 
-    blocker.set()
+        # Each sweep re-enqueues the running workflow (recovering a live executor
+        # is not prevented); the dequeue that follows bumps recovery_attempts, so
+        # wait for it before asserting the body did not run a second time.
+        for expected_attempts in (2, 3):
+            DBOS._recover_pending_workflows([GlobalParams.executor_id])
+
+            def dequeued(expected: int = expected_attempts) -> None:
+                status = DBOS.get_workflow_status(wfuuid)
+                assert status is not None
+                assert status.recovery_attempts == expected
+                assert status.status == WorkflowStatusString.PENDING.value
+
+            retry_until_success(dequeued)
+            assert start_count == 1
+    finally:
+        blocker.set()
+
     assert handle.get_result() == "done"
     assert start_count == 1
 

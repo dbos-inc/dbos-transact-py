@@ -1838,6 +1838,40 @@ async def test_simple_queue_async(dbos: DBOS) -> None:
     assert step_counter == 1
 
 
+def test_enqueue_options_require_a_queue(dbos: DBOS) -> None:
+    # Every enqueue option is interpreted by the queue machinery alone, so setting
+    # one without a queue silently does nothing -- and persisting it is unsafe: a
+    # dedup ID becomes a constraint violation once anything assigns the row a queue
+    # name (e.g. recovery), and a pinned app version hides the row from recovery.
+
+    @DBOS.workflow()
+    def test_workflow(var: str) -> str:
+        return var
+
+    for option in (
+        {"deduplication_id": "dedup_without_queue"},
+        {"priority": 5},
+        {"app_version": "some_other_version"},
+        {"queue_partition_key": "key_without_queue"},
+        {"delay_seconds": 30},
+    ):
+        with pytest.raises(DBOSException) as exc_info:
+            with SetEnqueueOptions(**option):
+                DBOS.start_workflow(test_workflow, "bob")
+        message = str(exc_info.value)
+        assert "not being enqueued" in message
+        assert next(iter(option)) in message
+
+    # A direct invocation never carries enqueue options, so it is unaffected and
+    # must keep working -- and must not persist any of them either.
+    wfid = str(uuid.uuid4())
+    with SetEnqueueOptions(deduplication_id="dedup_without_queue", priority=5):
+        with SetWorkflowID(wfid):
+            assert test_workflow("bob") == "bob"
+    status = DBOS.get_workflow_status(wfid)
+    assert status is not None and status.deduplication_id is None
+
+
 def test_queue_deduplication(dbos: DBOS) -> None:
     queue_name = "test_dedup_queue"
     DBOS.register_queue(queue_name)
