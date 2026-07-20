@@ -12,7 +12,7 @@ from psycopg import errors
 from sqlalchemy.exc import OperationalError
 
 from dbos._context import DBOSContext, get_local_dbos_context
-from dbos._error import DBOSException, DBOSWorkflowFunctionNotFoundError
+from dbos._error import DBOSException
 from dbos._logger import dbos_logger
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 
@@ -437,21 +437,6 @@ class Queue:
         )
 
 
-def _dispatch_dequeued_workflow(dbos: "DBOS", workflow_id: str) -> None:
-    """Start a workflow this thread just dequeued, returning it to the queue if
-    it cannot run yet.
-    """
-    try:
-        execute_workflow_by_id(dbos, workflow_id, False, True)
-    except DBOSWorkflowFunctionNotFoundError as e:
-        # The function may register later (e.g. a configured instance constructed
-        # after launch), so re-enqueue instead of leaving the row stuck PENDING.
-        dbos.logger.warning(f"Error executing workflow {workflow_id}: {e.message}")
-        dbos._sys_db.requeue_dequeued_workflow(workflow_id)
-    except Exception as e:
-        dbos.logger.error(f"Error executing workflow {workflow_id}: {e}")
-
-
 def queue_worker_thread(
     stop_event: threading.Event, dbos: "DBOS", queue: Queue
 ) -> None:
@@ -509,7 +494,10 @@ def queue_worker_thread(
                             continue
                         raise
                     for id in dequeued_workflows:
-                        _dispatch_dequeued_workflow(dbos, id)
+                        try:
+                            execute_workflow_by_id(dbos, id, False, True)
+                        except Exception as e:
+                            dbos.logger.error(f"Error executing workflow {id}: {e}")
             else:
                 local_running_count = dbos._active_workflows_set.count_for_queue(
                     queue.name, None
@@ -522,7 +510,10 @@ def queue_worker_thread(
                     local_running_count,
                 )
                 for id in dequeued_workflows:
-                    _dispatch_dequeued_workflow(dbos, id)
+                    try:
+                        execute_workflow_by_id(dbos, id, False, True)
+                    except Exception as e:
+                        dbos.logger.error(f"Error executing workflow {id}: {e}")
         except OperationalError as e:
             if isinstance(e.orig, errors.LockNotAvailable):
                 # Another worker is dequeueing this queue right now; retry next

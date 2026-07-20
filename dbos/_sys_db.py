@@ -4062,25 +4062,6 @@ class SystemDatabase(ABC):
             )
             return res.rowcount > 0
 
-    @db_retry()
-    def requeue_dequeued_workflow(self, workflow_id: str) -> None:
-        """Return a workflow this executor just dequeued to its queue, to be
-        retried on a later poll.
-        """
-        with self.engine.begin() as c:
-            c.execute(
-                sa.update(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
-                .where(SystemSchema.workflow_status.c.queue_name.isnot(None))
-                .where(
-                    SystemSchema.workflow_status.c.status
-                    == WorkflowStatusString.PENDING.value
-                )
-                .values(
-                    status=WorkflowStatusString.ENQUEUED.value, started_at_epoch_ms=None
-                )
-            )
-
     T = TypeVar("T")
 
     def call_function_as_step(
