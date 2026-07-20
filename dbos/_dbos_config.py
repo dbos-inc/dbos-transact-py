@@ -50,7 +50,7 @@ class DBOSConfig(TypedDict, total=False):
         notification_listener_polling_interval_sec (float): Polling interval in seconds for the notification listener background process. Defaults to 1.0. Minimum value is 0.001. Lower values can speed up test execution.
         notification_coalesce_sec (float): Interval in seconds for coalescing LISTEN/NOTIFY notifications (streams and events) pushed off the write path. Bounds read latency and caps the rate of notifying commits independent of write throughput. Defaults to 0.01. Minimum value is 0.001.
         scheduler_polling_interval_sec (float): Polling interval in seconds for the scheduler thread to detect new workflow schedules. Defaults to 30.0.
-        kafka_queue_polling_interval_sec (float): Polling interval in seconds for the internal queues on which Kafka consumer workflows run (_dbos_kafka_queue and _dbos_kafka_ordered_queue). Defaults to 1.0. Minimum value is 0.001. Raise it to reduce system database contention when many processes consume the same topics. A consumer's custom queue is configured on the queue itself instead.
+        kafka_queue_polling_interval_sec (float): Polling interval in seconds for the internal queues on which Kafka consumer workflows run (_dbos_kafka_queue and _dbos_kafka_ordered_queue). Defaults to 1.0. Minimum value is 0.001.
         otel_attribute_format (Literal["legacy", "semconv"]): How span attribute names are emitted to OTLP.
             "legacy" (default) keeps DBOS's original names (e.g. operationUUID, applicationID) for backward
             compatibility with existing dashboards and the TypeScript Transact SDK. "semconv" emits the
