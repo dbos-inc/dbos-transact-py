@@ -1848,13 +1848,14 @@ def test_enqueue_options_require_a_queue(dbos: DBOS) -> None:
     def test_workflow(var: str) -> str:
         return var
 
-    for option in (
+    options: List[dict[str, Any]] = [
         {"deduplication_id": "dedup_without_queue"},
         {"priority": 5},
         {"app_version": "some_other_version"},
         {"queue_partition_key": "key_without_queue"},
         {"delay_seconds": 30},
-    ):
+    ]
+    for option in options:
         with pytest.raises(DBOSException) as exc_info:
             with SetEnqueueOptions(**option):
                 DBOS.start_workflow(test_workflow, "bob")
