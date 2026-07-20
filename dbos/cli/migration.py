@@ -122,78 +122,56 @@ def grant_dbos_schema_permissions(
             engine.dispose()
 
 
-def _get_current_dbos_schema_version(
-    system_database_url: str, schema: str
-) -> Optional[int]:
-    """Read the current DBOS schema version with read-only queries.
-
-    Returns 0 if the schema or dbos_migrations table is missing or empty
-    (fresh database), and None if no connection could be established."""
-    engine = None
-    try:
-        engine = sa.create_engine(
-            sa.make_url(system_database_url).set(drivername="postgresql+psycopg"),
-            connect_args={"connect_timeout": 10},
-        )
-        with engine.connect() as conn:
-            table_exists = conn.execute(
-                sa.text(
-                    "SELECT 1 FROM information_schema.tables "
-                    "WHERE table_schema = :schema AND table_name = 'dbos_migrations'"
-                ),
-                {"schema": schema},
-            ).fetchone()
-            if table_exists is None:
-                return 0
-            row = conn.execute(
-                sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
-            ).fetchone()
-            return int(row[0]) if row else 0
-    except Exception:
-        return None
-    finally:
-        if engine:
-            engine.dispose()
+def _check_printable_identifier(name: str, kind: str) -> None:
+    # The execute path interpolates these names into quoted identifiers and
+    # string literals, so names containing quotes fail there too.
+    if '"' in name or "'" in name:
+        typer.echo(f"{kind} names containing quotes are not supported", err=True)
+        raise typer.Exit(code=1)
 
 
-def print_dbos_database_migrations(
+def _emit_sql(sql: str) -> None:
+    sql = sql.strip()
+    if sql:
+        typer.echo(sql if sql.endswith(";") else sql + ";")
+
+
+def print_dbos_migrations(
     system_database_url: str,
     *,
     schema: str = "dbos",
-    application_role: Optional[str] = None,
+    migration: str = "all",
 ) -> None:
-    """Print to stdout the SQL that DBOS migrations would execute, without
-    writing to any database. If the system database is reachable, only the
-    migrations past its current version are printed; otherwise a full
-    fresh-database script is printed. Stdout is pure SQL and comments."""
+    """Print to stdout the SQL of one DBOS system database migration
+    (migration is a number) or all of them (migration is "all"), without
+    touching any database. Stdout is pure SQL and comments."""
     if system_database_url.startswith("sqlite"):
-        typer.echo("--print-only is only supported for Postgres databases", err=True)
+        typer.echo(
+            "--print-migrations is only supported for Postgres databases", err=True
+        )
         raise typer.Exit(code=1)
-    # The execute path interpolates the schema into quoted identifiers and
-    # string literals, so names containing quotes fail there too.
-    if '"' in schema or "'" in schema:
-        typer.echo("Schema names containing quotes are not supported", err=True)
-        raise typer.Exit(code=1)
+    _check_printable_identifier(schema, "Schema")
 
     migrations = get_dbos_migrations(schema, use_listen_notify=True)
     latest_version = len(migrations)
-
-    # If the database is unreachable, silently fall back to a fresh-database
-    # script: the apply-time guard below protects against misuse.
-    current_version = _get_current_dbos_schema_version(system_database_url, schema)
-    if current_version is None:
-        current_version = 0
-
-    if current_version >= latest_version:
-        typer.echo(
-            f"-- Database is already at the latest DBOS schema version ({current_version}); nothing to do."
-        )
-        return
-
-    def emit(sql: str) -> None:
-        sql = sql.strip()
-        if sql:
-            typer.echo(sql if sql.endswith(";") else sql + ";")
+    if migration == "all":
+        start, end = 1, latest_version
+    else:
+        try:
+            start = int(migration)
+        except ValueError:
+            typer.echo(
+                f"Invalid --print-migrations value '{migration}': expected 'all' or a migration number",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        if not 1 <= start <= latest_version:
+            typer.echo(
+                f"Migration {start} does not exist: valid migrations are 1 through {latest_version}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        end = start
 
     typer.echo(
         f"-- DBOS system database migrations for {sa.make_url(system_database_url)}"
@@ -201,16 +179,16 @@ def print_dbos_database_migrations(
     typer.echo(
         "-- Contains CREATE/DROP INDEX CONCURRENTLY: run outside a transaction block (e.g. plain psql, not psql --single-transaction)."
     )
-    if current_version == 0:
+    if start == 1:
         typer.echo(
             "-- This script is for FRESH databases only and aborts if DBOS migrations were already applied."
         )
-        emit(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
-        emit(
+        _emit_sql(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+        _emit_sql(
             f'CREATE TABLE IF NOT EXISTS "{schema}".dbos_migrations (version BIGINT NOT NULL PRIMARY KEY)'
         )
         typer.echo("-- Abort if this is not a fresh database")
-        emit(f"""DO $$
+        _emit_sql(f"""DO $$
 DECLARE
     existing_version BIGINT;
 BEGIN
@@ -220,26 +198,20 @@ BEGIN
     END IF;
 END $$""")
     else:
-        typer.echo(
-            f"-- Delta script: migrations {current_version + 1} through {latest_version}, generated for a database at version {current_version}."
-        )
-        typer.echo(
-            f"-- Abort unless the database is exactly at version {current_version}"
-        )
-        emit(f"""DO $$
+        typer.echo(f"-- Abort unless the database is exactly at version {start - 1}")
+        _emit_sql(f"""DO $$
 DECLARE
     v BIGINT;
 BEGIN
     SELECT version INTO v FROM "{schema}".dbos_migrations LIMIT 1;
-    IF v IS DISTINCT FROM {current_version} THEN
-        RAISE EXCEPTION 'expected DBOS schema version {current_version}, found %; regenerate this script with dbos migrate --print-only', v;
+    IF v IS DISTINCT FROM {start - 1} THEN
+        RAISE EXCEPTION 'expected DBOS schema version {start - 1}, found %', v;
     END IF;
 END $$""")
 
-    version_row_exists = current_version > 0
-    for i, migration_sql in enumerate(migrations, 1):
-        if i <= current_version:
-            continue
+    version_row_exists = start > 1
+    for i in range(start, end + 1):
+        migration_sql = migrations[i - 1]
         if migration_sql.strip():
             typer.echo(f"-- Migration {i}")
             if i == 10:
@@ -249,22 +221,28 @@ END $$""")
                 typer.echo(
                     "-- Applied only if the notifications table has no primary key, mirroring the migration runner's guard"
                 )
-                emit(f"""DO $$
+                _emit_sql(f"""DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema = '{schema}' AND table_name = 'notifications' AND constraint_type = 'PRIMARY KEY') THEN
         {migration_sql.strip()}
     END IF;
 END $$""")
             else:
-                emit(migration_sql)
+                _emit_sql(migration_sql)
         # Per-migration version bookkeeping, mirroring the runner: an
-        # interrupted apply can be resumed by regenerating the delta.
+        # interrupted apply can be resumed from the next migration number.
         if version_row_exists:
-            emit(f'UPDATE "{schema}".dbos_migrations SET version = {i}')
+            _emit_sql(f'UPDATE "{schema}".dbos_migrations SET version = {i}')
         else:
-            emit(f'INSERT INTO "{schema}".dbos_migrations (version) VALUES ({i})')
+            _emit_sql(f'INSERT INTO "{schema}".dbos_migrations (version) VALUES ({i})')
             version_row_exists = True
-    if application_role:
-        typer.echo(f"-- Permissions for role {application_role}")
-        for sql in get_dbos_schema_permissions_sql(schema, application_role):
-            emit(sql)
+
+
+def print_dbos_user_role_sql(*, schema: str = "dbos", role_name: str) -> None:
+    """Print to stdout the SQL granting an application role access to the DBOS
+    system schema, without touching any database."""
+    _check_printable_identifier(schema, "Schema")
+    _check_printable_identifier(role_name, "Role")
+    typer.echo(f"-- Permissions on DBOS schema {schema} for role {role_name}")
+    for sql in get_dbos_schema_permissions_sql(schema, role_name):
+        _emit_sql(sql)

@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pytest
 import sqlalchemy as sa
+import typer
 
 # Public API
 from dbos import DBOS, DBOSConfig, run_dbos_database_migrations
@@ -15,7 +16,7 @@ from dbos._migration import get_dbos_migrations, should_migrate, sqlite_migratio
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
-from dbos.cli.migration import print_dbos_database_migrations
+from dbos.cli.migration import print_dbos_migrations, print_dbos_user_role_sql
 
 
 def test_systemdb_migration(dbos: DBOS, skip_with_sqlite: None) -> None:
@@ -722,13 +723,13 @@ def test_runner_resumes_after_invalid_index(dbos: DBOS, skip_with_sqlite: None) 
         assert version == final_version
 
 
-def test_migrate_print_only(
+def test_migrate_print_migrations_all(
     db_engine: sa.Engine,
     skip_with_sqlite: None,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Test that --print-only emits complete SQL that psql can apply to a fresh database."""
-    database_name = "print_only_test"
+    """--print-migrations all emits a complete fresh-database script that psql can apply."""
+    database_name = "print_migrations_test"
     db_url = db_engine.url.set(database=database_name).set(drivername="postgresql")
     db_url_string = db_url.render_as_string(hide_password=False)
     latest_version = len(get_dbos_migrations("dbos", True))
@@ -739,33 +740,36 @@ def test_migrate_print_only(
             sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
         )
 
-    # Printing works without a reachable database and includes grants for the role
-    print_dbos_database_migrations(
-        db_url_string,
-        schema="dbos",
-        application_role="print-only-role",
-    )
-    out = capsys.readouterr().out
-    assert 'CREATE SCHEMA IF NOT EXISTS "dbos";' in out
-    assert 'INSERT INTO "dbos".dbos_migrations (version) VALUES (1);' in out
-    assert f'UPDATE "dbos".dbos_migrations SET version = {latest_version};' in out
-    assert 'GRANT USAGE ON SCHEMA "dbos" TO "print-only-role";' in out
-    for line in out.splitlines():
+    # Printing needs no reachable database; stdout is pure SQL and comments
+    print_dbos_migrations(db_url_string, schema="dbos", migration="all")
+    sql = capsys.readouterr().out
+    assert 'CREATE SCHEMA IF NOT EXISTS "dbos";' in sql
+    assert "-- Abort if this is not a fresh database" in sql
+    assert 'INSERT INTO "dbos".dbos_migrations (version) VALUES (1);' in sql
+    assert f'UPDATE "dbos".dbos_migrations SET version = {latest_version};' in sql
+    # Role grants are only printed by --print-user-role
+    assert "GRANT" not in sql
+    for line in sql.splitlines():
         assert line.startswith("--") or not line.startswith(
             ("Starting", "Granting", "System database")
         )
 
+    # The CLI path prints the same script and exits cleanly, even though the
+    # database is unreachable
+    result = subprocess.run(
+        ["dbos", "migrate", "-s", db_url_string, "--print-migrations", "all"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert 'CREATE SCHEMA IF NOT EXISTS "dbos";' in result.stdout
+
     if shutil.which("psql") is None:
         pytest.skip("psql not available")
 
-    # Print without a role (the role does not exist) and apply the SQL to a fresh database
-    print_dbos_database_migrations(db_url_string, schema="dbos")
-    sql = capsys.readouterr().out
     with db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
-        connection.execute(
-            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
-        )
         connection.execute(sa.text(f"CREATE DATABASE {database_name}"))
 
     with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
@@ -804,13 +808,13 @@ def test_migrate_print_only(
         )
 
 
-def test_migrate_print_only_custom_schema(
+def test_migrate_print_migrations_custom_schema(
     db_engine: sa.Engine,
     skip_with_sqlite: None,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """--print-only must quote identifiers correctly for unusual schema names."""
-    database_name = "print_only_schema_test"
+    """--print-migrations must quote identifiers correctly for unusual schema names."""
+    database_name = "print_migrations_schema_test"
     schema = "F8nny_sCHem@-n@m3"
     db_url = db_engine.url.set(database=database_name).set(drivername="postgresql")
     db_url_string = db_url.render_as_string(hide_password=False)
@@ -822,7 +826,7 @@ def test_migrate_print_only_custom_schema(
             sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
         )
 
-    print_dbos_database_migrations(db_url_string, schema=schema)
+    print_dbos_migrations(db_url_string, schema=schema, migration="all")
     sql = capsys.readouterr().out
     assert f'CREATE SCHEMA IF NOT EXISTS "{schema}";' in sql
     assert (
@@ -841,12 +845,21 @@ def test_migrate_print_only_custom_schema(
 
     # Schema names containing quotes are rejected
     with pytest.raises(Exception):
-        print_dbos_database_migrations(db_url_string, schema='bad"schema')
+        print_dbos_migrations(db_url_string, schema='bad"schema', migration="all")
     capsys.readouterr()
 
     # The CLI flag path accepts the funny schema name
     cli_out = subprocess.check_output(
-        ["dbos", "migrate", "-s", db_url_string, "--schema", schema, "--print-only"],
+        [
+            "dbos",
+            "migrate",
+            "-s",
+            db_url_string,
+            "--schema",
+            schema,
+            "--print-migrations",
+            "all",
+        ],
         text=True,
     )
     assert f'CREATE SCHEMA IF NOT EXISTS "{schema}";' in cli_out
@@ -856,9 +869,6 @@ def test_migrate_print_only_custom_schema(
 
     with db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
-        connection.execute(
-            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
-        )
         connection.execute(sa.text(f"CREATE DATABASE {database_name}"))
 
     with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
@@ -912,44 +922,58 @@ def test_migrate_print_only_custom_schema(
         )
 
 
-def test_migrate_print_only_connection_failure(skip_with_sqlite: None) -> None:
-    """An unreachable database silently falls back to the full fresh script:
-    stdout is pure SQL/comments, stderr is empty, and the exit code is 0."""
-    unreachable_url = "postgresql://postgres:x@127.0.0.1:1/no_such_db"
-    result = subprocess.run(
-        ["dbos", "migrate", "-s", unreachable_url, "--print-only"],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0
-    assert result.stderr == ""
-    assert 'CREATE SCHEMA IF NOT EXISTS "dbos";' in result.stdout
-    assert "-- Abort if this is not a fresh database" in result.stdout
-    latest_version = len(get_dbos_migrations("dbos", True))
-    assert f'UPDATE "dbos".dbos_migrations SET version = {latest_version};' in (
-        result.stdout
-    )
-    for line in result.stdout.splitlines():
-        assert not line.startswith(("Starting", "Granting", "System database"))
-
-
-def test_migrate_print_only_delta(
+def test_migrate_print_single_migration(
     db_engine: sa.Engine,
     skip_with_sqlite: None,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Against a reachable database at version N, --print-only emits a delta
-    script covering only migrations N+1..latest, guarded on version N."""
+    """--print-migrations N emits one migration, guarded on version N-1."""
+    database_name = "print_single_migration_test"
+    db_url = db_engine.url.set(database=database_name).set(drivername="postgresql")
+    db_url_string = db_url.render_as_string(hide_password=False)
+    migrations = get_dbos_migrations("dbos", True)
+    latest_version = len(migrations)
+
+    # Invalid selections are rejected
+    for bad in ["0", str(latest_version + 1), "-1", "foo"]:
+        with pytest.raises(typer.Exit):
+            print_dbos_migrations(db_url_string, schema="dbos", migration=bad)
+    capsys.readouterr()
+    result = subprocess.run(
+        ["dbos", "migrate", "-s", db_url_string, "--print-migrations", "nope"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "expected 'all' or a migration number" in result.stderr
+
+    # Migration 1 includes the fresh-database prelude and abort guard
+    print_dbos_migrations(db_url_string, schema="dbos", migration="1")
+    out = capsys.readouterr().out
+    assert 'CREATE SCHEMA IF NOT EXISTS "dbos";' in out
+    assert "-- Abort if this is not a fresh database" in out
+    assert "-- Migration 1" in out.splitlines()
+    assert 'INSERT INTO "dbos".dbos_migrations (version) VALUES (1);' in out
+    assert "-- Migration 2" not in out
+
+    # Migration 10 keeps the runner's primary-key guard and a version guard
+    print_dbos_migrations(db_url_string, schema="dbos", migration="10")
+    out = capsys.readouterr().out
+    assert "IF v IS DISTINCT FROM 9 THEN" in out
+    assert "table_constraints" in out
+    assert 'UPDATE "dbos".dbos_migrations SET version = 10;' in out
+    assert "CREATE SCHEMA" not in out
+    assert "-- Migration 9" not in out
+    assert "-- Migration 11" not in out
+
     if shutil.which("psql") is None:
         pytest.skip("psql not available")
 
-    database_name = "print_only_delta_test"
-    schema = "F8nny_sCHem@-n@m3"
-    db_url = db_engine.url.set(database=database_name).set(drivername="postgresql")
-    db_url_string = db_url.render_as_string(hide_password=False)
-    migrations = get_dbos_migrations(schema, True)
-    latest_version = len(migrations)
-    delta_from = latest_version - 5
+    # Bring a fresh database to version latest-1 by truncating the full script
+    print_dbos_migrations(db_url_string, schema="dbos", migration="all")
+    full = capsys.readouterr().out
+    marker = f'UPDATE "dbos".dbos_migrations SET version = {latest_version - 1};'
+    partial = full[: full.index(marker) + len(marker)] + "\n"
 
     with db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
@@ -957,44 +981,29 @@ def test_migrate_print_only_delta(
             sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
         )
         connection.execute(sa.text(f"CREATE DATABASE {database_name}"))
-
-    # The database is reachable but empty, so this still prints the fresh script
-    print_dbos_database_migrations(db_url_string, schema=schema)
-    sql = capsys.readouterr().out
-    assert "FRESH databases only" in sql
-
-    # Build a genuinely partial database: apply the fresh script only up
-    # through migration delta_from's version bookkeeping
-    marker = f'UPDATE "{schema}".dbos_migrations SET version = {delta_from};'
-    partial_sql = sql[: sql.index(marker) + len(marker)] + "\n"
     with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
-        f.write(partial_sql)
+        f.write(partial)
         f.flush()
         subprocess.check_call(
             ["psql", db_url_string, "-v", "ON_ERROR_STOP=1", "-q", "-f", f.name]
         )
 
-    # The CLI now prints a delta script for migrations delta_from+1..latest
-    delta = subprocess.check_output(
-        ["dbos", "migrate", "-s", db_url_string, "--schema", schema, "--print-only"],
+    # The last migration printed alone applies on top of version latest-1
+    single = subprocess.check_output(
+        [
+            "dbos",
+            "migrate",
+            "-s",
+            db_url_string,
+            "--print-migrations",
+            str(latest_version),
+        ],
         text=True,
     )
-    lines = delta.splitlines()
-    assert f"IF v IS DISTINCT FROM {delta_from} THEN" in delta
-    assert "CREATE SCHEMA" not in delta
-    assert f'INSERT INTO "{schema}".dbos_migrations' not in delta
-    # Migration 10's conditional block only appears when 10 is in range
-    assert "table_constraints" not in delta
-    for i in range(1, delta_from + 1):
-        assert f"-- Migration {i}" not in lines
-    for i in range(delta_from + 1, latest_version + 1):
-        if migrations[i - 1].strip():
-            assert f"-- Migration {i}" in lines
-        assert f'UPDATE "{schema}".dbos_migrations SET version = {i};' in lines
-
-    # Applying the delta brings the database to the latest version
+    assert f"IF v IS DISTINCT FROM {latest_version - 1} THEN" in single
+    assert "CREATE SCHEMA" not in single
     with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
-        f.write(delta)
+        f.write(single)
         f.flush()
         subprocess.check_call(
             ["psql", db_url_string, "-v", "ON_ERROR_STOP=1", "-q", "-f", f.name]
@@ -1002,31 +1011,18 @@ def test_migrate_print_only_delta(
 
     engine = sa.create_engine(db_url.set(drivername="postgresql+psycopg"))
     try:
-        assert should_migrate(engine, schema, True) is False
+        assert should_migrate(engine, "dbos", True) is False
         with engine.connect() as conn:
             version = conn.execute(
-                sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+                sa.text('SELECT version FROM "dbos".dbos_migrations')
             ).scalar()
             assert version == latest_version
     finally:
         engine.dispose()
 
-    # An up-to-date database prints only the nothing-to-do comment
-    up_to_date = subprocess.check_output(
-        ["dbos", "migrate", "-s", db_url_string, "--schema", schema, "--print-only"],
-        text=True,
-    )
-    assert (
-        f"-- Database is already at the latest DBOS schema version ({latest_version}); nothing to do."
-        in up_to_date
-    )
-    assert "CREATE" not in up_to_date
-    assert "UPDATE" not in up_to_date
-
-    # A delta generated for version delta_from must fail fast against a
-    # database at a different version
+    # Its guard makes re-applying it fail fast
     with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
-        f.write(delta)
+        f.write(single)
         f.flush()
         with pytest.raises(subprocess.CalledProcessError):
             subprocess.check_call(
@@ -1039,3 +1035,70 @@ def test_migrate_print_only_delta(
         connection.execute(
             sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
         )
+
+
+def test_migrate_print_user_role(
+    skip_with_sqlite: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--print-user-role prints the role grant SQL and requires --app-role."""
+    # No database is contacted, so an unreachable URL works
+    unreachable_url = "postgresql://postgres:x@127.0.0.1:1/no_such_db"
+
+    result = subprocess.run(
+        ["dbos", "migrate", "-s", unreachable_url, "--print-user-role"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "--app-role" in result.stderr
+
+    result = subprocess.run(
+        [
+            "dbos",
+            "migrate",
+            "-s",
+            unreachable_url,
+            "--print-user-role",
+            "-r",
+            "my-app-role",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert 'GRANT USAGE ON SCHEMA "dbos" TO "my-app-role";' in result.stdout
+    assert (
+        'ALTER DEFAULT PRIVILEGES IN SCHEMA "dbos" GRANT EXECUTE ON FUNCTIONS TO "my-app-role";'
+        in result.stdout
+    )
+    for line in result.stdout.splitlines():
+        assert line.startswith(("--", "GRANT", "ALTER"))
+
+    # Role names containing quotes are rejected
+    with pytest.raises(typer.Exit):
+        print_dbos_user_role_sql(schema="dbos", role_name='bad"role')
+    capsys.readouterr()
+
+    # Combined with --print-migrations, migrations come first, then grants
+    result = subprocess.run(
+        [
+            "dbos",
+            "migrate",
+            "-s",
+            unreachable_url,
+            "--print-migrations",
+            "all",
+            "--print-user-role",
+            "-r",
+            "my-app-role",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert 'CREATE SCHEMA IF NOT EXISTS "dbos";' in result.stdout
+    assert result.stdout.index('CREATE SCHEMA IF NOT EXISTS "dbos";') < (
+        result.stdout.index('GRANT USAGE ON SCHEMA "dbos" TO "my-app-role";')
+    )

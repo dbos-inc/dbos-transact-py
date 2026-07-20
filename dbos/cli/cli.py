@@ -13,7 +13,8 @@ import typer
 
 from dbos._context import SetWorkflowID
 from dbos.cli.migration import (
-    print_dbos_database_migrations,
+    print_dbos_migrations,
+    print_dbos_user_role_sql,
     run_dbos_database_migrations,
 )
 
@@ -284,11 +285,19 @@ def migrate(
             help='Schema name for DBOS system tables. Defaults to "dbos".',
         ),
     ] = "dbos",
-    print_only: Annotated[
+    print_migrations: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--print-migrations",
+            metavar="[all|NUMBER]",
+            help="Print the SQL of one migration ('--print-migrations 3') or all of them ('--print-migrations all') instead of running them",
+        ),
+    ] = None,
+    print_user_role: Annotated[
         bool,
         typer.Option(
-            "--print-only",
-            help="Print the migration SQL without executing anything against the database",
+            "--print-user-role",
+            help="Print the SQL granting the application role (--app-role) access to DBOS system tables instead of executing it",
         ),
     ] = False,
 ) -> None:
@@ -299,17 +308,24 @@ def migrate(
     if schema is None:
         schema = "dbos"
 
-    if print_only:
-        print_dbos_database_migrations(
-            system_database_url=system_database_url,
-            schema=schema,
-            application_role=application_role,
-        )
+    if print_migrations is not None or print_user_role:
+        if print_user_role and application_role is None:
+            typer.echo("--print-user-role requires --app-role", err=True)
+            raise typer.Exit(code=1)
+        if print_migrations is not None:
+            print_dbos_migrations(
+                system_database_url=system_database_url,
+                schema=schema,
+                migration=print_migrations,
+            )
+        if print_user_role:
+            assert application_role is not None
+            print_dbos_user_role_sql(schema=schema, role_name=application_role)
         if os.path.exists("dbos-config.yaml"):
             config = load_config(silent=True)
             if "database" in config and config["database"].get("migrate"):
                 typer.echo(
-                    "Warning: skipping migration commands from 'dbos-config.yaml' in --print-only mode",
+                    "Warning: skipping migration commands from 'dbos-config.yaml' in print mode",
                     err=True,
                 )
         return
