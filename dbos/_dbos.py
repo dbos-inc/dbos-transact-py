@@ -1943,7 +1943,7 @@ class DBOS:
 
     @classmethod
     def _execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
-        """Execute a workflow by ID (for recovery)."""
+        """Execute a workflow by ID directly. Used only in testing."""
         return execute_workflow_by_id(_get_dbos_instance(), workflow_id, True, False)
 
     @classmethod
