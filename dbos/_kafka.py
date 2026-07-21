@@ -111,24 +111,21 @@ def validate_kafka_consumers(dbos: "DBOS") -> None:
 
 
 def _describe_kafka_error(err: "KafkaError") -> str:
-    """Describe a KafkaError without letting confluent-kafka's C-level formatting raise.
+    """Describe a KafkaError as "_TRANSPORT (-195): <detail>", readably and without raising.
 
-    librdkafka delivers many error callbacks per poll and confluent-kafka keeps
-    dispatching them after one raises, so once CPython's error indicator is set,
-    every later C call on a KafkaError -- formatting included -- fails with
-    "SystemError: ... returned a result with an exception set". Catching that
-    clears the indicator, so a later attempt here can still succeed.
+    Every accessor here is a C method, and those raise SystemError whenever
+    CPython's error indicator is already set -- which is how the underlying error
+    used to be lost entirely. Catching clears the indicator, so the fallback still
+    succeeds even when the first attempt did not.
     """
-    describers: tuple[Callable[[], str], ...] = (
-        lambda: f"{err.name()} ({err.code()}): {err.str()}",
-        lambda: repr(err),
-    )
-    for describe in describers:
-        try:
-            return describe()
-        except BaseException:
-            continue
-    return "<KafkaError that could not be formatted>"
+    try:
+        return f"{err.name()} ({err.code()}): {err.str()}"
+    except BaseException:
+        pass
+    try:
+        return repr(err)
+    except BaseException:
+        return "<KafkaError that could not be formatted>"
 
 
 def _make_error_cb(
@@ -145,19 +142,19 @@ def _make_error_cb(
     """
 
     def on_error(err: "KafkaError") -> None:
-        # Never raise: this runs inside librdkafka's callback dispatch, where an exception both discards this error and poisons every later callback in the batch.
+        # One guard around everything, logging included: anything escaping into librdkafka's dispatch discards this error and leaves CPython's error indicator set, which makes every later callback in the batch fail too.
         try:
             dbos_logger.error(
                 f"Kafka consumer {func_name} (group.id {group_id}, topics "
                 f"{', '.join(topics)}) error: {_describe_kafka_error(err)}"
             )
-        except Exception:
+            if user_error_cb is not None:
+                try:
+                    user_error_cb(err)
+                except Exception as e:
+                    dbos_logger.warning(f"Kafka error_cb for {func_name} failed: {e}")
+        except BaseException:
             pass
-        if user_error_cb is not None:
-            try:
-                user_error_cb(err)
-            except Exception as e:
-                dbos_logger.warning(f"Kafka error_cb for {func_name} failed: {e}")
 
     return on_error
 
