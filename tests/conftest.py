@@ -1,6 +1,7 @@
 import asyncio
 import glob
 import os
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -66,15 +67,9 @@ def postgres_urls() -> Tuple[str, str]:
 
 
 def default_config(sqlite_path: Path) -> DBOSConfig:
-    """Build a test config, using sqlite_path when running against SQLite.
-
-    Callers must supply a path unique to the running test. DBOS.destroy
-    abandons workflow threads rather than joining them, so a test can leave a
-    straggler still writing to its database; a per-test file keeps that
-    straggler away from every later test, where it would otherwise corrupt the
-    database through their shared -journal or insert rows into it. Postgres
-    needs no equivalent because DROP DATABASE ... WITH (FORCE) evicts stragglers.
-    """
+    """Build a test config. sqlite_path must be unique per test, since DBOS.destroy
+    leaves workflow threads running and a shared file lets them corrupt the next
+    test's database."""
     application_url, system_url = postgres_urls()
     return {
         "name": "test-app",
@@ -91,8 +86,17 @@ def default_config(sqlite_path: Path) -> DBOSConfig:
 
 @pytest.fixture()
 def sqlite_path(tmp_path: Path) -> Path:
-    """A SQLite database path belonging to the running test alone."""
-    return tmp_path / "test.sqlite"
+    """A SQLite database for this test alone, pre-created in WAL mode so DBOS
+    inherits it from the file header. Under the default rollback journal a writer
+    holds an exclusive lock across its commit, stalling the notification poller
+    for seconds, so recv waiters miss their wakeup and pay their full timeout."""
+    db_path = tmp_path / "test.sqlite"
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA journal_mode=WAL")
+    finally:
+        connection.close()
+    return db_path
 
 
 @pytest.fixture()
