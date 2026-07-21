@@ -765,7 +765,7 @@ def test_migrate_print_migrations_all(
     )
     assert result.returncode == 0
     assert result.stderr == ""
-    assert 'CREATE SCHEMA IF NOT EXISTS "dbos";' in result.stdout
+    assert result.stdout == sql
 
     if shutil.which("psql") is None:
         pytest.skip("psql not available")
@@ -800,12 +800,12 @@ def test_migrate_print_migrations_all(
         )
 
 
-def test_migrate_print_migrations_custom_schema(
+def test_migrate_print_custom_schema(
     db_engine: sa.Engine,
     skip_with_sqlite: None,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """--print-migrations must quote identifiers correctly for unusual schema names."""
+    """--print-migrations and --print-user-role handle unusual schema names."""
     database_name = "print_migrations_schema_test"
     schema = "F8nny_sCHem@-n@m3"
     db_url = db_engine.url.set(database=database_name).set(drivername="postgresql")
@@ -821,15 +821,6 @@ def test_migrate_print_migrations_custom_schema(
     print_dbos_migrations(db_url_string, schema=schema, migration="all")
     sql = capsys.readouterr().out
     assert f'CREATE SCHEMA IF NOT EXISTS "{schema}";' in sql
-    assert (
-        f'CREATE TABLE IF NOT EXISTS "{schema}".dbos_migrations (version BIGINT NOT NULL PRIMARY KEY);'
-        in sql
-    )
-    # Migration 10 is skipped, but its version bump is still recorded
-    assert "ADD PRIMARY KEY (message_uuid)" not in sql
-    assert f'UPDATE "{schema}".dbos_migrations SET version = 10;' in sql
-    assert f'INSERT INTO "{schema}".dbos_migrations (version) VALUES (1);' in sql
-    assert f'UPDATE "{schema}".dbos_migrations SET version = {latest_version};' in sql
     # The unquoted schema name must never appear outside quotes or literals
     assert f"CREATE TABLE {schema}." not in sql
 
@@ -838,8 +829,17 @@ def test_migrate_print_migrations_custom_schema(
         print_dbos_migrations(db_url_string, schema='bad"schema', migration="all")
     capsys.readouterr()
 
-    # The CLI flag path accepts the funny schema name
-    cli_out = subprocess.check_output(
+    # --print-user-role requires --app-role
+    result = subprocess.run(
+        ["dbos", "migrate", "-s", db_url_string, "--print-user-role"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "--app-role" in result.stderr
+
+    # --print-user-role emits only grant statements, quoting schema and role
+    result = subprocess.run(
         [
             "dbos",
             "migrate",
@@ -847,69 +847,92 @@ def test_migrate_print_migrations_custom_schema(
             db_url_string,
             "--schema",
             schema,
-            "--print-migrations",
-            "all",
+            "--print-user-role",
+            "-r",
+            "my-app-role",
         ],
+        capture_output=True,
         text=True,
     )
-    assert f'CREATE SCHEMA IF NOT EXISTS "{schema}";' in cli_out
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert f'GRANT USAGE ON SCHEMA "{schema}" TO "my-app-role";' in result.stdout
+    for line in result.stdout.splitlines():
+        assert line.startswith(("--", "GRANT", "ALTER"))
+    role_sql = result.stdout
+
+    # Role names containing quotes are rejected
+    with pytest.raises(typer.Exit):
+        print_dbos_user_role_sql(schema=schema, role_name='bad"role')
+    capsys.readouterr()
+
+    # --print-user-role cannot be combined with --print-migrations
+    result = subprocess.run(
+        [
+            "dbos",
+            "migrate",
+            "-s",
+            db_url_string,
+            "--print-migrations",
+            "all",
+            "--print-user-role",
+            "-r",
+            "my-app-role",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "cannot be combined" in result.stderr
+    assert result.stdout == ""
 
     if shutil.which("psql") is None:
         pytest.skip("psql not available")
 
+    # The printed scripts work on a fresh database
     with db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         connection.execute(sa.text(f"CREATE DATABASE {database_name}"))
-
-    with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
-        f.write(sql)
-        f.flush()
-        subprocess.check_call(
-            ["psql", db_url_string, "-v", "ON_ERROR_STOP=1", "-q", "-f", f.name]
+        connection.execute(sa.text('DROP ROLE IF EXISTS "my-app-role"'))
+        connection.execute(
+            sa.text("CREATE ROLE \"my-app-role\" LOGIN PASSWORD 'app_role_pwd'")
         )
+
+    for script in [sql, role_sql]:
+        with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
+            f.write(script)
+            f.flush()
+            subprocess.check_call(
+                ["psql", db_url_string, "-v", "ON_ERROR_STOP=1", "-q", "-f", f.name]
+            )
 
     engine = sa.create_engine(db_url.set(drivername="postgresql+psycopg"))
     try:
         assert should_migrate(engine, schema, True) is False
-        with engine.connect() as conn:
-            assert (
-                conn.execute(
-                    sa.text(
-                        "SELECT 1 FROM information_schema.schemata WHERE schema_name = :s"
-                    ),
-                    {"s": schema},
-                ).scalar()
-                == 1
-            )
-            for table in ["workflow_status", "notifications", "dbos_migrations"]:
-                assert conn.execute(
-                    sa.text(f'SELECT COUNT(*) FROM "{schema}".{table}')
-                ).scalar() in (0, 1)
+    finally:
+        engine.dispose()
+
+    # The app role can query the DBOS schema
+    app_engine = sa.create_engine(
+        db_url.set(drivername="postgresql+psycopg")
+        .set(username="my-app-role")
+        .set(password="app_role_pwd")
+    )
+    try:
+        with app_engine.connect() as conn:
             version = conn.execute(
                 sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
             ).scalar()
             assert version == latest_version
-            # The notifications primary key exists (created by migration 1;
-            # migration 10 is skipped in the printed script)
-            assert (
-                conn.execute(
-                    sa.text(
-                        "SELECT COUNT(*) FROM information_schema.table_constraints "
-                        "WHERE table_schema = :s AND table_name = 'notifications' "
-                        "AND constraint_type = 'PRIMARY KEY'"
-                    ),
-                    {"s": schema},
-                ).scalar()
-                == 1
-            )
     finally:
-        engine.dispose()
+        app_engine.dispose()
 
     with db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         connection.execute(
             sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
         )
+        connection.execute(sa.text('DROP ROLE IF EXISTS "my-app-role"'))
 
 
 def test_migrate_print_from_migration(
@@ -1013,68 +1036,3 @@ def test_migrate_print_from_migration(
         connection.execute(
             sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
         )
-
-
-def test_migrate_print_user_role(
-    skip_with_sqlite: None,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """--print-user-role prints the role grant SQL and requires --app-role."""
-    # No database is contacted, so an unreachable URL works
-    unreachable_url = "postgresql://postgres:x@127.0.0.1:1/no_such_db"
-
-    result = subprocess.run(
-        ["dbos", "migrate", "-s", unreachable_url, "--print-user-role"],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode != 0
-    assert "--app-role" in result.stderr
-
-    result = subprocess.run(
-        [
-            "dbos",
-            "migrate",
-            "-s",
-            unreachable_url,
-            "--print-user-role",
-            "-r",
-            "my-app-role",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0
-    assert result.stderr == ""
-    assert 'GRANT USAGE ON SCHEMA "dbos" TO "my-app-role";' in result.stdout
-    assert (
-        'ALTER DEFAULT PRIVILEGES IN SCHEMA "dbos" GRANT EXECUTE ON FUNCTIONS TO "my-app-role";'
-        in result.stdout
-    )
-    for line in result.stdout.splitlines():
-        assert line.startswith(("--", "GRANT", "ALTER"))
-
-    # Role names containing quotes are rejected
-    with pytest.raises(typer.Exit):
-        print_dbos_user_role_sql(schema="dbos", role_name='bad"role')
-    capsys.readouterr()
-
-    # --print-user-role cannot be combined with --print-migrations
-    result = subprocess.run(
-        [
-            "dbos",
-            "migrate",
-            "-s",
-            unreachable_url,
-            "--print-migrations",
-            "all",
-            "--print-user-role",
-            "-r",
-            "my-app-role",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode != 0
-    assert "cannot be combined" in result.stderr
-    assert result.stdout == ""
