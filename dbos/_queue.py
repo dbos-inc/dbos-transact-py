@@ -8,12 +8,12 @@ QueueConflictResolution = Literal[
     "update_if_latest_version", "always_update", "never_update"
 ]
 
-from psycopg import errors
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DBAPIError
 
 from dbos._context import DBOSContext, get_local_dbos_context
 from dbos._error import DBOSException
 from dbos._logger import dbos_logger
+from dbos._pg_errors import get_sqlstate, is_serialization_error
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 
 from ._core import P, R, execute_workflow_by_id, start_workflow, start_workflow_async
@@ -491,9 +491,10 @@ def queue_worker_thread(
                             key,
                             local_running_count,
                         )
-                    except OperationalError as e:
+                    except DBAPIError as e:
                         # Lock held: another worker owns this partition, so skip it; let serialization failures propagate to the outer handler's backoff.
-                        if isinstance(e.orig, errors.LockNotAvailable):
+                        # Classify by SQLSTATE (driver-neutral): pg8000 doesn't map lock-not-available to OperationalError.
+                        if get_sqlstate(e.orig) == "55P03":  # lock_not_available
                             continue
                         raise
                     for id in dequeued_workflows:
@@ -517,14 +518,16 @@ def queue_worker_thread(
                         execute_workflow_by_id(dbos, id, False, True)
                     except Exception as e:
                         dbos.logger.error(f"Error executing workflow {id}: {e}")
-        except OperationalError as e:
-            if isinstance(e.orig, errors.LockNotAvailable):
+        except DBAPIError as e:
+            # Classify by SQLSTATE (driver-neutral), not by exception class: pg8000
+            # maps serialization failures to DatabaseError, not OperationalError.
+            if get_sqlstate(e.orig) == "55P03":  # lock_not_available
                 # Another worker is dequeueing this queue right now; retry next
                 # poll without backing off.
                 dbos.logger.debug(
                     f"Queue {queue.name} is locked by another worker; retrying next poll."
                 )
-            elif isinstance(e.orig, errors.SerializationFailure):
+            elif is_serialization_error(e):  # 40001 / 40P01
                 # If a serialization error is encountered, increase the polling interval
                 polling_interval = min(
                     max_polling_interval,
@@ -533,7 +536,7 @@ def queue_worker_thread(
                 dbos.logger.warning(
                     f"Contention detected in queue thread for {queue.name}. Increasing polling interval to {polling_interval:.2f}."
                 )
-            else:
+            elif not stop_event.is_set():
                 dbos.logger.warning(
                     f"Exception encountered in queue thread for {queue.name}: {e}"
                 )

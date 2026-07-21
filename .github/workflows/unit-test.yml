@@ -112,3 +112,56 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         DBOS_DATABASE: ${{ matrix.dbos-database }}
         DBOS_COCKROACHDB_URL: cockroachdb://root@localhost:26257/postgres
+
+  # Prove the PostgreSQL error-classification layer is driver-neutral: install
+  # everything, uninstall psycopg, then run the pg8000-only tests against Postgres.
+  # If test_pg8000.py ever imports psycopg (directly or transitively), this fails.
+  pg8000-no-psycopg:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: sibedge/postgres-plv8
+        env:
+          POSTGRES_PASSWORD: a!b@c$d()e*_,/:;=?@ff[]22
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        fetch-tags: true
+
+    - name: Setup PDM
+      uses: pdm-project/setup-pdm@v4
+      with:
+        python-version: '3.12'
+        architecture: 'x64'
+
+    - name: Install Dependencies
+      run: pdm install
+      working-directory: ./
+
+    - name: Uninstall psycopg (simulate a driver-optional install)
+      # PDM builds its venv without pip, so bootstrap pip before uninstalling.
+      run: |
+        pdm run python -m ensurepip
+        pdm run python -m pip uninstall -y psycopg psycopg-binary
+      working-directory: ./
+
+    - name: Verify psycopg is absent
+      run: pdm run python -c "import importlib.util; assert importlib.util.find_spec('psycopg') is None, 'psycopg still importable'"
+      working-directory: ./
+
+    - name: Run pg8000 tests without psycopg
+      run: pdm run pytest tests/test_pg8000.py -v
+      working-directory: ./
+      timeout-minutes: 10
+      env:
+        PGPASSWORD: a!b@c$d()e*_,/:;=?@ff[]22
+        DBOS_DATABASE: POSTGRES

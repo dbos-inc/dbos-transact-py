@@ -1,13 +1,13 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, TypedDict
 
-import psycopg
 import sqlalchemy as sa
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from dbos._migration import get_sqlite_timestamp_expr
+from dbos._pg_errors import get_sqlstate, is_serialization_error
 from dbos._serialization import Serializer
 
 from ._error import DBOSUnexpectedStepError, DBOSWorkflowConflictIDError
@@ -341,18 +341,14 @@ class PostgresApplicationDatabase(ApplicationDatabase):
 
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a unique constraint violation in PostgreSQL."""
-        return dbapi_error.orig.sqlstate == "23505"  # type: ignore
+        return get_sqlstate(dbapi_error.orig) == "23505"
 
     def _is_serialization_error(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a serialization/concurrency error in PostgreSQL."""
         # 40001: serialization_failure (MVCC conflict)
         # 40P01: deadlock_detected
         driver_error = dbapi_error.orig
-        return (
-            driver_error is not None
-            and isinstance(driver_error, psycopg.OperationalError)
-            and driver_error.sqlstate in ("40001", "40P01")
-        )
+        return is_serialization_error(dbapi_error)
 
 
 class SQLiteApplicationDatabase(ApplicationDatabase):

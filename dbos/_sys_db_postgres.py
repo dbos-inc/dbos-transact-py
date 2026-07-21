@@ -1,12 +1,16 @@
 import time
 from typing import Any, Dict, Optional, cast
 
-import psycopg
+try:
+    import psycopg
+except ImportError:  # optional: only the psycopg driver and LISTEN/NOTIFY use it
+    psycopg = None  # type: ignore[assignment]
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import DBAPIError
 
 from dbos._migration import ensure_dbos_schema, run_dbos_migrations, should_migrate
+from dbos._pg_errors import get_sqlstate
 
 from ._logger import dbos_logger
 from ._schemas.system_database import SystemSchema
@@ -112,7 +116,7 @@ class PostgresSystemDatabase(SystemDatabase):
 
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a unique constraint violation in PostgreSQL."""
-        return dbapi_error.orig.sqlstate == "23505"  # type: ignore
+        return get_sqlstate(dbapi_error.orig) == "23505"
 
     def _attributes_contains_clause(
         self, attributes: Dict[str, Any]
@@ -126,7 +130,7 @@ class PostgresSystemDatabase(SystemDatabase):
 
     def _is_foreign_key_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a foreign key violation in PostgreSQL."""
-        return dbapi_error.orig.sqlstate == "23503"  # type: ignore
+        return get_sqlstate(dbapi_error.orig) == "23503"
 
     @staticmethod
     def _reset_system_database(database_url: str) -> None:

@@ -4,7 +4,10 @@ import os
 import subprocess
 import time
 
-import psycopg
+try:
+    import psycopg
+except ImportError:  # optional: only the psycopg driver and LISTEN/NOTIFY use it
+    psycopg = None  # type: ignore[assignment]
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 from typing import Any, Dict, Optional, Tuple
