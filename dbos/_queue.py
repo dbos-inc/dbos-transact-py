@@ -42,6 +42,9 @@ def _warn_sync_db_call_in_async_context(
     )
 
 
+DEFAULT_QUEUE_POLLING_INTERVAL_SEC = 1.0
+
+
 class QueueRateLimit(TypedDict):
     """
     Limit the maximum number of workflows from this queue that can be started in a given period.
@@ -71,7 +74,7 @@ class Queue:
         worker_concurrency: Optional[int] = None,
         priority_enabled: bool = False,
         partition_queue: bool = False,
-        polling_interval_sec: float = 1.0,
+        polling_interval_sec: float = DEFAULT_QUEUE_POLLING_INTERVAL_SEC,
         database_backed_queue: bool = False,
         client_system_database: Optional["SystemDatabase"] = None,
     ) -> None:
