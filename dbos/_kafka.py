@@ -137,19 +137,16 @@ def _make_error_cb(
     """Build librdkafka's error_cb, which is the only place connection, DNS, and auth failures are reported."""
 
     def on_error(err: "KafkaError") -> None:
-        # One guard around everything, logging included: anything escaping into librdkafka's dispatch discards this error and leaves CPython's error indicator set, which makes every later callback in the batch fail too.
-        try:
-            dbos_logger.error(
-                f"Kafka consumer {func_name} (group.id {group_id}, topics "
-                f"{', '.join(topics)}) error: {_describe_kafka_error(err)}"
-            )
-            if user_error_cb is not None:
-                try:
-                    user_error_cb(err)
-                except Exception as e:
-                    dbos_logger.warning(f"Kafka error_cb for {func_name} failed: {e}")
-        except BaseException:
-            pass
+        dbos_logger.error(
+            f"Kafka consumer {func_name} (group.id {group_id}, topics "
+            f"{', '.join(topics)}) error: {_describe_kafka_error(err)}"
+        )
+        if user_error_cb is not None:
+            # Contain the caller's callback: an exception from it escapes into librdkafka's dispatch, where it corrupts the error every later callback in the batch reports.
+            try:
+                user_error_cb(err)
+            except Exception as e:
+                dbos_logger.warning(f"Kafka error_cb for {func_name} failed: {e}")
 
     return on_error
 

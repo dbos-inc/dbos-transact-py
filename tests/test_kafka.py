@@ -745,7 +745,7 @@ def test_describe_kafka_error_never_raises() -> None:
     )
 
 
-def test_kafka_error_cb_reports_and_never_raises() -> None:
+def test_kafka_error_cb_reports_and_contains_user_callback() -> None:
     seen: list[KafkaError] = []
 
     def user_error_cb(err: KafkaError) -> NoReturn:
@@ -768,7 +768,9 @@ def test_kafka_error_cb_reports_and_never_raises() -> None:
     old_level = dbos_logger.level
     dbos_logger.setLevel(logging.WARNING)
     try:
-        on_error(err)  # must not raise: it runs inside librdkafka's dispatch
+        on_error(
+            err
+        )  # a failing user callback must not escape into librdkafka's dispatch
     finally:
         dbos_logger.removeHandler(handler)
         dbos_logger.setLevel(old_level)
