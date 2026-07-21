@@ -1,3 +1,4 @@
+import logging
 import random
 import threading
 import time
@@ -7,6 +8,8 @@ import pytest
 from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 
 from dbos import DBOS, DBOSConfig, KafkaMessage, Queue
+from dbos._kafka import _describe_kafka_error, _make_error_cb
+from dbos._logger import dbos_logger
 
 # These tests require local Kafka to run.
 # Without it, they're automatically skipped.
@@ -711,6 +714,80 @@ def test_kafka_config_not_mutated(dbos: DBOS) -> None:
         pass
 
     assert config == snapshot
+
+
+def test_describe_kafka_error_formats_real_error() -> None:
+    described = _describe_kafka_error(KafkaError(KafkaError._ALL_BROKERS_DOWN))
+    assert "_ALL_BROKERS_DOWN" in described
+    assert "broker" in described.lower()
+
+
+def test_describe_kafka_error_never_raises() -> None:
+    """librdkafka's callback dispatch can leave CPython's error indicator set, which makes
+    every C call on the KafkaError -- including formatting -- raise SystemError."""
+
+    class Poisoned:
+        def name(self) -> NoReturn:
+            raise SystemError("returned a result with an exception set")
+
+        code = str = name
+
+    # Falls back to repr when the accessors fail.
+    assert "Poisoned" in _describe_kafka_error(Poisoned())  # type: ignore[arg-type]
+
+    class FullyPoisoned(Poisoned):
+        def __repr__(self) -> NoReturn:
+            raise SystemError("returned a result with an exception set")
+
+    # Degrades to a placeholder rather than propagating into librdkafka.
+    assert _describe_kafka_error(FullyPoisoned()) == (  # type: ignore[arg-type]
+        "<KafkaError that could not be formatted>"
+    )
+
+
+def test_kafka_error_cb_reports_and_contains_user_callback() -> None:
+    seen: list[KafkaError] = []
+
+    def user_error_cb(err: KafkaError) -> NoReturn:
+        seen.append(err)
+        raise RuntimeError("user callback blew up")
+
+    on_error = _make_error_cb(
+        "my_consumer", "my-group", ["topic-a", "topic-b"], user_error_cb
+    )
+    err = KafkaError(KafkaError._ALL_BROKERS_DOWN)
+    # Attach to the dbos logger directly: DBOS sets propagate=False, so caplog's root handler may see nothing.
+    records: list[logging.LogRecord] = []
+
+    class Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = Capture()
+    dbos_logger.addHandler(handler)
+    old_level = dbos_logger.level
+    dbos_logger.setLevel(logging.WARNING)
+    try:
+        on_error(
+            err
+        )  # a failing user callback must not escape into librdkafka's dispatch
+    finally:
+        dbos_logger.removeHandler(handler)
+        dbos_logger.setLevel(old_level)
+
+    # The caller's callback is chained, not silently dropped.
+    assert seen == [err]
+    logged = "\n".join(r.getMessage() for r in records)
+    # The error is identifiable: which consumer, which group, which topics, what failed.
+    for expected in (
+        "my_consumer",
+        "my-group",
+        "topic-a",
+        "topic-b",
+        "_ALL_BROKERS_DOWN",
+    ):
+        assert expected in logged
+    assert "user callback blew up" in logged
 
 
 def test_kafka_queue_polling_interval(
