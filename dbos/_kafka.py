@@ -110,6 +110,53 @@ def validate_kafka_consumers(dbos: "DBOS") -> None:
             _validate_consumer_queue(dbos, reg.func_name, reg.queue_name)
 
 
+def _describe_kafka_error(err: "KafkaError") -> str:
+    """Describe a KafkaError without letting confluent-kafka's C-level formatting raise.
+
+    librdkafka delivers many error callbacks per poll and confluent-kafka keeps
+    dispatching them after one raises, so once CPython's error indicator is set,
+    every later C call on a KafkaError -- formatting included -- fails with
+    "SystemError: ... returned a result with an exception set". Catching that
+    clears the indicator, so a later attempt here can still succeed.
+    """
+    describers: tuple[Callable[[], str], ...] = (
+        lambda: f"{err.name()} ({err.code()}): {err.str()}",
+        lambda: repr(err),
+    )
+    for describe in describers:
+        try:
+            return describe()
+        except BaseException:
+            continue
+    return "<KafkaError that could not be formatted>"
+
+
+def _make_error_cb(
+    func_name: str,
+    group_id: str,
+    topics: list[str],
+    user_error_cb: Optional[Callable[["KafkaError"], None]],
+) -> Callable[["KafkaError"], None]:
+    """Build librdkafka's error_cb, which is the only place connection, DNS, and auth failures are reported."""
+
+    def on_error(err: "KafkaError") -> None:
+        # Never raise: this runs inside librdkafka's callback dispatch, where an exception both discards this error and poisons every later callback in the batch.
+        try:
+            dbos_logger.error(
+                f"Kafka consumer {func_name} (group.id {group_id}, topics "
+                f"{', '.join(topics)}) error: {_describe_kafka_error(err)}"
+            )
+        except Exception:
+            pass
+        if user_error_cb is not None:
+            try:
+                user_error_cb(err)
+            except Exception as e:
+                dbos_logger.warning(f"Kafka error_cb for {func_name} failed: {e}")
+
+    return on_error
+
+
 def _retry_until_success(
     stop_event: threading.Event, operation: Callable[[], T], description: str
 ) -> Optional[T]:
@@ -228,7 +275,8 @@ def _kafka_consumer_loop(
                         valid.append(cmsg)
                         continue
                     dbos_logger.error(
-                        f"Kafka error {err.code()} ({err.name()}): {err.str()}"
+                        f"Kafka consumer error (group.id {group_id}): "
+                        f"{_describe_kafka_error(err)}"
                     )
                     # fatal errors require an updated consumer instance
                     if err.code() == KafkaError._FATAL or err.fatal():
@@ -348,10 +396,6 @@ def kafka_consumer(
             _validate_consumer_queue(dbosreg.dbos, func_name, queue_name)
         cfg = dict(config)  # copy: never mutate the caller's dict
 
-        def on_error(err: KafkaError) -> None:
-            dbos_logger.error(f"Exception in Kafka consumer: {err}")
-
-        cfg["error_cb"] = on_error
         if "auto.offset.reset" not in cfg:
             cfg["auto.offset.reset"] = "earliest"
 
@@ -378,6 +422,11 @@ def kafka_consumer(
                 f"Consumer group ID not found. Using generated group.id {cfg['group.id']}"
             )
         group_id: str = cfg["group.id"]
+
+        # Chain the caller's error_cb rather than silently replacing it: it may be their only window into connection failures.
+        cfg["error_cb"] = _make_error_cb(
+            func_name, group_id, list(topics), cfg.get("error_cb")
+        )
 
         for reg in dbosreg.kafka_registrations:
             if reg.group_id != group_id:
