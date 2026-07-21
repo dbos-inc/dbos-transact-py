@@ -290,7 +290,7 @@ def migrate(
         typer.Option(
             "--print-migrations",
             metavar="[all|NUMBER]",
-            help="Print the SQL of one migration ('--print-migrations 3') or all of them ('--print-migrations all') instead of running them",
+            help="Print the SQL of all migrations ('--print-migrations all') or of migrations from a number onward ('--print-migrations 3') instead of running them",
         ),
     ] = None,
     print_user_role: Annotated[

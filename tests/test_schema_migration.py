@@ -912,13 +912,13 @@ def test_migrate_print_migrations_custom_schema(
         )
 
 
-def test_migrate_print_single_migration(
+def test_migrate_print_from_migration(
     db_engine: sa.Engine,
     skip_with_sqlite: None,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """--print-migrations N emits one migration."""
-    database_name = "print_single_migration_test"
+    """--print-migrations N emits migrations N through latest."""
+    database_name = "print_from_migration_test"
     db_url = db_engine.url.set(database=database_name).set(drivername="postgresql")
     db_url_string = db_url.render_as_string(hide_password=False)
     migrations = get_dbos_migrations("dbos", True)
@@ -937,26 +937,22 @@ def test_migrate_print_single_migration(
     assert result.returncode != 0
     assert "expected 'all' or a migration number" in result.stderr
 
-    # Migration 1 includes the fresh-database prelude
+    # Starting from 1 is identical to "all"
     print_dbos_migrations(db_url_string, schema="dbos", migration="1")
-    out = capsys.readouterr().out
-    assert 'CREATE SCHEMA IF NOT EXISTS "dbos";' in out
-    assert "-- Migration 1" in out.splitlines()
-    assert 'INSERT INTO "dbos".dbos_migrations (version) VALUES (1);' in out
-    assert "-- Migration 2" not in out
-    assert "DO $$" not in out
+    from_one = capsys.readouterr().out
+    print_dbos_migrations(db_url_string, schema="dbos", migration="all")
+    assert capsys.readouterr().out == from_one
 
-    # Migration 10 is not applicable on fresh databases
-    with pytest.raises(typer.Exit):
-        print_dbos_migrations(db_url_string, schema="dbos", migration="10")
-    capsys.readouterr()
-    result = subprocess.run(
-        ["dbos", "migrate", "-s", db_url_string, "--print-migrations", "10"],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode != 0
-    assert "not applicable" in result.stderr
+    # Starting mid-way omits the prelude and earlier migrations
+    print_dbos_migrations(db_url_string, schema="dbos", migration="10")
+    out = capsys.readouterr().out
+    assert "CREATE SCHEMA" not in out
+    assert "-- Migration 9" not in out
+    assert "-- Migration 10 skipped: not applicable on fresh databases" in out
+    assert 'UPDATE "dbos".dbos_migrations SET version = 10;' in out
+    assert "-- Migration 11" in out.splitlines()
+    assert f'UPDATE "dbos".dbos_migrations SET version = {latest_version};' in out
+    assert "DO $$" not in out
 
     if shutil.which("psql") is None:
         pytest.skip("psql not available")

@@ -142,9 +142,9 @@ def print_dbos_migrations(
     schema: str = "dbos",
     migration: str = "all",
 ) -> None:
-    """Print to stdout the SQL of one DBOS system database migration
-    (migration is a number) or all of them (migration is "all"), without
-    touching any database. Stdout is pure SQL and comments."""
+    """Print to stdout the SQL of the DBOS system database migrations, all of
+    them (migration is "all") or starting from a number (migration is N),
+    without touching any database. Stdout is pure SQL and comments."""
     if system_database_url.startswith("sqlite"):
         typer.echo(
             "--print-migrations is only supported for Postgres databases", err=True
@@ -155,7 +155,7 @@ def print_dbos_migrations(
     migrations = get_dbos_migrations(schema, use_listen_notify=True)
     latest_version = len(migrations)
     if migration == "all":
-        start, end = 1, latest_version
+        start = 1
     else:
         try:
             start = int(migration)
@@ -171,13 +171,6 @@ def print_dbos_migrations(
                 err=True,
             )
             raise typer.Exit(code=1)
-        if start == 10:
-            typer.echo(
-                "Migration 10 is not applicable: it backfills the notifications primary key, which migration 1 already creates on a fresh database",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-        end = start
 
     typer.echo(
         f"-- DBOS system database migrations for {sa.make_url(system_database_url)}"
@@ -193,7 +186,7 @@ def print_dbos_migrations(
         )
 
     version_row_exists = start > 1
-    for i in range(start, end + 1):
+    for i in range(start, latest_version + 1):
         migration_sql = migrations[i - 1]
         if i == 10:
             # Migration 10 backfills the notifications primary key, which
