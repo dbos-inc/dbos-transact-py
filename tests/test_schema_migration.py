@@ -744,7 +744,9 @@ def test_migrate_print_migrations_all(
     print_dbos_migrations(db_url_string, schema="dbos", migration="all")
     sql = capsys.readouterr().out
     assert 'CREATE SCHEMA IF NOT EXISTS "dbos";' in sql
-    assert "-- Abort if this is not a fresh database" in sql
+    assert "DO $$" not in sql
+    assert "-- Migration 10 skipped: not applicable on fresh databases" in sql
+    assert "ADD PRIMARY KEY (message_uuid)" not in sql
     assert 'INSERT INTO "dbos".dbos_migrations (version) VALUES (1);' in sql
     assert f'UPDATE "dbos".dbos_migrations SET version = {latest_version};' in sql
     # Role grants are only printed by --print-user-role
@@ -791,16 +793,6 @@ def test_migrate_print_migrations_all(
     finally:
         engine.dispose()
 
-    # Re-applying the script to a non-fresh database must fail fast
-    with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
-        f.write(sql)
-        f.flush()
-        with pytest.raises(subprocess.CalledProcessError):
-            subprocess.check_call(
-                ["psql", db_url_string, "-v", "ON_ERROR_STOP=1", "-q", "-f", f.name],
-                stderr=subprocess.DEVNULL,
-            )
-
     with db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         connection.execute(
@@ -833,11 +825,9 @@ def test_migrate_print_migrations_custom_schema(
         f'CREATE TABLE IF NOT EXISTS "{schema}".dbos_migrations (version BIGINT NOT NULL PRIMARY KEY);'
         in sql
     )
-    # Migration 10's guard embeds the schema in a single-quoted literal
-    assert f"WHERE table_schema = '{schema}'" in sql
-    assert (
-        f'ALTER TABLE "{schema}".notifications ADD PRIMARY KEY (message_uuid);' in sql
-    )
+    # Migration 10 is skipped, but its version bump is still recorded
+    assert "ADD PRIMARY KEY (message_uuid)" not in sql
+    assert f'UPDATE "{schema}".dbos_migrations SET version = 10;' in sql
     assert f'INSERT INTO "{schema}".dbos_migrations (version) VALUES (1);' in sql
     assert f'UPDATE "{schema}".dbos_migrations SET version = {latest_version};' in sql
     # The unquoted schema name must never appear outside quotes or literals
@@ -900,7 +890,7 @@ def test_migrate_print_migrations_custom_schema(
             ).scalar()
             assert version == latest_version
             # The notifications primary key exists (created by migration 1;
-            # migration 10's guarded backfill was a no-op)
+            # migration 10 is skipped in the printed script)
             assert (
                 conn.execute(
                     sa.text(
@@ -927,7 +917,7 @@ def test_migrate_print_single_migration(
     skip_with_sqlite: None,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """--print-migrations N emits one migration, guarded on version N-1."""
+    """--print-migrations N emits one migration."""
     database_name = "print_single_migration_test"
     db_url = db_engine.url.set(database=database_name).set(drivername="postgresql")
     db_url_string = db_url.render_as_string(hide_password=False)
@@ -947,24 +937,26 @@ def test_migrate_print_single_migration(
     assert result.returncode != 0
     assert "expected 'all' or a migration number" in result.stderr
 
-    # Migration 1 includes the fresh-database prelude and abort guard
+    # Migration 1 includes the fresh-database prelude
     print_dbos_migrations(db_url_string, schema="dbos", migration="1")
     out = capsys.readouterr().out
     assert 'CREATE SCHEMA IF NOT EXISTS "dbos";' in out
-    assert "-- Abort if this is not a fresh database" in out
     assert "-- Migration 1" in out.splitlines()
     assert 'INSERT INTO "dbos".dbos_migrations (version) VALUES (1);' in out
     assert "-- Migration 2" not in out
+    assert "DO $$" not in out
 
-    # Migration 10 keeps the runner's primary-key guard and a version guard
-    print_dbos_migrations(db_url_string, schema="dbos", migration="10")
-    out = capsys.readouterr().out
-    assert "IF v IS DISTINCT FROM 9 THEN" in out
-    assert "table_constraints" in out
-    assert 'UPDATE "dbos".dbos_migrations SET version = 10;' in out
-    assert "CREATE SCHEMA" not in out
-    assert "-- Migration 9" not in out
-    assert "-- Migration 11" not in out
+    # Migration 10 is not applicable on fresh databases
+    with pytest.raises(typer.Exit):
+        print_dbos_migrations(db_url_string, schema="dbos", migration="10")
+    capsys.readouterr()
+    result = subprocess.run(
+        ["dbos", "migrate", "-s", db_url_string, "--print-migrations", "10"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "not applicable" in result.stderr
 
     if shutil.which("psql") is None:
         pytest.skip("psql not available")
@@ -1000,8 +992,8 @@ def test_migrate_print_single_migration(
         ],
         text=True,
     )
-    assert f"IF v IS DISTINCT FROM {latest_version - 1} THEN" in single
     assert "CREATE SCHEMA" not in single
+    assert "DO $$" not in single
     with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
         f.write(single)
         f.flush()
@@ -1019,16 +1011,6 @@ def test_migrate_print_single_migration(
             assert version == latest_version
     finally:
         engine.dispose()
-
-    # Its guard makes re-applying it fail fast
-    with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
-        f.write(single)
-        f.flush()
-        with pytest.raises(subprocess.CalledProcessError):
-            subprocess.check_call(
-                ["psql", db_url_string, "-v", "ON_ERROR_STOP=1", "-q", "-f", f.name],
-                stderr=subprocess.DEVNULL,
-            )
 
     with db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")

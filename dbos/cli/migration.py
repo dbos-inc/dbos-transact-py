@@ -171,6 +171,12 @@ def print_dbos_migrations(
                 err=True,
             )
             raise typer.Exit(code=1)
+        if start == 10:
+            typer.echo(
+                "Migration 10 is not applicable: it backfills the notifications primary key, which migration 1 already creates on a fresh database",
+                err=True,
+            )
+            raise typer.Exit(code=1)
         end = start
 
     typer.echo(
@@ -180,55 +186,22 @@ def print_dbos_migrations(
         "-- Contains CREATE/DROP INDEX CONCURRENTLY: run outside a transaction block (e.g. plain psql, not psql --single-transaction)."
     )
     if start == 1:
-        typer.echo(
-            "-- This script is for FRESH databases only and aborts if DBOS migrations were already applied."
-        )
+        typer.echo("-- This script is for FRESH databases only.")
         _emit_sql(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
         _emit_sql(
             f'CREATE TABLE IF NOT EXISTS "{schema}".dbos_migrations (version BIGINT NOT NULL PRIMARY KEY)'
         )
-        typer.echo("-- Abort if this is not a fresh database")
-        _emit_sql(f"""DO $$
-DECLARE
-    existing_version BIGINT;
-BEGIN
-    SELECT version INTO existing_version FROM "{schema}".dbos_migrations LIMIT 1;
-    IF existing_version IS NOT NULL THEN
-        RAISE EXCEPTION 'DBOS schema % is already at version %; this script is for fresh databases only. Use dbos migrate instead.', '{schema}', existing_version;
-    END IF;
-END $$""")
-    else:
-        typer.echo(f"-- Abort unless the database is exactly at version {start - 1}")
-        _emit_sql(f"""DO $$
-DECLARE
-    v BIGINT;
-BEGIN
-    SELECT version INTO v FROM "{schema}".dbos_migrations LIMIT 1;
-    IF v IS DISTINCT FROM {start - 1} THEN
-        RAISE EXCEPTION 'expected DBOS schema version {start - 1}, found %', v;
-    END IF;
-END $$""")
 
     version_row_exists = start > 1
     for i in range(start, end + 1):
         migration_sql = migrations[i - 1]
-        if migration_sql.strip():
+        if i == 10:
+            # Migration 10 backfills the notifications primary key, which
+            # migration 1 already creates on a fresh database.
+            typer.echo("-- Migration 10 skipped: not applicable on fresh databases")
+        elif migration_sql.strip():
             typer.echo(f"-- Migration {i}")
-            if i == 10:
-                # Mirrors the runner's guard in run_dbos_migrations: migration
-                # 10 backfills the notifications primary key, which migration
-                # 1 already creates on a fresh database.
-                typer.echo(
-                    "-- Applied only if the notifications table has no primary key, mirroring the migration runner's guard"
-                )
-                _emit_sql(f"""DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema = '{schema}' AND table_name = 'notifications' AND constraint_type = 'PRIMARY KEY') THEN
-        {migration_sql.strip()}
-    END IF;
-END $$""")
-            else:
-                _emit_sql(migration_sql)
+            _emit_sql(migration_sql)
         # Per-migration version bookkeeping, mirroring the runner: an
         # interrupted apply can be resumed from the next migration number.
         if version_row_exists:
