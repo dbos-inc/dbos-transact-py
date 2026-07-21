@@ -7,6 +7,7 @@ from typing import Any, NoReturn, Optional
 import pytest
 from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 
+import dbos._kafka
 from dbos import DBOS, DBOSConfig, KafkaMessage, Queue
 from dbos._kafka import _describe_kafka_error, _make_error_cb
 from dbos._logger import dbos_logger
@@ -786,6 +787,41 @@ def test_kafka_error_cb_reports_and_never_raises() -> None:
     ):
         assert expected in logged
     assert "user callback blew up" in logged
+
+
+def test_kafka_error_cb_rate_limits_repeats(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A broker outage delivers dozens of errors per second on the polling thread; logging
+    every one lets a slow handler block inside consume() until the broker evicts us."""
+    records: list[logging.LogRecord] = []
+
+    class Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = Capture()
+    dbos_logger.addHandler(handler)
+    old_level = dbos_logger.level
+    dbos_logger.setLevel(logging.ERROR)
+    try:
+        on_error = _make_error_cb("c", "g", ["t"], None)
+        err = KafkaError(KafkaError._ALL_BROKERS_DOWN)
+        for _ in range(50):
+            on_error(err)
+        assert len(records) == 1, "repeats within the interval must be suppressed"
+
+        # Once the interval lapses, the next one reports how many were dropped.
+        monkeypatch.setattr(dbos._kafka, "_ERROR_LOG_MIN_INTERVAL_SEC", 0.0)
+        on_error(err)
+        assert len(records) == 2
+        assert "49 more suppressed" in records[1].getMessage()
+
+        # A different error code is not throttled by the first one.
+        on_error(KafkaError(KafkaError._TRANSPORT))
+        assert len(records) == 3
+        assert "_TRANSPORT" in records[2].getMessage()
+    finally:
+        dbos_logger.removeHandler(handler)
+        dbos_logger.setLevel(old_level)
 
 
 def test_kafka_queue_polling_interval(

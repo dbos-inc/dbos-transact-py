@@ -1,5 +1,6 @@
 import re
 import threading
+import time
 import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Literal, Optional, TypeVar
@@ -31,6 +32,8 @@ KAFKA_ORDERED_QUEUE_NAME = "_dbos_kafka_ordered_queue"
 
 _MIN_RETRY_WAIT_SEC = 1.0
 _MAX_RETRY_WAIT_SEC = 60.0
+# Per-error-code floor between error_cb log records; see _make_error_cb.
+_ERROR_LOG_MIN_INTERVAL_SEC = 10.0
 
 T = TypeVar("T")
 
@@ -131,21 +134,74 @@ def _describe_kafka_error(err: "KafkaError") -> str:
     return "<KafkaError that could not be formatted>"
 
 
+class _LogThrottle:
+    """Rate-limit log records emitted from a Kafka polling thread.
+
+    Every log site in the consume loop runs on the thread that must call consume()
+    again before max.poll.interval.ms expires. An unthrottled per-message log lets
+    a slow handler (a network log shipper under backpressure, a full stdout pipe)
+    block that thread until the broker evicts the consumer -- and the records that
+    would explain it are the ones stuck in the handler. Throttling per key keeps
+    one noisy condition from hiding the others.
+    """
+
+    def __init__(self, min_interval_sec: Optional[float] = None):
+        # None reads the module default at call time so it stays tunable.
+        self._min_interval_sec = min_interval_sec
+        self._last_logged: dict[str, float] = {}
+        self._suppressed: dict[str, int] = {}
+
+    def check(self, key: str) -> Optional[int]:
+        """Return how many records were suppressed since the last one, or None to skip."""
+        interval = (
+            self._min_interval_sec
+            if self._min_interval_sec is not None
+            else _ERROR_LOG_MIN_INTERVAL_SEC
+        )
+        now = time.monotonic()
+        previous = self._last_logged.get(key)
+        if previous is not None and now - previous < interval:
+            self._suppressed[key] = self._suppressed.get(key, 0) + 1
+            return None
+        self._last_logged[key] = now
+        return self._suppressed.pop(key, 0)
+
+
+def _suppressed_suffix(count: int) -> str:
+    return f" ({count} more suppressed)" if count else ""
+
+
 def _make_error_cb(
     func_name: str,
     group_id: str,
     topics: list[str],
     user_error_cb: Optional[Callable[["KafkaError"], None]],
 ) -> Callable[["KafkaError"], None]:
-    """Build librdkafka's error_cb, which is the only place connection, DNS, and auth failures are reported."""
+    """Build librdkafka's error_cb, which is the only place connection, DNS, and auth failures are reported.
+
+    This runs on the polling thread inside librdkafka's callback dispatch, so its
+    cost is charged against max.poll.interval.ms. A broker outage delivers dozens
+    of errors per second, so logging every one unthrottled lets a slow handler
+    (a network log shipper under backpressure, a full stdout pipe) block the
+    thread inside consume() until the broker evicts the consumer -- and the very
+    logs that would explain it are the ones stuck in that handler.
+    """
+    throttle = _LogThrottle()  # only the polling thread touches it, so no lock
 
     def on_error(err: "KafkaError") -> None:
         # Never raise: this runs inside librdkafka's callback dispatch, where an exception both discards this error and poisons every later callback in the batch.
         try:
-            dbos_logger.error(
-                f"Kafka consumer {func_name} (group.id {group_id}, topics "
-                f"{', '.join(topics)}) error: {_describe_kafka_error(err)}"
-            )
+            try:
+                code = err.name()
+            except BaseException:
+                code = "UNKNOWN"
+            skipped = throttle.check(code)
+            if skipped is not None:
+                dbos_logger.error(
+                    f"Kafka consumer {func_name} (group.id {group_id}, topics "
+                    f"{', '.join(topics)}) error: {_describe_kafka_error(err)}"
+                    f"{_suppressed_suffix(skipped)}"
+                )
         except Exception:
             pass
         if user_error_cb is not None:
@@ -258,6 +314,7 @@ def _kafka_consumer_loop(
     if consumer is None:
         return
     retry_wait = _MIN_RETRY_WAIT_SEC
+    loop_throttle = _LogThrottle()
     try:
         while not stop_event.is_set():
             try:
@@ -274,10 +331,13 @@ def _kafka_consumer_loop(
                     if err is None:
                         valid.append(cmsg)
                         continue
-                    dbos_logger.error(
-                        f"Kafka consumer error (group.id {group_id}): "
-                        f"{_describe_kafka_error(err)}"
-                    )
+                    described = _describe_kafka_error(err)
+                    skipped = loop_throttle.check(f"message-error:{described[:40]}")
+                    if skipped is not None:
+                        dbos_logger.error(
+                            f"Kafka consumer error (group.id {group_id}): "
+                            f"{described}{_suppressed_suffix(skipped)}"
+                        )
                     # fatal errors require an updated consumer instance
                     if err.code() == KafkaError._FATAL or err.fatal():
                         fatal_error = True
@@ -293,10 +353,16 @@ def _kafka_consumer_loop(
                                 )
                             )
                         except Exception as e:
-                            dbos_logger.error(
-                                f"Dropping unprocessable Kafka message "
-                                f"{cmsg.topic()}[{cmsg.partition()}]@{cmsg.offset()}: {e}"
+                            # Throttle by failure type: this fires per bad message, so a bad deploy would otherwise log at the full message rate.
+                            skipped = loop_throttle.check(
+                                f"unprocessable:{type(e).__name__}"
                             )
+                            if skipped is not None:
+                                dbos_logger.error(
+                                    f"Dropping unprocessable Kafka message "
+                                    f"{cmsg.topic()}[{cmsg.partition()}]@{cmsg.offset()}: {e}"
+                                    f"{_suppressed_suffix(skipped)}"
+                                )
                     if statuses:
                         # Retry this same batch until durable: consume() advances the
                         # fetch position regardless of offset storage, so dropping the
@@ -320,7 +386,12 @@ def _kafka_consumer_loop(
                         except KafkaException as e:
                             # Partition revoked, etc.; offsets stay put and the
                             # messages are redelivered.
-                            dbos_logger.warning(f"Failed to store Kafka offset: {e}")
+                            skipped = loop_throttle.check("store-offsets")
+                            if skipped is not None:
+                                dbos_logger.warning(
+                                    f"Failed to store Kafka offset: {e}"
+                                    f"{_suppressed_suffix(skipped)}"
+                                )
 
                 if fatal_error:
                     consumer = replace_consumer(consumer)
