@@ -134,12 +134,7 @@ def _make_error_cb(
     topics: list[str],
     user_error_cb: Optional[Callable[["KafkaError"], None]],
 ) -> Callable[["KafkaError"], None]:
-    """Build librdkafka's error_cb, which is the only place connection, DNS, and auth failures are reported.
-
-    Runs on the polling thread inside librdkafka's callback dispatch, which a
-    broker outage drives dozens of times per second, so keep it cheap: whatever
-    it spends is charged against max.poll.interval.ms.
-    """
+    """Build librdkafka's error_cb, which is the only place connection, DNS, and auth failures are reported."""
 
     def on_error(err: "KafkaError") -> None:
         # One guard around everything, logging included: anything escaping into librdkafka's dispatch discards this error and leaves CPython's error indicator set, which makes every later callback in the batch fail too.
