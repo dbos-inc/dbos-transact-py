@@ -310,9 +310,8 @@ class ExportedWorkflow(TypedDict):
 
 
 class GetPendingWorkflowsOutput:
-    def __init__(self, *, workflow_id: str, queue_name: Optional[str] = None):
+    def __init__(self, *, workflow_id: str):
         self.workflow_id: str = workflow_id
-        self.queue_name: Optional[str] = queue_name
 
 
 class WorkflowSchedule(TypedDict):
@@ -1982,7 +1981,6 @@ class SystemDatabase(ABC):
             rows = c.execute(
                 sa.select(
                     SystemSchema.workflow_status.c.workflow_uuid,
-                    SystemSchema.workflow_status.c.queue_name,
                 ).where(
                     SystemSchema.workflow_status.c.status
                     == WorkflowStatusString.PENDING.value,
@@ -1992,11 +1990,7 @@ class SystemDatabase(ABC):
             ).fetchall()
 
             return [
-                GetPendingWorkflowsOutput(
-                    workflow_id=row.workflow_uuid,
-                    queue_name=row.queue_name,
-                )
-                for row in rows
+                GetPendingWorkflowsOutput(workflow_id=row.workflow_uuid) for row in rows
             ]
 
     def list_workflow_steps(
@@ -4046,21 +4040,39 @@ class SystemDatabase(ABC):
             return ret_ids
 
     @db_retry()
-    def clear_queue_assignment(self, workflow_id: str) -> None:
+    def reenqueue_for_recovery(
+        self, workflow_id: str, executor_ids: List[str], recovery_queue_name: str
+    ) -> bool:
+        """Return a PENDING workflow to a queue so it is re-dispatched. Returns
+        whether the row was re-enqueued.
+
+        The executor_ids predicate makes recovery idempotent. Recovery declares a
+        set of executors dead; once any live executor dequeues the workflow,
+        start_queued_workflows sets the workflow's executor ID on the row, so a
+        duplicate recovery request for the original (dead) executor matches
+        nothing instead of re-enqueueing a running workflow.
+        """
+        if not executor_ids:
+            return False
         with self.engine.begin() as c:
-            # Reset the task to "ENQUEUED" so the queue re-dispatches it; a no-op if the row is no longer PENDING-queued.
-            c.execute(
+            res = c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
-                .where(SystemSchema.workflow_status.c.queue_name.isnot(None))
                 .where(
                     SystemSchema.workflow_status.c.status
                     == WorkflowStatusString.PENDING.value
                 )
+                .where(SystemSchema.workflow_status.c.executor_id.in_(executor_ids))
                 .values(
-                    status=WorkflowStatusString.ENQUEUED.value, started_at_epoch_ms=None
+                    status=WorkflowStatusString.ENQUEUED.value,
+                    started_at_epoch_ms=None,
+                    updated_at=self._now_ms_sql(),
+                    queue_name=sa.func.coalesce(
+                        SystemSchema.workflow_status.c.queue_name, recovery_queue_name
+                    ),
                 )
             )
+            return res.rowcount > 0
 
     T = TypeVar("T")
 
