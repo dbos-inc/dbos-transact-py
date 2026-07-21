@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 
 from dbos import DBOS, SetWorkflowID
 from tests import client_collateral as cc
@@ -12,14 +13,15 @@ if app_vers is None:
 else:
     DBOS.logger.info(f"DBOS__APPVERSION: {app_vers}")
 
-if len(sys.argv) < 2:
-    DBOS.logger.error("Usage: client_worker wfid <topic>")
+if len(sys.argv) < 3:
+    DBOS.logger.error("Usage: client_worker sqlite_path wfid <topic>")
     os._exit(1)
 
-wfid = sys.argv[1]
-topic = sys.argv[2] if len(sys.argv) > 2 else None
+sqlite_path = Path(sys.argv[1])
+wfid = sys.argv[2]
+topic = sys.argv[3] if len(sys.argv) > 3 else None
 
-config = default_config()
+config = default_config(sqlite_path)
 DBOS(config=config)
 DBOS.launch()
 

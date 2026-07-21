@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Optional, TypedDict
 
 import pytest
@@ -332,9 +333,11 @@ def test_client_send_bulk(client: DBOSClient, dbos: DBOS) -> None:
     assert handle_b.get_result() == f"to_b {now}"
 
 
-def run_send_worker(wfid: str, topic: Optional[str], app_ver: str) -> None:
+def run_send_worker(
+    sqlite_path: Path, wfid: str, topic: Optional[str], app_ver: str
+) -> None:
     script_path = os.path.join(os.path.dirname(__file__), "client_worker.py")
-    args = [sys.executable, script_path, wfid]
+    args = [sys.executable, script_path, str(sqlite_path), wfid]
     if topic is not None:
         args.append(topic)
 
@@ -346,7 +349,7 @@ def run_send_worker(wfid: str, topic: Optional[str], app_ver: str) -> None:
 
 
 def test_client_send_idempotent(
-    dbos: DBOS, client: DBOSClient, skip_with_sqlite: None
+    dbos: DBOS, client: DBOSClient, sqlite_path: Path, skip_with_sqlite: None
 ) -> None:
     run_client_collateral()
 
@@ -356,7 +359,7 @@ def test_client_send_idempotent(
     message = f"Hello, DBOS! {now}"
     idempotency_key = f"test-idempotency-{now}"
 
-    run_send_worker(wfid, topic, DBOS.application_version)
+    run_send_worker(sqlite_path, wfid, topic, DBOS.application_version)
 
     client.send(wfid, message, topic, idempotency_key)
     client.send(wfid, message, topic, idempotency_key)

@@ -9,6 +9,7 @@ import traceback
 from typing import Any, Callable, Generator, Optional, Tuple, TypeVar, cast
 
 T = TypeVar("T")
+from pathlib import Path
 from urllib.parse import quote
 
 import pytest
@@ -55,18 +56,33 @@ def skip_with_sqlite_imprecise_time() -> None:
         )
 
 
-def default_config() -> DBOSConfig:
+def postgres_urls() -> Tuple[str, str]:
+    """The (application, system) PostgreSQL URLs shared by every test."""
+    password = quote(os.environ.get("PGPASSWORD", "dbos"), safe="")
+    return (
+        f"postgresql://postgres:{password}@localhost:5432/dbostestpy",
+        f"postgresql+psycopg://postgres:{password}@localhost:5432/dbostestpy_dbos_sys",
+    )
+
+
+def default_config(sqlite_path: Path) -> DBOSConfig:
+    """Build a test config, using sqlite_path when running against SQLite.
+
+    Callers must supply a path unique to the running test. DBOS.destroy
+    abandons workflow threads rather than joining them, so a test can leave a
+    straggler still writing to its database; a per-test file keeps that
+    straggler away from every later test, where it would otherwise corrupt the
+    database through their shared -journal or insert rows into it. Postgres
+    needs no equivalent because DROP DATABASE ... WITH (FORCE) evicts stragglers.
+    """
+    application_url, system_url = postgres_urls()
     return {
         "name": "test-app",
         "application_database_url": (
-            "sqlite:///test.sqlite"
-            if using_sqlite()
-            else f"postgresql://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy"
+            f"sqlite:///{sqlite_path}" if using_sqlite() else application_url
         ),
         "system_database_url": (
-            "sqlite:///test.sqlite"
-            if using_sqlite()
-            else f"postgresql+psycopg://postgres:{quote(os.environ.get('PGPASSWORD', 'dbos'), safe='')}@localhost:5432/dbostestpy_dbos_sys"
+            f"sqlite:///{sqlite_path}" if using_sqlite() else system_url
         ),
         "enable_otlp": False,
         "notification_listener_polling_interval_sec": 0.01,
@@ -74,28 +90,29 @@ def default_config() -> DBOSConfig:
 
 
 @pytest.fixture()
-def config() -> DBOSConfig:
-    return default_config()
+def sqlite_path(tmp_path: Path) -> Path:
+    """A SQLite database path belonging to the running test alone."""
+    return tmp_path / "test.sqlite"
+
+
+@pytest.fixture()
+def config(sqlite_path: Path) -> DBOSConfig:
+    return default_config(sqlite_path)
 
 
 @pytest.fixture(scope="session")
 def db_engine() -> Generator[sa.Engine, Any, None]:
-    cfg = default_config()
-    assert cfg["system_database_url"] is not None
     if using_sqlite():
-        engine = sa.create_engine(cfg["system_database_url"])
-        yield engine
+        # Requested only by tests that branch away from it under SQLite.
+        engine = sa.create_engine("sqlite://")
     else:
         engine = sa.create_engine(
-            sa.make_url(cfg["system_database_url"]).set(
-                drivername="postgresql+psycopg",
-                database="postgres",
-            ),
+            sa.make_url(postgres_urls()[1]).set(database="postgres"),
             connect_args={
                 "connect_timeout": 30,
             },
         )
-        yield engine
+    yield engine
     engine.dispose()
 
 
@@ -104,17 +121,11 @@ def cleanup_test_databases(config: DBOSConfig, db_engine: sa.Engine) -> None:
     assert config["application_database_url"] is not None
     assert config["system_database_url"] is not None
 
-    if using_sqlite():
-        # For SQLite, delete the database files
-        # Extract file path from SQLite URL
-        parsed_url = sa.make_url(config["system_database_url"])
-        db_path = parsed_url.database
-        assert db_path is not None
+    # Stop any DBOS an earlier test left running before dropping its database.
+    DBOS.destroy(destroy_registry=True)
 
-        # Remove the database files if they exist
-        if os.path.exists(db_path):
-            os.remove(db_path)
-    else:
+    # SQLite needs no reset here: sqlite_path is a fresh file per test.
+    if not using_sqlite():
         # For PostgreSQL, drop the databases
         app_db_name = sa.make_url(config["application_database_url"]).database
         sys_db_name = sa.make_url(config["system_database_url"]).database

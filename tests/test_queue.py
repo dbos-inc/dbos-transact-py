@@ -8,6 +8,7 @@ import threading
 import time
 import uuid
 import weakref
+from pathlib import Path
 from typing import Any, List
 
 import pytest
@@ -874,7 +875,7 @@ def test_multiple_queues(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_queue_workflow_in_recovered_workflow(dbos: DBOS) -> None:
+def test_queue_workflow_in_recovered_workflow(dbos: DBOS, sqlite_path: Path) -> None:
     # We don't want to be taking queued jobs while subprocess runs
     DBOS.destroy()
 
@@ -884,7 +885,7 @@ def test_queue_workflow_in_recovered_workflow(dbos: DBOS) -> None:
 
     # Run the script as a subprocess to get a workflow stuck
     process = subprocess.run(
-        ["python", "tests/queuedworkflow.py"],
+        ["python", "tests/queuedworkflow.py", str(sqlite_path)],
         cwd=os.getcwd(),
         env=env,
         capture_output=True,
@@ -897,7 +898,7 @@ def test_queue_workflow_in_recovered_workflow(dbos: DBOS) -> None:
 
     # Run script again without crash
     process = subprocess.run(
-        ["python", "tests/queuedworkflow.py"],
+        ["python", "tests/queuedworkflow.py", str(sqlite_path)],
         cwd=os.getcwd(),
         env=os.environ,
         capture_output=True,
@@ -909,7 +910,7 @@ def test_queue_workflow_in_recovered_workflow(dbos: DBOS) -> None:
     assert process.returncode == 0  # Ran to completion
 
     # Launch DBOS to check answer
-    dbos = DBOS(config=default_config())
+    dbos = DBOS(config=default_config(sqlite_path))
     DBOS.launch()
     wfh: WorkflowHandle[int] = DBOS.retrieve_workflow("testqueuedwfcrash")
     assert wfh.get_result() == 5
@@ -975,11 +976,13 @@ def run_dbos_test_in_process(
     i: int,
     start_signal: multiprocessing.synchronize.Event,
     end_signal: multiprocessing.synchronize.Event,
+    sqlite_path: Path,
 ) -> None:
+    config = default_config(sqlite_path)
     dbos_config: DBOSConfig = {
         "name": "test-app",
-        "system_database_url": default_config()["system_database_url"],
-        "application_database_url": default_config()["application_database_url"],
+        "system_database_url": config["system_database_url"],
+        "application_database_url": config["application_database_url"],
         "admin_port": 8001 + i,
     }
     dbos = DBOS(config=dbos_config)
@@ -1006,14 +1009,14 @@ def run_dbos_test_in_process(
 # For the global limit, we fill the queue in 2 steps, ensuring that the 2nd worker is able to cap its local utilization even
 # after having dequeued some tasks already
 def test_worker_concurrency_with_n_dbos_instances(
-    dbos: DBOS, skip_with_sqlite: None
+    dbos: DBOS, sqlite_path: Path, skip_with_sqlite: None
 ) -> None:
     # Ensure children processes do not share global variables (including DBOS instance) with the parent
     multiprocessing.set_start_method("spawn")
 
     # Re-initialize so the parent opts out of dequeuing — only the children should
     # dequeue and run workflows.
-    config = default_config()
+    config = default_config(sqlite_path)
     DBOS.destroy()
     dbos = DBOS(config=config)
     DBOS.listen_queues([])
@@ -1045,7 +1048,8 @@ def test_worker_concurrency_with_n_dbos_instances(
         end_signal = manager.Event()
         end_signals.append(end_signal)
         process = multiprocessing.Process(
-            target=run_dbos_test_in_process, args=(i, start_signal, end_signal)
+            target=run_dbos_test_in_process,
+            args=(i, start_signal, end_signal, sqlite_path),
         )
         process.start()
         processes.append(process)

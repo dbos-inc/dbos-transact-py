@@ -3,15 +3,16 @@ import time
 import pytest
 
 # Public API
-from dbos import DBOS, SetWorkflowID, WorkflowHandle
+from dbos import DBOS, DBOSConfig, SetWorkflowID, WorkflowHandle
 
 # Private API used because this is a test
 from dbos._context import DBOSContextEnsure, assert_current_dbos_context
-from tests.conftest import default_config
 
 
 def test_dbos_singleton(
-    cleanup_test_databases: None, skip_with_sqlite_imprecise_time: None
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+    skip_with_sqlite_imprecise_time: None,
 ) -> None:
     # Initialize singleton
     DBOS.destroy()  # In case of other tests leaving it
@@ -25,7 +26,7 @@ def test_dbos_singleton(
         DBOSTestWrapperMethods,
     )
 
-    dbos: DBOS = DBOS(config=default_config())
+    dbos: DBOS = DBOS(config=config)
 
     from tests.more_classdefs import DBOSWFEvents, wfFunc
 
@@ -135,7 +136,9 @@ def test_dbos_singleton(
     DBOS.destroy()
 
 
-def test_dbos_singleton_negative(cleanup_test_databases: None) -> None:
+def test_dbos_singleton_negative(
+    config: DBOSConfig, cleanup_test_databases: None
+) -> None:
     # Initialize singleton
     DBOS.destroy()  # In case of other tests leaving it
 
@@ -143,7 +146,7 @@ def test_dbos_singleton_negative(cleanup_test_databases: None) -> None:
     #    then imports more
     from tests.classdefs import DBOSTestClass
 
-    DBOS(config=default_config())
+    DBOS(config=config)
 
     # Something should have launched
     with pytest.raises(Exception) as exc_info:

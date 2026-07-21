@@ -19,7 +19,7 @@ from dbos._datasource_sqlite import SqliteAsyncDatasource, SqliteSyncDatasource
 from dbos._error import DBOSException
 from dbos._schemas.datasource_database import DatasourceSchema
 from dbos._schemas.system_database import SystemSchema
-from tests.conftest import default_config
+from tests.conftest import postgres_urls
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -108,8 +108,7 @@ def sync_ds(
         if ds.created_engine:
             ds.engine.dispose()
     else:
-        cfg = default_config()
-        url = cfg.get("application_database_url") or ""
+        url = postgres_urls()[0]
         if not url.startswith("postgresql"):
             pytest.skip("not a PostgreSQL environment")
         _skip_if_pg_unreachable(url)
@@ -135,8 +134,7 @@ async def async_ds(
         yield ds
         await ds.engine.dispose()
     else:
-        cfg = default_config()
-        url = cfg.get("application_database_url") or ""
+        url = postgres_urls()[0]
         if not url.startswith("postgresql"):
             pytest.skip("not a PostgreSQL environment")
         _skip_if_pg_unreachable(url)

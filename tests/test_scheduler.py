@@ -12,7 +12,7 @@ from dbos._error import DBOSException
 from dbos._serialization import DBOSPortableJSONSerializer
 from dbos._utils import INTERNAL_QUEUE_NAME
 
-from .conftest import default_config, retry_until_success
+from .conftest import retry_until_success
 
 
 def test_schedule_crud(dbos: DBOS) -> None:
