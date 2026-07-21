@@ -57,6 +57,7 @@ from ._core import (
     StepOptions,
     WorkflowHandleAsyncPolling,
     WorkflowHandlePolling,
+    _validate_enqueue_only_options,
     close_stream,
     decorate_step,
     decorate_transaction,
@@ -1238,6 +1239,7 @@ class DBOS:
     ) -> WorkflowHandleAsync[R]:
         """Invoke a workflow function on the event loop, returning a handle to the ongoing execution."""
         ctx = get_local_dbos_context()
+        _validate_enqueue_only_options(ctx, None)
         parent_ctx_copy = copy.copy(ctx)
         child_ctx = DBOSContext.create_start_workflow_child(ctx)
         await cls._configure_asyncio_thread_pool()
