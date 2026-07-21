@@ -669,6 +669,21 @@ def test_translate_dbosconfig_notification_coalesce_sec():
         assert "notification_coalesce_sec" in str(exc_info.value)
 
 
+def test_translate_dbosconfig_kafka_queue_polling_interval_sec():
+    # A valid value is threaded into runtimeConfig.
+    ok: DBOSConfig = {"name": "test-app", "kafka_queue_polling_interval_sec": 5.0}
+    translated = translate_dbos_config_to_config_file(ok)
+    assert translated["runtimeConfig"]["kafka_queue_polling_interval_sec"] == 5.0
+
+    # Invalid values are rejected, including NaN/inf which would otherwise crash the queue worker's wait.
+    for bad in [0.0005, 0.0, -1.0, float("nan"), float("inf")]:
+        with pytest.raises(DBOSInitializationError) as exc_info:
+            translate_dbos_config_to_config_file(
+                {"name": "test-app", "kafka_queue_polling_interval_sec": bad}
+            )
+        assert "kafka_queue_polling_interval_sec" in str(exc_info.value)
+
+
 def test_translate_dbosconfig_minimal_input():
     config: DBOSConfig = {
         "name": "test-app",
