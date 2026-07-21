@@ -979,6 +979,17 @@ class SystemDatabase(ABC):
         queue_name: Optional[str] = None,
     ) -> None:
         with self.engine.begin() as c:
+            # Check existence separately: a zero-row update also means "already complete", a legal no-op.
+            existing = set(
+                c.execute(
+                    sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
+                        SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids)
+                    )
+                ).scalars()
+            )
+            missing = [wfid for wfid in workflow_ids if wfid not in existing]
+            if missing:
+                raise DBOSNonExistentWorkflowError("target", ", ".join(missing))
             # Set the workflows' status to ENQUEUED and clear recovery attempts and deadline,
             # but only if the workflow is not already complete.
             c.execute(
@@ -1202,7 +1213,7 @@ class SystemDatabase(ABC):
             status_by_id = {row[0]: row for row in rows}
             for original_workflow_id in original_workflow_ids:
                 if original_workflow_id not in status_by_id:
-                    raise Exception(f"Workflow {original_workflow_id} not found")
+                    raise DBOSNonExistentWorkflowError("target", original_workflow_id)
             statuses = [status_by_id[wid] for wid in original_workflow_ids]
             # Bulk insert all forked workflow status rows in one statement.
             c.execute(
