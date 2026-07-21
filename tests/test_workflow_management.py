@@ -8,7 +8,7 @@ import sqlalchemy as sa
 from sqlalchemy import event as sa_event
 
 from dbos import DBOS, DBOSClient, SetEnqueueOptions, SetWorkflowID, WorkflowHandle
-from dbos._error import DBOSAwaitedWorkflowCancelledError
+from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSNonExistentWorkflowError
 from dbos._schemas.application_database import ApplicationSchema
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from dbos._workflow_commands import garbage_collect, global_timeout
@@ -461,6 +461,53 @@ def test_bulk_resume(dbos: DBOS) -> None:
     assert steps_completed == 6
 
     assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_resume_nonexistent_workflow(dbos: DBOS, client: DBOSClient) -> None:
+    @DBOS.workflow()
+    def simple_workflow(x: int) -> int:
+        return x
+
+    missing_id = str(uuid.uuid4())
+
+    # Resuming a missing ID must fail, not return a handle whose get_result() polls forever
+    with pytest.raises(DBOSNonExistentWorkflowError):
+        DBOS.resume_workflow(missing_id)
+    with pytest.raises(DBOSNonExistentWorkflowError):
+        client.resume_workflow(missing_id)
+
+    # Resuming a workflow that exists but already completed is still a legal no-op
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert simple_workflow(5) == 5
+    assert DBOS.resume_workflow(wfid).get_result() == 5
+
+    # A bulk resume containing a missing ID is all-or-nothing: nothing is re-enqueued
+    with pytest.raises(DBOSNonExistentWorkflowError):
+        DBOS.resume_workflows([wfid, missing_id])
+    status = DBOS.get_workflow_status(wfid)
+    assert status is not None and status.status == "SUCCESS"
+
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+@pytest.mark.asyncio
+async def test_resume_nonexistent_workflow_async(dbos: DBOS) -> None:
+    missing_id = str(uuid.uuid4())
+
+    with pytest.raises(DBOSNonExistentWorkflowError):
+        await DBOS.resume_workflow_async(missing_id)
+    with pytest.raises(DBOSNonExistentWorkflowError):
+        await DBOS.resume_workflows_async([missing_id])
+
+
+def test_fork_nonexistent_workflow(dbos: DBOS, client: DBOSClient) -> None:
+    missing_id = str(uuid.uuid4())
+
+    with pytest.raises(DBOSNonExistentWorkflowError):
+        DBOS.fork_workflow(missing_id, 1)
+    with pytest.raises(DBOSNonExistentWorkflowError):
+        client.fork_workflow(missing_id, 1)
 
 
 def test_bulk_delete(dbos: DBOS) -> None:
