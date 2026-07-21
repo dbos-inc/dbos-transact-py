@@ -1,5 +1,7 @@
 # Public API
 import os
+import sys
+from pathlib import Path
 
 from dbos import DBOS, SetWorkflowID
 from tests.conftest import default_config
@@ -31,11 +33,15 @@ class WF:
 
 
 def main() -> None:
+    if len(sys.argv) < 2:
+        print("Usage: queuedworkflow sqlite_path")
+        os._exit(1)
+    config = default_config(Path(sys.argv[1]))
     DBOS(
         config={
             "name": "test-app",
-            "system_database_url": default_config()["system_database_url"],
-            "application_database_url": default_config()["application_database_url"],
+            "system_database_url": config["system_database_url"],
+            "application_database_url": config["application_database_url"],
         }
     )
     DBOS.launch()

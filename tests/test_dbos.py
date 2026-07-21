@@ -988,8 +988,12 @@ def test_retrieve_workflow_in_workflow(dbos: DBOS) -> None:
 
 
 def test_sleep(dbos: DBOS) -> None:
+    sleep_counter = 0
+
     @DBOS.workflow()
     def test_sleep_workflow(secs: float) -> str:
+        nonlocal sleep_counter
+        sleep_counter += 1
         dbos.sleep(secs)
         workflow_id = DBOS.workflow_id
         assert workflow_id is not None
@@ -1000,10 +1004,10 @@ def test_sleep(dbos: DBOS) -> None:
     assert time.time() - start_time > 1.4
 
     # Test sleep OAOO, skip sleep
-    start_time = time.time()
     with SetWorkflowID(sleep_uuid):
         assert test_sleep_workflow(1.5) == sleep_uuid
-        assert time.time() - start_time < 0.3
+    # Completed replay returns the recorded result without re-running the sleep.
+    assert sleep_counter == 1
 
 
 def test_send_recv(dbos: DBOS, config: DBOSConfig) -> None:
@@ -1546,10 +1550,14 @@ def test_set_get_events(
             DBOS.set_event("key4", "badvalue")
             DBOS.set_event("key4", "value4")
 
+        getevent_counter = 0
+
         @DBOS.workflow()
         def test_getevent_workflow(
             target_uuid: str, key: str, timeout: float = 0.0
         ) -> Optional[str]:
+            nonlocal getevent_counter
+            getevent_counter += 1
             msg = dbos.get_event(target_uuid, key, timeout)
             return str(msg) if msg is not None else None
 
@@ -1598,12 +1606,12 @@ def test_set_get_events(
             assert duration > 0.7
             assert res is None
 
+        calls_before_replay = getevent_counter
         with SetWorkflowID(timeout_uuid):
-            begin_time = time.time()
             res = test_getevent_workflow("non-existent-uuid", "key1", 1.0)
-            duration = time.time() - begin_time
-            assert duration < 0.3
             assert res is None
+        # Completed replay returns the recorded result without re-running the wait.
+        assert getevent_counter == calls_before_replay
 
         # No OAOO for getEvent outside of a workflow
         begin_time = time.time()

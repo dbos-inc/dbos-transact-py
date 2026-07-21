@@ -11,14 +11,14 @@ import pytest
 
 from dbos import DBOS, DBOSConfig
 from dbos._sys_db_sqlite import SQLiteSystemDatabase
-from tests.conftest import default_config, using_sqlite
+from tests.conftest import using_sqlite
 
 
 @pytest.fixture()
-def sqlite_config() -> DBOSConfig:
+def sqlite_config(config: DBOSConfig) -> DBOSConfig:
     if not using_sqlite():
         pytest.skip("This test only runs with SQLite")
-    return default_config()
+    return config
 
 
 def test_sqlite_engine_kwargs_passed() -> None:
