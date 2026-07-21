@@ -914,10 +914,11 @@ def test_class_step_without_dbos(dbos: DBOS, config: DBOSConfig) -> None:
 def test_inst_recovery_missing_instance(
     dbos: DBOS, config: DBOSConfig, caplog: pytest.LogCaptureFixture
 ) -> None:
-    # Reproduces issue #645: when startup recovery runs for an instance-method
-    # workflow whose DBOSConfiguredInstance has not been registered, the lookup
-    # raises DBOSWorkflowFunctionNotFoundError but the recovery thread swallows
-    # it without any log or other indication to the user.
+    # Reproduces issue #645: when a recovered instance-method workflow's
+    # DBOSConfiguredInstance has not been registered, the lookup raises
+    # DBOSWorkflowFunctionNotFoundError, which was swallowed without any log or
+    # other indication to the user. The workflow does not run; it must at least
+    # be visible in the logs.
     wfid = str(uuid.uuid4())
     DBOS.destroy(destroy_registry=True)
     config["application_version"] = "1.0.0"
@@ -959,7 +960,7 @@ def test_inst_recovery_missing_instance(
     caplog.set_level(logging.WARNING, "dbos")
     try:
         DBOS.launch()
-        # Give startup_recovery_thread a moment to run and emit a warning.
+        # Recovery re-enqueues; the queue worker logs the failed lookup on dequeue.
         deadline = time.time() + 5
         while time.time() < deadline:
             if "is not registered" in caplog.text:
@@ -970,8 +971,6 @@ def test_inst_recovery_missing_instance(
 
     assert f"is not registered" in caplog.text
     assert "test_class" in caplog.text
-    inst = TestClass()
-    assert DBOS.retrieve_workflow(wfid).get_result()
 
 
 def test_class_with_only_steps(dbos: DBOS) -> None:

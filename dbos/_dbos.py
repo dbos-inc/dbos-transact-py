@@ -57,6 +57,7 @@ from ._core import (
     StepOptions,
     WorkflowHandleAsyncPolling,
     WorkflowHandlePolling,
+    _validate_enqueue_only_options,
     close_stream,
     decorate_step,
     decorate_transaction,
@@ -1238,6 +1239,7 @@ class DBOS:
     ) -> WorkflowHandleAsync[R]:
         """Invoke a workflow function on the event loop, returning a handle to the ongoing execution."""
         ctx = get_local_dbos_context()
+        _validate_enqueue_only_options(ctx, None)
         parent_ctx_copy = copy.copy(ctx)
         child_ctx = DBOSContext.create_start_workflow_child(ctx)
         await cls._configure_asyncio_thread_pool()
@@ -1955,14 +1957,14 @@ class DBOS:
 
     @classmethod
     def _execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
-        """Execute a workflow by ID (for recovery)."""
+        """Execute a workflow by ID directly. Internal, used only for testing."""
         return execute_workflow_by_id(_get_dbos_instance(), workflow_id, True, False)
 
     @classmethod
     def _recover_pending_workflows(
         cls, executor_ids: List[str] = ["local"]
     ) -> List[WorkflowHandle[Any]]:
-        """Find all PENDING workflows and execute them."""
+        """Find all PENDING workflows and recover them. Internal."""
         return recover_pending_workflows(_get_dbos_instance(), executor_ids)
 
     @classmethod

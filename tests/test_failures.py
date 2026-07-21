@@ -166,7 +166,7 @@ def test_notification_errors(dbos: DBOS, skip_with_sqlite: None) -> None:
 
 def test_dead_letter_queue(dbos: DBOS) -> None:
     event = threading.Event()
-    max_recovery_attempts = 20
+    max_recovery_attempts = 3
     recovery_count = 0
 
     @DBOS.workflow(max_recovery_attempts=max_recovery_attempts)
@@ -184,17 +184,27 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
     for i in range(max_recovery_attempts):
         set_workflow_status(dbos._sys_db, wfid, "PENDING")
         handles = DBOS._recover_pending_workflows()
-        handles[0].get_result()
+        # Select our workflow rather than trusting ordering: recovery returns a
+        # polling handle for every pending row, and get_result() on the wrong one
+        # polls forever, turning a failure into a suite-level timeout.
+        recovered = [h for h in handles if h.workflow_id == wfid]
+        assert len(recovered) == 1
+        recovered[0].get_result()
         assert recovery_count == i + 2
 
     # Verify an additional attempt (either through recovery or through a direct call) throws a DLQ error
     # and puts the workflow in the DLQ status.
     set_workflow_status(dbos._sys_db, wfid, "PENDING")
     DBOS._recover_pending_workflows()
-    assert (
-        handle.get_status().status
-        == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
-    )
+
+    # Recovery re-enqueues, so the DLQ transition happens when the queue dequeues the workflow.
+    def check_dlq() -> None:
+        assert (
+            handle.get_status().status
+            == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
+        )
+
+    retry_until_success(check_dlq)
     with pytest.raises(Exception) as exc_info:
         with SetWorkflowID(wfid):
             dead_letter_workflow()

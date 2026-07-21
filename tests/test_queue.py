@@ -1842,6 +1842,62 @@ async def test_simple_queue_async(dbos: DBOS) -> None:
     assert step_counter == 1
 
 
+def test_enqueue_options_require_a_queue(dbos: DBOS) -> None:
+    # These options are interpreted by the queue machinery alone, so setting one
+    # without a queue silently does nothing -- and persisting a dedup ID is unsafe,
+    # because it becomes a unique-constraint violation once anything assigns the
+    # row a queue name (e.g. recovery).
+
+    @DBOS.workflow()
+    def test_workflow(var: str) -> str:
+        return var
+
+    options: List[dict[str, Any]] = [
+        {"deduplication_id": "dedup_without_queue"},
+        {"priority": 5},
+        {"queue_partition_key": "key_without_queue"},
+        {"delay_seconds": 30},
+    ]
+    for option in options:
+        wfid = str(uuid.uuid4())
+        with pytest.raises(DBOSException) as exc_info:
+            with SetEnqueueOptions(**option):
+                with SetWorkflowID(wfid):
+                    DBOS.start_workflow(test_workflow, "bob")
+        message = str(exc_info.value)
+        assert "not being enqueued" in message
+        assert next(iter(option)) in message
+        # The call must be rejected before any row is written, or it would leave
+        # exactly the orphaned PENDING row this validation exists to prevent.
+        assert DBOS.get_workflow_status(wfid) is None
+
+    # app_version is excluded: without a queue it still decides which executors
+    # can recover the workflow, so pinning it is meaningful and must keep working.
+    pinned_id = str(uuid.uuid4())
+    with SetEnqueueOptions(app_version="some_other_version"):
+        with SetWorkflowID(pinned_id):
+            DBOS.start_workflow(test_workflow, "bob")
+    pinned = DBOS.get_workflow_status(pinned_id)
+    assert pinned is not None and pinned.app_version == "some_other_version"
+
+
+@pytest.mark.asyncio
+async def test_enqueue_options_require_a_queue_async(dbos: DBOS) -> None:
+    # start_workflow_async carries the same validation on a separate code path.
+
+    @DBOS.workflow()
+    async def test_workflow(var: str) -> str:
+        return var
+
+    wfid = str(uuid.uuid4())
+    with pytest.raises(DBOSException) as exc_info:
+        with SetEnqueueOptions(deduplication_id="dedup_without_queue"):
+            with SetWorkflowID(wfid):
+                await DBOS.start_workflow_async(test_workflow, "bob")
+    assert "not being enqueued" in str(exc_info.value)
+    assert await DBOS.get_workflow_status_async(wfid) is None
+
+
 def test_queue_deduplication(dbos: DBOS) -> None:
     queue_name = "test_dedup_queue"
     DBOS.register_queue(queue_name)

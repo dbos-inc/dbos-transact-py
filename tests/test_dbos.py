@@ -39,7 +39,7 @@ from dbos._error import (
 )
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import _dbos_null_topic
-from dbos._utils import GlobalParams
+from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from tests.conftest import retry_until_success, set_workflow_status, using_sqlite
 
 
@@ -442,6 +442,147 @@ def test_recovery_workflow(dbos: DBOS) -> None:
     stat = workflow_handles[0].get_status()
     assert stat
     assert stat.recovery_attempts == 2  # original attempt + recovery attempt
+
+
+def test_recovery_reenqueue_is_ownership_conditional(dbos: DBOS) -> None:
+    """Recovery only re-enqueues workflows still owned by an executor it declared dead.
+
+    Once a live executor dequeues a recovered workflow, the dequeue stamps its own
+    ID on the row, so a duplicate (or delayed) recovery sweep for the dead executor
+    must not yank the running workflow back to ENQUEUED.
+    """
+
+    blocker = threading.Event()
+
+    @DBOS.workflow()
+    def blocked_workflow(var: str) -> str:
+        blocker.wait()
+        return var
+
+    wfuuid = str(uuid.uuid4())
+    with SetWorkflowID(wfuuid):
+        handle = DBOS.start_workflow(blocked_workflow, "bob")
+
+    # Orphan the workflow: PENDING, owned by an executor that is now dead.
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"status": "PENDING", "executor_id": "deadexecutor"})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
+        )
+
+    # The workflow stays blocked for the whole check, so release it even on
+    # failure: an assertion that escapes with the workflow still running wedges
+    # DBOS.destroy() in fixture teardown and hangs the suite instead of failing.
+    try:
+        # A sweep naming a different executor must not touch the row.
+        assert (
+            dbos._sys_db.reenqueue_for_recovery(
+                wfuuid, ["someotherexecutor"], INTERNAL_QUEUE_NAME
+            )
+            is False
+        )
+        unchanged = DBOS.get_workflow_status(wfuuid)
+        assert unchanged and unchanged.status == "PENDING"
+
+        # A sweep naming the dead executor re-enqueues it onto the internal queue.
+        assert (
+            dbos._sys_db.reenqueue_for_recovery(
+                wfuuid, ["deadexecutor"], INTERNAL_QUEUE_NAME
+            )
+            is True
+        )
+
+        # Wait for the queue to dequeue it. The row returns to PENDING, now
+        # stamped with this live executor's ID -- the state the claim rests on.
+        def dequeued_by_live_executor() -> None:
+            status = DBOS.get_workflow_status(wfuuid)
+            assert status is not None
+            assert status.status == WorkflowStatusString.PENDING.value
+            assert status.executor_id == GlobalParams.executor_id
+
+        retry_until_success(dequeued_by_live_executor)
+
+        # Because the row is PENDING again, only the executor predicate can
+        # reject this duplicate sweep. It must not yank the running workflow.
+        assert (
+            dbos._sys_db.reenqueue_for_recovery(
+                wfuuid, ["deadexecutor"], INTERNAL_QUEUE_NAME
+            )
+            is False
+        )
+        still_running = DBOS.get_workflow_status(wfuuid)
+        assert (
+            still_running and still_running.status == WorkflowStatusString.PENDING.value
+        )
+    finally:
+        blocker.set()
+
+    assert handle.get_result() == "bob"
+
+
+def test_duplicate_recovery_does_not_rerun_running_workflow(dbos: DBOS) -> None:
+    """Recovery hands a running workflow back to the queue, and each sweep yields exactly one dequeue.
+
+    This pins the mechanism this PR introduced rather than the pre-existing
+    in-process ownership guard: a workflow that was never enqueued acquires the
+    internal queue's name and is restarted by the queue, where before the sweep
+    executed it directly and the row's queue_name stayed None.
+    """
+    start_count = 0
+    blocker = threading.Event()
+
+    @DBOS.workflow()
+    def blocked_workflow() -> str:
+        nonlocal start_count
+        start_count += 1
+        blocker.wait()
+        return "done"
+
+    wfuuid = str(uuid.uuid4())
+    with SetWorkflowID(wfuuid):
+        handle = DBOS.start_workflow(blocked_workflow)
+
+    # Release the workflow even on failure: an assertion that escapes while it is
+    # still blocked wedges DBOS.destroy() in teardown and hangs the suite.
+    try:
+
+        def check_running() -> None:
+            assert start_count == 1
+
+        retry_until_success(check_running)
+
+        # Started directly, so it carries no queue at all.
+        before = DBOS.get_workflow_status(wfuuid)
+        assert before is not None and before.queue_name is None
+
+        # Each sweep re-enqueues the running workflow (recovering a live executor
+        # is not prevented).
+        for expected_attempts in (2, 3):
+            DBOS._recover_pending_workflows([GlobalParams.executor_id])
+
+            # Recovery re-enqueued rather than executing: the row now belongs to
+            # the internal queue, which is what restarts it. queue_name is never
+            # cleared afterwards, so reading it here is not a race.
+            requeued = DBOS.get_workflow_status(wfuuid)
+            assert requeued is not None
+            assert requeued.queue_name == INTERNAL_QUEUE_NAME
+
+            # The queue restarts it exactly once per sweep: the ENQUEUED->PENDING
+            # dequeue admits a single runner, so recovery_attempts advances by one.
+            def dequeued(expected: int = expected_attempts) -> None:
+                status = DBOS.get_workflow_status(wfuuid)
+                assert status is not None
+                assert status.recovery_attempts == expected
+                assert status.status == WorkflowStatusString.PENDING.value
+
+            retry_until_success(dequeued)
+            assert start_count == 1
+    finally:
+        blocker.set()
+
+    assert handle.get_result() == "done"
+    assert start_count == 1
 
 
 def test_recovery_empty_id_dead_letters(dbos: DBOS) -> None:

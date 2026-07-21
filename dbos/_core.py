@@ -1104,6 +1104,7 @@ def start_workflow(
     }
 
     local_ctx = get_local_dbos_context()
+    _validate_enqueue_only_options(local_ctx, queue_name)
     workflow_timeout_ms, workflow_deadline_epoch_ms = _get_timeout_deadline(
         local_ctx, queue_name
     )
@@ -1231,6 +1232,7 @@ async def start_workflow_async(
         "kwargs": kwargs,
     }
 
+    _validate_enqueue_only_options(local_ctx, queue_name)
     workflow_timeout_ms, workflow_deadline_epoch_ms = _get_timeout_deadline(
         local_ctx, queue_name
     )
@@ -2362,6 +2364,29 @@ def close_stream(dbos: "DBOS", step_ctx: Optional["DBOSContext"], key: str) -> N
     else:
         # Cannot call it from outside of a workflow
         raise DBOSException("close_stream() must be called from within a workflow")
+
+
+def _validate_enqueue_only_options(
+    ctx: Optional[DBOSContext], queue: Optional[str]
+) -> None:
+    """Reject enqueue options on a workflow that is not being enqueued."""
+    if queue is not None or ctx is None:
+        return
+    set_options = [
+        name
+        for name, value in (
+            ("deduplication_id", ctx.deduplication_id),
+            ("priority", ctx.priority),
+            ("queue_partition_key", ctx.queue_partition_key),
+            ("delay_seconds", ctx.delay_until_epoch_ms),
+        )
+        if value is not None
+    ]
+    if set_options:
+        raise DBOSException(
+            f"Enqueue option(s) {', '.join(set_options)} set on a workflow that is not being enqueued. "
+            "These options are only supported when enqueueing a workflow onto a queue."
+        )
 
 
 def _get_timeout_deadline(
