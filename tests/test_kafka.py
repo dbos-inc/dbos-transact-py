@@ -1193,6 +1193,206 @@ def test_init_workflows_cursor_survives_restart(dbos: DBOS) -> None:
     assert min(ordered[5:]) > max(ordered[:5])
 
 
+def test_init_workflows_cursor_scoped_per_queue(dbos: DBOS) -> None:
+    # Cursors are per (queue, partition key), matching the dequeue scope: the same key on another queue must not inherit this queue's high-water mark.
+    import sqlalchemy as sa
+
+    from dbos._core import prepare_enqueued_workflow
+    from dbos._schemas.system_database import SystemSchema
+
+    @DBOS.workflow()
+    def per_queue_workflow(value: str) -> None:
+        pass
+
+    prefix = f"perqueue-{random.randrange(1_000_000_000)}"
+    queue_a = f"unpolled-a-{random.randrange(1_000_000_000)}"
+    queue_b = f"unpolled-b-{random.randrange(1_000_000_000)}"
+    key = (
+        f"{prefix}-shared-key"  # one key string, deliberately reused across both queues
+    )
+
+    def statuses(queue_name: str, offsets: range) -> list[Any]:
+        return [
+            prepare_enqueued_workflow(
+                dbos,
+                per_queue_workflow,
+                (f"value-{i}",),
+                {},
+                queue_name=queue_name,
+                workflow_id=f"{prefix}-{queue_name}-{i}",
+                queue_partition_key=key,
+            )
+            for i in offsets
+        ]
+
+    # Drift queue_a's cursor an hour ahead so its rows are future-dated and stay ENQUEUED.
+    future = int(time.time() * 1000) + 3_600_000
+    with dbos._sys_db._batch_created_at_lock:
+        dbos._sys_db._batch_created_at_cursors[(queue_a, key)] = future
+    assert len(dbos._sys_db.init_workflows(statuses(queue_a, range(5)))) == 5
+
+    # Restart: queue_b's first sight of the key must seed from queue_b's own rows (there are none), not from queue_a's.
+    with dbos._sys_db._batch_created_at_lock:
+        dbos._sys_db._batch_created_at_cursors.clear()
+    before_ms = int(time.time() * 1000)
+    assert len(dbos._sys_db.init_workflows(statuses(queue_b, range(5)))) == 5
+
+    with dbos._sys_db.engine.begin() as conn:
+        rows = conn.execute(
+            sa.select(
+                SystemSchema.workflow_status.c.queue_name,
+                SystemSchema.workflow_status.c.created_at,
+            ).where(SystemSchema.workflow_status.c.workflow_uuid.like(f"{prefix}-%"))
+        ).fetchall()
+
+    by_queue: dict[str, list[int]] = {queue_a: [], queue_b: []}
+    for queue_name, created_at in rows:
+        by_queue[queue_name].append(created_at)
+    assert len(by_queue[queue_a]) == 5
+    assert len(by_queue[queue_b]) == 5
+    # queue_b starts at wall clock: a key-only cursor would have seeded it from queue_a's future-dated backlog.
+    assert min(by_queue[queue_b]) >= before_ms
+    assert max(by_queue[queue_b]) < min(by_queue[queue_a])
+    # Only the pair actually enqueued after the restart is tracked.
+    assert (queue_b, key) in dbos._sys_db._batch_created_at_cursors
+    assert (queue_a, key) not in dbos._sys_db._batch_created_at_cursors
+
+
+def test_init_workflows_seeds_from_pending_rows(dbos: DBOS) -> None:
+    # Seeding must span PENDING rows, not just ENQUEUED: recovery re-enqueues a PENDING row preserving its created_at, so a cursor seeded only from ENQUEUED rows would stamp newer messages below it.
+    import sqlalchemy as sa
+
+    from dbos._core import prepare_enqueued_workflow
+    from dbos._schemas.system_database import SystemSchema
+
+    @DBOS.workflow()
+    def pending_seed_workflow(value: str) -> None:
+        pass
+
+    prefix = f"pendseed-{random.randrange(1_000_000_000)}"
+    queue_name = f"unpolled-{random.randrange(1_000_000_000)}"
+    key = f"{prefix}-key"
+
+    def statuses(offsets: range) -> list[Any]:
+        return [
+            prepare_enqueued_workflow(
+                dbos,
+                pending_seed_workflow,
+                (f"value-{i}",),
+                {},
+                queue_name=queue_name,
+                workflow_id=f"{prefix}-{i}",
+                queue_partition_key=key,
+            )
+            for i in offsets
+        ]
+
+    # Drift the cursor an hour ahead so the backlog (offsets 0-4) is future-dated.
+    future = int(time.time() * 1000) + 3_600_000
+    with dbos._sys_db._batch_created_at_lock:
+        dbos._sys_db._batch_created_at_cursors[(queue_name, key)] = future
+    assert len(dbos._sys_db.init_workflows(statuses(range(0, 5)))) == 5
+
+    # The entire backlog goes in flight; a foreign executor_id keeps local recovery from claiming these rows.
+    with dbos._sys_db.engine.begin() as conn:
+        conn.execute(
+            sa.update(SystemSchema.workflow_status)
+            .where(SystemSchema.workflow_status.c.workflow_uuid.like(f"{prefix}-%"))
+            .values(
+                status="PENDING",
+                executor_id=f"other-{random.randrange(1_000_000_000)}",
+            )
+        )
+
+    # Fresh owner after a restart: PENDING rows are now the only high-water mark available.
+    with dbos._sys_db._batch_created_at_lock:
+        dbos._sys_db._batch_created_at_cursors.clear()
+    assert len(dbos._sys_db.init_workflows(statuses(range(5, 10)))) == 5
+
+    with dbos._sys_db.engine.begin() as conn:
+        rows = conn.execute(
+            sa.select(
+                SystemSchema.workflow_status.c.workflow_uuid,
+                SystemSchema.workflow_status.c.created_at,
+            ).where(SystemSchema.workflow_status.c.workflow_uuid.like(f"{prefix}-%"))
+        ).fetchall()
+
+    created_by_offset = {int(wfid.rsplit("-", 1)[1]): ca for wfid, ca in rows}
+    assert len(created_by_offset) == 10
+    ordered = [created_by_offset[i] for i in range(10)]
+    assert ordered == sorted(ordered)
+    assert len(set(ordered)) == 10
+    # Post-restart messages sort after the in-flight backlog, which recovery may re-enqueue at its original created_at.
+    assert min(ordered[5:]) > max(ordered[:5])
+
+
+def test_init_workflows_multi_queue_batch_seeds_only_requested_pairs(
+    dbos: DBOS,
+) -> None:
+    # The seed query's two IN lists cross-product, so it returns groups for (queue, key) pairs the batch never asked about; those must be discarded rather than cached as cursors.
+    import sqlalchemy as sa
+
+    from dbos._core import prepare_enqueued_workflow
+    from dbos._schemas.system_database import SystemSchema
+
+    @DBOS.workflow()
+    def cross_product_workflow(value: str) -> None:
+        pass
+
+    prefix = f"crossp-{random.randrange(1_000_000_000)}"
+    queue_a = f"unpolled-a-{random.randrange(1_000_000_000)}"
+    queue_b = f"unpolled-b-{random.randrange(1_000_000_000)}"
+    key_a = f"{prefix}-key-a"
+    key_b = f"{prefix}-key-b"
+
+    def status(queue_name: str, key: str, tag: str) -> Any:
+        return prepare_enqueued_workflow(
+            dbos,
+            cross_product_workflow,
+            (tag,),
+            {},
+            queue_name=queue_name,
+            workflow_id=f"{prefix}-{tag}",
+            queue_partition_key=key,
+        )
+
+    # Give the off-diagonal pair (queue_a, key_b) real rows: the batch below never requests it, but the cross product will match it.
+    future = int(time.time() * 1000) + 3_600_000
+    with dbos._sys_db._batch_created_at_lock:
+        dbos._sys_db._batch_created_at_cursors[(queue_a, key_b)] = future
+    assert len(dbos._sys_db.init_workflows([status(queue_a, key_b, "offdiag")])) == 1
+
+    # A single batch spanning two queues, requesting only the diagonal pairs.
+    with dbos._sys_db._batch_created_at_lock:
+        dbos._sys_db._batch_created_at_cursors.clear()
+    before_ms = int(time.time() * 1000)
+    inserted = dbos._sys_db.init_workflows(
+        [status(queue_a, key_a, "diag-a"), status(queue_b, key_b, "diag-b")]
+    )
+    assert inserted == {f"{prefix}-diag-a", f"{prefix}-diag-b"}
+
+    cursors = dbos._sys_db._batch_created_at_cursors
+    assert (queue_a, key_a) in cursors
+    assert (queue_b, key_b) in cursors
+    # The cross-product match must not leak into the cursor map.
+    assert (queue_a, key_b) not in cursors
+
+    with dbos._sys_db.engine.begin() as conn:
+        rows = conn.execute(
+            sa.select(
+                SystemSchema.workflow_status.c.workflow_uuid,
+                SystemSchema.workflow_status.c.created_at,
+            ).where(
+                SystemSchema.workflow_status.c.workflow_uuid.like(f"{prefix}-diag-%")
+            )
+        ).fetchall()
+
+    # Both requested pairs start at wall clock, untouched by the off-diagonal row's future-dated created_at.
+    assert len(rows) == 2
+    for _, created_at in rows:
+        assert before_ms <= created_at < future
+
+
 # ---------------------------------------------------------------------------
 # Decorator validation, config coercion, and helpers (no broker required)
 # ---------------------------------------------------------------------------
