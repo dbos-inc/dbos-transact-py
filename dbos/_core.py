@@ -144,6 +144,7 @@ class WorkflowHandleFuture(Generic[R]):
     def get_result(
         self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
     ) -> R:
+        start_time = int(time.time() * 1000)
         try:
             try:
                 r = self.future.result()
@@ -157,12 +158,20 @@ class WorkflowHandleFuture(Generic[R]):
                 e, None, self.dbos._serializer
             )
             self.dbos._sys_db.record_get_result(
-                self.workflow_id, None, serialized_e, serialization
+                self.workflow_id,
+                None,
+                serialized_e,
+                serialization,
+                started_at_epoch_ms=start_time,
             )
             raise
         serialized_r, serialization = serialize_value(r, None, self.dbos._serializer)
         self.dbos._sys_db.record_get_result(
-            self.workflow_id, serialized_r, None, serialization
+            self.workflow_id,
+            serialized_r,
+            None,
+            serialization,
+            started_at_epoch_ms=start_time,
         )
         return r
 
@@ -185,6 +194,7 @@ class WorkflowHandlePolling(Generic[R]):
     def get_result(
         self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
     ) -> R:
+        start_time = int(time.time() * 1000)
         try:
             r: R = self.dbos._sys_db.await_workflow_result(
                 self.workflow_id, polling_interval_sec
@@ -194,12 +204,20 @@ class WorkflowHandlePolling(Generic[R]):
                 e, None, self.dbos._serializer
             )
             self.dbos._sys_db.record_get_result(
-                self.workflow_id, None, serialized_e, serialization
+                self.workflow_id,
+                None,
+                serialized_e,
+                serialization,
+                started_at_epoch_ms=start_time,
             )
             raise
         serialized_r, serialization = serialize_value(r, None, self.dbos._serializer)
         self.dbos._sys_db.record_get_result(
-            self.workflow_id, serialized_r, None, serialization
+            self.workflow_id,
+            serialized_r,
+            None,
+            serialization,
+            started_at_epoch_ms=start_time,
         )
         return r
 
@@ -223,6 +241,7 @@ class WorkflowHandleAsyncTask(Generic[R]):
     async def get_result(
         self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
     ) -> R:
+        start_time = int(time.time() * 1000)
         try:
             try:
                 r = await self.task
@@ -241,6 +260,7 @@ class WorkflowHandleAsyncTask(Generic[R]):
                 None,
                 serialized_e,
                 serialization,
+                started_at_epoch_ms=start_time,
             )
             raise
         serialized_r, serialization = serialize_value(r, None, self.dbos._serializer)
@@ -250,6 +270,7 @@ class WorkflowHandleAsyncTask(Generic[R]):
             serialized_r,
             None,
             serialization,
+            started_at_epoch_ms=start_time,
         )
         return r
 
@@ -272,6 +293,7 @@ class WorkflowHandleAsyncPolling(Generic[R]):
     async def get_result(
         self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
     ) -> R:
+        start_time = int(time.time() * 1000)
         try:
             r: R = await self.dbos._sys_db.await_workflow_result_async(
                 self.workflow_id,
@@ -287,6 +309,7 @@ class WorkflowHandleAsyncPolling(Generic[R]):
                 None,
                 serialized_e,
                 serialization,
+                started_at_epoch_ms=start_time,
             )
             raise
         serialized_r, serialization = serialize_value(r, None, self.dbos._serializer)
@@ -296,6 +319,7 @@ class WorkflowHandleAsyncPolling(Generic[R]):
             serialized_r,
             None,
             serialization,
+            started_at_epoch_ms=start_time,
         )
         return r
 
@@ -1468,6 +1492,7 @@ def workflow_wrapper(
             If a child workflow is invoked synchronously, this records the implicit "getResult" where the
             parent retrieves the child's output. It executes in the CALLER'S context, not the workflow's.
             """
+            start_time = int(time.time() * 1000)
             try:
                 r = func()
             except Exception as e:
@@ -1476,13 +1501,23 @@ def workflow_wrapper(
                 )
                 assert workflow_id is not None
                 dbos._sys_db.record_get_result(
-                    workflow_id, None, serialized_e, serialization, resctx
+                    workflow_id,
+                    None,
+                    serialized_e,
+                    serialization,
+                    resctx,
+                    started_at_epoch_ms=start_time,
                 )
                 raise
             serialized_r, serialization = serialize_value(r, None, dbos._serializer)
             assert workflow_id is not None
             dbos._sys_db.record_get_result(
-                workflow_id, serialized_r, None, serialization, resctx
+                workflow_id,
+                serialized_r,
+                None,
+                serialization,
+                resctx,
+                started_at_epoch_ms=start_time,
             )
             return r
 
@@ -1569,6 +1604,9 @@ def decorate_transaction(
                 }
                 with EnterDBOSTransaction(session, attributes=attributes):
                     ctx = assert_current_dbos_context()
+                    # Stamp the start before the checkpoint lookup, so transactions
+                    # and steps measure the same span.
+                    step_start_time = int(time.time() * 1000)
                     # Check if the step record for this transaction exists
                     recorded_step_output = dbos._sys_db.check_operation_execution(
                         ctx.workflow_id, ctx.function_id, transaction_name
@@ -1611,7 +1649,7 @@ def decorate_transaction(
                         "output": None,
                         "error": None,
                         "serialization": None,
-                        "started_at_epoch_ms": int(time.time() * 1000),
+                        "started_at_epoch_ms": step_start_time,
                     }
                     retry_wait_seconds = 0.001
                     backoff_factor = 1.5

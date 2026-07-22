@@ -1740,6 +1740,7 @@ class DBOS:
         attributes: TracedAttributes = {"name": "asyncio_wait"}
 
         with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
+            start_time = int(time.time() * 1000)
             recorded = await asyncio.to_thread(
                 dbos._sys_db.check_operation_execution,
                 ctx.workflow_id,
@@ -1780,7 +1781,7 @@ class DBOS:
                         "output": serialized_output,
                         "error": None,
                         "serialization": serialization,
-                        "started_at_epoch_ms": int(time.time() * 1000),
+                        "started_at_epoch_ms": start_time,
                     },
                 )
                 return done, pending

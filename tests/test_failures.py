@@ -1181,7 +1181,13 @@ def test_record_get_result_increments_function_id_once_on_db_retry(
     _set_local_dbos_context(ctx)
     try:
         dbos._sys_db.engine = proxy  # type: ignore[assignment]
-        dbos._sys_db.record_get_result(str(uuid.uuid4()), "some-output", None, None)
+        dbos._sys_db.record_get_result(
+            str(uuid.uuid4()),
+            "some-output",
+            None,
+            None,
+            started_at_epoch_ms=int(time.time() * 1000),
+        )
     finally:
         dbos._sys_db.engine = real_engine
         _set_local_dbos_context(prev)
