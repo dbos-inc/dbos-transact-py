@@ -1165,7 +1165,7 @@ def test_init_workflows_cursor_survives_restart(dbos: DBOS) -> None:
     # Simulate drift: force the cursor an hour ahead so the backlog (offsets 0-4) is future-dated and stays ENQUEUED.
     future = int(time.time() * 1000) + 3_600_000
     with dbos._sys_db._batch_created_at_lock:
-        dbos._sys_db._batch_created_at_cursors[key] = future
+        dbos._sys_db._batch_created_at_cursors[(queue_name, key)] = future
     assert len(dbos._sys_db.init_workflows(statuses(range(0, 5)))) == 5
 
     # Process A restarts / the partition rebalances: a fresh owner has no in-memory cursor.
