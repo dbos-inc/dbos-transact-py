@@ -12,7 +12,11 @@ import sqlalchemy as sa
 import typer
 
 from dbos._context import SetWorkflowID
-from dbos.cli.migration import run_dbos_database_migrations
+from dbos.cli.migration import (
+    print_dbos_migrations,
+    print_dbos_user_role_sql,
+    run_dbos_database_migrations,
+)
 
 from .._client import DBOSClient
 from .._dbos_config import (
@@ -281,11 +285,49 @@ def migrate(
             help='Schema name for DBOS system tables. Defaults to "dbos".',
         ),
     ] = "dbos",
+    print_migrations: Annotated[
+        typing.Optional[str],
+        typer.Option(
+            "--print-migrations",
+            metavar="[all|NUMBER]",
+            help="Print the SQL of all migrations ('--print-migrations all') or of migrations from a number onward ('--print-migrations 3') instead of running them",
+        ),
+    ] = None,
+    print_user_role: Annotated[
+        bool,
+        typer.Option(
+            "--print-user-role",
+            help="Print the SQL granting the application role (--app-role) access to DBOS system tables instead of executing it",
+        ),
+    ] = False,
 ) -> None:
     system_database_url, application_database_url = _get_db_url(
         system_database_url=system_database_url,
         application_database_url=application_database_url,
     )
+    if schema is None:
+        schema = "dbos"
+
+    if print_migrations is not None or print_user_role:
+        if print_migrations is not None and print_user_role:
+            typer.echo(
+                "--print-user-role cannot be combined with --print-migrations", err=True
+            )
+            raise typer.Exit(code=1)
+        if print_user_role and application_role is None:
+            typer.echo("--print-user-role requires --app-role", err=True)
+            raise typer.Exit(code=1)
+        if print_migrations is not None:
+            print_dbos_migrations(
+                system_database_url=system_database_url,
+                schema=schema,
+                migration=print_migrations,
+            )
+        if print_user_role:
+            assert application_role is not None
+            print_dbos_user_role_sql(schema=schema, role_name=application_role)
+        return
+
     # Emit INFO logs from migrations
     init_logger()
     dbos_logger.setLevel(logging.INFO)
@@ -293,8 +335,6 @@ def migrate(
     if application_database_url:
         typer.echo(f"Application database: {sa.make_url(application_database_url)}")
     typer.echo(f"System database: {sa.make_url(system_database_url)}")
-    if schema is None:
-        schema = "dbos"
     typer.echo(f"DBOS system schema: {schema}")
 
     run_dbos_database_migrations(
