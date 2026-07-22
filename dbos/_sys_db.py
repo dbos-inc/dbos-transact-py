@@ -2506,7 +2506,6 @@ class SystemDatabase(ABC):
             res = conn.execute(stmt)
             rows = res.fetchall()
             if len(rows) > 0:
-                # Only an idempotent db_retry of this same call completes at our timestamp.
                 existing_completed_at = rows[0][0]
                 if (
                     existing_completed_at is None
@@ -2525,7 +2524,7 @@ class SystemDatabase(ABC):
         *,
         completed_at_epoch_ms: Optional[int] = None,
     ) -> None:
-        # Must stay outside the retry: the conflict check compares the stored completion to ours.
+        # Outside the retry: the conflict check compares the stored completion to ours.
         completed_at = (
             completed_at_epoch_ms
             if completed_at_epoch_ms is not None
@@ -2600,7 +2599,7 @@ class SystemDatabase(ABC):
                 f"Attempted to record an empty child workflow ID for parent "
                 f"{parentUUID} (function {functionID}, {functionName})."
             )
-        # The span is the launch itself: the parent does not wait for the child here.
+        # Spans the launch only: the parent does not wait for the child here.
         sql = sa.insert(SystemSchema.operation_outputs).values(
             workflow_uuid=parentUUID,
             function_id=functionID,
@@ -3378,11 +3377,10 @@ class SystemDatabase(ABC):
     ) -> float:
         """Checkpoint a durable sleep, returning the seconds still left to wait.
 
-        The row must be written before the sleep, since it stores the absolute
-        wake time that recovery resumes from. `project_completion_time` records
-        the completion as that wake time, so the step's duration is the sleep
-        itself. Callers registering a timeout they may abandon early (recv,
-        get_event) leave it off, recording the registration as instantaneous.
+        The row precedes the sleep because it stores the wake time recovery resumes
+        from. `project_completion_time` records that wake time as the completion, so
+        the duration is the sleep; callers registering a timeout they may abandon
+        early (recv, get_event) leave it off and record an instant.
         """
         function_name = "DBOS.sleep"
         start_time = int(time.time() * 1000)

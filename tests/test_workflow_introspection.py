@@ -1437,8 +1437,7 @@ async def test_sleep_timing_async(dbos: DBOS) -> None:
 
 
 def test_recv_timeout_registration_is_instantaneous(dbos: DBOS) -> None:
-    """recv's internal sleep only registers a deadline it abandons on delivery,
-    so it stays ~0 while the recv row itself spans the real wait."""
+    """The internal sleep only registers a deadline, abandoned on delivery."""
 
     @DBOS.workflow()
     def receiver() -> Any:
@@ -1458,9 +1457,6 @@ def test_recv_timeout_registration_is_instantaneous(dbos: DBOS) -> None:
 
 
 def test_sleep_timing_unchanged_on_replay(dbos: DBOS) -> None:
-    """record_sleep returns early on the recorded path, so a replay must not
-    rewrite the checkpoint's timestamps."""
-
     @DBOS.workflow()
     def workflow() -> None:
         DBOS.sleep(1.0)
@@ -1479,8 +1475,6 @@ def test_sleep_timing_unchanged_on_replay(dbos: DBOS) -> None:
 
 
 def test_get_result_timing_from_handle(dbos: DBOS) -> None:
-    """Matches the DBOS.get_result() classmethod path, which was already timed."""
-
     @DBOS.workflow()
     def child() -> str:
         time.sleep(0.5)
@@ -1518,7 +1512,7 @@ def test_child_workflow_row_timing(dbos: DBOS) -> None:
     step = rows[0]
     assert step["started_at_epoch_ms"] and step["completed_at_epoch_ms"]
     assert step["completed_at_epoch_ms"] >= step["started_at_epoch_ms"]
-    # The launch is bookkeeping — it must not absorb the child's 500ms runtime.
+    # Bookkeeping: must not absorb the child's 500ms runtime.
     assert step["completed_at_epoch_ms"] - step["started_at_epoch_ms"] < 400
 
 
@@ -1546,8 +1540,6 @@ async def test_child_workflow_row_timing_async(dbos: DBOS) -> None:
 
 
 def test_get_result_timing_sync_child(dbos: DBOS) -> None:
-    """The implicit getResult is timed even though it is written from the caller's context."""
-
     @DBOS.workflow()
     def child() -> str:
         time.sleep(0.5)
@@ -1588,8 +1580,6 @@ async def test_get_result_timing_async_handle(dbos: DBOS) -> None:
 
 @pytest.mark.asyncio
 async def test_asyncio_wait_timing(dbos: DBOS) -> None:
-    """DBOS.asyncio_wait spans the wait, not just the checkpoint write."""
-
     @DBOS.workflow()
     async def child() -> None:
         await asyncio.sleep(0.5)
@@ -1664,9 +1654,7 @@ def test_step_conflict_over_child_workflow_row(dbos: DBOS) -> None:
 
 
 def test_step_conflict_over_row_without_completion(dbos: DBOS) -> None:
-    """A row with no completion timestamp still conflicts. Every current write
-    path sets one, but rows predating that used to make the conflict check raise
-    TypeError out of int(None) instead of DBOSWorkflowConflictIDError."""
+    """No current write path leaves one NULL, so the row is built by hand."""
     workflow_id = _completed_workflow_id(dbos)
 
     with dbos._sys_db.engine.begin() as c:
