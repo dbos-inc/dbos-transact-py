@@ -2360,8 +2360,7 @@ class SystemDatabase(ABC):
             raise ValueError("At least one group_by flag must be set to True")
 
         # Build select columns from boolean flags. MAX ignores NULLs, so rows
-        # without start/complete timestamps (child-workflow markers) drop out
-        # of the duration max.
+        # without start/complete timestamps drop out of the duration max.
         select_flags: List[Tuple[str, bool, sa.sql.ColumnElement[Any]]] = [
             ("count", select_count, func.count()),
             (
@@ -2507,9 +2506,7 @@ class SystemDatabase(ABC):
             res = conn.execute(stmt)
             rows = res.fetchall()
             if len(rows) > 0:
-                # A row already existed. It came from this same call only if its
-                # completion matches ours (an idempotent db_retry re-attempt); a
-                # NULL means a bookkeeping row wrote this slot, which is a conflict.
+                # Only an idempotent db_retry of this same call completes at our timestamp.
                 existing_completed_at = rows[0][0]
                 if (
                     existing_completed_at is None
@@ -2552,8 +2549,6 @@ class SystemDatabase(ABC):
         # Capture ids outside the retry: db_retry may re-run its body, but function_id must increment only once.
         workflow_id = ctx.workflow_id
         function_id = ctx.function_id
-        # Capture the completion outside the retry so every attempt writes the same timestamp.
-        completed_at_epoch_ms = int(time.time() * 1000)
 
         @db_retry()
         def record() -> None:
@@ -2569,7 +2564,7 @@ class SystemDatabase(ABC):
                     error=error,
                     child_workflow_id=result_workflow_id,
                     started_at_epoch_ms=started_at_epoch_ms,
-                    completed_at_epoch_ms=completed_at_epoch_ms,
+                    completed_at_epoch_ms=int(time.time() * 1000),
                     serialization=serialization,
                 )
                 .on_conflict_do_nothing()
@@ -2586,6 +2581,8 @@ class SystemDatabase(ABC):
         childUUID: str,
         functionID: int,
         functionName: str,
+        *,
+        started_at_epoch_ms: int,
     ) -> None:
         # An empty child id is never valid; fail loudly instead of silently wedging the parent on recovery.
         if not childUUID:
@@ -2593,11 +2590,14 @@ class SystemDatabase(ABC):
                 f"Attempted to record an empty child workflow ID for parent "
                 f"{parentUUID} (function {functionID}, {functionName})."
             )
+        # The span is the launch itself: the parent does not wait for the child here.
         sql = sa.insert(SystemSchema.operation_outputs).values(
             workflow_uuid=parentUUID,
             function_id=functionID,
             function_name=functionName,
             child_workflow_id=childUUID,
+            started_at_epoch_ms=started_at_epoch_ms,
+            completed_at_epoch_ms=int(time.time() * 1000),
         )
         try:
             with self.engine.begin() as c:

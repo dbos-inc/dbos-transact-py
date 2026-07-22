@@ -6,10 +6,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
+import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, Queue, SetWorkflowAttributes, SetWorkflowID, WorkflowStatusString
 from dbos._error import DBOSWorkflowConflictIDError
+from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import OperationResultInternal
 from dbos._utils import GlobalParams
 
@@ -1401,8 +1403,7 @@ def _get_result_step(steps: list[Any]) -> Any:
 
 
 def test_get_result_timing_from_handle(dbos: DBOS) -> None:
-    """A getResult recorded by a workflow handle spans the wait for the child,
-    matching the DBOS.get_result() classmethod path."""
+    """Matches the DBOS.get_result() classmethod path, which was already timed."""
 
     @DBOS.workflow()
     def child() -> str:
@@ -1422,9 +1423,54 @@ def test_get_result_timing_from_handle(dbos: DBOS) -> None:
     assert step["completed_at_epoch_ms"] - step["started_at_epoch_ms"] >= 400
 
 
+def test_child_workflow_row_timing(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def child() -> str:
+        time.sleep(0.5)
+        return "c"
+
+    @DBOS.workflow()
+    def parent() -> None:
+        DBOS.start_workflow(child)
+
+    handle = DBOS.start_workflow(parent)
+    handle.get_result()
+
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    rows = [s for s in steps if s["function_name"] == child.__qualname__]
+    assert len(rows) == 1
+    step = rows[0]
+    assert step["started_at_epoch_ms"] and step["completed_at_epoch_ms"]
+    assert step["completed_at_epoch_ms"] >= step["started_at_epoch_ms"]
+    # The launch is bookkeeping — it must not absorb the child's 500ms runtime.
+    assert step["completed_at_epoch_ms"] - step["started_at_epoch_ms"] < 400
+
+
+@pytest.mark.asyncio
+async def test_child_workflow_row_timing_async(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    async def child() -> str:
+        await asyncio.sleep(0.5)
+        return "c"
+
+    @DBOS.workflow()
+    async def parent() -> None:
+        await DBOS.start_workflow_async(child)
+
+    handle = await DBOS.start_workflow_async(parent)
+    await handle.get_result()
+
+    steps = await DBOS.list_workflow_steps_async(handle.workflow_id)
+    rows = [s for s in steps if s["function_name"] == child.__qualname__]
+    assert len(rows) == 1
+    step = rows[0]
+    assert step["started_at_epoch_ms"] and step["completed_at_epoch_ms"]
+    assert step["completed_at_epoch_ms"] >= step["started_at_epoch_ms"]
+    assert step["completed_at_epoch_ms"] - step["started_at_epoch_ms"] < 400
+
+
 def test_get_result_timing_sync_child(dbos: DBOS) -> None:
-    """A synchronously invoked child records an implicit getResult, which is
-    timed even though it is written from the caller's context."""
+    """The implicit getResult is timed even though it is written from the caller's context."""
 
     @DBOS.workflow()
     def child() -> str:
@@ -1507,24 +1553,59 @@ def test_transaction_timing(dbos: DBOS) -> None:
     assert step["completed_at_epoch_ms"] - step["started_at_epoch_ms"] >= 200
 
 
-def test_step_conflict_over_bookkeeping_row(dbos: DBOS) -> None:
-    """Recording a step where a child-workflow marker already sits raises a
-    conflict error. Those markers carry no completion timestamp, which used to
-    make the conflict check raise TypeError instead."""
-
+def _completed_workflow_id(dbos: DBOS) -> str:
     @DBOS.workflow()
     def workflow() -> None:
         return
 
     handle = DBOS.start_workflow(workflow)
     handle.get_result()
-    workflow_id = handle.workflow_id
+    return handle.workflow_id
 
-    dbos._sys_db.record_child_workflow(workflow_id, str(uuid.uuid4()), 10, "child.wf")
+
+def test_step_conflict_over_child_workflow_row(dbos: DBOS) -> None:
+    workflow_id = _completed_workflow_id(dbos)
+
+    dbos._sys_db.record_child_workflow(
+        workflow_id,
+        str(uuid.uuid4()),
+        10,
+        "child.wf",
+        started_at_epoch_ms=int(time.time() * 1000),
+    )
 
     result: OperationResultInternal = {
         "workflow_uuid": workflow_id,
         "function_id": 10,
+        "function_name": "a.step",
+        "output": "1",
+        "error": None,
+        "serialization": None,
+        "started_at_epoch_ms": int(time.time() * 1000),
+    }
+    with pytest.raises(DBOSWorkflowConflictIDError):
+        dbos._sys_db.record_operation_result(result)
+
+
+def test_step_conflict_over_row_without_completion(dbos: DBOS) -> None:
+    """A row with no completion timestamp still conflicts. Every current write
+    path sets one, but rows predating that used to make the conflict check raise
+    TypeError out of int(None) instead of DBOSWorkflowConflictIDError."""
+    workflow_id = _completed_workflow_id(dbos)
+
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.insert(SystemSchema.operation_outputs).values(
+                workflow_uuid=workflow_id,
+                function_id=11,
+                function_name="legacy.step",
+                child_workflow_id=str(uuid.uuid4()),
+            )
+        )
+
+    result: OperationResultInternal = {
+        "workflow_uuid": workflow_id,
+        "function_id": 11,
         "function_name": "a.step",
         "output": "1",
         "error": None,
@@ -2192,9 +2273,6 @@ def test_get_step_aggregates_completed_window_and_max(
 
     @DBOS.workflow()
     def parent() -> None:
-        # Child workflow markers are bookkeeping rows with NULL timestamps —
-        # they should drop out of max_duration_ms. The DBOS.getResult that the
-        # synchronous call records is timed like any other step.
         child()
         quick_step()
         slow_step()
@@ -2203,10 +2281,6 @@ def test_get_step_aggregates_completed_window_and_max(
     parent()
     after_all = datetime.now().isoformat()
 
-    # completed_after/completed_before: window covers all step rows that have
-    # a completed_at_epoch_ms set. Child-workflow markers have NULL
-    # completed_at_epoch_ms, so they're filtered out by the WHERE clause
-    # itself — not by the MAX NULL-skipping.
     results = dbos._sys_db.get_step_aggregates(
         group_by_function_name=True,
         completed_after=before_all,
@@ -2228,25 +2302,13 @@ def test_get_step_aggregates_completed_window_and_max(
     # slow_step sleeps 50ms — the recorded duration should reflect that.
     assert slow_row["max_duration_ms"] >= 40
 
-    # Child-workflow markers are NOT present in the completed-window result.
-    assert child.__qualname__ not in by_fn
+    child_wf_row = by_fn[child.__qualname__]
+    assert child_wf_row["count"] == 1
+    assert child_wf_row["max_duration_ms"] is not None
 
-    # getResult is timed, so it falls inside the window like a real step.
     get_result_row = by_fn["DBOS.getResult"]
     assert get_result_row["count"] == 1
     assert get_result_row["max_duration_ms"] is not None
-
-    # Without the completed_at filter, child-workflow markers show up with
-    # NULL max_duration_ms (their started/completed timestamps are NULL).
-    results = dbos._sys_db.get_step_aggregates(
-        group_by_function_name=True,
-        select_count=True,
-        select_max_duration_ms=True,
-    )
-    by_fn = {r["group"]["function_name"]: r for r in results}
-    child_wf_row = by_fn[child.__qualname__]
-    assert child_wf_row["count"] == 1
-    assert child_wf_row["max_duration_ms"] is None
 
     # completed_before before any work: matches nothing.
     results = dbos._sys_db.get_step_aggregates(

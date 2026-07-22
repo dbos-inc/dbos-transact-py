@@ -537,6 +537,7 @@ def _init_workflow(
     is_dequeued_request: Optional[bool],
     serialization_type: Optional[WorkflowSerializationFormat],
     child_workflow_id: Optional[str] = None,
+    child_start_time_ms: Optional[int] = None,
 ) -> tuple[WorkflowStatusInternal, bool]:
     status = _assemble_workflow_status(
         dbos,
@@ -579,7 +580,11 @@ def _init_workflow(
                 "output": None,
                 "error": sererr,
                 "serialization": serialization,
-                "started_at_epoch_ms": int(time.time() * 1000),
+                "started_at_epoch_ms": (
+                    child_start_time_ms
+                    if child_start_time_ms is not None
+                    else int(time.time() * 1000)
+                ),
             }
             dbos._sys_db.record_operation_result(result)
         raise
@@ -1153,6 +1158,7 @@ def start_workflow(
     new_wf_ctx = DBOSContext.create_start_workflow_child(local_ctx)
     new_child_workflow_id = new_wf_ctx.id_assigned_for_next_workflow
 
+    child_start_time = int(time.time() * 1000)
     if new_wf_ctx.has_parent():
         recorded_result = dbos._sys_db.check_operation_execution(
             new_wf_ctx.parent_workflow_id,
@@ -1185,6 +1191,7 @@ def start_workflow(
         is_dequeued_request=is_dequeued,
         serialization_type=serialization_type,
         child_workflow_id=new_child_workflow_id,
+        child_start_time_ms=child_start_time,
     )
 
     if status["serialization"] == DBOSPortableJSON.name():
@@ -1198,6 +1205,7 @@ def start_workflow(
             new_child_workflow_id,
             new_wf_ctx.parent_workflow_fid,
             get_dbos_func_name(func),
+            started_at_epoch_ms=child_start_time,
         )
 
     if (
@@ -1277,6 +1285,7 @@ async def start_workflow_async(
     )
     new_child_workflow_id = new_wf_ctx.id_assigned_for_next_workflow
 
+    child_start_time = int(time.time() * 1000)
     if new_wf_ctx.has_parent():
         recorded_result = await asyncio.to_thread(
             dbos._sys_db.check_operation_execution,
@@ -1313,6 +1322,7 @@ async def start_workflow_async(
         is_dequeued_request=is_dequeued_request,
         serialization_type=serialization_type,
         child_workflow_id=new_child_workflow_id,
+        child_start_time_ms=child_start_time,
     )
 
     if status["serialization"] == DBOSPortableJSON.name():
@@ -1326,6 +1336,7 @@ async def start_workflow_async(
             new_child_workflow_id,
             new_wf_ctx.parent_workflow_fid,
             get_dbos_func_name(func),
+            started_at_epoch_ms=child_start_time,
         )
 
     wf_status = status["status"]
@@ -1431,6 +1442,7 @@ def workflow_wrapper(
             nonlocal workflow_id
             workflow_id = child_wfid
 
+            child_start_time = int(time.time() * 1000)
             if parent_wfid:
                 r = dbos._sys_db.check_operation_execution(
                     parent_wfid,
@@ -1460,6 +1472,7 @@ def workflow_wrapper(
                 is_dequeued_request=False,
                 serialization_type=fi.serialization_type,
                 child_workflow_id=child_wfid,
+                child_start_time_ms=child_start_time,
             )
 
             # TODO: maybe modify the parameters if they've been changed by `_init_workflow`
@@ -1473,6 +1486,7 @@ def workflow_wrapper(
                     child_wfid,
                     parent_fid,
                     get_dbos_func_name(func),
+                    started_at_epoch_ms=child_start_time,
                 )
 
             if should_execute:
@@ -1604,8 +1618,6 @@ def decorate_transaction(
                 }
                 with EnterDBOSTransaction(session, attributes=attributes):
                     ctx = assert_current_dbos_context()
-                    # Stamp the start before the checkpoint lookup, so transactions
-                    # and steps measure the same span.
                     step_start_time = int(time.time() * 1000)
                     # Check if the step record for this transaction exists
                     recorded_step_output = dbos._sys_db.check_operation_execution(

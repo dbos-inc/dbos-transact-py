@@ -1122,20 +1122,39 @@ def test_record_child_workflow_idempotent_on_db_retry(dbos: DBOS) -> None:
     function_id = 1
     function_name = "test_child"
 
-    dbos._sys_db.record_child_workflow(parent_id, child_id, function_id, function_name)
+    start_time = int(time.time() * 1000)
+    dbos._sys_db.record_child_workflow(
+        parent_id,
+        child_id,
+        function_id,
+        function_name,
+        started_at_epoch_ms=start_time,
+    )
 
     # Re-recording the same child at the same function_id is idempotent.
-    dbos._sys_db.record_child_workflow(parent_id, child_id, function_id, function_name)
+    dbos._sys_db.record_child_workflow(
+        parent_id,
+        child_id,
+        function_id,
+        function_name,
+        started_at_epoch_ms=start_time,
+    )
 
     # A different child at the same function_id is a genuine conflict.
     with pytest.raises(DBOSWorkflowConflictIDError):
         dbos._sys_db.record_child_workflow(
-            parent_id, str(uuid.uuid4()), function_id, function_name
+            parent_id,
+            str(uuid.uuid4()),
+            function_id,
+            function_name,
+            started_at_epoch_ms=start_time,
         )
 
     # An empty child id is rejected loudly rather than silently wedging recovery.
     with pytest.raises(DBOSException):
-        dbos._sys_db.record_child_workflow(parent_id, "", 2, function_name)
+        dbos._sys_db.record_child_workflow(
+            parent_id, "", 2, function_name, started_at_epoch_ms=start_time
+        )
 
 
 class _RetryOnceEngine:

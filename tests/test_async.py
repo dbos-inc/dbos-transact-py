@@ -1430,4 +1430,10 @@ def test_record_child_workflow_rejects_empty_id(dbos: DBOS) -> None:
     """The persistence guard: an empty child id is never valid and must fail loudly
     rather than silently corrupt operation_outputs."""
     with pytest.raises(DBOSException):
-        dbos._sys_db.record_child_workflow("some-parent-id", "", 0, "some.func")
+        dbos._sys_db.record_child_workflow(
+            "some-parent-id",
+            "",
+            0,
+            "some.func",
+            started_at_epoch_ms=int(time.time() * 1000),
+        )
