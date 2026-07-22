@@ -2519,13 +2519,23 @@ class SystemDatabase(ABC):
                 raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
             raise
 
-    def record_operation_result(self, result: OperationResultInternal) -> None:
-        completed_at_epoch_ms = int(time.time() * 1000)
+    def record_operation_result(
+        self,
+        result: OperationResultInternal,
+        *,
+        completed_at_epoch_ms: Optional[int] = None,
+    ) -> None:
+        # Must stay outside the retry: the conflict check compares the stored completion to ours.
+        completed_at = (
+            completed_at_epoch_ms
+            if completed_at_epoch_ms is not None
+            else int(time.time() * 1000)
+        )
 
         @db_retry()
         def record_operation_result_retry() -> None:
             with self.engine.begin() as c:
-                self._record_operation_result_txn(result, completed_at_epoch_ms, c)
+                self._record_operation_result_txn(result, completed_at, c)
             DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT)
 
         record_operation_result_retry()
@@ -3363,7 +3373,17 @@ class SystemDatabase(ABC):
         workflow_uuid: str,
         function_id: int,
         seconds: float,
+        *,
+        project_completion_time: bool = False,
     ) -> float:
+        """Checkpoint a durable sleep, returning the seconds still left to wait.
+
+        The row must be written before the sleep, since it stores the absolute
+        wake time that recovery resumes from. `project_completion_time` records
+        the completion as that wake time, so the step's duration is the sleep
+        itself. Callers registering a timeout they may abandon early (recv,
+        get_event) leave it off, recording the registration as instantaneous.
+        """
         function_name = "DBOS.sleep"
         start_time = int(time.time() * 1000)
         recorded_output = self.check_operation_execution(
@@ -3394,7 +3414,10 @@ class SystemDatabase(ABC):
                         "output": DBOSPortableJSON.serialize(end_time),
                         "error": None,
                         "serialization": DBOSPortableJSON.name(),
-                    }
+                    },
+                    completed_at_epoch_ms=(
+                        int(end_time * 1000) if project_completion_time else None
+                    ),
                 )
             except DBOSWorkflowConflictIDError:
                 pass

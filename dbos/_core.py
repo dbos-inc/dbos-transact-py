@@ -2342,7 +2342,10 @@ def record_sleep(
         }
         with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
             return dbos._sys_db.record_sleep(
-                ctx.workflow_id, ctx.curr_step_function_id, seconds
+                ctx.workflow_id,
+                ctx.curr_step_function_id,
+                seconds,
+                project_completion_time=True,
             )
     else:
         # Cannot call it from outside of a workflow

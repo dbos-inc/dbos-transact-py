@@ -1402,6 +1402,82 @@ def _get_result_step(steps: list[Any]) -> Any:
     return matches[0]
 
 
+def _only_step(steps: list[Any], function_name: str) -> Any:
+    matches = [s for s in steps if s["function_name"] == function_name]
+    assert len(matches) == 1, f"expected one {function_name} step, got {len(matches)}"
+    return matches[0]
+
+
+def test_sleep_timing(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def workflow() -> None:
+        DBOS.sleep(1.0)
+
+    handle = DBOS.start_workflow(workflow)
+    handle.get_result()
+
+    step = _only_step(DBOS.list_workflow_steps(handle.workflow_id), "DBOS.sleep")
+    assert step["started_at_epoch_ms"] and step["completed_at_epoch_ms"]
+    assert step["completed_at_epoch_ms"] - step["started_at_epoch_ms"] >= 1000
+
+
+@pytest.mark.asyncio
+async def test_sleep_timing_async(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    async def workflow() -> None:
+        await DBOS.sleep_async(1.0)
+
+    handle = await DBOS.start_workflow_async(workflow)
+    await handle.get_result()
+
+    steps = await DBOS.list_workflow_steps_async(handle.workflow_id)
+    step = _only_step(steps, "DBOS.sleep")
+    assert step["started_at_epoch_ms"] and step["completed_at_epoch_ms"]
+    assert step["completed_at_epoch_ms"] - step["started_at_epoch_ms"] >= 1000
+
+
+def test_recv_timeout_registration_is_instantaneous(dbos: DBOS) -> None:
+    """recv's internal sleep only registers a deadline it abandons on delivery,
+    so it stays ~0 while the recv row itself spans the real wait."""
+
+    @DBOS.workflow()
+    def receiver() -> Any:
+        return DBOS.recv(timeout_seconds=60)
+
+    handle = DBOS.start_workflow(receiver)
+    time.sleep(0.5)
+    DBOS.send(handle.workflow_id, "msg")
+    assert handle.get_result() == "msg"
+
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    sleep_step = _only_step(steps, "DBOS.sleep")
+    assert sleep_step["completed_at_epoch_ms"] - sleep_step["started_at_epoch_ms"] < 500
+
+    recv_step = _only_step(steps, "DBOS.recv")
+    assert recv_step["completed_at_epoch_ms"] - recv_step["started_at_epoch_ms"] >= 400
+
+
+def test_sleep_timing_unchanged_on_replay(dbos: DBOS) -> None:
+    """record_sleep returns early on the recorded path, so a replay must not
+    rewrite the checkpoint's timestamps."""
+
+    @DBOS.workflow()
+    def workflow() -> None:
+        DBOS.sleep(1.0)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        workflow()
+    before = _only_step(DBOS.list_workflow_steps(wfid), "DBOS.sleep")
+
+    with SetWorkflowID(wfid):
+        workflow()
+    after = _only_step(DBOS.list_workflow_steps(wfid), "DBOS.sleep")
+
+    assert after["started_at_epoch_ms"] == before["started_at_epoch_ms"]
+    assert after["completed_at_epoch_ms"] == before["completed_at_epoch_ms"]
+
+
 def test_get_result_timing_from_handle(dbos: DBOS) -> None:
     """Matches the DBOS.get_result() classmethod path, which was already timed."""
 
