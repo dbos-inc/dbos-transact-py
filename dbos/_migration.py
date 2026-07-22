@@ -8,7 +8,7 @@ from ._logger import dbos_logger
 # autocommit (CREATE/DROP INDEX CONCURRENTLY cannot run inside a transaction
 # block on Postgres). On CockroachDB, schema changes are inherently online,
 # so this set is ignored and the regular transactional path is used.
-_ONLINE_MIGRATIONS = {22, 23, 24, 25, 26, 27, 29, 30, 31, 32, 34, 35, 37}
+_ONLINE_MIGRATIONS = {22, 23, 24, 25, 26, 27, 29, 30, 31, 32, 34, 35, 37, 45}
 
 
 def _concurrently(is_cockroach: bool) -> str:
@@ -902,6 +902,14 @@ DROP FUNCTION IF EXISTS "{schema}".workflow_events_function();
 """
 
 
+def get_dbos_migration_fortyfive(schema: str, is_cockroach: bool) -> str:
+    # Partitioned-queue dequeue index: extends idx_workflow_status_in_flight with
+    # queue_partition_key so lookups scoped to one partition stay selective when
+    # many partitions are active.
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_partition_dequeue" ON "{schema}"."workflow_status" ("queue_name", "status", "queue_partition_key", "priority", "created_at") WHERE "status" IN (\'ENQUEUED\', \'PENDING\') AND "queue_partition_key" IS NOT NULL'
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -950,6 +958,7 @@ def get_dbos_migrations(
         get_dbos_migration_fortytwo(schema),
         get_dbos_migration_fortythree(schema, use_listen_notify),
         get_dbos_migration_fortyfour(schema, use_listen_notify),
+        get_dbos_migration_fortyfive(schema, is_cockroach),
     ]
 
 
@@ -1208,6 +1217,8 @@ ALTER TABLE workflow_status ADD COLUMN "debounce_deadline_epoch_ms" BIGINT DEFAU
 ALTER TABLE workflow_status ADD COLUMN "is_debounced" BOOLEAN NOT NULL DEFAULT FALSE;
 """
 
+sqlite_migration_fortyfive = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_partition_dequeue" ON "workflow_status" ("queue_name", "status", "queue_partition_key", "priority", "created_at") WHERE "status" IN (\'ENQUEUED\', \'PENDING\') AND "queue_partition_key" IS NOT NULL'
+
 sqlite_migrations = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -1250,4 +1261,6 @@ sqlite_migrations = [
     sqlite_migration_forty,
     sqlite_migration_fortyone,
     sqlite_migration_fortytwo,
+    # There is no SQLite version of migrations forty-three and forty-four
+    sqlite_migration_fortyfive,
 ]
