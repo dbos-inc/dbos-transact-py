@@ -4,9 +4,9 @@ import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import click
 import pytest
 import sqlalchemy as sa
-import typer
 
 # Public API
 from dbos import DBOS, DBOSConfig, run_dbos_database_migrations
@@ -862,7 +862,7 @@ def test_migrate_print_custom_schema(
     role_sql = result.stdout
 
     # Role names containing quotes are rejected
-    with pytest.raises(typer.Exit):
+    with pytest.raises(click.exceptions.Exit):
         print_dbos_user_role_sql(schema=schema, role_name='bad"role')
     capsys.readouterr()
 
@@ -949,7 +949,7 @@ def test_migrate_print_from_migration(
 
     # Invalid selections are rejected
     for bad in ["0", str(latest_version + 1), "-1", "foo"]:
-        with pytest.raises(typer.Exit):
+        with pytest.raises(click.exceptions.Exit):
             print_dbos_migrations(db_url_string, schema="dbos", migration=bad)
     capsys.readouterr()
     result = subprocess.run(

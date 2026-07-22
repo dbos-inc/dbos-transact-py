@@ -6,10 +6,10 @@ import signal
 import subprocess
 import typing
 from os import path
-from typing import Annotated, Any, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
+import click
 import sqlalchemy as sa
-import typer
 
 from dbos._context import SetWorkflowID
 from dbos.cli.migration import (
@@ -38,6 +38,13 @@ from ._template_init import copy_template, get_project_name, get_templates_direc
 class DefaultEncoder(json.JSONEncoder):
     def default(self, obj: Any) -> str:
         return str(obj)
+
+
+class OrderedGroup(click.Group):
+    """A group that lists commands in declaration order; click sorts alphabetically."""
+
+    def list_commands(self, ctx: click.Context) -> List[str]:
+        return list(self.commands)
 
 
 def _get_db_url(
@@ -79,32 +86,39 @@ def _get_db_url(
                 default_url = f"sqlite:///{_app_db_name}.sqlite"
                 return default_url, None
         except (FileNotFoundError, OSError):
-            typer.echo(
+            click.echo(
                 f"Error: Missing database URL: please set it using CLI flags or your dbos-config.yaml file.",
                 err=True,
             )
-            raise typer.Exit(code=1)
+            raise click.exceptions.Exit(code=1)
 
 
-app = typer.Typer()
+@click.group(
+    cls=OrderedGroup,
+    no_args_is_help=False,
+    context_settings={"show_default": True},
+)
+def app() -> None:
+    pass
+
+
+workflow = OrderedGroup(
+    name="workflow", help="Manage DBOS workflows", no_args_is_help=False
+)
+queue = OrderedGroup(
+    name="queue", help="Manage enqueued workflows", no_args_is_help=False
+)
+postgres = OrderedGroup(
+    name="postgres",
+    help="Manage local Postgres database with Docker",
+    no_args_is_help=False,
+)
 
 
 @app.command(help="Show the version and exit")
 def version() -> None:
     """Display the current version of DBOS CLI."""
-    typer.echo(f"DBOS CLI version: {GlobalParams.dbos_version}")
-
-
-workflow = typer.Typer()
-queue = typer.Typer()
-
-app.add_typer(workflow, name="workflow", help="Manage DBOS workflows")
-workflow.add_typer(queue, name="queue", help="Manage enqueued workflows")
-
-postgres = typer.Typer()
-app.add_typer(
-    postgres, name="postgres", help="Manage local Postgres database with Docker"
-)
+    click.echo(f"DBOS CLI version: {GlobalParams.dbos_version}")
 
 
 @postgres.command(name="start", help="Start a local Postgres database")
@@ -127,9 +141,9 @@ def _on_windows() -> bool:
 def start() -> None:
     config = load_config(silent=True)
     start_commands = config["runtimeConfig"]["start"]
-    typer.echo("Executing start commands from 'dbos-config.yaml'")
+    click.echo("Executing start commands from 'dbos-config.yaml'")
     for command in start_commands:
-        typer.echo(f"Executing: {command}")
+        click.echo(f"Executing: {command}")
 
         # Run the command in the child process.
         # On Unix-like systems, set its process group
@@ -161,19 +175,17 @@ def start() -> None:
         process.wait()
 
 
-@app.command(help="Initialize a new DBOS application from a template")
+@app.command(
+    short_help="Initialize a new DBOS application from a template",
+    help="Initialize a new DBOS application from a template\n\nPROJECT_NAME: Specify application name",
+)
+@click.argument("project_name", required=False, default=None)
+@click.option("--template", "-t", help="Specify template to use")
+@click.option("--config", "-c", is_flag=True, help="Only add dbos-config.yaml")
 def init(
-    project_name: Annotated[
-        typing.Optional[str], typer.Argument(help="Specify application name")
-    ] = None,
-    template: Annotated[
-        typing.Optional[str],
-        typer.Option("--template", "-t", help="Specify template to use"),
-    ] = None,
-    config: Annotated[
-        bool,
-        typer.Option("--config", "-c", help="Only add dbos-config.yaml"),
-    ] = False,
+    project_name: Optional[str],
+    template: Optional[str],
+    config: bool,
 ) -> None:
     try:
         git_templates = ["dbos-toolbox", "dbos-app-starter", "dbos-cron-starter"]
@@ -227,7 +239,7 @@ def _resolve_project_name_and_template(
                 else:
                     print("Invalid selection. Please choose a number from the list.")
             except (KeyboardInterrupt, EOFError):
-                raise typer.Abort()
+                raise click.Abort()
             except ValueError:
                 print("Please enter a valid number.")
 
@@ -238,7 +250,7 @@ def _resolve_project_name_and_template(
         if project_name is None:
             project_name = typing.cast(
                 str,
-                typer.prompt("What is your project's name?", get_project_name()),
+                click.prompt("What is your project's name?", get_project_name()),
             )
 
     if not _is_valid_app_name(project_name):
@@ -253,53 +265,43 @@ def _resolve_project_name_and_template(
 
 
 @app.command(help="Create DBOS system tables.")
+@click.option(
+    "--db-url",
+    "-D",
+    "application_database_url",
+    help="Your DBOS application database URL",
+)
+@click.option(
+    "--sys-db-url", "-s", "system_database_url", help="Your DBOS system database URL"
+)
+@click.option(
+    "--app-role",
+    "-r",
+    "application_role",
+    help="The role with which you will run your DBOS application",
+)
+@click.option(
+    "--schema",
+    default="dbos",
+    help='Schema name for DBOS system tables. Defaults to "dbos".',
+)
+@click.option(
+    "--print-migrations",
+    metavar="[all|NUMBER]",
+    help="Print the SQL of all migrations ('--print-migrations all') or of migrations from a number onward ('--print-migrations 3') instead of running them",
+)
+@click.option(
+    "--print-user-role",
+    is_flag=True,
+    help="Print the SQL granting the application role (--app-role) access to DBOS system tables instead of executing it",
+)
 def migrate(
-    application_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--db-url",
-            "-D",
-            help="Your DBOS application database URL",
-        ),
-    ] = None,
-    system_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--sys-db-url",
-            "-s",
-            help="Your DBOS system database URL",
-        ),
-    ] = None,
-    application_role: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--app-role",
-            "-r",
-            help="The role with which you will run your DBOS application",
-        ),
-    ] = None,
-    schema: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--schema",
-            help='Schema name for DBOS system tables. Defaults to "dbos".',
-        ),
-    ] = "dbos",
-    print_migrations: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--print-migrations",
-            metavar="[all|NUMBER]",
-            help="Print the SQL of all migrations ('--print-migrations all') or of migrations from a number onward ('--print-migrations 3') instead of running them",
-        ),
-    ] = None,
-    print_user_role: Annotated[
-        bool,
-        typer.Option(
-            "--print-user-role",
-            help="Print the SQL granting the application role (--app-role) access to DBOS system tables instead of executing it",
-        ),
-    ] = False,
+    application_database_url: Optional[str],
+    system_database_url: Optional[str],
+    application_role: Optional[str],
+    schema: Optional[str],
+    print_migrations: Optional[str],
+    print_user_role: bool,
 ) -> None:
     system_database_url, application_database_url = _get_db_url(
         system_database_url=system_database_url,
@@ -310,13 +312,13 @@ def migrate(
 
     if print_migrations is not None or print_user_role:
         if print_migrations is not None and print_user_role:
-            typer.echo(
+            click.echo(
                 "--print-user-role cannot be combined with --print-migrations", err=True
             )
-            raise typer.Exit(code=1)
+            raise click.exceptions.Exit(code=1)
         if print_user_role and application_role is None:
-            typer.echo("--print-user-role requires --app-role", err=True)
-            raise typer.Exit(code=1)
+            click.echo("--print-user-role requires --app-role", err=True)
+            raise click.exceptions.Exit(code=1)
         if print_migrations is not None:
             print_dbos_migrations(
                 system_database_url=system_database_url,
@@ -331,11 +333,11 @@ def migrate(
     # Emit INFO logs from migrations
     init_logger()
     dbos_logger.setLevel(logging.INFO)
-    typer.echo(f"Starting DBOS migrations")
+    click.echo(f"Starting DBOS migrations")
     if application_database_url:
-        typer.echo(f"Application database: {sa.make_url(application_database_url)}")
-    typer.echo(f"System database: {sa.make_url(system_database_url)}")
-    typer.echo(f"DBOS system schema: {schema}")
+        click.echo(f"Application database: {sa.make_url(application_database_url)}")
+    click.echo(f"System database: {sa.make_url(system_database_url)}")
+    click.echo(f"DBOS system schema: {schema}")
 
     run_dbos_database_migrations(
         system_database_url=system_database_url,
@@ -355,49 +357,45 @@ def migrate(
             else []
         )
         if migrate_commands:
-            typer.echo("Executing migration commands from 'dbos-config.yaml'")
+            click.echo("Executing migration commands from 'dbos-config.yaml'")
             try:
                 for command in migrate_commands:
-                    typer.echo(f"Executing migration command: {command}")
+                    click.echo(f"Executing migration command: {command}")
                     result = subprocess.run(command, shell=True, text=True)
                     if result.returncode != 0:
-                        typer.echo(f"Migration command failed: {command}")
-                        typer.echo(result.stderr)
-                        raise typer.Exit(1)
+                        click.echo(f"Migration command failed: {command}")
+                        click.echo(result.stderr)
+                        raise click.exceptions.Exit(1)
                     if result.stdout:
-                        typer.echo(result.stdout.rstrip())
+                        click.echo(result.stdout.rstrip())
             except Exception as e:
-                typer.echo(f"An error occurred during schema migration: {e}")
-                raise typer.Exit(code=1)
+                click.echo(f"An error occurred during schema migration: {e}")
+                raise click.exceptions.Exit(code=1)
 
 
 @app.command(help="Reset the DBOS system database")
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
+@click.option(
+    "--db-url",
+    "-D",
+    "application_database_url",
+    help="Your DBOS application database URL",
+)
+@click.option(
+    "--sys-db-url", "-s", "system_database_url", help="Your DBOS system database URL"
+)
 def reset(
-    yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompt"),
-    application_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--db-url",
-            "-D",
-            help="Your DBOS application database URL",
-        ),
-    ] = None,
-    system_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--sys-db-url",
-            "-s",
-            help="Your DBOS system database URL",
-        ),
-    ] = None,
+    yes: bool,
+    application_database_url: Optional[str],
+    system_database_url: Optional[str],
 ) -> None:
     if not yes:
-        confirm = typer.confirm(
+        confirm = click.confirm(
             "This command resets your DBOS system database, deleting metadata about past workflows and steps. Are you sure you want to proceed?"
         )
         if not confirm:
-            typer.echo("Operation cancelled.")
-            raise typer.Exit()
+            click.echo("Operation cancelled.")
+            raise click.exceptions.Exit()
     try:
         system_database_url, application_database_url = _get_db_url(
             system_database_url=system_database_url,
@@ -405,99 +403,68 @@ def reset(
         )
         SystemDatabase.reset_system_database(system_database_url)
     except Exception as e:
-        typer.echo(f"Error resetting system database: {str(e)}")
+        click.echo(f"Error resetting system database: {str(e)}")
         return
 
 
-@workflow.command(help="List workflows for your application")
-def list(
-    application_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--db-url",
-            "-D",
-            help="Your DBOS application database URL",
-        ),
-    ] = None,
-    system_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--sys-db-url",
-            "-s",
-            help="Your DBOS system database URL",
-        ),
-    ] = None,
-    limit: Annotated[
-        int,
-        typer.Option("--limit", "-l", help="Limit the results returned"),
-    ] = 10,
-    user: Annotated[
-        typing.Optional[str],
-        typer.Option("--user", "-u", help="Retrieve workflows run by this user"),
-    ] = None,
-    starttime: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--start-time",
-            "-t",
-            help="Retrieve workflows starting after this timestamp (ISO 8601 format)",
-        ),
-    ] = None,
-    endtime: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--end-time",
-            "-e",
-            help="Retrieve workflows starting before this timestamp (ISO 8601 format)",
-        ),
-    ] = None,
-    status: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--status",
-            "-S",
-            help="Retrieve workflows with this status (PENDING, SUCCESS, ERROR, ENQUEUED, DELAYED, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED)",
-        ),
-    ] = None,
-    appversion: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--application-version",
-            "-v",
-            help="Retrieve workflows with this application version",
-        ),
-    ] = None,
-    name: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--name",
-            "-n",
-            help="Retrieve workflows with this name",
-        ),
-    ] = None,
-    sort_desc: Annotated[
-        bool,
-        typer.Option(
-            "--sort-desc",
-            "-d",
-            help="Sort the results in descending order (older first)",
-        ),
-    ] = False,
-    offset: Annotated[
-        typing.Optional[int],
-        typer.Option(
-            "--offset",
-            "-o",
-            help="Offset for pagination",
-        ),
-    ] = None,
-    schema: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--schema",
-            help='Schema name for DBOS system tables. Defaults to "dbos".',
-        ),
-    ] = "dbos",
+@workflow.command(name="list", help="List workflows for your application")
+@click.option(
+    "--db-url",
+    "-D",
+    "application_database_url",
+    help="Your DBOS application database URL",
+)
+@click.option(
+    "--sys-db-url", "-s", "system_database_url", help="Your DBOS system database URL"
+)
+@click.option("--limit", "-l", type=int, default=10, help="Limit the results returned")
+@click.option("--user", "-u", help="Retrieve workflows run by this user")
+@click.option(
+    "--start-time",
+    "-t",
+    help="Retrieve workflows starting after this timestamp (ISO 8601 format)",
+)
+@click.option(
+    "--end-time",
+    "-e",
+    help="Retrieve workflows starting before this timestamp (ISO 8601 format)",
+)
+@click.option(
+    "--status",
+    "-S",
+    help="Retrieve workflows with this status (PENDING, SUCCESS, ERROR, ENQUEUED, DELAYED, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED)",
+)
+@click.option(
+    "--application-version",
+    "-v",
+    help="Retrieve workflows with this application version",
+)
+@click.option("--name", "-n", help="Retrieve workflows with this name")
+@click.option(
+    "--sort-desc",
+    "-d",
+    is_flag=True,
+    help="Sort the results in descending order (older first)",
+)
+@click.option("--offset", "-o", type=int, help="Offset for pagination")
+@click.option(
+    "--schema",
+    default="dbos",
+    help='Schema name for DBOS system tables. Defaults to "dbos".',
+)
+def list_workflows(
+    application_database_url: Optional[str],
+    system_database_url: Optional[str],
+    limit: int,
+    user: Optional[str],
+    start_time: Optional[str],
+    end_time: Optional[str],
+    status: Optional[str],
+    application_version: Optional[str],
+    name: Optional[str],
+    sort_desc: bool,
+    offset: Optional[int],
+    schema: Optional[str],
 ) -> None:
     system_database_url, application_database_url = _get_db_url(
         system_database_url=system_database_url,
@@ -513,41 +480,36 @@ def list(
         offset=offset,
         sort_desc=sort_desc,
         user=user,
-        start_time=starttime,
-        end_time=endtime,
+        start_time=start_time,
+        end_time=end_time,
         status=status,
-        app_version=appversion,
+        app_version=application_version,
         name=name,
     )
     print(json.dumps([w.__dict__ for w in workflows], cls=DefaultEncoder))
 
 
 @workflow.command(help="Retrieve the status of a workflow")
+@click.argument("workflow_id")
+@click.option(
+    "--db-url",
+    "-D",
+    "application_database_url",
+    help="Your DBOS application database URL",
+)
+@click.option(
+    "--sys-db-url", "-s", "system_database_url", help="Your DBOS system database URL"
+)
+@click.option(
+    "--schema",
+    default="dbos",
+    help='Schema name for DBOS system tables. Defaults to "dbos".',
+)
 def get(
-    workflow_id: Annotated[str, typer.Argument()],
-    application_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--db-url",
-            "-D",
-            help="Your DBOS application database URL",
-        ),
-    ] = None,
-    system_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--sys-db-url",
-            "-s",
-            help="Your DBOS system database URL",
-        ),
-    ] = None,
-    schema: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--schema",
-            help='Schema name for DBOS system tables. Defaults to "dbos".',
-        ),
-    ] = "dbos",
+    workflow_id: str,
+    application_database_url: Optional[str],
+    system_database_url: Optional[str],
+    schema: Optional[str],
 ) -> None:
     system_database_url, application_database_url = _get_db_url(
         system_database_url=system_database_url,
@@ -563,31 +525,26 @@ def get(
 
 
 @workflow.command(help="List the steps of a workflow")
+@click.argument("workflow_id")
+@click.option(
+    "--db-url",
+    "-D",
+    "application_database_url",
+    help="Your DBOS application database URL",
+)
+@click.option(
+    "--sys-db-url", "-s", "system_database_url", help="Your DBOS system database URL"
+)
+@click.option(
+    "--schema",
+    default="dbos",
+    help='Schema name for DBOS system tables. Defaults to "dbos".',
+)
 def steps(
-    workflow_id: Annotated[str, typer.Argument()],
-    application_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--db-url",
-            "-D",
-            help="Your DBOS application database URL",
-        ),
-    ] = None,
-    system_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--sys-db-url",
-            "-s",
-            help="Your DBOS system database URL",
-        ),
-    ] = None,
-    schema: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--schema",
-            help='Schema name for DBOS system tables. Defaults to "dbos".',
-        ),
-    ] = "dbos",
+    workflow_id: str,
+    application_database_url: Optional[str],
+    system_database_url: Optional[str],
+    schema: Optional[str],
 ) -> None:
     system_database_url, application_database_url = _get_db_url(
         system_database_url=system_database_url,
@@ -605,31 +562,26 @@ def steps(
 @workflow.command(
     help="Cancel a workflow so it is no longer automatically retried or restarted"
 )
+@click.argument("workflow_id")
+@click.option(
+    "--db-url",
+    "-D",
+    "application_database_url",
+    help="Your DBOS application database URL",
+)
+@click.option(
+    "--sys-db-url", "-s", "system_database_url", help="Your DBOS system database URL"
+)
+@click.option(
+    "--schema",
+    default="dbos",
+    help='Schema name for DBOS system tables. Defaults to "dbos".',
+)
 def cancel(
-    workflow_id: Annotated[str, typer.Argument()],
-    application_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--db-url",
-            "-D",
-            help="Your DBOS application database URL",
-        ),
-    ] = None,
-    system_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--sys-db-url",
-            "-s",
-            help="Your DBOS system database URL",
-        ),
-    ] = None,
-    schema: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--schema",
-            help='Schema name for DBOS system tables. Defaults to "dbos".',
-        ),
-    ] = "dbos",
+    workflow_id: str,
+    application_database_url: Optional[str],
+    system_database_url: Optional[str],
+    schema: Optional[str],
 ) -> None:
     system_database_url, application_database_url = _get_db_url(
         system_database_url=system_database_url,
@@ -644,31 +596,26 @@ def cancel(
 
 
 @workflow.command(help="Resume a workflow that has been cancelled")
+@click.argument("workflow_id")
+@click.option(
+    "--db-url",
+    "-D",
+    "application_database_url",
+    help="Your DBOS application database URL",
+)
+@click.option(
+    "--sys-db-url", "-s", "system_database_url", help="Your DBOS system database URL"
+)
+@click.option(
+    "--schema",
+    default="dbos",
+    help='Schema name for DBOS system tables. Defaults to "dbos".',
+)
 def resume(
-    workflow_id: Annotated[str, typer.Argument()],
-    application_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--db-url",
-            "-D",
-            help="Your DBOS application database URL",
-        ),
-    ] = None,
-    system_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--sys-db-url",
-            "-s",
-            help="Your DBOS system database URL",
-        ),
-    ] = None,
-    schema: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--schema",
-            help='Schema name for DBOS system tables. Defaults to "dbos".',
-        ),
-    ] = "dbos",
+    workflow_id: str,
+    application_database_url: Optional[str],
+    system_database_url: Optional[str],
+    schema: Optional[str],
 ) -> None:
     system_database_url, application_database_url = _get_db_url(
         system_database_url=system_database_url,
@@ -685,55 +632,36 @@ def resume(
 @workflow.command(
     help="fork a workflow from the beginning with a new id and from a step"
 )
+@click.argument("workflow_id")
+@click.option("--step", "-S", type=int, default=1, help="Restart from this step")
+@click.option("--forked-workflow-id", "-f", help="Custom ID for the forked workflow")
+@click.option(
+    "--application-version",
+    "-v",
+    help="Custom application version for the forked workflow",
+)
+@click.option(
+    "--db-url",
+    "-D",
+    "application_database_url",
+    help="Your DBOS application database URL",
+)
+@click.option(
+    "--sys-db-url", "-s", "system_database_url", help="Your DBOS system database URL"
+)
+@click.option(
+    "--schema",
+    default="dbos",
+    help='Schema name for DBOS system tables. Defaults to "dbos".',
+)
 def fork(
-    workflow_id: Annotated[str, typer.Argument()],
-    step: Annotated[
-        int,
-        typer.Option(
-            "--step",
-            "-S",
-            help="Restart from this step",
-        ),
-    ] = 1,
-    forked_workflow_id: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--forked-workflow-id",
-            "-f",
-            help="Custom ID for the forked workflow",
-        ),
-    ] = None,
-    application_version: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--application-version",
-            "-v",
-            help="Custom application version for the forked workflow",
-        ),
-    ] = None,
-    application_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--db-url",
-            "-D",
-            help="Your DBOS application database URL",
-        ),
-    ] = None,
-    system_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--sys-db-url",
-            "-s",
-            help="Your DBOS system database URL",
-        ),
-    ] = None,
-    schema: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--schema",
-            help='Schema name for DBOS system tables. Defaults to "dbos".',
-        ),
-    ] = "dbos",
+    workflow_id: str,
+    step: int,
+    forked_workflow_id: Optional[str],
+    application_version: Optional[str],
+    application_database_url: Optional[str],
+    system_database_url: Optional[str],
+    schema: Optional[str],
 ) -> None:
     system_database_url, application_database_url = _get_db_url(
         system_database_url=system_database_url,
@@ -762,90 +690,57 @@ def fork(
 
 
 @queue.command(name="list", help="List enqueued functions for your application")
+@click.option(
+    "--db-url",
+    "-D",
+    "application_database_url",
+    help="Your DBOS application database URL",
+)
+@click.option(
+    "--sys-db-url", "-s", "system_database_url", help="Your DBOS system database URL"
+)
+@click.option("--limit", "-l", type=int, help="Limit the results returned")
+@click.option(
+    "--start-time",
+    "-t",
+    help="Retrieve functions starting after this timestamp (ISO 8601 format)",
+)
+@click.option(
+    "--end-time",
+    "-e",
+    help="Retrieve functions starting before this timestamp (ISO 8601 format)",
+)
+@click.option(
+    "--status",
+    "-S",
+    help="Retrieve functions with this status (PENDING, SUCCESS, ERROR, ENQUEUED, DELAYED, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED)",
+)
+@click.option("--queue-name", "-q", help="Retrieve functions on this queue")
+@click.option("--name", "-n", help="Retrieve functions on this queue")
+@click.option(
+    "--sort-desc",
+    "-d",
+    is_flag=True,
+    help="Sort the results in descending order (older first)",
+)
+@click.option("--offset", "-o", type=int, help="Offset for pagination")
+@click.option(
+    "--schema",
+    default="dbos",
+    help='Schema name for DBOS system tables. Defaults to "dbos".',
+)
 def list_queue(
-    application_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--db-url",
-            "-D",
-            help="Your DBOS application database URL",
-        ),
-    ] = None,
-    system_database_url: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--sys-db-url",
-            "-s",
-            help="Your DBOS system database URL",
-        ),
-    ] = None,
-    limit: Annotated[
-        typing.Optional[int],
-        typer.Option("--limit", "-l", help="Limit the results returned"),
-    ] = None,
-    start_time: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--start-time",
-            "-t",
-            help="Retrieve functions starting after this timestamp (ISO 8601 format)",
-        ),
-    ] = None,
-    end_time: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--end-time",
-            "-e",
-            help="Retrieve functions starting before this timestamp (ISO 8601 format)",
-        ),
-    ] = None,
-    status: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--status",
-            "-S",
-            help="Retrieve functions with this status (PENDING, SUCCESS, ERROR, ENQUEUED, DELAYED, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED)",
-        ),
-    ] = None,
-    queue_name: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--queue-name",
-            "-q",
-            help="Retrieve functions on this queue",
-        ),
-    ] = None,
-    name: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--name",
-            "-n",
-            help="Retrieve functions on this queue",
-        ),
-    ] = None,
-    sort_desc: Annotated[
-        bool,
-        typer.Option(
-            "--sort-desc",
-            "-d",
-            help="Sort the results in descending order (older first)",
-        ),
-    ] = False,
-    offset: Annotated[
-        typing.Optional[int],
-        typer.Option(
-            "--offset",
-            "-o",
-            help="Offset for pagination",
-        ),
-    ] = None,
-    schema: Annotated[
-        typing.Optional[str],
-        typer.Option(
-            "--schema",
-            help='Schema name for DBOS system tables. Defaults to "dbos".',
-        ),
-    ] = "dbos",
+    application_database_url: Optional[str],
+    system_database_url: Optional[str],
+    limit: Optional[int],
+    start_time: Optional[str],
+    end_time: Optional[str],
+    status: Optional[str],
+    queue_name: Optional[str],
+    name: Optional[str],
+    sort_desc: bool,
+    offset: Optional[int],
+    schema: Optional[str],
 ) -> None:
     system_database_url, application_database_url = _get_db_url(
         system_database_url=system_database_url,
@@ -867,6 +762,12 @@ def list_queue(
         name=name,
     )
     print(json.dumps([w.__dict__ for w in workflows], cls=DefaultEncoder))
+
+
+# Registered last so groups sort after plain commands in help, matching the previous layout
+workflow.add_command(queue)
+app.add_command(workflow)
+app.add_command(postgres)
 
 
 if __name__ == "__main__":

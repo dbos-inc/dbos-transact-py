@@ -1,7 +1,7 @@
 from typing import List, Optional
 
+import click
 import sqlalchemy as sa
-import typer
 
 from dbos._app_db import ApplicationDatabase
 from dbos._migration import get_dbos_migrations
@@ -68,8 +68,8 @@ def migrate_dbos_databases(
             )
             app_db.run_migrations()
     except Exception as e:
-        typer.echo(f"DBOS migrations failed: {e}")
-        raise typer.Exit(code=1)
+        click.echo(f"DBOS migrations failed: {e}")
+        raise click.exceptions.Exit(code=1)
     finally:
         if sys_db:
             sys_db.destroy()
@@ -101,7 +101,7 @@ def grant_dbos_schema_permissions(
     """
     Grant all permissions on all entities in the system schema to the specified role.
     """
-    typer.echo(
+    click.echo(
         f"Granting permissions for the {schema} schema to {role_name} in database {sa.make_url(database_url)}"
     )
     engine = None
@@ -112,11 +112,11 @@ def grant_dbos_schema_permissions(
         with engine.connect() as connection:
             connection.execution_options(isolation_level="AUTOCOMMIT")
             for sql in get_dbos_schema_permissions_sql(schema, role_name):
-                typer.echo(sql)
+                click.echo(sql)
                 connection.execute(sa.text(sql))
     except Exception as e:
-        typer.echo(f"Failed to grant permissions to role {role_name}: {e}")
-        raise typer.Exit(code=1)
+        click.echo(f"Failed to grant permissions to role {role_name}: {e}")
+        raise click.exceptions.Exit(code=1)
     finally:
         if engine:
             engine.dispose()
@@ -126,14 +126,14 @@ def _check_printable_identifier(name: str, kind: str) -> None:
     # The execute path interpolates these names into quoted identifiers and
     # string literals, so names containing quotes fail there too.
     if '"' in name or "'" in name:
-        typer.echo(f"{kind} names containing quotes are not supported", err=True)
-        raise typer.Exit(code=1)
+        click.echo(f"{kind} names containing quotes are not supported", err=True)
+        raise click.exceptions.Exit(code=1)
 
 
 def _emit_sql(sql: str) -> None:
     sql = sql.strip()
     if sql:
-        typer.echo(sql if sql.endswith(";") else sql + ";")
+        click.echo(sql if sql.endswith(";") else sql + ";")
 
 
 def print_dbos_migrations(
@@ -146,10 +146,10 @@ def print_dbos_migrations(
     them (migration is "all") or starting from a number (migration is N),
     without touching any database. Stdout is pure SQL and comments."""
     if system_database_url.startswith("sqlite"):
-        typer.echo(
+        click.echo(
             "--print-migrations is only supported for Postgres databases", err=True
         )
-        raise typer.Exit(code=1)
+        raise click.exceptions.Exit(code=1)
     _check_printable_identifier(schema, "Schema")
 
     migrations = get_dbos_migrations(schema, use_listen_notify=True)
@@ -160,26 +160,26 @@ def print_dbos_migrations(
         try:
             start = int(migration)
         except ValueError:
-            typer.echo(
+            click.echo(
                 f"Invalid --print-migrations value '{migration}': expected 'all' or a migration number",
                 err=True,
             )
-            raise typer.Exit(code=1)
+            raise click.exceptions.Exit(code=1)
         if not 1 <= start <= latest_version:
-            typer.echo(
+            click.echo(
                 f"Migration {start} does not exist: valid migrations are 1 through {latest_version}",
                 err=True,
             )
-            raise typer.Exit(code=1)
+            raise click.exceptions.Exit(code=1)
 
-    typer.echo(
+    click.echo(
         f"-- DBOS system database migrations for {sa.make_url(system_database_url)}"
     )
-    typer.echo(
+    click.echo(
         "-- Contains CREATE/DROP INDEX CONCURRENTLY: run outside a transaction block (e.g. plain psql, not psql --single-transaction)."
     )
     if start == 1:
-        typer.echo("-- This script is for FRESH databases only.")
+        click.echo("-- This script is for FRESH databases only.")
         _emit_sql(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
         _emit_sql(
             f'CREATE TABLE IF NOT EXISTS "{schema}".dbos_migrations (version BIGINT NOT NULL PRIMARY KEY)'
@@ -191,9 +191,9 @@ def print_dbos_migrations(
         if i == 10:
             # Migration 10 backfills the notifications primary key, which
             # migration 1 already creates on a fresh database.
-            typer.echo("-- Migration 10 skipped: not applicable on fresh databases")
+            click.echo("-- Migration 10 skipped: not applicable on fresh databases")
         elif migration_sql.strip():
-            typer.echo(f"-- Migration {i}")
+            click.echo(f"-- Migration {i}")
             _emit_sql(migration_sql)
         # Per-migration version bookkeeping, mirroring the runner: an
         # interrupted apply can be resumed from the next migration number.
@@ -209,6 +209,6 @@ def print_dbos_user_role_sql(*, schema: str = "dbos", role_name: str) -> None:
     system schema, without touching any database."""
     _check_printable_identifier(schema, "Schema")
     _check_printable_identifier(role_name, "Role")
-    typer.echo(f"-- Permissions on DBOS schema {schema} for role {role_name}")
+    click.echo(f"-- Permissions on DBOS schema {schema} for role {role_name}")
     for sql in get_dbos_schema_permissions_sql(schema, role_name):
         _emit_sql(sql)

@@ -1,13 +1,12 @@
 import os
 import re
 
-import typer
+import click
 from git import Optional, Repo
 
-app = typer.Typer()
 
-
-@app.command()
+@click.command()
+@click.option("--version-number", default=None)
 def make_release(version_number: Optional[str] = None) -> None:
     repo = Repo(os.getcwd())
     if repo.is_dirty():
@@ -65,4 +64,4 @@ def create_and_push_release_branch(repo: Repo, version_number: str) -> None:
 
 
 if __name__ == "__main__":
-    app()
+    make_release()
