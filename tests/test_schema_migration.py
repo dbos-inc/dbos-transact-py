@@ -1,19 +1,22 @@
 import os
+import shutil
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pytest
 import sqlalchemy as sa
+import typer
 
 # Public API
 from dbos import DBOS, DBOSConfig, run_dbos_database_migrations
-from dbos._migration import get_dbos_migrations, sqlite_migrations
+from dbos._migration import get_dbos_migrations, should_migrate, sqlite_migrations
 
 # Private API because this is a unit test
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
+from dbos.cli.migration import print_dbos_migrations, print_dbos_user_role_sql
 
 
 def test_systemdb_migration(dbos: DBOS, skip_with_sqlite: None) -> None:
@@ -718,3 +721,318 @@ def test_runner_resumes_after_invalid_index(dbos: DBOS, skip_with_sqlite: None) 
             sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
         ).scalar()
         assert version == final_version
+
+
+def test_migrate_print_migrations_all(
+    db_engine: sa.Engine,
+    skip_with_sqlite: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--print-migrations all emits a complete fresh-database script that psql can apply."""
+    database_name = "print_migrations_test"
+    db_url = db_engine.url.set(database=database_name).set(drivername="postgresql")
+    db_url_string = db_url.render_as_string(hide_password=False)
+    latest_version = len(get_dbos_migrations("dbos", True))
+
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(
+            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+        )
+
+    # Printing needs no reachable database; stdout is pure SQL and comments
+    print_dbos_migrations(db_url_string, schema="dbos", migration="all")
+    sql = capsys.readouterr().out
+    assert 'CREATE SCHEMA IF NOT EXISTS "dbos";' in sql
+    assert "DO $$" not in sql
+    assert "-- Migration 10 skipped: not applicable on fresh databases" in sql
+    assert "ADD PRIMARY KEY (message_uuid)" not in sql
+    assert 'INSERT INTO "dbos".dbos_migrations (version) VALUES (1);' in sql
+    assert f'UPDATE "dbos".dbos_migrations SET version = {latest_version};' in sql
+    # Role grants are only printed by --print-user-role
+    assert "GRANT" not in sql
+    for line in sql.splitlines():
+        assert line.startswith("--") or not line.startswith(
+            ("Starting", "Granting", "System database")
+        )
+
+    # The CLI path prints the same script and exits cleanly, even though the
+    # database is unreachable
+    result = subprocess.run(
+        ["dbos", "migrate", "-s", db_url_string, "--print-migrations", "all"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == sql
+
+    if shutil.which("psql") is None:
+        pytest.skip("psql not available")
+
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(sa.text(f"CREATE DATABASE {database_name}"))
+
+    with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
+        f.write(sql)
+        f.flush()
+        subprocess.check_call(
+            ["psql", db_url_string, "-v", "ON_ERROR_STOP=1", "-q", "-f", f.name]
+        )
+
+    # A real migration now considers the database up to date
+    engine = sa.create_engine(db_url.set(drivername="postgresql+psycopg"))
+    try:
+        assert should_migrate(engine, "dbos", True) is False
+        with engine.connect() as conn:
+            version = conn.execute(
+                sa.text('SELECT version FROM "dbos".dbos_migrations')
+            ).scalar()
+            assert version == latest_version
+    finally:
+        engine.dispose()
+
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(
+            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+        )
+
+
+def test_migrate_print_custom_schema(
+    db_engine: sa.Engine,
+    skip_with_sqlite: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--print-migrations and --print-user-role handle unusual schema names."""
+    database_name = "print_migrations_schema_test"
+    schema = "F8nny_sCHem@-n@m3"
+    db_url = db_engine.url.set(database=database_name).set(drivername="postgresql")
+    db_url_string = db_url.render_as_string(hide_password=False)
+    latest_version = len(get_dbos_migrations(schema, True))
+
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(
+            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+        )
+
+    print_dbos_migrations(db_url_string, schema=schema, migration="all")
+    sql = capsys.readouterr().out
+    assert f'CREATE SCHEMA IF NOT EXISTS "{schema}";' in sql
+    # The unquoted schema name must never appear outside quotes or literals
+    assert f"CREATE TABLE {schema}." not in sql
+
+    # Schema names containing quotes are rejected
+    with pytest.raises(Exception):
+        print_dbos_migrations(db_url_string, schema='bad"schema', migration="all")
+    capsys.readouterr()
+
+    # --print-user-role requires --app-role
+    result = subprocess.run(
+        ["dbos", "migrate", "-s", db_url_string, "--print-user-role"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "--app-role" in result.stderr
+
+    # --print-user-role emits only grant statements, quoting schema and role
+    result = subprocess.run(
+        [
+            "dbos",
+            "migrate",
+            "-s",
+            db_url_string,
+            "--schema",
+            schema,
+            "--print-user-role",
+            "-r",
+            "my-app-role",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert f'GRANT USAGE ON SCHEMA "{schema}" TO "my-app-role";' in result.stdout
+    for line in result.stdout.splitlines():
+        assert line.startswith(("--", "GRANT", "ALTER"))
+    role_sql = result.stdout
+
+    # Role names containing quotes are rejected
+    with pytest.raises(typer.Exit):
+        print_dbos_user_role_sql(schema=schema, role_name='bad"role')
+    capsys.readouterr()
+
+    # --print-user-role cannot be combined with --print-migrations
+    result = subprocess.run(
+        [
+            "dbos",
+            "migrate",
+            "-s",
+            db_url_string,
+            "--print-migrations",
+            "all",
+            "--print-user-role",
+            "-r",
+            "my-app-role",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "cannot be combined" in result.stderr
+    assert result.stdout == ""
+
+    if shutil.which("psql") is None:
+        pytest.skip("psql not available")
+
+    # The printed scripts work on a fresh database
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(sa.text(f"CREATE DATABASE {database_name}"))
+        connection.execute(sa.text('DROP ROLE IF EXISTS "my-app-role"'))
+        connection.execute(
+            sa.text("CREATE ROLE \"my-app-role\" LOGIN PASSWORD 'app_role_pwd'")
+        )
+
+    for script in [sql, role_sql]:
+        with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
+            f.write(script)
+            f.flush()
+            subprocess.check_call(
+                ["psql", db_url_string, "-v", "ON_ERROR_STOP=1", "-q", "-f", f.name]
+            )
+
+    engine = sa.create_engine(db_url.set(drivername="postgresql+psycopg"))
+    try:
+        assert should_migrate(engine, schema, True) is False
+    finally:
+        engine.dispose()
+
+    # The app role can query the DBOS schema
+    app_engine = sa.create_engine(
+        db_url.set(drivername="postgresql+psycopg")
+        .set(username="my-app-role")
+        .set(password="app_role_pwd")
+    )
+    try:
+        with app_engine.connect() as conn:
+            version = conn.execute(
+                sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+            ).scalar()
+            assert version == latest_version
+    finally:
+        app_engine.dispose()
+
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(
+            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+        )
+        connection.execute(sa.text('DROP ROLE IF EXISTS "my-app-role"'))
+
+
+def test_migrate_print_from_migration(
+    db_engine: sa.Engine,
+    skip_with_sqlite: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--print-migrations N emits migrations N through latest."""
+    database_name = "print_from_migration_test"
+    db_url = db_engine.url.set(database=database_name).set(drivername="postgresql")
+    db_url_string = db_url.render_as_string(hide_password=False)
+    migrations = get_dbos_migrations("dbos", True)
+    latest_version = len(migrations)
+
+    # Invalid selections are rejected
+    for bad in ["0", str(latest_version + 1), "-1", "foo"]:
+        with pytest.raises(typer.Exit):
+            print_dbos_migrations(db_url_string, schema="dbos", migration=bad)
+    capsys.readouterr()
+    result = subprocess.run(
+        ["dbos", "migrate", "-s", db_url_string, "--print-migrations", "nope"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "expected 'all' or a migration number" in result.stderr
+
+    # Starting from 1 is identical to "all"
+    print_dbos_migrations(db_url_string, schema="dbos", migration="1")
+    from_one = capsys.readouterr().out
+    print_dbos_migrations(db_url_string, schema="dbos", migration="all")
+    assert capsys.readouterr().out == from_one
+
+    # Starting mid-way omits the prelude and earlier migrations
+    print_dbos_migrations(db_url_string, schema="dbos", migration="10")
+    out = capsys.readouterr().out
+    assert "CREATE SCHEMA" not in out
+    assert "-- Migration 9" not in out
+    assert "-- Migration 10 skipped: not applicable on fresh databases" in out
+    assert 'UPDATE "dbos".dbos_migrations SET version = 10;' in out
+    assert "-- Migration 11" in out.splitlines()
+    assert f'UPDATE "dbos".dbos_migrations SET version = {latest_version};' in out
+    assert "DO $$" not in out
+
+    if shutil.which("psql") is None:
+        pytest.skip("psql not available")
+
+    # Bring a fresh database to version latest-1 by truncating the full script
+    print_dbos_migrations(db_url_string, schema="dbos", migration="all")
+    full = capsys.readouterr().out
+    marker = f'UPDATE "dbos".dbos_migrations SET version = {latest_version - 1};'
+    partial = full[: full.index(marker) + len(marker)] + "\n"
+
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(
+            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+        )
+        connection.execute(sa.text(f"CREATE DATABASE {database_name}"))
+    with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
+        f.write(partial)
+        f.flush()
+        subprocess.check_call(
+            ["psql", db_url_string, "-v", "ON_ERROR_STOP=1", "-q", "-f", f.name]
+        )
+
+    # The last migration printed alone applies on top of version latest-1
+    single = subprocess.check_output(
+        [
+            "dbos",
+            "migrate",
+            "-s",
+            db_url_string,
+            "--print-migrations",
+            str(latest_version),
+        ],
+        text=True,
+    )
+    assert "CREATE SCHEMA" not in single
+    assert "DO $$" not in single
+    with tempfile.NamedTemporaryFile("w", suffix=".sql") as f:
+        f.write(single)
+        f.flush()
+        subprocess.check_call(
+            ["psql", db_url_string, "-v", "ON_ERROR_STOP=1", "-q", "-f", f.name]
+        )
+
+    engine = sa.create_engine(db_url.set(drivername="postgresql+psycopg"))
+    try:
+        assert should_migrate(engine, "dbos", True) is False
+        with engine.connect() as conn:
+            version = conn.execute(
+                sa.text('SELECT version FROM "dbos".dbos_migrations')
+            ).scalar()
+            assert version == latest_version
+    finally:
+        engine.dispose()
+
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(
+            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+        )
