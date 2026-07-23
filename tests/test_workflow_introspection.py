@@ -15,6 +15,8 @@ from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import OperationResultInternal
 from dbos._utils import GlobalParams
 
+from .conftest import retry_until_success, set_workflow_status
+
 
 def test_list_workflow(dbos: DBOS) -> None:
     @DBOS.workflow()
@@ -1437,28 +1439,42 @@ async def test_sleep_timing_async(dbos: DBOS) -> None:
 
 
 def test_recv_timeout_registration_is_instantaneous(dbos: DBOS) -> None:
-    """The internal sleep only registers a deadline, abandoned on delivery."""
-
     @DBOS.workflow()
     def receiver() -> Any:
         return DBOS.recv(timeout_seconds=60)
 
     handle = DBOS.start_workflow(receiver)
-    time.sleep(0.5)
+
+    # Poll rather than sleep, so the floor is our wait and not workflow startup.
+    def registered() -> None:
+        assert any(
+            s["function_name"] == "DBOS.sleep"
+            for s in DBOS.list_workflow_steps(handle.workflow_id)
+        )
+
+    retry_until_success(registered)
+    waiting_since = time.time()
+    time.sleep(1.0)
     DBOS.send(handle.workflow_id, "msg")
     assert handle.get_result() == "msg"
+    waited_ms = int((time.time() - waiting_since) * 1000)
 
     steps = DBOS.list_workflow_steps(handle.workflow_id)
+    # The registration is abandoned on delivery, so it cannot span the wait.
     sleep_step = _only_step(steps, "DBOS.sleep")
-    assert sleep_step["completed_at_epoch_ms"] - sleep_step["started_at_epoch_ms"] < 500
+    sleep_ms = sleep_step["completed_at_epoch_ms"] - sleep_step["started_at_epoch_ms"]
+    assert sleep_ms < waited_ms
 
     recv_step = _only_step(steps, "DBOS.recv")
-    assert recv_step["completed_at_epoch_ms"] - recv_step["started_at_epoch_ms"] >= 400
+    assert recv_step["completed_at_epoch_ms"] - recv_step["started_at_epoch_ms"] >= 900
 
 
 def test_sleep_timing_unchanged_on_replay(dbos: DBOS) -> None:
+    runs: list[int] = []
+
     @DBOS.workflow()
     def workflow() -> None:
+        runs.append(1)
         DBOS.sleep(1.0)
 
     wfid = str(uuid.uuid4())
@@ -1466,10 +1482,12 @@ def test_sleep_timing_unchanged_on_replay(dbos: DBOS) -> None:
         workflow()
     before = _only_step(DBOS.list_workflow_steps(wfid), "DBOS.sleep")
 
-    with SetWorkflowID(wfid):
-        workflow()
-    after = _only_step(DBOS.list_workflow_steps(wfid), "DBOS.sleep")
+    # Without the PENDING reset the body is short-circuited and never re-runs.
+    set_workflow_status(dbos._sys_db, wfid, "PENDING")
+    dbos._execute_workflow_id(wfid).get_result()
+    assert len(runs) == 2
 
+    after = _only_step(DBOS.list_workflow_steps(wfid), "DBOS.sleep")
     assert after["started_at_epoch_ms"] == before["started_at_epoch_ms"]
     assert after["completed_at_epoch_ms"] == before["completed_at_epoch_ms"]
 
@@ -1617,6 +1635,149 @@ def test_transaction_timing(dbos: DBOS) -> None:
     step = steps[0]
     assert step["started_at_epoch_ms"] and step["completed_at_epoch_ms"]
     assert step["completed_at_epoch_ms"] - step["started_at_epoch_ms"] >= 200
+
+
+def test_transaction_timing_includes_checkpoint_lookup(dbos: DBOS) -> None:
+    real_check = dbos._sys_db.check_operation_execution
+
+    def slow_check(*args: Any, **kwargs: Any) -> Any:
+        time.sleep(0.5)
+        return real_check(*args, **kwargs)
+
+    @DBOS.transaction()
+    def txn() -> None:
+        return
+
+    @DBOS.workflow()
+    def workflow() -> None:
+        txn()
+
+    dbos._sys_db.check_operation_execution = slow_check  # type: ignore[method-assign]
+    try:
+        handle = DBOS.start_workflow(workflow)
+        handle.get_result()
+    finally:
+        dbos._sys_db.check_operation_execution = real_check  # type: ignore[method-assign]
+
+    step = _only_step(DBOS.list_workflow_steps(handle.workflow_id), txn.__qualname__)
+    assert step["completed_at_epoch_ms"] - step["started_at_epoch_ms"] >= 500
+
+
+@pytest.mark.asyncio
+async def test_get_result_timing_async_direct_child(dbos: DBOS) -> None:
+    """Pending.then invokes its callback only after awaiting the body."""
+
+    @DBOS.workflow()
+    async def child() -> str:
+        await asyncio.sleep(1.0)
+        return "c"
+
+    @DBOS.workflow()
+    async def parent() -> None:
+        await child()
+
+    handle = await DBOS.start_workflow_async(parent)
+    await handle.get_result()
+
+    steps = await DBOS.list_workflow_steps_async(handle.workflow_id)
+    step = _get_result_step(steps)
+    assert step["started_at_epoch_ms"] and step["completed_at_epoch_ms"]
+    assert step["completed_at_epoch_ms"] - step["started_at_epoch_ms"] >= 900
+
+
+def test_get_result_timing_enqueued_child(dbos: DBOS) -> None:
+    """Covers the polling handle, which only an enqueued child produces."""
+    queue = Queue("timing-queue")
+
+    @DBOS.workflow()
+    def child() -> str:
+        time.sleep(1.0)
+        return "c"
+
+    @DBOS.workflow()
+    def parent() -> None:
+        queue.enqueue(child).get_result()
+
+    handle = DBOS.start_workflow(parent)
+    handle.get_result()
+
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    get_result = _get_result_step(steps)
+    assert (
+        get_result["completed_at_epoch_ms"] - get_result["started_at_epoch_ms"] >= 900
+    )
+
+    marker = _only_step(steps, child.__qualname__)
+    assert marker["started_at_epoch_ms"] and marker["completed_at_epoch_ms"]
+    assert marker["completed_at_epoch_ms"] - marker["started_at_epoch_ms"] < 900
+
+
+def test_get_result_timing_on_error(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def child() -> None:
+        time.sleep(1.0)
+        raise Exception("boom")
+
+    @DBOS.workflow()
+    def parent() -> None:
+        DBOS.start_workflow(child).get_result()
+
+    handle = DBOS.start_workflow(parent)
+    with pytest.raises(Exception):
+        handle.get_result()
+
+    step = _get_result_step(DBOS.list_workflow_steps(handle.workflow_id))
+    assert step["started_at_epoch_ms"] and step["completed_at_epoch_ms"]
+    assert step["completed_at_epoch_ms"] - step["started_at_epoch_ms"] >= 900
+
+
+def test_child_marker_timing_direct_call(dbos: DBOS) -> None:
+    """The direct-call path builds its own child_start_time."""
+
+    @DBOS.workflow()
+    def child() -> str:
+        time.sleep(1.0)
+        return "c"
+
+    @DBOS.workflow()
+    def parent() -> None:
+        child()
+
+    handle = DBOS.start_workflow(parent)
+    handle.get_result()
+
+    marker = _only_step(
+        DBOS.list_workflow_steps(handle.workflow_id), child.__qualname__
+    )
+    assert marker["started_at_epoch_ms"] and marker["completed_at_epoch_ms"]
+    assert marker["completed_at_epoch_ms"] - marker["started_at_epoch_ms"] < 900
+
+
+def test_get_event_timeout_registration_is_instantaneous(dbos: DBOS) -> None:
+    """get_event's internal sleep is the second deliberately-unprojected call site."""
+
+    @DBOS.workflow()
+    def setter() -> None:
+        time.sleep(1.0)
+        DBOS.set_event("k", "v")
+
+    @DBOS.workflow()
+    def getter(target: str) -> Any:
+        return DBOS.get_event(target, "k", timeout_seconds=60)
+
+    target = DBOS.start_workflow(setter)
+    handle = DBOS.start_workflow(getter, target.workflow_id)
+    assert handle.get_result() == "v"
+
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    sleep_step = _only_step(steps, "DBOS.sleep")
+    assert sleep_step["completed_at_epoch_ms"] - sleep_step["started_at_epoch_ms"] < 900
+
+    get_event_step = _only_step(steps, "DBOS.getEvent")
+    span = (
+        get_event_step["completed_at_epoch_ms"] - get_event_step["started_at_epoch_ms"]
+    )
+    assert span >= 900
 
 
 def _completed_workflow_id(dbos: DBOS) -> str:

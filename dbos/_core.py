@@ -1436,6 +1436,8 @@ def workflow_wrapper(
         workflow_id = None
         # Holds the initialized status so the invoke step can be built once the workflow is cleared to execute.
         init_status: dict[str, WorkflowStatusInternal] = {}
+        # Hoisted out of record_get_result: Pending.then invokes it only after awaiting the body.
+        get_result_start_time = int(time.time() * 1000)
 
         def check_and_init() -> Union[NoResult, "DeferredResult[R]", R]:
             """Initialize the workflow row, returning a deferred wait for an existing workflow's result to skip re-running its body, or NoResult to run it."""
@@ -1506,7 +1508,6 @@ def workflow_wrapper(
             If a child workflow is invoked synchronously, this records the implicit "getResult" where the
             parent retrieves the child's output. It executes in the CALLER'S context, not the workflow's.
             """
-            start_time = int(time.time() * 1000)
             try:
                 r = func()
             except Exception as e:
@@ -1520,7 +1521,7 @@ def workflow_wrapper(
                     serialized_e,
                     serialization,
                     resctx,
-                    started_at_epoch_ms=start_time,
+                    started_at_epoch_ms=get_result_start_time,
                 )
                 raise
             serialized_r, serialization = serialize_value(r, None, dbos._serializer)
@@ -1531,7 +1532,7 @@ def workflow_wrapper(
                 None,
                 serialization,
                 resctx,
-                started_at_epoch_ms=start_time,
+                started_at_epoch_ms=get_result_start_time,
             )
             return r
 
