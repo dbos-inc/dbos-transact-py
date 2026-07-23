@@ -1122,20 +1122,39 @@ def test_record_child_workflow_idempotent_on_db_retry(dbos: DBOS) -> None:
     function_id = 1
     function_name = "test_child"
 
-    dbos._sys_db.record_child_workflow(parent_id, child_id, function_id, function_name)
+    start_time = int(time.time() * 1000)
+    dbos._sys_db.record_child_workflow(
+        parent_id,
+        child_id,
+        function_id,
+        function_name,
+        started_at_epoch_ms=start_time,
+    )
 
     # Re-recording the same child at the same function_id is idempotent.
-    dbos._sys_db.record_child_workflow(parent_id, child_id, function_id, function_name)
+    dbos._sys_db.record_child_workflow(
+        parent_id,
+        child_id,
+        function_id,
+        function_name,
+        started_at_epoch_ms=start_time,
+    )
 
     # A different child at the same function_id is a genuine conflict.
     with pytest.raises(DBOSWorkflowConflictIDError):
         dbos._sys_db.record_child_workflow(
-            parent_id, str(uuid.uuid4()), function_id, function_name
+            parent_id,
+            str(uuid.uuid4()),
+            function_id,
+            function_name,
+            started_at_epoch_ms=start_time,
         )
 
     # An empty child id is rejected loudly rather than silently wedging recovery.
     with pytest.raises(DBOSException):
-        dbos._sys_db.record_child_workflow(parent_id, "", 2, function_name)
+        dbos._sys_db.record_child_workflow(
+            parent_id, "", 2, function_name, started_at_epoch_ms=start_time
+        )
 
 
 class _RetryOnceEngine:
@@ -1181,7 +1200,13 @@ def test_record_get_result_increments_function_id_once_on_db_retry(
     _set_local_dbos_context(ctx)
     try:
         dbos._sys_db.engine = proxy  # type: ignore[assignment]
-        dbos._sys_db.record_get_result(str(uuid.uuid4()), "some-output", None, None)
+        dbos._sys_db.record_get_result(
+            str(uuid.uuid4()),
+            "some-output",
+            None,
+            None,
+            started_at_epoch_ms=int(time.time() * 1000),
+        )
     finally:
         dbos._sys_db.engine = real_engine
         _set_local_dbos_context(prev)

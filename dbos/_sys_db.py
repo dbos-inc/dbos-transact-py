@@ -2319,8 +2319,8 @@ class SystemDatabase(ABC):
 
         # operation_outputs has no explicit status column; derive it from
         # whether `error` is populated. Bookkeeping rows from record_child_workflow
-        # and DBOS.getResult have NULL error and NULL output, so they appear
-        # as SUCCESS here — callers can filter them by function_name.
+        # have NULL error and NULL output, so they appear as SUCCESS here —
+        # callers can filter them by function_name.
         status_expr = sa.case(
             (
                 SystemSchema.operation_outputs.c.error.is_(None),
@@ -2360,8 +2360,7 @@ class SystemDatabase(ABC):
             raise ValueError("At least one group_by flag must be set to True")
 
         # Build select columns from boolean flags. MAX ignores NULLs, so rows
-        # without start/complete timestamps (child-workflow and getResult
-        # markers) drop out of the duration max.
+        # without start/complete timestamps drop out of the duration max.
         select_flags: List[Tuple[str, bool, sa.sql.ColumnElement[Any]]] = [
             ("count", select_count, func.count()),
             (
@@ -2506,21 +2505,36 @@ class SystemDatabase(ABC):
 
             res = conn.execute(stmt)
             rows = res.fetchall()
-            if len(rows) > 0 and int(rows[0][0]) != completed_at_epoch_ms:
-                raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
+            if len(rows) > 0:
+                existing_completed_at = rows[0][0]
+                if (
+                    existing_completed_at is None
+                    or int(existing_completed_at) != completed_at_epoch_ms
+                ):
+                    raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
 
         except DBAPIError as dbapi_error:
             if self._is_unique_constraint_violation(dbapi_error):
                 raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
             raise
 
-    def record_operation_result(self, result: OperationResultInternal) -> None:
-        completed_at_epoch_ms = int(time.time() * 1000)
+    def record_operation_result(
+        self,
+        result: OperationResultInternal,
+        *,
+        completed_at_epoch_ms: Optional[int] = None,
+    ) -> None:
+        # Outside the retry: the conflict check compares the stored completion to ours.
+        completed_at = (
+            completed_at_epoch_ms
+            if completed_at_epoch_ms is not None
+            else int(time.time() * 1000)
+        )
 
         @db_retry()
         def record_operation_result_retry() -> None:
             with self.engine.begin() as c:
-                self._record_operation_result_txn(result, completed_at_epoch_ms, c)
+                self._record_operation_result_txn(result, completed_at, c)
             DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT)
 
         record_operation_result_retry()
@@ -2532,6 +2546,8 @@ class SystemDatabase(ABC):
         error: Optional[str],
         serialization: Optional[str],
         ctx: Optional["DBOSContext"] = None,
+        *,
+        started_at_epoch_ms: int,
     ) -> None:
         if ctx is None:
             ctx = get_local_dbos_context()
@@ -2556,6 +2572,8 @@ class SystemDatabase(ABC):
                     output=output,
                     error=error,
                     child_workflow_id=result_workflow_id,
+                    started_at_epoch_ms=started_at_epoch_ms,
+                    completed_at_epoch_ms=int(time.time() * 1000),
                     serialization=serialization,
                 )
                 .on_conflict_do_nothing()
@@ -2572,6 +2590,8 @@ class SystemDatabase(ABC):
         childUUID: str,
         functionID: int,
         functionName: str,
+        *,
+        started_at_epoch_ms: int,
     ) -> None:
         # An empty child id is never valid; fail loudly instead of silently wedging the parent on recovery.
         if not childUUID:
@@ -2579,11 +2599,14 @@ class SystemDatabase(ABC):
                 f"Attempted to record an empty child workflow ID for parent "
                 f"{parentUUID} (function {functionID}, {functionName})."
             )
+        # Spans the launch only: the parent does not wait for the child here.
         sql = sa.insert(SystemSchema.operation_outputs).values(
             workflow_uuid=parentUUID,
             function_id=functionID,
             function_name=functionName,
             child_workflow_id=childUUID,
+            started_at_epoch_ms=started_at_epoch_ms,
+            completed_at_epoch_ms=int(time.time() * 1000),
         )
         try:
             with self.engine.begin() as c:
@@ -3349,7 +3372,16 @@ class SystemDatabase(ABC):
         workflow_uuid: str,
         function_id: int,
         seconds: float,
+        *,
+        project_completion_time: bool = False,
     ) -> float:
+        """Checkpoint a durable sleep, returning the seconds still left to wait.
+
+        The row precedes the sleep because it stores the wake time recovery resumes
+        from. `project_completion_time` records that wake time as the completion, so
+        the duration is the sleep; callers registering a timeout they may abandon
+        early (recv, get_event) leave it off and record an instant.
+        """
         function_name = "DBOS.sleep"
         start_time = int(time.time() * 1000)
         recorded_output = self.check_operation_execution(
@@ -3380,7 +3412,10 @@ class SystemDatabase(ABC):
                         "output": DBOSPortableJSON.serialize(end_time),
                         "error": None,
                         "serialization": DBOSPortableJSON.name(),
-                    }
+                    },
+                    completed_at_epoch_ms=(
+                        int(end_time * 1000) if project_completion_time else None
+                    ),
                 )
             except DBOSWorkflowConflictIDError:
                 pass
