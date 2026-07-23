@@ -35,7 +35,7 @@ class DBOSConfig(TypedDict, total=False):
         console_log_level: Optional[str]: log level specficially for console logging; must be no less severe than log_level
         otlp_traces_endpoints: List[str]: OTLP traces endpoints
         otlp_logs_endpoints: List[str]: OTLP logs endpoints
-        admin_port (int): (DEPRECATED) Port of the DBOS admin server. The admin server is deprecated and will be removed in a future version of DBOS.
+        admin_port (int): (DEPRECATED) Port of the DBOS admin server. Has no effect unless run_admin_server is True. The admin server is deprecated and will be removed in a future version of DBOS.
         run_admin_server (bool): (DEPRECATED) Whether to run the DBOS admin server. Defaults to False (True in DBOS Cloud). The admin server is deprecated and will be removed in a future version of DBOS.
         otlp_attributes (dict[str, str]): A set of custom attributes to apply OTLP-exported logs and traces
         application_version (str): Application version
