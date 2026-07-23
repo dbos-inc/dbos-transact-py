@@ -628,7 +628,6 @@ class DBOS:
                 validate_kafka_consumers(self)
                 configure_kafka_queues(self)
 
-            # Deprecated: the admin server is off by default (except in DBOS Cloud) and will be removed in a future version.
             admin_port = self._config.get("runtimeConfig", {}).get("admin_port")
             if admin_port is None:
                 admin_port = 3001
