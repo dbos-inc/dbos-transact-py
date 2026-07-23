@@ -1,3 +1,8 @@
+"""
+DEPRECATED: The DBOS admin server is deprecated and will be removed in a future version of DBOS.
+It is disabled by default; set run_admin_server=True in your DBOS config to re-enable it.
+"""
+
 from __future__ import annotations
 
 import json
@@ -36,7 +41,14 @@ _conductor_path = "/conductor"
 
 
 class AdminServer:
+    """DEPRECATED: this server will be removed in a future version of DBOS."""
+
     def __init__(self, dbos: DBOS, port: int = 3001) -> None:
+        # Don't warn in DBOS Cloud, which runs the admin server on the user's behalf.
+        if not GlobalParams.dbos_cloud:
+            dbos_logger.warning(
+                "The DBOS admin server is deprecated and will be removed in a future version of DBOS."
+            )
         self.port = port
         handler = partial(AdminRequestHandler, dbos)
         self.server = ThreadingHTTPServer(("0.0.0.0", port), handler)

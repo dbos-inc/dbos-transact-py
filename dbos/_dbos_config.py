@@ -13,6 +13,7 @@ from dbos._serialization import Serializer
 from ._error import DBOSInitializationError
 from ._logger import dbos_logger
 from ._schemas.system_database import SystemSchema
+from ._utils import GlobalParams
 
 DBOS_CONFIG_PATH = "dbos-config.yaml"
 
@@ -34,8 +35,8 @@ class DBOSConfig(TypedDict, total=False):
         console_log_level: Optional[str]: log level specficially for console logging; must be no less severe than log_level
         otlp_traces_endpoints: List[str]: OTLP traces endpoints
         otlp_logs_endpoints: List[str]: OTLP logs endpoints
-        admin_port (int): Admin port
-        run_admin_server (bool): Whether to run the DBOS admin server
+        admin_port (int): (DEPRECATED) Port of the DBOS admin server. The admin server is deprecated and will be removed in a future version of DBOS.
+        run_admin_server (bool): (DEPRECATED) Whether to run the DBOS admin server. Defaults to False (True in DBOS Cloud). The admin server is deprecated and will be removed in a future version of DBOS.
         otlp_attributes (dict[str, str]): A set of custom attributes to apply OTLP-exported logs and traces
         application_version (str): Application version
         executor_id (str): Executor ID, used to identify the application instance in distributed environments
@@ -149,6 +150,11 @@ class ConfigFile(TypedDict, total=False):
     use_listen_notify: bool
 
 
+def _default_run_admin_server() -> bool:
+    # The admin server is deprecated and off by default, except in DBOS Cloud, which depends on it.
+    return GlobalParams.dbos_cloud
+
+
 def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     if "name" not in config:
         raise DBOSInitializationError(f"Configuration must specify an application name")
@@ -183,7 +189,9 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         translated_config["dbos_system_schema"] = config.get("dbos_system_schema")
 
     # Runtime config
-    translated_config["runtimeConfig"] = {"run_admin_server": True}
+    translated_config["runtimeConfig"] = {
+        "run_admin_server": _default_run_admin_server()
+    }
     if "admin_port" in config:
         translated_config["runtimeConfig"]["admin_port"] = config["admin_port"]
     if "run_admin_server" in config:
@@ -393,10 +401,10 @@ def process_config(
     # Handle admin server config
     if not data.get("runtimeConfig"):
         data["runtimeConfig"] = {
-            "run_admin_server": True,
+            "run_admin_server": _default_run_admin_server(),
         }
     elif "run_admin_server" not in data["runtimeConfig"]:
-        data["runtimeConfig"]["run_admin_server"] = True
+        data["runtimeConfig"]["run_admin_server"] = _default_run_admin_server()
 
     # Ensure database dict exists
     data.setdefault("database", {})
