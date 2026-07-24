@@ -4,6 +4,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict
 
 import pytest
@@ -17,6 +18,15 @@ from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
+from tests.conftest import default_config
+
+
+@pytest.fixture()
+def config(sqlite_path: Path) -> DBOSConfig:
+    # The admin server is deprecated and off by default, so these tests must opt in.
+    config = default_config(sqlite_path)
+    config["run_admin_server"] = True
+    return config
 
 
 def test_admin_endpoints(dbos: DBOS) -> None:
