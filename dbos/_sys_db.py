@@ -3857,6 +3857,13 @@ class SystemDatabase(ABC):
         base_filter = sa.and_(
             ws.c.queue_name == queue_name,
             ws.c.status == WorkflowStatusString.ENQUEUED.value,
+            # Redundant literal IN mirroring the index's own predicate: SQLite's partial-index prover runs at prepare time, so it can't see bound params and can't derive IN membership from =.
+            ws.c.status.in_(
+                [
+                    sa.literal_column(f"'{WorkflowStatusString.ENQUEUED.value}'"),
+                    sa.literal_column(f"'{WorkflowStatusString.PENDING.value}'"),
+                ]
+            ),
         )
         partitions = (
             sa.select(sa.func.min(ws.c.queue_partition_key).label("pk"))
