@@ -637,16 +637,11 @@ class SetWorkflowAttributes:
 
 class PropagateOtelContext:
     """
-    Record an OpenTelemetry context with workflows started or enqueued within the block
-    so their spans join the caller's trace, even when they run later in another process
-    after a queue handoff or recovery. Steps parent to the workflow span as usual.
+    Propagate the current OpenTelemetry context (or optionally, a pass-in context)
+    to all workflows started or enqueued in this block so their spans join the caller's
+    trace. The propagated context is durably backed by the workflow's attributes.
 
-    Defaults to the context active at the start of the block; pass one to propagate a
-    context obtained elsewhere. Like workflow attributes, it is not inherited by child
-    workflows: use PropagateOtelContext again inside the workflow to keep a child on
-    the trace.
-
-    Typical Usage
+    Usage
         ```
         with PropagateOtelContext():
             handle = queue.enqueue(workflow_function, ...)
