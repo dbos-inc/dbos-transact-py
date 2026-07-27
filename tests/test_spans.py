@@ -452,9 +452,9 @@ def test_queue_span_has_queue_name(
 def test_start_workflow_inherits_caller_trace(
     config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
 ) -> None:
-    """DBOS.start_workflow runs the workflow on an executor thread, which does not
-    inherit contextvars. Its span must still parent to the span active at the call
-    site, matching a direct call and DBOS.start_workflow_async."""
+    """DBOS.start_workflow runs on an executor thread, which does not inherit
+    contextvars. Its span must still parent to the span active at the call site,
+    matching a direct call and DBOS.start_workflow_async."""
     exporter, _, _ = setup_in_memory_otlp_collector
 
     DBOS.destroy(destroy_registry=True)

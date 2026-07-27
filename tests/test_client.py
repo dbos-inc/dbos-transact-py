@@ -118,8 +118,8 @@ def test_client_enqueue_with_otel_context(
 ) -> None:
     """otel_context is recorded as a trace carrier beside the caller's own attributes.
 
-    Needs a real TracerProvider: without one the ambient span context is invalid and
-    there is nothing for inject() to serialize.
+    Needs a real TracerProvider: without one the span context is invalid and
+    inject() has nothing to serialize.
     """
     from opentelemetry import trace
 

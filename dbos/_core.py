@@ -396,10 +396,10 @@ def normalize_step_options(opts: Optional[StepOptions]) -> StepOptions:
 
 
 def _attributes_with_otel_carrier(ctx: DBOSContext) -> Optional[dict[str, Any]]:
-    """Fold a PropagateOtelContext carrier into the attributes persisted with the workflow.
+    """Fold a PropagateOtelContext carrier into the workflow's persisted attributes.
 
-    Kept out of ctx.workflow_attributes so PropagateOtelContext and SetWorkflowAttributes
-    can be nested in either order without one clobbering the other.
+    Held outside ctx.workflow_attributes so PropagateOtelContext and
+    SetWorkflowAttributes nest in either order without clobbering each other.
     """
     if ctx.otel_carrier is None:
         return ctx.workflow_attributes
@@ -865,10 +865,10 @@ def _workflow_otel_context(
 ) -> "Optional[OtelContext]":
     """Resolve the OpenTelemetry context a workflow's span should parent to.
 
-    A carrier persisted by PropagateOtelContext wins over the context captured at submit
-    time, so the workflow lands on the same trace whether it runs immediately, after
-    a queue handoff, or on recovery in another process. A malformed carrier extracts
-    to an empty context, which roots a new trace rather than failing the workflow.
+    A persisted carrier wins over the context captured at submit time, so the workflow
+    lands on the same trace whether it runs immediately, after a queue handoff, or on
+    recovery. A malformed carrier extracts to an empty context, rooting a new trace
+    rather than failing the workflow.
     """
     carrier = (status.get("attributes") or {}).get(OTEL_CARRIER_ATTRIBUTE)
     if isinstance(carrier, dict):
@@ -882,10 +882,9 @@ def _workflow_otel_context(
 def _use_otel_context(otel_ctx: "Optional[OtelContext]") -> Iterator[None]:
     """Re-attach the submitting thread's OpenTelemetry context on the executor thread.
 
-    ThreadPoolExecutor.submit does not carry contextvars across threads, so without
-    this a workflow started by DBOS.start_workflow would root a new trace instead of
-    parenting to the span active at the call site. The async path gets the equivalent
-    for free, since asyncio.create_task copies the context at task creation.
+    ThreadPoolExecutor.submit does not carry contextvars across threads, so a workflow
+    started by DBOS.start_workflow would otherwise root a new trace instead of parenting
+    to the span active at the call site. asyncio.create_task copies the context already.
     """
     if otel_ctx is None:
         yield
@@ -974,7 +973,7 @@ async def _execute_workflow_async(
         "queueName": status.get("queue_name"),
     }
     fi = get_func_info(func)
-    # No submitted context: asyncio.create_task already copied the caller's contextvars.
+    # No submitted context: asyncio.create_task already copied the caller's.
     with (
         _use_otel_context(_workflow_otel_context(status, None)),
         EnterDBOSWorkflow(attributes, ctx),
@@ -1288,7 +1287,7 @@ def start_workflow(
 
     from opentelemetry import context as otel_context
 
-    # Captured here, on the caller's thread, and re-attached inside the executor thread.
+    # Captured on the caller's thread, re-attached inside the executor thread.
     future = dbos._executor.submit(
         cast(Callable[..., R], _execute_workflow_wthread),
         dbos,

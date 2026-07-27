@@ -50,8 +50,7 @@ OperationTypes = Literal["handler", "workflow", "transaction", "step", "procedur
 MaxPriority = 2**31 - 1  # 2,147,483,647
 MinPriority = 1
 
-# Reserved workflow attribute holding the W3C trace carrier set by PropagateOtelContext.
-# Internal: applications set it through PropagateOtelContext, not by name.
+# Reserved workflow attribute holding the trace carrier set by PropagateOtelContext.
 OTEL_CARRIER_ATTRIBUTE = "dbos.otelContext"
 
 
@@ -147,7 +146,7 @@ class DBOSContext:
         self.priority: Optional[int] = None
         # User-specified attributes to attach to the next started workflow.
         self.workflow_attributes: Optional[Dict[str, Any]] = None
-        # W3C trace carrier to attach to the next started workflow, set by PropagateOtelContext.
+        # Trace carrier for the next started workflow, set by PropagateOtelContext.
         self.otel_carrier: Optional[Dict[str, str]] = None
         # If the workflow is enqueued on a partitioned queue, its partition key
         self.queue_partition_key: Optional[str] = None
@@ -638,20 +637,14 @@ class SetWorkflowAttributes:
 
 class PropagateOtelContext:
     """
-    Attach an OpenTelemetry context to workflows started or enqueued within the block,
-    so their spans join the caller's trace.
+    Record an OpenTelemetry context with workflows started or enqueued within the block
+    so their spans join the caller's trace, even when they run later in another process
+    after a queue handoff or recovery. Steps parent to the workflow span as usual.
 
-    A queued or recovered workflow executes on a worker thread with no ambient trace
-    context, so by default its span roots a new, disconnected trace. This records the
-    trace context durably with the workflow, and DBOS restores it as the parent of the
-    workflow's span whenever the workflow runs, including after a queue handoff or a
-    recovery in another process. Steps parent to the workflow span as usual.
-
-    Defaults to the OpenTelemetry context active at the start of the block. Pass an
-    explicit context to use one obtained elsewhere. Like other workflow attributes,
-    the context applies to the workflows started in this block and is not inherited by
-    their children; to keep a child on the trace, use PropagateOtelContext again inside the
-    workflow, where the ambient context is the workflow's own span.
+    Defaults to the context active at the start of the block; pass one to propagate a
+    context obtained elsewhere. Like workflow attributes, it is not inherited by child
+    workflows: use PropagateOtelContext again inside the workflow to keep a child on
+    the trace.
 
     Typical Usage
         ```
@@ -668,7 +661,7 @@ class PropagateOtelContext:
     def __enter__(self) -> PropagateOtelContext:
         from opentelemetry.propagate import inject
 
-        # inject leaves the carrier empty when there is no valid context to propagate.
+        # inject writes nothing when there is no valid context to propagate.
         carrier: Dict[str, str] = {}
         inject(carrier, context=self.context)
         # Code to create a basic context
@@ -698,9 +691,8 @@ class PropagateOtelContext:
 def restore_otel_carrier(carrier: Optional[Any]) -> Iterator[None]:
     """Put a carrier persisted by PropagateOtelContext back on the context.
 
-    Dequeue and recovery rebuild the workflow status from a fresh context, so without
-    this the stored carrier would not reach the executing workflow. Anything that is
-    not a dict is ignored, leaving the workflow to start its own trace.
+    Dequeue and recovery rebuild the workflow status from a fresh context, so the stored
+    carrier would not otherwise reach the executing workflow. Non-dict values are ignored.
     """
     ctx = assert_current_dbos_context()
     saved = ctx.otel_carrier
