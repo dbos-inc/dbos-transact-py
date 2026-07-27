@@ -5,10 +5,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from inline_snapshot import snapshot
+from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.trace.span import format_trace_id
 
-from dbos import DBOS, DBOSConfig, SetOtelContext, SetWorkflowAttributes
+from dbos import DBOS, DBOSClient, DBOSConfig, SetOtelContext, SetWorkflowAttributes
+from dbos._dbos import WorkflowHandle
 from dbos._utils import GlobalParams
 from tests.conftest import TestOtelType, set_workflow_status
 
@@ -672,3 +674,54 @@ def test_set_otel_context_without_active_span_is_noop(
     assert handle.get_result() == "done"
 
     assert DBOS.retrieve_workflow(handle.workflow_id).get_status().attributes is None
+
+
+def test_client_otel_context_joins_caller_trace(
+    config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
+) -> None:
+    """The EnqueueOptions.otel_context field is the client-side SetOtelContext: a
+    workflow enqueued from outside the application still joins the caller's trace."""
+    exporter, _, _ = setup_in_memory_otlp_collector
+
+    DBOS.destroy(destroy_registry=True)
+    config["enable_otlp"] = True
+    DBOS(config=config)
+
+    @DBOS.workflow()
+    def client_workflow() -> str:
+        return "done"
+
+    DBOS.launch()
+    DBOS.register_queue("client_otel_queue")
+    exporter.clear()
+
+    assert config["system_database_url"] is not None
+    client = DBOSClient(system_database_url=config["system_database_url"])
+    try:
+        my_tracer = trace.get_tracer_provider().get_tracer("dbos")
+        with my_tracer.start_as_current_span(
+            "caller"
+        ) as caller:  # pyright: ignore[reportAttributeAccessIssue]
+            caller_ctx = caller.get_span_context()
+            handle: WorkflowHandle[str] = client.enqueue(
+                {
+                    "queue_name": "client_otel_queue",
+                    "workflow_name": client_workflow.__qualname__,
+                    "otel_context": otel_context.get_current(),
+                }
+            )
+        assert handle.get_result() == "done"
+    finally:
+        client.destroy()
+
+    workflow_spans = [
+        s
+        for s in exporter.get_finished_spans()
+        if s.name == client_workflow.__qualname__
+    ]
+    assert len(workflow_spans) == 1
+    span = workflow_spans[0]
+    assert span.context is not None
+    assert span.context.trace_id == caller_ctx.trace_id
+    assert span.parent is not None
+    assert span.parent.span_id == caller_ctx.span_id
