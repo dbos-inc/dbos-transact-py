@@ -1464,7 +1464,9 @@ def test_failed_dequeued_async_workflow_leaves_no_unretrieved_future(
     previous_handler = loop.get_exception_handler()
     loop.set_exception_handler(handler)
     try:
-        handle = DBOS.enqueue_workflow("test_queue", failing_workflow)
+        handle = cast(
+            WorkflowHandle[None], DBOS.enqueue_workflow("test_queue", failing_workflow)
+        )
         with pytest.raises(Exception, match=message):
             handle.get_result()
 
@@ -1484,7 +1486,7 @@ def test_failed_dequeued_async_workflow_leaves_no_unretrieved_future(
         control = "workflow-796-control"
 
         def leak_a_future() -> None:
-            future: asyncio.Future[None] = loop.create_future()  # type: ignore[union-attr]
+            future: asyncio.Future[None] = loop.create_future()
             future.set_exception(Exception(control))
 
         loop.call_soon_threadsafe(leak_a_future)
