@@ -1228,6 +1228,12 @@ def start_workflow(
     return WorkflowHandleFuture(new_child_workflow_id, future, dbos)
 
 
+def _retrieve_future_exception(future: "asyncio.Future[Any]") -> None:
+    """Mark a future's exception as retrieved so asyncio does not report it at GC."""
+    if not future.cancelled():
+        future.exception()
+
+
 async def start_workflow_async(
     dbos: "DBOS",
     local_ctx: Optional[DBOSContext],
@@ -1360,6 +1366,8 @@ async def start_workflow_async(
     inner_task.add_done_callback(dbos._workflow_tasks.discard)
     # Shield the workflow task from cancellation
     task = asyncio.shield(inner_task)
+    # Nothing awaits this future when dequeue/recovery callers discard the handle (#796)
+    task.add_done_callback(_retrieve_future_exception)
     return WorkflowHandleAsyncTask(new_child_workflow_id, task, dbos)
 
 

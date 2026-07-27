@@ -1468,9 +1468,7 @@ def test_failed_dequeued_async_workflow_leaves_no_unretrieved_future(
         with pytest.raises(Exception, match=message):
             handle.get_result()
 
-        # get_result returns once the error is recorded, which happens before the
-        # workflow task finishes. Wait for the task to be released, then collect:
-        # the shield future is only reachable from the inner task's callbacks.
+        # The error is recorded before the task finishes, so wait for it to be released
         def workflow_task_released() -> None:
             assert not dbos._workflow_tasks
 
@@ -1482,8 +1480,7 @@ def test_failed_dequeued_async_workflow_leaves_no_unretrieved_future(
         leaked = unretrieved(message)
         assert leaked == [], f"asyncio reported an unretrieved future: {leaked}"
 
-        # Prove the check above is not vacuous: the same detector must catch a
-        # future that genuinely is dropped with an unretrieved exception.
+        # Prove the check is not vacuous: the detector must catch a genuine leak
         control = "workflow-796-control"
 
         def leak_a_future() -> None:
