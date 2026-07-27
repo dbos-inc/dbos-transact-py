@@ -8,6 +8,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import Future
+from contextlib import contextmanager
 from functools import wraps
 from typing import (
     TYPE_CHECKING,
@@ -16,6 +17,7 @@ from typing import (
     Callable,
     Coroutine,
     Generic,
+    Iterator,
     List,
     Optional,
     ParamSpec,
@@ -97,6 +99,8 @@ from ._sys_db import (
 )
 
 if TYPE_CHECKING:
+    from opentelemetry.context import Context as OtelContext
+
     from ._dbos import (
         DBOS,
         WorkflowHandle,
@@ -840,6 +844,27 @@ def _check_required_roles_or_finalize_error(
         raise
 
 
+@contextmanager
+def _use_otel_context(otel_ctx: "Optional[OtelContext]") -> Iterator[None]:
+    """Re-attach the submitting thread's OpenTelemetry context on the executor thread.
+
+    ThreadPoolExecutor.submit does not carry contextvars across threads, so without
+    this a workflow started by DBOS.start_workflow would root a new trace instead of
+    parenting to the span active at the call site. The async path gets the equivalent
+    for free, since asyncio.create_task copies the context at task creation.
+    """
+    if otel_ctx is None:
+        yield
+        return
+    from opentelemetry import context as otel_context
+
+    token = otel_context.attach(otel_ctx)
+    try:
+        yield
+    finally:
+        otel_context.detach(token)
+
+
 def _execute_workflow_wthread(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
@@ -847,6 +872,7 @@ def _execute_workflow_wthread(
     ctx: DBOSContext,
     args: tuple[Any],
     kwargs: dict[str, Any],
+    otel_ctx: "Optional[OtelContext]" = None,
 ) -> R:
     attributes: TracedAttributes = {
         "name": get_dbos_func_name(func),
@@ -854,7 +880,7 @@ def _execute_workflow_wthread(
         "queueName": status.get("queue_name"),
     }
     fi = get_func_info(func)
-    with EnterDBOSWorkflow(attributes, ctx):
+    with _use_otel_context(otel_ctx), EnterDBOSWorkflow(attributes, ctx):
         rr: Optional[str] = _check_required_roles_or_finalize_error(
             dbos, status, func, fi
         )
@@ -1216,6 +1242,9 @@ def start_workflow(
     ):
         return WorkflowHandlePolling(new_child_workflow_id, dbos)
 
+    from opentelemetry import context as otel_context
+
+    # Captured here, on the caller's thread, and re-attached inside the executor thread.
     future = dbos._executor.submit(
         cast(Callable[..., R], _execute_workflow_wthread),
         dbos,
@@ -1224,6 +1253,7 @@ def start_workflow(
         new_wf_ctx,
         args,
         kwargs,
+        otel_context.get_current(),
     )
     return WorkflowHandleFuture(new_child_workflow_id, future, dbos)
 

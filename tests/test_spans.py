@@ -439,3 +439,78 @@ def test_queue_span_has_queue_name(
     assert span.attributes["applicationVersion"] == DBOS.application_version
     assert span.attributes["executorID"] == GlobalParams.executor_id
     assert span.attributes["operationUUID"] == handle.workflow_id
+
+
+def test_start_workflow_inherits_caller_trace(
+    config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
+) -> None:
+    """DBOS.start_workflow runs the workflow on an executor thread, which does not
+    inherit contextvars. Its span must still parent to the span active at the call
+    site, matching a direct call and DBOS.start_workflow_async."""
+    exporter, _, _ = setup_in_memory_otlp_collector
+
+    DBOS.destroy(destroy_registry=True)
+    config["enable_otlp"] = True
+    DBOS(config=config)
+
+    @DBOS.step()
+    def a_step() -> None:
+        pass
+
+    @DBOS.workflow()
+    def a_workflow() -> str:
+        a_step()
+        return "done"
+
+    DBOS.launch()
+    exporter.clear()
+
+    my_tracer = trace.get_tracer_provider().get_tracer("dbos")
+    with my_tracer.start_as_current_span(
+        "caller"
+    ) as caller:  # pyright: ignore[reportAttributeAccessIssue]
+        caller_ctx = caller.get_span_context()
+        handle = DBOS.start_workflow(a_workflow)
+        assert handle.get_result() == "done"
+
+    spans = exporter.get_finished_spans()
+    workflow_spans = [s for s in spans if s.name == a_workflow.__qualname__]
+    assert len(workflow_spans) == 1
+    workflow_span = workflow_spans[0]
+    assert workflow_span.context is not None
+    assert workflow_span.context.trace_id == caller_ctx.trace_id
+    assert workflow_span.parent is not None
+    assert workflow_span.parent.span_id == caller_ctx.span_id
+
+    # Steps still parent to the workflow span, so the whole chain is on one trace.
+    step_spans = [s for s in spans if s.name == a_step.__qualname__]
+    assert len(step_spans) == 1
+    assert step_spans[0].parent is not None
+    assert step_spans[0].parent.span_id == workflow_span.context.span_id
+
+
+def test_start_workflow_without_caller_span_is_root(
+    config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
+) -> None:
+    """With no span active at the call site, the workflow span still roots its own trace."""
+    exporter, _, _ = setup_in_memory_otlp_collector
+
+    DBOS.destroy(destroy_registry=True)
+    config["enable_otlp"] = True
+    DBOS(config=config)
+
+    @DBOS.workflow()
+    def a_workflow() -> str:
+        return "done"
+
+    DBOS.launch()
+    exporter.clear()
+
+    handle = DBOS.start_workflow(a_workflow)
+    assert handle.get_result() == "done"
+
+    workflow_spans = [
+        s for s in exporter.get_finished_spans() if s.name == a_workflow.__qualname__
+    ]
+    assert len(workflow_spans) == 1
+    assert workflow_spans[0].parent is None
