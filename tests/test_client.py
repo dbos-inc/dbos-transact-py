@@ -30,7 +30,7 @@ from dbos._error import DBOSNonExistentWorkflowError
 from dbos._schemas.system_database import SystemSchema
 from tests import client_collateral
 from tests.client_collateral import event_test, retrieve_test, send_test
-from tests.conftest import set_workflow_status, wait_for_client_listener
+from tests.conftest import TestOtelType, set_workflow_status, wait_for_client_listener
 
 
 class Person(TypedDict):
@@ -113,8 +113,14 @@ def test_client_enqueue_and_get_result(dbos: DBOS, client: DBOSClient) -> None:
     assert list_results[0].input is None
 
 
-def test_client_enqueue_with_otel_context(dbos: DBOS, client: DBOSClient) -> None:
-    """otel_context is recorded as a trace carrier beside the caller's own attributes."""
+def test_client_enqueue_with_otel_context(
+    dbos: DBOS, client: DBOSClient, setup_in_memory_otlp_collector: TestOtelType
+) -> None:
+    """otel_context is recorded as a trace carrier beside the caller's own attributes.
+
+    Needs a real TracerProvider: without one the ambient span context is invalid and
+    there is nothing for inject() to serialize.
+    """
     from opentelemetry import trace
 
     run_client_collateral()

@@ -396,9 +396,9 @@ def normalize_step_options(opts: Optional[StepOptions]) -> StepOptions:
 
 
 def _attributes_with_otel_carrier(ctx: DBOSContext) -> Optional[dict[str, Any]]:
-    """Fold a SetOtelContext carrier into the attributes persisted with the workflow.
+    """Fold a PropagateOtelContext carrier into the attributes persisted with the workflow.
 
-    Kept out of ctx.workflow_attributes so SetOtelContext and SetWorkflowAttributes
+    Kept out of ctx.workflow_attributes so PropagateOtelContext and SetWorkflowAttributes
     can be nested in either order without one clobbering the other.
     """
     if ctx.otel_carrier is None:
@@ -865,7 +865,7 @@ def _workflow_otel_context(
 ) -> "Optional[OtelContext]":
     """Resolve the OpenTelemetry context a workflow's span should parent to.
 
-    A carrier persisted by SetOtelContext wins over the context captured at submit
+    A carrier persisted by PropagateOtelContext wins over the context captured at submit
     time, so the workflow lands on the same trace whether it runs immediately, after
     a queue handoff, or on recovery in another process. A malformed carrier extracts
     to an empty context, which roots a new trace rather than failing the workflow.

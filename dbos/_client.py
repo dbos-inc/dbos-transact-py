@@ -98,7 +98,7 @@ class EnqueueOptions(_EnqueueOptionsRequired, total=False):
     instance_name: str
     attributes: Dict[str, Any]
     # OpenTelemetry context to make the parent of the enqueued workflow's span, so it
-    # joins this trace when it runs. The client-side equivalent of SetOtelContext.
+    # joins this trace when it runs. The client-side equivalent of PropagateOtelContext.
     otel_context: "OtelContext"
 
 
@@ -118,7 +118,7 @@ def _attributes_with_otel_context(
 ) -> Optional[Dict[str, Any]]:
     """Fold an otel_context option into the attributes persisted with the workflow.
 
-    Mirrors what SetOtelContext does in-process. Nothing is recorded when there is no
+    Mirrors what PropagateOtelContext does in-process. Nothing is recorded when there is no
     valid context to propagate, and an explicit context wins over a carrier a caller
     wrote into attributes by hand.
     """

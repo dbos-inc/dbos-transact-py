@@ -9,7 +9,13 @@ from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.trace.span import format_trace_id
 
-from dbos import DBOS, DBOSClient, DBOSConfig, SetOtelContext, SetWorkflowAttributes
+from dbos import (
+    DBOS,
+    DBOSClient,
+    DBOSConfig,
+    PropagateOtelContext,
+    SetWorkflowAttributes,
+)
 from dbos._dbos import WorkflowHandle
 from dbos._utils import GlobalParams
 from tests.conftest import TestOtelType, set_workflow_status
@@ -518,11 +524,11 @@ def test_start_workflow_without_caller_span_is_root(
     assert workflow_spans[0].parent is None
 
 
-def test_set_otel_context_queued_workflow_joins_caller_trace(
+def test_propagate_otel_context_queued_workflow_joins_caller_trace(
     config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
 ) -> None:
     """A queued workflow runs after the enqueuing context is gone, so it only joins the
-    caller's trace if SetOtelContext recorded that trace with the workflow."""
+    caller's trace if PropagateOtelContext recorded that trace with the workflow."""
     exporter, _, _ = setup_in_memory_otlp_collector
 
     DBOS.destroy(destroy_registry=True)
@@ -547,7 +553,7 @@ def test_set_otel_context_queued_workflow_joins_caller_trace(
         "caller"
     ) as caller:  # pyright: ignore[reportAttributeAccessIssue]
         caller_ctx = caller.get_span_context()
-        with SetOtelContext():
+        with PropagateOtelContext():
             traced = DBOS.enqueue_workflow("otel_queue", a_workflow)
         untraced = DBOS.enqueue_workflow("otel_queue", a_workflow)
     assert traced.get_result() == "done"
@@ -579,14 +585,14 @@ def test_set_otel_context_queued_workflow_joins_caller_trace(
     ]
     assert len(step_spans) == 1
 
-    # Without SetOtelContext, a queued workflow still roots its own trace.
+    # Without PropagateOtelContext, a queued workflow still roots its own trace.
     untraced_span = by_workflow_id[untraced.workflow_id]
     assert untraced_span.context is not None
     assert untraced_span.parent is None
     assert untraced_span.context.trace_id != caller_ctx.trace_id
 
 
-def test_set_otel_context_survives_recovery(
+def test_propagate_otel_context_survives_recovery(
     config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
 ) -> None:
     """A recovered workflow re-executes in a context with no ambient trace, so it must
@@ -609,7 +615,7 @@ def test_set_otel_context_survives_recovery(
         "caller"
     ) as caller:  # pyright: ignore[reportAttributeAccessIssue]
         caller_ctx = caller.get_span_context()
-        with SetOtelContext():
+        with PropagateOtelContext():
             handle = DBOS.start_workflow(a_workflow)
     assert handle.get_result() == "done"
 
@@ -630,7 +636,7 @@ def test_set_otel_context_survives_recovery(
 
 
 @pytest.mark.parametrize("otel_outermost", [True, False])
-def test_set_otel_context_composes_with_workflow_attributes(
+def test_propagate_otel_context_composes_with_workflow_attributes(
     dbos: DBOS,
     setup_in_memory_otlp_collector: TestOtelType,
     otel_outermost: bool,
@@ -647,10 +653,10 @@ def test_set_otel_context_composes_with_workflow_attributes(
         "caller"
     ):  # pyright: ignore[reportAttributeAccessIssue]
         if otel_outermost:
-            with SetOtelContext(), SetWorkflowAttributes({"customer": "acme"}):
+            with PropagateOtelContext(), SetWorkflowAttributes({"customer": "acme"}):
                 handle = DBOS.start_workflow(a_workflow)
         else:
-            with SetWorkflowAttributes({"customer": "acme"}), SetOtelContext():
+            with SetWorkflowAttributes({"customer": "acme"}), PropagateOtelContext():
                 handle = DBOS.start_workflow(a_workflow)
     assert handle.get_result() == "done"
 
@@ -660,7 +666,7 @@ def test_set_otel_context_composes_with_workflow_attributes(
     assert "traceparent" in attributes["dbos.otelContext"]
 
 
-def test_set_otel_context_without_active_span_is_noop(
+def test_propagate_otel_context_without_active_span_is_noop(
     dbos: DBOS, setup_in_memory_otlp_collector: TestOtelType
 ) -> None:
     """With no span to propagate, nothing is recorded rather than an empty carrier."""
@@ -669,7 +675,7 @@ def test_set_otel_context_without_active_span_is_noop(
     def a_workflow() -> str:
         return "done"
 
-    with SetOtelContext():
+    with PropagateOtelContext():
         handle = DBOS.start_workflow(a_workflow)
     assert handle.get_result() == "done"
 
@@ -679,7 +685,7 @@ def test_set_otel_context_without_active_span_is_noop(
 def test_client_otel_context_joins_caller_trace(
     config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
 ) -> None:
-    """The EnqueueOptions.otel_context field is the client-side SetOtelContext: a
+    """The EnqueueOptions.otel_context field is the client-side PropagateOtelContext: a
     workflow enqueued from outside the application still joins the caller's trace."""
     exporter, _, _ = setup_in_memory_otlp_collector
 

@@ -3,8 +3,8 @@ from ._client import DBOSClient, EnqueueOptions
 from ._context import (
     DBOSContextEnsure,
     DBOSContextSetAuth,
+    PropagateOtelContext,
     SetEnqueueOptions,
-    SetOtelContext,
     SetWorkflowAttributes,
     SetWorkflowID,
     SetWorkflowTimeout,
@@ -52,7 +52,7 @@ __all__ = [
     "EnqueueOptions",
     "KafkaMessage",
     "PortableWorkflowError",
-    "SetOtelContext",
+    "PropagateOtelContext",
     "SetWorkflowAttributes",
     "SetWorkflowID",
     "SetWorkflowTimeout",

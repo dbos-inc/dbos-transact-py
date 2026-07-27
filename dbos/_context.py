@@ -50,8 +50,8 @@ OperationTypes = Literal["handler", "workflow", "transaction", "step", "procedur
 MaxPriority = 2**31 - 1  # 2,147,483,647
 MinPriority = 1
 
-# Reserved workflow attribute holding the W3C trace carrier set by SetOtelContext.
-# Internal: applications set it through SetOtelContext, not by name.
+# Reserved workflow attribute holding the W3C trace carrier set by PropagateOtelContext.
+# Internal: applications set it through PropagateOtelContext, not by name.
 OTEL_CARRIER_ATTRIBUTE = "dbos.otelContext"
 
 
@@ -147,7 +147,7 @@ class DBOSContext:
         self.priority: Optional[int] = None
         # User-specified attributes to attach to the next started workflow.
         self.workflow_attributes: Optional[Dict[str, Any]] = None
-        # W3C trace carrier to attach to the next started workflow, set by SetOtelContext.
+        # W3C trace carrier to attach to the next started workflow, set by PropagateOtelContext.
         self.otel_carrier: Optional[Dict[str, str]] = None
         # If the workflow is enqueued on a partitioned queue, its partition key
         self.queue_partition_key: Optional[str] = None
@@ -636,7 +636,7 @@ class SetWorkflowAttributes:
         return False  # Did not handle
 
 
-class SetOtelContext:
+class PropagateOtelContext:
     """
     Attach an OpenTelemetry context to workflows started or enqueued within the block,
     so their spans join the caller's trace.
@@ -650,12 +650,12 @@ class SetOtelContext:
     Defaults to the OpenTelemetry context active at the start of the block. Pass an
     explicit context to use one obtained elsewhere. Like other workflow attributes,
     the context applies to the workflows started in this block and is not inherited by
-    their children; to keep a child on the trace, use SetOtelContext again inside the
+    their children; to keep a child on the trace, use PropagateOtelContext again inside the
     workflow, where the ambient context is the workflow's own span.
 
     Typical Usage
         ```
-        with SetOtelContext():
+        with PropagateOtelContext():
             handle = queue.enqueue(workflow_function, ...)
         ```
     """
@@ -665,7 +665,7 @@ class SetOtelContext:
         self.created_ctx = False
         self.saved_carrier: Optional[Dict[str, str]] = None
 
-    def __enter__(self) -> SetOtelContext:
+    def __enter__(self) -> PropagateOtelContext:
         from opentelemetry.propagate import inject
 
         # inject leaves the carrier empty when there is no valid context to propagate.
@@ -696,7 +696,7 @@ class SetOtelContext:
 
 @contextmanager
 def restore_otel_carrier(carrier: Optional[Any]) -> Iterator[None]:
-    """Put a carrier persisted by SetOtelContext back on the context.
+    """Put a carrier persisted by PropagateOtelContext back on the context.
 
     Dequeue and recovery rebuild the workflow status from a fresh context, so without
     this the stored carrier would not reach the executing workflow. Anything that is
