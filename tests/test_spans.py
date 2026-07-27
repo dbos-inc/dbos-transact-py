@@ -592,6 +592,71 @@ def test_propagate_otel_context_queued_workflow_joins_caller_trace(
     assert untraced_span.context.trace_id != caller_ctx.trace_id
 
 
+@pytest.mark.asyncio
+async def test_propagate_otel_context_queued_async_workflow_joins_caller_trace(
+    config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
+) -> None:
+    """Async workflows run through _execute_workflow_async, a separate call site from
+    the sync executor path, so the restored context needs its own coverage there."""
+    exporter, _, _ = setup_in_memory_otlp_collector
+
+    DBOS.destroy(destroy_registry=True)
+    config["enable_otlp"] = True
+    DBOS(config=config)
+
+    @DBOS.step()
+    async def a_step() -> None:
+        pass
+
+    @DBOS.workflow()
+    async def a_workflow() -> str:
+        await a_step()
+        return "done"
+
+    DBOS.launch()
+    await DBOS.register_queue_async("async_otel_queue")
+    exporter.clear()
+
+    my_tracer = trace.get_tracer_provider().get_tracer("dbos")
+    with my_tracer.start_as_current_span(
+        "caller"
+    ) as caller:  # pyright: ignore[reportAttributeAccessIssue]
+        caller_ctx = caller.get_span_context()
+        with PropagateOtelContext():
+            traced = await DBOS.enqueue_workflow_async("async_otel_queue", a_workflow)
+        untraced = await DBOS.enqueue_workflow_async("async_otel_queue", a_workflow)
+    assert (await traced.get_result()) == "done"
+    assert (await untraced.get_result()) == "done"
+
+    spans = exporter.get_finished_spans()
+    by_workflow_id = {
+        s.attributes["operationUUID"]: s
+        for s in spans
+        if s.name == a_workflow.__qualname__ and s.attributes
+    }
+
+    traced_span = by_workflow_id[traced.workflow_id]
+    assert traced_span.context is not None
+    assert traced_span.context.trace_id == caller_ctx.trace_id
+    assert traced_span.parent is not None
+    assert traced_span.parent.span_id == caller_ctx.span_id
+
+    # Async steps still parent to the workflow span.
+    step_spans = [
+        s
+        for s in spans
+        if s.name == a_step.__qualname__
+        and s.parent
+        and s.parent.span_id == traced_span.context.span_id
+    ]
+    assert len(step_spans) == 1
+
+    untraced_span = by_workflow_id[untraced.workflow_id]
+    assert untraced_span.context is not None
+    assert untraced_span.parent is None
+    assert untraced_span.context.trace_id != caller_ctx.trace_id
+
+
 def test_propagate_otel_context_survives_recovery(
     config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
 ) -> None:
