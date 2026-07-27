@@ -33,6 +33,7 @@ from dbos._utils import GlobalParams, retriable_postgres_exception
 
 from ._app_db import ApplicationDatabase, TransactionResultInternal
 from ._context import (
+    OTEL_CARRIER_ATTRIBUTE,
     DBOSAssumeRole,
     DBOSContext,
     DBOSContextSetAuth,
@@ -45,6 +46,7 @@ from ._context import (
     TracedAttributes,
     assert_current_dbos_context,
     get_local_dbos_context,
+    restore_otel_carrier,
 )
 from ._error import (
     DBOSAwaitedWorkflowCancelledError,
@@ -393,6 +395,19 @@ def normalize_step_options(opts: Optional[StepOptions]) -> StepOptions:
     return {**DEFAULT_STEP_OPTIONS, **(opts or {})}
 
 
+def _attributes_with_otel_carrier(ctx: DBOSContext) -> Optional[dict[str, Any]]:
+    """Fold a SetOtelContext carrier into the attributes persisted with the workflow.
+
+    Kept out of ctx.workflow_attributes so SetOtelContext and SetWorkflowAttributes
+    can be nested in either order without one clobbering the other.
+    """
+    if ctx.otel_carrier is None:
+        return ctx.workflow_attributes
+    attributes = dict(ctx.workflow_attributes) if ctx.workflow_attributes else {}
+    attributes[OTEL_CARRIER_ATTRIBUTE] = ctx.otel_carrier
+    return attributes
+
+
 def _assemble_workflow_status(
     dbos: "DBOS",
     ctx: DBOSContext,
@@ -513,7 +528,7 @@ def _assemble_workflow_status(
         "is_debounced": (
             enqueue_options["is_debounced"] if enqueue_options is not None else False
         ),
-        "attributes": ctx.workflow_attributes,
+        "attributes": _attributes_with_otel_carrier(ctx),
         # schedule_name is only set by the persistent scheduler, which builds
         # the workflow status directly rather than going through this path.
         "schedule_name": None,
@@ -521,6 +536,7 @@ def _assemble_workflow_status(
     # Consume the attributes from the workflow's context so that workflows
     # started inside this workflow do not inherit them.
     ctx.workflow_attributes = None
+    ctx.otel_carrier = None
     return status
 
 
@@ -844,6 +860,24 @@ def _check_required_roles_or_finalize_error(
         raise
 
 
+def _workflow_otel_context(
+    status: WorkflowStatusInternal, submitted_ctx: "Optional[OtelContext]"
+) -> "Optional[OtelContext]":
+    """Resolve the OpenTelemetry context a workflow's span should parent to.
+
+    A carrier persisted by SetOtelContext wins over the context captured at submit
+    time, so the workflow lands on the same trace whether it runs immediately, after
+    a queue handoff, or on recovery in another process. A malformed carrier extracts
+    to an empty context, which roots a new trace rather than failing the workflow.
+    """
+    carrier = (status.get("attributes") or {}).get(OTEL_CARRIER_ATTRIBUTE)
+    if isinstance(carrier, dict):
+        from opentelemetry.propagate import extract
+
+        return extract(carrier)
+    return submitted_ctx
+
+
 @contextmanager
 def _use_otel_context(otel_ctx: "Optional[OtelContext]") -> Iterator[None]:
     """Re-attach the submitting thread's OpenTelemetry context on the executor thread.
@@ -880,7 +914,10 @@ def _execute_workflow_wthread(
         "queueName": status.get("queue_name"),
     }
     fi = get_func_info(func)
-    with _use_otel_context(otel_ctx), EnterDBOSWorkflow(attributes, ctx):
+    with (
+        _use_otel_context(_workflow_otel_context(status, otel_ctx)),
+        EnterDBOSWorkflow(attributes, ctx),
+    ):
         rr: Optional[str] = _check_required_roles_or_finalize_error(
             dbos, status, func, fi
         )
@@ -937,7 +974,11 @@ async def _execute_workflow_async(
         "queueName": status.get("queue_name"),
     }
     fi = get_func_info(func)
-    with EnterDBOSWorkflow(attributes, ctx):
+    # No submitted context: asyncio.create_task already copied the caller's contextvars.
+    with (
+        _use_otel_context(_workflow_otel_context(status, None)),
+        EnterDBOSWorkflow(attributes, ctx),
+    ):
         rr: Optional[str] = _check_required_roles_or_finalize_error(
             dbos, status, func, fi
         )
@@ -1087,10 +1128,13 @@ def execute_workflow_by_id(
             if fi.func_type != DBOSFuncType.Static:
                 inputs["args"] = (class_object,) + inputs["args"]
 
-        # Propagate the workflow's partition key from its persisted status.
+        # Propagate the workflow's partition key and trace carrier from its persisted status.
         with (
             SetWorkflowID(workflow_id),
             SetEnqueueOptions(queue_partition_key=status.get("queue_partition_key")),
+            restore_otel_carrier(
+                (status.get("attributes") or {}).get(OTEL_CARRIER_ATTRIBUTE)
+            ),
         ):
             if inspect.iscoroutinefunction(wf_func):
                 ctx = get_local_dbos_context()

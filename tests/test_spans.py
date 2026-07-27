@@ -8,9 +8,9 @@ from inline_snapshot import snapshot
 from opentelemetry import trace
 from opentelemetry.trace.span import format_trace_id
 
-from dbos import DBOS, DBOSConfig
+from dbos import DBOS, DBOSConfig, SetOtelContext, SetWorkflowAttributes
 from dbos._utils import GlobalParams
-from tests.conftest import TestOtelType
+from tests.conftest import TestOtelType, set_workflow_status
 
 
 @dataclass
@@ -514,3 +514,161 @@ def test_start_workflow_without_caller_span_is_root(
     ]
     assert len(workflow_spans) == 1
     assert workflow_spans[0].parent is None
+
+
+def test_set_otel_context_queued_workflow_joins_caller_trace(
+    config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
+) -> None:
+    """A queued workflow runs after the enqueuing context is gone, so it only joins the
+    caller's trace if SetOtelContext recorded that trace with the workflow."""
+    exporter, _, _ = setup_in_memory_otlp_collector
+
+    DBOS.destroy(destroy_registry=True)
+    config["enable_otlp"] = True
+    DBOS(config=config)
+
+    @DBOS.step()
+    def a_step() -> None:
+        pass
+
+    @DBOS.workflow()
+    def a_workflow() -> str:
+        a_step()
+        return "done"
+
+    DBOS.launch()
+    DBOS.register_queue("otel_queue")
+    exporter.clear()
+
+    my_tracer = trace.get_tracer_provider().get_tracer("dbos")
+    with my_tracer.start_as_current_span(
+        "caller"
+    ) as caller:  # pyright: ignore[reportAttributeAccessIssue]
+        caller_ctx = caller.get_span_context()
+        with SetOtelContext():
+            traced = DBOS.enqueue_workflow("otel_queue", a_workflow)
+        untraced = DBOS.enqueue_workflow("otel_queue", a_workflow)
+    assert traced.get_result() == "done"
+    assert untraced.get_result() == "done"
+
+    spans = exporter.get_finished_spans()
+    by_workflow_id = {
+        s.attributes["operationUUID"]: s
+        for s in spans
+        if s.name == a_workflow.__qualname__ and s.attributes
+    }
+
+    traced_span = by_workflow_id[traced.workflow_id]
+    assert traced_span.context is not None
+    assert traced_span.context.trace_id == caller_ctx.trace_id
+    assert traced_span.parent is not None
+    assert traced_span.parent.span_id == caller_ctx.span_id
+    # The workflow span keeps its DBOS attributes on the caller's trace.
+    assert traced_span.attributes is not None
+    assert traced_span.attributes["queueName"] == "otel_queue"
+
+    # Steps still parent to the workflow span rather than to the restored context.
+    step_spans = [
+        s
+        for s in spans
+        if s.name == a_step.__qualname__
+        and s.parent
+        and s.parent.span_id == traced_span.context.span_id
+    ]
+    assert len(step_spans) == 1
+
+    # Without SetOtelContext, a queued workflow still roots its own trace.
+    untraced_span = by_workflow_id[untraced.workflow_id]
+    assert untraced_span.context is not None
+    assert untraced_span.parent is None
+    assert untraced_span.context.trace_id != caller_ctx.trace_id
+
+
+def test_set_otel_context_survives_recovery(
+    config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
+) -> None:
+    """A recovered workflow re-executes in a context with no ambient trace, so it must
+    rebuild its parent from the carrier persisted with the workflow."""
+    exporter, _, _ = setup_in_memory_otlp_collector
+
+    DBOS.destroy(destroy_registry=True)
+    config["enable_otlp"] = True
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def a_workflow() -> str:
+        return "done"
+
+    DBOS.launch()
+    exporter.clear()
+
+    my_tracer = trace.get_tracer_provider().get_tracer("dbos")
+    with my_tracer.start_as_current_span(
+        "caller"
+    ) as caller:  # pyright: ignore[reportAttributeAccessIssue]
+        caller_ctx = caller.get_span_context()
+        with SetOtelContext():
+            handle = DBOS.start_workflow(a_workflow)
+    assert handle.get_result() == "done"
+
+    exporter.clear()
+    set_workflow_status(dbos._sys_db, handle.workflow_id, "PENDING")
+    recovery_handles = DBOS._recover_pending_workflows()
+    assert len(recovery_handles) == 1
+    assert recovery_handles[0].get_result() == "done"
+
+    recovered = [
+        s for s in exporter.get_finished_spans() if s.name == a_workflow.__qualname__
+    ]
+    assert len(recovered) == 1
+    assert recovered[0].context is not None
+    assert recovered[0].context.trace_id == caller_ctx.trace_id
+    assert recovered[0].parent is not None
+    assert recovered[0].parent.span_id == caller_ctx.span_id
+
+
+@pytest.mark.parametrize("otel_outermost", [True, False])
+def test_set_otel_context_composes_with_workflow_attributes(
+    dbos: DBOS,
+    setup_in_memory_otlp_collector: TestOtelType,
+    otel_outermost: bool,
+) -> None:
+    """The carrier lives outside workflow_attributes, so the two context managers can be
+    nested in either order without one replacing the other's attributes."""
+
+    @DBOS.workflow()
+    def a_workflow() -> str:
+        return "done"
+
+    my_tracer = trace.get_tracer_provider().get_tracer("dbos")
+    with my_tracer.start_as_current_span(
+        "caller"
+    ):  # pyright: ignore[reportAttributeAccessIssue]
+        if otel_outermost:
+            with SetOtelContext(), SetWorkflowAttributes({"customer": "acme"}):
+                handle = DBOS.start_workflow(a_workflow)
+        else:
+            with SetWorkflowAttributes({"customer": "acme"}), SetOtelContext():
+                handle = DBOS.start_workflow(a_workflow)
+    assert handle.get_result() == "done"
+
+    attributes = DBOS.retrieve_workflow(handle.workflow_id).get_status().attributes
+    assert attributes is not None
+    assert attributes["customer"] == "acme"
+    assert "traceparent" in attributes["dbos.otelContext"]
+
+
+def test_set_otel_context_without_active_span_is_noop(
+    dbos: DBOS, setup_in_memory_otlp_collector: TestOtelType
+) -> None:
+    """With no span to propagate, nothing is recorded rather than an empty carrier."""
+
+    @DBOS.workflow()
+    def a_workflow() -> str:
+        return "done"
+
+    with SetOtelContext():
+        handle = DBOS.start_workflow(a_workflow)
+    assert handle.get_result() == "done"
+
+    assert DBOS.retrieve_workflow(handle.workflow_id).get_status().attributes is None
