@@ -2769,52 +2769,23 @@ def _enqueue_partition_rows(
     return ids
 
 
-def test_partitioned_batch_dequeue_direct(dbos: DBOS) -> None:
-    """With no caps set, one batched call dequeues every partition's entire
-    backlog, ordered (partition, created_at), and a second call finds nothing."""
-
-    @DBOS.workflow()
-    def batch_wf(value: str) -> None:
-        pass
-
-    # database_backed_queue=True skips registration, so the poller never races us
-    queue_name = f"unpolled-batch-{uuid.uuid4().hex[:8]}"
-    queue = Queue(queue_name, partition_queue=True, database_backed_queue=True)
-    partitions = ["p0", "p1", "p2"]
-    ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "direct", partitions, 3)
-
-    ret = dbos._sys_db.start_queued_partitioned_workflows(
-        queue, GlobalParams.executor_id, GlobalParams.app_version, {}
-    )
-    assert ret == [id for p in partitions for id in ids[p]]
-    for p in partitions:
-        for wfid in ids[p]:
-            status = dbos._sys_db.get_workflow_status(wfid)
-            assert status is not None
-            assert status["status"] == WorkflowStatusString.PENDING.value
-            assert status["executor_id"] == GlobalParams.executor_id
-    assert (
-        dbos._sys_db.start_queued_partitioned_workflows(
-            queue, GlobalParams.executor_id, GlobalParams.app_version, {}
-        )
-        == []
-    )
-
-
 def test_partitioned_batch_dequeue_sweep_cap(
     dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A sweep admits at most PARTITIONED_DEQUEUE_SWEEP_CAP workflows in
-    (partition, created_at) order; the remainder drains on later sweeps."""
+    """A sweep admits at most PARTITIONED_DEQUEUE_SWEEP_CAP heads in partition
+    order; admitted partitions are PENDING-gated, so the next sweep rotates
+    onward to the remaining partitions."""
 
     @DBOS.workflow()
     def batch_wf(value: str) -> None:
         pass
 
     queue_name = f"unpolled-sweep-{uuid.uuid4().hex[:8]}"
-    queue = Queue(queue_name, partition_queue=True, database_backed_queue=True)
-    partitions = ["p0", "p1"]
-    ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "sweep", partitions, 4)
+    queue = Queue(
+        queue_name, concurrency=1, partition_queue=True, database_backed_queue=True
+    )
+    partitions = [f"p{i}" for i in range(8)]
+    ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "sweep", partitions, 1)
 
     monkeypatch.setattr(type(dbos._sys_db), "PARTITIONED_DEQUEUE_SWEEP_CAP", 5)
 
@@ -2823,14 +2794,14 @@ def test_partitioned_batch_dequeue_sweep_cap(
             queue, GlobalParams.executor_id, GlobalParams.app_version, {}
         )
 
-    assert start() == ids["p0"] + ids["p1"][:1]
-    assert start() == ids["p1"][1:]
+    assert start() == [ids[p][0] for p in partitions[:5]]
+    assert start() == [ids[p][0] for p in partitions[5:]]
     assert start() == []
 
 
 def test_partitioned_batch_dequeue_worker_cap_direct(dbos: DBOS) -> None:
-    """worker_concurrency is applied per partition from this worker's in-memory
-    running counts: each partition admits only its remaining budget."""
+    """A partition this worker is already running at its worker_concurrency
+    budget is skipped, without affecting other partitions."""
 
     @DBOS.workflow()
     def batch_wf(value: str) -> None:
@@ -2839,21 +2810,22 @@ def test_partitioned_batch_dequeue_worker_cap_direct(dbos: DBOS) -> None:
     queue_name = f"unpolled-cap-{uuid.uuid4().hex[:8]}"
     queue = Queue(
         queue_name,
+        concurrency=1,
         partition_queue=True,
-        worker_concurrency=2,
+        worker_concurrency=1,
         database_backed_queue=True,
     )
     partitions = ["p0", "p1", "p2"]
-    ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "cap", partitions, 3)
+    ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "cap", partitions, 2)
 
     ret = dbos._sys_db.start_queued_partitioned_workflows(
         queue,
         GlobalParams.executor_id,
         GlobalParams.app_version,
-        {"p0": 1, "p1": 2},
+        {"p0": 1},
     )
-    # p0 has budget 1, p1 is saturated, p2 has the full budget of 2
-    assert ret == [ids["p0"][0]] + ids["p2"][:2]
+    # p0 is locally saturated; p1 and p2 admit their heads
+    assert ret == [ids["p1"][0], ids["p2"][0]]
 
 
 def test_partitioned_batch_dequeue_exclusive_direct(dbos: DBOS) -> None:
@@ -3080,7 +3052,9 @@ def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
         pass
 
     queue_name = f"unpolled-ver-{uuid.uuid4().hex[:8]}"
-    queue = Queue(queue_name, partition_queue=True, database_backed_queue=True)
+    queue = Queue(
+        queue_name, concurrency=1, partition_queue=True, database_backed_queue=True
+    )
     ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "ver", ["p0"], 3)
 
     def pin_version(wfid: str, version: Any) -> None:
@@ -3095,10 +3069,16 @@ def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
     pin_version(ids["p0"][1], GlobalParams.app_version)
     pin_version(ids["p0"][2], None)
 
-    ret = dbos._sys_db.start_queued_partitioned_workflows(
-        queue, GlobalParams.executor_id, GlobalParams.app_version, {}
-    )
-    assert ret == [ids["p0"][1], ids["p0"][2]]
+    def start() -> List[str]:
+        return dbos._sys_db.start_queued_partitioned_workflows(
+            queue, GlobalParams.executor_id, GlobalParams.app_version, {}
+        )
+
+    # The other-version row is invisible, so this worker's head is row 1; the
+    # version-less row 2 follows once it completes (this worker is latest).
+    assert start() == [ids["p0"][1]]
+    set_workflow_status(dbos._sys_db, ids["p0"][1], WorkflowStatusString.SUCCESS.value)
+    assert start() == [ids["p0"][2]]
 
 
 def test_partitioned_batch_dequeue_sqlite_plan(dbos: DBOS) -> None:

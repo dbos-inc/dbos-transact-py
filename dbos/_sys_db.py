@@ -4098,9 +4098,9 @@ class SystemDatabase(ABC):
             return ret_ids
 
     # Max workflows dequeued per partitioned sweep. Bounds the IN-list bind
-    # parameters below (SQLite caps at 32766, libpq at 65535); leftovers are
-    # picked up next poll, with flipped rows leaving ENQUEUED so sweeps rotate
-    # through the backlog rather than starve later partitions.
+    # parameters below (SQLite caps at 32766, libpq at 65535). Leftover
+    # partitions are picked up next poll: admitted partitions are excluded by
+    # the PENDING gate, so sweeps rotate onward rather than starve them.
     PARTITIONED_DEQUEUE_SWEEP_CAP = 1024
 
     def start_queued_partitioned_workflows(
@@ -4110,37 +4110,30 @@ class SystemDatabase(ABC):
         app_version: str,
         local_counts: Dict[str, int],
     ) -> List[str]:
-        """Dequeue from every partition of a partitioned queue in one transaction.
+        """Dequeue every partition's head-of-line workflow in one transaction.
         Each sweep admits at most PARTITIONED_DEQUEUE_SWEEP_CAP workflows.
 
-        Only valid when the queue's global concurrency is None or 1 and it has
-        no rate limiter (limiter queues use the per-partition path). With
-        concurrency=1, admission is a conditional flip of each partition's
-        head-of-line row: the ranking order is total (workflow_uuid breaks
-        ties), so dequeuers sharing a snapshot compute the same head and a
-        stale snapshot can only fail the flip (under-admission for one poll
-        cycle). A row committing between two workers' snapshots that sorts
-        before the visible head can still race in -- a narrow pre-existing
-        exposure shared with the per-partition path. The argument requires
-        locking a fixed candidate ID set -- do not rewrite the lock below as a
-        LIMIT query, whose SKIP LOCKED could slide past a locked head to the
-        next row in the same partition and admit out of order.
+        Only valid for partitioned queues with global concurrency 1 and no
+        rate limiter; every other config uses the per-partition path.
+        Admission is a conditional flip of each partition's head-of-line row:
+        the ranking order is total (workflow_uuid breaks ties), so dequeuers
+        sharing a snapshot compute the same head and a stale snapshot can only
+        fail the flip (under-admission for one poll cycle). A row committing
+        between two workers' snapshots that sorts before the visible head can
+        still race in -- a narrow pre-existing exposure shared with the
+        per-partition path. The argument requires locking a fixed candidate ID
+        set -- do not rewrite the lock below as a LIMIT query, whose SKIP
+        LOCKED could slide past a locked head to the next row in the same
+        partition and admit out of order.
 
         Args:
             local_counts: per-partition counts of workflows this worker is
                 currently running, from the in-memory active-workflows set.
         """
-        assert queue._concurrency is None or queue._concurrency == 1
+        assert queue._concurrency == 1
         assert queue._limiter is None
         start_time_ms = int(time.time() * 1000)
         ws = SystemSchema.workflow_status
-        # Bound the per-partition fetch by whichever caps apply; None = unbounded.
-        caps = [
-            cap
-            for cap in (queue._concurrency, queue._worker_concurrency)
-            if cap is not None
-        ]
-        rank_cap = min(caps) if caps else None
         with self.engine.begin() as c:
             latest_version = c.execute(
                 sa.select(SystemSchema.application_versions.c.version_name)
@@ -4170,81 +4163,62 @@ class SystemDatabase(ABC):
                 ws.c.queue_partition_key.isnot(None),
                 version_predicate,
             )
-            if rank_cap is not None:
-                # Rank per partition and fetch only each partition's first
-                # rank_cap rows; FOR UPDATE cannot share a query level with a
-                # window function, so ranking goes in a subquery and locking
-                # happens by ID below.
-                ranked = (
-                    sa.select(
-                        ws.c.workflow_uuid,
-                        ws.c.queue_partition_key,
-                        sa.func.row_number()
-                        .over(
-                            partition_by=ws.c.queue_partition_key,
-                            # workflow_uuid makes the order total, so every
-                            # worker ranks the same head under created_at ties;
-                            # idx_workflow_status_partition_dequeue ends with
-                            # workflow_uuid so the sort stays index-provided.
-                            order_by=(
-                                ws.c.priority.asc(),
-                                ws.c.created_at.asc(),
-                                ws.c.workflow_uuid.asc(),
-                            ),
-                        )
-                        .label("rn"),
+            # Rank each partition and take only its head; FOR UPDATE cannot
+            # share a query level with a window function, so ranking goes in a
+            # subquery and locking happens by ID below.
+            ranked = (
+                sa.select(
+                    ws.c.workflow_uuid,
+                    ws.c.queue_partition_key,
+                    sa.func.row_number()
+                    .over(
+                        partition_by=ws.c.queue_partition_key,
+                        # workflow_uuid makes the order total, so every
+                        # worker ranks the same head under created_at ties;
+                        # idx_workflow_status_partition_dequeue ends with
+                        # workflow_uuid so the sort stays index-provided.
+                        order_by=(
+                            ws.c.priority.asc(),
+                            ws.c.created_at.asc(),
+                            ws.c.workflow_uuid.asc(),
+                        ),
                     )
-                    .where(base)
-                    .subquery("ranked")
+                    .label("rn"),
                 )
-                cand_query = (
-                    sa.select(ranked.c.workflow_uuid, ranked.c.queue_partition_key)
-                    .where(ranked.c.rn <= rank_cap)
-                    .order_by(ranked.c.queue_partition_key.asc(), ranked.c.rn.asc())
-                )
-                if queue._concurrency == 1:
-                    # Admit a partition's head only while nothing in that
-                    # partition is running anywhere, on any app version.
-                    pending_probe = (
-                        sa.select(sa.literal(1))
-                        .where(ws.c.queue_name == queue.name)
-                        .where(ws.c.status == WorkflowStatusString.PENDING.value)
-                        .where(status_prover)
-                        .where(ws.c.queue_partition_key.isnot(None))
-                        .where(ws.c.queue_partition_key == ranked.c.queue_partition_key)
-                        .exists()
-                    )
-                    cand_query = cand_query.where(~pending_probe)
-            else:
-                cand_query = (
-                    sa.select(ws.c.workflow_uuid, ws.c.queue_partition_key)
-                    .where(base)
-                    .order_by(
-                        ws.c.queue_partition_key.asc(),
-                        ws.c.priority.asc(),
-                        ws.c.created_at.asc(),
-                        ws.c.workflow_uuid.asc(),
-                    )
-                )
-            cand_query = cand_query.limit(self.PARTITIONED_DEQUEUE_SWEEP_CAP)
+                .where(base)
+                .subquery("ranked")
+            )
+            # Admit a partition's head only while nothing in that partition is
+            # running anywhere, on any app version.
+            pending_probe = (
+                sa.select(sa.literal(1))
+                .where(ws.c.queue_name == queue.name)
+                .where(ws.c.status == WorkflowStatusString.PENDING.value)
+                .where(status_prover)
+                .where(ws.c.queue_partition_key.isnot(None))
+                .where(ws.c.queue_partition_key == ranked.c.queue_partition_key)
+                .exists()
+            )
+            cand_query = (
+                sa.select(ranked.c.workflow_uuid, ranked.c.queue_partition_key)
+                .where(ranked.c.rn == 1)
+                .where(~pending_probe)
+                .order_by(ranked.c.queue_partition_key.asc())
+                .limit(self.PARTITIONED_DEQUEUE_SWEEP_CAP)
+            )
             rows = c.execute(cand_query).fetchall()
             if not rows:
                 return []
 
-            # Truncate each partition's candidates to its remaining worker
-            # budget. Rows arrive ordered (partition, priority, created_at),
-            # so truncation keeps each partition's earliest rows.
-            candidate_ids: List[str] = []
-            admitted_per_key: Dict[str, int] = {}
-            for workflow_uuid, key in rows:
-                cap = sys.maxsize
-                if queue._worker_concurrency is not None:
-                    cap = min(cap, queue._worker_concurrency - local_counts.get(key, 0))
-                admitted = admitted_per_key.get(key, 0)
-                if admitted >= cap:
-                    continue
-                admitted_per_key[key] = admitted + 1
-                candidate_ids.append(workflow_uuid)
+            # Skip partitions this worker is already running at its local cap
+            # (worker_concurrency can only be 1 here, validation caps it at
+            # the queue's concurrency).
+            wc = queue._worker_concurrency
+            candidate_ids = [
+                workflow_uuid
+                for workflow_uuid, key in rows
+                if wc is None or local_counts.get(key, 0) < wc
+            ]
             if not candidate_ids:
                 return []
 
@@ -4299,7 +4273,7 @@ class SystemDatabase(ABC):
                 .returning(ws.c.workflow_uuid)
             ).fetchall()
             flipped_ids = {row[0] for row in flipped_rows}
-            # Preserve (partition, priority, created_at) order for submission.
+            # Preserve partition order for submission.
             ret_ids = [id for id in claim_ids if id in flipped_ids]
             if ret_ids:
                 dbos_logger.debug(f"[{queue.name}] dequeueing {len(ret_ids)} task(s)")
