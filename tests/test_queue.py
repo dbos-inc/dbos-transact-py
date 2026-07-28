@@ -1696,7 +1696,9 @@ def test_resuming_queued_workflows(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_resuming_queued_partitioned_workflows(dbos: DBOS) -> None:
+def test_resuming_queued_partitioned_workflows(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
     start_event = threading.Event()
     blocking_event = threading.Event()
 
@@ -3178,7 +3180,9 @@ def test_partitioned_batch_dequeue_sqlite_plan(dbos: DBOS) -> None:
 
 
 def test_partitioned_queue_global_exclusivity(
-    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+    dbos: DBOS,
+    monkeypatch: pytest.MonkeyPatch,
+    skip_with_sqlite_imprecise_time: None,
 ) -> None:
     """End-to-end concurrency=1: the queue worker dispatches to the batched path, and a
     partition runs strictly one workflow at a time in FIFO order, gated globally (no
