@@ -4098,7 +4098,7 @@ class SystemDatabase(ABC):
             return ret_ids
 
     # Max heads dequeued per partitioned sweep: bounds the IN-list bind params below (SQLite caps at 32766, libpq at 65535); leftover partitions rotate in on later polls via the PENDING gate.
-    PARTITIONED_DEQUEUE_SWEEP_CAP = 1024
+    PARTITIONED_DEQUEUE_SWEEP_CAP = 8192
 
     def start_queued_partitioned_workflows(
         self,
