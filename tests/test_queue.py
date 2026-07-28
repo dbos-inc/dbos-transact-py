@@ -2874,7 +2874,7 @@ def test_partitioned_batch_dequeue_skips_requeued_rows(dbos: DBOS) -> None:
     queue = Queue(
         queue_name, concurrency=1, partition_queue=True, database_backed_queue=True
     )
-    ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "requeue", ["p0"], 2)
+    ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "requeue", ["p0"], 3)
     head_id = ids["p0"][0]
     # Resume onto another unpolled queue: the internal queue is live, and its worker would drain the row before the assertions below.
     resume_target = f"unpolled-resume-{uuid.uuid4().hex[:8]}"
@@ -2916,6 +2916,40 @@ def test_partitioned_batch_dequeue_skips_requeued_rows(dbos: DBOS) -> None:
     assert dbos._sys_db.start_queued_partitioned_workflows(
         queue, GlobalParams.executor_id, GlobalParams.app_version
     ) == [ids["p0"][1]]
+
+    if not using_sqlite():
+        return
+    # SQLite holds no row locks, so a racer can still move a candidate after the lock select:
+    # the flip's own guard must reject it and RETURNING must report it as unclaimed.
+    set_workflow_status(dbos._sys_db, ids["p0"][1], WorkflowStatusString.SUCCESS.value)
+    moved_late = threading.Event()
+
+    def before_update(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        if not moved_late.is_set() and statement.lstrip().upper().startswith("UPDATE"):
+            moved_late.set()  # Set first: resume_workflows itself runs an UPDATE
+            dbos._sys_db.resume_workflows([ids["p0"][2]], queue_name=resume_target)
+
+    event.listen(dbos._sys_db.engine, "before_cursor_execute", before_update)
+    try:
+        assert (
+            dbos._sys_db.start_queued_partitioned_workflows(
+                queue, GlobalParams.executor_id, GlobalParams.app_version
+            )
+            == []
+        )
+    finally:
+        event.remove(dbos._sys_db.engine, "before_cursor_execute", before_update)
+    assert moved_late.is_set()
+    late_status = dbos._sys_db.get_workflow_status(ids["p0"][2])
+    assert late_status is not None
+    assert late_status["status"] == WorkflowStatusString.ENQUEUED.value
 
 
 def test_partitioned_batch_dequeue_contention(dbos: DBOS) -> None:
@@ -3055,7 +3089,8 @@ def test_partitioned_queue_paused_uses_fallback(
 
 def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
     """The batched path dequeues only rows of this worker's app version, plus
-    version-less rows when this worker runs the latest registered version."""
+    version-less rows while this worker runs the latest registered version. A
+    partition holding no eligible row is skipped without disturbing the others."""
 
     @DBOS.workflow()
     def batch_wf(value: str) -> None:
@@ -3065,7 +3100,7 @@ def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
     queue = Queue(
         queue_name, concurrency=1, partition_queue=True, database_backed_queue=True
     )
-    ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "ver", ["p0"], 3)
+    ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "ver", ["p0", "p1"], 3)
 
     def pin_version(wfid: str, version: Any) -> None:
         with dbos._sys_db.engine.begin() as c:
@@ -3078,6 +3113,9 @@ def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
     pin_version(ids["p0"][0], "some-other-version")
     pin_version(ids["p0"][1], GlobalParams.app_version)
     pin_version(ids["p0"][2], None)
+    # p1 is entirely ineligible: its head probe yields nothing, so the partition never appears below.
+    for wfid in ids["p1"]:
+        pin_version(wfid, "some-other-version")
 
     def start() -> List[str]:
         return dbos._sys_db.start_queued_partitioned_workflows(
@@ -3088,6 +3126,23 @@ def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
     assert start() == [ids["p0"][1]]
     set_workflow_status(dbos._sys_db, ids["p0"][1], WorkflowStatusString.SUCCESS.value)
     assert start() == [ids["p0"][2]]
+
+    # Registering a newer version demotes this worker: version-less rows now belong to the newer one.
+    set_workflow_status(dbos._sys_db, ids["p0"][2], WorkflowStatusString.ENQUEUED.value)
+    pin_version(
+        ids["p0"][2], None
+    )  # dequeueing it above stamped this worker's version on
+    now_ms = int(time.time() * 1000)
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.insert(SystemSchema.application_versions).values(
+                version_id="newer-than-this-worker",
+                version_name="newer-than-this-worker",
+                version_timestamp=now_ms + 3_600_000,
+                created_at=now_ms,
+            )
+        )
+    assert start() == []
 
 
 def test_partitioned_batch_dequeue_sqlite_plan(dbos: DBOS) -> None:
