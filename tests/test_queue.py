@@ -2790,41 +2790,12 @@ def test_partitioned_batch_dequeue_sweep_cap(
 
     def start() -> List[str]:
         return dbos._sys_db.start_queued_partitioned_workflows(
-            queue, GlobalParams.executor_id, GlobalParams.app_version, {}
+            queue, GlobalParams.executor_id, GlobalParams.app_version
         )
 
     assert start() == [ids[p][0] for p in partitions[:5]]
     assert start() == [ids[p][0] for p in partitions[5:]]
     assert start() == []
-
-
-def test_partitioned_batch_dequeue_worker_cap_direct(dbos: DBOS) -> None:
-    """A partition this worker is already running at its worker_concurrency
-    budget is skipped, without affecting other partitions."""
-
-    @DBOS.workflow()
-    def batch_wf(value: str) -> None:
-        pass
-
-    queue_name = f"unpolled-cap-{uuid.uuid4().hex[:8]}"
-    queue = Queue(
-        queue_name,
-        concurrency=1,
-        partition_queue=True,
-        worker_concurrency=1,
-        database_backed_queue=True,
-    )
-    partitions = ["p0", "p1", "p2"]
-    ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "cap", partitions, 2)
-
-    ret = dbos._sys_db.start_queued_partitioned_workflows(
-        queue,
-        GlobalParams.executor_id,
-        GlobalParams.app_version,
-        {"p0": 1},
-    )
-    # p0 is locally saturated; p1 and p2 admit their heads
-    assert ret == [ids["p1"][0], ids["p2"][0]]
 
 
 def test_partitioned_batch_dequeue_exclusive_direct(dbos: DBOS) -> None:
@@ -2844,7 +2815,7 @@ def test_partitioned_batch_dequeue_exclusive_direct(dbos: DBOS) -> None:
 
     def start() -> List[str]:
         return dbos._sys_db.start_queued_partitioned_workflows(
-            queue, GlobalParams.executor_id, GlobalParams.app_version, {}
+            queue, GlobalParams.executor_id, GlobalParams.app_version
         )
 
     # Heads only, one per partition
@@ -2879,7 +2850,7 @@ def test_partitioned_batch_dequeue_tie_break(dbos: DBOS) -> None:
 
     def start() -> List[str]:
         return dbos._sys_db.start_queued_partitioned_workflows(
-            queue, GlobalParams.executor_id, GlobalParams.app_version, {}
+            queue, GlobalParams.executor_id, GlobalParams.app_version
         )
 
     # Ties resolve by workflow_uuid ascending: "...-0" < "...-1" < "...-2"
@@ -2931,7 +2902,7 @@ def test_partitioned_batch_dequeue_skips_requeued_rows(dbos: DBOS) -> None:
     event.listen(dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute)
     try:
         ret = dbos._sys_db.start_queued_partitioned_workflows(
-            queue, GlobalParams.executor_id, GlobalParams.app_version, {}
+            queue, GlobalParams.executor_id, GlobalParams.app_version
         )
     finally:
         event.remove(
@@ -2947,7 +2918,7 @@ def test_partitioned_batch_dequeue_skips_requeued_rows(dbos: DBOS) -> None:
 
     # The next sweep sees the remaining row as the partition's new head
     assert dbos._sys_db.start_queued_partitioned_workflows(
-        queue, GlobalParams.executor_id, GlobalParams.app_version, {}
+        queue, GlobalParams.executor_id, GlobalParams.app_version
     ) == [ids["p0"][1]]
 
 
@@ -2973,7 +2944,7 @@ def test_partitioned_batch_dequeue_contention(dbos: DBOS) -> None:
     def call(slot: int) -> None:
         barrier.wait()
         results[slot] = dbos._sys_db.start_queued_partitioned_workflows(
-            queue, f"executor-{slot}", GlobalParams.app_version, {}
+            queue, f"executor-{slot}", GlobalParams.app_version
         )
 
     threads = [threading.Thread(target=call, args=(slot,)) for slot in range(2)]
@@ -3069,7 +3040,7 @@ def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
 
     def start() -> List[str]:
         return dbos._sys_db.start_queued_partitioned_workflows(
-            queue, GlobalParams.executor_id, GlobalParams.app_version, {}
+            queue, GlobalParams.executor_id, GlobalParams.app_version
         )
 
     # The other-version row is invisible, so the head is row 1; version-less row 2 follows once it completes (this worker is latest).
@@ -3113,7 +3084,7 @@ def test_partitioned_batch_dequeue_sqlite_plan(dbos: DBOS) -> None:
     event.listen(dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute)
     try:
         ret = dbos._sys_db.start_queued_partitioned_workflows(
-            queue, GlobalParams.executor_id, GlobalParams.app_version, {}
+            queue, GlobalParams.executor_id, GlobalParams.app_version
         )
     finally:
         event.remove(

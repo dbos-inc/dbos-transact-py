@@ -483,14 +483,10 @@ def queue_worker_thread(
                 and queue._limiter is None
             ):
                 # Batched path: one transaction claims every partition's head (valid only for concurrency=1, see start_queued_partitioned_workflows).
-                local_counts = dbos._active_workflows_set.partition_counts_for_queue(
-                    queue.name
-                )
                 dequeued_workflows = dbos._sys_db.start_queued_partitioned_workflows(
                     queue,
                     GlobalParams.executor_id,
                     GlobalParams.app_version,
-                    local_counts,
                 )
                 for id in dequeued_workflows:
                     try:

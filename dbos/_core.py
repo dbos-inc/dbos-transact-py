@@ -811,19 +811,6 @@ class ActiveWorkflowById:
         with self._lock:
             return sum(1 for bucket in self._m.values() if bucket == target)
 
-    def partition_counts_for_queue(self, queue_name: str) -> dict[str, int]:
-        """Count active workflows per partition of a queue; partitions with
-        no active workflows are absent from the result."""
-        counts: dict[str, int] = {}
-        with self._lock:
-            for bucket in self._m.values():
-                if bucket is None:
-                    continue
-                name, key = bucket
-                if name == queue_name and key is not None:
-                    counts[key] = counts.get(key, 0) + 1
-        return counts
-
 
 def _check_required_roles_or_finalize_error(
     dbos: "DBOS",

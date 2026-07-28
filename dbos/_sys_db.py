@@ -4105,7 +4105,6 @@ class SystemDatabase(ABC):
         queue: "Queue",
         executor_id: str,
         app_version: str,
-        local_counts: Dict[str, int],
     ) -> List[str]:
         """Dequeue every partition's head-of-line workflow in one transaction, at most
         PARTITIONED_DEQUEUE_SWEEP_CAP per sweep. Valid only for concurrency=1, no-limiter queues:
@@ -4113,6 +4112,7 @@ class SystemDatabase(ABC):
         """
         assert queue._concurrency == 1
         assert queue._limiter is None
+        # worker_concurrency needs no handling: validation caps it at concurrency=1, which the PENDING gate below already enforces globally.
         start_time_ms = int(time.time() * 1000)
         ws = SystemSchema.workflow_status
         with self.engine.begin() as c:
@@ -4183,7 +4183,7 @@ class SystemDatabase(ABC):
                 # LATERAL joins plan as tight nested loops; correlated scalar subqueries run as slower per-row SubPlans on Postgres.
                 head = head_query.lateral("head")
                 cand_query = (
-                    sa.select(head.c.workflow_uuid, partitions.c.pk)
+                    sa.select(head.c.workflow_uuid)
                     .select_from(partitions.join(head, sa.true()))
                     .where(partitions.c.pk.isnot(None))
                     .where(~pending_probe)
@@ -4202,22 +4202,12 @@ class SystemDatabase(ABC):
                     .subquery("heads")
                 )
                 cand_query = (
-                    sa.select(heads.c.workflow_uuid, heads.c.pk)
+                    sa.select(heads.c.workflow_uuid)
                     .where(heads.c.workflow_uuid.isnot(None))
                     .order_by(heads.c.pk.asc())
                     .limit(self.PARTITIONED_DEQUEUE_SWEEP_CAP)
                 )
-            rows = c.execute(cand_query).fetchall()
-            if not rows:
-                return []
-
-            # Skip partitions this worker already runs at its local cap (worker_concurrency can only be 1 here, validation caps it at the queue's concurrency).
-            wc = queue._worker_concurrency
-            candidate_ids = [
-                workflow_uuid
-                for workflow_uuid, key in rows
-                if wc is None or local_counts.get(key, 0) < wc
-            ]
+            candidate_ids = [row[0] for row in c.execute(cand_query).fetchall()]
             if not candidate_ids:
                 return []
 
