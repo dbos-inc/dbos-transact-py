@@ -2999,58 +2999,27 @@ def test_partitioned_batch_dequeue_contention(dbos: DBOS) -> None:
     assert {key: count for key, count in rows} == {p: 1 for p in partitions}
 
 
-def test_partitioned_queue_with_limiter_uses_fallback(
+def test_partitioned_queue_fallback_routing(
     dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A partitioned queue with a rate limiter is dispatched to the per-partition
-    sweep loop, never the batched path, and still drains correctly."""
+    """Partitioned configs the batched path does not support -- a rate limiter, and
+    worker_concurrency=0 (the pause-dequeue idiom, which it would ignore) -- route to
+    the per-partition sweep, which drains the first and honors the pause on the second.
+    """
 
     @DBOS.workflow()
-    def limited_wf(tag: str) -> str:
+    def routed_wf(tag: str) -> str:
         return tag
 
-    # concurrency=1 would otherwise qualify for the batched path: only the limiter excludes it.
-    queue = Queue(
+    # Both are concurrency=1 partitioned queues, so only the limiter / the pause excludes them.
+    limiter_queue = Queue(
         f"limiter_fallback_{uuid.uuid4().hex[:8]}",
         concurrency=1,
         limiter={"limit": 10, "period": 60},
         partition_queue=True,
         polling_interval_sec=0.25,
     )
-
-    batched_queues: List[str] = []
-    real_batched = dbos._sys_db.start_queued_partitioned_workflows
-
-    def spying_batched(queue_arg: Queue, *args: Any, **kwargs: Any) -> List[str]:
-        batched_queues.append(queue_arg.name)
-        return real_batched(queue_arg, *args, **kwargs)
-
-    monkeypatch.setattr(
-        dbos._sys_db, "start_queued_partitioned_workflows", spying_batched
-    )
-
-    handles = []
-    for partition in ["p0", "p1"]:
-        with SetEnqueueOptions(queue_partition_key=partition):
-            for i in range(2):
-                handles.append(queue.enqueue(limited_wf, f"{partition}-{i}"))
-    for handle in handles:
-        assert handle.get_result()
-    assert queue.name not in batched_queues
-
-
-def test_partitioned_queue_paused_uses_fallback(
-    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """worker_concurrency=0 pauses dequeue, so a concurrency=1 partitioned queue
-    routes to the per-partition path (which honors the pause) rather than the
-    batched path (which ignores worker_concurrency)."""
-
-    @DBOS.workflow()
-    def paused_wf(tag: str) -> str:
-        return tag
-
-    queue = Queue(
+    paused_queue = Queue(
         f"paused_fallback_{uuid.uuid4().hex[:8]}",
         concurrency=1,
         worker_concurrency=0,
@@ -3076,15 +3045,23 @@ def test_partitioned_queue_paused_uses_fallback(
     )
     monkeypatch.setattr(dbos._sys_db, "start_queued_workflows", spying_single)
 
+    handles = []
+    for partition in ["p0", "p1"]:
+        with SetEnqueueOptions(queue_partition_key=partition):
+            handles.append(limiter_queue.enqueue(routed_wf, f"limited-{partition}"))
     with SetEnqueueOptions(queue_partition_key="p0"):
-        handle = queue.enqueue(paused_wf, "p0-0")
+        paused_handle = paused_queue.enqueue(routed_wf, "paused")
 
-    def swept_via_fallback() -> None:
-        assert queue.name in swept_queues
+    for handle in handles:
+        assert handle.get_result()
 
-    retry_until_success(swept_via_fallback, interval=0.1, max_attempts=100)
-    assert queue.name not in batched_queues
-    assert handle.get_status().status == WorkflowStatusString.ENQUEUED.value
+    def paused_queue_swept() -> None:
+        assert paused_queue.name in swept_queues
+
+    retry_until_success(paused_queue_swept, interval=0.1, max_attempts=100)
+    assert limiter_queue.name not in batched_queues
+    assert paused_queue.name not in batched_queues
+    assert paused_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
 
 
 def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
@@ -3200,10 +3177,12 @@ def test_partitioned_batch_dequeue_sqlite_plan(dbos: DBOS) -> None:
     assert not [d for d in details if d.startswith("SCAN") and "workflow_status" in d]
 
 
-def test_partitioned_queue_global_exclusivity(dbos: DBOS) -> None:
-    """End-to-end concurrency=1: a partition runs strictly one workflow at a
-    time in FIFO order, gated globally (no worker_concurrency is set, so only
-    the PENDING-row check holds followers back); other partitions are unaffected."""
+def test_partitioned_queue_global_exclusivity(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end concurrency=1: the queue worker dispatches to the batched path, and a
+    partition runs strictly one workflow at a time in FIFO order, gated globally (no
+    worker_concurrency is set, so only the PENDING-row check holds followers back)."""
 
     order_lock = threading.Lock()
     execution_order: List[str] = []
@@ -3231,6 +3210,19 @@ def test_partitioned_queue_global_exclusivity(dbos: DBOS) -> None:
         partition_queue=True,
         polling_interval_sec=0.25,
     )
+
+    # Every other batched-path test calls the sweep directly, so this is what pins the dispatch itself.
+    batched_queues: List[str] = []
+    real_batched = dbos._sys_db.start_queued_partitioned_workflows
+
+    def spying_batched(queue_arg: Queue, *args: Any, **kwargs: Any) -> List[str]:
+        batched_queues.append(queue_arg.name)
+        return real_batched(queue_arg, *args, **kwargs)
+
+    monkeypatch.setattr(
+        dbos._sys_db, "start_queued_partitioned_workflows", spying_batched
+    )
+
     with SetEnqueueOptions(queue_partition_key="a"):
         head_handle = queue.enqueue(head_workflow)
         follower_1 = queue.enqueue(tagged_workflow, "a1")
@@ -3249,6 +3241,7 @@ def test_partitioned_queue_global_exclusivity(dbos: DBOS) -> None:
     assert follower_1.get_result() == "a1"
     assert follower_2.get_result() == "a2"
     assert [tag for tag in execution_order if tag != "b1"] == ["head", "a1", "a2"]
+    assert queue.name in batched_queues
     assert queue_entries_are_cleaned_up(dbos)
 
 
