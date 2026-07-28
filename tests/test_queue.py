@@ -3105,7 +3105,7 @@ def test_partitioned_batch_dequeue_sqlite_plan(dbos: DBOS) -> None:
         context: Any,
         executemany: bool,
     ) -> None:
-        if "row_number" in statement.lower():
+        if "recursive" in statement.lower():
             captured.append((statement, parameters))
 
     from sqlalchemy import event

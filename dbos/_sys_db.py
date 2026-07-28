@@ -4135,32 +4135,39 @@ class SystemDatabase(ABC):
                     sa.literal_column(f"'{WorkflowStatusString.PENDING.value}'"),
                 ]
             )
-            base = sa.and_(
+            enq = sa.and_(
                 ws.c.queue_name == queue.name,
                 ws.c.status == WorkflowStatusString.ENQUEUED.value,
                 status_prover,
-                ws.c.queue_partition_key.isnot(None),
-                version_predicate,
             )
-            # Rank each partition in a subquery (FOR UPDATE cannot share a query level with a window function); locking happens by ID below.
-            ranked = (
-                sa.select(
-                    ws.c.workflow_uuid,
-                    ws.c.queue_partition_key,
-                    sa.func.row_number()
-                    .over(
-                        partition_by=ws.c.queue_partition_key,
-                        # workflow_uuid totalizes the order (same head for every worker under created_at ties); the index's trailing workflow_uuid keeps the sort index-provided.
-                        order_by=(
-                            ws.c.priority.asc(),
-                            ws.c.created_at.asc(),
-                            ws.c.workflow_uuid.asc(),
-                        ),
-                    )
-                    .label("rn"),
+            # Walk distinct partition keys with a recursive-CTE loose index scan (one seek per key, mirroring get_queue_partitions) so sweep cost scales with partition count, not backlog depth.
+            partitions = (
+                sa.select(sa.func.min(ws.c.queue_partition_key).label("pk"))
+                .where(enq)
+                .where(ws.c.queue_partition_key.isnot(None))
+                .cte("partitions", recursive=True)
+            )
+            next_pk = (
+                sa.select(sa.func.min(ws.c.queue_partition_key))
+                .where(enq)
+                .where(ws.c.queue_partition_key > partitions.c.pk)
+                .scalar_subquery()
+            )
+            partitions = partitions.union_all(
+                sa.select(next_pk).where(partitions.c.pk.isnot(None))
+            )
+            # A partition's head is its first version-eligible row; workflow_uuid totalizes the order (same head for every worker under created_at ties), and the index's trailing workflow_uuid makes this a pure top-1 probe.
+            head_query = (
+                sa.select(ws.c.workflow_uuid)
+                .where(enq)
+                .where(ws.c.queue_partition_key == partitions.c.pk)
+                .where(version_predicate)
+                .order_by(
+                    ws.c.priority.asc(),
+                    ws.c.created_at.asc(),
+                    ws.c.workflow_uuid.asc(),
                 )
-                .where(base)
-                .subquery("ranked")
+                .limit(1)
             )
             # Admit a partition's head only while nothing in that partition runs anywhere, on any app version.
             pending_probe = (
@@ -4169,16 +4176,37 @@ class SystemDatabase(ABC):
                 .where(ws.c.status == WorkflowStatusString.PENDING.value)
                 .where(status_prover)
                 .where(ws.c.queue_partition_key.isnot(None))
-                .where(ws.c.queue_partition_key == ranked.c.queue_partition_key)
+                .where(ws.c.queue_partition_key == partitions.c.pk)
                 .exists()
             )
-            cand_query = (
-                sa.select(ranked.c.workflow_uuid, ranked.c.queue_partition_key)
-                .where(ranked.c.rn == 1)
-                .where(~pending_probe)
-                .order_by(ranked.c.queue_partition_key.asc())
-                .limit(self.PARTITIONED_DEQUEUE_SWEEP_CAP)
-            )
+            if self.engine.dialect.name == "postgresql":
+                # LATERAL joins plan as tight nested loops; correlated scalar subqueries run as slower per-row SubPlans on Postgres.
+                head = head_query.lateral("head")
+                cand_query = (
+                    sa.select(head.c.workflow_uuid, partitions.c.pk)
+                    .select_from(partitions.join(head, sa.true()))
+                    .where(partitions.c.pk.isnot(None))
+                    .where(~pending_probe)
+                    .order_by(partitions.c.pk.asc())
+                    .limit(self.PARTITIONED_DEQUEUE_SWEEP_CAP)
+                )
+            else:
+                # SQLite has no LATERAL; a correlated scalar subquery probes each head, with version-ineligible (NULL-head) partitions filtered in the outer select.
+                heads = (
+                    sa.select(
+                        head_query.scalar_subquery().label("workflow_uuid"),
+                        partitions.c.pk,
+                    )
+                    .where(partitions.c.pk.isnot(None))
+                    .where(~pending_probe)
+                    .subquery("heads")
+                )
+                cand_query = (
+                    sa.select(heads.c.workflow_uuid, heads.c.pk)
+                    .where(heads.c.workflow_uuid.isnot(None))
+                    .order_by(heads.c.pk.asc())
+                    .limit(self.PARTITIONED_DEQUEUE_SWEEP_CAP)
+                )
             rows = c.execute(cand_query).fetchall()
             if not rows:
                 return []
