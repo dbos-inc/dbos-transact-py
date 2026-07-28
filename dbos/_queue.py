@@ -481,6 +481,7 @@ def queue_worker_thread(
                 queue._partition_queue
                 and queue._concurrency == 1
                 and queue._limiter is None
+                and queue._worker_concurrency != 0
             ):
                 # Batched path: one transaction claims every partition's head (valid only for concurrency=1, see start_queued_partitioned_workflows).
                 dequeued_workflows = dbos._sys_db.start_queued_partitioned_workflows(
