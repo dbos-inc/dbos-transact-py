@@ -15,6 +15,12 @@ from dbos._utils import INTERNAL_QUEUE_NAME
 from .conftest import retry_until_success
 
 
+def daily_cron_far_from_now() -> str:
+    # Daily cron pinned ~12 hours away, so it can't fire mid-test at any wall-clock time.
+    t = datetime.now(timezone.utc) + timedelta(hours=12)
+    return f"{t.minute} {t.hour} * * *"
+
+
 def test_schedule_crud(dbos: DBOS) -> None:
     @DBOS.workflow()
     def my_workflow(scheduled_at: datetime, ctx: Any) -> None:
@@ -683,11 +689,11 @@ def test_dynamic_scheduler_replace_schedule(dbos: DBOS) -> None:
     def scheduled_workflow(scheduled_at: datetime, ctx: Any) -> None:
         received_contexts.append(ctx)
 
-    # Create a schedule that runs once a day — should not fire during this test
+    # A daily schedule far from now — must not fire during this test
     DBOS.create_schedule(
         schedule_name="replaceable",
         workflow_fn=scheduled_workflow,
-        schedule="0 0 * * *",
+        schedule=daily_cron_far_from_now(),
         context={"version": 1},
     )
     time.sleep(3)
@@ -735,11 +741,11 @@ def test_long_schedule_shutdown(dbos: DBOS) -> None:
         nonlocal wf_counter
         wf_counter += 1
 
-    # Create a schedule that runs once a day — should not fire during this test
+    # A daily schedule far from now — must not fire during this test
     DBOS.create_schedule(
         schedule_name="replaceable",
         workflow_fn=scheduled_workflow,
-        schedule="0 0 * * *",
+        schedule=daily_cron_far_from_now(),
     )
     time.sleep(3)
     assert wf_counter == 0
@@ -772,15 +778,17 @@ def test_backfill_schedule(dbos: DBOS) -> None:
     for h in handles:
         h.get_result()
 
+    # Filter to the window: the live schedule may also fire if the test crosses a top-of-hour
+    backfilled = [(t, c) for t, c in received if start <= t < end]
     expected = [datetime(2025, 1, 1, h, 0, 0, tzinfo=timezone.utc) for h in range(1, 4)]
-    assert sorted(t for t, _ in received) == expected
-    assert all(ctx == {"env": "backfill"} for _, ctx in received)
+    assert sorted(t for t, _ in backfilled) == expected
+    assert all(ctx == {"env": "backfill"} for _, ctx in backfilled)
 
     # Backfilling again should be idempotent (same workflow IDs)
     handles2 = DBOS.backfill_schedule("backfill-test", start, end)
     assert len(handles2) == 3
     time.sleep(1)
-    assert len(received) == 3
+    assert len([t for t, _ in received if start <= t < end]) == 3
 
     # Nonexistent schedule
     with pytest.raises(DBOSException, match="does not exist"):
@@ -812,8 +820,12 @@ def test_backfill_naive_datetime(dbos: DBOS) -> None:
     for h in handles:
         h.get_result()
 
+    # Filter to the window: the live schedule may also fire if the test crosses a top-of-hour
+    window_start = naive_start.replace(tzinfo=timezone.utc)
+    window_end = naive_end.replace(tzinfo=timezone.utc)
+    backfilled = [t for t in received if window_start <= t < window_end]
     expected = [datetime(2025, 1, 1, h, 0, 0, tzinfo=timezone.utc) for h in range(1, 4)]
-    assert sorted(received) == expected
+    assert sorted(backfilled) == expected
 
     # Mixed (aware start, naive end) should also work
     received.clear()
@@ -862,14 +874,15 @@ def test_backfill_with_timezone(dbos: DBOS) -> None:
     for h in handles_utc + handles_ny:
         h.get_result()
 
+    # Filter to the window: the live schedules may also fire if the test crosses their midnight
     # UTC schedule: midnight UTC on Jan 1 and Jan 2
-    utc_times = sorted(received_utc)
+    utc_times = sorted(t for t in received_utc if start <= t < end)
     assert len(utc_times) == 2
     assert utc_times[0].day == 1 and utc_times[0].hour == 0
     assert utc_times[1].day == 2 and utc_times[1].hour == 0
 
     # NY schedule: midnight Eastern = 05:00 UTC, so Jan 1 05:00 and Jan 2 05:00
-    ny_times = sorted(received_ny)
+    ny_times = sorted(t for t in received_ny if start <= t < end)
     assert len(ny_times) == 2
     for t in ny_times:
         # Midnight in New York
@@ -895,7 +908,7 @@ def test_trigger_schedule(dbos: DBOS) -> None:
     DBOS.create_schedule(
         schedule_name="trigger-test",
         workflow_fn=trigger_workflow,
-        schedule="0 0 * * *",  # daily, won't fire during test
+        schedule=daily_cron_far_from_now(),  # daily, can't fire during the test
         context=[1, 2, 3],
     )
 
@@ -940,7 +953,7 @@ def test_list_workflows_by_schedule_name(dbos: DBOS) -> None:
         DBOS.create_schedule(
             schedule_name=name,
             workflow_fn=scheduled_workflow,
-            schedule="0 0 * * *",  # daily, won't fire during the test
+            schedule=daily_cron_far_from_now(),  # daily, can't fire during the test
         )
 
     handle_a = DBOS.trigger_schedule("search-a")
@@ -978,7 +991,7 @@ def test_schedule_name_survives_export_import(dbos: DBOS) -> None:
     DBOS.create_schedule(
         schedule_name="export-test",
         workflow_fn=scheduled_workflow,
-        schedule="0 0 * * *",  # daily, won't fire during the test
+        schedule=daily_cron_far_from_now(),  # daily, can't fire during the test
     )
     handle = DBOS.trigger_schedule("export-test")
     handle.get_result()
@@ -1248,9 +1261,11 @@ def test_client_backfill_schedule(client: DBOSClient) -> None:
     for h in handles:
         h.get_result()
 
+    # Filter to the window: the live schedule may also fire if the test crosses a top-of-hour
+    backfilled = [(t, c) for t, c in received if start <= t < end]
     expected = [datetime(2025, 6, 1, h, 0, 0, tzinfo=timezone.utc) for h in range(1, 4)]
-    assert sorted(t for t, _ in received) == expected
-    assert all(ctx == {"source": "client"} for _, ctx in received)
+    assert sorted(t for t, _ in backfilled) == expected
+    assert all(ctx == {"source": "client"} for _, ctx in backfilled)
 
     client.delete_schedule("client-backfill")
 
@@ -1265,7 +1280,7 @@ def test_client_trigger_schedule(client: DBOSClient) -> None:
     client.create_schedule(
         schedule_name="client-trigger",
         workflow_name=trigger_workflow.__qualname__,
-        schedule="0 0 * * *",
+        schedule=daily_cron_far_from_now(),  # daily, can't fire during the test
         context="trigger-ctx",
     )
 
@@ -1833,7 +1848,7 @@ def test_scheduled_workflow_datetime_with_portable_serializer(
         DBOS.create_schedule(
             schedule_name="portable-schedule",
             workflow_fn=scheduled_workflow,
-            schedule="0 0 * * *",  # daily, won't fire during the test
+            schedule=daily_cron_far_from_now(),  # daily, can't fire during the test
             context={"env": "test"},
         )
 
@@ -1862,7 +1877,7 @@ def test_scheduled_workflow_datetime_with_portable_serializer(
         DBOS.create_schedule(
             schedule_name="portable-class-schedule",
             workflow_fn=ScheduledClass.scheduled_wf,
-            schedule="0 0 * * *",  # daily, won't fire during the test
+            schedule=daily_cron_far_from_now(),  # daily, can't fire during the test
             context={"env": "cls"},
         )
 
