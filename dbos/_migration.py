@@ -919,7 +919,7 @@ def get_dbos_migration_fortysix(schema: str, is_cockroach: bool) -> str:
 
 
 def get_dbos_migration_fortyseven(schema: str, is_cockroach: bool) -> str:
-    # Trailing workflow_uuid totalizes the dequeue order (same head for every worker under ties) and keeps the tiebroken window sort index-provided.
+    # Trailing workflow_uuid totalizes the dequeue order (same head for every worker under ties) and keeps the tiebroken head probe index-provided.
     c = _concurrently(is_cockroach)
     return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_partition_dequeue" ON "{schema}"."workflow_status" ("queue_name", "status", "queue_partition_key", "priority", "created_at", "workflow_uuid") WHERE "status" IN (\'ENQUEUED\', \'PENDING\') AND "queue_partition_key" IS NOT NULL'
 
@@ -1240,7 +1240,7 @@ sqlite_migration_fortysix = (
     'DROP INDEX IF EXISTS "idx_workflow_status_partition_dequeue"'
 )
 
-# Trailing workflow_uuid totalizes the dequeue order (same head for every worker under ties) and keeps the tiebroken window sort index-provided.
+# Trailing workflow_uuid totalizes the dequeue order (same head for every worker under ties) and keeps the tiebroken head probe index-provided.
 sqlite_migration_fortyseven = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_partition_dequeue" ON "workflow_status" ("queue_name", "status", "queue_partition_key", "priority", "created_at", "workflow_uuid") WHERE "status" IN (\'ENQUEUED\', \'PENDING\') AND "queue_partition_key" IS NOT NULL'
 
 sqlite_migrations = [

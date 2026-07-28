@@ -8,6 +8,7 @@ import threading
 import time
 import uuid
 import weakref
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, List
 
@@ -2865,8 +2866,6 @@ def test_partitioned_batch_dequeue_skips_requeued_rows(dbos: DBOS) -> None:
     the claim guard, not flipped and run under the wrong queue."""
     from sqlalchemy import event
 
-    from dbos._utils import INTERNAL_QUEUE_NAME
-
     @DBOS.workflow()
     def batch_wf(value: str) -> None:
         pass
@@ -2877,8 +2876,10 @@ def test_partitioned_batch_dequeue_skips_requeued_rows(dbos: DBOS) -> None:
     )
     ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "requeue", ["p0"], 2)
     head_id = ids["p0"][0]
+    # Resume onto another unpolled queue: the internal queue is live, and its worker would drain the row before the assertions below.
+    resume_target = f"unpolled-resume-{uuid.uuid4().hex[:8]}"
 
-    # Between the candidate snapshot (has row_number) and the lock select (a plain SELECT ... IN), resume the head onto the internal queue.
+    # Fire between the candidate snapshot (starts WITH RECURSIVE) and the lock select (a plain SELECT ... IN).
     moved = threading.Event()
 
     def before_cursor_execute(
@@ -2890,14 +2891,9 @@ def test_partitioned_batch_dequeue_skips_requeued_rows(dbos: DBOS) -> None:
         executemany: bool,
     ) -> None:
         stmt = statement.lstrip().upper()
-        if (
-            not moved.is_set()
-            and stmt.startswith("SELECT")
-            and " IN " in stmt
-            and "ROW_NUMBER" not in stmt
-        ):
+        if not moved.is_set() and stmt.startswith("SELECT") and " IN " in stmt:
             moved.set()  # Set first: resume_workflows itself runs a SELECT ... IN
-            dbos._sys_db.resume_workflows([head_id])
+            dbos._sys_db.resume_workflows([head_id], queue_name=resume_target)
 
     event.listen(dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute)
     try:
@@ -2914,7 +2910,7 @@ def test_partitioned_batch_dequeue_skips_requeued_rows(dbos: DBOS) -> None:
     status = dbos._sys_db.get_workflow_status(head_id)
     assert status is not None
     assert status["status"] == WorkflowStatusString.ENQUEUED.value
-    assert status["queue_name"] == INTERNAL_QUEUE_NAME
+    assert status["queue_name"] == resume_target
 
     # The next sweep sees the remaining row as the partition's new head
     assert dbos._sys_db.start_queued_partitioned_workflows(
@@ -2939,26 +2935,20 @@ def test_partitioned_batch_dequeue_contention(dbos: DBOS) -> None:
     ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "race", partitions, 2)
 
     barrier = threading.Barrier(2)
-    results: List[List[str]] = [[], []]
 
-    def call(slot: int) -> None:
+    def call(slot: int) -> List[str]:
         barrier.wait()
-        results[slot] = dbos._sys_db.start_queued_partitioned_workflows(
+        return dbos._sys_db.start_queued_partitioned_workflows(
             queue, f"executor-{slot}", GlobalParams.app_version
         )
 
-    threads = [threading.Thread(target=call, args=(slot,)) for slot in range(2)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(call, slot) for slot in range(2)]
+        # future.result() re-raises: a racer that dies must fail the test, not silently return nothing
+        admitted = [id for future in futures for id in future.result()]
 
-    admitted = results[0] + results[1]
-    # No workflow was admitted twice
-    assert len(admitted) == len(set(admitted))
-    # Each partition admitted its head or (if contended away this cycle) nothing
-    for p in partitions:
-        assert [id for id in admitted if id in ids[p]] in ([], [ids[p][0]])
+    # Whichever racer wins each head, every head is claimed exactly once and no follower is
+    assert sorted(admitted) == sorted(ids[p][0] for p in partitions)
     with dbos._sys_db.engine.begin() as c:
         rows = c.execute(
             sa.select(
@@ -2971,7 +2961,8 @@ def test_partitioned_batch_dequeue_contention(dbos: DBOS) -> None:
             )
             .group_by(SystemSchema.workflow_status.c.queue_partition_key)
         ).fetchall()
-    assert all(count <= 1 for _, count in rows)
+    # The returned IDs match the rows actually flipped: one PENDING per partition
+    assert {key: count for key, count in rows} == {p: 1 for p in partitions}
 
 
 def test_partitioned_queue_with_limiter_uses_fallback(
@@ -2984,8 +2975,10 @@ def test_partitioned_queue_with_limiter_uses_fallback(
     def limited_wf(tag: str) -> str:
         return tag
 
+    # concurrency=1 would otherwise qualify for the batched path: only the limiter excludes it.
     queue = Queue(
         f"limiter_fallback_{uuid.uuid4().hex[:8]}",
+        concurrency=1,
         limiter={"limit": 10, "period": 60},
         partition_queue=True,
         polling_interval_sec=0.25,
@@ -3010,6 +3003,54 @@ def test_partitioned_queue_with_limiter_uses_fallback(
     for handle in handles:
         assert handle.get_result()
     assert queue.name not in batched_queues
+
+
+def test_partitioned_queue_paused_uses_fallback(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """worker_concurrency=0 pauses dequeue, so a concurrency=1 partitioned queue
+    routes to the per-partition path (which honors the pause) rather than the
+    batched path (which ignores worker_concurrency)."""
+
+    @DBOS.workflow()
+    def paused_wf(tag: str) -> str:
+        return tag
+
+    queue = Queue(
+        f"paused_fallback_{uuid.uuid4().hex[:8]}",
+        concurrency=1,
+        worker_concurrency=0,
+        partition_queue=True,
+        polling_interval_sec=0.25,
+    )
+
+    batched_queues: List[str] = []
+    swept_queues: List[str] = []
+    real_batched = dbos._sys_db.start_queued_partitioned_workflows
+    real_single = dbos._sys_db.start_queued_workflows
+
+    def spying_batched(queue_arg: Queue, *args: Any, **kwargs: Any) -> List[str]:
+        batched_queues.append(queue_arg.name)
+        return real_batched(queue_arg, *args, **kwargs)
+
+    def spying_single(queue_arg: Queue, *args: Any, **kwargs: Any) -> List[str]:
+        swept_queues.append(queue_arg.name)
+        return real_single(queue_arg, *args, **kwargs)
+
+    monkeypatch.setattr(
+        dbos._sys_db, "start_queued_partitioned_workflows", spying_batched
+    )
+    monkeypatch.setattr(dbos._sys_db, "start_queued_workflows", spying_single)
+
+    with SetEnqueueOptions(queue_partition_key="p0"):
+        handle = queue.enqueue(paused_wf, "p0-0")
+
+    def swept_via_fallback() -> None:
+        assert queue.name in swept_queues
+
+    retry_until_success(swept_via_fallback, interval=0.1, max_attempts=100)
+    assert queue.name not in batched_queues
+    assert handle.get_status().status == WorkflowStatusString.ENQUEUED.value
 
 
 def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
@@ -3076,6 +3117,7 @@ def test_partitioned_batch_dequeue_sqlite_plan(dbos: DBOS) -> None:
         context: Any,
         executemany: bool,
     ) -> None:
+        # The candidates query is the only WITH RECURSIVE this sweep emits (get_queue_partitions, the other one, runs on the fallback path).
         if "recursive" in statement.lower():
             captured.append((statement, parameters))
 
@@ -3097,8 +3139,10 @@ def test_partitioned_batch_dequeue_sqlite_plan(dbos: DBOS) -> None:
         plan = conn.exec_driver_sql(
             f"EXPLAIN QUERY PLAN {statement}", parameters
         ).fetchall()
-    plan_text = " ".join(str(row) for row in plan)
-    assert "idx_workflow_status_partition_dequeue" in plan_text
+    details = [str(row[-1]) for row in plan]
+    assert any("idx_workflow_status_partition_dequeue" in d for d in details)
+    # Every workflow_status access must be a seek: asserting only that the index is named somewhere still passes when one probe (e.g. the PENDING gate) regresses to a scan.
+    assert not [d for d in details if d.startswith("SCAN") and "workflow_status" in d]
 
 
 def test_partitioned_queue_global_exclusivity(dbos: DBOS) -> None:
