@@ -729,19 +729,15 @@ def _get_wf_invoke_func(
     release_active: Callable[[], None] = lambda: None,
 ) -> Callable[[Callable[[], R]], R]:
     def persist(func: Callable[[], R]) -> R:
-        def await_recorded_outcome() -> R:
-            # The outcome write did not land: the row was not PENDING, so this
-            # run no longer owns the workflow's outcome. It may have been
-            # cancelled, dead-lettered, completed by a concurrent execution, or
-            # handed back to the queue by a resume. Park the execution and
-            # deliver the recorded outcome instead of the one this run computed.
-            dbos.logger.warning(
-                f"Workflow {status['workflow_uuid']} outcome was not recorded: the workflow is no longer owned by this execution. Waiting for the recorded outcome"
-            )
+        def adopt_recorded_outcome(warning: str) -> R:
+            dbos.logger.warning(warning)
             recorded_outcome: R = dbos._sys_db.await_workflow_result(
                 status["workflow_uuid"], polling_interval=DEFAULT_POLLING_INTERVAL
             )
             return recorded_outcome
+
+        def not_recorded_warning() -> str:
+            return f"Workflow {status['workflow_uuid']} outcome was not recorded: the workflow is no longer owned by this execution. Waiting for the recorded outcome"
 
         if (
             status["status"] == WorkflowStatusString.ERROR.value
@@ -772,17 +768,17 @@ def _get_wf_invoke_func(
             # dispatch down the non-owner path to wait forever.
             release_active()
         except DBOSWorkflowConflictIDError:
-            # Await the workflow result
-            dbos.logger.warning(
+            # Another execution owns this workflow's step checkpoints.
+            release_active()
+            return adopt_recorded_outcome(
                 f"Aborting duplicate execution of workflow {status['workflow_uuid']}."
             )
-            r: R = dbos._sys_db.await_workflow_result(
-                status["workflow_uuid"], polling_interval=DEFAULT_POLLING_INTERVAL
-            )
-            return r
-        except DBOSWorkflowCancelledError as error:
+        except DBOSWorkflowCancelledError:
+            # The run observed its own cancellation. Park the execution.
             release_active()
-            raise DBOSAwaitedWorkflowCancelledError(status["workflow_uuid"])
+            return adopt_recorded_outcome(
+                f"Workflow {status['workflow_uuid']} was cancelled during execution. Waiting for the recorded outcome"
+            )
         except Exception as error:
             error_str = _serialize_exception_for_persistence(
                 error, status["serialization"], dbos._serializer
@@ -793,14 +789,16 @@ def _get_wf_invoke_func(
                 WorkflowStatusString.ERROR.value,
                 error=error_str,
             ):
-                return await_recorded_outcome()
+                # We couldn't update the workflow status: park the execution.
+                return adopt_recorded_outcome(not_recorded_warning())
             raise
         if not dbos._sys_db.update_workflow_outcome(
             status["workflow_uuid"],
             WorkflowStatusString.SUCCESS.value,
             output=serval,
         ):
-            return await_recorded_outcome()
+            # We couldn't update the workflow status: park the execution.
+            return adopt_recorded_outcome(not_recorded_warning())
         return output
 
     return persist

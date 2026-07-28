@@ -12,6 +12,7 @@ from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
     DBOSNonExistentWorkflowError,
+    DBOSWorkflowCancelledError,
 )
 from dbos._schemas.application_database import ApplicationSchema
 from dbos._schemas.system_database import SystemSchema
@@ -219,14 +220,25 @@ def test_workflow_outcome_is_owned_by_the_pending_row(dbos: DBOS) -> None:
         assert release.wait(timeout=30)
         return "own-result"
 
-    def start_blocked_run() -> tuple[WorkflowHandle[str], threading.Event]:
+    # Stands in for a run that observes its own cancellation mid-flight: the
+    # cancellation is raised only after the test has rewritten the row.
+    @DBOS.workflow()
+    def self_cancelling_workflow(wfid: str) -> str:
+        started, release = controls[wfid]
+        started.set()
+        assert release.wait(timeout=30)
+        raise DBOSWorkflowCancelledError(f"workflow {wfid} observed cancellation")
+
+    def start_blocked_run(
+        workflow: Any = blocked_workflow,
+    ) -> tuple[WorkflowHandle[str], threading.Event]:
         """Start a run and return once it is blocked inside the workflow
         function, with its row PENDING."""
         wfid = f"outcome-ownership-{uuid.uuid4()}"
         started, release = threading.Event(), threading.Event()
         controls[wfid] = (started, release)
         with SetWorkflowID(wfid):
-            handle = DBOS.start_workflow(blocked_workflow, wfid)
+            handle = DBOS.start_workflow(workflow, wfid)
         assert started.wait(timeout=15), "the workflow never started"
         return handle, release
 
@@ -345,6 +357,28 @@ def test_workflow_outcome_is_owned_by_the_pending_row(dbos: DBOS) -> None:
     release.set()
     with pytest.raises(DBOSNonExistentWorkflowError):
         handle.get_result()
+
+    # 6. A run that observes its own cancellation adopts the recorded outcome
+    # rather than trusting its local view: here a concurrent "resume" already
+    # rewrote the row to SUCCESS, so the handle reports that outcome instead of
+    # a cancellation that is no longer the workflow's state.
+    handle, release = start_blocked_run(self_cancelling_workflow)
+    rewrite_row(
+        handle.workflow_id, "SUCCESS", output=encode_output("recorded-after-cancel")
+    )
+    release.set()
+    assert (
+        handle.get_result() == "recorded-after-cancel"
+    ), "the run must adopt the recorded outcome, not report its cancellation"
+
+    # ... and when the row is genuinely CANCELLED, the handle still reports the
+    # awaited-cancelled error, as before.
+    handle, release = start_blocked_run(self_cancelling_workflow)
+    rewrite_row(handle.workflow_id, "CANCELLED")
+    release.set()
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        handle.get_result()
+    assert read_row(handle.workflow_id)[0] == "CANCELLED"
 
 
 def test_delete_workflow(dbos: DBOS) -> None:
