@@ -2917,6 +2917,70 @@ def test_partitioned_batch_dequeue_tie_break(dbos: DBOS) -> None:
     assert start() == [ids["p0"][1]]
 
 
+def test_partitioned_batch_dequeue_skips_requeued_rows(dbos: DBOS) -> None:
+    """A candidate moved to another queue mid-sweep (e.g. by resume_workflows,
+    which rewrites queue_name while leaving status ENQUEUED) must be dropped by
+    the claim guard, not flipped and run under the wrong queue."""
+    from sqlalchemy import event
+
+    from dbos._utils import INTERNAL_QUEUE_NAME
+
+    @DBOS.workflow()
+    def batch_wf(value: str) -> None:
+        pass
+
+    queue_name = f"unpolled-requeue-{uuid.uuid4().hex[:8]}"
+    queue = Queue(
+        queue_name, concurrency=1, partition_queue=True, database_backed_queue=True
+    )
+    ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "requeue", ["p0"], 2)
+    head_id = ids["p0"][0]
+
+    # Between the candidate snapshot (identified by row_number) and the lock
+    # select (a plain SELECT ... IN), resume the head onto the internal queue.
+    moved = threading.Event()
+
+    def before_cursor_execute(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        stmt = statement.lstrip().upper()
+        if (
+            not moved.is_set()
+            and stmt.startswith("SELECT")
+            and " IN " in stmt
+            and "ROW_NUMBER" not in stmt
+        ):
+            moved.set()  # Set first: resume_workflows itself runs a SELECT ... IN
+            dbos._sys_db.resume_workflows([head_id])
+
+    event.listen(dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute)
+    try:
+        ret = dbos._sys_db.start_queued_partitioned_workflows(
+            queue, GlobalParams.executor_id, GlobalParams.app_version, {}
+        )
+    finally:
+        event.remove(
+            dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute
+        )
+    assert moved.is_set()
+    # The moved head was the sole candidate and must not have been claimed
+    assert ret == []
+    status = dbos._sys_db.get_workflow_status(head_id)
+    assert status is not None
+    assert status["status"] == WorkflowStatusString.ENQUEUED.value
+    assert status["queue_name"] == INTERNAL_QUEUE_NAME
+
+    # The next sweep sees the remaining row as the partition's new head
+    assert dbos._sys_db.start_queued_partitioned_workflows(
+        queue, GlobalParams.executor_id, GlobalParams.app_version, {}
+    ) == [ids["p0"][1]]
+
+
 def test_partitioned_batch_dequeue_contention(dbos: DBOS) -> None:
     """Two workers batch-dequeueing concurrently never co-admit into a
     partition: candidates are heads only, so racing flips target the same row

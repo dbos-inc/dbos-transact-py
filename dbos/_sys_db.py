@@ -4252,11 +4252,19 @@ class SystemDatabase(ABC):
             # the candidate snapshot are skipped (or, if already flipped and
             # unlocked, dropped by the status recheck on lock acquisition). On
             # SQLite this is an unlocked re-read; the RETURNING flip below is
-            # the guard.
+            # the guard. Queue/partition/version are re-checked alongside
+            # status so a row resume_workflows moved to another queue between
+            # the candidate snapshot and here is dropped, not hijacked.
+            claim_guard = sa.and_(
+                ws.c.status == WorkflowStatusString.ENQUEUED.value,
+                ws.c.queue_name == queue.name,
+                ws.c.queue_partition_key.isnot(None),
+                version_predicate,
+            )
             locked_rows = c.execute(
                 sa.select(ws.c.workflow_uuid)
                 .where(ws.c.workflow_uuid.in_(candidate_ids))
-                .where(ws.c.status == WorkflowStatusString.ENQUEUED.value)
+                .where(claim_guard)
                 .with_for_update(skip_locked=True)
             ).fetchall()
             locked_ids = {row[0] for row in locked_rows}
@@ -4269,7 +4277,7 @@ class SystemDatabase(ABC):
             flipped_rows = c.execute(
                 ws.update()
                 .where(ws.c.workflow_uuid.in_(claim_ids))
-                .where(ws.c.status == WorkflowStatusString.ENQUEUED.value)
+                .where(claim_guard)
                 .values(
                     status=WorkflowStatusString.PENDING.value,
                     application_version=app_version,
