@@ -729,6 +729,20 @@ def _get_wf_invoke_func(
     release_active: Callable[[], None] = lambda: None,
 ) -> Callable[[Callable[[], R]], R]:
     def persist(func: Callable[[], R]) -> R:
+        def await_recorded_outcome() -> R:
+            # The outcome write did not land: the row was not PENDING, so this
+            # run no longer owns the workflow's outcome. It may have been
+            # cancelled, dead-lettered, completed by a concurrent execution, or
+            # handed back to the queue by a resume. Park the execution and
+            # deliver the recorded outcome instead of the one this run computed.
+            dbos.logger.warning(
+                f"Workflow {status['workflow_uuid']} outcome was not recorded: the workflow is no longer owned by this execution. Waiting for the recorded outcome"
+            )
+            recorded_outcome: R = dbos._sys_db.await_workflow_result(
+                status["workflow_uuid"], polling_interval=DEFAULT_POLLING_INTERVAL
+            )
+            return recorded_outcome
+
         if (
             status["status"] == WorkflowStatusString.ERROR.value
             or status["status"] == WorkflowStatusString.SUCCESS.value
@@ -757,12 +771,6 @@ def _get_wf_invoke_func(
             # workflow to this executor, and a stale entry would send that
             # dispatch down the non-owner path to wait forever.
             release_active()
-            dbos._sys_db.update_workflow_outcome(
-                status["workflow_uuid"],
-                WorkflowStatusString.SUCCESS.value,
-                output=serval,
-            )
-            return output
         except DBOSWorkflowConflictIDError:
             # Await the workflow result
             dbos.logger.warning(
@@ -780,12 +788,20 @@ def _get_wf_invoke_func(
                 error, status["serialization"], dbos._serializer
             )
             release_active()
-            dbos._sys_db.update_workflow_outcome(
+            if not dbos._sys_db.update_workflow_outcome(
                 status["workflow_uuid"],
                 WorkflowStatusString.ERROR.value,
                 error=error_str,
-            )
+            ):
+                return await_recorded_outcome()
             raise
+        if not dbos._sys_db.update_workflow_outcome(
+            status["workflow_uuid"],
+            WorkflowStatusString.SUCCESS.value,
+            output=serval,
+        ):
+            return await_recorded_outcome()
+        return output
 
     return persist
 

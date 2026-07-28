@@ -890,12 +890,22 @@ class SystemDatabase(ABC):
         *,
         output: Optional[str] = None,
         error: Optional[str] = None,
-    ) -> None:
+    ) -> bool:
+        """Record a workflow's terminal outcome, reporting whether the write landed.
+
+        The write applies only to a PENDING row: a run owns its workflow's
+        outcome exactly as long as the row says that run is what the workflow
+        is doing. (Note: this does not prevent a write when another concurrent
+        execution is already running and the status is PENDING. However, both
+        executions should be deterministic and idempotent.)
+
+        Returns False when the row was CANCELLED, dead-lettered, already
+        terminal, or handed to another execution (ENQUEUED/DELAYED, e.g. by a
+        concurrent resume). Raises DBOSNonExistentWorkflowError if the row does
+        not exist at all.
+        """
         with self.engine.begin() as c:
             now_ms = self._now_ms_sql()
-            # Record the outcome, but never overwrite the terminal CANCELLED
-            # status: a workflow can be cancelled during its final step, and if so
-            # it must not be able to subsequently complete.
             result = c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .values(
@@ -910,23 +920,22 @@ class SystemDatabase(ABC):
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
                 .where(
                     SystemSchema.workflow_status.c.status
-                    != WorkflowStatusString.CANCELLED.value
+                    == WorkflowStatusString.PENDING.value
                 )
             )
-            # update_workflow_outcome is only called to finalize a workflow. If
-            # the guarded UPDATE above matched no rows, the workflow may have
-            # been cancelled: a cancelled workflow must not complete, so re-read
-            # the status and raise so it ends as cancelled rather than succeeding
-            # or erroring. The re-read only happens on this rare no-op path, not
-            # on every completion.
+            # The guarded UPDATE matched no rows. Re-read the row (only on this
+            # rare no-op path) to distinguish a row this run no longer owns from
+            # a row that is gone.
             if result.rowcount == 0:
                 current_status = c.execute(
                     sa.select(SystemSchema.workflow_status.c.status).where(
                         SystemSchema.workflow_status.c.workflow_uuid == workflow_id
                     )
                 ).scalar_one_or_none()
-                if current_status == WorkflowStatusString.CANCELLED.value:
-                    raise DBOSAwaitedWorkflowCancelledError(workflow_id)
+                if current_status is None:
+                    raise DBOSNonExistentWorkflowError("target", workflow_id)
+                return False
+            return True
 
     def cancel_workflows(
         self,
