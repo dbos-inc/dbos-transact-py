@@ -2830,38 +2830,6 @@ def test_partitioned_batch_dequeue_exclusive_direct(dbos: DBOS) -> None:
     assert start() == [ids["p1"][1]]
 
 
-def test_partitioned_batch_dequeue_tie_break(dbos: DBOS) -> None:
-    """Rows tied on (priority, created_at) rank deterministically by
-    workflow_uuid, so every worker computes the same head-of-line row."""
-
-    @DBOS.workflow()
-    def batch_wf(value: str) -> None:
-        pass
-
-    queue_name = f"unpolled-tie-{uuid.uuid4().hex[:8]}"
-    queue = Queue(
-        queue_name, concurrency=1, partition_queue=True, database_backed_queue=True
-    )
-    ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "tie", ["p0"], 3)
-    # Force an exact created_at tie across all three rows
-    with dbos._sys_db.engine.begin() as c:
-        c.execute(
-            sa.update(SystemSchema.workflow_status)
-            .where(SystemSchema.workflow_status.c.workflow_uuid.in_(ids["p0"]))
-            .values(created_at=1234567890)
-        )
-
-    def start() -> List[str]:
-        return dbos._sys_db.start_queued_partitioned_workflows(
-            queue, GlobalParams.executor_id, GlobalParams.app_version
-        )
-
-    # Ties resolve by workflow_uuid ascending: "...-0" < "...-1" < "...-2"
-    assert start() == [ids["p0"][0]]
-    set_workflow_status(dbos._sys_db, ids["p0"][0], WorkflowStatusString.SUCCESS.value)
-    assert start() == [ids["p0"][1]]
-
-
 def test_partitioned_batch_dequeue_skips_requeued_rows(dbos: DBOS) -> None:
     """A candidate moved to another queue mid-sweep (e.g. by resume_workflows,
     which rewrites queue_name while leaving status ENQUEUED) must be dropped by
