@@ -4112,7 +4112,7 @@ class SystemDatabase(ABC):
         """
         assert queue._concurrency == 1
         assert queue._limiter is None
-        # worker_concurrency needs no handling here: dispatch routes 0 (the pause-dequeue idiom) to the fallback path, and validation caps any other value at concurrency=1, which the PENDING gate below already enforces globally.
+        assert queue.partition_queue == True
         start_time_ms = int(time.time() * 1000)
         ws = SystemSchema.workflow_status
         with self.engine.begin() as c:
