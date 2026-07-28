@@ -4097,6 +4097,12 @@ class SystemDatabase(ABC):
             # Return the IDs of all functions we started
             return ret_ids
 
+    # Max workflows dequeued per partitioned sweep. Bounds the IN-list bind
+    # parameters below (SQLite caps at 32766, libpq at 65535); leftovers are
+    # picked up next poll, with flipped rows leaving ENQUEUED so sweeps rotate
+    # through the backlog rather than starve later partitions.
+    PARTITIONED_DEQUEUE_SWEEP_CAP = 1024
+
     def start_queued_partitioned_workflows(
         self,
         queue: "Queue",
@@ -4105,6 +4111,7 @@ class SystemDatabase(ABC):
         local_counts: Dict[str, int],
     ) -> List[str]:
         """Dequeue from every partition of a partitioned queue in one transaction.
+        Each sweep admits at most PARTITIONED_DEQUEUE_SWEEP_CAP workflows.
 
         Only valid when the queue's global concurrency is None or 1 and it has
         no rate limiter (limiter queues use the per-partition path). With
@@ -4207,6 +4214,7 @@ class SystemDatabase(ABC):
                         ws.c.created_at.asc(),
                     )
                 )
+            cand_query = cand_query.limit(self.PARTITIONED_DEQUEUE_SWEEP_CAP)
             rows = c.execute(cand_query).fetchall()
             if not rows:
                 return []

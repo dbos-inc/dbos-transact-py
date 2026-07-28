@@ -2801,6 +2801,33 @@ def test_partitioned_batch_dequeue_direct(dbos: DBOS) -> None:
     )
 
 
+def test_partitioned_batch_dequeue_sweep_cap(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sweep admits at most PARTITIONED_DEQUEUE_SWEEP_CAP workflows in
+    (partition, created_at) order; the remainder drains on later sweeps."""
+
+    @DBOS.workflow()
+    def batch_wf(value: str) -> None:
+        pass
+
+    queue_name = f"unpolled-sweep-{uuid.uuid4().hex[:8]}"
+    queue = Queue(queue_name, partition_queue=True, database_backed_queue=True)
+    partitions = ["p0", "p1"]
+    ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "sweep", partitions, 4)
+
+    monkeypatch.setattr(type(dbos._sys_db), "PARTITIONED_DEQUEUE_SWEEP_CAP", 5)
+
+    def start() -> List[str]:
+        return dbos._sys_db.start_queued_partitioned_workflows(
+            queue, GlobalParams.executor_id, GlobalParams.app_version, {}
+        )
+
+    assert start() == ids["p0"] + ids["p1"][:1]
+    assert start() == ids["p1"][1:]
+    assert start() == []
+
+
 def test_partitioned_batch_dequeue_worker_cap_direct(dbos: DBOS) -> None:
     """worker_concurrency is applied per partition from this worker's in-memory
     running counts: each partition admits only its remaining budget."""
