@@ -3851,7 +3851,7 @@ class SystemDatabase(ABC):
         # Recursive-CTE loose index scan: neither Postgres nor SQLite can skip to the
         # next distinct value inside a plain SELECT DISTINCT, which degenerates into a
         # scan of every ENQUEUED row. Each iteration here is instead one index seek on
-        # idx_workflow_status_partition_dequeue, so cost scales with the number of
+        # idx_workflow_status_partition_dequeue_v2, so cost scales with the number of
         # partitions rather than the backlog depth.
         ws = SystemSchema.workflow_status
         base_filter = sa.and_(
@@ -4128,7 +4128,7 @@ class SystemDatabase(ABC):
                     ws.c.application_version == app_version,
                     ws.c.application_version.is_(None),
                 )
-            # Redundant literal IN mirroring idx_workflow_status_partition_dequeue's predicate: SQLite's partial-index prover runs at prepare time, so it can't see bound params and can't derive IN membership from =.
+            # Redundant literal IN mirroring idx_workflow_status_partition_dequeue_v2's predicate: SQLite's partial-index prover runs at prepare time, so it can't see bound params and can't derive IN membership from =.
             status_prover = ws.c.status.in_(
                 [
                     sa.literal_column(f"'{WorkflowStatusString.ENQUEUED.value}'"),
@@ -4432,7 +4432,7 @@ class SystemDatabase(ABC):
             return {}
         queue_names = {queue_name for queue_name, _ in keys}
         partition_keys = {partition_key for _, partition_key in keys}
-        # One arm per status so idx_workflow_status_partition_dequeue can seek: a status IN (...) matching that index's own predicate is dropped as redundant, leaving its status column unbound and blocking the seek on queue_partition_key.
+        # One arm per status so idx_workflow_status_partition_dequeue_v2 can seek: a status IN (...) matching that index's own predicate is dropped as redundant, leaving its status column unbound and blocking the seek on queue_partition_key.
         arms = [
             sa.select(
                 SystemSchema.workflow_status.c.queue_name,

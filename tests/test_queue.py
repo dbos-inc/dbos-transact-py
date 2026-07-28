@@ -3093,7 +3093,7 @@ def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
 
 
 def test_partitioned_batch_dequeue_sqlite_plan(dbos: DBOS) -> None:
-    """The batched candidates query must seek idx_workflow_status_partition_dequeue.
+    """The batched candidates query must seek idx_workflow_status_partition_dequeue_v2.
     SQLite's partial-index prover runs at prepare time, so this regresses silently
     (full scan) if the literal predicate conjuncts are dropped from the query."""
     if not using_sqlite():
@@ -3142,7 +3142,7 @@ def test_partitioned_batch_dequeue_sqlite_plan(dbos: DBOS) -> None:
             f"EXPLAIN QUERY PLAN {statement}", parameters
         ).fetchall()
     details = [str(row[-1]) for row in plan]
-    assert any("idx_workflow_status_partition_dequeue" in d for d in details)
+    assert any("idx_workflow_status_partition_dequeue_v2" in d for d in details)
     # Every workflow_status access must be a seek: asserting only that the index is named somewhere still passes when one probe (e.g. the PENDING gate) regresses to a scan.
     assert not [d for d in details if d.startswith("SCAN") and "workflow_status" in d]
 

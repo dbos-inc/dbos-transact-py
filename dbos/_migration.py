@@ -911,17 +911,17 @@ def get_dbos_migration_fortyfive(schema: str, is_cockroach: bool) -> str:
 
 
 def get_dbos_migration_fortysix(schema: str, is_cockroach: bool) -> str:
-    # Recreated with a workflow_uuid tiebreaker column by migration forty-seven.
+    # Trailing workflow ID totalizes the dequeue order
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_partition_dequeue_v2" ON "{schema}"."workflow_status" ("queue_name", "status", "queue_partition_key", "priority", "created_at", "workflow_uuid") WHERE "status" IN (\'ENQUEUED\', \'PENDING\') AND "queue_partition_key" IS NOT NULL'
+
+
+def get_dbos_migration_fortyseven(schema: str, is_cockroach: bool) -> str:
+    # Superseded by idx_workflow_status_partition_dequeue_v2
     c = _concurrently(is_cockroach)
     return (
         f'DROP INDEX {c} IF EXISTS "{schema}"."idx_workflow_status_partition_dequeue"'
     )
-
-
-def get_dbos_migration_fortyseven(schema: str, is_cockroach: bool) -> str:
-    # Trailing workflow_uuid totalizes the dequeue order (same head for every worker under ties) and keeps the tiebroken head probe index-provided.
-    c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_partition_dequeue" ON "{schema}"."workflow_status" ("queue_name", "status", "queue_partition_key", "priority", "created_at", "workflow_uuid") WHERE "status" IN (\'ENQUEUED\', \'PENDING\') AND "queue_partition_key" IS NOT NULL'
 
 
 def get_dbos_migrations(
@@ -1235,13 +1235,13 @@ ALTER TABLE workflow_status ADD COLUMN "is_debounced" BOOLEAN NOT NULL DEFAULT F
 
 sqlite_migration_fortyfive = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_partition_dequeue" ON "workflow_status" ("queue_name", "status", "queue_partition_key", "priority", "created_at") WHERE "status" IN (\'ENQUEUED\', \'PENDING\') AND "queue_partition_key" IS NOT NULL'
 
-# Recreated with a workflow_uuid tiebreaker column by migration forty-seven.
-sqlite_migration_fortysix = (
+# Trailing workflow ID totalizes the dequeue order
+sqlite_migration_fortysix = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_partition_dequeue_v2" ON "workflow_status" ("queue_name", "status", "queue_partition_key", "priority", "created_at", "workflow_uuid") WHERE "status" IN (\'ENQUEUED\', \'PENDING\') AND "queue_partition_key" IS NOT NULL'
+
+# Superseded by idx_workflow_status_partition_dequeue_v2
+sqlite_migration_fortyseven = (
     'DROP INDEX IF EXISTS "idx_workflow_status_partition_dequeue"'
 )
-
-# Trailing workflow_uuid totalizes the dequeue order (same head for every worker under ties) and keeps the tiebroken head probe index-provided.
-sqlite_migration_fortyseven = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_partition_dequeue" ON "workflow_status" ("queue_name", "status", "queue_partition_key", "priority", "created_at", "workflow_uuid") WHERE "status" IN (\'ENQUEUED\', \'PENDING\') AND "queue_partition_key" IS NOT NULL'
 
 sqlite_migrations = [
     sqlite_migration_one,
