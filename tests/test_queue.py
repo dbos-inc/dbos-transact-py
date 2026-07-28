@@ -2593,6 +2593,70 @@ def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
     assert client_handle.get_result()
 
 
+def test_partition_serialization_failure_skips_key(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A serialization failure on one partition key skips only that partition:
+    the same sweep still dequeues other partitions, with no queue-wide backoff."""
+    from psycopg import errors
+    from sqlalchemy.exc import OperationalError
+
+    queue = Queue(
+        f"serialization_skip_{uuid.uuid4().hex[:8]}",
+        concurrency=1,
+        partition_queue=True,
+        polling_interval_sec=0.25,
+    )
+    # Sorts before the healthy key, so an escaping error would abort the sweep first.
+    poisoned_key = "a_poisoned"
+    healthy_key = "z_healthy"
+    poison_active = threading.Event()
+    poison_active.set()
+
+    @DBOS.workflow()
+    def wf() -> str:
+        assert DBOS.workflow_id
+        return DBOS.workflow_id
+
+    real_start = dbos._sys_db.start_queued_workflows
+
+    def poisoned_start(
+        queue_arg: Queue,
+        executor_id: str,
+        app_version: str,
+        queue_partition_key: Any = None,
+        local_running_count: int = 0,
+    ) -> List[str]:
+        if (
+            poison_active.is_set()
+            and queue_arg.name == queue.name
+            and queue_partition_key == poisoned_key
+        ):
+            raise OperationalError("dequeue", None, errors.SerializationFailure())
+        return real_start(
+            queue_arg,
+            executor_id,
+            app_version,
+            queue_partition_key,
+            local_running_count,
+        )
+
+    monkeypatch.setattr(dbos._sys_db, "start_queued_workflows", poisoned_start)
+
+    with SetEnqueueOptions(queue_partition_key=poisoned_key):
+        poisoned_handle = queue.enqueue(wf)
+    with SetEnqueueOptions(queue_partition_key=healthy_key):
+        healthy_handle = queue.enqueue(wf)
+
+    # The healthy partition drains even though the poisoned one fails every sweep.
+    assert healthy_handle.get_result()
+    assert poisoned_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
+
+    # Once the contention clears, the poisoned partition drains on a later sweep.
+    poison_active.clear()
+    assert poisoned_handle.get_result()
+
+
 @pytest.mark.asyncio
 async def test_partition_queue_worker_concurrency_async(dbos: DBOS) -> None:
     """worker_concurrency is enforced *per partition* on a partitioned queue.

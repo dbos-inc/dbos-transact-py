@@ -3848,18 +3848,41 @@ class SystemDatabase(ABC):
         Returns:
             A list of unique partition names for the queue
         """
+        # Recursive-CTE loose index scan: neither Postgres nor SQLite can skip to the
+        # next distinct value inside a plain SELECT DISTINCT, which degenerates into a
+        # scan of every ENQUEUED row. Each iteration here is instead one index seek on
+        # idx_workflow_status_partition_dequeue, so cost scales with the number of
+        # partitions rather than the backlog depth.
+        ws = SystemSchema.workflow_status
+        base_filter = sa.and_(
+            ws.c.queue_name == queue_name,
+            ws.c.status == WorkflowStatusString.ENQUEUED.value,
+            # Redundant literal IN mirroring the index's own predicate: SQLite's partial-index prover runs at prepare time, so it can't see bound params and can't derive IN membership from =.
+            ws.c.status.in_(
+                [
+                    sa.literal_column(f"'{WorkflowStatusString.ENQUEUED.value}'"),
+                    sa.literal_column(f"'{WorkflowStatusString.PENDING.value}'"),
+                ]
+            ),
+        )
+        partitions = (
+            sa.select(sa.func.min(ws.c.queue_partition_key).label("pk"))
+            .where(base_filter)
+            .where(ws.c.queue_partition_key.isnot(None))
+            .cte("partitions", recursive=True)
+        )
+        # Next key strictly after the previous one; > implies IS NOT NULL.
+        next_pk = (
+            sa.select(sa.func.min(ws.c.queue_partition_key))
+            .where(base_filter)
+            .where(ws.c.queue_partition_key > partitions.c.pk)
+            .scalar_subquery()
+        )
+        partitions = partitions.union_all(
+            sa.select(next_pk).where(partitions.c.pk.isnot(None))
+        )
+        query = sa.select(partitions.c.pk).where(partitions.c.pk.isnot(None))
         with self.engine.begin() as c:
-            query = (
-                sa.select(SystemSchema.workflow_status.c.queue_partition_key)
-                .distinct()
-                .where(SystemSchema.workflow_status.c.queue_name == queue_name)
-                .where(
-                    SystemSchema.workflow_status.c.status
-                    == WorkflowStatusString.ENQUEUED.value
-                )
-                .where(SystemSchema.workflow_status.c.queue_partition_key.isnot(None))
-            )
-
             rows = c.execute(query).fetchall()
             return [row[0] for row in rows]
 
