@@ -2602,8 +2602,7 @@ def test_partition_serialization_failure_skips_key(
     from psycopg import errors
     from sqlalchemy.exc import OperationalError
 
-    # concurrency=2 keeps this queue on the per-partition sweep loop; the
-    # batched path used for concurrency <= 1 has no per-partition skip.
+    # concurrency=2 keeps this queue on the per-partition sweep loop; only concurrency=1 uses the batched path.
     queue = Queue(
         f"serialization_skip_{uuid.uuid4().hex[:8]}",
         concurrency=2,
@@ -2908,8 +2907,7 @@ def test_partitioned_batch_dequeue_skips_requeued_rows(dbos: DBOS) -> None:
     ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "requeue", ["p0"], 2)
     head_id = ids["p0"][0]
 
-    # Between the candidate snapshot (identified by row_number) and the lock
-    # select (a plain SELECT ... IN), resume the head onto the internal queue.
+    # Between the candidate snapshot (has row_number) and the lock select (a plain SELECT ... IN), resume the head onto the internal queue.
     moved = threading.Event()
 
     def before_cursor_execute(
@@ -3074,8 +3072,7 @@ def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
             queue, GlobalParams.executor_id, GlobalParams.app_version, {}
         )
 
-    # The other-version row is invisible, so this worker's head is row 1; the
-    # version-less row 2 follows once it completes (this worker is latest).
+    # The other-version row is invisible, so the head is row 1; version-less row 2 follows once it completes (this worker is latest).
     assert start() == [ids["p0"][1]]
     set_workflow_status(dbos._sys_db, ids["p0"][1], WorkflowStatusString.SUCCESS.value)
     assert start() == [ids["p0"][2]]
@@ -3172,8 +3169,7 @@ def test_partitioned_queue_global_exclusivity(dbos: DBOS) -> None:
         other_handle = queue.enqueue(tagged_workflow, "b1")
 
     waiting_event.wait()
-    # Partition b drains while a's head blocks; its completion also proves at
-    # least one full sweep ran, making the follower assertions meaningful.
+    # Partition b drains while a's head blocks; its completion proves a full sweep ran, making the follower assertions meaningful.
     assert other_handle.get_result() == "b1"
     assert follower_1.get_status().status == WorkflowStatusString.ENQUEUED.value
     assert follower_2.get_status().status == WorkflowStatusString.ENQUEUED.value

@@ -812,10 +812,8 @@ class ActiveWorkflowById:
             return sum(1 for bucket in self._m.values() if bucket == target)
 
     def partition_counts_for_queue(self, queue_name: str) -> dict[str, int]:
-        """
-        Count the active workflows in each partition of a given queue.
-        Partitions with no active workflows are absent from the result.
-        """
+        """Count active workflows per partition of a queue; partitions with
+        no active workflows are absent from the result."""
         counts: dict[str, int] = {}
         with self._lock:
             for bucket in self._m.values():

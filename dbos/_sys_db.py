@@ -4097,10 +4097,7 @@ class SystemDatabase(ABC):
             # Return the IDs of all functions we started
             return ret_ids
 
-    # Max workflows dequeued per partitioned sweep. Bounds the IN-list bind
-    # parameters below (SQLite caps at 32766, libpq at 65535). Leftover
-    # partitions are picked up next poll: admitted partitions are excluded by
-    # the PENDING gate, so sweeps rotate onward rather than starve them.
+    # Max heads dequeued per partitioned sweep: bounds the IN-list bind params below (SQLite caps at 32766, libpq at 65535); leftover partitions rotate in on later polls via the PENDING gate.
     PARTITIONED_DEQUEUE_SWEEP_CAP = 1024
 
     def start_queued_partitioned_workflows(
@@ -4110,25 +4107,9 @@ class SystemDatabase(ABC):
         app_version: str,
         local_counts: Dict[str, int],
     ) -> List[str]:
-        """Dequeue every partition's head-of-line workflow in one transaction.
-        Each sweep admits at most PARTITIONED_DEQUEUE_SWEEP_CAP workflows.
-
-        Only valid for partitioned queues with global concurrency 1 and no
-        rate limiter; every other config uses the per-partition path.
-        Admission is a conditional flip of each partition's head-of-line row:
-        the ranking order is total (workflow_uuid breaks ties), so dequeuers
-        sharing a snapshot compute the same head and a stale snapshot can only
-        fail the flip (under-admission for one poll cycle). A row committing
-        between two workers' snapshots that sorts before the visible head can
-        still race in -- a narrow pre-existing exposure shared with the
-        per-partition path. The argument requires locking a fixed candidate ID
-        set -- do not rewrite the lock below as a LIMIT query, whose SKIP
-        LOCKED could slide past a locked head to the next row in the same
-        partition and admit out of order.
-
-        Args:
-            local_counts: per-partition counts of workflows this worker is
-                currently running, from the in-memory active-workflows set.
+        """Dequeue every partition's head-of-line workflow in one transaction, at most
+        PARTITIONED_DEQUEUE_SWEEP_CAP per sweep. Valid only for concurrency=1, no-limiter queues:
+        all workers rank the same head, so guarded flips admit at most one row per partition.
         """
         assert queue._concurrency == 1
         assert queue._limiter is None
@@ -4147,9 +4128,7 @@ class SystemDatabase(ABC):
                     ws.c.application_version == app_version,
                     ws.c.application_version.is_(None),
                 )
-            # Redundant literal IN mirroring idx_workflow_status_partition_dequeue's
-            # predicate: SQLite's partial-index prover runs at prepare time, so it
-            # can't see bound params and can't derive IN membership from =.
+            # Redundant literal IN mirroring idx_workflow_status_partition_dequeue's predicate: SQLite's partial-index prover runs at prepare time, so it can't see bound params and can't derive IN membership from =.
             status_prover = ws.c.status.in_(
                 [
                     sa.literal_column(f"'{WorkflowStatusString.ENQUEUED.value}'"),
@@ -4163,9 +4142,7 @@ class SystemDatabase(ABC):
                 ws.c.queue_partition_key.isnot(None),
                 version_predicate,
             )
-            # Rank each partition and take only its head; FOR UPDATE cannot
-            # share a query level with a window function, so ranking goes in a
-            # subquery and locking happens by ID below.
+            # Rank each partition in a subquery (FOR UPDATE cannot share a query level with a window function); locking happens by ID below.
             ranked = (
                 sa.select(
                     ws.c.workflow_uuid,
@@ -4173,10 +4150,7 @@ class SystemDatabase(ABC):
                     sa.func.row_number()
                     .over(
                         partition_by=ws.c.queue_partition_key,
-                        # workflow_uuid makes the order total, so every
-                        # worker ranks the same head under created_at ties;
-                        # idx_workflow_status_partition_dequeue ends with
-                        # workflow_uuid so the sort stays index-provided.
+                        # workflow_uuid totalizes the order (same head for every worker under created_at ties); the index's trailing workflow_uuid keeps the sort index-provided.
                         order_by=(
                             ws.c.priority.asc(),
                             ws.c.created_at.asc(),
@@ -4188,8 +4162,7 @@ class SystemDatabase(ABC):
                 .where(base)
                 .subquery("ranked")
             )
-            # Admit a partition's head only while nothing in that partition is
-            # running anywhere, on any app version.
+            # Admit a partition's head only while nothing in that partition runs anywhere, on any app version.
             pending_probe = (
                 sa.select(sa.literal(1))
                 .where(ws.c.queue_name == queue.name)
@@ -4210,9 +4183,7 @@ class SystemDatabase(ABC):
             if not rows:
                 return []
 
-            # Skip partitions this worker is already running at its local cap
-            # (worker_concurrency can only be 1 here, validation caps it at
-            # the queue's concurrency).
+            # Skip partitions this worker already runs at its local cap (worker_concurrency can only be 1 here, validation caps it at the queue's concurrency).
             wc = queue._worker_concurrency
             candidate_ids = [
                 workflow_uuid
@@ -4222,19 +4193,14 @@ class SystemDatabase(ABC):
             if not candidate_ids:
                 return []
 
-            # Lock the fixed candidate set; rows another worker has claimed since
-            # the candidate snapshot are skipped (or, if already flipped and
-            # unlocked, dropped by the status recheck on lock acquisition). On
-            # SQLite this is an unlocked re-read; the RETURNING flip below is
-            # the guard. Queue/partition/version are re-checked alongside
-            # status so a row resume_workflows moved to another queue between
-            # the candidate snapshot and here is dropped, not hijacked.
+            # Re-check queue/partition/version alongside status so a row resume_workflows moved to another queue mid-sweep is dropped, not hijacked.
             claim_guard = sa.and_(
                 ws.c.status == WorkflowStatusString.ENQUEUED.value,
                 ws.c.queue_name == queue.name,
                 ws.c.queue_partition_key.isnot(None),
                 version_predicate,
             )
+            # Lock the fixed candidate set -- never a LIMIT query, whose SKIP LOCKED could slide past a locked head and admit out of order. On SQLite this is an unlocked re-read; the RETURNING flip below is the guard.
             locked_rows = c.execute(
                 sa.select(ws.c.workflow_uuid)
                 .where(ws.c.workflow_uuid.in_(candidate_ids))
@@ -4246,8 +4212,7 @@ class SystemDatabase(ABC):
             if not claim_ids:
                 return []
 
-            # Start the workflows by marking them PENDING and updating executor
-            # ID. RETURNING reports exactly the rows this statement flipped.
+            # Start the workflows by marking them PENDING; RETURNING reports exactly the rows this statement flipped (requires SQLite >= 3.35).
             flipped_rows = c.execute(
                 ws.update()
                 .where(ws.c.workflow_uuid.in_(claim_ids))

@@ -482,10 +482,7 @@ def queue_worker_thread(
                 and queue._concurrency == 1
                 and queue._limiter is None
             ):
-                # Batched path: one transaction dequeues every partition's
-                # head. Valid only with global concurrency 1, where admission
-                # is a conditional flip of each partition's head-of-line row
-                # (see start_queued_partitioned_workflows).
+                # Batched path: one transaction claims every partition's head (valid only for concurrency=1, see start_queued_partitioned_workflows).
                 local_counts = dbos._active_workflows_set.partition_counts_for_queue(
                     queue.name
                 )
@@ -501,8 +498,7 @@ def queue_worker_thread(
                     except Exception as e:
                         dbos.logger.error(f"Error executing workflow {id}: {e}")
             elif queue._partition_queue:
-                # Every other partitioned config sweeps one partition at a
-                # time with the general-purpose dequeue.
+                # Every other partitioned config sweeps one partition at a time.
                 queue_partition_keys = dbos._sys_db.get_queue_partitions(queue.name)
                 for key in queue_partition_keys:
                     local_running_count = dbos._active_workflows_set.count_for_queue(
