@@ -3035,13 +3035,15 @@ def test_partitioned_batch_dequeue_sqlite_plan(dbos: DBOS) -> None:
         if "row_number" in statement.lower():
             captured.append((statement, parameters))
 
-    sa.event.listen(dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute)
+    from sqlalchemy import event
+
+    event.listen(dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute)
     try:
         ret = dbos._sys_db.start_queued_partitioned_workflows(
             queue, GlobalParams.executor_id, GlobalParams.app_version, {}
         )
     finally:
-        sa.event.remove(
+        event.remove(
             dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute
         )
     assert ret == [ids["p0"][0], ids["p1"][0]]
