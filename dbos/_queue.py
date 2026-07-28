@@ -492,8 +492,11 @@ def queue_worker_thread(
                             local_running_count,
                         )
                     except OperationalError as e:
-                        # Lock held: another worker owns this partition, so skip it; let serialization failures propagate to the outer handler's backoff.
-                        if isinstance(e.orig, errors.LockNotAvailable):
+                        # Lock held or claim raced by another worker: skip just this partition, no queue-wide backoff.
+                        if isinstance(
+                            e.orig,
+                            (errors.LockNotAvailable, errors.SerializationFailure),
+                        ):
                             continue
                         raise
                     for id in dequeued_workflows:

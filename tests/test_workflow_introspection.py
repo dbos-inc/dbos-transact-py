@@ -1811,7 +1811,10 @@ def test_step_conflict_over_child_workflow_row(dbos: DBOS) -> None:
         "started_at_epoch_ms": int(time.time() * 1000),
     }
     with pytest.raises(DBOSWorkflowConflictIDError):
-        dbos._sys_db.record_operation_result(result)
+        # Explicit far-future completion time so it can't equal the child row's same-millisecond completed_at.
+        dbos._sys_db.record_operation_result(
+            result, completed_at_epoch_ms=int(time.time() * 1000) + 3_600_000
+        )
 
 
 def test_step_conflict_over_row_without_completion(dbos: DBOS) -> None:
