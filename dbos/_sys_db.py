@@ -4097,6 +4097,225 @@ class SystemDatabase(ABC):
             # Return the IDs of all functions we started
             return ret_ids
 
+    def start_queued_partitioned_workflows(
+        self,
+        queue: "Queue",
+        executor_id: str,
+        app_version: str,
+        local_counts: Dict[str, int],
+    ) -> List[str]:
+        """Dequeue from every partition of a partitioned queue in one transaction.
+
+        Only valid when the queue's global concurrency is None or 1. With
+        concurrency=1, admission is a conditional flip of each partition's
+        head-of-line row: every dequeuer computes the same head, so a stale
+        snapshot can only fail the flip (under-admission for one poll cycle),
+        never admit a second row into a partition. That argument requires
+        locking a fixed candidate ID set -- do not rewrite the lock below as a
+        LIMIT query, whose SKIP LOCKED could slide past a locked head to the
+        next row in the same partition and admit out of order.
+
+        Args:
+            local_counts: per-partition counts of workflows this worker is
+                currently running, from the in-memory active-workflows set.
+        """
+        assert queue._concurrency is None or queue._concurrency == 1
+        start_time_ms = int(time.time() * 1000)
+        ws = SystemSchema.workflow_status
+        # Bound the per-partition fetch by whichever caps apply; None = unbounded.
+        caps = [
+            cap
+            for cap in (
+                queue._concurrency,
+                queue._worker_concurrency,
+                queue._limiter["limit"] if queue._limiter is not None else None,
+            )
+            if cap is not None
+        ]
+        rank_cap = min(caps) if caps else None
+        with self.engine.begin() as c:
+            latest_version = c.execute(
+                sa.select(SystemSchema.application_versions.c.version_name)
+                .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
+                .limit(1)
+            ).scalar()
+            is_latest_version = latest_version is None or latest_version == app_version
+            version_predicate = ws.c.application_version == app_version
+            if is_latest_version:
+                version_predicate = sa.or_(
+                    ws.c.application_version == app_version,
+                    ws.c.application_version.is_(None),
+                )
+            # Redundant literal IN mirroring idx_workflow_status_partition_dequeue's
+            # predicate: SQLite's partial-index prover runs at prepare time, so it
+            # can't see bound params and can't derive IN membership from =.
+            status_prover = ws.c.status.in_(
+                [
+                    sa.literal_column(f"'{WorkflowStatusString.ENQUEUED.value}'"),
+                    sa.literal_column(f"'{WorkflowStatusString.PENDING.value}'"),
+                ]
+            )
+            base = sa.and_(
+                ws.c.queue_name == queue.name,
+                ws.c.status == WorkflowStatusString.ENQUEUED.value,
+                status_prover,
+                ws.c.queue_partition_key.isnot(None),
+                version_predicate,
+            )
+            if rank_cap is not None:
+                # Rank per partition and fetch only each partition's first
+                # rank_cap rows; FOR UPDATE cannot share a query level with a
+                # window function, so ranking goes in a subquery and locking
+                # happens by ID below.
+                ranked = (
+                    sa.select(
+                        ws.c.workflow_uuid,
+                        ws.c.queue_partition_key,
+                        sa.func.row_number()
+                        .over(
+                            partition_by=ws.c.queue_partition_key,
+                            order_by=(ws.c.priority.asc(), ws.c.created_at.asc()),
+                        )
+                        .label("rn"),
+                    )
+                    .where(base)
+                    .subquery("ranked")
+                )
+                cand_query = (
+                    sa.select(ranked.c.workflow_uuid, ranked.c.queue_partition_key)
+                    .where(ranked.c.rn <= rank_cap)
+                    .order_by(ranked.c.queue_partition_key.asc(), ranked.c.rn.asc())
+                )
+                if queue._concurrency == 1:
+                    # Admit a partition's head only while nothing in that
+                    # partition is running anywhere, on any app version.
+                    pending_probe = (
+                        sa.select(sa.literal(1))
+                        .where(ws.c.queue_name == queue.name)
+                        .where(ws.c.status == WorkflowStatusString.PENDING.value)
+                        .where(status_prover)
+                        .where(ws.c.queue_partition_key.isnot(None))
+                        .where(ws.c.queue_partition_key == ranked.c.queue_partition_key)
+                        .exists()
+                    )
+                    cand_query = cand_query.where(~pending_probe)
+            else:
+                cand_query = (
+                    sa.select(ws.c.workflow_uuid, ws.c.queue_partition_key)
+                    .where(base)
+                    .order_by(
+                        ws.c.queue_partition_key.asc(),
+                        ws.c.priority.asc(),
+                        ws.c.created_at.asc(),
+                    )
+                )
+            rows = c.execute(cand_query).fetchall()
+            if not rows:
+                return []
+
+            # If there is a limiter, compute each partition's started-in-window count.
+            recent_counts: Dict[str, int] = {}
+            if queue._limiter is not None:
+                limiter_period_ms = int(queue._limiter["period"] * 1000)
+                recent_rows = c.execute(
+                    sa.select(ws.c.queue_partition_key, sa.func.count())
+                    .where(ws.c.queue_name == queue.name)
+                    .where(ws.c.rate_limited == True)
+                    .where(
+                        ws.c.status.notin_(
+                            [
+                                WorkflowStatusString.ENQUEUED.value,
+                                WorkflowStatusString.DELAYED.value,
+                            ]
+                        )
+                    )
+                    .where(ws.c.started_at_epoch_ms > start_time_ms - limiter_period_ms)
+                    .where(ws.c.queue_partition_key.isnot(None))
+                    .group_by(ws.c.queue_partition_key)
+                ).fetchall()
+                recent_counts = {row[0]: row[1] for row in recent_rows}
+
+            # Truncate each partition's candidates to its remaining worker and
+            # rate-limit budget. Rows arrive ordered (partition, priority,
+            # created_at), so truncation keeps each partition's earliest rows.
+            candidate_ids: List[str] = []
+            admitted_per_key: Dict[str, int] = {}
+            for workflow_uuid, key in rows:
+                cap = sys.maxsize
+                if queue._worker_concurrency is not None:
+                    cap = min(cap, queue._worker_concurrency - local_counts.get(key, 0))
+                if queue._limiter is not None:
+                    cap = min(cap, queue._limiter["limit"] - recent_counts.get(key, 0))
+                admitted = admitted_per_key.get(key, 0)
+                if admitted >= cap:
+                    continue
+                admitted_per_key[key] = admitted + 1
+                candidate_ids.append(workflow_uuid)
+            if not candidate_ids:
+                return []
+
+            # Lock the fixed candidate set; rows another worker has claimed since
+            # the candidate snapshot are skipped (or, if already flipped and
+            # unlocked, dropped by the status recheck on lock acquisition). On
+            # SQLite this is an unlocked re-read; the claim loop below is the guard.
+            locked_rows = c.execute(
+                sa.select(ws.c.workflow_uuid)
+                .where(ws.c.workflow_uuid.in_(candidate_ids))
+                .where(ws.c.status == WorkflowStatusString.ENQUEUED.value)
+                .with_for_update(skip_locked=True)
+            ).fetchall()
+            locked_ids = {row[0] for row in locked_rows}
+            # Preserve (partition, priority, created_at) order for submission.
+            claim_ids = [id for id in candidate_ids if id in locked_ids]
+            if not claim_ids:
+                return []
+
+            # Start the workflows by marking them PENDING and updating executor ID.
+            def flip_to_pending(update: Any) -> Any:
+                return c.execute(
+                    update.where(
+                        ws.c.status == WorkflowStatusString.ENQUEUED.value
+                    ).values(
+                        status=WorkflowStatusString.PENDING.value,
+                        application_version=app_version,
+                        executor_id=executor_id,
+                        started_at_epoch_ms=start_time_ms,
+                        rate_limited=queue._limiter is not None,
+                        # If a timeout is set, set the deadline on dequeue
+                        workflow_deadline_epoch_ms=sa.case(
+                            (
+                                sa.and_(
+                                    ws.c.workflow_timeout_ms.isnot(None),
+                                    ws.c.workflow_deadline_epoch_ms.is_(None),
+                                ),
+                                start_time_ms + ws.c.workflow_timeout_ms,
+                            ),
+                            else_=ws.c.workflow_deadline_epoch_ms,
+                        ),
+                    )
+                )
+
+            if self.engine.dialect.name == "postgresql":
+                # The rows are FOR UPDATE-locked above, so no concurrent flip is
+                # possible and one guarded batch UPDATE claims them all.
+                flip_to_pending(ws.update().where(ws.c.workflow_uuid.in_(claim_ids)))
+                ret_ids = claim_ids
+            else:
+                # SQLite takes its write lock at the first write, not at BEGIN, so
+                # the reads above raced other workers: claim row by row and keep
+                # only the rows whose flip this worker actually won.
+                ret_ids = [
+                    id
+                    for id in claim_ids
+                    if flip_to_pending(
+                        ws.update().where(ws.c.workflow_uuid == id)
+                    ).rowcount
+                    > 0
+                ]
+            if ret_ids:
+                dbos_logger.debug(f"[{queue.name}] dequeueing {len(ret_ids)} task(s)")
+            return ret_ids
+
     @db_retry()
     def reenqueue_for_recovery(
         self, workflow_id: str, executor_ids: List[str], recovery_queue_name: str

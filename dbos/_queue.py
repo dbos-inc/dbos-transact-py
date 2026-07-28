@@ -477,7 +477,30 @@ def queue_worker_thread(
             return
 
         try:
-            if queue._partition_queue:
+            if queue._partition_queue and (
+                queue._concurrency is None or queue._concurrency == 1
+            ):
+                # Batched path: one transaction dequeues every partition. Valid
+                # only with global concurrency of None or 1, where admission is
+                # a conditional flip of a fixed per-partition candidate set
+                # (see start_queued_partitioned_workflows).
+                local_counts = dbos._active_workflows_set.partition_counts_for_queue(
+                    queue.name
+                )
+                dequeued_workflows = dbos._sys_db.start_queued_partitioned_workflows(
+                    queue,
+                    GlobalParams.executor_id,
+                    GlobalParams.app_version,
+                    local_counts,
+                )
+                for id in dequeued_workflows:
+                    try:
+                        execute_workflow_by_id(dbos, id, False, True)
+                    except Exception as e:
+                        dbos.logger.error(f"Error executing workflow {id}: {e}")
+            elif queue._partition_queue:
+                # Global concurrency >= 2 needs per-partition NOWAIT
+                # transactions for consistent concurrency accounting.
                 queue_partition_keys = dbos._sys_db.get_queue_partitions(queue.name)
                 for key in queue_partition_keys:
                     local_running_count = dbos._active_workflows_set.count_for_queue(
