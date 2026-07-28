@@ -4231,7 +4231,8 @@ class SystemDatabase(ABC):
             # Lock the fixed candidate set; rows another worker has claimed since
             # the candidate snapshot are skipped (or, if already flipped and
             # unlocked, dropped by the status recheck on lock acquisition). On
-            # SQLite this is an unlocked re-read; the claim loop below is the guard.
+            # SQLite this is an unlocked re-read; the RETURNING flip below is
+            # the guard.
             locked_rows = c.execute(
                 sa.select(ws.c.workflow_uuid)
                 .where(ws.c.workflow_uuid.in_(candidate_ids))
@@ -4239,53 +4240,39 @@ class SystemDatabase(ABC):
                 .with_for_update(skip_locked=True)
             ).fetchall()
             locked_ids = {row[0] for row in locked_rows}
-            # Preserve (partition, priority, created_at) order for submission.
             claim_ids = [id for id in candidate_ids if id in locked_ids]
             if not claim_ids:
                 return []
 
-            # Start the workflows by marking them PENDING and updating executor ID.
-            def flip_to_pending(update: Any) -> Any:
-                return c.execute(
-                    update.where(
-                        ws.c.status == WorkflowStatusString.ENQUEUED.value
-                    ).values(
-                        status=WorkflowStatusString.PENDING.value,
-                        application_version=app_version,
-                        executor_id=executor_id,
-                        started_at_epoch_ms=start_time_ms,
-                        rate_limited=False,
-                        # If a timeout is set, set the deadline on dequeue
-                        workflow_deadline_epoch_ms=sa.case(
-                            (
-                                sa.and_(
-                                    ws.c.workflow_timeout_ms.isnot(None),
-                                    ws.c.workflow_deadline_epoch_ms.is_(None),
-                                ),
-                                start_time_ms + ws.c.workflow_timeout_ms,
+            # Start the workflows by marking them PENDING and updating executor
+            # ID. RETURNING reports exactly the rows this statement flipped.
+            flipped_rows = c.execute(
+                ws.update()
+                .where(ws.c.workflow_uuid.in_(claim_ids))
+                .where(ws.c.status == WorkflowStatusString.ENQUEUED.value)
+                .values(
+                    status=WorkflowStatusString.PENDING.value,
+                    application_version=app_version,
+                    executor_id=executor_id,
+                    started_at_epoch_ms=start_time_ms,
+                    rate_limited=False,
+                    # If a timeout is set, set the deadline on dequeue
+                    workflow_deadline_epoch_ms=sa.case(
+                        (
+                            sa.and_(
+                                ws.c.workflow_timeout_ms.isnot(None),
+                                ws.c.workflow_deadline_epoch_ms.is_(None),
                             ),
-                            else_=ws.c.workflow_deadline_epoch_ms,
+                            start_time_ms + ws.c.workflow_timeout_ms,
                         ),
-                    )
+                        else_=ws.c.workflow_deadline_epoch_ms,
+                    ),
                 )
-
-            if self.engine.dialect.name == "postgresql":
-                # The rows are FOR UPDATE-locked above, so no concurrent flip is
-                # possible and one guarded batch UPDATE claims them all.
-                flip_to_pending(ws.update().where(ws.c.workflow_uuid.in_(claim_ids)))
-                ret_ids = claim_ids
-            else:
-                # SQLite takes its write lock at the first write, not at BEGIN, so
-                # the reads above raced other workers: claim row by row and keep
-                # only the rows whose flip this worker actually won.
-                ret_ids = [
-                    id
-                    for id in claim_ids
-                    if flip_to_pending(
-                        ws.update().where(ws.c.workflow_uuid == id)
-                    ).rowcount
-                    > 0
-                ]
+                .returning(ws.c.workflow_uuid)
+            ).fetchall()
+            flipped_ids = {row[0] for row in flipped_rows}
+            # Preserve (partition, priority, created_at) order for submission.
+            ret_ids = [id for id in claim_ids if id in flipped_ids]
             if ret_ids:
                 dbos_logger.debug(f"[{queue.name}] dequeueing {len(ret_ids)} task(s)")
             return ret_ids
