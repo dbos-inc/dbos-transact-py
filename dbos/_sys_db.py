@@ -923,9 +923,8 @@ class SystemDatabase(ABC):
                     == WorkflowStatusString.PENDING.value
                 )
             )
-            # The guarded UPDATE matched no rows. Re-read the row (only on this
-            # rare no-op path) to distinguish a row this run no longer owns from
-            # a row that is gone.
+            # The guarded UPDATE matched no rows. Re-read the row to distinguish a row
+            # this run no longer owns from a row that is gone.
             if result.rowcount == 0:
                 current_status = c.execute(
                     sa.select(SystemSchema.workflow_status.c.status).where(
