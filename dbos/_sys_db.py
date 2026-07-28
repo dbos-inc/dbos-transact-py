@@ -4116,9 +4116,12 @@ class SystemDatabase(ABC):
         Only valid when the queue's global concurrency is None or 1 and it has
         no rate limiter (limiter queues use the per-partition path). With
         concurrency=1, admission is a conditional flip of each partition's
-        head-of-line row: every dequeuer computes the same head, so a stale
-        snapshot can only fail the flip (under-admission for one poll cycle),
-        never admit a second row into a partition. That argument requires
+        head-of-line row: the ranking order is total (workflow_uuid breaks
+        ties), so dequeuers sharing a snapshot compute the same head and a
+        stale snapshot can only fail the flip (under-admission for one poll
+        cycle). A row committing between two workers' snapshots that sorts
+        before the visible head can still race in -- a narrow pre-existing
+        exposure shared with the per-partition path. The argument requires
         locking a fixed candidate ID set -- do not rewrite the lock below as a
         LIMIT query, whose SKIP LOCKED could slide past a locked head to the
         next row in the same partition and admit out of order.
@@ -4179,7 +4182,15 @@ class SystemDatabase(ABC):
                         sa.func.row_number()
                         .over(
                             partition_by=ws.c.queue_partition_key,
-                            order_by=(ws.c.priority.asc(), ws.c.created_at.asc()),
+                            # workflow_uuid makes the order total, so every
+                            # worker ranks the same head under created_at ties;
+                            # idx_workflow_status_partition_dequeue ends with
+                            # workflow_uuid so the sort stays index-provided.
+                            order_by=(
+                                ws.c.priority.asc(),
+                                ws.c.created_at.asc(),
+                                ws.c.workflow_uuid.asc(),
+                            ),
                         )
                         .label("rn"),
                     )
@@ -4212,6 +4223,7 @@ class SystemDatabase(ABC):
                         ws.c.queue_partition_key.asc(),
                         ws.c.priority.asc(),
                         ws.c.created_at.asc(),
+                        ws.c.workflow_uuid.asc(),
                     )
                 )
             cand_query = cand_query.limit(self.PARTITIONED_DEQUEUE_SWEEP_CAP)
