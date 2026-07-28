@@ -4106,7 +4106,8 @@ class SystemDatabase(ABC):
     ) -> List[str]:
         """Dequeue from every partition of a partitioned queue in one transaction.
 
-        Only valid when the queue's global concurrency is None or 1. With
+        Only valid when the queue's global concurrency is None or 1 and it has
+        no rate limiter (limiter queues use the per-partition path). With
         concurrency=1, admission is a conditional flip of each partition's
         head-of-line row: every dequeuer computes the same head, so a stale
         snapshot can only fail the flip (under-admission for one poll cycle),
@@ -4120,16 +4121,13 @@ class SystemDatabase(ABC):
                 currently running, from the in-memory active-workflows set.
         """
         assert queue._concurrency is None or queue._concurrency == 1
+        assert queue._limiter is None
         start_time_ms = int(time.time() * 1000)
         ws = SystemSchema.workflow_status
         # Bound the per-partition fetch by whichever caps apply; None = unbounded.
         caps = [
             cap
-            for cap in (
-                queue._concurrency,
-                queue._worker_concurrency,
-                queue._limiter["limit"] if queue._limiter is not None else None,
-            )
+            for cap in (queue._concurrency, queue._worker_concurrency)
             if cap is not None
         ]
         rank_cap = min(caps) if caps else None
@@ -4213,39 +4211,15 @@ class SystemDatabase(ABC):
             if not rows:
                 return []
 
-            # If there is a limiter, compute each partition's started-in-window count.
-            recent_counts: Dict[str, int] = {}
-            if queue._limiter is not None:
-                limiter_period_ms = int(queue._limiter["period"] * 1000)
-                recent_rows = c.execute(
-                    sa.select(ws.c.queue_partition_key, sa.func.count())
-                    .where(ws.c.queue_name == queue.name)
-                    .where(ws.c.rate_limited == True)
-                    .where(
-                        ws.c.status.notin_(
-                            [
-                                WorkflowStatusString.ENQUEUED.value,
-                                WorkflowStatusString.DELAYED.value,
-                            ]
-                        )
-                    )
-                    .where(ws.c.started_at_epoch_ms > start_time_ms - limiter_period_ms)
-                    .where(ws.c.queue_partition_key.isnot(None))
-                    .group_by(ws.c.queue_partition_key)
-                ).fetchall()
-                recent_counts = {row[0]: row[1] for row in recent_rows}
-
-            # Truncate each partition's candidates to its remaining worker and
-            # rate-limit budget. Rows arrive ordered (partition, priority,
-            # created_at), so truncation keeps each partition's earliest rows.
+            # Truncate each partition's candidates to its remaining worker
+            # budget. Rows arrive ordered (partition, priority, created_at),
+            # so truncation keeps each partition's earliest rows.
             candidate_ids: List[str] = []
             admitted_per_key: Dict[str, int] = {}
             for workflow_uuid, key in rows:
                 cap = sys.maxsize
                 if queue._worker_concurrency is not None:
                     cap = min(cap, queue._worker_concurrency - local_counts.get(key, 0))
-                if queue._limiter is not None:
-                    cap = min(cap, queue._limiter["limit"] - recent_counts.get(key, 0))
                 admitted = admitted_per_key.get(key, 0)
                 if admitted >= cap:
                     continue
@@ -4280,7 +4254,7 @@ class SystemDatabase(ABC):
                         application_version=app_version,
                         executor_id=executor_id,
                         started_at_epoch_ms=start_time_ms,
-                        rate_limited=queue._limiter is not None,
+                        rate_limited=False,
                         # If a timeout is set, set the deadline on dequeue
                         workflow_deadline_epoch_ms=sa.case(
                             (

@@ -2910,36 +2910,42 @@ def test_partitioned_batch_dequeue_contention(dbos: DBOS) -> None:
     assert all(count <= 1 for _, count in rows)
 
 
-def test_partitioned_batch_dequeue_limiter_direct(dbos: DBOS) -> None:
-    """The rate limiter is applied per partition on the batched path: each
-    partition starts up to `limit` workflows per period, independently."""
+def test_partitioned_queue_with_limiter_uses_fallback(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A partitioned queue with a rate limiter is dispatched to the per-partition
+    sweep loop, never the batched path, and still drains correctly."""
 
     @DBOS.workflow()
-    def batch_wf(value: str) -> None:
-        pass
+    def limited_wf(tag: str) -> str:
+        return tag
 
-    queue_name = f"unpolled-limit-{uuid.uuid4().hex[:8]}"
     queue = Queue(
-        queue_name,
-        limiter={"limit": 2, "period": 60},
+        f"limiter_fallback_{uuid.uuid4().hex[:8]}",
+        limiter={"limit": 10, "period": 60},
         partition_queue=True,
-        database_backed_queue=True,
+        polling_interval_sec=0.25,
     )
-    partitions = ["p0", "p1"]
-    ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "limit", partitions, 4)
 
-    def start() -> List[str]:
-        return dbos._sys_db.start_queued_partitioned_workflows(
-            queue, GlobalParams.executor_id, GlobalParams.app_version, {}
-        )
+    batched_queues: List[str] = []
+    real_batched = dbos._sys_db.start_queued_partitioned_workflows
 
-    # First sweep admits `limit` workflows per partition
-    assert start() == ids["p0"][:2] + ids["p1"][:2]
-    # The window is now full for both partitions, even after those complete
-    for p in partitions:
-        for wfid in ids[p][:2]:
-            set_workflow_status(dbos._sys_db, wfid, WorkflowStatusString.SUCCESS.value)
-    assert start() == []
+    def spying_batched(queue_arg: Queue, *args: Any, **kwargs: Any) -> List[str]:
+        batched_queues.append(queue_arg.name)
+        return real_batched(queue_arg, *args, **kwargs)
+
+    monkeypatch.setattr(
+        dbos._sys_db, "start_queued_partitioned_workflows", spying_batched
+    )
+
+    handles = []
+    for partition in ["p0", "p1"]:
+        with SetEnqueueOptions(queue_partition_key=partition):
+            for i in range(2):
+                handles.append(queue.enqueue(limited_wf, f"{partition}-{i}"))
+    for handle in handles:
+        assert handle.get_result()
+    assert queue.name not in batched_queues
 
 
 def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
