@@ -764,7 +764,8 @@ def _get_wf_invoke_func(
             )
             # Directly return the result if the workflow is already completed
             recorded_result: R = dbos._sys_db.await_workflow_result(
-                status["workflow_uuid"], polling_interval=DEFAULT_POLLING_INTERVAL
+                status["workflow_uuid"], polling_interval=DEFAULT_POLLING_INTERVAL,
+                fail_if_missing=True # We expect the workflow to be present (success/error come from init wf status), throw if the row is not found
             )
             return recorded_result
         try:
