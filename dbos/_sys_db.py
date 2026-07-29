@@ -4112,7 +4112,7 @@ class SystemDatabase(ABC):
         """
         assert queue._concurrency == 1
         assert queue._limiter is None
-        assert queue.partition_queue == True
+        assert queue._partition_queue
         start_time_ms = int(time.time() * 1000)
         ws = SystemSchema.workflow_status
         with self.engine.begin() as c:
