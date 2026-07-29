@@ -26,6 +26,7 @@ from dbos._context import (
     OTEL_CARRIER_ATTRIBUTE,
     MaxPriority,
     MinPriority,
+    inject_trace_context,
     validate_workflow_id,
 )
 from dbos._core import DEFAULT_POLLING_INTERVAL
@@ -120,13 +121,11 @@ def _attributes_with_otel_context(
 
     The client-side counterpart of PropagateOtelContext. Records nothing when there is
     no valid context to propagate, and wins over a hand-written carrier in attributes.
+    Only the W3C trace context travels, not baggage.
     """
     if otel_context is None:
         return attributes
-    from opentelemetry.propagate import inject
-
-    carrier: Dict[str, str] = {}
-    inject(carrier, context=otel_context)
+    carrier = inject_trace_context(otel_context)
     if not carrier:
         return attributes
     merged = dict(attributes) if attributes else {}

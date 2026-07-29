@@ -635,11 +635,70 @@ class SetWorkflowAttributes:
         return False  # Did not handle
 
 
+def inject_trace_context(context: "Optional[OtelContext]") -> Dict[str, str]:
+    """Serialize just the W3C trace context of `context` into a fresh carrier.
+
+    Deliberately not the global composite propagator: that one also injects baggage,
+    which is unbounded in size, commonly carries user data, and would be persisted in
+    the workflow's attributes and shipped anywhere the status is read. Returns an empty
+    carrier when there is no valid span context to propagate.
+    """
+    from opentelemetry.trace.propagation.tracecontext import (
+        TraceContextTextMapPropagator,
+    )
+
+    carrier: Dict[str, str] = {}
+    TraceContextTextMapPropagator().inject(carrier, context=context)
+    return carrier
+
+
+def extract_trace_context(carrier: Dict[str, Any]) -> "Optional[OtelContext]":
+    """Rebuild an OpenTelemetry context from a carrier written by inject_trace_context.
+
+    Returns None when the carrier holds no usable span context, so callers can fall back
+    to whatever context they already have instead of rooting a detached trace. Never
+    raises: the carrier lives in the user-writable attributes map, so a bad value must
+    not be able to stop a workflow from executing.
+    """
+    from opentelemetry.trace import get_current_span
+    from opentelemetry.trace.propagation.tracecontext import (
+        TraceContextTextMapPropagator,
+    )
+
+    try:
+        extracted = TraceContextTextMapPropagator().extract(carrier)
+    except Exception as e:
+        # Non-string carrier values make the propagator's regex/len calls raise.
+        dbos_logger.warning(
+            f"Ignoring malformed {OTEL_CARRIER_ATTRIBUTE} workflow attribute: {e}"
+        )
+        return None
+    if not get_current_span(extracted).get_span_context().is_valid:
+        return None
+    return extracted
+
+
+def otel_carrier_from_attributes(
+    attributes: Optional[Any],
+) -> Optional[Dict[str, Any]]:
+    """Read the trace carrier out of a workflow's persisted attributes, if present.
+
+    Tolerates any shape: attributes are user-supplied and are not validated on every
+    enqueue path, so a non-dict value here must not raise on the execution path.
+    """
+    if not isinstance(attributes, dict):
+        return None
+    carrier = attributes.get(OTEL_CARRIER_ATTRIBUTE)
+    return carrier if isinstance(carrier, dict) else None
+
+
 class PropagateOtelContext:
     """
     Propagate the current OpenTelemetry context (or optionally, a passed-in context)
     to all workflows started or enqueued in this block so their spans join the caller's
     trace. The propagated context is durably backed by the workflow's attributes.
+
+    Only the W3C trace context (traceparent/tracestate) travels, not baggage.
 
     Not automatically inherited by child workflows; use PropagateOtelContext again
     inside a workflow to keep its children on the trace.
@@ -657,11 +716,8 @@ class PropagateOtelContext:
         self.saved_carrier: Optional[Dict[str, str]] = None
 
     def __enter__(self) -> PropagateOtelContext:
-        from opentelemetry.propagate import inject
-
-        # inject writes nothing when there is no valid context to propagate.
-        carrier: Dict[str, str] = {}
-        inject(carrier, context=self.context)
+        # Writes nothing when there is no valid context to propagate.
+        carrier = inject_trace_context(self.context)
         # Code to create a basic context
         ctx = get_local_dbos_context()
         if ctx is None:

@@ -1,7 +1,13 @@
+import os
+import sqlite3
+import subprocess
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 import pytest
+import sqlalchemy as sa
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from inline_snapshot import snapshot
@@ -17,8 +23,9 @@ from dbos import (
     SetWorkflowAttributes,
 )
 from dbos._dbos import WorkflowHandle
+from dbos._schemas.system_database import SystemSchema
 from dbos._utils import GlobalParams
-from tests.conftest import TestOtelType, set_workflow_status
+from tests.conftest import TestOtelType, retry_until_success, set_workflow_status
 
 
 @dataclass
@@ -796,3 +803,138 @@ def test_client_otel_context_joins_caller_trace(
     assert span.context.trace_id == caller_ctx.trace_id
     assert span.parent is not None
     assert span.parent.span_id == caller_ctx.span_id
+
+
+def test_malformed_carrier_falls_back_to_caller_trace(
+    config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
+) -> None:
+    """The carrier lives in the user-writable attributes map, so a bad value must not be
+    able to stop a workflow from running. It falls back to the caller's live context
+    rather than rooting a detached trace."""
+    exporter, _, _ = setup_in_memory_otlp_collector
+
+    DBOS.destroy(destroy_registry=True)
+    config["enable_otlp"] = True
+    DBOS(config=config)
+
+    @DBOS.workflow()
+    def a_workflow() -> str:
+        return "done"
+
+    DBOS.launch()
+    exporter.clear()
+
+    my_tracer = trace.get_tracer_provider().get_tracer("dbos")
+    # Non-string carrier values make the W3C propagator's regex/len calls raise.
+    for poison in [{"traceparent": 42}, {"traceparent": "garbage"}, {"tracestate": 5}]:
+        with my_tracer.start_as_current_span(
+            "caller"
+        ) as caller:  # pyright: ignore[reportAttributeAccessIssue]
+            caller_ctx = caller.get_span_context()
+            with SetWorkflowAttributes({"dbos.otelContext": poison}):
+                handle = DBOS.start_workflow(a_workflow)
+            assert handle.get_result() == "done", f"wedged on carrier {poison}"
+
+        workflow_spans = [
+            s
+            for s in exporter.get_finished_spans()
+            if s.name == a_workflow.__qualname__
+            and s.attributes
+            and s.attributes["operationUUID"] == handle.workflow_id
+        ]
+        assert len(workflow_spans) == 1
+        span = workflow_spans[0]
+        # Fell back to the submitted context instead of rooting a new trace.
+        assert span.parent is not None, f"carrier {poison} rooted a detached trace"
+        assert span.parent.span_id == caller_ctx.span_id
+        exporter.clear()
+
+
+def test_malformed_attributes_do_not_wedge_a_queued_workflow(
+    config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
+) -> None:
+    """A non-dict attributes value reaches the dequeue path unvalidated (DBOSClient.enqueue
+    does not check it), where reading the carrier used to raise and strand the row PENDING.
+    """
+    DBOS.destroy(destroy_registry=True)
+    config["enable_otlp"] = True
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def a_workflow() -> str:
+        return "done"
+
+    DBOS.launch()
+    DBOS.register_queue("malformed_attrs_queue")
+
+    handle = DBOS.enqueue_workflow("malformed_attrs_queue", a_workflow)
+    # Bypass validate_workflow_attributes the way an unvalidated client enqueue would.
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"attributes": "not-a-dict"})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == handle.workflow_id)
+        )
+
+    def completed() -> str:
+        status = DBOS.retrieve_workflow(handle.workflow_id).get_status().status
+        assert status == "SUCCESS", f"workflow stuck in {status}"
+        return status
+
+    retry_until_success(completed, interval=0.5, max_attempts=20)
+
+
+def test_propagate_otel_context_does_not_persist_baggage(
+    dbos: DBOS, setup_in_memory_otlp_collector: TestOtelType
+) -> None:
+    """Baggage is unbounded and commonly carries user data, so it must not be folded into
+    the durable carrier -- the attributes column is GIN-indexed and widely readable."""
+    from opentelemetry import baggage
+
+    @DBOS.workflow()
+    def a_workflow() -> str:
+        return "done"
+
+    my_tracer = trace.get_tracer_provider().get_tracer("dbos")
+    with my_tracer.start_as_current_span(
+        "caller"
+    ):  # pyright: ignore[reportAttributeAccessIssue]
+        ctx = baggage.set_baggage("tenant", "acme")
+        ctx = baggage.set_baggage("blob", "V" * 4000, context=ctx)
+        with PropagateOtelContext(ctx):
+            handle = DBOS.start_workflow(a_workflow)
+    assert handle.get_result() == "done"
+
+    attributes = DBOS.retrieve_workflow(handle.workflow_id).get_status().attributes
+    assert attributes is not None
+    carrier = attributes["dbos.otelContext"]
+    assert "traceparent" in carrier
+    assert set(carrier) <= {
+        "traceparent",
+        "tracestate",
+    }, f"unexpected keys: {set(carrier)}"
+
+
+def test_workflows_run_without_opentelemetry(tmp_path: Path) -> None:
+    """opentelemetry is an optional extra and OTLP is off by default, so nothing on the
+    workflow execution path may import it. Runs in a subprocess because the blocker must
+    be installed before dbos is imported, and this suite needs the real package."""
+    sqlite_path = tmp_path / "otel_absent.sqlite"
+    connection = sqlite3.connect(sqlite_path)
+    try:
+        connection.execute("PRAGMA journal_mode=WAL")
+    finally:
+        connection.close()
+
+    script = os.path.join(os.path.dirname(__file__), "otel_absent_script.py")
+    result = subprocess.run(
+        [sys.executable, script, str(sqlite_path)],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert result.returncode == 0, (
+        f"workflows failed without opentelemetry installed\n"
+        f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+    )
+    assert "OK" in result.stdout

@@ -45,7 +45,9 @@ from ._context import (
     SetWorkflowID,
     TracedAttributes,
     assert_current_dbos_context,
+    extract_trace_context,
     get_local_dbos_context,
+    otel_carrier_from_attributes,
     restore_otel_carrier,
 )
 from ._error import (
@@ -99,6 +101,7 @@ from ._sys_db import (
     WorkflowStatusInternal,
     WorkflowStatusString,
 )
+from ._tracer import dbos_tracer
 
 if TYPE_CHECKING:
     from opentelemetry.context import Context as OtelContext
@@ -860,6 +863,19 @@ def _check_required_roles_or_finalize_error(
         raise
 
 
+def _capture_otel_context() -> "Optional[OtelContext]":
+    """Capture the caller's OpenTelemetry context to re-attach on the executor thread.
+
+    Returns None when tracing is off, so opentelemetry -- an optional dependency -- is
+    never imported on the workflow execution path unless the user enabled OTLP.
+    """
+    if dbos_tracer.disable_otlp:
+        return None
+    from opentelemetry import context as otel_context
+
+    return otel_context.get_current()
+
+
 def _workflow_otel_context(
     status: WorkflowStatusInternal, submitted_ctx: "Optional[OtelContext]"
 ) -> "Optional[OtelContext]":
@@ -867,15 +883,16 @@ def _workflow_otel_context(
 
     A persisted carrier wins over the context captured at submit time, so the workflow
     lands on the same trace whether it runs immediately, after a queue handoff, or on
-    recovery. A malformed carrier extracts to an empty context, rooting a new trace
-    rather than failing the workflow.
+    recovery. A carrier that cannot be read falls back to the submitted context rather
+    than rooting a detached trace, and never fails the workflow.
     """
-    carrier = (status.get("attributes") or {}).get(OTEL_CARRIER_ATTRIBUTE)
-    if isinstance(carrier, dict):
-        from opentelemetry.propagate import extract
-
-        return extract(carrier)
-    return submitted_ctx
+    if dbos_tracer.disable_otlp:
+        return None
+    carrier = otel_carrier_from_attributes(status.get("attributes"))
+    if carrier is None:
+        return submitted_ctx
+    extracted = extract_trace_context(carrier)
+    return extracted if extracted is not None else submitted_ctx
 
 
 @contextmanager
@@ -1132,7 +1149,7 @@ def execute_workflow_by_id(
             SetWorkflowID(workflow_id),
             SetEnqueueOptions(queue_partition_key=status.get("queue_partition_key")),
             restore_otel_carrier(
-                (status.get("attributes") or {}).get(OTEL_CARRIER_ATTRIBUTE)
+                otel_carrier_from_attributes(status.get("attributes"))
             ),
         ):
             if inspect.iscoroutinefunction(wf_func):
@@ -1285,8 +1302,6 @@ def start_workflow(
     ):
         return WorkflowHandlePolling(new_child_workflow_id, dbos)
 
-    from opentelemetry import context as otel_context
-
     # Captured on the caller's thread, re-attached inside the executor thread.
     future = dbos._executor.submit(
         cast(Callable[..., R], _execute_workflow_wthread),
@@ -1296,7 +1311,7 @@ def start_workflow(
         new_wf_ctx,
         args,
         kwargs,
-        otel_context.get_current(),
+        _capture_otel_context(),
     )
     return WorkflowHandleFuture(new_child_workflow_id, future, dbos)
 
