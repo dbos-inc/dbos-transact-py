@@ -3851,7 +3851,7 @@ class SystemDatabase(ABC):
         # Recursive-CTE loose index scan: neither Postgres nor SQLite can skip to the
         # next distinct value inside a plain SELECT DISTINCT, which degenerates into a
         # scan of every ENQUEUED row. Each iteration here is instead one index seek on
-        # idx_workflow_status_partition_dequeue, so cost scales with the number of
+        # idx_workflow_status_partition_dequeue_v2, so cost scales with the number of
         # partitions rather than the backlog depth.
         ws = SystemSchema.workflow_status
         base_filter = sa.and_(
@@ -4097,6 +4097,171 @@ class SystemDatabase(ABC):
             # Return the IDs of all functions we started
             return ret_ids
 
+    # Max heads dequeued per partitioned sweep: bounds the IN-list bind params below (SQLite caps at 32766, libpq at 65535); leftover partitions rotate in on later polls via the PENDING gate.
+    PARTITIONED_DEQUEUE_SWEEP_CAP = 8192
+
+    def start_queued_partitioned_workflows(
+        self,
+        queue: "Queue",
+        executor_id: str,
+        app_version: str,
+    ) -> List[str]:
+        """Dequeue every partition's head-of-line workflow in one transaction, at most
+        PARTITIONED_DEQUEUE_SWEEP_CAP per sweep. Valid only for concurrency=1, no-limiter queues:
+        all workers rank the same head, so guarded flips admit at most one row per partition.
+        """
+        assert queue._concurrency == 1
+        assert queue._limiter is None
+        assert queue._partition_queue
+        start_time_ms = int(time.time() * 1000)
+        ws = SystemSchema.workflow_status
+        with self.engine.begin() as c:
+            latest_version = c.execute(
+                sa.select(SystemSchema.application_versions.c.version_name)
+                .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
+                .limit(1)
+            ).scalar()
+            is_latest_version = latest_version is None or latest_version == app_version
+            version_predicate = ws.c.application_version == app_version
+            if is_latest_version:
+                version_predicate = sa.or_(
+                    ws.c.application_version == app_version,
+                    ws.c.application_version.is_(None),
+                )
+            # Redundant literal IN mirroring idx_workflow_status_partition_dequeue_v2's predicate: SQLite's partial-index prover runs at prepare time, so it can't see bound params and can't derive IN membership from =.
+            status_prover = ws.c.status.in_(
+                [
+                    sa.literal_column(f"'{WorkflowStatusString.ENQUEUED.value}'"),
+                    sa.literal_column(f"'{WorkflowStatusString.PENDING.value}'"),
+                ]
+            )
+            enq = sa.and_(
+                ws.c.queue_name == queue.name,
+                ws.c.status == WorkflowStatusString.ENQUEUED.value,
+                status_prover,
+            )
+            # Walk distinct partition keys with a recursive-CTE loose index scan (one seek per key, mirroring get_queue_partitions) so sweep cost scales with partition count, not backlog depth.
+            partitions = (
+                sa.select(sa.func.min(ws.c.queue_partition_key).label("pk"))
+                .where(enq)
+                .where(ws.c.queue_partition_key.isnot(None))
+                .cte("partitions", recursive=True)
+            )
+            next_pk = (
+                sa.select(sa.func.min(ws.c.queue_partition_key))
+                .where(enq)
+                .where(ws.c.queue_partition_key > partitions.c.pk)
+                .scalar_subquery()
+            )
+            partitions = partitions.union_all(
+                sa.select(next_pk).where(partitions.c.pk.isnot(None))
+            )
+            # A partition's head is its first version-eligible row; workflow_uuid totalizes the order (same head for every worker under created_at ties), and the index's trailing workflow_uuid makes this a pure top-1 probe.
+            head_query = (
+                sa.select(ws.c.workflow_uuid)
+                .where(enq)
+                .where(ws.c.queue_partition_key == partitions.c.pk)
+                .where(version_predicate)
+                .order_by(
+                    ws.c.priority.asc(),
+                    ws.c.created_at.asc(),
+                    ws.c.workflow_uuid.asc(),
+                )
+                .limit(1)
+            )
+            # Admit a partition's head only while nothing in that partition runs anywhere, on any app version.
+            pending_probe = (
+                sa.select(sa.literal(1))
+                .where(ws.c.queue_name == queue.name)
+                .where(ws.c.status == WorkflowStatusString.PENDING.value)
+                .where(status_prover)
+                .where(ws.c.queue_partition_key.isnot(None))
+                .where(ws.c.queue_partition_key == partitions.c.pk)
+                .exists()
+            )
+            if self.engine.dialect.name == "postgresql":
+                # LATERAL joins plan as tight nested loops; correlated scalar subqueries run as slower per-row SubPlans on Postgres.
+                head = head_query.lateral("head")
+                cand_query = (
+                    sa.select(head.c.workflow_uuid)
+                    .select_from(partitions.join(head, sa.true()))
+                    .where(partitions.c.pk.isnot(None))
+                    .where(~pending_probe)
+                    .order_by(partitions.c.pk.asc())
+                    .limit(self.PARTITIONED_DEQUEUE_SWEEP_CAP)
+                )
+            else:
+                # SQLite has no LATERAL; a correlated scalar subquery probes each head, with version-ineligible (NULL-head) partitions filtered in the outer select.
+                heads = (
+                    sa.select(
+                        head_query.scalar_subquery().label("workflow_uuid"),
+                        partitions.c.pk,
+                    )
+                    .where(partitions.c.pk.isnot(None))
+                    .where(~pending_probe)
+                    .subquery("heads")
+                )
+                cand_query = (
+                    sa.select(heads.c.workflow_uuid)
+                    .where(heads.c.workflow_uuid.isnot(None))
+                    .order_by(heads.c.pk.asc())
+                    .limit(self.PARTITIONED_DEQUEUE_SWEEP_CAP)
+                )
+            candidate_ids = [row[0] for row in c.execute(cand_query).fetchall()]
+            if not candidate_ids:
+                return []
+
+            # Re-check queue/partition/version alongside status so a row resume_workflows moved to another queue mid-sweep is dropped, not hijacked.
+            claim_guard = sa.and_(
+                ws.c.status == WorkflowStatusString.ENQUEUED.value,
+                ws.c.queue_name == queue.name,
+                ws.c.queue_partition_key.isnot(None),
+                version_predicate,
+            )
+            # Lock the fixed candidate set -- never a LIMIT query, whose SKIP LOCKED could slide past a locked head and admit out of order. On SQLite this is an unlocked re-read; the RETURNING flip below is the guard.
+            locked_rows = c.execute(
+                sa.select(ws.c.workflow_uuid)
+                .where(ws.c.workflow_uuid.in_(candidate_ids))
+                .where(claim_guard)
+                .with_for_update(skip_locked=True)
+            ).fetchall()
+            locked_ids = {row[0] for row in locked_rows}
+            claim_ids = [id for id in candidate_ids if id in locked_ids]
+            if not claim_ids:
+                return []
+
+            # Start the workflows by marking them PENDING; RETURNING reports exactly the rows this statement flipped (requires SQLite >= 3.35).
+            flipped_rows = c.execute(
+                ws.update()
+                .where(ws.c.workflow_uuid.in_(claim_ids))
+                .where(claim_guard)
+                .values(
+                    status=WorkflowStatusString.PENDING.value,
+                    application_version=app_version,
+                    executor_id=executor_id,
+                    started_at_epoch_ms=start_time_ms,
+                    rate_limited=False,
+                    # If a timeout is set, set the deadline on dequeue
+                    workflow_deadline_epoch_ms=sa.case(
+                        (
+                            sa.and_(
+                                ws.c.workflow_timeout_ms.isnot(None),
+                                ws.c.workflow_deadline_epoch_ms.is_(None),
+                            ),
+                            start_time_ms + ws.c.workflow_timeout_ms,
+                        ),
+                        else_=ws.c.workflow_deadline_epoch_ms,
+                    ),
+                )
+                .returning(ws.c.workflow_uuid)
+            ).fetchall()
+            flipped_ids = {row[0] for row in flipped_rows}
+            # Preserve partition order for submission.
+            ret_ids = [id for id in claim_ids if id in flipped_ids]
+            if ret_ids:
+                dbos_logger.debug(f"[{queue.name}] dequeueing {len(ret_ids)} task(s)")
+            return ret_ids
+
     @db_retry()
     def reenqueue_for_recovery(
         self, workflow_id: str, executor_ids: List[str], recovery_queue_name: str
@@ -4267,7 +4432,7 @@ class SystemDatabase(ABC):
             return {}
         queue_names = {queue_name for queue_name, _ in keys}
         partition_keys = {partition_key for _, partition_key in keys}
-        # One arm per status so idx_workflow_status_partition_dequeue can seek: a status IN (...) matching that index's own predicate is dropped as redundant, leaving its status column unbound and blocking the seek on queue_partition_key.
+        # One arm per status so idx_workflow_status_partition_dequeue_v2 can seek: a status IN (...) matching that index's own predicate is dropped as redundant, leaving its status column unbound and blocking the seek on queue_partition_key.
         arms = [
             sa.select(
                 SystemSchema.workflow_status.c.queue_name,
