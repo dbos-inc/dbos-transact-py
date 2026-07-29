@@ -736,20 +736,11 @@ def _get_wf_invoke_func(
             # handle/caller) rather than polling for a row that will never
             # reappear.
             dbos.logger.warning(warning)
-            try:
-                recorded_outcome: R = dbos._sys_db.await_workflow_result(
-                    status["workflow_uuid"],
-                    polling_interval=DEFAULT_POLLING_INTERVAL,
-                    fail_if_missing=True,
-                )
-            except DBOSAwaitedWorkflowCancelledError:
-                # await_workflow_result reports a CANCELLED row from an
-                # awaiter's point of view, but this outcome is delivered
-                # through the workflow's own handle: report the workflow's own
-                # cancellation.
-                raise DBOSWorkflowCancelledError(
-                    f"Workflow {status['workflow_uuid']} is cancelled."
-                ) from None
+            recorded_outcome: R = dbos._sys_db.await_workflow_result(
+                status["workflow_uuid"],
+                polling_interval=DEFAULT_POLLING_INTERVAL,
+                fail_if_missing=True,
+            )
             return recorded_outcome
 
         def not_recorded_warning() -> str:
@@ -764,8 +755,9 @@ def _get_wf_invoke_func(
             )
             # Directly return the result if the workflow is already completed
             recorded_result: R = dbos._sys_db.await_workflow_result(
-                status["workflow_uuid"], polling_interval=DEFAULT_POLLING_INTERVAL,
-                fail_if_missing=True # We expect the workflow to be present (success/error come from init wf status), throw if the row is not found
+                status["workflow_uuid"],
+                polling_interval=DEFAULT_POLLING_INTERVAL,
+                fail_if_missing=True,  # We expect the workflow to be present (success/error come from init wf status), throw if the row is not found
             )
             return recorded_result
         try:
