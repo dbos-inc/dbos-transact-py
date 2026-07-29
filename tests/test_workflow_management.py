@@ -354,6 +354,16 @@ def test_workflow_outcome_is_owned_by_the_pending_row(dbos: DBOS) -> None:
                 SystemSchema.workflow_status.c.workflow_uuid == handle.workflow_id
             )
         )
+    # The guarded UPDATE is a single statement: on a missing row it reports
+    # not-landed rather than raising. It is the parked await, told the row must
+    # already exist, that detects the deletion and raises.
+    assert not dbos._sys_db.update_workflow_outcome(
+        handle.workflow_id, "SUCCESS", output=encode_output("never-lands")
+    )
+    with pytest.raises(DBOSNonExistentWorkflowError):
+        dbos._sys_db.await_workflow_result(
+            handle.workflow_id, polling_interval=0.01, fail_if_missing=True
+        )
     release.set()
     with pytest.raises(DBOSNonExistentWorkflowError):
         handle.get_result()

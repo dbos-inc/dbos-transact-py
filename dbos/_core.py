@@ -730,9 +730,16 @@ def _get_wf_invoke_func(
 ) -> Callable[[Callable[[], R]], R]:
     def persist(func: Callable[[], R]) -> R:
         def adopt_recorded_outcome(warning: str) -> R:
+            # This run inserted or read the workflow's row, so it is known to
+            # have existed: a missing row here means it was deleted. Fail fast
+            # with DBOSNonExistentWorkflowError (which propagates to the
+            # handle/caller) rather than polling for a row that will never
+            # reappear.
             dbos.logger.warning(warning)
             recorded_outcome: R = dbos._sys_db.await_workflow_result(
-                status["workflow_uuid"], polling_interval=DEFAULT_POLLING_INTERVAL
+                status["workflow_uuid"],
+                polling_interval=DEFAULT_POLLING_INTERVAL,
+                fail_if_missing=True,
             )
             return recorded_outcome
 
@@ -1003,9 +1010,14 @@ def _execute_workflow_wthread(
                         functools.partial(func, *args, **kwargs)
                     )
                 else:
+                    # Parked on the concurrent execution that owns the active
+                    # entry. The row is known to exist (this dispatch inserted
+                    # or read it), so a missing row means it was deleted: fail
+                    # fast rather than polling forever.
                     output: R = dbos._sys_db.await_workflow_result(
                         status["workflow_uuid"],
                         polling_interval=DEFAULT_POLLING_INTERVAL,
+                        fail_if_missing=True,
                     )
                     return output
             except Exception as e:
@@ -1066,11 +1078,16 @@ async def _execute_workflow_async(
                     return await result()
                 else:
                     # Wait on the event loop rather than pinning a to_thread worker in a blocking poll.
+                    # Parked on the concurrent execution that owns the active
+                    # entry. The row is known to exist (this dispatch inserted
+                    # or read it), so a missing row means it was deleted: fail
+                    # fast rather than polling forever.
                     return cast(
                         R,
                         await dbos._sys_db.await_workflow_result_async(
                             status["workflow_uuid"],
                             polling_interval=DEFAULT_POLLING_INTERVAL,
+                            fail_if_missing=True,
                         ),
                     )
             except Exception as e:
