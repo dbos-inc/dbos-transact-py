@@ -1503,8 +1503,9 @@ def _build_enqueue_with_options(
     SetWorkflowAttributes, PropagateOtelContext), so this behaves like every
     other enqueue from inside an application. The one deliberate exception is
     app_version, which stays unset unless asked for: the target workflow may
-    belong to another executor, so stamping the caller's version would make the
-    row undequeueable by anyone.
+    belong to another executor, so stamping the caller's version would strand
+    the row. Unset routes it to the latest registered version instead, which
+    callers targeting another binary must account for.
     """
     resolved = copy.copy(options)
     if "workflow_id" not in resolved and new_wf_ctx.id_assigned_for_next_workflow:

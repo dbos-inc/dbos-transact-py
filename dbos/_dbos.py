@@ -1288,7 +1288,8 @@ class DBOS:
 
         Unlike :meth:`enqueue_workflow`, options are deliberately not validated
         against the local registry, and ``app_version`` is left unset unless
-        given.
+        given. An unset ``app_version`` is only dequeued by an executor running
+        the latest registered application version.
         """
         return enqueue_workflow_with_options(
             _get_dbos_instance(), options, args, kwargs

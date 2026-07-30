@@ -21,6 +21,7 @@ from dbos import (
     DBOSClient,
     DBOSConfig,
     DBOSConfiguredInstance,
+    DBOSContextSetAuth,
     EnqueueOptions,
     Queue,
     SetEnqueueOptions,
@@ -3603,16 +3604,30 @@ def test_enqueue_with_options_passthrough(dbos: DBOS) -> None:
     )
     assert handle2.get_result() == 42
 
-    # Park a workflow to hold a deduplication ID for the collision below.
+    # Park a workflow to hold a deduplication ID for the collisions below.
     parked: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
         {
             "workflow_name": "with_options_passthrough_target",
             "queue_name": "with_options_passthrough_queue",
             "deduplication_id": "held-key",
             "delay_seconds": 3600,
+            "workflow_timeout": 300,
         },
         21,
     )
+    # An explicit timeout survives; it is not overwritten by the ambient deadline.
+    assert parked.get_status().workflow_timeout_ms == 300000
+
+    # Colliding with a held key outside a workflow raises directly.
+    with pytest.raises(DBOSQueueDeduplicatedError):
+        DBOS.enqueue_workflow_with_options(
+            {
+                "workflow_name": "with_options_passthrough_target",
+                "queue_name": "with_options_passthrough_queue",
+                "deduplication_id": "held-key",
+            },
+            21,
+        )
 
     @DBOS.workflow()
     def with_options_dedup_parent() -> int:
@@ -3626,13 +3641,20 @@ def test_enqueue_with_options_passthrough(dbos: DBOS) -> None:
         )
         return handle.get_result()
 
-    # A deduplicated enqueue inside a workflow checkpoints its error, so the
-    # replay raises the same error rather than enqueueing a second time.
     parent_id = str(uuid.uuid4())
     with SetWorkflowID(parent_id):
         with pytest.raises(DBOSQueueDeduplicatedError):
             with_options_dedup_parent()
 
+    # The failed enqueue is checkpointed against the parent: an error, no child.
+    steps = DBOS.list_workflow_steps(parent_id)
+    assert len(steps) == 1
+    assert steps[0]["error"] is not None
+    assert steps[0]["child_workflow_id"] is None
+
+    # Free the key BEFORE recovery, so a re-attempted enqueue would now succeed.
+    # Only a replay of the checkpointed error can still raise here.
+    DBOS.cancel_workflow(parked.get_workflow_id())
     set_workflow_status(dbos._sys_db, parent_id, "PENDING")
     recovered = [
         h for h in DBOS._recover_pending_workflows() if h.get_workflow_id() == parent_id
@@ -3640,8 +3662,6 @@ def test_enqueue_with_options_passthrough(dbos: DBOS) -> None:
     assert len(recovered) == 1
     with pytest.raises(DBOSQueueDeduplicatedError):
         recovered[0].get_result()
-
-    DBOS.cancel_workflow(parked.get_workflow_id())
 
 
 def test_enqueue_with_options_unknown_workflow(dbos: DBOS) -> None:
@@ -3714,11 +3734,17 @@ def test_enqueue_with_options_child(dbos: DBOS) -> None:
         assert child_status.workflow_deadline_epoch_ms == parent_deadline
 
     # On recovery the parent re-runs but returns the recorded children, not new ones.
+    # A re-attempted enqueue would rebuild the same deterministic ID and upsert
+    # over the finished child, so watch updated_at: only a replay leaves it alone.
+    child_updated_at = DBOS.retrieve_workflow(f"{wfid}-1").get_status().updated_at
     set_workflow_status(dbos._sys_db, wfid, "PENDING")
     handles = DBOS._recover_pending_workflows()
     assert len(handles) == 1
     assert handles[0].get_result() == 14
     assert child_counter == 2
+    assert (
+        DBOS.retrieve_workflow(f"{wfid}-1").get_status().updated_at == child_updated_at
+    )
 
 
 @pytest.mark.asyncio
@@ -3775,6 +3801,51 @@ def test_enqueue_with_options_ambient_context(dbos: DBOS) -> None:
     # No executor runs that version, so the workflow stays enqueued.
     assert status.status == WorkflowStatusString.ENQUEUED.value
     DBOS.cancel_workflow(wfid)
+
+    # Ambient deduplication_id, priority and delay all reach the row.
+    with SetEnqueueOptions(
+        deduplication_id="ambient-dedup", priority=5, delay_seconds=3600
+    ):
+        ambient: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
+            {
+                "workflow_name": "with_options_ctx_target",
+                "queue_name": "with_options_ctx_queue",
+            },
+            3,
+        )
+    ambient_status = ambient.get_status()
+    assert ambient_status.status == WorkflowStatusString.DELAYED.value
+    assert ambient_status.deduplication_id == "ambient-dedup"
+    assert ambient_status.priority == 5
+    DBOS.cancel_workflow(ambient.get_workflow_id())
+
+    # An ambient partition key reaches the row too, where it is rejected
+    # alongside an explicit deduplication ID.
+    with pytest.raises(DBOSException):
+        with SetEnqueueOptions(queue_partition_key="tenant-1"):
+            DBOS.enqueue_workflow_with_options(
+                {
+                    "workflow_name": "with_options_ctx_target",
+                    "queue_name": "with_options_ctx_queue",
+                    "deduplication_id": "never-written",
+                },
+                4,
+            )
+
+    # Ambient authentication is inherited when the options do not set it.
+    with DBOSContextSetAuth("bob", ["auditor"]):
+        with SetEnqueueOptions(delay_seconds=3600):
+            authed: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
+                {
+                    "workflow_name": "with_options_ctx_target",
+                    "queue_name": "with_options_ctx_queue",
+                },
+                5,
+            )
+    authed_status = authed.get_status()
+    assert authed_status.authenticated_user == "bob"
+    assert authed_status.authenticated_roles == ["auditor"]
+    DBOS.cancel_workflow(authed.get_workflow_id())
 
     # An explicit option still wins over the ambient one.
     with SetEnqueueOptions(app_version="ambient-version"):
