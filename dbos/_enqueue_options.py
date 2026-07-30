@@ -1,7 +1,7 @@
 """Options and status-row construction for enqueueing a workflow by name.
 
 Shared by DBOSClient.enqueue, which enqueues from outside an application, and
-DBOS.enqueue_workflow_by_name, which enqueues from inside one. Both build the
+DBOS.enqueue_workflow_with_options, which enqueues from inside one. Both build the
 same ENQUEUED row from the same options, so a workflow enqueued either way is
 indistinguishable to the executor that eventually runs it.
 """
@@ -93,7 +93,7 @@ def build_enqueue_status(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
 ) -> tuple[str, WorkflowStatusInternal]:
-    """Build (without persisting) the ENQUEUED row for a by-name enqueue.
+    """Build (without persisting) the ENQUEUED row for a workflow named by string.
 
     Fields DBOS-internal callers own (parent linkage, app id) are left unset here
     and stamped by the caller.

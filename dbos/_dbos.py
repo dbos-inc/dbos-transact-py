@@ -62,8 +62,8 @@ from ._core import (
     decorate_step,
     decorate_transaction,
     decorate_workflow,
-    enqueue_workflow_by_name,
-    enqueue_workflow_by_name_async,
+    enqueue_workflow_with_options,
+    enqueue_workflow_with_options_async,
     execute_workflow_by_id,
     record_sleep,
     run_step,
@@ -1276,7 +1276,7 @@ class DBOS:
         return await queue.enqueue_async(func, *args, **kwargs)
 
     @classmethod
-    def enqueue_workflow_by_name(
+    def enqueue_workflow_with_options(
         cls, options: EnqueueOptions, *args: Any, **kwargs: Any
     ) -> WorkflowHandle[Any]:
         """Enqueue a workflow by name, without a reference to its function.
@@ -1293,20 +1293,22 @@ class DBOS:
         workflow is dequeued by whichever executor is running the latest
         application version rather than being pinned to this one.
         """
-        return enqueue_workflow_by_name(_get_dbos_instance(), options, args, kwargs)
+        return enqueue_workflow_with_options(
+            _get_dbos_instance(), options, args, kwargs
+        )
 
     @classmethod
-    async def enqueue_workflow_by_name_async(
+    async def enqueue_workflow_with_options_async(
         cls, options: EnqueueOptions, *args: Any, **kwargs: Any
     ) -> WorkflowHandleAsync[Any]:
-        """Async version of :meth:`enqueue_workflow_by_name`."""
+        """Async version of :meth:`enqueue_workflow_with_options`."""
         # To allow safe concurrent async operations, all context management
         # must run synchronously before the first `await`.
         ctx = get_local_dbos_context()
         parent_ctx_copy = copy.copy(ctx)
         child_ctx = DBOSContext.create_start_workflow_child(ctx)
         await cls._configure_asyncio_thread_pool()
-        return await enqueue_workflow_by_name_async(
+        return await enqueue_workflow_with_options_async(
             _get_dbos_instance(), parent_ctx_copy, child_ctx, options, args, kwargs
         )
 

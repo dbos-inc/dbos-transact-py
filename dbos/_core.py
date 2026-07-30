@@ -1488,7 +1488,7 @@ async def start_workflow_async(
     return WorkflowHandleAsyncTask(new_child_workflow_id, task, dbos)
 
 
-def _build_enqueue_by_name(
+def _build_enqueue_with_options(
     dbos: "DBOS",
     local_ctx: Optional[DBOSContext],
     new_wf_ctx: DBOSContext,
@@ -1563,13 +1563,13 @@ def _build_enqueue_by_name(
     return status
 
 
-def _persist_enqueue_by_name(
+def _persist_enqueue_with_options(
     dbos: "DBOS",
     new_wf_ctx: DBOSContext,
     status: WorkflowStatusInternal,
     max_recovery_attempts: Optional[int],
 ) -> str:
-    """Persist a by-name enqueue, recording it as a child of the calling workflow.
+    """Persist the enqueue, recording it as a child of the calling workflow.
 
     Returns the enqueued workflow's ID, which on a replay is the ID recorded by
     the original call rather than the one just built.
@@ -1631,7 +1631,7 @@ def _persist_enqueue_by_name(
     return workflow_id
 
 
-def enqueue_workflow_by_name(
+def enqueue_workflow_with_options(
     dbos: "DBOS",
     options: "EnqueueOptions",
     args: tuple[Any, ...],
@@ -1639,14 +1639,16 @@ def enqueue_workflow_by_name(
 ) -> "WorkflowHandle[Any]":
     local_ctx = get_local_dbos_context()
     new_wf_ctx = DBOSContext.create_start_workflow_child(local_ctx)
-    status = _build_enqueue_by_name(dbos, local_ctx, new_wf_ctx, options, args, kwargs)
-    workflow_id = _persist_enqueue_by_name(
+    status = _build_enqueue_with_options(
+        dbos, local_ctx, new_wf_ctx, options, args, kwargs
+    )
+    workflow_id = _persist_enqueue_with_options(
         dbos, new_wf_ctx, status, options.get("max_recovery_attempts")
     )
     return WorkflowHandlePolling(workflow_id, dbos)
 
 
-async def enqueue_workflow_by_name_async(
+async def enqueue_workflow_with_options_async(
     dbos: "DBOS",
     local_ctx: Optional[DBOSContext],
     new_wf_ctx: DBOSContext,
@@ -1654,9 +1656,11 @@ async def enqueue_workflow_by_name_async(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
 ) -> "WorkflowHandleAsync[Any]":
-    status = _build_enqueue_by_name(dbos, local_ctx, new_wf_ctx, options, args, kwargs)
+    status = _build_enqueue_with_options(
+        dbos, local_ctx, new_wf_ctx, options, args, kwargs
+    )
     workflow_id = await asyncio.to_thread(
-        _persist_enqueue_by_name,
+        _persist_enqueue_with_options,
         dbos,
         new_wf_ctx,
         status,
