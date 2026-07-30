@@ -62,6 +62,8 @@ from ._core import (
     decorate_step,
     decorate_transaction,
     decorate_workflow,
+    enqueue_workflow_by_name,
+    enqueue_workflow_by_name_async,
     execute_workflow_by_id,
     record_sleep,
     run_step,
@@ -73,6 +75,7 @@ from ._core import (
     write_stream,
 )
 from ._croniter import croniter  # type: ignore
+from ._enqueue_options import EnqueueOptions
 from ._queue import (
     Queue,
     QueueConflictResolution,
@@ -1271,6 +1274,41 @@ class DBOS:
         await cls._configure_asyncio_thread_pool()
         queue = Queue(queue_name, database_backed_queue=True)
         return await queue.enqueue_async(func, *args, **kwargs)
+
+    @classmethod
+    def enqueue_workflow_by_name(
+        cls, options: EnqueueOptions, *args: Any, **kwargs: Any
+    ) -> WorkflowHandle[Any]:
+        """Enqueue a workflow by name, without a reference to its function.
+
+        Takes the same options as :meth:`DBOSClient.enqueue` and builds the same
+        row, so the workflow may be implemented by another process, another
+        binary, or another language, as long as it shares this system database.
+        Called from inside a workflow, the enqueued workflow is recorded as a
+        child: it is enqueued exactly once across replays, and the returned
+        handle awaits it.
+
+        Unlike :meth:`enqueue_workflow`, nothing here is validated against the
+        local registry, and ``app_version`` is left unset unless given, so the
+        workflow is dequeued by whichever executor is running the latest
+        application version rather than being pinned to this one.
+        """
+        return enqueue_workflow_by_name(_get_dbos_instance(), options, args, kwargs)
+
+    @classmethod
+    async def enqueue_workflow_by_name_async(
+        cls, options: EnqueueOptions, *args: Any, **kwargs: Any
+    ) -> WorkflowHandleAsync[Any]:
+        """Async version of :meth:`enqueue_workflow_by_name`."""
+        # To allow safe concurrent async operations, all context management
+        # must run synchronously before the first `await`.
+        ctx = get_local_dbos_context()
+        parent_ctx_copy = copy.copy(ctx)
+        child_ctx = DBOSContext.create_start_workflow_child(ctx)
+        await cls._configure_asyncio_thread_pool()
+        return await enqueue_workflow_by_name_async(
+            _get_dbos_instance(), parent_ctx_copy, child_ctx, options, args, kwargs
+        )
 
     @classmethod
     @overload

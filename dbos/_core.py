@@ -52,6 +52,7 @@ from ._context import (
     otel_carrier_from_attributes,
     restore_otel_carrier,
 )
+from ._enqueue_options import EnqueueOptions, build_enqueue_status
 from ._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSException,
@@ -1485,6 +1486,183 @@ async def start_workflow_async(
     # Nothing awaits this future when dequeue/recovery callers discard the handle (#796)
     task.add_done_callback(_retrieve_future_exception)
     return WorkflowHandleAsyncTask(new_child_workflow_id, task, dbos)
+
+
+def _build_enqueue_by_name(
+    dbos: "DBOS",
+    local_ctx: Optional[DBOSContext],
+    new_wf_ctx: DBOSContext,
+    options: "EnqueueOptions",
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> WorkflowStatusInternal:
+    """Build (without persisting) the ENQUEUED row for a workflow named by string.
+
+    The options are authoritative; anything they leave unset falls back to the
+    ambient DBOS context (SetWorkflowID, SetEnqueueOptions, SetWorkflowTimeout,
+    SetWorkflowAttributes, PropagateOtelContext), so this behaves like every other
+    enqueue from inside an application. The one deliberate exception is
+    app_version, which stays unset unless asked for: the target workflow belongs
+    to another executor, so stamping the caller's version would make the row
+    undequeueable by anyone.
+    """
+    resolved = copy.copy(options)
+    if "workflow_id" not in resolved and new_wf_ctx.id_assigned_for_next_workflow:
+        resolved["workflow_id"] = new_wf_ctx.id_assigned_for_next_workflow
+    if local_ctx is not None:
+        if (
+            "deduplication_id" not in resolved
+            and local_ctx.deduplication_id is not None
+        ):
+            resolved["deduplication_id"] = local_ctx.deduplication_id
+        if "priority" not in resolved and local_ctx.priority is not None:
+            resolved["priority"] = local_ctx.priority
+        if "app_version" not in resolved and local_ctx.app_version is not None:
+            resolved["app_version"] = local_ctx.app_version
+        if (
+            "queue_partition_key" not in resolved
+            and local_ctx.queue_partition_key is not None
+        ):
+            resolved["queue_partition_key"] = local_ctx.queue_partition_key
+        if (
+            "authenticated_user" not in resolved
+            and local_ctx.authenticated_user is not None
+        ):
+            resolved["authenticated_user"] = local_ctx.authenticated_user
+        if (
+            "authenticated_roles" not in resolved
+            and local_ctx.authenticated_roles is not None
+        ):
+            resolved["authenticated_roles"] = local_ctx.authenticated_roles
+    if (
+        resolved.get("queue_partition_key") is not None
+        and resolved.get("deduplication_id") is not None
+    ):
+        raise DBOSException("Deduplication is not supported for partitioned queues")
+
+    _, status = build_enqueue_status(resolved, dbos._serializer, args, kwargs)
+
+    status["app_id"] = new_wf_ctx.app_id
+    status["parent_workflow_id"] = (
+        new_wf_ctx.parent_workflow_id if new_wf_ctx.has_parent() else None
+    )
+    if "workflow_timeout" not in resolved:
+        # Inherit an explicit SetWorkflowTimeout, else the parent's propagated deadline.
+        status["workflow_timeout_ms"], status["workflow_deadline_epoch_ms"] = (
+            _get_timeout_deadline(local_ctx, resolved["queue_name"])
+        )
+    if (
+        "delay_seconds" not in resolved
+        and local_ctx is not None
+        and local_ctx.delay_until_epoch_ms is not None
+    ):
+        status["delay_until_epoch_ms"] = local_ctx.delay_until_epoch_ms
+        status["status"] = WorkflowStatusString.DELAYED.value
+    if status["attributes"] is None:
+        status["attributes"] = _attributes_with_otel_carrier(new_wf_ctx)
+    return status
+
+
+def _persist_enqueue_by_name(
+    dbos: "DBOS",
+    new_wf_ctx: DBOSContext,
+    status: WorkflowStatusInternal,
+    max_recovery_attempts: Optional[int],
+) -> str:
+    """Persist a by-name enqueue, recording it as a child of the calling workflow.
+
+    Returns the enqueued workflow's ID, which on a replay is the ID recorded by
+    the original call rather than the one just built.
+    """
+    wf_name = status["name"]
+    workflow_id = status["workflow_uuid"]
+    child_start_time = int(time.time() * 1000)
+    if new_wf_ctx.has_parent():
+        recorded_result = dbos._sys_db.check_operation_execution(
+            new_wf_ctx.parent_workflow_id,
+            new_wf_ctx.parent_workflow_fid,
+            wf_name,
+        )
+        if recorded_result and recorded_result["error"]:
+            e: Exception = deserialize_exception(
+                recorded_result["error"],
+                recorded_result["serialization"],
+                dbos._sys_db.serializer,
+            )
+            raise e
+        elif recorded_result and recorded_result["child_workflow_id"]:
+            return recorded_result["child_workflow_id"]
+
+    try:
+        dbos._sys_db.init_workflow(
+            status,
+            max_recovery_attempts=max_recovery_attempts,
+            owner_xid=None,
+            is_recovery_request=False,
+            is_dequeued_request=False,
+        )
+    except DBOSQueueDeduplicatedError as e:
+        sererr, serialization = serialize_exception(
+            e,
+            status["serialization"],
+            dbos._serializer,
+        )
+        if new_wf_ctx.has_parent():
+            result: OperationResultInternal = {
+                "workflow_uuid": new_wf_ctx.parent_workflow_id,
+                "function_id": new_wf_ctx.parent_workflow_fid,
+                "function_name": wf_name,
+                "output": None,
+                "error": sererr,
+                "serialization": serialization,
+                "started_at_epoch_ms": child_start_time,
+            }
+            dbos._sys_db.record_operation_result(result)
+        raise
+
+    if new_wf_ctx.has_parent():
+        dbos._sys_db.record_child_workflow(
+            new_wf_ctx.parent_workflow_id,
+            workflow_id,
+            new_wf_ctx.parent_workflow_fid,
+            wf_name,
+            started_at_epoch_ms=child_start_time,
+        )
+    return workflow_id
+
+
+def enqueue_workflow_by_name(
+    dbos: "DBOS",
+    options: "EnqueueOptions",
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> "WorkflowHandle[Any]":
+    local_ctx = get_local_dbos_context()
+    new_wf_ctx = DBOSContext.create_start_workflow_child(local_ctx)
+    status = _build_enqueue_by_name(dbos, local_ctx, new_wf_ctx, options, args, kwargs)
+    workflow_id = _persist_enqueue_by_name(
+        dbos, new_wf_ctx, status, options.get("max_recovery_attempts")
+    )
+    return WorkflowHandlePolling(workflow_id, dbos)
+
+
+async def enqueue_workflow_by_name_async(
+    dbos: "DBOS",
+    local_ctx: Optional[DBOSContext],
+    new_wf_ctx: DBOSContext,
+    options: "EnqueueOptions",
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> "WorkflowHandleAsync[Any]":
+    status = _build_enqueue_by_name(dbos, local_ctx, new_wf_ctx, options, args, kwargs)
+    workflow_id = await asyncio.to_thread(
+        _persist_enqueue_by_name,
+        dbos,
+        new_wf_ctx,
+        status,
+        options.get("max_recovery_attempts"),
+    )
+    return WorkflowHandleAsyncPolling(workflow_id, dbos)
 
 
 if sys.version_info < (3, 12):
