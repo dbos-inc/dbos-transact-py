@@ -45,6 +45,10 @@ if TYPE_CHECKING:
     from opentelemetry.context import Context as OtelContext
 
     from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
+else:
+    # EnqueueOptions is public, so its annotations must stay resolvable at runtime for
+    # get_type_hints()/pydantic without importing the optional opentelemetry package.
+    OtelContext = Any
 
 from dbos._croniter import croniter  # type: ignore
 from dbos._dbos_config import get_system_database_url, is_valid_database_url

@@ -938,3 +938,136 @@ def test_workflows_run_without_opentelemetry(tmp_path: Path) -> None:
         f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
     )
     assert "OK" in result.stdout
+
+
+def test_propagate_explicit_otel_context_to_inline_workflow(
+    config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
+) -> None:
+    """An inline workflow call honours the carrier, so an explicitly passed context reaches
+    it on the first attempt and not only after a recovery."""
+    exporter, _, _ = setup_in_memory_otlp_collector
+
+    DBOS.destroy(destroy_registry=True)
+    config["enable_otlp"] = True
+    DBOS(config=config)
+
+    @DBOS.step()
+    def a_step() -> None:
+        pass
+
+    @DBOS.workflow()
+    def a_workflow() -> str:
+        a_step()
+        return "done"
+
+    DBOS.launch()
+    my_tracer = trace.get_tracer_provider().get_tracer("dbos")
+
+    # A context captured elsewhere, not the one ambient at the call site.
+    with my_tracer.start_as_current_span(
+        "elsewhere"
+    ) as elsewhere:  # pyright: ignore[reportAttributeAccessIssue]
+        elsewhere_ctx = elsewhere.get_span_context()
+        saved = otel_context.get_current()
+
+    exporter.clear()
+    with my_tracer.start_as_current_span(
+        "caller"
+    ) as caller:  # pyright: ignore[reportAttributeAccessIssue]
+        caller_ctx = caller.get_span_context()
+        with PropagateOtelContext(saved):
+            assert a_workflow() == "done"
+
+    workflow_spans = [
+        s for s in exporter.get_finished_spans() if s.name == a_workflow.__qualname__
+    ]
+    assert len(workflow_spans) == 1
+    span = workflow_spans[0]
+    assert span.context is not None
+    assert span.parent is not None
+    # The explicit context wins over the span ambient at the call site.
+    assert span.parent.span_id == elsewhere_ctx.span_id
+    assert span.parent.span_id != caller_ctx.span_id
+    assert span.context.trace_id == elsewhere_ctx.trace_id
+
+    # Steps still parent to the workflow span.
+    step_spans = [
+        s for s in exporter.get_finished_spans() if s.name == a_step.__qualname__
+    ]
+    assert len(step_spans) == 1
+    assert step_spans[0].parent is not None
+    assert step_spans[0].parent.span_id == span.context.span_id
+
+
+def test_inline_workflow_without_carrier_keeps_caller_trace(
+    config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
+) -> None:
+    """Without a carrier the inline path is unchanged: the ambient caller span is the parent."""
+    exporter, _, _ = setup_in_memory_otlp_collector
+
+    DBOS.destroy(destroy_registry=True)
+    config["enable_otlp"] = True
+    DBOS(config=config)
+
+    @DBOS.workflow()
+    def a_workflow() -> str:
+        return "done"
+
+    DBOS.launch()
+    exporter.clear()
+
+    my_tracer = trace.get_tracer_provider().get_tracer("dbos")
+    with my_tracer.start_as_current_span(
+        "caller"
+    ) as caller:  # pyright: ignore[reportAttributeAccessIssue]
+        caller_ctx = caller.get_span_context()
+        assert a_workflow() == "done"
+
+    workflow_spans = [
+        s for s in exporter.get_finished_spans() if s.name == a_workflow.__qualname__
+    ]
+    assert len(workflow_spans) == 1
+    assert workflow_spans[0].parent is not None
+    assert workflow_spans[0].parent.span_id == caller_ctx.span_id
+
+
+@pytest.mark.asyncio
+async def test_propagate_explicit_otel_context_to_inline_async_workflow(
+    config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
+) -> None:
+    """Async inline calls run through Outcome.Pending, a separate wrapper path from the
+    sync one, so the carrier needs its own coverage there."""
+    exporter, _, _ = setup_in_memory_otlp_collector
+
+    DBOS.destroy(destroy_registry=True)
+    config["enable_otlp"] = True
+    DBOS(config=config)
+
+    @DBOS.workflow()
+    async def a_workflow() -> str:
+        return "done"
+
+    DBOS.launch()
+    my_tracer = trace.get_tracer_provider().get_tracer("dbos")
+
+    with my_tracer.start_as_current_span(
+        "elsewhere"
+    ) as elsewhere:  # pyright: ignore[reportAttributeAccessIssue]
+        elsewhere_ctx = elsewhere.get_span_context()
+        saved = otel_context.get_current()
+
+    exporter.clear()
+    with my_tracer.start_as_current_span(
+        "caller"
+    ) as caller:  # pyright: ignore[reportAttributeAccessIssue]
+        caller_ctx = caller.get_span_context()
+        with PropagateOtelContext(saved):
+            assert (await a_workflow()) == "done"
+
+    workflow_spans = [
+        s for s in exporter.get_finished_spans() if s.name == a_workflow.__qualname__
+    ]
+    assert len(workflow_spans) == 1
+    assert workflow_spans[0].parent is not None
+    assert workflow_spans[0].parent.span_id == elsewhere_ctx.span_id
+    assert workflow_spans[0].parent.span_id != caller_ctx.span_id
