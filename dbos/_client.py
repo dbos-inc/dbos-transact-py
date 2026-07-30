@@ -22,8 +22,7 @@ from sqlalchemy.orm import Session
 
 from dbos._core import DEFAULT_POLLING_INTERVAL
 
-# EnqueueOptions is re-exported here: it is public as dbos.EnqueueOptions but is
-# shared with DBOS.enqueue_workflow_with_options, so it lives in a module both can import.
+# Re-exported: EnqueueOptions is public as dbos.EnqueueOptions but is shared with _core.
 from dbos._enqueue_options import EnqueueOptions as EnqueueOptions
 from dbos._enqueue_options import build_enqueue_status
 from dbos._logger import dbos_logger

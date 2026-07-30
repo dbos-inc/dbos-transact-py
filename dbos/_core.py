@@ -1496,15 +1496,15 @@ def _build_enqueue_with_options(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
 ) -> WorkflowStatusInternal:
-    """Build (without persisting) the ENQUEUED row for a workflow named by string.
+    """Build (without persisting) the ENQUEUED row described by these options.
 
     The options are authoritative; anything they leave unset falls back to the
     ambient DBOS context (SetWorkflowID, SetEnqueueOptions, SetWorkflowTimeout,
-    SetWorkflowAttributes, PropagateOtelContext), so this behaves like every other
-    enqueue from inside an application. The one deliberate exception is
-    app_version, which stays unset unless asked for: the target workflow belongs
-    to another executor, so stamping the caller's version would make the row
-    undequeueable by anyone.
+    SetWorkflowAttributes, PropagateOtelContext), so this behaves like every
+    other enqueue from inside an application. The one deliberate exception is
+    app_version, which stays unset unless asked for: the target workflow may
+    belong to another executor, so stamping the caller's version would make the
+    row undequeueable by anyone.
     """
     resolved = copy.copy(options)
     if "workflow_id" not in resolved and new_wf_ctx.id_assigned_for_next_workflow:

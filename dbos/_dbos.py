@@ -1279,19 +1279,16 @@ class DBOS:
     def enqueue_workflow_with_options(
         cls, options: EnqueueOptions, *args: Any, **kwargs: Any
     ) -> WorkflowHandle[Any]:
-        """Enqueue a workflow by name, without a reference to its function.
+        """Enqueue a workflow by options, without a reference to its function.
 
         Takes the same options as :meth:`DBOSClient.enqueue` and builds the same
-        row, so the workflow may be implemented by another process, another
-        binary, or another language, as long as it shares this system database.
-        Called from inside a workflow, the enqueued workflow is recorded as a
-        child: it is enqueued exactly once across replays, and the returned
-        handle awaits it.
+        row, so the workflow may be implemented by another process, as long as
+        it shares this system database. Can safely be called from inside a
+        workflow, the enqueued workflow is recorded as a child.
 
-        Unlike :meth:`enqueue_workflow`, nothing here is validated against the
-        local registry, and ``app_version`` is left unset unless given, so the
-        workflow is dequeued by whichever executor is running the latest
-        application version rather than being pinned to this one.
+        Unlike :meth:`enqueue_workflow`, options are deliberately not validated
+        against the local registry, and ``app_version`` is left unset unless
+        given.
         """
         return enqueue_workflow_with_options(
             _get_dbos_instance(), options, args, kwargs
@@ -1302,8 +1299,7 @@ class DBOS:
         cls, options: EnqueueOptions, *args: Any, **kwargs: Any
     ) -> WorkflowHandleAsync[Any]:
         """Async version of :meth:`enqueue_workflow_with_options`."""
-        # To allow safe concurrent async operations, all context management
-        # must run synchronously before the first `await`.
+        # All context management runs before the first await, for concurrency safety.
         ctx = get_local_dbos_context()
         parent_ctx_copy = copy.copy(ctx)
         child_ctx = DBOSContext.create_start_workflow_child(ctx)
