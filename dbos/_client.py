@@ -22,7 +22,13 @@ from zoneinfo import ZoneInfo
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from dbos._context import MaxPriority, MinPriority, validate_workflow_id
+from dbos._context import (
+    OTEL_CARRIER_ATTRIBUTE,
+    MaxPriority,
+    MinPriority,
+    inject_trace_context,
+    validate_workflow_id,
+)
 from dbos._core import DEFAULT_POLLING_INTERVAL
 from dbos._logger import dbos_logger
 from dbos._queue import (
@@ -36,7 +42,13 @@ from dbos._sys_db import SystemDatabase
 from dbos._utils import generate_uuid
 
 if TYPE_CHECKING:
+    from opentelemetry.context import Context as OtelContext
+
     from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
+else:
+    # EnqueueOptions is public, so its annotations must stay resolvable at runtime for
+    # get_type_hints()/pydantic without importing the optional opentelemetry package.
+    OtelContext = Any
 
 from dbos._croniter import croniter  # type: ignore
 from dbos._dbos_config import get_system_database_url, is_valid_database_url
@@ -90,6 +102,9 @@ class EnqueueOptions(_EnqueueOptionsRequired, total=False):
     class_name: str
     instance_name: str
     attributes: Dict[str, Any]
+    # Parents the enqueued workflow's span to this OpenTelemetry context, so it joins
+    # this trace when it runs. The client-side PropagateOtelContext.
+    otel_context: "OtelContext"
 
 
 def validate_enqueue_options(options: EnqueueOptions) -> None:
@@ -101,6 +116,25 @@ def validate_enqueue_options(options: EnqueueOptions) -> None:
     workflow_id = options.get("workflow_id")
     if workflow_id is not None:
         validate_workflow_id(workflow_id)
+
+
+def _attributes_with_otel_context(
+    attributes: Optional[Dict[str, Any]], otel_context: "Optional[OtelContext]"
+) -> Optional[Dict[str, Any]]:
+    """Fold an otel_context option into the workflow's persisted attributes.
+
+    The client-side counterpart of PropagateOtelContext. Records nothing when there is
+    no valid context to propagate, and wins over a hand-written carrier in attributes.
+    Only the W3C trace context travels, not baggage.
+    """
+    if otel_context is None:
+        return attributes
+    carrier = inject_trace_context(otel_context)
+    if not carrier:
+        return attributes
+    merged = dict(attributes) if attributes else {}
+    merged[OTEL_CARRIER_ATTRIBUTE] = carrier
+    return merged
 
 
 class WorkflowHandleClientPolling(Generic[R]):
@@ -287,6 +321,10 @@ class DBOSClient:
             self._serializer,
         )
 
+        attributes = _attributes_with_otel_context(
+            options.get("attributes"), options.get("otel_context")
+        )
+
         status: WorkflowStatusInternal = {
             "workflow_uuid": workflow_id,
             "status": (
@@ -327,7 +365,7 @@ class DBOSClient:
             "started_at_epoch_ms": None,
             "owner_xid": None,
             "delay_until_epoch_ms": delay_until_epoch_ms,
-            "attributes": options.get("attributes"),
+            "attributes": attributes,
             "schedule_name": None,
             # Set only by the debouncer via _enqueue_debounced, never from options.
             "debounce_deadline_epoch_ms": None,

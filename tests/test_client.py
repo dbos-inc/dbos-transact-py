@@ -12,6 +12,7 @@ from typing import Any, Optional, TypedDict
 
 import pytest
 import sqlalchemy as sa
+from opentelemetry import context as otel_context
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import Session
@@ -29,7 +30,7 @@ from dbos._error import DBOSNonExistentWorkflowError
 from dbos._schemas.system_database import SystemSchema
 from tests import client_collateral
 from tests.client_collateral import event_test, retrieve_test, send_test
-from tests.conftest import set_workflow_status, wait_for_client_listener
+from tests.conftest import TestOtelType, set_workflow_status, wait_for_client_listener
 
 
 class Person(TypedDict):
@@ -110,6 +111,74 @@ def test_client_enqueue_and_get_result(dbos: DBOS, client: DBOSClient) -> None:
     assert list_results[0].status == "SUCCESS"
     assert list_results[0].output is None
     assert list_results[0].input is None
+
+
+def test_client_enqueue_with_otel_context(
+    dbos: DBOS, client: DBOSClient, setup_in_memory_otlp_collector: TestOtelType
+) -> None:
+    """otel_context is recorded as a trace carrier beside the caller's own attributes.
+
+    Needs a real TracerProvider: without one the span context is invalid and
+    inject() has nothing to serialize.
+    """
+    from opentelemetry import trace
+
+    run_client_collateral()
+
+    johnDoe: Person = {"first": "John", "last": "Doe", "age": 30}
+    my_tracer = trace.get_tracer_provider().get_tracer("dbos")
+    with my_tracer.start_as_current_span(
+        "caller"
+    ):  # pyright: ignore[reportAttributeAccessIssue]
+        options: EnqueueOptions = {
+            "queue_name": "test_queue",
+            "workflow_name": "enqueue_test",
+            "otel_context": otel_context.get_current(),
+            "attributes": {"customer": "acme"},
+        }
+        handle: WorkflowHandle[str] = client.enqueue(options, 42, "test", johnDoe)
+    assert handle.get_result() is not None
+
+    attributes = client.retrieve_workflow(handle.workflow_id).get_status().attributes
+    assert attributes is not None
+    # The caller's own attributes survive alongside the carrier.
+    assert attributes["customer"] == "acme"
+    assert "traceparent" in attributes["dbos.otelContext"]
+
+
+def test_client_enqueue_without_otel_context(dbos: DBOS, client: DBOSClient) -> None:
+    """Omitting otel_context leaves attributes exactly as the caller passed them."""
+    run_client_collateral()
+
+    johnDoe: Person = {"first": "John", "last": "Doe", "age": 30}
+    options: EnqueueOptions = {
+        "queue_name": "test_queue",
+        "workflow_name": "enqueue_test",
+        "attributes": {"customer": "acme"},
+    }
+    handle: WorkflowHandle[str] = client.enqueue(options, 42, "test", johnDoe)
+    assert handle.get_result() is not None
+
+    attributes = client.retrieve_workflow(handle.workflow_id).get_status().attributes
+    assert attributes == {"customer": "acme"}
+
+
+def test_client_enqueue_otel_context_without_active_span(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    """An empty context has nothing to propagate, so no carrier is recorded."""
+    run_client_collateral()
+
+    johnDoe: Person = {"first": "John", "last": "Doe", "age": 30}
+    options: EnqueueOptions = {
+        "queue_name": "test_queue",
+        "workflow_name": "enqueue_test",
+        "otel_context": otel_context.Context(),
+    }
+    handle: WorkflowHandle[str] = client.enqueue(options, 42, "test", johnDoe)
+    assert handle.get_result() is not None
+
+    assert client.retrieve_workflow(handle.workflow_id).get_status().attributes is None
 
 
 @pytest.mark.parametrize("bad_id", ["", "   ", "\t\n"])

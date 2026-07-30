@@ -3,16 +3,27 @@ from __future__ import annotations
 import json
 import os
 import time
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, TypedDict
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+    Type,
+    TypedDict,
+)
 
 from dbos._serialization import WorkflowSerializationFormat
 
 if TYPE_CHECKING:
+    from opentelemetry.context import Context as OtelContext
     from opentelemetry.trace import Span
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +49,9 @@ OperationTypes = Literal["handler", "workflow", "transaction", "step", "procedur
 
 MaxPriority = 2**31 - 1  # 2,147,483,647
 MinPriority = 1
+
+# Reserved workflow attribute holding the trace carrier set by PropagateOtelContext.
+OTEL_CARRIER_ATTRIBUTE = "dbos.otelContext"
 
 
 # Keys must be the same as in TypeScript Transact
@@ -132,6 +146,8 @@ class DBOSContext:
         self.priority: Optional[int] = None
         # User-specified attributes to attach to the next started workflow.
         self.workflow_attributes: Optional[Dict[str, Any]] = None
+        # Trace carrier for the next started workflow, set by PropagateOtelContext.
+        self.otel_carrier: Optional[Dict[str, str]] = None
         # If the workflow is enqueued on a partitioned queue, its partition key
         self.queue_partition_key: Optional[str] = None
         # The UNIX epoch timestamp before which the workflow should not be dequeued
@@ -152,6 +168,9 @@ class DBOSContext:
                 dict(self.workflow_attributes)
                 if self.workflow_attributes is not None
                 else None
+            )
+            rv.otel_carrier = (
+                dict(self.otel_carrier) if self.otel_carrier is not None else None
             )
         rv.is_within_set_workflow_id_block = self.is_within_set_workflow_id_block
         rv.parent_workflow_id = self.workflow_id
@@ -182,6 +201,7 @@ class DBOSContext:
         rv.debounce_deadline_epoch_ms = self.debounce_deadline_epoch_ms
         rv.is_debounced = self.is_debounced
         rv.workflow_attributes = self.workflow_attributes
+        rv.otel_carrier = self.otel_carrier
         self.function_id += 1
         rv.function_id = self.function_id
         if reserve_sleep_id:
@@ -613,6 +633,128 @@ class SetWorkflowAttributes:
         if self.created_ctx:
             _clear_local_dbos_context()
         return False  # Did not handle
+
+
+def inject_trace_context(context: "Optional[OtelContext]") -> Dict[str, str]:
+    """Serialize just the W3C trace context of `context` into a fresh carrier.
+
+    Deliberately not the global composite propagator: that one also injects baggage,
+    which is unbounded in size, commonly carries user data, and would be persisted in
+    the workflow's attributes and shipped anywhere the status is read. Returns an empty
+    carrier when there is no valid span context to propagate.
+    """
+    from opentelemetry.trace.propagation.tracecontext import (
+        TraceContextTextMapPropagator,
+    )
+
+    carrier: Dict[str, str] = {}
+    TraceContextTextMapPropagator().inject(carrier, context=context)
+    return carrier
+
+
+def extract_trace_context(carrier: Dict[str, Any]) -> "Optional[OtelContext]":
+    """Rebuild an OpenTelemetry context from a carrier written by inject_trace_context.
+
+    Returns None when the carrier holds no usable span context, so callers can fall back
+    to whatever context they already have instead of rooting a detached trace. Never
+    raises: the carrier lives in the user-writable attributes map, so a bad value must
+    not be able to stop a workflow from executing.
+    """
+    from opentelemetry.trace import get_current_span
+    from opentelemetry.trace.propagation.tracecontext import (
+        TraceContextTextMapPropagator,
+    )
+
+    try:
+        extracted = TraceContextTextMapPropagator().extract(carrier)
+    except Exception as e:
+        # Non-string carrier values make the propagator's regex/len calls raise.
+        dbos_logger.warning(
+            f"Ignoring malformed {OTEL_CARRIER_ATTRIBUTE} workflow attribute: {e}"
+        )
+        return None
+    if not get_current_span(extracted).get_span_context().is_valid:
+        return None
+    return extracted
+
+
+def otel_carrier_from_attributes(
+    attributes: Optional[Any],
+) -> Optional[Dict[str, Any]]:
+    """Read the trace carrier out of a workflow's persisted attributes, if present.
+
+    Tolerates any shape: attributes are user-supplied and are not validated on every
+    enqueue path, so a non-dict value here must not raise on the execution path.
+    """
+    if not isinstance(attributes, dict):
+        return None
+    carrier = attributes.get(OTEL_CARRIER_ATTRIBUTE)
+    return carrier if isinstance(carrier, dict) else None
+
+
+class PropagateOtelContext:
+    """
+    Propagate the current OpenTelemetry context (or optionally, a passed-in context)
+    to all workflows started or enqueued in this block so their spans join the caller's
+    trace. The propagated context is durably backed by the workflow's attributes.
+
+    Only the W3C trace context (traceparent/tracestate) travels, not baggage.
+
+    Not automatically inherited by child workflows; use PropagateOtelContext again
+    inside a workflow to keep its children on the trace.
+
+    Typical Usage
+        ```
+        with PropagateOtelContext():
+            handle = queue.enqueue(workflow_function, ...)
+        ```
+    """
+
+    def __init__(self, context: "Optional[OtelContext]" = None) -> None:
+        self.context = context
+        self.created_ctx = False
+        self.saved_carrier: Optional[Dict[str, str]] = None
+
+    def __enter__(self) -> PropagateOtelContext:
+        # Writes nothing when there is no valid context to propagate.
+        carrier = inject_trace_context(self.context)
+        # Code to create a basic context
+        ctx = get_local_dbos_context()
+        if ctx is None:
+            self.created_ctx = True
+            _set_local_dbos_context(DBOSContext())
+        ctx = assert_current_dbos_context()
+        self.saved_carrier = ctx.otel_carrier
+        ctx.otel_carrier = carrier if carrier else None
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        assert_current_dbos_context().otel_carrier = self.saved_carrier
+        # Code to clean up the basic context if we created it
+        if self.created_ctx:
+            _clear_local_dbos_context()
+        return False  # Did not handle
+
+
+@contextmanager
+def restore_otel_carrier(carrier: Optional[Any]) -> Iterator[None]:
+    """Put a carrier persisted by PropagateOtelContext back on the context.
+
+    Dequeue and recovery rebuild the workflow status from a fresh context, so the stored
+    carrier would not otherwise reach the executing workflow. Non-dict values are ignored.
+    """
+    ctx = assert_current_dbos_context()
+    saved = ctx.otel_carrier
+    ctx.otel_carrier = carrier if isinstance(carrier, dict) else None
+    try:
+        yield
+    finally:
+        assert_current_dbos_context().otel_carrier = saved
 
 
 class SetEnqueueOptions:

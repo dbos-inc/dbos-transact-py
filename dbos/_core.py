@@ -8,7 +8,9 @@ import threading
 import time
 import uuid
 from concurrent.futures import Future
+from contextlib import AbstractContextManager
 from functools import wraps
+from types import TracebackType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -17,9 +19,11 @@ from typing import (
     Coroutine,
     Generic,
     List,
+    Literal,
     Optional,
     ParamSpec,
     Tuple,
+    Type,
     TypedDict,
     TypeVar,
     Union,
@@ -31,6 +35,7 @@ from dbos._utils import GlobalParams, retriable_postgres_exception
 
 from ._app_db import ApplicationDatabase, TransactionResultInternal
 from ._context import (
+    OTEL_CARRIER_ATTRIBUTE,
     DBOSAssumeRole,
     DBOSContext,
     DBOSContextSetAuth,
@@ -42,7 +47,10 @@ from ._context import (
     SetWorkflowID,
     TracedAttributes,
     assert_current_dbos_context,
+    extract_trace_context,
     get_local_dbos_context,
+    otel_carrier_from_attributes,
+    restore_otel_carrier,
 )
 from ._error import (
     DBOSAwaitedWorkflowCancelledError,
@@ -95,8 +103,13 @@ from ._sys_db import (
     WorkflowStatusInternal,
     WorkflowStatusString,
 )
+from ._tracer import dbos_tracer
 
 if TYPE_CHECKING:
+    from contextvars import Token
+
+    from opentelemetry.context import Context as OtelContext
+
     from ._dbos import (
         DBOS,
         WorkflowHandle,
@@ -389,6 +402,19 @@ def normalize_step_options(opts: Optional[StepOptions]) -> StepOptions:
     return {**DEFAULT_STEP_OPTIONS, **(opts or {})}
 
 
+def _attributes_with_otel_carrier(ctx: DBOSContext) -> Optional[dict[str, Any]]:
+    """Fold a PropagateOtelContext carrier into the workflow's persisted attributes.
+
+    Held outside ctx.workflow_attributes so PropagateOtelContext and
+    SetWorkflowAttributes nest in either order without clobbering each other.
+    """
+    if ctx.otel_carrier is None:
+        return ctx.workflow_attributes
+    attributes = dict(ctx.workflow_attributes) if ctx.workflow_attributes else {}
+    attributes[OTEL_CARRIER_ATTRIBUTE] = ctx.otel_carrier
+    return attributes
+
+
 def _assemble_workflow_status(
     dbos: "DBOS",
     ctx: DBOSContext,
@@ -509,7 +535,7 @@ def _assemble_workflow_status(
         "is_debounced": (
             enqueue_options["is_debounced"] if enqueue_options is not None else False
         ),
-        "attributes": ctx.workflow_attributes,
+        "attributes": _attributes_with_otel_carrier(ctx),
         # schedule_name is only set by the persistent scheduler, which builds
         # the workflow status directly rather than going through this path.
         "schedule_name": None,
@@ -517,6 +543,7 @@ def _assemble_workflow_status(
     # Consume the attributes from the workflow's context so that workflows
     # started inside this workflow do not inherit them.
     ctx.workflow_attributes = None
+    ctx.otel_carrier = None
     return status
 
 
@@ -840,6 +867,82 @@ def _check_required_roles_or_finalize_error(
         raise
 
 
+def _capture_otel_context() -> "Optional[OtelContext]":
+    """Capture the caller's OpenTelemetry context to re-attach on the executor thread.
+
+    Returns None when tracing is off, so opentelemetry -- an optional dependency -- is
+    never imported on the workflow execution path unless the user enabled OTLP.
+    """
+    if dbos_tracer.disable_otlp:
+        return None
+    from opentelemetry import context as otel_context
+
+    return otel_context.get_current()
+
+
+def _carrier_otel_context(
+    carrier: Optional[dict[str, Any]], submitted_ctx: "Optional[OtelContext]"
+) -> "Optional[OtelContext]":
+    """Resolve the OpenTelemetry context a workflow's span should parent to.
+
+    A carrier wins over the context captured at submit time, so the workflow lands on the
+    same trace whether it runs inline, after a queue handoff, or on recovery. A carrier
+    that cannot be read falls back to the submitted context rather than rooting a detached
+    trace, and never fails the workflow. None leaves the ambient context in place.
+    """
+    if dbos_tracer.disable_otlp:
+        return None
+    if carrier is None:
+        return submitted_ctx
+    extracted = extract_trace_context(carrier)
+    return extracted if extracted is not None else submitted_ctx
+
+
+def _workflow_otel_context(
+    status: WorkflowStatusInternal, submitted_ctx: "Optional[OtelContext]"
+) -> "Optional[OtelContext]":
+    """Resolve the parent context for a workflow whose status row is already built."""
+    return _carrier_otel_context(
+        otel_carrier_from_attributes(status.get("attributes")), submitted_ctx
+    )
+
+
+class _UseOtelContext(AbstractContextManager[None, Literal[False]]):
+    """Make an OpenTelemetry context ambient for the duration of a workflow's execution.
+
+    ThreadPoolExecutor.submit does not carry contextvars across threads, so a workflow
+    started by DBOS.start_workflow would otherwise root a new trace instead of parenting
+    to the span active at the call site. asyncio.create_task copies the context already.
+    A None context is a no-op, leaving whatever is ambient in place.
+
+    A class rather than a @contextmanager generator so it also satisfies Outcome.also.
+    """
+
+    def __init__(self, otel_ctx: "Optional[OtelContext]") -> None:
+        self.otel_ctx = otel_ctx
+        self.token: "Optional[Token[OtelContext]]" = None
+
+    def __enter__(self) -> None:
+        if self.otel_ctx is None:
+            return
+        from opentelemetry import context as otel_context
+
+        self.token = otel_context.attach(self.otel_ctx)
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        if self.token is not None:
+            from opentelemetry import context as otel_context
+
+            otel_context.detach(self.token)
+            self.token = None
+        return False
+
+
 def _execute_workflow_wthread(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
@@ -847,6 +950,7 @@ def _execute_workflow_wthread(
     ctx: DBOSContext,
     args: tuple[Any],
     kwargs: dict[str, Any],
+    otel_ctx: "Optional[OtelContext]" = None,
 ) -> R:
     attributes: TracedAttributes = {
         "name": get_dbos_func_name(func),
@@ -854,7 +958,10 @@ def _execute_workflow_wthread(
         "queueName": status.get("queue_name"),
     }
     fi = get_func_info(func)
-    with EnterDBOSWorkflow(attributes, ctx):
+    with (
+        _UseOtelContext(_workflow_otel_context(status, otel_ctx)),
+        EnterDBOSWorkflow(attributes, ctx),
+    ):
         rr: Optional[str] = _check_required_roles_or_finalize_error(
             dbos, status, func, fi
         )
@@ -911,7 +1018,11 @@ async def _execute_workflow_async(
         "queueName": status.get("queue_name"),
     }
     fi = get_func_info(func)
-    with EnterDBOSWorkflow(attributes, ctx):
+    # No submitted context: asyncio.create_task already copied the caller's.
+    with (
+        _UseOtelContext(_workflow_otel_context(status, None)),
+        EnterDBOSWorkflow(attributes, ctx),
+    ):
         rr: Optional[str] = _check_required_roles_or_finalize_error(
             dbos, status, func, fi
         )
@@ -1061,10 +1172,13 @@ def execute_workflow_by_id(
             if fi.func_type != DBOSFuncType.Static:
                 inputs["args"] = (class_object,) + inputs["args"]
 
-        # Propagate the workflow's partition key from its persisted status.
+        # Propagate the workflow's partition key and trace carrier from its persisted status.
         with (
             SetWorkflowID(workflow_id),
             SetEnqueueOptions(queue_partition_key=status.get("queue_partition_key")),
+            restore_otel_carrier(
+                otel_carrier_from_attributes(status.get("attributes"))
+            ),
         ):
             if inspect.iscoroutinefunction(wf_func):
                 ctx = get_local_dbos_context()
@@ -1216,6 +1330,7 @@ def start_workflow(
     ):
         return WorkflowHandlePolling(new_child_workflow_id, dbos)
 
+    # Captured on the caller's thread, re-attached inside the executor thread.
     future = dbos._executor.submit(
         cast(Callable[..., R], _execute_workflow_wthread),
         dbos,
@@ -1224,6 +1339,7 @@ def start_workflow(
         new_wf_ctx,
         args,
         kwargs,
+        _capture_otel_context(),
     )
     return WorkflowHandleFuture(new_child_workflow_id, future, dbos)
 
@@ -1549,6 +1665,10 @@ def workflow_wrapper(
             .intercept(check_and_init, dbos=dbos)
             .also(DBOSAssumeRole(rr))
             .also(EnterDBOSWorkflow(attributes, newwfctx))
+            # Outside EnterDBOSWorkflow so the carrier is active when the span is created,
+            # and read now: check_and_init consumes the carrier off newwfctx. Inside
+            # record_get_result, which belongs to the caller's trace, not the workflow's.
+            .also(_UseOtelContext(_carrier_otel_context(newwfctx.otel_carrier, None)))
             .then(record_get_result, dbos=dbos)
         )
         return outcome()  # type: ignore
