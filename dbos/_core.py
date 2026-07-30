@@ -1507,31 +1507,33 @@ def _build_enqueue_with_options(
     the row. Unset routes it to the latest registered version instead, which
     callers targeting another binary must account for.
     """
+    # An option set to None counts as unset, matching validate_enqueue_options and
+    # build_enqueue_status, so a dict built from config cannot defeat the fallbacks.
     resolved = copy.copy(options)
-    if "workflow_id" not in resolved and new_wf_ctx.id_assigned_for_next_workflow:
+    if resolved.get("workflow_id") is None and new_wf_ctx.id_assigned_for_next_workflow:
         resolved["workflow_id"] = new_wf_ctx.id_assigned_for_next_workflow
     if local_ctx is not None:
         if (
-            "deduplication_id" not in resolved
+            resolved.get("deduplication_id") is None
             and local_ctx.deduplication_id is not None
         ):
             resolved["deduplication_id"] = local_ctx.deduplication_id
-        if "priority" not in resolved and local_ctx.priority is not None:
+        if resolved.get("priority") is None and local_ctx.priority is not None:
             resolved["priority"] = local_ctx.priority
-        if "app_version" not in resolved and local_ctx.app_version is not None:
+        if resolved.get("app_version") is None and local_ctx.app_version is not None:
             resolved["app_version"] = local_ctx.app_version
         if (
-            "queue_partition_key" not in resolved
+            resolved.get("queue_partition_key") is None
             and local_ctx.queue_partition_key is not None
         ):
             resolved["queue_partition_key"] = local_ctx.queue_partition_key
         if (
-            "authenticated_user" not in resolved
+            resolved.get("authenticated_user") is None
             and local_ctx.authenticated_user is not None
         ):
             resolved["authenticated_user"] = local_ctx.authenticated_user
         if (
-            "authenticated_roles" not in resolved
+            resolved.get("authenticated_roles") is None
             and local_ctx.authenticated_roles is not None
         ):
             resolved["authenticated_roles"] = local_ctx.authenticated_roles
@@ -1547,20 +1549,23 @@ def _build_enqueue_with_options(
     status["parent_workflow_id"] = (
         new_wf_ctx.parent_workflow_id if new_wf_ctx.has_parent() else None
     )
-    if "workflow_timeout" not in resolved:
+    if resolved.get("workflow_timeout") is None:
         # Inherit an explicit SetWorkflowTimeout, else the parent's propagated deadline.
         status["workflow_timeout_ms"], status["workflow_deadline_epoch_ms"] = (
             _get_timeout_deadline(local_ctx, resolved["queue_name"])
         )
     if (
-        "delay_seconds" not in resolved
+        resolved.get("delay_seconds") is None
         and local_ctx is not None
         and local_ctx.delay_until_epoch_ms is not None
     ):
         status["delay_until_epoch_ms"] = local_ctx.delay_until_epoch_ms
         status["status"] = WorkflowStatusString.DELAYED.value
-    if status["attributes"] is None:
-        status["attributes"] = _attributes_with_otel_carrier(new_wf_ctx)
+    ambient_attributes = _attributes_with_otel_carrier(new_wf_ctx)
+    if ambient_attributes is not None:
+        # Merge rather than replace: options win per key, but neither an ambient
+        # SetWorkflowAttributes nor a PropagateOtelContext carrier is dropped.
+        status["attributes"] = {**ambient_attributes, **(status["attributes"] or {})}
     return status
 
 

@@ -25,6 +25,7 @@ from dbos import (
     EnqueueOptions,
     Queue,
     SetEnqueueOptions,
+    SetWorkflowAttributes,
     SetWorkflowID,
     SetWorkflowTimeout,
     WorkflowHandle,
@@ -3802,16 +3803,18 @@ def test_enqueue_with_options_ambient_context(dbos: DBOS) -> None:
     assert status.status == WorkflowStatusString.ENQUEUED.value
     DBOS.cancel_workflow(wfid)
 
-    # Ambient deduplication_id, priority and delay all reach the row.
+    # Ambient deduplication_id, priority and delay all reach the row. The
+    # explicit None must count as unset, or it would defeat the fallback.
+    ambient_opts: EnqueueOptions = {
+        "workflow_name": "with_options_ctx_target",
+        "queue_name": "with_options_ctx_queue",
+    }
+    ambient_opts["deduplication_id"] = None  # type: ignore[typeddict-item]
     with SetEnqueueOptions(
         deduplication_id="ambient-dedup", priority=5, delay_seconds=3600
     ):
         ambient: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
-            {
-                "workflow_name": "with_options_ctx_target",
-                "queue_name": "with_options_ctx_queue",
-            },
-            3,
+            ambient_opts, 3
         )
     ambient_status = ambient.get_status()
     assert ambient_status.status == WorkflowStatusString.DELAYED.value
@@ -3846,6 +3849,20 @@ def test_enqueue_with_options_ambient_context(dbos: DBOS) -> None:
     assert authed_status.authenticated_user == "bob"
     assert authed_status.authenticated_roles == ["auditor"]
     DBOS.cancel_workflow(authed.get_workflow_id())
+
+    # Options attributes merge with ambient ones rather than replacing them.
+    with SetWorkflowAttributes({"ambient": "a"}):
+        with SetEnqueueOptions(delay_seconds=3600):
+            merged: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
+                {
+                    "workflow_name": "with_options_ctx_target",
+                    "queue_name": "with_options_ctx_queue",
+                    "attributes": {"explicit": "b"},
+                },
+                6,
+            )
+    assert merged.get_status().attributes == {"ambient": "a", "explicit": "b"}
+    DBOS.cancel_workflow(merged.get_workflow_id())
 
     # An explicit option still wins over the ambient one.
     with SetEnqueueOptions(app_version="ambient-version"):
