@@ -21,6 +21,7 @@ from dbos import (
     DBOSClient,
     DBOSConfig,
     DBOSConfiguredInstance,
+    EnqueueOptions,
     Queue,
     SetEnqueueOptions,
     SetWorkflowID,
@@ -3602,6 +3603,46 @@ def test_enqueue_with_options_passthrough(dbos: DBOS) -> None:
     )
     assert handle2.get_result() == 42
 
+    # Park a workflow to hold a deduplication ID for the collision below.
+    parked: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
+        {
+            "workflow_name": "with_options_passthrough_target",
+            "queue_name": "with_options_passthrough_queue",
+            "deduplication_id": "held-key",
+            "delay_seconds": 3600,
+        },
+        21,
+    )
+
+    @DBOS.workflow()
+    def with_options_dedup_parent() -> int:
+        handle: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
+            {
+                "workflow_name": "with_options_passthrough_target",
+                "queue_name": "with_options_passthrough_queue",
+                "deduplication_id": "held-key",
+            },
+            21,
+        )
+        return handle.get_result()
+
+    # A deduplicated enqueue inside a workflow checkpoints its error, so the
+    # replay raises the same error rather than enqueueing a second time.
+    parent_id = str(uuid.uuid4())
+    with SetWorkflowID(parent_id):
+        with pytest.raises(DBOSQueueDeduplicatedError):
+            with_options_dedup_parent()
+
+    set_workflow_status(dbos._sys_db, parent_id, "PENDING")
+    recovered = [
+        h for h in DBOS._recover_pending_workflows() if h.get_workflow_id() == parent_id
+    ]
+    assert len(recovered) == 1
+    with pytest.raises(DBOSQueueDeduplicatedError):
+        recovered[0].get_result()
+
+    DBOS.cancel_workflow(parked.get_workflow_id())
+
 
 def test_enqueue_with_options_unknown_workflow(dbos: DBOS) -> None:
     """A name this executor cannot resolve is enqueued without complaint: the
@@ -3635,35 +3676,49 @@ def test_enqueue_with_options_child(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def with_options_parent(x: int) -> int:
-        handle: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
-            {
-                "workflow_name": "with_options_child",
-                "queue_name": "with_options_child_queue",
-            },
-            x,
+        # One options dict, enqueued twice: the caller's copy must not be mutated.
+        options: EnqueueOptions = {
+            "workflow_name": "with_options_child",
+            "queue_name": "with_options_child_queue",
+        }
+        first: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(options, x)
+        second: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
+            options, x + 10
         )
-        return handle.get_result()
+        return first.get_result() + second.get_result()
 
     DBOS.register_queue("with_options_child_queue")
 
     wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        assert with_options_parent(1) == 2
-    assert child_counter == 1
+    with SetWorkflowTimeout(300):
+        with SetWorkflowID(wfid):
+            assert with_options_parent(1) == 14
+    assert child_counter == 2
 
-    # The child is recorded against the parent; the second step is its get_result.
+    # Each child is recorded against the parent, with an ID from the parent's
+    # function counter; the trailing steps are the two get_results.
     steps = DBOS.list_workflow_steps(wfid)
-    assert len(steps) == 2
+    assert len(steps) == 4
     assert steps[0]["function_name"] == "with_options_child"
     assert steps[0]["child_workflow_id"] == f"{wfid}-1"
+    assert steps[1]["child_workflow_id"] == f"{wfid}-2"
     assert DBOS.retrieve_workflow(f"{wfid}-1").get_status().parent_workflow_id == wfid
 
-    # On recovery the parent re-runs but returns the recorded child, not a new one.
+    # The children inherit the parent's deadline instead of running unbounded.
+    parent_deadline = (
+        DBOS.retrieve_workflow(wfid).get_status().workflow_deadline_epoch_ms
+    )
+    assert parent_deadline is not None
+    for child_id in (f"{wfid}-1", f"{wfid}-2"):
+        child_status = DBOS.retrieve_workflow(child_id).get_status()
+        assert child_status.workflow_deadline_epoch_ms == parent_deadline
+
+    # On recovery the parent re-runs but returns the recorded children, not new ones.
     set_workflow_status(dbos._sys_db, wfid, "PENDING")
     handles = DBOS._recover_pending_workflows()
     assert len(handles) == 1
-    assert handles[0].get_result() == 2
-    assert child_counter == 1
+    assert handles[0].get_result() == 14
+    assert child_counter == 2
 
 
 @pytest.mark.asyncio
