@@ -21,8 +21,11 @@ from dbos import (
     DBOSClient,
     DBOSConfig,
     DBOSConfiguredInstance,
+    DBOSContextSetAuth,
+    EnqueueOptions,
     Queue,
     SetEnqueueOptions,
+    SetWorkflowAttributes,
     SetWorkflowID,
     SetWorkflowTimeout,
     WorkflowHandle,
@@ -3541,3 +3544,334 @@ def test_enqueued_async_workflow_survives_gc(dbos: DBOS) -> None:
         assert not dbos._workflow_tasks
 
     retry_until_success(check_task_released, interval=0.1, max_attempts=50)
+
+
+def test_enqueue_with_options(dbos: DBOS) -> None:
+    @DBOS.workflow(name="with_options_target")
+    def with_options_target(x: int, y: int = 0) -> int:
+        return x + y
+
+    DBOS.register_queue("with_options_queue")
+
+    handle: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
+        {"workflow_name": "with_options_target", "queue_name": "with_options_queue"},
+        5,
+        y=3,
+    )
+    assert handle.get_result() == 8
+
+    status = handle.get_status()
+    assert status.name == "with_options_target"
+    assert status.queue_name == "with_options_queue"
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_enqueue_with_options_passthrough(dbos: DBOS) -> None:
+    @DBOS.workflow(name="with_options_passthrough_target")
+    def with_options_passthrough_target(x: int) -> int:
+        return x * 2
+
+    DBOS.register_queue("with_options_passthrough_queue")
+
+    wfid = str(uuid.uuid4())
+    handle: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
+        {
+            "workflow_name": "with_options_passthrough_target",
+            "queue_name": "with_options_passthrough_queue",
+            "workflow_id": wfid,
+            "app_version": GlobalParams.app_version,
+            "deduplication_id": "dedup-key",
+            "authenticated_user": "alice",
+            "authenticated_roles": ["admin"],
+        },
+        21,
+    )
+    assert handle.get_workflow_id() == wfid
+    assert handle.get_result() == 42
+
+    status = handle.get_status()
+    assert status.app_version == GlobalParams.app_version
+    assert status.authenticated_user == "alice"
+    assert status.authenticated_roles == ["admin"]
+
+    # The deduplication ID is released once the first workflow completes.
+    handle2: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
+        {
+            "workflow_name": "with_options_passthrough_target",
+            "queue_name": "with_options_passthrough_queue",
+            "deduplication_id": "dedup-key",
+        },
+        21,
+    )
+    assert handle2.get_result() == 42
+
+    # Park a workflow to hold a deduplication ID for the collisions below.
+    parked: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
+        {
+            "workflow_name": "with_options_passthrough_target",
+            "queue_name": "with_options_passthrough_queue",
+            "deduplication_id": "held-key",
+            "delay_seconds": 3600,
+            "workflow_timeout": 300,
+        },
+        21,
+    )
+    # An explicit timeout survives; it is not overwritten by the ambient deadline.
+    assert parked.get_status().workflow_timeout_ms == 300000
+
+    # Colliding with a held key outside a workflow raises directly.
+    with pytest.raises(DBOSQueueDeduplicatedError):
+        DBOS.enqueue_workflow_with_options(
+            {
+                "workflow_name": "with_options_passthrough_target",
+                "queue_name": "with_options_passthrough_queue",
+                "deduplication_id": "held-key",
+            },
+            21,
+        )
+
+    @DBOS.workflow()
+    def with_options_dedup_parent() -> int:
+        handle: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
+            {
+                "workflow_name": "with_options_passthrough_target",
+                "queue_name": "with_options_passthrough_queue",
+                "deduplication_id": "held-key",
+            },
+            21,
+        )
+        return handle.get_result()
+
+    parent_id = str(uuid.uuid4())
+    with SetWorkflowID(parent_id):
+        with pytest.raises(DBOSQueueDeduplicatedError):
+            with_options_dedup_parent()
+
+    # The failed enqueue is checkpointed against the parent: an error, no child.
+    steps = DBOS.list_workflow_steps(parent_id)
+    assert len(steps) == 1
+    assert steps[0]["error"] is not None
+    assert steps[0]["child_workflow_id"] is None
+
+    # Free the key BEFORE recovery, so a re-attempted enqueue would now succeed.
+    # Only a replay of the checkpointed error can still raise here.
+    DBOS.cancel_workflow(parked.get_workflow_id())
+    set_workflow_status(dbos._sys_db, parent_id, "PENDING")
+    recovered = [
+        h for h in DBOS._recover_pending_workflows() if h.get_workflow_id() == parent_id
+    ]
+    assert len(recovered) == 1
+    with pytest.raises(DBOSQueueDeduplicatedError):
+        recovered[0].get_result()
+
+
+def test_enqueue_with_options_unknown_workflow(dbos: DBOS) -> None:
+    """A name this executor cannot resolve is enqueued without complaint: the
+    point of the API is that the target is implemented elsewhere."""
+    DBOS.register_queue("with_options_unknown_queue")
+
+    handle: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
+        {
+            "workflow_name": "not_registered_anywhere",
+            "queue_name": "with_options_unknown_queue",
+            # Parks the row so no worker dequeues a name it cannot run.
+            "delay_seconds": 3600,
+        },
+        1,
+    )
+    status = handle.get_status()
+    assert status.status == WorkflowStatusString.DELAYED.value
+    # The target may live in another executor, so the row is left unpinned.
+    assert status.app_version is None
+    DBOS.cancel_workflow(handle.get_workflow_id())
+
+
+def test_enqueue_with_options_child(dbos: DBOS) -> None:
+    child_counter: int = 0
+
+    @DBOS.workflow(name="with_options_child")
+    def with_options_child(x: int) -> int:
+        nonlocal child_counter
+        child_counter += 1
+        return x + 1
+
+    @DBOS.workflow()
+    def with_options_parent(x: int) -> int:
+        # One options dict, enqueued twice: the caller's copy must not be mutated.
+        options: EnqueueOptions = {
+            "workflow_name": "with_options_child",
+            "queue_name": "with_options_child_queue",
+        }
+        first: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(options, x)
+        second: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
+            options, x + 10
+        )
+        return first.get_result() + second.get_result()
+
+    DBOS.register_queue("with_options_child_queue")
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowTimeout(300):
+        with SetWorkflowID(wfid):
+            assert with_options_parent(1) == 14
+    assert child_counter == 2
+
+    # Each child is recorded against the parent, with an ID from the parent's
+    # function counter; the trailing steps are the two get_results.
+    steps = DBOS.list_workflow_steps(wfid)
+    assert len(steps) == 4
+    assert steps[0]["function_name"] == "with_options_child"
+    assert steps[0]["child_workflow_id"] == f"{wfid}-1"
+    assert steps[1]["child_workflow_id"] == f"{wfid}-2"
+    assert DBOS.retrieve_workflow(f"{wfid}-1").get_status().parent_workflow_id == wfid
+
+    # The children inherit the parent's deadline instead of running unbounded.
+    parent_deadline = (
+        DBOS.retrieve_workflow(wfid).get_status().workflow_deadline_epoch_ms
+    )
+    assert parent_deadline is not None
+    for child_id in (f"{wfid}-1", f"{wfid}-2"):
+        child_status = DBOS.retrieve_workflow(child_id).get_status()
+        assert child_status.workflow_deadline_epoch_ms == parent_deadline
+
+    # On recovery the parent re-runs but returns the recorded children, not new ones.
+    # A re-attempted enqueue would rebuild the same deterministic ID and upsert
+    # over the finished child, so watch updated_at: only a replay leaves it alone.
+    child_updated_at = DBOS.retrieve_workflow(f"{wfid}-1").get_status().updated_at
+    set_workflow_status(dbos._sys_db, wfid, "PENDING")
+    handles = DBOS._recover_pending_workflows()
+    assert len(handles) == 1
+    assert handles[0].get_result() == 14
+    assert child_counter == 2
+    assert (
+        DBOS.retrieve_workflow(f"{wfid}-1").get_status().updated_at == child_updated_at
+    )
+
+
+@pytest.mark.asyncio
+async def test_enqueue_with_options_async(dbos: DBOS) -> None:
+    @DBOS.workflow(name="with_options_async_child")
+    async def with_options_async_child(x: int) -> int:
+        return x + 1
+
+    @DBOS.workflow()
+    async def with_options_async_parent(x: int) -> int:
+        handle: WorkflowHandleAsync[int] = (
+            await DBOS.enqueue_workflow_with_options_async(
+                {
+                    "workflow_name": "with_options_async_child",
+                    "queue_name": "with_options_async_queue",
+                },
+                x,
+            )
+        )
+        return await handle.get_result()
+
+    await DBOS.register_queue_async("with_options_async_queue")
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert await with_options_async_parent(1) == 2
+
+    steps = await DBOS.list_workflow_steps_async(wfid)
+    assert steps[0]["function_name"] == "with_options_async_child"
+    assert steps[0]["child_workflow_id"] == f"{wfid}-1"
+
+
+def test_enqueue_with_options_ambient_context(dbos: DBOS) -> None:
+    @DBOS.workflow(name="with_options_ctx_target")
+    def with_options_ctx_target(x: int) -> int:
+        return x
+
+    DBOS.register_queue("with_options_ctx_queue")
+
+    # Ambient enqueue options apply here like they do to any other enqueue.
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        with SetEnqueueOptions(app_version="ambient-version"):
+            handle: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
+                {
+                    "workflow_name": "with_options_ctx_target",
+                    "queue_name": "with_options_ctx_queue",
+                },
+                1,
+            )
+    assert handle.get_workflow_id() == wfid
+    status = handle.get_status()
+    assert status.app_version == "ambient-version"
+    # No executor runs that version, so the workflow stays enqueued.
+    assert status.status == WorkflowStatusString.ENQUEUED.value
+    DBOS.cancel_workflow(wfid)
+
+    # Ambient deduplication_id, priority and delay all reach the row. The
+    # explicit None must count as unset, or it would defeat the fallback.
+    ambient_opts: EnqueueOptions = {
+        "workflow_name": "with_options_ctx_target",
+        "queue_name": "with_options_ctx_queue",
+    }
+    ambient_opts["deduplication_id"] = None  # type: ignore[typeddict-item]
+    with SetEnqueueOptions(
+        deduplication_id="ambient-dedup", priority=5, delay_seconds=3600
+    ):
+        ambient: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
+            ambient_opts, 3
+        )
+    ambient_status = ambient.get_status()
+    assert ambient_status.status == WorkflowStatusString.DELAYED.value
+    assert ambient_status.deduplication_id == "ambient-dedup"
+    assert ambient_status.priority == 5
+    DBOS.cancel_workflow(ambient.get_workflow_id())
+
+    # An ambient partition key reaches the row too, where it is rejected
+    # alongside an explicit deduplication ID.
+    with pytest.raises(DBOSException):
+        with SetEnqueueOptions(queue_partition_key="tenant-1"):
+            DBOS.enqueue_workflow_with_options(
+                {
+                    "workflow_name": "with_options_ctx_target",
+                    "queue_name": "with_options_ctx_queue",
+                    "deduplication_id": "never-written",
+                },
+                4,
+            )
+
+    # Ambient authentication is inherited when the options do not set it.
+    with DBOSContextSetAuth("bob", ["auditor"]):
+        with SetEnqueueOptions(delay_seconds=3600):
+            authed: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
+                {
+                    "workflow_name": "with_options_ctx_target",
+                    "queue_name": "with_options_ctx_queue",
+                },
+                5,
+            )
+    authed_status = authed.get_status()
+    assert authed_status.authenticated_user == "bob"
+    assert authed_status.authenticated_roles == ["auditor"]
+    DBOS.cancel_workflow(authed.get_workflow_id())
+
+    # Options attributes merge with ambient ones rather than replacing them.
+    with SetWorkflowAttributes({"ambient": "a"}):
+        with SetEnqueueOptions(delay_seconds=3600):
+            merged: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
+                {
+                    "workflow_name": "with_options_ctx_target",
+                    "queue_name": "with_options_ctx_queue",
+                    "attributes": {"explicit": "b"},
+                },
+                6,
+            )
+    assert merged.get_status().attributes == {"ambient": "a", "explicit": "b"}
+    DBOS.cancel_workflow(merged.get_workflow_id())
+
+    # An explicit option still wins over the ambient one.
+    with SetEnqueueOptions(app_version="ambient-version"):
+        explicit: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
+            {
+                "workflow_name": "with_options_ctx_target",
+                "queue_name": "with_options_ctx_queue",
+                "app_version": GlobalParams.app_version,
+            },
+            2,
+        )
+    assert explicit.get_result() == 2
