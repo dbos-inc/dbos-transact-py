@@ -483,7 +483,7 @@ def db_retry(
     retry_connection_errors=False opts out, raising connection errors instead.
 
     Args:
-        sys_db (SystemDatabase): The system database whose retry setting applies, for call sites where it is not the decorated function's first argument (closures within a method).
+        sys_db (SystemDatabase): The system database whose retry setting applies, for call sites where it is not the first argument (closures within a method).
     """
 
     def decorator(func: F) -> F:
@@ -498,12 +498,12 @@ def db_retry(
                 except Exception as e:
 
                     # Determine if this is a retriable exception
-                    sqlite_retriable = retriable_sqlite_exception(e)
-                    if not retriable_postgres_exception(e) and not sqlite_retriable:
+                    postgres_retriable = retriable_postgres_exception(e)
+                    if not postgres_retriable and not retriable_sqlite_exception(e):
                         raise
 
-                    # Retrying connection errors is optional; SQLite lock contention is not a connection error and always retries.
-                    if not sqlite_retriable and not getattr(
+                    # Connection-error retries are optional. Judge the error itself: a DBAPIError renders its parameters, so program data can read as lock contention.
+                    if postgres_retriable and not getattr(
                         db, "_retry_connection_errors", True
                     ):
                         raise

@@ -31,6 +31,7 @@ from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import db_retry
+from dbos._utils import retriable_sqlite_exception
 from tests import client_collateral
 from tests.client_collateral import event_test, retrieve_test, send_test
 from tests.conftest import TestOtelType, set_workflow_status, wait_for_client_listener
@@ -622,6 +623,18 @@ def test_db_retry_connection_error_opt_out() -> None:
     locked = sa.exc.OperationalError("SELECT 1", None, Exception("database is locked"))
     assert flaky(FakeSystemDatabase(False), locked) == "ok"
     assert calls == 3
+
+    # A DBAPIError renders its parameters, so program data can read as lock contention.
+    calls = 0
+    lookalike = sa.exc.OperationalError(
+        "INSERT INTO dbos.workflow_status (inputs) VALUES (%(inputs)s)",
+        {"inputs": '{"args": ["database is locked"]}'},
+        psycopg.OperationalError("connection failed"),
+    )
+    assert retriable_sqlite_exception(lookalike)
+    with pytest.raises(DBAPIError):
+        flaky(FakeSystemDatabase(False), lookalike)
+    assert calls == 1
 
 
 def test_client_no_retry_raises_on_unreachable_database() -> None:
