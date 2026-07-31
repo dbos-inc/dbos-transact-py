@@ -26,7 +26,7 @@ from dbos import (
     SetWorkflowID,
 )
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
-from dbos._error import DBOSNonExistentWorkflowError
+from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 from dbos._schemas.system_database import SystemSchema
 from tests import client_collateral
 from tests.client_collateral import event_test, retrieve_test, send_test
@@ -527,6 +527,61 @@ async def test_client_get_event_async_prompt_delivery(
 
 def test_client_no_listener_by_default(client: DBOSClient) -> None:
     assert client._notification_listener_thread is None
+
+
+# Nothing listens here, so connecting fails immediately instead of hanging.
+_UNREACHABLE_SYSTEM_DATABASE_URL = (
+    "postgresql://postgres:dbos@127.0.0.1:59999/dbostestpy_lazy_dbos_sys"
+)
+
+
+def test_client_lazy_defers_connecting() -> None:
+    """A lazy client constructs while the system database is unreachable; an eager one raises."""
+    client = DBOSClient(system_database_url=_UNREACHABLE_SYSTEM_DATABASE_URL, lazy=True)
+    try:
+        # The connection is checked only when explicitly requested.
+        with pytest.raises(Exception):
+            client.check_connection()
+    finally:
+        client.destroy()
+
+    with pytest.raises(Exception):
+        DBOSClient(system_database_url=_UNREACHABLE_SYSTEM_DATABASE_URL)
+
+
+def test_client_lazy_connects_on_first_use(config: DBOSConfig, dbos: DBOS) -> None:
+    """A lazy client against a live database behaves exactly like an eager one."""
+    assert config["system_database_url"] is not None
+    client = DBOSClient(system_database_url=config["system_database_url"], lazy=True)
+    try:
+        client.check_connection()
+        run_client_collateral()
+
+        wfid = str(uuid.uuid4())
+        options: EnqueueOptions = {
+            "queue_name": "test_queue",
+            "workflow_name": "enqueue_test",
+            "workflow_id": wfid,
+        }
+        johnDoe: Person = {"first": "John", "last": "Doe", "age": 30}
+        handle: WorkflowHandle[str] = client.enqueue(options, 42, "test", johnDoe)
+        assert (
+            handle.get_result() == '42-test-{"first": "John", "last": "Doe", "age": 30}'
+        )
+    finally:
+        client.destroy()
+
+
+def test_client_lazy_rejects_listen_notify(config: DBOSConfig) -> None:
+    """The listener thread connects immediately, so it cannot combine with lazy."""
+    assert config["system_database_url"] is not None
+    with pytest.raises(DBOSException) as exc_info:
+        DBOSClient(
+            system_database_url=config["system_database_url"],
+            use_listen_notify=True,
+            lazy=True,
+        )
+    assert "lazy" in str(exc_info.value)
 
 
 def test_client_listen_notify_get_event(
