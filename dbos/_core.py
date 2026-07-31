@@ -1596,46 +1596,53 @@ def _build_enqueue_with_options(
         status["status"] = WorkflowStatusString.DELAYED.value
     ambient_attributes = _attributes_with_otel_carrier(new_wf_ctx)
     if ambient_attributes is not None:
-        # Merge rather than replace: options win per key, but neither an ambient
-        # SetWorkflowAttributes nor a PropagateOtelContext carrier is dropped.
+        # Merge rather than replace: ambient attributes survive, but options win per
+        # key, including the otel carrier an ambient PropagateOtelContext set.
         status["attributes"] = {**ambient_attributes, **(status["attributes"] or {})}
     return status
+
+
+def _check_recorded_enqueue(
+    dbos: "DBOS", new_wf_ctx: DBOSContext, wf_name: str
+) -> Optional[str]:
+    """Return the child ID this enqueue already recorded, or None if it is new.
+
+    Raises the recorded error if the original call failed. Runs before the row is
+    built so a replay re-validates and re-serializes nothing it already checkpointed.
+    """
+    if not new_wf_ctx.has_parent():
+        return None
+    recorded_result = dbos._sys_db.check_operation_execution(
+        new_wf_ctx.parent_workflow_id,
+        new_wf_ctx.parent_workflow_fid,
+        wf_name,
+    )
+    if recorded_result and recorded_result["error"]:
+        e: Exception = deserialize_exception(
+            recorded_result["error"],
+            recorded_result["serialization"],
+            dbos._sys_db.serializer,
+        )
+        raise e
+    elif recorded_result and recorded_result["child_workflow_id"]:
+        return recorded_result["child_workflow_id"]
+    return None
 
 
 def _persist_enqueue_with_options(
     dbos: "DBOS",
     new_wf_ctx: DBOSContext,
     status: WorkflowStatusInternal,
-    max_recovery_attempts: Optional[int],
 ) -> str:
-    """Persist the enqueue, recording it as a child of the calling workflow.
-
-    Returns the enqueued workflow's ID, which on a replay is the ID recorded by
-    the original call rather than the one just built.
-    """
+    """Persist the enqueue, recording it as a child of the calling workflow."""
     wf_name = status["name"]
     workflow_id = status["workflow_uuid"]
     child_start_time = int(time.time() * 1000)
-    if new_wf_ctx.has_parent():
-        recorded_result = dbos._sys_db.check_operation_execution(
-            new_wf_ctx.parent_workflow_id,
-            new_wf_ctx.parent_workflow_fid,
-            wf_name,
-        )
-        if recorded_result and recorded_result["error"]:
-            e: Exception = deserialize_exception(
-                recorded_result["error"],
-                recorded_result["serialization"],
-                dbos._sys_db.serializer,
-            )
-            raise e
-        elif recorded_result and recorded_result["child_workflow_id"]:
-            return recorded_result["child_workflow_id"]
-
     try:
         dbos._sys_db.init_workflow(
             status,
-            max_recovery_attempts=max_recovery_attempts,
+            # Ignored like every other options-based enqueue; the executor that runs the workflow applies its own limit.
+            max_recovery_attempts=None,
             owner_xid=None,
             is_recovery_request=False,
             is_dequeued_request=False,
@@ -1678,12 +1685,15 @@ def enqueue_workflow_with_options(
 ) -> "WorkflowHandle[Any]":
     local_ctx = get_local_dbos_context()
     new_wf_ctx = DBOSContext.create_start_workflow_child(local_ctx)
+    recorded_child_id = _check_recorded_enqueue(
+        dbos, new_wf_ctx, options["workflow_name"]
+    )
+    if recorded_child_id is not None:
+        return WorkflowHandlePolling(recorded_child_id, dbos)
     status = _build_enqueue_with_options(
         dbos, local_ctx, new_wf_ctx, options, args, kwargs
     )
-    workflow_id = _persist_enqueue_with_options(
-        dbos, new_wf_ctx, status, options.get("max_recovery_attempts")
-    )
+    workflow_id = _persist_enqueue_with_options(dbos, new_wf_ctx, status)
     return WorkflowHandlePolling(workflow_id, dbos)
 
 
@@ -1695,15 +1705,16 @@ async def enqueue_workflow_with_options_async(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
 ) -> "WorkflowHandleAsync[Any]":
+    recorded_child_id = await asyncio.to_thread(
+        _check_recorded_enqueue, dbos, new_wf_ctx, options["workflow_name"]
+    )
+    if recorded_child_id is not None:
+        return WorkflowHandleAsyncPolling(recorded_child_id, dbos)
     status = _build_enqueue_with_options(
         dbos, local_ctx, new_wf_ctx, options, args, kwargs
     )
     workflow_id = await asyncio.to_thread(
-        _persist_enqueue_with_options,
-        dbos,
-        new_wf_ctx,
-        status,
-        options.get("max_recovery_attempts"),
+        _persist_enqueue_with_options, dbos, new_wf_ctx, status
     )
     return WorkflowHandleAsyncPolling(workflow_id, dbos)
 
