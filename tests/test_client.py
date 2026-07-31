@@ -529,7 +529,7 @@ def test_client_no_listener_by_default(client: DBOSClient) -> None:
     assert client._notification_listener_thread is None
 
 
-# Nothing listens here, so connecting fails immediately instead of hanging.
+# Nothing listens here, so connecting fails fast.
 _UNREACHABLE_SYSTEM_DATABASE_URL = (
     "postgresql://postgres:dbos@127.0.0.1:59999/dbostestpy_lazy_dbos_sys"
 )
@@ -539,7 +539,6 @@ def test_client_lazy_defers_connecting() -> None:
     """A lazy client constructs while the system database is unreachable; an eager one raises."""
     client = DBOSClient(system_database_url=_UNREACHABLE_SYSTEM_DATABASE_URL, lazy=True)
     try:
-        # The connection is checked only when explicitly requested.
         with pytest.raises(Exception):
             client.check_connection()
     finally:
@@ -550,7 +549,7 @@ def test_client_lazy_defers_connecting() -> None:
 
 
 def test_client_lazy_connects_on_first_use(config: DBOSConfig, dbos: DBOS) -> None:
-    """A lazy client against a live database behaves exactly like an eager one."""
+    """Against a live database, a lazy client behaves like an eager one."""
     assert config["system_database_url"] is not None
     client = DBOSClient(system_database_url=config["system_database_url"], lazy=True)
     try:

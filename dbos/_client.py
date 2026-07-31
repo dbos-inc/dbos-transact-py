@@ -209,9 +209,9 @@ class DBOSClient:
 
         The client talks only to the system database, so it can enqueue workflows,
         send messages, read events and streams, and manage workflows, queues, and
-        schedules without registering or running any workflow code itself. By
-        default it connects on construction and raises if the system database is
-        unreachable; pass lazy=True to defer connecting until first use.
+        schedules without registering or running any workflow code itself. It
+        connects on construction and raises if the system database is
+        unreachable, unless it is created with lazy=True.
 
         Unlike DBOS itself, the client never runs schema migrations: the system
         database must already have been created by a DBOS application.
@@ -226,7 +226,7 @@ class DBOSClient:
             system_database_pool_size (int): System database pool size. Defaults to 5.
             system_database_polling_concurrency (int): Maximum number of DB-backed polling reads (from wait operations such as get_result, get_event, and read_stream) that may run concurrently against the system database pool. Defaults to half the system database pool size (minimum 1). Set to a non-positive value to disable the limiter.
             use_listen_notify (bool): Whether to run a listener thread so get_event and read_stream are woken by notifications rather than polling the database. Defaults to False. Only enable this if the system database was created with use_listen_notify=True (the DBOS default).
-            lazy (bool): Whether to defer connecting to the system database until the client is first used. Defaults to False, meaning the client verifies its connection on construction. A lazy client can be constructed while the system database is unreachable (for example at import time), but then a database that never becomes reachable surfaces as operations retrying instead of as an error at construction. Call check_connection() to verify the connection explicitly. Cannot be combined with use_listen_notify, whose listener thread connects as soon as the client is created.
+            lazy (bool): Whether to defer connecting until the client is first used. Defaults to False, meaning the connection is checked on construction. Call check_connection() to check it explicitly. Cannot be combined with use_listen_notify, whose listener connects immediately.
 
         Raises:
             Exception: If the system database cannot be reached, unless lazy is True.
@@ -234,7 +234,7 @@ class DBOSClient:
         """
         if lazy and use_listen_notify:
             raise DBOSException(
-                "A DBOSClient cannot be both lazy and use_listen_notify: the notification listener connects to the system database immediately."
+                "A DBOSClient cannot be both lazy and use_listen_notify: the notification listener connects immediately."
             )
         self._serializer = serializer
         if system_database_engine:
@@ -286,11 +286,7 @@ class DBOSClient:
                 self._notification_listener_thread.start()
 
     def check_connection(self) -> None:
-        """Verify the client can reach the system database, raising if it cannot.
-
-        Non-lazy clients run this on construction. Lazy clients can call it to
-        check the connection at a point of their own choosing.
-        """
+        """Verify the client can reach the system database, raising if it cannot."""
         self._sys_db.check_connection()
 
     def destroy(self) -> None:
