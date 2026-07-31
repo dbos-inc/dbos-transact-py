@@ -134,6 +134,7 @@ class DBOSClient:
         system_database_polling_concurrency: Optional[int] = None,
         use_listen_notify: bool = False,
         lazy: bool = False,
+        retry_connection_errors: bool = True,
     ):
         """Create a client for interacting with a DBOS application from outside it.
 
@@ -157,6 +158,7 @@ class DBOSClient:
             system_database_polling_concurrency (int): Maximum number of DB-backed polling reads (from wait operations such as get_result, get_event, and read_stream) that may run concurrently against the system database pool. Defaults to half the system database pool size (minimum 1). Set to a non-positive value to disable the limiter.
             use_listen_notify (bool): Whether to run a listener thread so get_event and read_stream are woken by notifications rather than polling the database. Defaults to False. Only enable this if the system database was created with use_listen_notify=True (the DBOS default).
             lazy (bool): Whether to defer connecting until the client is first used. Defaults to False, meaning the connection is checked on construction. Call check_connection() to check it explicitly. Cannot be combined with use_listen_notify, whose listener connects immediately.
+            retry_connection_errors (bool): Whether an operation that loses its database connection blocks and retries until the connection recovers. Defaults to True. Set to False to raise instead, so an unreachable database surfaces as an error rather than a wait.
 
         Raises:
             Exception: If the system database cannot be reached, unless lazy is True.
@@ -203,6 +205,7 @@ class DBOSClient:
             executor_id=None,
             use_listen_notify=use_listen_notify,
             polling_concurrency=system_database_polling_concurrency,
+            retry_connection_errors=retry_connection_errors,
         )
         self._notification_listener_thread: Optional[threading.Thread] = None
         if not lazy:

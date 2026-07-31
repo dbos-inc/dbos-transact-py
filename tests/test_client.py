@@ -5,11 +5,13 @@ import os
 import runpy
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Optional, TypedDict
 
+import psycopg
 import pytest
 import sqlalchemy as sa
 from opentelemetry import context as otel_context
@@ -28,6 +30,7 @@ from dbos import (
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 from dbos._schemas.system_database import SystemSchema
+from dbos._sys_db import db_retry
 from tests import client_collateral
 from tests.client_collateral import event_test, retrieve_test, send_test
 from tests.conftest import TestOtelType, set_workflow_status, wait_for_client_listener
@@ -581,6 +584,74 @@ def test_client_lazy_rejects_listen_notify(config: DBOSConfig) -> None:
             lazy=True,
         )
     assert "lazy" in str(exc_info.value)
+
+
+def _connection_error() -> DBAPIError:
+    return sa.exc.OperationalError(
+        "SELECT 1", None, psycopg.OperationalError("connection failed")
+    )
+
+
+def test_db_retry_connection_error_opt_out() -> None:
+    """db_retry rides out connection errors by default and raises when opted out,
+    but SQLite lock contention is not a connection error and always retries."""
+
+    class FakeSystemDatabase:
+        def __init__(self, retry_connection_errors: bool) -> None:
+            self._retry_connection_errors = retry_connection_errors
+
+    calls = 0
+
+    @db_retry(initial_backoff=0.01)
+    def flaky(sys_db: Any, error: Exception) -> str:
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise error
+        return "ok"
+
+    assert flaky(FakeSystemDatabase(True), _connection_error()) == "ok"
+    assert calls == 3
+
+    calls = 0
+    with pytest.raises(DBAPIError):
+        flaky(FakeSystemDatabase(False), _connection_error())
+    assert calls == 1
+
+    calls = 0
+    locked = sa.exc.OperationalError("SELECT 1", None, Exception("database is locked"))
+    assert flaky(FakeSystemDatabase(False), locked) == "ok"
+    assert calls == 3
+
+
+def test_client_no_retry_raises_on_unreachable_database() -> None:
+    """retry_connection_errors=False surfaces an unreachable database as an error, not a wait."""
+    client = DBOSClient(
+        system_database_url=_UNREACHABLE_SYSTEM_DATABASE_URL,
+        lazy=True,
+        retry_connection_errors=False,
+    )
+    options: EnqueueOptions = {
+        "queue_name": "test_queue",
+        "workflow_name": "enqueue_test",
+    }
+    raised: list[Exception] = []
+
+    def enqueue() -> None:
+        try:
+            client.enqueue(options)
+        except Exception as e:
+            raised.append(e)
+
+    # Retrying would never return, so bound the wait instead of hanging the suite.
+    thread = threading.Thread(target=enqueue, daemon=True)
+    thread.start()
+    thread.join(timeout=10)
+    try:
+        assert not thread.is_alive()
+        assert isinstance(raised[0], DBAPIError)
+    finally:
+        client.destroy()
 
 
 def test_client_listen_notify_get_event(
