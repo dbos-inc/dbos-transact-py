@@ -890,12 +890,21 @@ class SystemDatabase(ABC):
         *,
         output: Optional[str] = None,
         error: Optional[str] = None,
-    ) -> None:
+    ) -> bool:
+        """Record a workflow's terminal outcome, reporting whether the write landed.
+
+        The write applies only to a PENDING row: a run owns its workflow's
+        outcome exactly as long as the row says that run is what the workflow
+        is doing. (Note: this does not prevent a write when another concurrent
+        execution is already running and the status is PENDING. However, both
+        executions should be deterministic and idempotent.)
+
+        Returning False means the row was CANCELLED, dead-lettered, already
+        terminal, handed to another execution (ENQUEUED/DELAYED, e.g. by a
+        concurrent resume), or gone entirely.
+        """
         with self.engine.begin() as c:
             now_ms = self._now_ms_sql()
-            # Record the outcome, but never overwrite the terminal CANCELLED
-            # status: a workflow can be cancelled during its final step, and if so
-            # it must not be able to subsequently complete.
             result = c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .values(
@@ -910,23 +919,10 @@ class SystemDatabase(ABC):
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
                 .where(
                     SystemSchema.workflow_status.c.status
-                    != WorkflowStatusString.CANCELLED.value
+                    == WorkflowStatusString.PENDING.value
                 )
             )
-            # update_workflow_outcome is only called to finalize a workflow. If
-            # the guarded UPDATE above matched no rows, the workflow may have
-            # been cancelled: a cancelled workflow must not complete, so re-read
-            # the status and raise so it ends as cancelled rather than succeeding
-            # or erroring. The re-read only happens on this rare no-op path, not
-            # on every completion.
-            if result.rowcount == 0:
-                current_status = c.execute(
-                    sa.select(SystemSchema.workflow_status.c.status).where(
-                        SystemSchema.workflow_status.c.workflow_uuid == workflow_id
-                    )
-                ).scalar_one_or_none()
-                if current_status == WorkflowStatusString.CANCELLED.value:
-                    raise DBOSAwaitedWorkflowCancelledError(workflow_id)
+            return result.rowcount > 0
 
     def cancel_workflows(
         self,
@@ -1611,14 +1607,24 @@ class SystemDatabase(ABC):
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
             ).fetchone()
 
-    def check_workflow_result(self, workflow_id: str) -> Union[NoResult, Any]:
+    def check_workflow_result(
+        self, workflow_id: str, *, fail_if_missing: bool = False
+    ) -> Union[NoResult, Any]:
         """Check if a workflow has completed and return its result.
 
         Returns NoResult() if the workflow is still pending/enqueued/delayed/not found.
         Returns the deserialized output on success.
         Raises on error, cancellation, or max recovery attempts exceeded.
+
+        A missing row normally means the workflow has not been inserted yet, so
+        it reports NoResult() and the poll keeps waiting for the row to appear.
+        Callers that know the row must already exist (e.g. a run parking on an
+        outcome it just failed to write) pass fail_if_missing to get a
+        DBOSNonExistentWorkflowError instead of polling forever.
         """
         row = self._read_workflow_result_row(workflow_id)
+        if row is None and fail_if_missing:
+            raise DBOSNonExistentWorkflowError("target", workflow_id)
         if row is not None:
             status = row[0]
             if status == WorkflowStatusString.SUCCESS.value:
@@ -1636,18 +1642,32 @@ class SystemDatabase(ABC):
                 raise DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(workflow_id)
         return NoResult()
 
-    def await_workflow_result(self, workflow_id: str, polling_interval: float) -> Any:
+    def await_workflow_result(
+        self,
+        workflow_id: str,
+        polling_interval: float,
+        *,
+        fail_if_missing: bool = False,
+    ) -> Any:
         while True:
-            result = self.check_workflow_result(workflow_id)
+            result = self.check_workflow_result(
+                workflow_id, fail_if_missing=fail_if_missing
+            )
             if not isinstance(result, NoResult):
                 return result
             time.sleep(polling_interval)
 
     async def await_workflow_result_async(
-        self, workflow_id: str, polling_interval: float
+        self,
+        workflow_id: str,
+        polling_interval: float,
+        *,
+        fail_if_missing: bool = False,
     ) -> Any:
         while True:
-            result = await asyncio.to_thread(self.check_workflow_result, workflow_id)
+            result = await asyncio.to_thread(
+                self.check_workflow_result, workflow_id, fail_if_missing=fail_if_missing
+            )
             if not isinstance(result, NoResult):
                 return result
             await asyncio.sleep(polling_interval)
