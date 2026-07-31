@@ -78,6 +78,8 @@ class SystemSchema:
         Column("schedule_name", Text, nullable=True),
         Column("debounce_deadline_epoch_ms", BigInteger, nullable=True),
         Column("is_debounced", Boolean, nullable=False, server_default="false"),
+        # Owning application. NULL means unclaimed: any application may read and claim the row.
+        Column("application_name", Text, nullable=True),
         Index("workflow_status_created_at_index", "created_at"),
         Index(
             "idx_workflow_status_delayed",
@@ -280,6 +282,8 @@ class SystemSchema:
         Column("automatic_backfill", Boolean, nullable=False, server_default="false"),
         Column("cron_timezone", Text, nullable=True),
         Column("queue_name", Text, nullable=True),
+        # Owning application. NULL means unclaimed; schedule_name stays globally unique.
+        Column("application_name", Text, nullable=True),
     )
 
     application_versions = Table(
@@ -297,6 +301,8 @@ class SystemSchema:
             BigInteger,
             nullable=False,
         ),
+        # Owning application. NULL means unclaimed; version_name stays globally unique.
+        Column("application_name", Text, nullable=True),
     )
 
     queues = Table(
@@ -318,4 +324,6 @@ class SystemSchema:
         Column("polling_interval_sec", Float, nullable=False, server_default="1.0"),
         Column("created_at", BigInteger, nullable=False),
         Column("updated_at", BigInteger, nullable=False),
+        # Owning application. NULL means unclaimed; name stays globally unique.
+        Column("application_name", Text, nullable=True),
     )
