@@ -421,6 +421,10 @@ class DBOS:
         self._registry: DBOSRegistry = _get_or_create_dbos_registry()
         self._registry.dbos = self
         self._listening_queues: Optional[List[str]] = None
+        # Queue names this process is currently polling, republished each pass by
+        # queue_thread. Read on the enqueue path to decide whether this application
+        # owns the target queue; never mutated in place, so reads need no lock.
+        self._polled_queue_names: frozenset[str] = frozenset()
         self._admin_server_field: Optional[AdminServer] = None
         # Stop internal background threads (queue thread, timeout threads, etc.)
         self.background_thread_stop_events: List[threading.Event] = []
@@ -558,8 +562,10 @@ class DBOS:
                 GlobalParams.app_version = self._registry.compute_app_version()
             if self.conductor_key is not None:
                 GlobalParams.executor_id = generate_uuid()
+            GlobalParams.app_name = self._config["name"]
             dbos_logger.info(f"Executor ID: {GlobalParams.executor_id}")
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
+            dbos_logger.info(f"Application name: {GlobalParams.app_name}")
 
             max_executor_threads = (
                 self._config.get("runtimeConfig", {}).get("max_executor_threads")
@@ -597,6 +603,7 @@ class DBOS:
                 polling_concurrency=self._config["database"].get(
                     "sys_db_polling_concurrency"
                 ),
+                app_name=GlobalParams.app_name,
             )
             assert self._config["database"]["db_engine_kwargs"] is not None
             if self._config["database_url"]:
@@ -2806,6 +2813,8 @@ class DBOS:
             automatic_backfill=automatic_backfill,
             cron_timezone=cron_timezone,
             queue_name=queue_name,
+            # Ownership is stamped by the system database on write.
+            application_name=None,
         )
         ctx = snapshot_step_context(reserve_sleep_id=False)
         if ctx and ctx.is_workflow():
@@ -3070,6 +3079,8 @@ class DBOS:
                     automatic_backfill=entry.get("automatic_backfill", False),
                     cron_timezone=cron_timezone,
                     queue_name=entry_queue_name,
+                    # Ownership is stamped by the system database on write.
+                    application_name=None,
                 )
             )
         with dbos._sys_db.engine.begin() as c:

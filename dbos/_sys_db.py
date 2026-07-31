@@ -193,6 +193,9 @@ class WorkflowStatus:
     attributes: Optional[Dict[str, Any]]
     # If this workflow was enqueued by a named schedule, that schedule's name
     schedule_name: Optional[str]
+    # The application that owns this workflow. None if unclaimed, in which case any
+    # application listening on its queue may run it.
+    application_name: Optional[str]
 
     # INTERNAL FIELDS
 
@@ -238,6 +241,8 @@ class WorkflowStatusInternal(TypedDict):
     debounce_deadline_epoch_ms: Optional[int]
     # True if this workflow's dedup ID is a debounce key to clear on the DELAYED->ENQUEUED transition.
     is_debounced: bool
+    # Owning application; None writes an unclaimed row.
+    application_name: Optional[str]
 
 
 class MetricData(TypedDict):
@@ -326,6 +331,8 @@ class WorkflowSchedule(TypedDict):
     automatic_backfill: bool
     cron_timezone: Optional[str]  # IANA timezone name, stored as string in DB
     queue_name: Optional[str]
+    # Owning application; None if unclaimed.
+    application_name: Optional[str]
 
 
 class ClientScheduleInput(TypedDict, total=False):
@@ -344,6 +351,8 @@ class VersionInfo(TypedDict):
     version_name: str
     version_timestamp: int
     created_at: int
+    # Owning application; None if unclaimed.
+    application_name: Optional[str]
 
 
 class StepInfo(TypedDict):
@@ -533,6 +542,7 @@ class SystemDatabase(ABC):
         notification_listener_polling_interval_sec: float = 1.0,
         notification_coalesce_sec: float = DEFAULT_NOTIFICATION_COALESCE_SEC,
         polling_concurrency: Optional[int] = None,
+        app_name: Optional[str] = None,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
         if system_database_url.startswith("sqlite"):
@@ -549,6 +559,7 @@ class SystemDatabase(ABC):
                 notification_listener_polling_interval_sec=notification_listener_polling_interval_sec,
                 notification_coalesce_sec=notification_coalesce_sec,
                 polling_concurrency=polling_concurrency,
+                app_name=app_name,
             )
         else:
             from ._sys_db_postgres import PostgresSystemDatabase
@@ -564,6 +575,7 @@ class SystemDatabase(ABC):
                 notification_listener_polling_interval_sec=notification_listener_polling_interval_sec,
                 notification_coalesce_sec=notification_coalesce_sec,
                 polling_concurrency=polling_concurrency,
+                app_name=app_name,
             )
 
     def __init__(
@@ -579,6 +591,7 @@ class SystemDatabase(ABC):
         notification_listener_polling_interval_sec: float = 1.0,
         notification_coalesce_sec: float = DEFAULT_NOTIFICATION_COALESCE_SEC,
         polling_concurrency: Optional[int] = None,
+        app_name: Optional[str] = None,
     ):
         import sqlalchemy.dialects.postgresql as pg
         import sqlalchemy.dialects.sqlite as sq
@@ -640,6 +653,9 @@ class SystemDatabase(ABC):
         self.workflow_events_map = ThreadSafeEventDict()
         self.streams_map = ThreadSafeEventDict()
         self.executor_id = executor_id
+        # The application this database handle acts on behalf of. None means no
+        # application identity: rows are written unclaimed.
+        self.app_name = app_name
         self._notification_listener_polling_interval_sec = (
             notification_listener_polling_interval_sec
         )
@@ -782,6 +798,9 @@ class SystemDatabase(ABC):
                 schedule_name=status["schedule_name"],
                 debounce_deadline_epoch_ms=status["debounce_deadline_epoch_ms"],
                 is_debounced=status["is_debounced"],
+                # Deliberately absent from update_values: a re-enqueue must never
+                # re-own a row another application already claimed.
+                application_name=status["application_name"],
             )
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
@@ -1199,6 +1218,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.inputs,
                     SystemSchema.workflow_status.c.serialization,
                     SystemSchema.workflow_status.c.attributes,
+                    SystemSchema.workflow_status.c.application_name,
                 ).where(
                     SystemSchema.workflow_status.c.workflow_uuid.in_(
                         original_workflow_ids
@@ -1236,6 +1256,9 @@ class SystemDatabase(ABC):
                             assumed_role=status[7],
                             forked_from=original_workflow_id,
                             attributes=status[10],
+                            # Inherit the source's owner so the fork runs on the
+                            # application that owns the original workflow.
+                            application_name=status[11],
                         )
                         for original_workflow_id, forked_workflow_id, status in zip(
                             original_workflow_ids, forked_workflow_ids, statuses
@@ -1553,6 +1576,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.schedule_name,
                     SystemSchema.workflow_status.c.debounce_deadline_epoch_ms,
                     SystemSchema.workflow_status.c.is_debounced,
+                    SystemSchema.workflow_status.c.application_name,
                 ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
             ).fetchone()
             if row is None:
@@ -1591,6 +1615,7 @@ class SystemDatabase(ABC):
                 "schedule_name": row[26],
                 "debounce_deadline_epoch_ms": row[27],
                 "is_debounced": bool(row[28]),
+                "application_name": row[29],
             }
             return status
 
@@ -1804,6 +1829,7 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.completed_at,
             SystemSchema.workflow_status.c.attributes,
             SystemSchema.workflow_status.c.schedule_name,
+            SystemSchema.workflow_status.c.application_name,
         ]
         if load_input:
             load_columns.append(SystemSchema.workflow_status.c.inputs)
@@ -1966,8 +1992,9 @@ class SystemDatabase(ABC):
             info.completed_at = row[25]
             info.attributes = row[26]
             info.schedule_name = row[27]
+            info.application_name = row[28]
 
-            idx = 28
+            idx = 29
             raw_input = row[idx] if load_input else None
             if load_input:
                 idx += 1
@@ -4563,12 +4590,13 @@ class SystemDatabase(ABC):
                     "delay_until_epoch_ms": status["delay_until_epoch_ms"],
                     "attributes": status["attributes"],
                     "schedule_name": status["schedule_name"],
+                    "application_name": status["application_name"],
                     "created_at": created_ats[i],
                     "updated_at": created_ats[i],
                 }
             )
         inserted: Set[str] = set()
-        # Chunk to stay well under bind-parameter limits (~29 params per row).
+        # Chunk to stay well under bind-parameter limits (~30 params per row).
         chunk_size = 500
         with self.engine.begin() as conn:
             for start in range(0, len(rows), chunk_size):
@@ -5153,6 +5181,7 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.schedule_name,
                         SystemSchema.workflow_status.c.debounce_deadline_epoch_ms,
                         SystemSchema.workflow_status.c.is_debounced,
+                        SystemSchema.workflow_status.c.application_name,
                         # owner_xid is intentionally omitted: it is a transient
                         # transaction-ownership token, not logical workflow state
                         # (get_workflow_status also returns None for it), and a
@@ -5199,6 +5228,7 @@ class SystemDatabase(ABC):
                     "schedule_name": status_row[32],
                     "debounce_deadline_epoch_ms": status_row[33],
                     "is_debounced": status_row[34],
+                    "application_name": status_row[35],
                 }
 
                 # Export operation_outputs
@@ -5364,6 +5394,7 @@ class SystemDatabase(ABC):
                             "debounce_deadline_epoch_ms"
                         ),
                         is_debounced=status.get("is_debounced", False),
+                        application_name=status.get("application_name"),
                     )
                 )
 
@@ -5439,6 +5470,8 @@ class SystemDatabase(ABC):
                         automatic_backfill=schedule.get("automatic_backfill", False),
                         cron_timezone=schedule.get("cron_timezone"),
                         queue_name=schedule.get("queue_name"),
+                        # Ownership belongs to the writer, not the payload.
+                        application_name=self.app_name,
                     )
                 )
             except sa.exc.IntegrityError:
@@ -5471,6 +5504,8 @@ class SystemDatabase(ABC):
                     automatic_backfill=schedule.get("automatic_backfill", False),
                     cron_timezone=schedule.get("cron_timezone"),
                     queue_name=schedule.get("queue_name"),
+                    # Ownership belongs to the writer, not the payload.
+                    application_name=self.app_name,
                 )
                 .on_conflict_do_update(
                     index_elements=["schedule_name"],
@@ -5482,6 +5517,7 @@ class SystemDatabase(ABC):
                         "automatic_backfill": schedule.get("automatic_backfill", False),
                         "cron_timezone": schedule.get("cron_timezone"),
                         "queue_name": schedule.get("queue_name"),
+                        "application_name": self.app_name,
                     },
                 )
             )
@@ -5513,6 +5549,7 @@ class SystemDatabase(ABC):
                 SystemSchema.workflow_schedules.c.automatic_backfill,
                 SystemSchema.workflow_schedules.c.cron_timezone,
                 SystemSchema.workflow_schedules.c.queue_name,
+                SystemSchema.workflow_schedules.c.application_name,
             )
             if status is not None:
                 vals = [status] if isinstance(status, str) else status
@@ -5554,6 +5591,7 @@ class SystemDatabase(ABC):
                     automatic_backfill=bool(row[8]),
                     cron_timezone=row[9],
                     queue_name=row[10],
+                    application_name=row[11],
                 )
                 for row in rows
             ]
@@ -5580,6 +5618,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_schedules.c.automatic_backfill,
                     SystemSchema.workflow_schedules.c.cron_timezone,
                     SystemSchema.workflow_schedules.c.queue_name,
+                    SystemSchema.workflow_schedules.c.application_name,
                 ).where(SystemSchema.workflow_schedules.c.schedule_name == name)
             ).fetchone()
             if row is None:
@@ -5596,6 +5635,7 @@ class SystemDatabase(ABC):
                 automatic_backfill=bool(row[8]),
                 cron_timezone=row[9],
                 queue_name=row[10],
+                application_name=row[11],
             )
 
         if conn is not None:
@@ -5656,6 +5696,7 @@ class SystemDatabase(ABC):
                 .values(
                     version_id=generate_uuid(),
                     version_name=version_name,
+                    application_name=self.app_name,
                 )
                 .on_conflict_do_nothing(index_elements=["version_name"])
             )
@@ -5678,6 +5719,7 @@ class SystemDatabase(ABC):
                     SystemSchema.application_versions.c.version_name,
                     SystemSchema.application_versions.c.version_timestamp,
                     SystemSchema.application_versions.c.created_at,
+                    SystemSchema.application_versions.c.application_name,
                 ).order_by(SystemSchema.application_versions.c.version_timestamp.desc())
             ).fetchall()
             return [
@@ -5686,6 +5728,7 @@ class SystemDatabase(ABC):
                     version_name=row[1],
                     version_timestamp=row[2],
                     created_at=row[3],
+                    application_name=row[4],
                 )
                 for row in rows
             ]
@@ -5764,6 +5807,7 @@ class SystemDatabase(ABC):
             "partition_queue": partition_queue,
             "polling_interval_sec": polling_interval_sec,
             "updated_at": int(time.time() * 1000),
+            "application_name": self.app_name,
         }
         with self.engine.begin() as c:
             existed = (
@@ -5794,6 +5838,7 @@ class SystemDatabase(ABC):
                     SystemSchema.application_versions.c.version_name,
                     SystemSchema.application_versions.c.version_timestamp,
                     SystemSchema.application_versions.c.created_at,
+                    SystemSchema.application_versions.c.application_name,
                 )
                 .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
                 .limit(1)
@@ -5805,6 +5850,7 @@ class SystemDatabase(ABC):
                 version_name=row[1],
                 version_timestamp=row[2],
                 created_at=row[3],
+                application_name=row[4],
             )
 
     @db_retry()

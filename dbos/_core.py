@@ -31,7 +31,7 @@ from typing import (
 )
 
 from dbos._outcome import DeferredResult, NoResult, Outcome, Pending
-from dbos._utils import GlobalParams, retriable_postgres_exception
+from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, retriable_postgres_exception
 
 from ._app_db import ApplicationDatabase, TransactionResultInternal
 from ._context import (
@@ -416,6 +416,24 @@ def _attributes_with_otel_carrier(ctx: DBOSContext) -> Optional[dict[str, Any]]:
     return attributes
 
 
+def resolve_application_name(dbos: "DBOS", queue_name: Optional[str]) -> Optional[str]:
+    """The application that should own a new workflow row.
+
+    None means unclaimed: the row is routed by its (globally unique) queue name to
+    whichever application serves that queue. A workflow that will run in this
+    process, or that lands on the internal queue whose name every application
+    shares, must be owned outright.
+    """
+    if queue_name is None or queue_name == INTERNAL_QUEUE_NAME:
+        return GlobalParams.app_name
+    if (
+        queue_name in dbos._registry.queue_info_map
+        or queue_name in dbos._polled_queue_names
+    ):
+        return GlobalParams.app_name
+    return None
+
+
 def _assemble_workflow_status(
     dbos: "DBOS",
     ctx: DBOSContext,
@@ -540,6 +558,7 @@ def _assemble_workflow_status(
         # schedule_name is only set by the persistent scheduler, which builds
         # the workflow status directly rather than going through this path.
         "schedule_name": None,
+        "application_name": resolve_application_name(dbos, queue),
     }
     # Consume the attributes from the workflow's context so that workflows
     # started inside this workflow do not inherit them.
@@ -1578,6 +1597,7 @@ def _build_enqueue_with_options(
 
     _, status = build_enqueue_status(resolved, dbos._serializer, args, kwargs)
 
+    status["application_name"] = resolve_application_name(dbos, resolved["queue_name"])
     status["app_id"] = new_wf_ctx.app_id
     status["parent_workflow_id"] = (
         new_wf_ctx.parent_workflow_id if new_wf_ctx.has_parent() else None

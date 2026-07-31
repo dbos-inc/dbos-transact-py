@@ -174,5 +174,7 @@ def build_enqueue_status(
         # Set only by the debouncer via _enqueue_debounced, never from options.
         "debounce_deadline_epoch_ms": None,
         "is_debounced": False,
+        # Left unclaimed here; callers inside an application stamp their own name.
+        "application_name": None,
     }
     return workflow_id, status

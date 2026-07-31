@@ -202,6 +202,99 @@ def test_reset(
         DBOS.reset_system_database()
 
 
+_APPLICATION_NAME_TABLES = (
+    "workflow_status",
+    "queues",
+    "workflow_schedules",
+    "application_versions",
+)
+
+
+def test_application_name_columns(dbos: DBOS, skip_with_sqlite: None) -> None:
+    """application_name must be nullable on every table that carries it: NULL is
+    what SDKs predating the column write, and any application may claim it."""
+    with dbos._sys_db.engine.connect() as connection:
+        for table in _APPLICATION_NAME_TABLES:
+            row = connection.execute(
+                sa.text(
+                    "SELECT data_type, is_nullable FROM information_schema.columns "
+                    "WHERE table_schema='dbos' AND table_name=:t "
+                    "AND column_name='application_name'"
+                ),
+                {"t": table},
+            ).fetchone()
+            assert row == ("text", "YES"), f"{table}.application_name"
+
+
+def test_application_name_leaves_uniques_global(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    """Queue, schedule, and version names stay globally unique across applications,
+    so the deduplication index needs no application_name and none of these change."""
+    with dbos._sys_db.engine.connect() as connection:
+        found = {
+            row[0]
+            for row in connection.execute(
+                sa.text(
+                    "SELECT indexname FROM pg_indexes WHERE schemaname='dbos' "
+                    "AND indexname IN ('uq_workflow_status_dedup_id', 'queues_name_key', "
+                    "'workflow_schedules_schedule_name_key', "
+                    "'application_versions_version_name_key')"
+                )
+            )
+        }
+    assert found == {
+        "uq_workflow_status_dedup_id",
+        "queues_name_key",
+        "workflow_schedules_schedule_name_key",
+        "application_versions_version_name_key",
+    }
+
+
+def test_enqueue_workflow_function_application_name(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    """The SQL enqueue entry point takes application_name as a trailing optional
+    argument, so callers that predate it still enqueue (as unclaimed)."""
+    with dbos._sys_db.engine.begin() as connection:
+        overloads = connection.execute(
+            sa.text(
+                "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
+                "WHERE n.nspname='dbos' AND p.proname='enqueue_workflow'"
+            )
+        ).scalar()
+        # The migration must drop the previous signature, else calls are ambiguous.
+        assert overloads == 1
+
+        connection.execute(
+            sa.text(
+                "INSERT INTO dbos.queues (name, created_at, updated_at) "
+                "VALUES ('sql-fn-queue', 1, 1)"
+            )
+        )
+        old_style = connection.execute(
+            sa.text("SELECT dbos.enqueue_workflow('wf', 'sql-fn-queue')")
+        ).scalar()
+        new_style = connection.execute(
+            sa.text(
+                "SELECT dbos.enqueue_workflow(workflow_name => 'wf', "
+                "queue_name => 'sql-fn-queue', application_name => 'other-app')"
+            )
+        ).scalar()
+        owners = {
+            row[0]: row[1]
+            for row in connection.execute(
+                sa.text(
+                    "SELECT workflow_uuid, application_name FROM dbos.workflow_status "
+                    "WHERE workflow_uuid IN (:a, :b)"
+                ),
+                {"a": old_style, "b": new_style},
+            )
+        }
+    assert owners[old_style] is None
+    assert owners[new_style] == "other-app"
+
+
 def test_sqlite_systemdb_migration() -> None:
     """Test SQLite system database migration."""
     # Create a temporary SQLite database file
@@ -265,6 +358,17 @@ def test_sqlite_systemdb_migration() -> None:
             fk_result = connection.execute(sa.text("PRAGMA foreign_keys"))
             fk_enabled = fk_result.fetchone()
             assert fk_enabled and fk_enabled[0] == 1  # 1 means enabled
+
+            # application_name must be nullable everywhere it appears
+            for table in _APPLICATION_NAME_TABLES:
+                columns = {
+                    row[1]: row[3]  # name -> notnull
+                    for row in connection.execute(
+                        sa.text(f"PRAGMA table_info({table})")
+                    )
+                }
+                assert "application_name" in columns, table
+                assert columns["application_name"] == 0, table
 
         # Clean up
         sys_db.destroy()

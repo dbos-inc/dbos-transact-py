@@ -1258,6 +1258,8 @@ class DBOSClient:
                 automatic_backfill=automatic_backfill,
                 cron_timezone=cron_timezone,
                 queue_name=queue_name,
+                # Ownership is stamped by the system database on write.
+                application_name=None,
             )
         )
 
@@ -1409,6 +1411,8 @@ class DBOSClient:
                     automatic_backfill=entry.get("automatic_backfill", False),
                     cron_timezone=cron_timezone,
                     queue_name=entry.get("queue_name"),
+                    # Ownership is stamped by the system database on write.
+                    application_name=None,
                 )
             )
         with self._sys_db.engine.begin() as c:
