@@ -1,5 +1,4 @@
 import asyncio
-import json
 import threading
 import time
 from datetime import datetime
@@ -13,7 +12,6 @@ from typing import (
     List,
     Optional,
     Tuple,
-    TypedDict,
     TypeVar,
     Union,
 )
@@ -22,14 +20,11 @@ from zoneinfo import ZoneInfo
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from dbos._context import (
-    OTEL_CARRIER_ATTRIBUTE,
-    MaxPriority,
-    MinPriority,
-    inject_trace_context,
-    validate_workflow_id,
-)
 from dbos._core import DEFAULT_POLLING_INTERVAL
+
+# Re-exported: EnqueueOptions is public as dbos.EnqueueOptions but is shared with _core.
+from dbos._enqueue_options import EnqueueOptions as EnqueueOptions
+from dbos._enqueue_options import build_enqueue_status
 from dbos._logger import dbos_logger
 from dbos._queue import (
     Queue,
@@ -42,13 +37,7 @@ from dbos._sys_db import SystemDatabase
 from dbos._utils import generate_uuid
 
 if TYPE_CHECKING:
-    from opentelemetry.context import Context as OtelContext
-
     from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
-else:
-    # EnqueueOptions is public, so its annotations must stay resolvable at runtime for
-    # get_type_hints()/pydantic without importing the optional opentelemetry package.
-    OtelContext = Any
 
 from dbos._croniter import croniter  # type: ignore
 from dbos._dbos_config import get_system_database_url, is_valid_database_url
@@ -59,7 +48,6 @@ from dbos._serialization import (
     Serializer,
     WorkflowSerializationFormat,
     safe_deserialize_schedule_context,
-    serialize_args,
 )
 from dbos._sys_db import (
     ClientScheduleInput,
@@ -70,7 +58,6 @@ from dbos._sys_db import (
     WorkflowSchedule,
     WorkflowStatus,
     WorkflowStatusInternal,
-    WorkflowStatusString,
     _dbos_stream_closed_sentinel,
     _no_stream_value,
     workflow_is_active,
@@ -78,63 +65,6 @@ from dbos._sys_db import (
 from dbos._workflow_commands import fork_workflow, get_workflow
 
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
-
-
-# Required EnqueueOptions fields
-class _EnqueueOptionsRequired(TypedDict):
-    workflow_name: str
-    queue_name: str
-
-
-# Optional EnqueueOptions fields
-class EnqueueOptions(_EnqueueOptionsRequired, total=False):
-    workflow_id: str
-    app_version: str
-    workflow_timeout: float
-    delay_seconds: float
-    deduplication_id: str
-    priority: int
-    max_recovery_attempts: int
-    queue_partition_key: str
-    authenticated_user: str
-    authenticated_roles: list[str]
-    serialization_type: WorkflowSerializationFormat
-    class_name: str
-    instance_name: str
-    attributes: Dict[str, Any]
-    # Parents the enqueued workflow's span to this OpenTelemetry context, so it joins
-    # this trace when it runs. The client-side PropagateOtelContext.
-    otel_context: "OtelContext"
-
-
-def validate_enqueue_options(options: EnqueueOptions) -> None:
-    priority = options.get("priority")
-    if priority is not None and (priority < MinPriority or priority > MaxPriority):
-        raise DBOSException(
-            f"Invalid priority {priority}. Priority must be between {MinPriority}~{MaxPriority}."
-        )
-    workflow_id = options.get("workflow_id")
-    if workflow_id is not None:
-        validate_workflow_id(workflow_id)
-
-
-def _attributes_with_otel_context(
-    attributes: Optional[Dict[str, Any]], otel_context: "Optional[OtelContext]"
-) -> Optional[Dict[str, Any]]:
-    """Fold an otel_context option into the workflow's persisted attributes.
-
-    The client-side counterpart of PropagateOtelContext. Records nothing when there is
-    no valid context to propagate, and wins over a hand-written carrier in attributes.
-    Only the W3C trace context travels, not baggage.
-    """
-    if otel_context is None:
-        return attributes
-    carrier = inject_trace_context(otel_context)
-    if not carrier:
-        return attributes
-    merged = dict(attributes) if attributes else {}
-    merged[OTEL_CARRIER_ATTRIBUTE] = carrier
-    return merged
 
 
 class WorkflowHandleClientPolling(Generic[R]):
@@ -305,86 +235,7 @@ class DBOSClient:
     def _build_enqueue_status(
         self, options: EnqueueOptions, *args: Any, **kwargs: Any
     ) -> tuple[str, WorkflowStatusInternal]:
-        validate_enqueue_options(options)
-        workflow_name = options["workflow_name"]
-        queue_name = options["queue_name"]
-
-        workflow_id = options.get("workflow_id")
-        if workflow_id is None:
-            workflow_id = generate_uuid()
-        workflow_timeout = options.get("workflow_timeout", None)
-        delay_seconds = options.get("delay_seconds", None)
-        delay_until_epoch_ms: Optional[int] = (
-            int((time.time() + delay_seconds) * 1000)
-            if delay_seconds is not None
-            else None
-        )
-
-        authenticated_user = options.get("authenticated_user")
-        authenticated_roles = (
-            json.dumps(options.get("authenticated_roles"))
-            if options.get("authenticated_roles")
-            else None
-        )
-
-        inputs, serialization = serialize_args(
-            args,
-            kwargs,
-            options.get("serialization_type"),
-            self._serializer,
-        )
-
-        attributes = _attributes_with_otel_context(
-            options.get("attributes"), options.get("otel_context")
-        )
-
-        status: WorkflowStatusInternal = {
-            "workflow_uuid": workflow_id,
-            "status": (
-                WorkflowStatusString.DELAYED.value
-                if delay_until_epoch_ms is not None
-                else WorkflowStatusString.ENQUEUED.value
-            ),
-            "name": workflow_name,
-            "class_name": options.get("class_name"),
-            "queue_name": queue_name,
-            "app_version": options.get("app_version"),
-            "config_name": options.get("instance_name"),
-            "authenticated_user": authenticated_user,
-            "assumed_role": None,
-            "authenticated_roles": authenticated_roles,
-            "output": None,
-            "error": None,
-            "created_at": None,
-            "updated_at": None,
-            "executor_id": None,
-            "recovery_attempts": None,
-            "app_id": None,
-            "workflow_timeout_ms": (
-                int(workflow_timeout * 1000) if workflow_timeout is not None else None
-            ),
-            "workflow_deadline_epoch_ms": None,
-            "deduplication_id": options.get("deduplication_id", None),
-            "priority": (
-                options.get("priority", 0)
-                if options.get("priority", None) is not None
-                else 0
-            ),
-            "inputs": inputs,
-            "serialization": serialization,
-            "queue_partition_key": options.get("queue_partition_key", None),
-            "forked_from": None,
-            "parent_workflow_id": None,
-            "started_at_epoch_ms": None,
-            "owner_xid": None,
-            "delay_until_epoch_ms": delay_until_epoch_ms,
-            "attributes": attributes,
-            "schedule_name": None,
-            # Set only by the debouncer via _enqueue_debounced, never from options.
-            "debounce_deadline_epoch_ms": None,
-            "is_debounced": False,
-        }
-        return workflow_id, status
+        return build_enqueue_status(options, self._serializer, args, kwargs)
 
     def _enqueue(self, options: EnqueueOptions, *args: Any, **kwargs: Any) -> str:
         workflow_id, status = self._build_enqueue_status(options, *args, **kwargs)
