@@ -15,7 +15,7 @@ import psycopg
 import pytest
 import sqlalchemy as sa
 from opentelemetry import context as otel_context
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import Session
 
@@ -588,7 +588,7 @@ def test_client_lazy_rejects_listen_notify(config: DBOSConfig) -> None:
 
 
 def _connection_error() -> DBAPIError:
-    return sa.exc.OperationalError(
+    return OperationalError(
         "SELECT 1", None, psycopg.OperationalError("connection failed")
     )
 
@@ -620,13 +620,13 @@ def test_db_retry_connection_error_opt_out() -> None:
     assert calls == 1
 
     calls = 0
-    locked = sa.exc.OperationalError("SELECT 1", None, Exception("database is locked"))
+    locked = OperationalError("SELECT 1", None, Exception("database is locked"))
     assert flaky(FakeSystemDatabase(False), locked) == "ok"
     assert calls == 3
 
     # A DBAPIError renders its parameters, so program data can read as lock contention.
     calls = 0
-    lookalike = sa.exc.OperationalError(
+    lookalike = OperationalError(
         "INSERT INTO dbos.workflow_status (inputs) VALUES (%(inputs)s)",
         {"inputs": '{"args": ["database is locked"]}'},
         psycopg.OperationalError("connection failed"),
