@@ -212,9 +212,9 @@ _APPLICATION_NAME_TABLES = (
 )
 
 
-def test_application_name_columns(dbos: DBOS, skip_with_sqlite: None) -> None:
-    """application_name must be nullable on every table that carries it: NULL is
-    what SDKs predating the column write, and any application may claim it."""
+def test_application_name_schema(dbos: DBOS, skip_with_sqlite: None) -> None:
+    """application_name is nullable everywhere it appears — NULL is what SDKs
+    predating it write — and it changes no existing unique, which stay global."""
     with dbos._sys_db.engine.connect() as connection:
         for table in _APPLICATION_NAME_TABLES:
             row = connection.execute(
@@ -227,30 +227,23 @@ def test_application_name_columns(dbos: DBOS, skip_with_sqlite: None) -> None:
             ).fetchone()
             assert row == ("text", "YES"), f"{table}.application_name"
 
-
-def test_application_name_leaves_uniques_global(
-    dbos: DBOS, skip_with_sqlite: None
-) -> None:
-    """Queue, schedule, and version names stay globally unique across applications,
-    so the deduplication index needs no application_name and none of these change."""
-    with dbos._sys_db.engine.connect() as connection:
+        uniques = {
+            "uq_workflow_status_dedup_id",
+            "queues_name_key",
+            "workflow_schedules_schedule_name_key",
+            "application_versions_version_name_key",
+        }
         found = {
             row[0]
             for row in connection.execute(
                 sa.text(
                     "SELECT indexname FROM pg_indexes WHERE schemaname='dbos' "
-                    "AND indexname IN ('uq_workflow_status_dedup_id', 'queues_name_key', "
-                    "'workflow_schedules_schedule_name_key', "
-                    "'application_versions_version_name_key')"
-                )
+                    "AND indexname = ANY(:names)"
+                ),
+                {"names": list(uniques)},
             )
         }
-    assert found == {
-        "uq_workflow_status_dedup_id",
-        "queues_name_key",
-        "workflow_schedules_schedule_name_key",
-        "application_versions_version_name_key",
-    }
+    assert found == uniques
 
 
 def test_enqueue_workflow_function_application_name(
