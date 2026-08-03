@@ -411,7 +411,10 @@ def test_bulk_operations_spare_another_application(dbos: DBOS) -> None:
     assert not workflow_exists(dbos, handle.workflow_id)
 
 
-def test_enumeration_skips_another_applications_rows(dbos: DBOS) -> None:
+def test_enumeration_scopes_the_loops_but_not_the_listings(dbos: DBOS) -> None:
+    """The claiming variants are what the queue thread and scheduler poll, so they
+    take own plus unclaimed. The public listings are ordinary filters instead."""
+
     @DBOS.workflow()
     def scheduled(scheduled_at: datetime, ctx: Any) -> None:
         pass
@@ -441,10 +444,24 @@ def test_enumeration_skips_another_applications_rows(dbos: DBOS) -> None:
                 application_name=OTHER_APP,
             )
         )
-    schedules = {s["schedule_name"] for s in dbos._sys_db.list_schedules()}
-    queues = {q.name for q in dbos._sys_db.list_queues()}
-    assert "mine" in schedules and "theirs" not in schedules
-    assert "mine-queue" in queues and "theirs-queue" not in queues
+    claimable_schedules = {
+        s["schedule_name"] for s in dbos._sys_db.list_claimable_schedules()
+    }
+    claimable_queues = {q.name for q in dbos._sys_db.list_claimable_queues()}
+    assert "mine" in claimable_schedules and "theirs" not in claimable_schedules
+    assert "mine-queue" in claimable_queues and "theirs-queue" not in claimable_queues
+
+    # Unset lists every application, and the filter matches an owner exactly.
+    assert {"mine", "theirs"} <= {s["schedule_name"] for s in DBOS.list_schedules()}
+    assert {"mine-queue", "theirs-queue"} <= {q.name for q in DBOS.list_queues()}
+    assert [
+        s["schedule_name"] for s in DBOS.list_schedules(application_name=OTHER_APP)
+    ] == ["theirs"]
+    theirs = DBOS.list_queues(application_name=OTHER_APP)
+    assert [q.name for q in theirs] == ["theirs-queue"]
+    # The listing is attributable: a Queue carries its owner.
+    assert theirs[0].application_name == OTHER_APP
+
     # Name-addressed lookups stay global: a globally unique name is an identity.
     assert dbos._sys_db.get_queue("theirs-queue") is not None
 

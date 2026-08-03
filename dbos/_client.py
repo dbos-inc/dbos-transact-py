@@ -1298,6 +1298,7 @@ class DBOSClient:
         status: Optional[Union[str, List[str]]] = None,
         workflow_name: Optional[Union[str, List[str]]] = None,
         schedule_name_prefix: Optional[Union[str, List[str]]] = None,
+        application_name: Optional[Union[str, List[str]]] = None,
     ) -> List[WorkflowSchedule]:
         """
         Return all registered workflow schedules, optionally filtered.
@@ -1306,11 +1307,14 @@ class DBOSClient:
             status: Filter by status (e.g. ``"ACTIVE"``) or a list of statuses
             workflow_name: Filter by workflow name or a list of names
             schedule_name_prefix: Filter by schedule name prefix or a list of prefixes
+            application_name: Restrict to schedules owned by these applications.
+                Unset lists every application's, as on list_workflows.
         """
         schedules = self._sys_db.list_schedules(
             status=status,
             workflow_name=workflow_name,
             schedule_name_prefix=schedule_name_prefix,
+            application_name=application_name,
         )
         for s in schedules:
             s["context"] = safe_deserialize_schedule_context(
@@ -1368,6 +1372,7 @@ class DBOSClient:
         status: Optional[Union[str, List[str]]] = None,
         workflow_name: Optional[Union[str, List[str]]] = None,
         schedule_name_prefix: Optional[Union[str, List[str]]] = None,
+        application_name: Optional[Union[str, List[str]]] = None,
     ) -> List[WorkflowSchedule]:
         """Async version of :meth:`list_schedules`."""
         return await asyncio.to_thread(
@@ -1375,6 +1380,7 @@ class DBOSClient:
             status=status,
             workflow_name=workflow_name,
             schedule_name_prefix=schedule_name_prefix,
+            application_name=application_name,
         )
 
     async def get_schedule_async(self, name: str) -> Optional[WorkflowSchedule]:

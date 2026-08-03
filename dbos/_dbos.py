@@ -1028,18 +1028,29 @@ class DBOS:
         await asyncio.to_thread(cls.delete_queue, name)
 
     @classmethod
-    def list_queues(cls) -> List[Queue]:
+    def list_queues(
+        cls, *, application_name: Optional[Union[str, List[str]]] = None
+    ) -> List[Queue]:
         """
-        List all database-backed queues registered in the system database.
+        List database-backed queues registered in the system database.
+
+        :param application_name: Restrict to queues owned by these applications.
+            Unset lists every application's, as on :meth:`list_workflows`.
         """
         check_async("list_queues")
-        return _get_dbos_instance()._sys_db.list_queues()
+        return _get_dbos_instance()._sys_db.list_queues(
+            application_name=application_name
+        )
 
     @classmethod
-    async def list_queues_async(cls) -> List[Queue]:
+    async def list_queues_async(
+        cls, *, application_name: Optional[Union[str, List[str]]] = None
+    ) -> List[Queue]:
         """Async version of :meth:`list_queues`."""
         await cls._configure_asyncio_thread_pool()
-        return await asyncio.to_thread(cls.list_queues)
+        return await asyncio.to_thread(
+            lambda: cls.list_queues(application_name=application_name)
+        )
 
     # Decorators for DBOS functionality
     @classmethod
@@ -2842,6 +2853,7 @@ class DBOS:
         status: Optional[Union[str, List[str]]] = None,
         workflow_name: Optional[Union[str, List[str]]] = None,
         schedule_name_prefix: Optional[Union[str, List[str]]] = None,
+        application_name: Optional[Union[str, List[str]]] = None,
     ) -> List["WorkflowSchedule"]:
         """
         Return all registered workflow schedules, optionally filtered.
@@ -2850,6 +2862,8 @@ class DBOS:
             status: Filter by status (e.g. ``"ACTIVE"``) or a list of statuses
             workflow_name: Filter by workflow name or a list of names
             schedule_name_prefix: Filter by schedule name prefix or a list of prefixes
+            application_name: Restrict to schedules owned by these applications.
+                Unset lists every application's, as on list_workflows.
         """
         dbos = _get_dbos_instance()
         ctx = snapshot_step_context(reserve_sleep_id=False)
@@ -2863,6 +2877,7 @@ class DBOS:
                         status=status,
                         workflow_name=workflow_name,
                         schedule_name_prefix=schedule_name_prefix,
+                        application_name=application_name,
                         conn=c,
                     ),
                 )
@@ -2871,6 +2886,7 @@ class DBOS:
                 status=status,
                 workflow_name=workflow_name,
                 schedule_name_prefix=schedule_name_prefix,
+                application_name=application_name,
             )
         for s in schedules:
             s["context"] = safe_deserialize_schedule_context(
@@ -2951,6 +2967,7 @@ class DBOS:
         status: Optional[Union[str, List[str]]] = None,
         workflow_name: Optional[Union[str, List[str]]] = None,
         schedule_name_prefix: Optional[Union[str, List[str]]] = None,
+        application_name: Optional[Union[str, List[str]]] = None,
     ) -> List["WorkflowSchedule"]:
         """Async version of :meth:`list_schedules`."""
         await cls._configure_asyncio_thread_pool()
@@ -2959,6 +2976,7 @@ class DBOS:
             status=status,
             workflow_name=workflow_name,
             schedule_name_prefix=schedule_name_prefix,
+            application_name=application_name,
         )
 
     @classmethod

@@ -746,6 +746,9 @@ class ConductorWebsocket(threading.Thread):
                                         load_context=load_context,
                                     )
                                     for s in self.dbos._sys_db.list_schedules(
+                                        application_name=sched_body.get(
+                                            "application_name", None
+                                        ),
                                         status=sched_body.get("status", None),
                                         workflow_name=sched_body.get(
                                             "workflow_name", None
@@ -1083,11 +1086,17 @@ class ConductorWebsocket(threading.Thread):
                                 ).to_json()
                             )
                         elif msg_type == p.MessageType.LIST_QUEUES:
+                            list_queues_message = p.ListQueuesRequest.from_json(message)
+                            queues_body = list_queues_message.body
                             queues_output: list[p.QueueOutput] = []
                             try:
                                 queues_output = [
                                     p.QueueOutput.from_queue(q)
-                                    for q in self.dbos._sys_db.list_queues()
+                                    for q in self.dbos._sys_db.list_queues(
+                                        application_name=queues_body.get(
+                                            "application_name", None
+                                        )
+                                    )
                                 ]
                             except Exception:
                                 error_message = (

@@ -77,6 +77,7 @@ class Queue:
         polling_interval_sec: float = DEFAULT_QUEUE_POLLING_INTERVAL_SEC,
         database_backed_queue: bool = False,
         client_system_database: Optional["SystemDatabase"] = None,
+        application_name: Optional[str] = None,
     ) -> None:
         Queue._validate_queue(
             concurrency=concurrency,
@@ -86,6 +87,9 @@ class Queue:
         )
         self.name = name
         self.database_backed_queue = database_backed_queue
+        # Owning application, from the queues table. None for in-memory queues,
+        # which have no row, and for rows written before the column existed.
+        self.application_name = application_name
         # When set, getters/setters use this SystemDatabase instead of the
         # DBOS singleton's. This allows a DBOSClient to manipulate queues
         # without depending on a launched DBOS process.
@@ -588,7 +592,7 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
                 if name in listening_set
             }
             try:
-                for queue in dbos._sys_db.list_queues():
+                for queue in dbos._sys_db.list_claimable_queues():
                     if queue.name in listening_set and queue.name not in current_queues:
                         current_queues[queue.name] = queue
             except Exception as e:
@@ -615,7 +619,7 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
             # Else, check all in-memory and database-backed queues
             current_queues = dict(dbos._registry.queue_info_map)
             try:
-                for queue in dbos._sys_db.list_queues():
+                for queue in dbos._sys_db.list_claimable_queues():
                     if queue.name in dbos._registry.queue_info_map:
                         dbos.logger.warning(
                             f"Database-backed queue {queue.name} has the same "
@@ -702,7 +706,7 @@ def log_queues(dbos: "DBOS", listening_queues: Optional[list[str]]) -> None:
     """
     queues: dict[str, Queue] = dict(dbos._registry.queue_info_map)
     try:
-        for q in dbos._sys_db.list_queues():
+        for q in dbos._sys_db.list_claimable_queues():
             queues.setdefault(q.name, q)
     except Exception as e:
         dbos.logger.warning(f"Exception listing database-backed queues: {e}")

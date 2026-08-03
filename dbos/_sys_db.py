@@ -96,6 +96,7 @@ def queue_from_db_row(
         priority_enabled=bool(m["priority_enabled"]),
         partition_queue=bool(m["partition_queue"]),
         polling_interval_sec=m["polling_interval_sec"],
+        application_name=m["application_name"],
         database_backed_queue=True,
         client_system_database=client_system_database,
     )
@@ -736,6 +737,15 @@ class SystemDatabase(ABC):
         if self.app_name is None:
             return sa.true()
         return sa.or_(col == self.app_name, col.is_(None))
+
+    @staticmethod
+    def _name_filter(
+        col: sa.ColumnElement[Any], value: Optional[Union[str, List[str]]]
+    ) -> sa.ColumnElement[bool]:
+        """An ordinary exact-match filter; unset matches every application."""
+        if value is None:
+            return sa.true()
+        return col.in_([value] if isinstance(value, str) else value)
 
     def _check_row_owner(
         self,
@@ -5685,6 +5695,38 @@ class SystemDatabase(ABC):
         status: Optional[Union[str, List[str]]] = None,
         workflow_name: Optional[Union[str, List[str]]] = None,
         schedule_name_prefix: Optional[Union[str, List[str]]] = None,
+        application_name: Optional[Union[str, List[str]]] = None,
+        conn: Optional[sa.Connection] = None,
+    ) -> List[WorkflowSchedule]:
+        """Schedules matching these filters, across every application unless
+        application_name narrows it — the same semantics as list_workflows."""
+        return self._list_schedules(
+            self._name_filter(
+                SystemSchema.workflow_schedules.c.application_name, application_name
+            ),
+            status=status,
+            workflow_name=workflow_name,
+            schedule_name_prefix=schedule_name_prefix,
+            conn=conn,
+        )
+
+    def list_claimable_schedules(
+        self, *, conn: Optional[sa.Connection] = None
+    ) -> List[WorkflowSchedule]:
+        """Schedules this application runs: its own plus unclaimed. What the
+        scheduler loop polls, so it never starts another application's crons."""
+        return self._list_schedules(
+            self._app_scope(SystemSchema.workflow_schedules.c.application_name),
+            conn=conn,
+        )
+
+    def _list_schedules(
+        self,
+        scope: sa.ColumnElement[bool],
+        *,
+        status: Optional[Union[str, List[str]]] = None,
+        workflow_name: Optional[Union[str, List[str]]] = None,
+        schedule_name_prefix: Optional[Union[str, List[str]]] = None,
         conn: Optional[sa.Connection] = None,
     ) -> List[WorkflowSchedule]:
         def _do(c: sa.Connection) -> List[WorkflowSchedule]:
@@ -5701,10 +5743,7 @@ class SystemDatabase(ABC):
                 SystemSchema.workflow_schedules.c.cron_timezone,
                 SystemSchema.workflow_schedules.c.queue_name,
                 SystemSchema.workflow_schedules.c.application_name,
-            ).where(
-                # Scoped so the scheduler only runs this application's own crons.
-                self._app_scope(SystemSchema.workflow_schedules.c.application_name)
-            )
+            ).where(scope)
             if status is not None:
                 vals = [status] if isinstance(status, str) else status
                 query = query.where(SystemSchema.workflow_schedules.c.status.in_(vals))
@@ -5931,15 +5970,33 @@ class SystemDatabase(ABC):
     def list_queues(
         self,
         *,
+        application_name: Optional[Union[str, List[str]]] = None,
         client_system_database: Optional["SystemDatabase"] = None,
     ) -> List["Queue"]:
+        """Queues across every application unless application_name narrows it —
+        the same semantics as list_workflows."""
+        return self._list_queues(
+            self._name_filter(SystemSchema.queues.c.application_name, application_name),
+            client_system_database,
+        )
+
+    def list_claimable_queues(
+        self, *, client_system_database: Optional["SystemDatabase"] = None
+    ) -> List["Queue"]:
+        """Queues this application polls: its own plus unclaimed. What the queue
+        thread reads, so it never spawns workers for another application."""
+        return self._list_queues(
+            self._app_scope(SystemSchema.queues.c.application_name),
+            client_system_database,
+        )
+
+    def _list_queues(
+        self,
+        scope: sa.ColumnElement[bool],
+        client_system_database: Optional["SystemDatabase"],
+    ) -> List["Queue"]:
         with self.engine.begin() as c:
-            rows = c.execute(
-                # Scoped so the queue thread ignores other applications' queues.
-                sa.select(SystemSchema.queues).where(
-                    self._app_scope(SystemSchema.queues.c.application_name)
-                )
-            ).fetchall()
+            rows = c.execute(sa.select(SystemSchema.queues).where(scope)).fetchall()
             return [
                 queue_from_db_row(row, client_system_database=client_system_database)
                 for row in rows

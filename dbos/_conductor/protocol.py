@@ -1,5 +1,5 @@
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -565,6 +565,7 @@ class ScheduleOutput:
     automatic_backfill: bool
     cron_timezone: Optional[str]
     queue_name: Optional[str]
+    application_name: Optional[str]
 
     @classmethod
     def from_schedule(
@@ -597,6 +598,7 @@ class ScheduleOutput:
             automatic_backfill=s.get("automatic_backfill", False),
             cron_timezone=s.get("cron_timezone"),
             queue_name=s.get("queue_name"),
+            application_name=s.get("application_name"),
         )
 
 
@@ -604,6 +606,7 @@ class ListSchedulesBody(TypedDict, total=False):
     status: Optional[Union[str, List[str]]]
     workflow_name: Optional[Union[str, List[str]]]
     schedule_name_prefix: Optional[Union[str, List[str]]]
+    application_name: Optional[Union[str, List[str]]]
     load_context: bool
 
 
@@ -888,6 +891,7 @@ class QueueOutput:
     priority_enabled: bool
     partition_queue: bool
     polling_interval_sec: float
+    application_name: Optional[str]
 
     @classmethod
     def from_queue(cls, q: "Queue") -> "QueueOutput":
@@ -900,12 +904,19 @@ class QueueOutput:
             priority_enabled=q._priority_enabled,
             partition_queue=q._partition_queue,
             polling_interval_sec=q._polling_interval_sec,
+            application_name=q.application_name,
         )
+
+
+class ListQueuesBody(TypedDict, total=False):
+    application_name: Optional[Union[str, List[str]]]
 
 
 @dataclass
 class ListQueuesRequest(BaseMessage):
-    pass
+    # Defaulted: this message carried no body before the application_name filter,
+    # so a Conductor that still omits it must keep working.
+    body: ListQueuesBody = field(default_factory=lambda: ListQueuesBody())
 
 
 @dataclass
