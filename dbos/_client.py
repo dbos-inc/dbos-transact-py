@@ -133,6 +133,7 @@ class DBOSClient:
         system_database_pool_size: Optional[int] = None,
         system_database_polling_concurrency: Optional[int] = None,
         use_listen_notify: bool = False,
+        application_name: Optional[str] = None,
     ):
         """Create a client for interacting with a DBOS application from outside it.
 
@@ -154,6 +155,7 @@ class DBOSClient:
             system_database_pool_size (int): System database pool size. Defaults to 5.
             system_database_polling_concurrency (int): Maximum number of DB-backed polling reads (from wait operations such as get_result, get_event, and read_stream) that may run concurrently against the system database pool. Defaults to half the system database pool size (minimum 1). Set to a non-positive value to disable the limiter.
             use_listen_notify (bool): Whether to run a listener thread so get_event and read_stream are woken by notifications rather than polling the database. Defaults to False. Only enable this if the system database was created with use_listen_notify=True (the DBOS default).
+            application_name (str): The application this client acts on behalf of. Defaults to None, meaning no application identity: the client sees every application's rows and writes unclaimed ones, which any application may run. Set it when several applications share this system database, so the client's writes are owned and its reads are scoped. Individual methods take an application_name that overrides this.
 
         Raises:
             Exception: If the system database cannot be reached.
@@ -195,6 +197,7 @@ class DBOSClient:
             executor_id=None,
             use_listen_notify=use_listen_notify,
             polling_concurrency=system_database_polling_concurrency,
+            app_name=application_name,
         )
         self._sys_db.check_connection()
         self._notification_listener_thread: Optional[threading.Thread] = None
@@ -326,6 +329,7 @@ class DBOSClient:
         partition_queue: bool = False,
         polling_interval_sec: float = 1.0,
         on_conflict: QueueConflictResolution = "always_update",
+        application_name: Optional[str] = None,
     ) -> Queue:
         """Register a queue from a client and persist it to the system database.
 
@@ -357,6 +361,9 @@ class DBOSClient:
             ``"update_if_latest_version"`` is rejected because clients are not
             associated with an application version. ``"never_update"`` leaves
             the existing row unchanged.
+        :param application_name: The application that owns this queue and polls
+            it. Defaults to the client's own application. Registering a queue
+            already owned by a different application raises.
 
         :returns: A :class:`Queue` bound to this client's system database.
         """
@@ -391,6 +398,7 @@ class DBOSClient:
             partition_queue=partition_queue,
             polling_interval_sec=polling_interval_sec,
             update_existing=update_existing,
+            application_name=application_name,
         )
         queue = self._sys_db.get_queue(name, client_system_database=self._sys_db)
         assert queue is not None, f"Queue {name} missing from database after upsert"
@@ -409,6 +417,7 @@ class DBOSClient:
         partition_queue: bool = False,
         polling_interval_sec: float = 1.0,
         on_conflict: QueueConflictResolution = "always_update",
+        application_name: Optional[str] = None,
     ) -> Queue:
         """Async version of :meth:`register_queue`."""
         return await asyncio.to_thread(
@@ -421,6 +430,7 @@ class DBOSClient:
                 partition_queue=partition_queue,
                 polling_interval_sec=polling_interval_sec,
                 on_conflict=on_conflict,
+                application_name=application_name,
             )
         )
 
@@ -845,6 +855,7 @@ class DBOSClient:
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
         schedule_name: Optional[str | list[str]] = None,
+        application_name: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         return self._sys_db.list_workflows(
             workflow_ids=workflow_ids,
@@ -873,6 +884,7 @@ class DBOSClient:
             has_parent=has_parent,
             attributes=attributes,
             schedule_name=schedule_name,
+            application_name=application_name,
         )
 
     async def list_workflows_async(
@@ -904,6 +916,7 @@ class DBOSClient:
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
         schedule_name: Optional[str | list[str]] = None,
+        application_name: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         return await asyncio.to_thread(
             self.list_workflows,
@@ -933,6 +946,7 @@ class DBOSClient:
             has_parent=has_parent,
             attributes=attributes,
             schedule_name=schedule_name,
+            application_name=application_name,
         )
 
     def list_queued_workflows(
@@ -961,6 +975,7 @@ class DBOSClient:
         executor_id: Optional[str | list[str]] = None,
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
+        application_name: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         return self._sys_db.list_workflows(
             workflow_ids=workflow_ids,
@@ -987,6 +1002,7 @@ class DBOSClient:
             queues_only=True,
             has_parent=has_parent,
             attributes=attributes,
+            application_name=application_name,
         )
 
     async def list_queued_workflows_async(
@@ -1015,6 +1031,7 @@ class DBOSClient:
         executor_id: Optional[str | list[str]] = None,
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
+        application_name: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         return await asyncio.to_thread(
             self.list_queued_workflows,
@@ -1041,6 +1058,7 @@ class DBOSClient:
             executor_id=executor_id,
             has_parent=has_parent,
             attributes=attributes,
+            application_name=application_name,
         )
 
     def list_workflow_steps(
@@ -1227,6 +1245,7 @@ class DBOSClient:
         automatic_backfill: bool = False,
         cron_timezone: Optional[str] = None,
         queue_name: Optional[str] = None,
+        application_name: Optional[str] = None,
     ) -> None:
         """
         Create a cron schedule that periodically invokes a workflow.
@@ -1240,9 +1259,10 @@ class DBOSClient:
             automatic_backfill: If ``True``, on startup the scheduler will automatically backfill missed executions since the last time the schedule fired. Defaults to ``False``.
             cron_timezone: IANA timezone name (e.g. ``"America/New_York"``) in which to evaluate the cron expression. Defaults to ``None`` (UTC).
             queue_name: Optional name of a queue to enqueue scheduled workflows to. If ``None``, uses the internal queue. Defaults to ``None``.
+            application_name: The application that owns this schedule and runs its workflows. Defaults to the client's own application. Leaving both unset creates an unclaimed schedule, which every application sharing the system database will run.
 
         Raises:
-            DBOSException: If the cron expression is invalid or a schedule with the same name already exists.
+            DBOSException: If the cron expression is invalid, a schedule with the same name already exists, or the existing schedule belongs to another application.
         """
         if not croniter.is_valid(schedule, second_at_beginning=True):
             raise DBOSException(f"Invalid cron schedule: '{schedule}'")
@@ -1264,7 +1284,11 @@ class DBOSClient:
                 automatic_backfill=automatic_backfill,
                 cron_timezone=cron_timezone,
                 queue_name=queue_name,
-                application_name=self._sys_db.app_name,
+                application_name=(
+                    application_name
+                    if application_name is not None
+                    else self._sys_db.app_name
+                ),
             )
         )
 
@@ -1322,6 +1346,7 @@ class DBOSClient:
         automatic_backfill: bool = False,
         cron_timezone: Optional[str] = None,
         queue_name: Optional[str] = None,
+        application_name: Optional[str] = None,
     ) -> None:
         """Async version of :meth:`create_schedule`."""
         await asyncio.to_thread(
@@ -1334,6 +1359,7 @@ class DBOSClient:
             automatic_backfill=automatic_backfill,
             cron_timezone=cron_timezone,
             queue_name=queue_name,
+            application_name=application_name,
         )
 
     async def list_schedules_async(
@@ -1416,7 +1442,9 @@ class DBOSClient:
                     automatic_backfill=entry.get("automatic_backfill", False),
                     cron_timezone=cron_timezone,
                     queue_name=entry.get("queue_name"),
-                    application_name=self._sys_db.app_name,
+                    application_name=entry.get(
+                        "application_name", self._sys_db.app_name
+                    ),
                 )
             )
         with self._sys_db.engine.begin() as c:

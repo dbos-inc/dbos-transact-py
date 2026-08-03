@@ -345,6 +345,8 @@ class ClientScheduleInput(TypedDict, total=False):
     automatic_backfill: bool
     cron_timezone: Optional[str]
     queue_name: Optional[str]
+    # Owning application; unset falls back to the client's own.
+    application_name: Optional[str]
 
 
 class VersionInfo(TypedDict):
@@ -730,6 +732,86 @@ class SystemDatabase(ABC):
                 return sa.func.unixepoch("subsec") * 1000
             return sa.func.strftime("%s", "now") * 1000
         return sa.func.extract("epoch", sa.func.now()) * 1000
+
+    def _app_scope(self, col: sa.ColumnElement[Any]) -> sa.ColumnElement[bool]:
+        """Rows this application may act on: its own, plus unclaimed ones.
+
+        Unclaimed (NULL) rows are written by SDKs predating the column and by
+        callers with no application identity, so every application must be able to
+        claim them — otherwise upgrading would strand in-flight work.
+
+        This is the claiming scope: dequeue, recovery, the enumeration the
+        background loops run on, and the bulk delete/cancel operations. It is
+        deliberately not what the observability filters use, which match an owner
+        exactly and default to matching nothing at all.
+        """
+        if self.app_name is None:
+            return sa.true()
+        return sa.or_(col == self.app_name, col.is_(None))
+
+    @staticmethod
+    def _owning_workflow_exists(
+        application_name: List[str],
+    ) -> sa.ColumnElement[bool]:
+        """Semi-join from operation_outputs to its workflow's owning application.
+
+        operation_outputs carries no owner of its own, so filtering steps by
+        application has to go through the parent row.
+        """
+        return sa.exists().where(
+            sa.and_(
+                SystemSchema.workflow_status.c.workflow_uuid
+                == SystemSchema.operation_outputs.c.workflow_uuid,
+                SystemSchema.workflow_status.c.application_name.in_(application_name),
+            )
+        )
+
+    def _adopt_unnamed_row(
+        self,
+        conn: sa.Connection,
+        table: sa.Table,
+        name_col: sa.ColumnElement[Any],
+        name: str,
+        owner: Optional[str],
+    ) -> None:
+        """Claim a pre-upgrade row for a name the caller declares.
+
+        Scoped to one name so an application only ever claims rows it registers
+        itself, which keeps two applications on one system database from taking
+        each other's queues or schedules.
+        """
+        if owner is None:
+            return
+        conn.execute(
+            sa.update(table)
+            .where(name_col == name, table.c.application_name.is_(None))
+            .values(application_name=owner)
+        )
+
+    def _check_row_owner(
+        self,
+        conn: sa.Connection,
+        table: sa.Table,
+        name_col: sa.ColumnElement[Any],
+        name: str,
+        owner: Optional[str],
+        kind: str,
+    ) -> None:
+        """Reject writing over a row owned by a different application.
+
+        Names stay globally unique across applications, so a collision is a real
+        conflict rather than something to silently resolve by last-writer-wins.
+        """
+        existing = conn.execute(
+            sa.select(table.c.application_name).where(name_col == name)
+        ).fetchone()
+        if existing is None or existing[0] is None or existing[0] == owner:
+            return
+        raise DBOSException(
+            f"{kind} '{name}' is already registered by application "
+            f"'{existing[0]}' in this system database. {kind} names must be "
+            f"unique across applications sharing a system database."
+        )
 
     def _insert_workflow_status(
         self,
@@ -1778,6 +1860,7 @@ class SystemDatabase(ABC):
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
         schedule_name: Optional[str | list[str]] = None,
+        application_name: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         """
         Retrieve a list of workflows based on the search criteria.
@@ -1800,6 +1883,8 @@ class SystemDatabase(ABC):
         executor_id_list = _to_list(executor_id)
         prefix_list = _to_list(workflow_id_prefix)
         schedule_name_list = _to_list(schedule_name)
+        # An ordinary filter, not the claiming scope: unset means every application.
+        application_name_list = _to_list(application_name)
 
         load_columns = [
             SystemSchema.workflow_status.c.workflow_uuid,
@@ -1861,6 +1946,12 @@ class SystemDatabase(ABC):
         if schedule_name_list:
             query = query.where(
                 SystemSchema.workflow_status.c.schedule_name.in_(schedule_name_list)
+            )
+        if application_name_list:
+            query = query.where(
+                SystemSchema.workflow_status.c.application_name.in_(
+                    application_name_list
+                )
             )
         if user_list:
             query = query.where(
@@ -2034,6 +2125,9 @@ class SystemDatabase(ABC):
                     == WorkflowStatusString.PENDING.value,
                     SystemSchema.workflow_status.c.executor_id == executor_id,
                     SystemSchema.workflow_status.c.application_version == app_version,
+                    # executor_id defaults to the literal "local", so it collides
+                    # across applications on a shared host; this disambiguates.
+                    self._app_scope(SystemSchema.workflow_status.c.application_name),
                 )
             ).fetchall()
 
@@ -2125,6 +2219,7 @@ class SystemDatabase(ABC):
         parent_workflow_id: Optional[List[str]] = None,
         user: Optional[List[str]] = None,
         schedule_name: Optional[List[str]] = None,
+        application_name: Optional[List[str]] = None,
         was_forked_from: Optional[bool] = None,
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
@@ -2292,6 +2387,10 @@ class SystemDatabase(ABC):
             query = query.where(
                 SystemSchema.workflow_status.c.schedule_name.in_(schedule_name)
             )
+        if application_name:
+            query = query.where(
+                SystemSchema.workflow_status.c.application_name.in_(application_name)
+            )
         if was_forked_from is not None:
             query = query.where(
                 SystemSchema.workflow_status.c.was_forked_from == was_forked_from
@@ -2361,6 +2460,7 @@ class SystemDatabase(ABC):
         workflow_id_prefix: Optional[List[str]] = None,
         completed_after: Optional[str] = None,
         completed_before: Optional[str] = None,
+        application_name: Optional[List[str]] = None,
     ) -> List[StepAggregateRow]:
         if time_bucket_size_ms is not None and time_bucket_size_ms <= 0:
             raise ValueError("time_bucket_size_ms must be > 0")
@@ -2460,6 +2560,10 @@ class SystemDatabase(ABC):
                 SystemSchema.operation_outputs.c.completed_at_epoch_ms
                 <= datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
             )
+        if application_name:
+            # operation_outputs has no owner column; reach it through the parent
+            # workflow. Built only when filtering, so the default path is unchanged.
+            query = query.where(self._owning_workflow_exists(application_name))
 
         query = query.group_by(*group_columns)
 
@@ -3912,6 +4016,8 @@ class SystemDatabase(ABC):
                     sa.literal_column(f"'{WorkflowStatusString.PENDING.value}'"),
                 ]
             ),
+            # Only partitions this application can actually dequeue from.
+            self._app_scope(ws.c.application_name),
         )
         partitions = (
             sa.select(sa.func.min(ws.c.queue_partition_key).label("pk"))
@@ -4002,6 +4108,11 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.started_at_epoch_ms
                         > start_time_ms - limiter_period_ms
                     )
+                    # Count only what this application would dequeue, so the rate
+                    # limit matches the set the select below draws from.
+                    .where(
+                        self._app_scope(SystemSchema.workflow_status.c.application_name)
+                    )
                 )
                 if queue_partition_key is not None:
                     query = query.where(
@@ -4029,6 +4140,9 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.status
                         == WorkflowStatusString.PENDING.value
                     )
+                    .where(
+                        self._app_scope(SystemSchema.workflow_status.c.application_name)
+                    )
                 )
                 if queue_partition_key is not None:
                     global_pending_query = global_pending_query.where(
@@ -4045,6 +4159,15 @@ class SystemDatabase(ABC):
 
             latest_version = c.execute(
                 sa.select(SystemSchema.application_versions.c.version_name)
+                # This application's latest version, not the newest on the
+                # database. Unclaimed rows count: one that is newer means an
+                # older-SDK peer deployed after this worker, which really does
+                # demote it.
+                .where(
+                    self._app_scope(
+                        SystemSchema.application_versions.c.application_name
+                    )
+                )
                 .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
                 .limit(1)
             ).scalar()
@@ -4073,6 +4196,7 @@ class SystemDatabase(ABC):
                     == WorkflowStatusString.ENQUEUED.value
                 )
                 .where(version_predicate)
+                .where(self._app_scope(SystemSchema.workflow_status.c.application_name))
                 # Unless global concurrency is set, use skip_locked to only select
                 # rows that can be locked. If global concurrency is set, use no_wait
                 # to ensure all processes have a consistent view of the table.
@@ -4119,6 +4243,9 @@ class SystemDatabase(ABC):
                         status=WorkflowStatusString.PENDING.value,
                         application_version=app_version,
                         executor_id=executor_id,
+                        # Claim the row: unclaimed workflows are adopted by whoever
+                        # runs them, so the unclaimed partition drains over time.
+                        application_name=self.app_name,
                         started_at_epoch_ms=start_time_ms,
                         rate_limited=queue._limiter is not None,
                         # If a timeout is set, set the deadline on dequeue
@@ -4166,6 +4293,15 @@ class SystemDatabase(ABC):
         with self.engine.begin() as c:
             latest_version = c.execute(
                 sa.select(SystemSchema.application_versions.c.version_name)
+                # This application's latest version, not the newest on the
+                # database. Unclaimed rows count: one that is newer means an
+                # older-SDK peer deployed after this worker, which really does
+                # demote it.
+                .where(
+                    self._app_scope(
+                        SystemSchema.application_versions.c.application_name
+                    )
+                )
                 .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
                 .limit(1)
             ).scalar()
@@ -4187,6 +4323,7 @@ class SystemDatabase(ABC):
                 ws.c.queue_name == queue.name,
                 ws.c.status == WorkflowStatusString.ENQUEUED.value,
                 status_prover,
+                self._app_scope(ws.c.application_name),
             )
             # Walk distinct partition keys with a recursive-CTE loose index scan (one seek per key, mirroring get_queue_partitions) so sweep cost scales with partition count, not backlog depth.
             partitions = (
@@ -4217,7 +4354,10 @@ class SystemDatabase(ABC):
                 )
                 .limit(1)
             )
-            # Admit a partition's head only while nothing in that partition runs anywhere, on any app version.
+            # Admit a partition's head only while nothing in that partition runs
+            # anywhere, on any app version, for any application. Deliberately
+            # unscoped: this is a mutual-exclusion probe, so a row owned by someone
+            # else still has to block admission.
             pending_probe = (
                 sa.select(sa.literal(1))
                 .where(ws.c.queue_name == queue.name)
@@ -4265,6 +4405,7 @@ class SystemDatabase(ABC):
                 ws.c.queue_name == queue.name,
                 ws.c.queue_partition_key.isnot(None),
                 version_predicate,
+                self._app_scope(ws.c.application_name),
             )
             # Lock the fixed candidate set -- never a LIMIT query, whose SKIP LOCKED could slide past a locked head and admit out of order. On SQLite this is an unlocked re-read; the RETURNING flip below is the guard.
             locked_rows = c.execute(
@@ -4287,6 +4428,8 @@ class SystemDatabase(ABC):
                     status=WorkflowStatusString.PENDING.value,
                     application_version=app_version,
                     executor_id=executor_id,
+                    # Claim the row, as the unpartitioned dequeue does.
+                    application_name=self.app_name,
                     started_at_epoch_ms=start_time_ms,
                     rate_limited=False,
                     # If a timeout is set, set the deadline on dequeue
@@ -4879,6 +5022,9 @@ class SystemDatabase(ABC):
                 # Get the created_at timestamp of the rows_threshold newest row
                 result = c.execute(
                     sa.select(SystemSchema.workflow_status.c.created_at)
+                    .where(
+                        self._app_scope(SystemSchema.workflow_status.c.application_name)
+                    )
                     .order_by(SystemSchema.workflow_status.c.created_at.desc())
                     .limit(1)
                     .offset(rows_threshold - 1)
@@ -4906,6 +5052,10 @@ class SystemDatabase(ABC):
                     WorkflowStatusString.DELAYED.value,
                 ]
             ),
+            # Collect this application's rows and unclaimed ones. Unclaimed rows are
+            # included deliberately: excluding them would leak every pre-upgrade row
+            # forever, since no application would ever be entitled to collect them.
+            self._app_scope(SystemSchema.workflow_status.c.application_name),
         )
 
         if batch_size is None:
@@ -4948,7 +5098,8 @@ class SystemDatabase(ABC):
             pending_enqueued_result = c.execute(
                 sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
                     SystemSchema.workflow_status.c.created_at
-                    < cutoff_epoch_timestamp_ms
+                    < cutoff_epoch_timestamp_ms,
+                    self._app_scope(SystemSchema.workflow_status.c.application_name),
                 )
             ).fetchall()
 
@@ -4957,13 +5108,43 @@ class SystemDatabase(ABC):
                 row[0] for row in pending_enqueued_result
             ]
 
-    def get_metrics(self, start_time: str, end_time: str) -> List[MetricData]:
+    def list_timed_out_workflow_ids(self, cutoff_epoch_timestamp_ms: int) -> List[str]:
+        """IDs of this application's in-flight workflows created before the cutoff.
+
+        Uses the claiming scope rather than an exact owner match, so an upgrading
+        application still times out its own pre-upgrade (unclaimed) workflows.
+        """
+        with self.engine.begin() as c:
+            rows = c.execute(
+                sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
+                    SystemSchema.workflow_status.c.status.in_(
+                        [
+                            WorkflowStatusString.PENDING.value,
+                            WorkflowStatusString.ENQUEUED.value,
+                            WorkflowStatusString.DELAYED.value,
+                        ]
+                    ),
+                    SystemSchema.workflow_status.c.created_at
+                    <= cutoff_epoch_timestamp_ms,
+                    self._app_scope(SystemSchema.workflow_status.c.application_name),
+                )
+            ).fetchall()
+            return [row[0] for row in rows]
+
+    def get_metrics(
+        self,
+        start_time: str,
+        end_time: str,
+        application_name: Optional[List[str]] = None,
+    ) -> List[MetricData]:
         """
         Retrieve the number of workflows and steps that ran in a time range.
 
         Args:
             start_time: ISO 8601 formatted start time
             end_time: ISO 8601 formatted end time
+            application_name: Restrict to these owning applications. Unset counts
+                every application's workflows and steps.
         """
         # Convert ISO 8601 times to epoch milliseconds
         start_epoch_ms = int(
@@ -4990,6 +5171,12 @@ class SystemDatabase(ABC):
                 )
                 .group_by(SystemSchema.workflow_status.c.name)
             )
+            if application_name:
+                workflow_query = workflow_query.where(
+                    SystemSchema.workflow_status.c.application_name.in_(
+                        application_name
+                    )
+                )
 
             workflow_results = c.execute(workflow_query).fetchall()
             for row in workflow_results:
@@ -5017,6 +5204,10 @@ class SystemDatabase(ABC):
                 )
                 .group_by(SystemSchema.operation_outputs.c.function_name)
             )
+            if application_name:
+                step_query = step_query.where(
+                    self._owning_workflow_exists(application_name)
+                )
 
             step_results = c.execute(step_query).fetchall()
             for row in step_results:
@@ -5457,6 +5648,14 @@ class SystemDatabase(ABC):
         self, schedule: WorkflowSchedule, conn: Optional[sa.Connection] = None
     ) -> None:
         def _do(c: sa.Connection) -> None:
+            self._check_row_owner(
+                c,
+                SystemSchema.workflow_schedules,
+                SystemSchema.workflow_schedules.c.schedule_name,
+                schedule["schedule_name"],
+                schedule.get("application_name"),
+                "Schedule",
+            )
             try:
                 c.execute(
                     sa.insert(SystemSchema.workflow_schedules).values(
@@ -5490,6 +5689,21 @@ class SystemDatabase(ABC):
     ) -> None:
         # Idempotent upsert by schedule_name; preserves schedule_id, status, and last_fired_at on conflict. The scheduler loop detects the changed definition and restarts the thread.
         def _do(c: sa.Connection) -> None:
+            self._check_row_owner(
+                c,
+                SystemSchema.workflow_schedules,
+                SystemSchema.workflow_schedules.c.schedule_name,
+                schedule["schedule_name"],
+                schedule.get("application_name"),
+                "Schedule",
+            )
+            self._adopt_unnamed_row(
+                c,
+                SystemSchema.workflow_schedules,
+                SystemSchema.workflow_schedules.c.schedule_name,
+                schedule["schedule_name"],
+                schedule.get("application_name"),
+            )
             c.execute(
                 self.dialect.insert(SystemSchema.workflow_schedules)
                 .values(
@@ -5549,6 +5763,9 @@ class SystemDatabase(ABC):
                 SystemSchema.workflow_schedules.c.cron_timezone,
                 SystemSchema.workflow_schedules.c.queue_name,
                 SystemSchema.workflow_schedules.c.application_name,
+            ).where(
+                # Scoped so the scheduler only runs this application's own crons.
+                self._app_scope(SystemSchema.workflow_schedules.c.application_name)
             )
             if status is not None:
                 vals = [status] if isinstance(status, str) else status
@@ -5688,22 +5905,54 @@ class SystemDatabase(ABC):
 
     # ── Application Version CRUD ────────────────────────────────
 
-    def create_application_version(self, version_name: str) -> None:
+    def create_application_version(
+        self, version_name: str, application_name: Optional[str] = None
+    ) -> None:
+        owner = application_name if application_name is not None else self.app_name
         with self.engine.begin() as c:
+            self._check_row_owner(
+                c,
+                SystemSchema.application_versions,
+                SystemSchema.application_versions.c.version_name,
+                version_name,
+                owner,
+                "Application version",
+            )
+            self._adopt_unnamed_row(
+                c,
+                SystemSchema.application_versions,
+                SystemSchema.application_versions.c.version_name,
+                version_name,
+                owner,
+            )
             c.execute(
                 self.dialect.insert(SystemSchema.application_versions)
                 .values(
                     version_id=generate_uuid(),
                     version_name=version_name,
-                    application_name=self.app_name,
+                    application_name=owner,
                 )
                 .on_conflict_do_nothing(index_elements=["version_name"])
             )
 
     def update_application_version_timestamp(
-        self, version_name: str, new_timestamp: int
+        self,
+        version_name: str,
+        new_timestamp: int,
+        application_name: Optional[str] = None,
     ) -> None:
+        owner = application_name if application_name is not None else self.app_name
         with self.engine.begin() as c:
+            # Naming a version explicitly is an operator action, so claim it: this
+            # is what makes rolling back to a pre-upgrade version visible to the
+            # owner-only read in get_latest_application_version.
+            self._adopt_unnamed_row(
+                c,
+                SystemSchema.application_versions,
+                SystemSchema.application_versions.c.version_name,
+                version_name,
+                owner,
+            )
             c.execute(
                 sa.update(SystemSchema.application_versions)
                 .where(SystemSchema.application_versions.c.version_name == version_name)
@@ -5719,7 +5968,13 @@ class SystemDatabase(ABC):
                     SystemSchema.application_versions.c.version_timestamp,
                     SystemSchema.application_versions.c.created_at,
                     SystemSchema.application_versions.c.application_name,
-                ).order_by(SystemSchema.application_versions.c.version_timestamp.desc())
+                )
+                .where(
+                    self._app_scope(
+                        SystemSchema.application_versions.c.application_name
+                    )
+                )
+                .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
             ).fetchall()
             return [
                 VersionInfo(
@@ -5754,7 +6009,13 @@ class SystemDatabase(ABC):
         client_system_database: Optional["SystemDatabase"] = None,
     ) -> List["Queue"]:
         with self.engine.begin() as c:
-            rows = c.execute(sa.select(SystemSchema.queues)).fetchall()
+            rows = c.execute(
+                # Scoped so the queue thread never spawns workers for another
+                # application's database-backed queues.
+                sa.select(SystemSchema.queues).where(
+                    self._app_scope(SystemSchema.queues.c.application_name)
+                )
+            ).fetchall()
             return [
                 queue_from_db_row(row, client_system_database=client_system_database)
                 for row in rows
@@ -5792,10 +6053,12 @@ class SystemDatabase(ABC):
         partition_queue: bool,
         polling_interval_sec: float,
         update_existing: bool,
+        application_name: Optional[str] = None,
     ) -> bool:
         """Upsert a queue row. Returns True iff a new row was inserted (i.e.
         the queue did not previously exist). False if the row already existed,
         regardless of whether it was updated."""
+        owner = application_name if application_name is not None else self.app_name
         values = {
             "name": name,
             "concurrency": concurrency,
@@ -5806,9 +6069,20 @@ class SystemDatabase(ABC):
             "partition_queue": partition_queue,
             "polling_interval_sec": polling_interval_sec,
             "updated_at": int(time.time() * 1000),
-            "application_name": self.app_name,
+            "application_name": owner,
         }
         with self.engine.begin() as c:
+            self._check_row_owner(
+                c,
+                SystemSchema.queues,
+                SystemSchema.queues.c.name,
+                name,
+                owner,
+                "Queue",
+            )
+            self._adopt_unnamed_row(
+                c, SystemSchema.queues, SystemSchema.queues.c.name, name, owner
+            )
             existed = (
                 c.execute(
                     sa.select(SystemSchema.queues.c.name).where(
@@ -5838,6 +6112,11 @@ class SystemDatabase(ABC):
                     SystemSchema.application_versions.c.version_timestamp,
                     SystemSchema.application_versions.c.created_at,
                     SystemSchema.application_versions.c.application_name,
+                )
+                .where(
+                    self._app_scope(
+                        SystemSchema.application_versions.c.application_name
+                    )
                 )
                 .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
                 .limit(1)

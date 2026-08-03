@@ -99,13 +99,10 @@ def garbage_collect(
 
 
 def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:
-    cutoff_iso = datetime.fromtimestamp(cutoff_epoch_timestamp_ms / 1000).isoformat()
-    for workflow in dbos.list_workflows(
-        status=[
-            WorkflowStatusString.PENDING.value,
-            WorkflowStatusString.ENQUEUED.value,
-            WorkflowStatusString.DELAYED.value,
-        ],
-        end_time=cutoff_iso,
+    # Scoped to this application's workflows plus unclaimed ones, not routed through
+    # list_workflows: that filter matches an owner exactly and so cannot express the
+    # unclaimed half, which is what pre-upgrade in-flight rows look like.
+    for workflow_id in dbos._sys_db.list_timed_out_workflow_ids(
+        cutoff_epoch_timestamp_ms
     ):
-        dbos.cancel_workflow(workflow.workflow_id)
+        dbos.cancel_workflow(workflow_id)
