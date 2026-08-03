@@ -551,6 +551,61 @@ def test_can_roll_back_to_a_legacy_version(dbos: DBOS) -> None:
     assert latest["application_name"] is None
 
 
+def test_create_application_version_claims_unclaimed_row(dbos: DBOS) -> None:
+    """Registering a version claims a pre-upgrade row. Without this, a pinned
+    application_version — one whose string never changes — would stay unclaimed
+    for the life of the deployment, since a computed hash is what normally mints
+    a fresh owned row."""
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.insert(SystemSchema.application_versions).values(
+                version_id="pinned-version-id",
+                version_name="1.0.0",
+                version_timestamp=7,
+                created_at=7,
+                application_name=None,
+            )
+        )
+    dbos._sys_db.create_application_version("1.0.0")
+    with dbos._sys_db.engine.begin() as c:
+        row = c.execute(
+            sa.select(
+                SystemSchema.application_versions.c.application_name,
+                SystemSchema.application_versions.c.version_id,
+                SystemSchema.application_versions.c.version_timestamp,
+            ).where(SystemSchema.application_versions.c.version_name == "1.0.0")
+        ).fetchone()
+    assert row is not None
+    assert row[0] == APP_NAME
+    # Claiming must not recreate the row or promote it to latest.
+    assert row[1] == "pinned-version-id"
+    assert row[2] == 7
+
+
+def test_create_application_version_leaves_owned_rows_alone(dbos: DBOS) -> None:
+    """Re-registering an already-owned version is still a no-op, so a redeploy of
+    an unchanged version does not become a promotion."""
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.insert(SystemSchema.application_versions).values(
+                version_id="owned-version-id",
+                version_name="2.0.0",
+                version_timestamp=7,
+                created_at=7,
+                application_name=APP_NAME,
+            )
+        )
+    dbos._sys_db.create_application_version("2.0.0")
+    with dbos._sys_db.engine.begin() as c:
+        row = c.execute(
+            sa.select(
+                SystemSchema.application_versions.c.version_id,
+                SystemSchema.application_versions.c.version_timestamp,
+            ).where(SystemSchema.application_versions.c.version_name == "2.0.0")
+        ).fetchone()
+    assert row == ("owned-version-id", 7)
+
+
 # ── Cross-application operations that must keep working ───────────────────────
 
 

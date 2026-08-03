@@ -5879,6 +5879,15 @@ class SystemDatabase(ABC):
     def create_application_version(
         self, version_name: str, application_name: Optional[str] = None
     ) -> None:
+        """Register this version, claiming the row if nobody owns it yet.
+
+        An unowned row is one written before this column existed. Claiming it on
+        registration means a version string that never changes — a pinned
+        application_version rather than a computed source hash — still ends up
+        owned, instead of staying unclaimed for the life of the deployment.
+        Rows owned by another application are rejected above, and a row this
+        application already owns is left alone.
+        """
         owner = application_name if application_name is not None else self.app_name
         with self.engine.begin() as c:
             self._check_row_owner(
@@ -5890,13 +5899,21 @@ class SystemDatabase(ABC):
                 "Application version",
             )
             c.execute(
-                self.dialect.insert(SystemSchema.application_versions)
-                .values(
+                self.dialect.insert(SystemSchema.application_versions).values(
                     version_id=generate_uuid(),
                     version_name=version_name,
                     application_name=owner,
                 )
-                .on_conflict_do_nothing(index_elements=["version_name"])
+                # Conditional upsert rather than a preceding UPDATE: one atomic
+                # statement, and it leaves version_timestamp untouched so a
+                # redeploy of the same version still is not a promotion.
+                .on_conflict_do_update(
+                    index_elements=["version_name"],
+                    set_={"application_name": owner},
+                    where=SystemSchema.application_versions.c.application_name.is_(
+                        None
+                    ),
+                )
             )
 
     def update_application_version_timestamp(
