@@ -338,6 +338,7 @@ class ConductorWebsocket(threading.Thread):
                                     dequeued_before=body.get("dequeued_before", None),
                                     status=body.get("status", None),
                                     app_version=body.get("application_version", None),
+                                    application_name=body.get("application_name", None),
                                     forked_from=body.get("forked_from", None),
                                     parent_workflow_id=body.get(
                                         "parent_workflow_id", None
@@ -393,6 +394,9 @@ class ConductorWebsocket(threading.Thread):
                                     dequeued_before=q_body.get("dequeued_before", None),
                                     status=q_body.get("status", None),
                                     app_version=q_body.get("application_version", None),
+                                    application_name=q_body.get(
+                                        "application_name", None
+                                    ),
                                     forked_from=q_body.get("forked_from", None),
                                     parent_workflow_id=q_body.get(
                                         "parent_workflow_id", None
@@ -948,6 +952,9 @@ class ConductorWebsocket(threading.Thread):
                                     group_by_application_version=agg_body.get(
                                         "group_by_application_version", False
                                     ),
+                                    group_by_application_name=agg_body.get(
+                                        "group_by_application_name", False
+                                    ),
                                     select_count=select_count,
                                     select_min_created_at=select_min_created_at,
                                     select_max_queue_wait_ms=select_max_queue_wait_ms,
@@ -982,6 +989,9 @@ class ConductorWebsocket(threading.Thread):
                                     ),
                                     user=agg_body.get("user", None),
                                     schedule_name=agg_body.get("schedule_name", None),
+                                    application_name=agg_body.get(
+                                        "application_name", None
+                                    ),
                                     was_forked_from=agg_body.get(
                                         "was_forked_from", None
                                     ),
@@ -1048,6 +1058,9 @@ class ConductorWebsocket(threading.Thread):
                                     ),
                                     completed_before=step_agg_body.get(
                                         "completed_before", None
+                                    ),
+                                    application_name=step_agg_body.get(
+                                        "application_name", None
                                     ),
                                 )
                                 step_agg_output = [

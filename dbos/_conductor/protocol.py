@@ -198,6 +198,7 @@ class ListWorkflowsBody(TypedDict, total=False):
     has_parent: Optional[bool]
     attributes: Optional[Dict[str, Any]]
     schedule_name: Optional[Union[str, List[str]]]
+    application_name: Optional[Union[str, List[str]]]
 
 
 @dataclass
@@ -231,6 +232,7 @@ class WorkflowsOutput:
     CompletedAt: Optional[str]
     Attributes: Optional[str]
     ScheduleName: Optional[str]
+    ApplicationName: Optional[str]
 
     @classmethod
     def from_workflow_information(cls, info: WorkflowStatus) -> "WorkflowsOutput":
@@ -302,6 +304,7 @@ class WorkflowsOutput:
             CompletedAt=completed_at_str,
             Attributes=attributes_str,
             ScheduleName=info.schedule_name,
+            ApplicationName=info.application_name,
         )
 
 
@@ -377,6 +380,7 @@ class ListQueuedWorkflowsBody(TypedDict, total=False):
     has_parent: Optional[bool]
     attributes: Optional[Dict[str, Any]]
     schedule_name: Optional[Union[str, List[str]]]
+    application_name: Optional[Union[str, List[str]]]
 
 
 @dataclass
@@ -790,6 +794,7 @@ class GetWorkflowAggregatesBody(TypedDict, total=False):
     group_by_queue_name: bool
     group_by_executor_id: bool
     group_by_application_version: bool
+    group_by_application_name: bool
     select_count: bool
     select_min_created_at: bool
     select_max_queue_wait_ms: bool
@@ -812,6 +817,7 @@ class GetWorkflowAggregatesBody(TypedDict, total=False):
     parent_workflow_id: Optional[List[str]]
     user: Optional[List[str]]
     schedule_name: Optional[List[str]]
+    application_name: Optional[List[str]]
     was_forked_from: Optional[bool]
     has_parent: Optional[bool]
     attributes: Optional[Dict[str, Any]]
@@ -848,6 +854,7 @@ class GetStepAggregatesBody(TypedDict, total=False):
     workflow_id_prefix: Optional[List[str]]
     completed_after: Optional[str]
     completed_before: Optional[str]
+    application_name: Optional[List[str]]
 
 
 @dataclass

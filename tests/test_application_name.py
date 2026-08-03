@@ -303,6 +303,12 @@ def test_observability_filters_are_exact_and_optional(dbos: DBOS) -> None:
     )
     assert [r["group"]["name"] for r in aggregates] == ["foreign_workflow"]
 
+    # Grouping by owner is what lets a console break down a shared database.
+    grouped = dbos._sys_db.get_workflow_aggregates(
+        group_by_application_name=True, select_count=True
+    )
+    assert {r["group"]["application_name"] for r in grouped} == {APP_NAME, OTHER_APP}
+
     steps = dbos._sys_db.get_step_aggregates(
         group_by_function_name=True, select_count=True, application_name=[OTHER_APP]
     )
@@ -642,3 +648,32 @@ def test_conflicting_names_across_applications_raise(dbos: DBOS) -> None:
         )
     with pytest.raises(DBOSException, match="already registered by application"):
         dbos._sys_db.create_application_version("conflict-version")
+
+
+def test_cli_filters_by_application(dbos: DBOS, config: Any) -> None:
+    """Click binds options to parameters by name, which mypy cannot check, so the
+    two list commands need one real invocation."""
+    from click.testing import CliRunner
+
+    from dbos.cli.cli import app
+
+    @DBOS.workflow()
+    def wf() -> int:
+        return 14
+
+    handle = DBOS.start_workflow(wf)
+    assert handle.get_result() == 14
+    insert_foreign_workflow(dbos, "cli-foreign", status="SUCCESS")
+
+    runner = CliRunner()
+    for command in (["workflow", "list"], ["workflow", "queue", "list"]):
+        result = runner.invoke(
+            app, command + ["-s", config["system_database_url"], "-a", OTHER_APP]
+        )
+        assert result.exit_code == 0, result.output
+        assert handle.workflow_id not in result.output
+    listed = runner.invoke(
+        app,
+        ["workflow", "list", "-s", config["system_database_url"], "-a", OTHER_APP],
+    )
+    assert "cli-foreign" in listed.output

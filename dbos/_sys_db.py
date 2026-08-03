@@ -2143,6 +2143,7 @@ class SystemDatabase(ABC):
         group_by_queue_name: bool = False,
         group_by_executor_id: bool = False,
         group_by_application_version: bool = False,
+        group_by_application_name: bool = False,
         select_count: bool = False,
         select_min_created_at: bool = False,
         select_max_queue_wait_ms: bool = False,
@@ -2191,6 +2192,11 @@ class SystemDatabase(ABC):
                 "application_version",
                 group_by_application_version,
                 SystemSchema.workflow_status.c.application_version,
+            ),
+            (
+                "application_name",
+                group_by_application_name,
+                SystemSchema.workflow_status.c.application_name,
             ),
         ]
         group_names: List[str] = []

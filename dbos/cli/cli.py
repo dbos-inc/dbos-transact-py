@@ -441,6 +441,11 @@ def reset(
 )
 @click.option("--name", "-n", help="Retrieve workflows with this name")
 @click.option(
+    "--application-name",
+    "-a",
+    help="Retrieve workflows owned by this application",
+)
+@click.option(
     "--sort-desc",
     "-d",
     is_flag=True,
@@ -462,6 +467,7 @@ def list_workflows(
     status: Optional[str],
     application_version: Optional[str],
     name: Optional[str],
+    application_name: Optional[str],
     sort_desc: bool,
     offset: Optional[int],
     schema: Optional[str],
@@ -485,6 +491,7 @@ def list_workflows(
         status=status,
         app_version=application_version,
         name=name,
+        application_name=application_name,
     )
     print(json.dumps([w.__dict__ for w in workflows], cls=DefaultEncoder))
 
@@ -718,6 +725,11 @@ def fork(
 @click.option("--queue-name", "-q", help="Retrieve functions on this queue")
 @click.option("--name", "-n", help="Retrieve functions on this queue")
 @click.option(
+    "--application-name",
+    "-a",
+    help="Retrieve functions owned by this application",
+)
+@click.option(
     "--sort-desc",
     "-d",
     is_flag=True,
@@ -738,6 +750,7 @@ def list_queue(
     status: Optional[str],
     queue_name: Optional[str],
     name: Optional[str],
+    application_name: Optional[str],
     sort_desc: bool,
     offset: Optional[int],
     schema: Optional[str],
@@ -760,6 +773,7 @@ def list_queue(
         queue_name=queue_name,
         status=status,
         name=name,
+        application_name=application_name,
     )
     print(json.dumps([w.__dict__ for w in workflows], cls=DefaultEncoder))
 
