@@ -87,8 +87,7 @@ class Queue:
         )
         self.name = name
         self.database_backed_queue = database_backed_queue
-        # Owning application, from the queues table. None for in-memory queues,
-        # which have no row, and for rows written before the column existed.
+        # Owner from the queues table; None for in-memory and pre-upgrade queues.
         self.application_name = application_name
         # When set, getters/setters use this SystemDatabase instead of the
         # DBOS singleton's. This allows a DBOSClient to manipulate queues

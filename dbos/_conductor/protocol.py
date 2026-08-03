@@ -914,8 +914,7 @@ class ListQueuesBody(TypedDict, total=False):
 
 @dataclass
 class ListQueuesRequest(BaseMessage):
-    # Defaulted: this message carried no body before the application_name filter,
-    # so a Conductor that still omits it must keep working.
+    # Defaulted: a Conductor that predates the filter still sends no body.
     body: ListQueuesBody = field(default_factory=lambda: ListQueuesBody())
 
 

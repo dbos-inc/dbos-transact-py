@@ -117,8 +117,7 @@ def test_runtime_stamps_its_own_application(dbos: DBOS) -> None:
         return 5
 
     workflow_ids = [DBOS.start_workflow(wf).workflow_id, served.enqueue(wf).workflow_id]
-    # A queue this application serves and one it has never heard of: an earlier
-    # design consulted the queue here, and left the unknown one unclaimed.
+    # An earlier design consulted the queue here, leaving the unknown one unclaimed.
     for queue_name in ("served-queue", "never-served-queue"):
         workflow_ids.append(
             DBOS.enqueue_workflow_with_options(

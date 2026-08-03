@@ -10,6 +10,21 @@ from ._logger import dbos_logger
 # so this set is ignored and the regular transactional path is used.
 _ONLINE_MIGRATIONS = {22, 23, 24, 25, 26, 27, 29, 30, 31, 32, 34, 35, 37, 45, 46, 47}
 
+# From this index on, every SDK defines the same migration at the same index.
+SHARED_MIGRATION_BASE = 100
+
+
+def _pad_to_shared_base(migrations: list[str]) -> list[str]:
+    """Pad a language's own history out to SHARED_MIGRATION_BASE - 1. Earlier
+    indices stay per-language, safe to skip only because the schemas converge."""
+    if len(migrations) >= SHARED_MIGRATION_BASE:
+        raise ValueError(
+            f"Migration history is {len(migrations)} long, which reaches the "
+            f"shared numbering base {SHARED_MIGRATION_BASE}. Shared migrations "
+            f"must be appended after it, not merged into the history."
+        )
+    return migrations + [""] * (SHARED_MIGRATION_BASE - 1 - len(migrations))
+
 
 def _concurrently(is_cockroach: bool) -> str:
     """Render the CONCURRENTLY keyword for online index DDL.
@@ -924,7 +939,7 @@ def get_dbos_migration_fortyseven(schema: str, is_cockroach: bool) -> str:
     )
 
 
-def get_dbos_migration_fortyeight(schema: str) -> str:
+def get_dbos_migration_hundred(schema: str) -> str:
     # Catalog-only. NULL means unclaimed: any application may read and claim the row.
     return f"""
 ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
@@ -935,7 +950,7 @@ ALTER TABLE "{schema}"."operation_outputs" ADD COLUMN IF NOT EXISTS "application
 """
 
 
-def get_dbos_migration_fortynine(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_hundredone(schema: str, is_cockroach: bool) -> str:
     # Callers omitting the trailing application_name enqueue an unclaimed workflow.
     migration = f"""
 DROP FUNCTION IF EXISTS "{schema}".enqueue_workflow(
@@ -1045,7 +1060,7 @@ ALTER FUNCTION "{schema}".enqueue_workflow(
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
-    return [
+    history = [
         get_dbos_migration_one(schema, use_listen_notify),
         get_dbos_migration_two(schema),
         get_dbos_migration_three(schema),
@@ -1093,8 +1108,11 @@ def get_dbos_migrations(
         get_dbos_migration_fortyfive(schema, is_cockroach),
         get_dbos_migration_fortysix(schema, is_cockroach),
         get_dbos_migration_fortyseven(schema, is_cockroach),
-        get_dbos_migration_fortyeight(schema),
-        get_dbos_migration_fortynine(schema, is_cockroach),
+    ]
+    return [
+        *_pad_to_shared_base(history),
+        get_dbos_migration_hundred(schema),
+        get_dbos_migration_hundredone(schema, is_cockroach),
     ]
 
 
@@ -1364,7 +1382,7 @@ sqlite_migration_fortyseven = (
 )
 
 # NULL means unclaimed: any application may read and claim the row.
-sqlite_migration_fortyeight = """
+sqlite_migration_hundred = """
 ALTER TABLE workflow_status ADD COLUMN "application_name" TEXT DEFAULT NULL;
 ALTER TABLE queues ADD COLUMN "application_name" TEXT DEFAULT NULL;
 ALTER TABLE workflow_schedules ADD COLUMN "application_name" TEXT DEFAULT NULL;
@@ -1372,7 +1390,7 @@ ALTER TABLE application_versions ADD COLUMN "application_name" TEXT DEFAULT NULL
 ALTER TABLE operation_outputs ADD COLUMN "application_name" TEXT DEFAULT NULL;
 """
 
-sqlite_migrations = [
+_sqlite_history = [
     sqlite_migration_one,
     sqlite_migration_two,
     sqlite_migration_three,
@@ -1418,6 +1436,11 @@ sqlite_migrations = [
     sqlite_migration_fortyfive,
     sqlite_migration_fortysix,
     sqlite_migration_fortyseven,
-    sqlite_migration_fortyeight,
-    # There is no SQLite version of migration forty-nine
+]
+
+sqlite_migrations = [
+    *_pad_to_shared_base(_sqlite_history),
+    sqlite_migration_hundred,
+    # Postgres migration 101 rewrites a stored function; SQLite has none.
+    "",
 ]
