@@ -207,8 +207,7 @@ _APPLICATION_NAME_TABLES = (
     "queues",
     "workflow_schedules",
     "application_versions",
-    # Denormalized from the parent workflow so step observability can filter
-    # locally instead of joining back to workflow_status.
+    # Denormalized from the parent so step observability filters without a join.
     "operation_outputs",
 )
 

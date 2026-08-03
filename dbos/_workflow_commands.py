@@ -99,9 +99,7 @@ def garbage_collect(
 
 
 def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:
-    # Scoped to this application's workflows plus unclaimed ones, not routed through
-    # list_workflows: that filter matches an owner exactly and so cannot express the
-    # unclaimed half, which is what pre-upgrade in-flight rows look like.
+    # Own plus unclaimed rows, which list_workflows' exact-match filter cannot express.
     for workflow_id in dbos._sys_db.list_timed_out_workflow_ids(
         cutoff_epoch_timestamp_ms
     ):

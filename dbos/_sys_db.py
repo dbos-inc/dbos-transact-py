@@ -193,8 +193,7 @@ class WorkflowStatus:
     attributes: Optional[Dict[str, Any]]
     # If this workflow was enqueued by a named schedule, that schedule's name
     schedule_name: Optional[str]
-    # The application that owns this workflow. None if unclaimed, in which case any
-    # application listening on its queue may run it.
+    # Owning application; None if unclaimed, in which case any application may run it.
     application_name: Optional[str]
 
     # INTERNAL FIELDS
@@ -331,8 +330,7 @@ class WorkflowSchedule(TypedDict):
     automatic_backfill: bool
     cron_timezone: Optional[str]  # IANA timezone name, stored as string in DB
     queue_name: Optional[str]
-    # The application that owns this schedule and runs its workflows. None leaves it
-    # unclaimed. Writers may set it to provision a schedule for another application.
+    # Owning application; None leaves it unclaimed. Writers may name another.
     application_name: Optional[str]
 
 
@@ -656,8 +654,7 @@ class SystemDatabase(ABC):
         self.workflow_events_map = ThreadSafeEventDict()
         self.streams_map = ThreadSafeEventDict()
         self.executor_id = executor_id
-        # The application this database handle acts on behalf of. None means no
-        # application identity: rows are written unclaimed.
+        # The application this handle acts for; None writes unclaimed rows.
         self.app_name = app_name
         self._notification_listener_polling_interval_sec = (
             notification_listener_polling_interval_sec
@@ -734,17 +731,8 @@ class SystemDatabase(ABC):
         return sa.func.extract("epoch", sa.func.now()) * 1000
 
     def _app_scope(self, col: sa.ColumnElement[Any]) -> sa.ColumnElement[bool]:
-        """Rows this application may act on: its own, plus unclaimed ones.
-
-        Unclaimed (NULL) rows are written by SDKs predating the column and by
-        callers with no application identity, so every application must be able to
-        claim them — otherwise upgrading would strand in-flight work.
-
-        This is the claiming scope: dequeue, recovery, the enumeration the
-        background loops run on, and the bulk delete/cancel operations. It is
-        deliberately not what the observability filters use, which match an owner
-        exactly and default to matching nothing at all.
-        """
+        """Rows this application may act on: its own, plus unclaimed ones. The
+        claiming scope, as against the observability filters' exact owner match."""
         if self.app_name is None:
             return sa.true()
         return sa.or_(col == self.app_name, col.is_(None))
@@ -758,11 +746,8 @@ class SystemDatabase(ABC):
         owner: Optional[str],
         kind: str,
     ) -> None:
-        """Reject writing over a row owned by a different application.
-
-        Names stay globally unique across applications, so a collision is a real
-        conflict rather than something to silently resolve by last-writer-wins.
-        """
+        """Reject writing over a row owned by a different application: names are
+        globally unique, so a collision is a conflict, not a last-writer-wins race."""
         existing = conn.execute(
             sa.select(table.c.application_name).where(name_col == name)
         ).fetchone()
@@ -842,8 +827,7 @@ class SystemDatabase(ABC):
                 schedule_name=status["schedule_name"],
                 debounce_deadline_epoch_ms=status["debounce_deadline_epoch_ms"],
                 is_debounced=status["is_debounced"],
-                # Deliberately absent from update_values: a re-enqueue must never
-                # re-own a row another application already claimed.
+                # Absent from update_values: a re-enqueue must not re-own a claimed row.
                 application_name=status["application_name"],
             )
             .on_conflict_do_update(
@@ -1300,8 +1284,7 @@ class SystemDatabase(ABC):
                             assumed_role=status[7],
                             forked_from=original_workflow_id,
                             attributes=status[10],
-                            # Inherit the source's owner so the fork runs on the
-                            # application that owns the original workflow.
+                            # Inherit the source's owner so the fork runs on the same application.
                             application_name=status[11],
                         )
                         for original_workflow_id, forked_workflow_id, status in zip(
@@ -1385,8 +1368,7 @@ class SystemDatabase(ABC):
                             child_wf_expr,
                             oo.c.started_at_epoch_ms,
                             oo.c.completed_at_epoch_ms,
-                            # The fork inherits the source workflow's owner, so its
-                            # copied steps must inherit the same one.
+                            # Copied steps inherit the owner the forked workflow inherited.
                             oo.c.application_name,
                         ).select_from(
                             mapping_subquery.join(
@@ -2090,8 +2072,7 @@ class SystemDatabase(ABC):
                     == WorkflowStatusString.PENDING.value,
                     SystemSchema.workflow_status.c.executor_id == executor_id,
                     SystemSchema.workflow_status.c.application_version == app_version,
-                    # executor_id defaults to the literal "local", so it collides
-                    # across applications on a shared host; this disambiguates.
+                    # executor_id defaults to "local", so it collides across applications.
                     self._app_scope(SystemSchema.workflow_status.c.application_name),
                 )
             ).fetchall()
@@ -2607,8 +2588,7 @@ class SystemDatabase(ABC):
                     output=output,
                     error=error,
                     serialization=result["serialization"],
-                    # Mirrors the parent workflow's owner: only the application
-                    # running a workflow records its steps.
+                    # Mirrors the parent: only the running application records its steps.
                     application_name=self.app_name,
                 )
                 .on_conflict_do_update(
@@ -4078,8 +4058,7 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.started_at_epoch_ms
                         > start_time_ms - limiter_period_ms
                     )
-                    # Count only what this application would dequeue, so the rate
-                    # limit matches the set the select below draws from.
+                    # Count only what this application would dequeue, matching the select below.
                     .where(
                         self._app_scope(SystemSchema.workflow_status.c.application_name)
                     )
@@ -4129,10 +4108,7 @@ class SystemDatabase(ABC):
 
             latest_version = c.execute(
                 sa.select(SystemSchema.application_versions.c.version_name)
-                # This application's latest version, not the newest on the
-                # database. Unclaimed rows count: one that is newer means an
-                # older-SDK peer deployed after this worker, which really does
-                # demote it.
+                # This application's latest; a newer unclaimed row is a peer's deploy.
                 .where(
                     self._app_scope(
                         SystemSchema.application_versions.c.application_name
@@ -4213,8 +4189,7 @@ class SystemDatabase(ABC):
                         status=WorkflowStatusString.PENDING.value,
                         application_version=app_version,
                         executor_id=executor_id,
-                        # Claim the row: unclaimed workflows are adopted by whoever
-                        # runs them, so the unclaimed partition drains over time.
+                        # Claim it, so the unclaimed partition drains as workflows run.
                         application_name=self.app_name,
                         started_at_epoch_ms=start_time_ms,
                         rate_limited=queue._limiter is not None,
@@ -4263,10 +4238,7 @@ class SystemDatabase(ABC):
         with self.engine.begin() as c:
             latest_version = c.execute(
                 sa.select(SystemSchema.application_versions.c.version_name)
-                # This application's latest version, not the newest on the
-                # database. Unclaimed rows count: one that is newer means an
-                # older-SDK peer deployed after this worker, which really does
-                # demote it.
+                # This application's latest; a newer unclaimed row is a peer's deploy.
                 .where(
                     self._app_scope(
                         SystemSchema.application_versions.c.application_name
@@ -4324,10 +4296,7 @@ class SystemDatabase(ABC):
                 )
                 .limit(1)
             )
-            # Admit a partition's head only while nothing in that partition runs
-            # anywhere, on any app version, for any application. Deliberately
-            # unscoped: this is a mutual-exclusion probe, so a row owned by someone
-            # else still has to block admission.
+            # Unscoped by design: a mutual-exclusion probe must block on any owner's row.
             pending_probe = (
                 sa.select(sa.literal(1))
                 .where(ws.c.queue_name == queue.name)
@@ -5022,9 +4991,7 @@ class SystemDatabase(ABC):
                     WorkflowStatusString.DELAYED.value,
                 ]
             ),
-            # Collect this application's rows and unclaimed ones. Unclaimed rows are
-            # included deliberately: excluding them would leak every pre-upgrade row
-            # forever, since no application would ever be entitled to collect them.
+            # Unclaimed rows included: excluding them would leak pre-upgrade rows forever.
             self._app_scope(SystemSchema.workflow_status.c.application_name),
         )
 
@@ -5080,10 +5047,7 @@ class SystemDatabase(ABC):
 
     def list_timed_out_workflow_ids(self, cutoff_epoch_timestamp_ms: int) -> List[str]:
         """IDs of this application's in-flight workflows created before the cutoff.
-
-        Uses the claiming scope rather than an exact owner match, so an upgrading
-        application still times out its own pre-upgrade (unclaimed) workflows.
-        """
+        Claiming-scoped, so an upgrade still times out its own unclaimed workflows."""
         with self.engine.begin() as c:
             rows = c.execute(
                 sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
@@ -5876,15 +5840,8 @@ class SystemDatabase(ABC):
     def create_application_version(
         self, version_name: str, application_name: Optional[str] = None
     ) -> None:
-        """Register this version, claiming the row if nobody owns it yet.
-
-        An unowned row is one written before this column existed. Claiming it on
-        registration means a version string that never changes — a pinned
-        application_version rather than a computed source hash — still ends up
-        owned, instead of staying unclaimed for the life of the deployment.
-        Rows owned by another application are rejected above, and a row this
-        application already owns is left alone.
-        """
+        """Register this version, claiming the row if nobody owns it yet, so a pinned
+        application_version does not stay unclaimed for the life of the deployment."""
         owner = application_name if application_name is not None else self.app_name
         with self.engine.begin() as c:
             self._check_row_owner(
@@ -5901,9 +5858,7 @@ class SystemDatabase(ABC):
                     version_name=version_name,
                     application_name=owner,
                 )
-                # Conditional upsert rather than a preceding UPDATE: one atomic
-                # statement, and it leaves version_timestamp untouched so a
-                # redeploy of the same version still is not a promotion.
+                # Sets only the owner, so redeploying a version is still not a promotion.
                 .on_conflict_do_update(
                     index_elements=["version_name"],
                     set_={"application_name": owner},
@@ -5974,8 +5929,7 @@ class SystemDatabase(ABC):
     ) -> List["Queue"]:
         with self.engine.begin() as c:
             rows = c.execute(
-                # Scoped so the queue thread never spawns workers for another
-                # application's database-backed queues.
+                # Scoped so the queue thread ignores other applications' queues.
                 sa.select(SystemSchema.queues).where(
                     self._app_scope(SystemSchema.queues.c.application_name)
                 )

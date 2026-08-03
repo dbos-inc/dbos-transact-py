@@ -925,9 +925,7 @@ def get_dbos_migration_fortyseven(schema: str, is_cockroach: bool) -> str:
 
 
 def get_dbos_migration_fortyeight(schema: str) -> str:
-    # ADD COLUMN with no default is catalog-only. NULL means the row is unclaimed:
-    # it is written by SDKs that predate this column and may be read and claimed by
-    # any application sharing the system database.
+    # Catalog-only. NULL means unclaimed: any application may read and claim the row.
     return f"""
 ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
 ALTER TABLE "{schema}"."queues" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
@@ -938,8 +936,7 @@ ALTER TABLE "{schema}"."operation_outputs" ADD COLUMN IF NOT EXISTS "application
 
 
 def get_dbos_migration_fortynine(schema: str, is_cockroach: bool) -> str:
-    # Adds the trailing application_name parameter. Callers that omit it enqueue an
-    # unclaimed workflow, which any application listening on the queue may run.
+    # Callers omitting the trailing application_name enqueue an unclaimed workflow.
     migration = f"""
 DROP FUNCTION IF EXISTS "{schema}".enqueue_workflow(
     TEXT, TEXT, JSON[], JSON, TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, INT4, TEXT, TEXT, TEXT, BIGINT
@@ -1366,8 +1363,7 @@ sqlite_migration_fortyseven = (
     'DROP INDEX IF EXISTS "idx_workflow_status_partition_dequeue"'
 )
 
-# NULL means the row is unclaimed: written by SDKs that predate this column, and
-# readable and claimable by any application sharing the system database.
+# NULL means unclaimed: any application may read and claim the row.
 sqlite_migration_fortyeight = """
 ALTER TABLE workflow_status ADD COLUMN "application_name" TEXT DEFAULT NULL;
 ALTER TABLE queues ADD COLUMN "application_name" TEXT DEFAULT NULL;

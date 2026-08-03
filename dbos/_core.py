@@ -540,8 +540,7 @@ def _assemble_workflow_status(
         # schedule_name is only set by the persistent scheduler, which builds
         # the workflow status directly rather than going through this path.
         "schedule_name": None,
-        # This application owns what it starts. Enqueueing onto another application's
-        # queue requires naming it explicitly, via the application_name option.
+        # This application owns what it starts; reaching another one requires naming it.
         "application_name": GlobalParams.app_name,
     }
     # Consume the attributes from the workflow's context so that workflows

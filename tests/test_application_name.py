@@ -1,11 +1,5 @@
-"""Ownership of system database rows, and the isolation it buys.
-
-Two scoping rules are exercised here and are deliberately different. Claiming —
-dequeue, recovery, enumeration, and the bulk delete/cancel — matches this
-application's rows plus unclaimed ones, so upgrading never strands in-flight
-work. The observability filters match an owner exactly and default to matching
-every application.
-"""
+"""Row ownership and the isolation it buys. Claiming (dequeue, recovery,
+enumeration, bulk delete) takes own plus unclaimed; filters match an owner exactly."""
 
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -22,8 +16,7 @@ from .conftest import retry_until_success
 
 APP_NAME = "test-app"  # matches conftest.default_config
 OTHER_APP = "other-app"
-# Comfortably after any row DBOS writes during the test; epoch ms is ~1.7e12, so a
-# literal like 2**40 would silently be in the past.
+# After any row written during the test; epoch ms is ~1.7e12, so 2**40 is the past.
 FUTURE_MS = int(datetime.now(timezone.utc).timestamp() * 1000) + 10**9
 
 
@@ -280,11 +273,8 @@ def test_export_import_round_trips_owner(dbos: DBOS) -> None:
 
 
 # ── Isolation between applications ────────────────────────────────────────────
-#
-# The dbos fixture's application is "test-app". These tests write rows owned by a
-# second application directly, then assert "test-app" neither runs nor destroys
-# them. Writing the foreign rows rather than launching a second DBOS keeps this to
-# one process, which the shared test databases require.
+# Foreign rows are written directly rather than by launching a second DBOS, which
+# keeps these to one process as the shared test databases require.
 
 
 def insert_foreign_workflow(
@@ -399,9 +389,8 @@ def test_recovery_skips_another_applications_workflow(dbos: DBOS) -> None:
 
 
 def test_garbage_collect_spares_another_application(dbos: DBOS) -> None:
-    """GC collects this application's rows and unclaimed ones — excluding
-    unclaimed would leak every pre-upgrade row forever — but never another
-    application's."""
+    """GC collects own and unclaimed rows, never another application's. Unclaimed
+    are included because excluding them would leak pre-upgrade rows forever."""
 
     @DBOS.workflow()
     def wf() -> int:
@@ -515,9 +504,8 @@ def test_another_applications_version_does_not_demote(dbos: DBOS) -> None:
 
 
 def test_unclaimed_newer_version_does_demote(dbos: DBOS) -> None:
-    """An unclaimed version row that is newer means an older-SDK peer deployed
-    after this worker, so it really is stale. Excluding these would break rolling
-    upgrades, where the peer's rows carry no owner."""
+    """A newer unclaimed version means an older-SDK peer deployed after this worker,
+    so it really is stale. Excluding these would break rolling upgrades."""
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.insert(SystemSchema.application_versions).values(
@@ -552,10 +540,8 @@ def test_can_roll_back_to_a_legacy_version(dbos: DBOS) -> None:
 
 
 def test_create_application_version_claims_unclaimed_row(dbos: DBOS) -> None:
-    """Registering a version claims a pre-upgrade row. Without this, a pinned
-    application_version — one whose string never changes — would stay unclaimed
-    for the life of the deployment, since a computed hash is what normally mints
-    a fresh owned row."""
+    """Registering a version claims a pre-upgrade row, so a pinned
+    application_version does not stay unclaimed for the life of the deployment."""
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.insert(SystemSchema.application_versions).values(

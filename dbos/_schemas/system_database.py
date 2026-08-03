@@ -174,9 +174,7 @@ class SystemSchema:
         Column("started_at_epoch_ms", BigInteger, nullable=True),
         Column("completed_at_epoch_ms", BigInteger, nullable=True),
         Column("serialization", Text()),
-        # Denormalized from the parent workflow so step-level observability can
-        # filter by application without a semi-join back to workflow_status,
-        # whose hash build side scales with the table rather than the time window.
+        # Denormalized from the parent so step observability filters without a join.
         Column("application_name", Text, nullable=True),
         PrimaryKeyConstraint("workflow_uuid", "function_id"),
         Index(

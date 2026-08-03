@@ -157,8 +157,7 @@ def _enqueue_scheduled_workflow(
         "schedule_name": schedule_name,
         "debounce_deadline_epoch_ms": None,
         "is_debounced": False,
-        # Always owned: scheduled workflows default to the internal queue, whose
-        # name every application shares, so an unclaimed row could run anywhere.
+        # Always owned: the internal queue's shared name cannot route an unclaimed row.
         "application_name": sys_db.app_name,
     }
     sys_db.init_workflow(

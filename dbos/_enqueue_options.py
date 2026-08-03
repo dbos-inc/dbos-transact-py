@@ -52,10 +52,7 @@ class EnqueueOptions(_EnqueueOptionsRequired, total=False):
     class_name: str
     instance_name: str
     attributes: Dict[str, Any]
-    # The application that owns the enqueued workflow and will run it. Unset lets the
-    # caller decide: an application stamps itself, a client writes it unclaimed.
-    # Spelled in full, unlike the adjacent app_version, to match the column and every
-    # other application_name in the API.
+    # Owning application; unset lets the caller decide whether to stamp itself.
     application_name: Optional[str]
     # Parents the enqueued workflow's span to this OpenTelemetry context, so it joins
     # this trace when it runs. The client-side PropagateOtelContext.
