@@ -532,9 +532,9 @@ def test_unclaimed_newer_version_does_demote(dbos: DBOS) -> None:
     assert latest["version_name"] == "unclaimed-version"
 
 
-def test_set_latest_version_adopts_a_legacy_row(dbos: DBOS) -> None:
-    """Naming a version explicitly is an operator action, so it claims the row —
-    which is what makes rolling back to a pre-upgrade version possible at all."""
+def test_can_roll_back_to_a_legacy_version(dbos: DBOS) -> None:
+    """Rolling back to a pre-upgrade version needs no claiming step: unclaimed
+    rows are already inside the claiming scope."""
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.insert(SystemSchema.application_versions).values(
@@ -548,7 +548,7 @@ def test_set_latest_version_adopts_a_legacy_row(dbos: DBOS) -> None:
     dbos._sys_db.update_application_version_timestamp("legacy-version", FUTURE_MS)
     latest = dbos._sys_db.get_latest_application_version()
     assert latest["version_name"] == "legacy-version"
-    assert latest["application_name"] == APP_NAME
+    assert latest["application_name"] is None
 
 
 # ── Cross-application operations that must keep working ───────────────────────
@@ -582,12 +582,12 @@ def test_enqueue_for_another_application(dbos: DBOS) -> None:
     assert application_name_of(dbos, handle.workflow_id) == OTHER_APP
 
 
-# ── Adoption ──────────────────────────────────────────────────────────────────
+# ── Claiming pre-upgrade rows ─────────────────────────────────────────────────
 
 
-def test_registration_adopts_unclaimed_rows(dbos: DBOS) -> None:
-    """Adoption is per-name, so an application only ever claims rows for names it
-    declares itself."""
+def test_re_registering_claims_unclaimed_rows(dbos: DBOS) -> None:
+    """Registration has no separate adoption step: the upsert writes the owner
+    itself, so re-registering a pre-upgrade row claims it."""
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.insert(SystemSchema.queues).values(
@@ -642,8 +642,38 @@ def test_registration_adopts_unclaimed_rows(dbos: DBOS) -> None:
     assert queue_owner == APP_NAME
     assert schedule_row is not None
     assert schedule_row[0] == APP_NAME
-    # Adoption must preserve identity, not recreate the row.
+    # Claiming must preserve identity, not recreate the row.
     assert schedule_row[1] == "legacy-schedule-id"
+
+
+def test_unclaimed_rows_stay_visible_without_being_claimed(dbos: DBOS) -> None:
+    """Nothing needs claiming in advance: the claiming scope already includes
+    unclaimed rows, so a pre-upgrade queue and schedule are used as they are."""
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.insert(SystemSchema.queues).values(
+                queue_id="unclaimed-queue-id",
+                name="unclaimed-queue",
+                created_at=1,
+                updated_at=1,
+                application_name=None,
+            )
+        )
+        c.execute(
+            sa.insert(SystemSchema.workflow_schedules).values(
+                schedule_id="unclaimed-schedule-id",
+                schedule_name="unclaimed-schedule",
+                workflow_name="scheduled",
+                schedule=daily_cron_far_from_now(),
+                status="ACTIVE",
+                context="null",
+                application_name=None,
+            )
+        )
+    assert "unclaimed-queue" in {q.name for q in dbos._sys_db.list_queues()}
+    assert "unclaimed-schedule" in {
+        s["schedule_name"] for s in dbos._sys_db.list_schedules()
+    }
 
 
 # ── Ownership conflicts ───────────────────────────────────────────────────────

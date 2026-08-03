@@ -766,28 +766,6 @@ class SystemDatabase(ABC):
             )
         )
 
-    def _adopt_unnamed_row(
-        self,
-        conn: sa.Connection,
-        table: sa.Table,
-        name_col: sa.ColumnElement[Any],
-        name: str,
-        owner: Optional[str],
-    ) -> None:
-        """Claim a pre-upgrade row for a name the caller declares.
-
-        Scoped to one name so an application only ever claims rows it registers
-        itself, which keeps two applications on one system database from taking
-        each other's queues or schedules.
-        """
-        if owner is None:
-            return
-        conn.execute(
-            sa.update(table)
-            .where(name_col == name, table.c.application_name.is_(None))
-            .values(application_name=owner)
-        )
-
     def _check_row_owner(
         self,
         conn: sa.Connection,
@@ -5697,13 +5675,6 @@ class SystemDatabase(ABC):
                 schedule.get("application_name"),
                 "Schedule",
             )
-            self._adopt_unnamed_row(
-                c,
-                SystemSchema.workflow_schedules,
-                SystemSchema.workflow_schedules.c.schedule_name,
-                schedule["schedule_name"],
-                schedule.get("application_name"),
-            )
             c.execute(
                 self.dialect.insert(SystemSchema.workflow_schedules)
                 .values(
@@ -5918,13 +5889,6 @@ class SystemDatabase(ABC):
                 owner,
                 "Application version",
             )
-            self._adopt_unnamed_row(
-                c,
-                SystemSchema.application_versions,
-                SystemSchema.application_versions.c.version_name,
-                version_name,
-                owner,
-            )
             c.execute(
                 self.dialect.insert(SystemSchema.application_versions)
                 .values(
@@ -5936,23 +5900,9 @@ class SystemDatabase(ABC):
             )
 
     def update_application_version_timestamp(
-        self,
-        version_name: str,
-        new_timestamp: int,
-        application_name: Optional[str] = None,
+        self, version_name: str, new_timestamp: int
     ) -> None:
-        owner = application_name if application_name is not None else self.app_name
         with self.engine.begin() as c:
-            # Naming a version explicitly is an operator action, so claim it: this
-            # is what makes rolling back to a pre-upgrade version visible to the
-            # owner-only read in get_latest_application_version.
-            self._adopt_unnamed_row(
-                c,
-                SystemSchema.application_versions,
-                SystemSchema.application_versions.c.version_name,
-                version_name,
-                owner,
-            )
             c.execute(
                 sa.update(SystemSchema.application_versions)
                 .where(SystemSchema.application_versions.c.version_name == version_name)
@@ -6079,9 +6029,6 @@ class SystemDatabase(ABC):
                 name,
                 owner,
                 "Queue",
-            )
-            self._adopt_unnamed_row(
-                c, SystemSchema.queues, SystemSchema.queues.c.name, name, owner
             )
             existed = (
                 c.execute(
