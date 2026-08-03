@@ -749,23 +749,6 @@ class SystemDatabase(ABC):
             return sa.true()
         return sa.or_(col == self.app_name, col.is_(None))
 
-    @staticmethod
-    def _owning_workflow_exists(
-        application_name: List[str],
-    ) -> sa.ColumnElement[bool]:
-        """Semi-join from operation_outputs to its workflow's owning application.
-
-        operation_outputs carries no owner of its own, so filtering steps by
-        application has to go through the parent row.
-        """
-        return sa.exists().where(
-            sa.and_(
-                SystemSchema.workflow_status.c.workflow_uuid
-                == SystemSchema.operation_outputs.c.workflow_uuid,
-                SystemSchema.workflow_status.c.application_name.in_(application_name),
-            )
-        )
-
     def _check_row_owner(
         self,
         conn: sa.Connection,
@@ -1390,6 +1373,7 @@ class SystemDatabase(ABC):
                             "child_workflow_id",
                             "started_at_epoch_ms",
                             "completed_at_epoch_ms",
+                            "application_name",
                         ],
                         sa.select(
                             mapping_subquery.c.fork_id.label("workflow_uuid"),
@@ -1401,6 +1385,9 @@ class SystemDatabase(ABC):
                             child_wf_expr,
                             oo.c.started_at_epoch_ms,
                             oo.c.completed_at_epoch_ms,
+                            # The fork inherits the source workflow's owner, so its
+                            # copied steps must inherit the same one.
+                            oo.c.application_name,
                         ).select_from(
                             mapping_subquery.join(
                                 oo,
@@ -2539,9 +2526,9 @@ class SystemDatabase(ABC):
                 <= datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
             )
         if application_name:
-            # operation_outputs has no owner column; reach it through the parent
-            # workflow. Built only when filtering, so the default path is unchanged.
-            query = query.where(self._owning_workflow_exists(application_name))
+            query = query.where(
+                SystemSchema.operation_outputs.c.application_name.in_(application_name)
+            )
 
         query = query.group_by(*group_columns)
 
@@ -2620,6 +2607,9 @@ class SystemDatabase(ABC):
                     output=output,
                     error=error,
                     serialization=result["serialization"],
+                    # Mirrors the parent workflow's owner: only the application
+                    # running a workflow records its steps.
+                    application_name=self.app_name,
                 )
                 .on_conflict_do_update(
                     index_elements=[
@@ -2705,6 +2695,7 @@ class SystemDatabase(ABC):
                     started_at_epoch_ms=started_at_epoch_ms,
                     completed_at_epoch_ms=int(time.time() * 1000),
                     serialization=serialization,
+                    application_name=self.app_name,
                 )
                 .on_conflict_do_nothing()
             )
@@ -2737,6 +2728,7 @@ class SystemDatabase(ABC):
             child_workflow_id=childUUID,
             started_at_epoch_ms=started_at_epoch_ms,
             completed_at_epoch_ms=int(time.time() * 1000),
+            application_name=self.app_name,
         )
         try:
             with self.engine.begin() as c:
@@ -5184,7 +5176,9 @@ class SystemDatabase(ABC):
             )
             if application_name:
                 step_query = step_query.where(
-                    self._owning_workflow_exists(application_name)
+                    SystemSchema.operation_outputs.c.application_name.in_(
+                        application_name
+                    )
                 )
 
             step_results = c.execute(step_query).fetchall()
@@ -5413,6 +5407,7 @@ class SystemDatabase(ABC):
                         SystemSchema.operation_outputs.c.started_at_epoch_ms,
                         SystemSchema.operation_outputs.c.completed_at_epoch_ms,
                         SystemSchema.operation_outputs.c.serialization,
+                        SystemSchema.operation_outputs.c.application_name,
                     ).where(SystemSchema.operation_outputs.c.workflow_uuid == wf_id)
                 ).fetchall()
 
@@ -5427,6 +5422,7 @@ class SystemDatabase(ABC):
                         "started_at_epoch_ms": row[6],
                         "completed_at_epoch_ms": row[7],
                         "serialization": row[8],
+                        "application_name": row[9],
                     }
                     for row in output_rows
                 ]
@@ -5581,6 +5577,7 @@ class SystemDatabase(ABC):
                             started_at_epoch_ms=output["started_at_epoch_ms"],
                             completed_at_epoch_ms=output["completed_at_epoch_ms"],
                             serialization=output["serialization"],
+                            application_name=output.get("application_name"),
                         )
                     )
 

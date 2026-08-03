@@ -933,6 +933,7 @@ ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "application_n
 ALTER TABLE "{schema}"."queues" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
 ALTER TABLE "{schema}"."workflow_schedules" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
 ALTER TABLE "{schema}"."application_versions" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
+ALTER TABLE "{schema}"."operation_outputs" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
 """
 
 
@@ -1372,6 +1373,7 @@ ALTER TABLE workflow_status ADD COLUMN "application_name" TEXT DEFAULT NULL;
 ALTER TABLE queues ADD COLUMN "application_name" TEXT DEFAULT NULL;
 ALTER TABLE workflow_schedules ADD COLUMN "application_name" TEXT DEFAULT NULL;
 ALTER TABLE application_versions ADD COLUMN "application_name" TEXT DEFAULT NULL;
+ALTER TABLE operation_outputs ADD COLUMN "application_name" TEXT DEFAULT NULL;
 """
 
 sqlite_migrations = [

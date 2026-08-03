@@ -825,3 +825,126 @@ def test_aggregates_filter_by_application(dbos: DBOS) -> None:
         group_by_name=True, select_count=True, application_name=[OTHER_APP]
     )
     assert [r["group"]["name"] for r in rows] == ["foreign_workflow"]
+
+
+# ── Steps carry the owner too ─────────────────────────────────────────────────
+
+
+def step_owners(dbos: DBOS, workflow_id: str) -> list[Any]:
+    with dbos._sys_db.engine.begin() as c:
+        return [
+            r[0]
+            for r in c.execute(
+                sa.select(SystemSchema.operation_outputs.c.application_name).where(
+                    SystemSchema.operation_outputs.c.workflow_uuid == workflow_id
+                )
+            )
+        ]
+
+
+def insert_foreign_step(
+    dbos: DBOS,
+    workflow_id: str,
+    *,
+    function_name: str,
+    application_name: Optional[str] = OTHER_APP,
+    completed_at: int = 1,
+) -> None:
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.insert(SystemSchema.operation_outputs).values(
+                workflow_uuid=workflow_id,
+                function_id=1,
+                function_name=function_name,
+                completed_at_epoch_ms=completed_at,
+                started_at_epoch_ms=completed_at,
+                application_name=application_name,
+            )
+        )
+
+
+def test_steps_carry_the_owner(dbos: DBOS) -> None:
+    """operation_outputs mirrors its parent workflow's owner, which is what lets
+    step observability filter without joining back to workflow_status."""
+
+    @DBOS.step()
+    def a_step() -> int:
+        return 1
+
+    @DBOS.workflow()
+    def wf() -> int:
+        return a_step()
+
+    handle = DBOS.start_workflow(wf)
+    assert handle.get_result() == 1
+    owners = step_owners(dbos, handle.workflow_id)
+    assert owners and set(owners) == {APP_NAME}
+
+
+def test_forked_steps_inherit_the_owner(dbos: DBOS) -> None:
+    @DBOS.step()
+    def a_step() -> int:
+        return 2
+
+    @DBOS.workflow()
+    def wf() -> int:
+        return a_step()
+
+    handle = DBOS.start_workflow(wf)
+    assert handle.get_result() == 2
+
+    forked = DBOS.fork_workflow(handle.workflow_id, 2)
+    assert forked.get_result() == 2
+    assert set(step_owners(dbos, forked.workflow_id)) == {APP_NAME}
+
+
+def test_step_aggregates_filter_by_application(dbos: DBOS) -> None:
+    @DBOS.step()
+    def a_step() -> int:
+        return 3
+
+    @DBOS.workflow()
+    def wf() -> int:
+        return a_step()
+
+    handle = DBOS.start_workflow(wf)
+    assert handle.get_result() == 3
+    insert_foreign_workflow(dbos, "foreign-stepped", status="SUCCESS")
+    insert_foreign_step(dbos, "foreign-stepped", function_name="their_step")
+
+    theirs = dbos._sys_db.get_step_aggregates(
+        group_by_function_name=True, select_count=True, application_name=[OTHER_APP]
+    )
+    assert [r["group"]["function_name"] for r in theirs] == ["their_step"]
+
+    mine = {
+        r["group"]["function_name"]
+        for r in dbos._sys_db.get_step_aggregates(
+            group_by_function_name=True, select_count=True, application_name=[APP_NAME]
+        )
+    }
+    assert "their_step" not in mine
+    assert mine  # this application's own steps are still counted
+
+
+def test_metrics_filter_by_application(dbos: DBOS) -> None:
+    from datetime import datetime as _dt
+
+    insert_foreign_workflow(dbos, "foreign-metric", status="SUCCESS")
+    insert_foreign_step(
+        dbos,
+        "foreign-metric",
+        function_name="their_metric_step",
+        completed_at=int(_dt.now(timezone.utc).timestamp() * 1000),
+    )
+    start = _dt.fromtimestamp(0, timezone.utc).isoformat()
+    end = (_dt.now(timezone.utc) + timedelta(hours=1)).isoformat()
+
+    theirs = dbos._sys_db.get_metrics(start, end, application_name=[OTHER_APP])
+    step_names = {m["metric_name"] for m in theirs if m["metric_type"] == "step_count"}
+    assert step_names == {"their_metric_step"}
+
+    mine = dbos._sys_db.get_metrics(start, end, application_name=[APP_NAME])
+    assert "their_metric_step" not in {
+        m["metric_name"] for m in mine if m["metric_type"] == "step_count"
+    }
