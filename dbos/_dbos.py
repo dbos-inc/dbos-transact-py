@@ -421,10 +421,6 @@ class DBOS:
         self._registry: DBOSRegistry = _get_or_create_dbos_registry()
         self._registry.dbos = self
         self._listening_queues: Optional[List[str]] = None
-        # Queue names this process is currently polling, republished each pass by
-        # queue_thread. Read on the enqueue path to decide whether this application
-        # owns the target queue; never mutated in place, so reads need no lock.
-        self._polled_queue_names: frozenset[str] = frozenset()
         self._admin_server_field: Optional[AdminServer] = None
         # Stop internal background threads (queue thread, timeout threads, etc.)
         self.background_thread_stop_events: List[threading.Event] = []
@@ -1297,6 +1293,10 @@ class DBOS:
         against the local registry, and ``app_version`` is left unset unless
         given. An unset ``app_version`` is only dequeued by an executor running
         the latest registered application version.
+
+        The enqueued workflow is owned by this application unless
+        ``application_name`` names another one. Enqueueing onto an application
+        that does not share this one's name requires setting it explicitly.
         """
         return enqueue_workflow_with_options(
             _get_dbos_instance(), options, args, kwargs

@@ -56,9 +56,9 @@ def test_enqueued_workflow_on_served_queue_is_owned(dbos: DBOS) -> None:
     assert application_name_of(dbos, handle.workflow_id) == APP_NAME
 
 
-def test_enqueue_to_unserved_queue_is_unclaimed(dbos: DBOS) -> None:
-    """A queue this application does not serve belongs to some other application,
-    so the row is left unclaimed and routed by its globally unique queue name."""
+def test_enqueue_to_unserved_queue_is_still_owned(dbos: DBOS) -> None:
+    """The target queue's name never affects ownership: this application owns what
+    it enqueues, and reaching another application requires naming it."""
 
     @DBOS.workflow()
     def wf() -> int:
@@ -67,7 +67,7 @@ def test_enqueue_to_unserved_queue_is_unclaimed(dbos: DBOS) -> None:
     handle = DBOS.enqueue_workflow_with_options(
         {"workflow_name": wf.__qualname__, "queue_name": "some-other-apps-queue"}
     )
-    assert application_name_of(dbos, handle.workflow_id) is None
+    assert application_name_of(dbos, handle.workflow_id) == APP_NAME
 
 
 def test_enqueue_with_options_to_served_queue_is_owned(dbos: DBOS) -> None:

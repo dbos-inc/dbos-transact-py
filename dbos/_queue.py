@@ -634,10 +634,6 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
             except Exception as e:
                 dbos.logger.warning(f"Exception listing database-backed queues: {e}")
 
-        # Republish the polled set so the enqueue path can tell which queues this
-        # application serves. Rebind rather than mutate, so readers never tear.
-        dbos._polled_queue_names = frozenset(current_queues)
-
         # Transition any DELAYED workflows whose delay has expired to ENQUEUED.
         try:
             dbos._sys_db.transition_delayed_workflows()
