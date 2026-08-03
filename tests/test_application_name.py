@@ -270,9 +270,9 @@ def test_export_import_round_trips_owner(dbos: DBOS) -> None:
     assert application_name_of(dbos, handle.workflow_id) == APP_NAME
 
 
-def test_observability_filters_are_exact_and_optional(dbos: DBOS) -> None:
-    """The four observability surfaces take an ordinary exact-match predicate,
-    unset meaning every application, unlike the claiming scope."""
+def test_observability_filters_include_unclaimed_rows(dbos: DBOS) -> None:
+    """All four surfaces follow the one rule: unset lists every application, and
+    naming one lists its rows plus unclaimed ones."""
 
     @DBOS.step()
     def a_step() -> int:
@@ -289,24 +289,32 @@ def test_observability_filters_are_exact_and_optional(dbos: DBOS) -> None:
     insert_foreign_step(
         dbos, "foreign-listed", function_name="their_step", completed_at=now_ms
     )
+    insert_foreign_workflow(
+        dbos, "unclaimed-listed", status="SUCCESS", application_name=None
+    )
 
     unfiltered = {w.workflow_id for w in DBOS.list_workflows()}
-    assert {handle.workflow_id, "foreign-listed"} <= unfiltered
+    assert {handle.workflow_id, "foreign-listed", "unclaimed-listed"} <= unfiltered
     mine = {w.workflow_id for w in DBOS.list_workflows(application_name=APP_NAME)}
-    assert handle.workflow_id in mine and "foreign-listed" not in mine
+    assert {handle.workflow_id, "unclaimed-listed"} <= mine
+    assert "foreign-listed" not in mine
     theirs = {w.workflow_id for w in DBOS.list_workflows(application_name=OTHER_APP)}
-    assert theirs == {"foreign-listed"}
+    assert theirs == {"foreign-listed", "unclaimed-listed"}
 
     aggregates = dbos._sys_db.get_workflow_aggregates(
         group_by_name=True, select_count=True, application_name=[OTHER_APP]
     )
     assert [r["group"]["name"] for r in aggregates] == ["foreign_workflow"]
 
-    # Grouping by owner is what lets a console break down a shared database.
+    # Grouping partitions where the filter deliberately overlaps.
     grouped = dbos._sys_db.get_workflow_aggregates(
         group_by_application_name=True, select_count=True
     )
-    assert {r["group"]["application_name"] for r in grouped} == {APP_NAME, OTHER_APP}
+    assert {r["group"]["application_name"] for r in grouped} == {
+        APP_NAME,
+        OTHER_APP,
+        None,
+    }
 
     steps = dbos._sys_db.get_step_aggregates(
         group_by_function_name=True, select_count=True, application_name=[OTHER_APP]
@@ -410,9 +418,9 @@ def test_bulk_operations_spare_another_application(dbos: DBOS) -> None:
     assert not workflow_exists(dbos, handle.workflow_id)
 
 
-def test_enumeration_scopes_the_loops_but_not_the_listings(dbos: DBOS) -> None:
+def test_unclaimed_rows_belong_to_every_application(dbos: DBOS) -> None:
     """One rule everywhere: naming an application lists its rows plus unclaimed
-    ones, which belong to every application. Unset lists every application's."""
+    ones. Re-registering an unclaimed row claims it through the ordinary upsert."""
 
     @DBOS.workflow()
     def scheduled(scheduled_at: datetime, ctx: Any) -> None:
@@ -423,47 +431,34 @@ def test_enumeration_scopes_the_loops_but_not_the_listings(dbos: DBOS) -> None:
     )
     DBOS.register_queue("mine-queue")
     with dbos._sys_db.engine.begin() as c:
-        c.execute(
-            sa.insert(SystemSchema.workflow_schedules).values(
-                schedule_id="foreign-schedule-id",
-                schedule_name="theirs",
-                workflow_name="foreign_workflow",
-                schedule="* * * * *",
-                status="ACTIVE",
-                context="null",
-                application_name=OTHER_APP,
+        for schedule_id, name, owner in (
+            ("foreign-schedule-id", "theirs", OTHER_APP),
+            ("legacy-schedule-id", "unclaimed", None),
+        ):
+            c.execute(
+                sa.insert(SystemSchema.workflow_schedules).values(
+                    schedule_id=schedule_id,
+                    schedule_name=name,
+                    workflow_name="scheduled",
+                    schedule=daily_cron_far_from_now(),
+                    status="ACTIVE",
+                    context="null",
+                    application_name=owner,
+                )
             )
-        )
-        c.execute(
-            sa.insert(SystemSchema.queues).values(
-                queue_id="foreign-queue-id",
-                name="theirs-queue",
-                created_at=1,
-                updated_at=1,
-                application_name=OTHER_APP,
+        for queue_id, name, owner in (
+            ("foreign-queue-id", "theirs-queue", OTHER_APP),
+            ("legacy-queue-id", "unclaimed-queue", None),
+        ):
+            c.execute(
+                sa.insert(SystemSchema.queues).values(
+                    queue_id=queue_id,
+                    name=name,
+                    created_at=1,
+                    updated_at=1,
+                    application_name=owner,
+                )
             )
-        )
-        # Pre-upgrade rows, owned by nobody.
-        c.execute(
-            sa.insert(SystemSchema.workflow_schedules).values(
-                schedule_id="unclaimed-schedule-id",
-                schedule_name="unclaimed",
-                workflow_name="scheduled",
-                schedule=daily_cron_far_from_now(),
-                status="ACTIVE",
-                context="null",
-                application_name=None,
-            )
-        )
-        c.execute(
-            sa.insert(SystemSchema.queues).values(
-                queue_id="unclaimed-queue-id",
-                name="unclaimed-queue",
-                created_at=1,
-                updated_at=1,
-                application_name=None,
-            )
-        )
 
     # Unset lists every application.
     assert {"mine", "theirs", "unclaimed"} <= {
@@ -473,15 +468,14 @@ def test_enumeration_scopes_the_loops_but_not_the_listings(dbos: DBOS) -> None:
         q.name for q in DBOS.list_queues()
     }
 
-    # Naming an application adds the unclaimed rows to its own, and this is
-    # exactly what the queue thread and scheduler loop poll.
-    mine_schedules = {
+    # Naming an application adds the unclaimed rows, as the loops themselves do.
+    assert {
         s["schedule_name"] for s in DBOS.list_schedules(application_name=APP_NAME)
+    } == {"mine", "unclaimed"}
+    assert {q.name for q in DBOS.list_queues(application_name=APP_NAME)} == {
+        "mine-queue",
+        "unclaimed-queue",
     }
-    mine_queues = {q.name for q in DBOS.list_queues(application_name=APP_NAME)}
-    assert mine_schedules == {"mine", "unclaimed"}
-    assert mine_queues == {"mine-queue", "unclaimed-queue"}
-
     theirs = DBOS.list_queues(application_name=OTHER_APP)
     assert {q.name for q in theirs} == {"theirs-queue", "unclaimed-queue"}
     # The listing is attributable: a Queue carries its owner.
@@ -489,6 +483,32 @@ def test_enumeration_scopes_the_loops_but_not_the_listings(dbos: DBOS) -> None:
 
     # Name-addressed lookups stay global: a globally unique name is an identity.
     assert dbos._sys_db.get_queue("theirs-queue") is not None
+
+    # Re-registering an unclaimed row claims it, without recreating it.
+    DBOS.register_queue("unclaimed-queue")
+    DBOS.apply_schedules(
+        [
+            {
+                "schedule_name": "unclaimed",
+                "workflow_fn": scheduled,
+                "schedule": daily_cron_far_from_now(),
+            }
+        ]
+    )
+    with dbos._sys_db.engine.begin() as c:
+        queue_owner = c.execute(
+            sa.select(SystemSchema.queues.c.application_name).where(
+                SystemSchema.queues.c.name == "unclaimed-queue"
+            )
+        ).scalar()
+        schedule_row = c.execute(
+            sa.select(
+                SystemSchema.workflow_schedules.c.application_name,
+                SystemSchema.workflow_schedules.c.schedule_id,
+            ).where(SystemSchema.workflow_schedules.c.schedule_name == "unclaimed")
+        ).fetchone()
+    assert queue_owner == APP_NAME
+    assert schedule_row == (APP_NAME, "legacy-schedule-id")
 
 
 # ── Application versions ──────────────────────────────────────────────────────
@@ -576,70 +596,6 @@ def test_create_application_version_claims_only_unclaimed_rows(dbos: DBOS) -> No
 
 
 # ── Pre-upgrade rows and conflicts ────────────────────────────────────────────
-
-
-def test_unclaimed_metadata_is_visible_then_claimed_on_registration(
-    dbos: DBOS,
-) -> None:
-    """Nothing needs claiming in advance — the claiming scope already includes
-    unclaimed rows — but re-registering claims them through the ordinary upsert."""
-    with dbos._sys_db.engine.begin() as c:
-        c.execute(
-            sa.insert(SystemSchema.queues).values(
-                queue_id="legacy-queue-id",
-                name="legacy-queue",
-                created_at=1,
-                updated_at=1,
-                application_name=None,
-            )
-        )
-        c.execute(
-            sa.insert(SystemSchema.workflow_schedules).values(
-                schedule_id="legacy-schedule-id",
-                schedule_name="legacy-schedule",
-                workflow_name="scheduled",
-                schedule=daily_cron_far_from_now(),
-                status="ACTIVE",
-                context="null",
-                application_name=None,
-            )
-        )
-    assert "legacy-queue" in {q.name for q in dbos._sys_db.list_queues()}
-    assert "legacy-schedule" in {
-        s["schedule_name"] for s in dbos._sys_db.list_schedules()
-    }
-
-    @DBOS.workflow()
-    def scheduled(scheduled_at: datetime, ctx: Any) -> None:
-        pass
-
-    DBOS.register_queue("legacy-queue")
-    DBOS.apply_schedules(
-        [
-            {
-                "schedule_name": "legacy-schedule",
-                "workflow_fn": scheduled,
-                "schedule": daily_cron_far_from_now(),
-            }
-        ]
-    )
-    with dbos._sys_db.engine.begin() as c:
-        queue_owner = c.execute(
-            sa.select(SystemSchema.queues.c.application_name).where(
-                SystemSchema.queues.c.name == "legacy-queue"
-            )
-        ).scalar()
-        schedule_row = c.execute(
-            sa.select(
-                SystemSchema.workflow_schedules.c.application_name,
-                SystemSchema.workflow_schedules.c.schedule_id,
-            ).where(
-                SystemSchema.workflow_schedules.c.schedule_name == "legacy-schedule"
-            )
-        ).fetchone()
-    assert queue_owner == APP_NAME
-    # Claiming must preserve identity, not recreate the row.
-    assert schedule_row == (APP_NAME, "legacy-schedule-id")
 
 
 def test_conflicting_names_across_applications_raise(dbos: DBOS) -> None:

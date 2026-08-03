@@ -83,15 +83,15 @@ class SQLiteSystemDatabase(SystemDatabase):
                 if i <= last_applied:
                     continue
 
-                # Execute the migration
-                dbos_logger.info(
-                    f"Applying DBOS SQLite system database schema migration {i}"
-                )
-
                 # SQLite only allows one statement at a time, so split by semicolon
                 statements = [
                     stmt.strip() for stmt in migration_sql.split(";") if stmt.strip()
                 ]
+                # Renumbering left long runs of empty migrations; say nothing of them.
+                if statements:
+                    dbos_logger.info(
+                        f"Applying DBOS SQLite system database schema migration {i}"
+                    )
                 for statement in statements:
                     conn.execute(sa.text(statement))
 

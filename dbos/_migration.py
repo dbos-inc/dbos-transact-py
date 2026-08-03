@@ -174,13 +174,13 @@ def run_dbos_migrations(
         if i <= last_applied:
             continue
 
-        dbos_logger.info(f"Applying DBOS system database schema migration {i}")
-
+        # Renumbering left long runs of empty migrations; say nothing of them.
         if not migration_sql.strip():
-            dbos_logger.info(f"Migration {i} has no statements; skipping.")
             _bump_migration_version(engine, schema, i, last_applied)
             last_applied = i
             continue
+
+        dbos_logger.info(f"Applying DBOS system database schema migration {i}")
 
         # Online migrations contain CONCURRENTLY index DDL and must run with
         # autocommit. On CockroachDB, schema changes are inherently online, so
