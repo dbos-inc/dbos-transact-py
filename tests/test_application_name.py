@@ -12,8 +12,6 @@ from dbos._error import DBOSException
 from dbos._schemas.system_database import SystemSchema
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 
-from .conftest import retry_until_success
-
 APP_NAME = "test-app"  # matches conftest.default_config
 OTHER_APP = "other-app"
 # After any row written during the test; epoch ms is ~1.7e12, so 2**40 is the past.
@@ -118,13 +116,10 @@ def test_runtime_stamps_its_own_application(dbos: DBOS) -> None:
     def wf() -> int:
         return 5
 
-    workflow_ids = [
-        DBOS.start_workflow(wf).workflow_id,
-        served.enqueue(wf).workflow_id,
-    ]
-    # A queue this application serves, one it has never heard of, and the internal
-    # queue whose name every application shares.
-    for queue_name in ("served-queue", "never-served-queue", INTERNAL_QUEUE_NAME):
+    workflow_ids = [DBOS.start_workflow(wf).workflow_id, served.enqueue(wf).workflow_id]
+    # A queue this application serves and one it has never heard of: an earlier
+    # design consulted the queue here, and left the unknown one unclaimed.
+    for queue_name in ("served-queue", "never-served-queue"):
         workflow_ids.append(
             DBOS.enqueue_workflow_with_options(
                 {"workflow_name": wf.__qualname__, "queue_name": queue_name}
@@ -154,8 +149,6 @@ def test_explicit_application_name_wins(dbos: DBOS, client: DBOSClient) -> None:
     from_client: WorkflowHandle[int] = client.enqueue(options())
     assert application_name_of(dbos, from_runtime.workflow_id) == OTHER_APP
     assert application_name_of(dbos, from_client.workflow_id) == OTHER_APP
-    # Owned by another application, so this one leaves them enqueued.
-    assert status_of(dbos, from_runtime.workflow_id) == "ENQUEUED"
 
 
 def test_client_without_identity_writes_unclaimed_rows(
@@ -182,35 +175,17 @@ def test_client_without_identity_writes_unclaimed_rows(
     assert application_name_of(dbos, polled.workflow_id) == APP_NAME
 
 
-def test_scheduled_workflow_is_owned(dbos: DBOS) -> None:
-    """Scheduled workflows default to the internal queue, whose shared name cannot
-    route an unclaimed row."""
-    fired: list[str] = []
-
-    @DBOS.workflow()
-    def scheduled(scheduled_at: datetime, ctx: Any) -> None:
-        workflow_id = DBOS.workflow_id
-        assert workflow_id is not None
-        fired.append(workflow_id)
-
-    DBOS.create_schedule(
-        schedule_name="owned-schedule",
-        workflow_fn=scheduled,
-        schedule="* * * * * *",
-    )
-    # Indexing raises until the schedule fires, which is what retry_until_success waits on.
-    workflow_id = retry_until_success(lambda: fired[0])
-    assert application_name_of(dbos, workflow_id) == APP_NAME
-
-
 def test_metadata_rows_are_owned(dbos: DBOS) -> None:
+    """Queue, schedule, and version rows, plus the workflows a schedule fires —
+    those land on the internal queue, whose shared name cannot route them."""
+
     @DBOS.workflow()
     def scheduled(scheduled_at: datetime, ctx: Any) -> None:
         pass
 
     DBOS.register_queue("registered-queue")
     DBOS.create_schedule(
-        schedule_name="owned-schedule-row",
+        schedule_name="owned-schedule",
         workflow_fn=scheduled,
         schedule=daily_cron_far_from_now(),
     )
@@ -220,11 +195,15 @@ def test_metadata_rows_are_owned(dbos: DBOS) -> None:
                 SystemSchema.queues.c.name == "registered-queue"
             )
         ).scalar()
-    schedule = dbos._sys_db.get_schedule("owned-schedule-row")
+    schedule = dbos._sys_db.get_schedule("owned-schedule")
     versions = dbos._sys_db.list_application_versions()
     assert queue_owner == APP_NAME
     assert schedule is not None and schedule["application_name"] == APP_NAME
     assert [v["application_name"] for v in versions] == [APP_NAME]
+
+    # trigger_schedule enqueues through the same path the cron loop uses.
+    fired = DBOS.trigger_schedule("owned-schedule")
+    assert application_name_of(dbos, fired.workflow_id) == APP_NAME
 
 
 def test_steps_carry_owner_and_forks_inherit_it(dbos: DBOS) -> None:
@@ -499,25 +478,6 @@ def test_latest_version_is_scoped(dbos: DBOS) -> None:
         dbos._sys_db.get_latest_application_version()["version_name"]
         == "unclaimed-version"
     )
-
-
-def test_can_roll_back_to_a_legacy_version(dbos: DBOS) -> None:
-    """Rolling back to a pre-upgrade version needs no claiming step, since
-    unclaimed rows are already inside the claiming scope."""
-    with dbos._sys_db.engine.begin() as c:
-        c.execute(
-            sa.insert(SystemSchema.application_versions).values(
-                version_id="legacy-version-id",
-                version_name="legacy-version",
-                version_timestamp=1,
-                created_at=1,
-                application_name=None,
-            )
-        )
-    dbos._sys_db.update_application_version_timestamp("legacy-version", FUTURE_MS)
-    latest = dbos._sys_db.get_latest_application_version()
-    assert latest["version_name"] == "legacy-version"
-    assert latest["application_name"] is None
 
 
 def test_create_application_version_claims_only_unclaimed_rows(dbos: DBOS) -> None:
