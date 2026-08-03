@@ -222,7 +222,13 @@ class DBOSClient:
     def _build_enqueue_status(
         self, options: EnqueueOptions, *args: Any, **kwargs: Any
     ) -> tuple[str, WorkflowStatusInternal]:
-        return build_enqueue_status(options, self._serializer, args, kwargs)
+        workflow_id, status = build_enqueue_status(
+            options, self._serializer, args, kwargs
+        )
+        if status["application_name"] is None:
+            # Fall back to the client's own application, if it was given one.
+            status["application_name"] = self._sys_db.app_name
+        return workflow_id, status
 
     def _enqueue(self, options: EnqueueOptions, *args: Any, **kwargs: Any) -> str:
         workflow_id, status = self._build_enqueue_status(options, *args, **kwargs)
@@ -1258,8 +1264,7 @@ class DBOSClient:
                 automatic_backfill=automatic_backfill,
                 cron_timezone=cron_timezone,
                 queue_name=queue_name,
-                # Ownership is stamped by the system database on write.
-                application_name=None,
+                application_name=self._sys_db.app_name,
             )
         )
 
@@ -1411,8 +1416,7 @@ class DBOSClient:
                     automatic_backfill=entry.get("automatic_backfill", False),
                     cron_timezone=cron_timezone,
                     queue_name=entry.get("queue_name"),
-                    # Ownership is stamped by the system database on write.
-                    application_name=None,
+                    application_name=self._sys_db.app_name,
                 )
             )
         with self._sys_db.engine.begin() as c:

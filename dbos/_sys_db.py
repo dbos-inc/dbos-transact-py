@@ -331,7 +331,8 @@ class WorkflowSchedule(TypedDict):
     automatic_backfill: bool
     cron_timezone: Optional[str]  # IANA timezone name, stored as string in DB
     queue_name: Optional[str]
-    # Owning application; None if unclaimed.
+    # The application that owns this schedule and runs its workflows. None leaves it
+    # unclaimed. Writers may set it to provision a schedule for another application.
     application_name: Optional[str]
 
 
@@ -5470,8 +5471,7 @@ class SystemDatabase(ABC):
                         automatic_backfill=schedule.get("automatic_backfill", False),
                         cron_timezone=schedule.get("cron_timezone"),
                         queue_name=schedule.get("queue_name"),
-                        # Ownership belongs to the writer, not the payload.
-                        application_name=self.app_name,
+                        application_name=schedule.get("application_name"),
                     )
                 )
             except sa.exc.IntegrityError:
@@ -5504,8 +5504,7 @@ class SystemDatabase(ABC):
                     automatic_backfill=schedule.get("automatic_backfill", False),
                     cron_timezone=schedule.get("cron_timezone"),
                     queue_name=schedule.get("queue_name"),
-                    # Ownership belongs to the writer, not the payload.
-                    application_name=self.app_name,
+                    application_name=schedule.get("application_name"),
                 )
                 .on_conflict_do_update(
                     index_elements=["schedule_name"],
@@ -5517,7 +5516,7 @@ class SystemDatabase(ABC):
                         "automatic_backfill": schedule.get("automatic_backfill", False),
                         "cron_timezone": schedule.get("cron_timezone"),
                         "queue_name": schedule.get("queue_name"),
-                        "application_name": self.app_name,
+                        "application_name": schedule.get("application_name"),
                     },
                 )
             )

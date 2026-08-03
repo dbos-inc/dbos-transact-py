@@ -1597,7 +1597,11 @@ def _build_enqueue_with_options(
 
     _, status = build_enqueue_status(resolved, dbos._serializer, args, kwargs)
 
-    status["application_name"] = resolve_application_name(dbos, resolved["queue_name"])
+    if status["application_name"] is None:
+        # No explicit target, so stamp ownership the way a directly enqueued workflow does.
+        status["application_name"] = resolve_application_name(
+            dbos, resolved["queue_name"]
+        )
     status["app_id"] = new_wf_ctx.app_id
     status["parent_workflow_id"] = (
         new_wf_ctx.parent_workflow_id if new_wf_ctx.has_parent() else None

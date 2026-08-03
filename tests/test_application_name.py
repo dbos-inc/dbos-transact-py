@@ -84,6 +84,44 @@ def test_enqueue_with_options_to_served_queue_is_owned(dbos: DBOS) -> None:
     assert application_name_of(dbos, handle.workflow_id) == APP_NAME
 
 
+def test_enqueue_options_application_name_wins(dbos: DBOS) -> None:
+    """An explicit target beats the runtime's automatic stamping, so an application
+    can enqueue on behalf of another one."""
+    Queue("override-queue")
+
+    @DBOS.workflow()
+    def wf() -> int:
+        return 14
+
+    handle = DBOS.enqueue_workflow_with_options(
+        {
+            "workflow_name": wf.__qualname__,
+            "queue_name": "override-queue",
+            "application_name": "other-app",
+        }
+    )
+    assert application_name_of(dbos, handle.workflow_id) == "other-app"
+
+
+def test_client_enqueue_options_application_name_wins(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    Queue("client-override-queue")
+
+    @DBOS.workflow()
+    def wf() -> int:
+        return 15
+
+    handle: WorkflowHandle[int] = client.enqueue(
+        {
+            "workflow_name": wf.__qualname__,
+            "queue_name": "client-override-queue",
+            "application_name": "other-app",
+        }
+    )
+    assert application_name_of(dbos, handle.workflow_id) == "other-app"
+
+
 def test_internal_queue_workflow_is_owned(dbos: DBOS) -> None:
     """The internal queue's name is shared by every application, so a row on it
     can only be routed by ownership."""

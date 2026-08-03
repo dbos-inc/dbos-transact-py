@@ -2813,8 +2813,7 @@ class DBOS:
             automatic_backfill=automatic_backfill,
             cron_timezone=cron_timezone,
             queue_name=queue_name,
-            # Ownership is stamped by the system database on write.
-            application_name=None,
+            application_name=GlobalParams.app_name,
         )
         ctx = snapshot_step_context(reserve_sleep_id=False)
         if ctx and ctx.is_workflow():
@@ -3079,8 +3078,7 @@ class DBOS:
                     automatic_backfill=entry.get("automatic_backfill", False),
                     cron_timezone=cron_timezone,
                     queue_name=entry_queue_name,
-                    # Ownership is stamped by the system database on write.
-                    application_name=None,
+                    application_name=GlobalParams.app_name,
                 )
             )
         with dbos._sys_db.engine.begin() as c:

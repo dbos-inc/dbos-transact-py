@@ -52,6 +52,11 @@ class EnqueueOptions(_EnqueueOptionsRequired, total=False):
     class_name: str
     instance_name: str
     attributes: Dict[str, Any]
+    # The application that owns the enqueued workflow and will run it. Unset lets the
+    # caller decide: an application stamps itself, a client writes it unclaimed.
+    # Spelled in full, unlike the adjacent app_version, to match the column and every
+    # other application_name in the API.
+    application_name: Optional[str]
     # Parents the enqueued workflow's span to this OpenTelemetry context, so it joins
     # this trace when it runs. The client-side PropagateOtelContext.
     otel_context: "OtelContext"
@@ -174,7 +179,6 @@ def build_enqueue_status(
         # Set only by the debouncer via _enqueue_debounced, never from options.
         "debounce_deadline_epoch_ms": None,
         "is_debounced": False,
-        # Left unclaimed here; callers inside an application stamp their own name.
-        "application_name": None,
+        "application_name": options.get("application_name"),
     }
     return workflow_id, status
