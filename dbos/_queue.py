@@ -591,7 +591,9 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
                 if name in listening_set
             }
             try:
-                for queue in dbos._sys_db.list_claimable_queues():
+                for queue in dbos._sys_db.list_queues(
+                    application_name=dbos._sys_db.app_name
+                ):
                     if queue.name in listening_set and queue.name not in current_queues:
                         current_queues[queue.name] = queue
             except Exception as e:
@@ -618,7 +620,9 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
             # Else, check all in-memory and database-backed queues
             current_queues = dict(dbos._registry.queue_info_map)
             try:
-                for queue in dbos._sys_db.list_claimable_queues():
+                for queue in dbos._sys_db.list_queues(
+                    application_name=dbos._sys_db.app_name
+                ):
                     if queue.name in dbos._registry.queue_info_map:
                         dbos.logger.warning(
                             f"Database-backed queue {queue.name} has the same "
@@ -705,7 +709,7 @@ def log_queues(dbos: "DBOS", listening_queues: Optional[list[str]]) -> None:
     """
     queues: dict[str, Queue] = dict(dbos._registry.queue_info_map)
     try:
-        for q in dbos._sys_db.list_claimable_queues():
+        for q in dbos._sys_db.list_queues(application_name=dbos._sys_db.app_name):
             queues.setdefault(q.name, q)
     except Exception as e:
         dbos.logger.warning(f"Exception listing database-backed queues: {e}")

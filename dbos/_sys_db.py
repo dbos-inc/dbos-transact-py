@@ -731,21 +731,16 @@ class SystemDatabase(ABC):
             return sa.func.strftime("%s", "now") * 1000
         return sa.func.extract("epoch", sa.func.now()) * 1000
 
-    def _app_scope(self, col: sa.ColumnElement[Any]) -> sa.ColumnElement[bool]:
-        """Rows this application may act on: its own, plus unclaimed ones. The
-        claiming scope, as against the observability filters' exact owner match."""
-        if self.app_name is None:
-            return sa.true()
-        return sa.or_(col == self.app_name, col.is_(None))
-
     @staticmethod
     def _name_filter(
         col: sa.ColumnElement[Any], value: Optional[Union[str, List[str]]]
     ) -> sa.ColumnElement[bool]:
-        """An ordinary exact-match filter; unset matches every application."""
-        if value is None:
+        """Rows owned by these applications plus unclaimed ones, which belong to
+        every application. Unset, or empty, matches every application."""
+        if not value:
             return sa.true()
-        return col.in_([value] if isinstance(value, str) else value)
+        names = [value] if isinstance(value, str) else value
+        return sa.or_(col.in_(names), col.is_(None))
 
     def _check_row_owner(
         self,
@@ -1904,12 +1899,11 @@ class SystemDatabase(ABC):
             query = query.where(
                 SystemSchema.workflow_status.c.schedule_name.in_(schedule_name_list)
             )
-        if application_name_list:
-            query = query.where(
-                SystemSchema.workflow_status.c.application_name.in_(
-                    application_name_list
-                )
+        query = query.where(
+            self._name_filter(
+                SystemSchema.workflow_status.c.application_name, application_name_list
             )
+        )
         if user_list:
             query = query.where(
                 SystemSchema.workflow_status.c.authenticated_user.in_(user_list)
@@ -2083,7 +2077,9 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.executor_id == executor_id,
                     SystemSchema.workflow_status.c.application_version == app_version,
                     # executor_id defaults to "local", so it collides across applications.
-                    self._app_scope(SystemSchema.workflow_status.c.application_name),
+                    self._name_filter(
+                        SystemSchema.workflow_status.c.application_name, self.app_name
+                    ),
                 )
             ).fetchall()
 
@@ -2349,10 +2345,11 @@ class SystemDatabase(ABC):
             query = query.where(
                 SystemSchema.workflow_status.c.schedule_name.in_(schedule_name)
             )
-        if application_name:
-            query = query.where(
-                SystemSchema.workflow_status.c.application_name.in_(application_name)
+        query = query.where(
+            self._name_filter(
+                SystemSchema.workflow_status.c.application_name, application_name
             )
+        )
         if was_forked_from is not None:
             query = query.where(
                 SystemSchema.workflow_status.c.was_forked_from == was_forked_from
@@ -2522,10 +2519,11 @@ class SystemDatabase(ABC):
                 SystemSchema.operation_outputs.c.completed_at_epoch_ms
                 <= datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
             )
-        if application_name:
-            query = query.where(
-                SystemSchema.operation_outputs.c.application_name.in_(application_name)
+        query = query.where(
+            self._name_filter(
+                SystemSchema.operation_outputs.c.application_name, application_name
             )
+        )
 
         query = query.group_by(*group_columns)
 
@@ -3983,7 +3981,7 @@ class SystemDatabase(ABC):
                 ]
             ),
             # Only partitions this application can actually dequeue from.
-            self._app_scope(ws.c.application_name),
+            self._name_filter(ws.c.application_name, self.app_name),
         )
         partitions = (
             sa.select(sa.func.min(ws.c.queue_partition_key).label("pk"))
@@ -4076,7 +4074,10 @@ class SystemDatabase(ABC):
                     )
                     # Count only what this application would dequeue, matching the select below.
                     .where(
-                        self._app_scope(SystemSchema.workflow_status.c.application_name)
+                        self._name_filter(
+                            SystemSchema.workflow_status.c.application_name,
+                            self.app_name,
+                        )
                     )
                 )
                 if queue_partition_key is not None:
@@ -4106,7 +4107,10 @@ class SystemDatabase(ABC):
                         == WorkflowStatusString.PENDING.value
                     )
                     .where(
-                        self._app_scope(SystemSchema.workflow_status.c.application_name)
+                        self._name_filter(
+                            SystemSchema.workflow_status.c.application_name,
+                            self.app_name,
+                        )
                     )
                 )
                 if queue_partition_key is not None:
@@ -4126,8 +4130,9 @@ class SystemDatabase(ABC):
                 sa.select(SystemSchema.application_versions.c.version_name)
                 # This application's latest; a newer unclaimed row is a peer's deploy.
                 .where(
-                    self._app_scope(
-                        SystemSchema.application_versions.c.application_name
+                    self._name_filter(
+                        SystemSchema.application_versions.c.application_name,
+                        self.app_name,
                     )
                 )
                 .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
@@ -4158,7 +4163,11 @@ class SystemDatabase(ABC):
                     == WorkflowStatusString.ENQUEUED.value
                 )
                 .where(version_predicate)
-                .where(self._app_scope(SystemSchema.workflow_status.c.application_name))
+                .where(
+                    self._name_filter(
+                        SystemSchema.workflow_status.c.application_name, self.app_name
+                    )
+                )
                 # Unless global concurrency is set, use skip_locked to only select
                 # rows that can be locked. If global concurrency is set, use no_wait
                 # to ensure all processes have a consistent view of the table.
@@ -4256,8 +4265,9 @@ class SystemDatabase(ABC):
                 sa.select(SystemSchema.application_versions.c.version_name)
                 # This application's latest; a newer unclaimed row is a peer's deploy.
                 .where(
-                    self._app_scope(
-                        SystemSchema.application_versions.c.application_name
+                    self._name_filter(
+                        SystemSchema.application_versions.c.application_name,
+                        self.app_name,
                     )
                 )
                 .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
@@ -4281,7 +4291,7 @@ class SystemDatabase(ABC):
                 ws.c.queue_name == queue.name,
                 ws.c.status == WorkflowStatusString.ENQUEUED.value,
                 status_prover,
-                self._app_scope(ws.c.application_name),
+                self._name_filter(ws.c.application_name, self.app_name),
             )
             # Walk distinct partition keys with a recursive-CTE loose index scan (one seek per key, mirroring get_queue_partitions) so sweep cost scales with partition count, not backlog depth.
             partitions = (
@@ -4360,7 +4370,7 @@ class SystemDatabase(ABC):
                 ws.c.queue_name == queue.name,
                 ws.c.queue_partition_key.isnot(None),
                 version_predicate,
-                self._app_scope(ws.c.application_name),
+                self._name_filter(ws.c.application_name, self.app_name),
             )
             # Lock the fixed candidate set -- never a LIMIT query, whose SKIP LOCKED could slide past a locked head and admit out of order. On SQLite this is an unlocked re-read; the RETURNING flip below is the guard.
             locked_rows = c.execute(
@@ -4978,7 +4988,10 @@ class SystemDatabase(ABC):
                 result = c.execute(
                     sa.select(SystemSchema.workflow_status.c.created_at)
                     .where(
-                        self._app_scope(SystemSchema.workflow_status.c.application_name)
+                        self._name_filter(
+                            SystemSchema.workflow_status.c.application_name,
+                            self.app_name,
+                        )
                     )
                     .order_by(SystemSchema.workflow_status.c.created_at.desc())
                     .limit(1)
@@ -5008,7 +5021,9 @@ class SystemDatabase(ABC):
                 ]
             ),
             # Unclaimed rows included: excluding them would leak pre-upgrade rows forever.
-            self._app_scope(SystemSchema.workflow_status.c.application_name),
+            self._name_filter(
+                SystemSchema.workflow_status.c.application_name, self.app_name
+            ),
         )
 
         if batch_size is None:
@@ -5052,7 +5067,9 @@ class SystemDatabase(ABC):
                 sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
                     SystemSchema.workflow_status.c.created_at
                     < cutoff_epoch_timestamp_ms,
-                    self._app_scope(SystemSchema.workflow_status.c.application_name),
+                    self._name_filter(
+                        SystemSchema.workflow_status.c.application_name, self.app_name
+                    ),
                 )
             ).fetchall()
 
@@ -5076,7 +5093,9 @@ class SystemDatabase(ABC):
                     ),
                     SystemSchema.workflow_status.c.created_at
                     <= cutoff_epoch_timestamp_ms,
-                    self._app_scope(SystemSchema.workflow_status.c.application_name),
+                    self._name_filter(
+                        SystemSchema.workflow_status.c.application_name, self.app_name
+                    ),
                 )
             ).fetchall()
             return [row[0] for row in rows]
@@ -5121,12 +5140,11 @@ class SystemDatabase(ABC):
                 )
                 .group_by(SystemSchema.workflow_status.c.name)
             )
-            if application_name:
-                workflow_query = workflow_query.where(
-                    SystemSchema.workflow_status.c.application_name.in_(
-                        application_name
-                    )
+            workflow_query = workflow_query.where(
+                self._name_filter(
+                    SystemSchema.workflow_status.c.application_name, application_name
                 )
+            )
 
             workflow_results = c.execute(workflow_query).fetchall()
             for row in workflow_results:
@@ -5154,12 +5172,11 @@ class SystemDatabase(ABC):
                 )
                 .group_by(SystemSchema.operation_outputs.c.function_name)
             )
-            if application_name:
-                step_query = step_query.where(
-                    SystemSchema.operation_outputs.c.application_name.in_(
-                        application_name
-                    )
+            step_query = step_query.where(
+                self._name_filter(
+                    SystemSchema.operation_outputs.c.application_name, application_name
                 )
+            )
 
             step_results = c.execute(step_query).fetchall()
             for row in step_results:
@@ -5698,8 +5715,8 @@ class SystemDatabase(ABC):
         application_name: Optional[Union[str, List[str]]] = None,
         conn: Optional[sa.Connection] = None,
     ) -> List[WorkflowSchedule]:
-        """Schedules matching these filters, across every application unless
-        application_name narrows it — the same semantics as list_workflows."""
+        """Schedules owned by these applications, plus unclaimed ones. Unset lists
+        every application's, as on list_workflows."""
         return self._list_schedules(
             self._name_filter(
                 SystemSchema.workflow_schedules.c.application_name, application_name
@@ -5707,16 +5724,6 @@ class SystemDatabase(ABC):
             status=status,
             workflow_name=workflow_name,
             schedule_name_prefix=schedule_name_prefix,
-            conn=conn,
-        )
-
-    def list_claimable_schedules(
-        self, *, conn: Optional[sa.Connection] = None
-    ) -> List[WorkflowSchedule]:
-        """Schedules this application runs: its own plus unclaimed. What the
-        scheduler loop polls, so it never starts another application's crons."""
-        return self._list_schedules(
-            self._app_scope(SystemSchema.workflow_schedules.c.application_name),
             conn=conn,
         )
 
@@ -5934,8 +5941,9 @@ class SystemDatabase(ABC):
                     SystemSchema.application_versions.c.application_name,
                 )
                 .where(
-                    self._app_scope(
-                        SystemSchema.application_versions.c.application_name
+                    self._name_filter(
+                        SystemSchema.application_versions.c.application_name,
+                        self.app_name,
                     )
                 )
                 .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
@@ -5973,30 +5981,16 @@ class SystemDatabase(ABC):
         application_name: Optional[Union[str, List[str]]] = None,
         client_system_database: Optional["SystemDatabase"] = None,
     ) -> List["Queue"]:
-        """Queues across every application unless application_name narrows it —
-        the same semantics as list_workflows."""
-        return self._list_queues(
-            self._name_filter(SystemSchema.queues.c.application_name, application_name),
-            client_system_database,
-        )
-
-    def list_claimable_queues(
-        self, *, client_system_database: Optional["SystemDatabase"] = None
-    ) -> List["Queue"]:
-        """Queues this application polls: its own plus unclaimed. What the queue
-        thread reads, so it never spawns workers for another application."""
-        return self._list_queues(
-            self._app_scope(SystemSchema.queues.c.application_name),
-            client_system_database,
-        )
-
-    def _list_queues(
-        self,
-        scope: sa.ColumnElement[bool],
-        client_system_database: Optional["SystemDatabase"],
-    ) -> List["Queue"]:
+        """Queues owned by these applications, plus unclaimed ones. Unset lists
+        every application's, as on list_workflows."""
         with self.engine.begin() as c:
-            rows = c.execute(sa.select(SystemSchema.queues).where(scope)).fetchall()
+            rows = c.execute(
+                sa.select(SystemSchema.queues).where(
+                    self._name_filter(
+                        SystemSchema.queues.c.application_name, application_name
+                    )
+                )
+            ).fetchall()
             return [
                 queue_from_db_row(row, client_system_database=client_system_database)
                 for row in rows
@@ -6092,8 +6086,9 @@ class SystemDatabase(ABC):
                     SystemSchema.application_versions.c.application_name,
                 )
                 .where(
-                    self._app_scope(
-                        SystemSchema.application_versions.c.application_name
+                    self._name_filter(
+                        SystemSchema.application_versions.c.application_name,
+                        self.app_name,
                     )
                 )
                 .order_by(SystemSchema.application_versions.c.version_timestamp.desc())

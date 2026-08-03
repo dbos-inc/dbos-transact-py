@@ -260,7 +260,9 @@ def dynamic_scheduler_loop(
 
     while not stop_event.is_set():
         try:
-            schedules = dbos._sys_db.list_claimable_schedules()
+            schedules = dbos._sys_db.list_schedules(
+                application_name=dbos._sys_db.app_name
+            )
         except Exception:
             dbos_logger.warning(
                 f"Exception polling schedules: {traceback.format_exc()}"

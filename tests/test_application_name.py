@@ -411,8 +411,8 @@ def test_bulk_operations_spare_another_application(dbos: DBOS) -> None:
 
 
 def test_enumeration_scopes_the_loops_but_not_the_listings(dbos: DBOS) -> None:
-    """The claiming variants are what the queue thread and scheduler poll, so they
-    take own plus unclaimed. The public listings are ordinary filters instead."""
+    """One rule everywhere: naming an application lists its rows plus unclaimed
+    ones, which belong to every application. Unset lists every application's."""
 
     @DBOS.workflow()
     def scheduled(scheduled_at: datetime, ctx: Any) -> None:
@@ -443,23 +443,49 @@ def test_enumeration_scopes_the_loops_but_not_the_listings(dbos: DBOS) -> None:
                 application_name=OTHER_APP,
             )
         )
-    claimable_schedules = {
-        s["schedule_name"] for s in dbos._sys_db.list_claimable_schedules()
-    }
-    claimable_queues = {q.name for q in dbos._sys_db.list_claimable_queues()}
-    assert "mine" in claimable_schedules and "theirs" not in claimable_schedules
-    assert "mine-queue" in claimable_queues and "theirs-queue" not in claimable_queues
+        # Pre-upgrade rows, owned by nobody.
+        c.execute(
+            sa.insert(SystemSchema.workflow_schedules).values(
+                schedule_id="unclaimed-schedule-id",
+                schedule_name="unclaimed",
+                workflow_name="scheduled",
+                schedule=daily_cron_far_from_now(),
+                status="ACTIVE",
+                context="null",
+                application_name=None,
+            )
+        )
+        c.execute(
+            sa.insert(SystemSchema.queues).values(
+                queue_id="unclaimed-queue-id",
+                name="unclaimed-queue",
+                created_at=1,
+                updated_at=1,
+                application_name=None,
+            )
+        )
 
-    # Unset lists every application, and the filter matches an owner exactly.
-    assert {"mine", "theirs"} <= {s["schedule_name"] for s in DBOS.list_schedules()}
-    assert {"mine-queue", "theirs-queue"} <= {q.name for q in DBOS.list_queues()}
-    assert [
-        s["schedule_name"] for s in DBOS.list_schedules(application_name=OTHER_APP)
-    ] == ["theirs"]
+    # Unset lists every application.
+    assert {"mine", "theirs", "unclaimed"} <= {
+        s["schedule_name"] for s in DBOS.list_schedules()
+    }
+    assert {"mine-queue", "theirs-queue", "unclaimed-queue"} <= {
+        q.name for q in DBOS.list_queues()
+    }
+
+    # Naming an application adds the unclaimed rows to its own, and this is
+    # exactly what the queue thread and scheduler loop poll.
+    mine_schedules = {
+        s["schedule_name"] for s in DBOS.list_schedules(application_name=APP_NAME)
+    }
+    mine_queues = {q.name for q in DBOS.list_queues(application_name=APP_NAME)}
+    assert mine_schedules == {"mine", "unclaimed"}
+    assert mine_queues == {"mine-queue", "unclaimed-queue"}
+
     theirs = DBOS.list_queues(application_name=OTHER_APP)
-    assert [q.name for q in theirs] == ["theirs-queue"]
+    assert {q.name for q in theirs} == {"theirs-queue", "unclaimed-queue"}
     # The listing is attributable: a Queue carries its owner.
-    assert theirs[0].application_name == OTHER_APP
+    assert {q.application_name for q in theirs} == {OTHER_APP, None}
 
     # Name-addressed lookups stay global: a globally unique name is an identity.
     assert dbos._sys_db.get_queue("theirs-queue") is not None
