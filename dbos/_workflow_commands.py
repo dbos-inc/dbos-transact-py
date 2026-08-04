@@ -1,10 +1,9 @@
-from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
 from dbos._context import get_local_dbos_context
 from dbos._utils import generate_uuid
 
-from ._sys_db import SystemDatabase, WorkflowStatus, WorkflowStatusString
+from ._sys_db import SystemDatabase, WorkflowStatus
 
 if TYPE_CHECKING:
     from ._dbos import DBOS
