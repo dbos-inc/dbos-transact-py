@@ -6203,8 +6203,8 @@ class SystemDatabase(ABC):
         adopt_unclaimed_rows: bool,
     ) -> sa.ColumnElement[bool]:
         """Rows a rename moves: an application's own, unclaimed ones, or both. Unlike
-        _name_filter, unclaimed rows are not implied -- they belong to every
-        application, so a rename takes them only when asked."""
+        _name_filter, unclaimed rows are not implied; a rename takes them only when asked.
+        """
         clauses = []
         if old_name is not None:
             clauses.append(col == old_name)
@@ -6222,16 +6222,8 @@ class SystemDatabase(ABC):
         batch_size: Optional[int],
         adopt_unclaimed_rows: bool,
     ) -> int:
-        """Re-own a table's rows, batching by key so a long history does not move in one
-        transaction. A re-run resumes an interrupted rename, since moved rows stop
-        matching.
-
-        Each batch is a half-open key range, advancing a watermark, so both the probe
-        and the update are index range scans. Selecting the batch with LIMIT instead
-        costs O(batches^2): the rows already moved no longer match, but the scan still
-        pages them in to skip them, and an IN list of keys plans as a whole-table hash
-        join. Both only look cheap while the table fits in cache.
-        """
+        """Re-own a table's rows in half-open key ranges, so a long history neither moves
+        in one transaction nor rescans what it already moved; a re-run resumes."""
         predicate = self._rename_source(
             table.c.application_name, old_name, adopt_unclaimed_rows
         )
@@ -6241,6 +6233,7 @@ class SystemDatabase(ABC):
                     sa.update(table).where(predicate).values(application_name=new_name)
                 ).rowcount
         total = 0
+        # Ranges, not LIMIT: a LIMIT repages every row already moved, and an IN list of keys plans as a whole-table hash join.
         watermark: Optional[Any] = None
         while True:
             scope = (
@@ -6276,24 +6269,8 @@ class SystemDatabase(ABC):
         batch_size: Optional[int] = DEFAULT_RENAME_BATCH_SIZE,
         adopt_unclaimed_rows: bool = False,
     ) -> ApplicationRowCounts:
-        """Give ``new_name`` ownership of rows another name holds, rows nobody holds,
-        or both. Naming ``old_name`` alone renames an application; omitting it and
-        setting ``adopt_unclaimed_rows`` only adopts, which is how an application takes
-        over a system database whose rows predate ownership.
-
-        Queue, schedule, and version names are globally unique whatever their owner, so
-        this can never collide: it is pure re-ownership, never a merge.
-
-        The control-plane rows and every in-flight workflow move in one transaction, so
-        the application is never half-owned. Terminal workflows and their steps follow in
-        batches; they scope only observability and garbage collection, so they may lag.
-
-        The application named by ``old_name`` must not be running: a dequeue racing this
-        stamps the old name back onto a row this has already passed.
-
-        ``adopt_unclaimed_rows`` takes rows no application owns. They belong to every
-        application sharing this system database, so adopting them takes them from any
-        peer; left false, unclaimed rows are not touched.
+        """Give ``new_name`` ownership of the rows ``old_name`` holds, of unclaimed rows,
+        or of both. The renamed application must be stopped, or its dequeues race this.
         """
         from ._dbos_config import _is_valid_app_name
 
@@ -6318,6 +6295,7 @@ class SystemDatabase(ABC):
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
 
         ws = SystemSchema.workflow_status
+        # Never a merge: queue, schedule, and version names are globally unique whatever their owner, so this cannot collide.
         with self.engine.begin() as c:
 
             def move(table: sa.Table, *extra: sa.ColumnElement[bool]) -> int:
@@ -6337,7 +6315,7 @@ class SystemDatabase(ABC):
             versions = move(SystemSchema.application_versions)
             in_flight = move(ws, ws.c.status.in_(self._RENAME_ATOMIC_STATUSES))
 
-        # Phase one already moved the in-flight rows, so these predicates now match only terminal ones.
+        # Only terminal rows are left to match, and they scope observability and GC alone, so they may lag behind the commit above.
         terminal = self._rename_rows_in_batches(
             ws, ws.c.workflow_uuid, old_name, new_name, batch_size, adopt_unclaimed_rows
         )

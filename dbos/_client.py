@@ -1572,23 +1572,8 @@ class DBOSClient:
         batch_size: Optional[int] = DEFAULT_RENAME_BATCH_SIZE,
         adopt_unclaimed_rows: bool = False,
     ) -> ApplicationRowCounts:
-        """Give an application ownership of rows another name holds, rows nobody
-        holds, or both.
-
-        Ownership is recorded on each row, so renaming an application in its
-        configuration strands everything written under the old name: those
-        workflows stop being dequeued, recovered, or garbage collected. Run this
-        against the system database to move them, then start the application
-        under its new name.
-
-        Omitting ``old_name`` and setting ``adopt_unclaimed_rows`` adopts without
-        renaming, which is how an application takes over a system database whose
-        rows predate ownership.
-
-        This is deliberately not available on a launched :class:`DBOS`: an
-        application cannot safely rename itself, because its own dequeues would
-        stamp the old name back onto rows the rename has already passed. Stop the
-        application first.
+        """Give an application ownership of rows another name holds, rows nobody holds,
+        or both. Stop the application being renamed first, or its dequeues race this.
 
         :param old_name: The application's previous name. ``None`` moves nothing
             but the unclaimed rows, so it requires ``adopt_unclaimed_rows``.
