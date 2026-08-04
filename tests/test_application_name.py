@@ -1,9 +1,10 @@
-"""Row ownership and the isolation it buys. Claiming (dequeue, recovery,
-enumeration, bulk delete) takes own plus unclaimed; filters match an owner exactly."""
+"""Row ownership and the isolation it buys. Every scope -- claiming (dequeue, recovery,
+bulk delete) and filtering alike -- takes an owner's rows plus the unclaimed ones."""
 
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
+from unittest.mock import patch
 
 import pytest
 import sqlalchemy as sa
@@ -1038,6 +1039,23 @@ def test_unclaimed_rows_can_be_adopted_without_a_rename(dbos: DBOS) -> None:
     assert step_owners(dbos, "legacy-wf") == {RENAMED_APP}
     # A peer's own rows are never in scope for an adoption.
     assert application_name_of(dbos, "peer-wf") == OTHER_APP
+
+
+def test_version_is_per_application(dbos: DBOS) -> None:
+    """Version names are global addresses, so two applications built from one workflow
+    source must not compute the same version and collide when they both register."""
+    registry = dbos._registry
+    assert registry.compute_app_version("app-a") != registry.compute_app_version(
+        "app-b"
+    )
+    assert registry.compute_app_version("app-a") == registry.compute_app_version(
+        "app-a"
+    )
+    # The unreadable-source fallback is per-application too, not one shared sentinel.
+    # A builtin has no retrievable source, which is what sends compute_app_version there.
+    with patch.object(registry, "workflow_info_map", {"wf": len}):
+        assert registry.compute_app_version("app-a") == "DEFAULT_VERSION-app-a"
+        assert registry.compute_app_version("app-b") == "DEFAULT_VERSION-app-b"
 
 
 def test_registration_conflict_points_at_the_rename_command(dbos: DBOS) -> None:

@@ -1176,6 +1176,11 @@ class SystemDatabase(ABC):
                     inputs=inputs,
                     serialization=serialization,
                     updated_at=self._now_ms_sql(),
+                    # Claim it, as dequeue does: an unclaimed holder left unclaimed would let
+                    # every peer coalesce onto one workflow, last inputs winning.
+                    application_name=sa.func.coalesce(
+                        wsc.application_name, sa.literal(self.app_name)
+                    ),
                 )
                 .returning(wsc.workflow_uuid)
             ).fetchone()

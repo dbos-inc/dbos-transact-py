@@ -98,7 +98,7 @@ def garbage_collect(
 
 
 def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:
-    # Own plus unclaimed rows, which list_workflows' exact-match filter cannot express.
+    # IDs only, so a bulk timeout does not deserialize every row's inputs and outputs.
     for workflow_id in dbos._sys_db.list_timed_out_workflow_ids(
         cutoff_epoch_timestamp_ms
     ):

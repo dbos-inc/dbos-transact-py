@@ -294,13 +294,17 @@ class DBOSRegistry:
         else:
             self.instance_info_map[fn] = inst
 
-    def compute_app_version(self) -> str:
+    def compute_app_version(self, app_name: str) -> str:
         """
         An application's version is computed from a hash of the source of its workflows.
         This is guaranteed to be stable given identical source code because it uses an MD5 hash
         and because it iterates through the workflows in sorted order.
         This way, if the app's workflows are updated (which would break recovery), its version changes.
         App version can be manually set through the application_version field in DBOSConfig.
+
+        The application's name is hashed in too: version names are globally unique across
+        applications sharing a system database, so two applications built from the same
+        workflow source must not compute the same version and collide on registration.
         """
         hasher = hashlib.md5()
         try:
@@ -309,11 +313,13 @@ class DBOSRegistry:
             )
         except Exception:
             dbos_logger.warning(
-                "Could not get workflow source code to compute an application version, defaulting application version to 'DEFAULT_VERSION'. Set a custom version through the 'application_version' field in DBOSConfig"
+                "Could not get workflow source code to compute an application version, defaulting application version to 'DEFAULT_VERSION-<app name>'. Set a custom version through the 'application_version' field in DBOSConfig"
             )
-            return "DEFAULT_VERSION"
+            # Suffixed, so peers sharing a system database do not all fall back onto one name.
+            return f"DEFAULT_VERSION-{app_name}"
         # Different DBOS versions should produce different app versions
         sources.append(GlobalParams.dbos_version)
+        sources.append(app_name)
         for source in sources:
             hasher.update(source.encode("utf-8"))
         return hasher.hexdigest()
@@ -556,11 +562,13 @@ class DBOS:
                 dbos_logger.warning(f"DBOS was already launched")
                 return
             self._launched = True
+            GlobalParams.app_name = self._config["name"]
             if GlobalParams.app_version == "":
-                GlobalParams.app_version = self._registry.compute_app_version()
+                GlobalParams.app_version = self._registry.compute_app_version(
+                    GlobalParams.app_name
+                )
             if self.conductor_key is not None:
                 GlobalParams.executor_id = generate_uuid()
-            GlobalParams.app_name = self._config["name"]
             dbos_logger.info(f"Executor ID: {GlobalParams.executor_id}")
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
             dbos_logger.info(f"Application name: {GlobalParams.app_name}")

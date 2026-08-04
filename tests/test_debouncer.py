@@ -831,6 +831,49 @@ def test_debounce_collision_across_applications(dbos: DBOS, config: Any) -> None
         client_b.destroy()
 
 
+def test_debounce_claims_an_unclaimed_holder(dbos: DBOS, config: Any) -> None:
+    """Bouncing an unclaimed holder claims it, as dequeue does. Left unclaimed, every
+    peer would coalesce onto the one workflow and the last bouncer's inputs would win.
+    """
+    queue_name = f"unclaimed-debounce-queue-{uuid.uuid4()}"
+    DBOS.register_queue(queue_name)
+    url = config["system_database_url"]
+    nameless = DBOSClient(system_database_url=url)
+    client_a = DBOSClient(system_database_url=url, application_name="app-a")
+    client_b = DBOSClient(system_database_url=url, application_name="app-b")
+    try:
+        opts: Any = {"workflow_name": "shared_wf", "queue_name": queue_name}
+        # A nameless client writes an unclaimed row, which no application owns yet.
+        handle: WorkflowHandle[int] = DebouncerClient(nameless, opts).debounce(
+            "k", 1000000, 1
+        )
+        status = dbos._sys_db.get_workflow_status(handle.workflow_id)
+        assert status is not None and status["application_name"] is None
+
+        # app-a coalesces onto it and takes ownership in the same statement.
+        again: WorkflowHandle[int] = DebouncerClient(client_a, opts).debounce(
+            "k", 1000000, 2
+        )
+        assert again.workflow_id == handle.workflow_id
+        status = dbos._sys_db.get_workflow_status(handle.workflow_id)
+        assert status is not None and status["application_name"] == "app-a"
+
+        # So app-b now collides instead of silently overwriting app-a's inputs.
+        with pytest.raises(DBOSQueueDeduplicatedError):
+            DebouncerClient(client_b, opts).debounce("k", 1, 3)
+
+        # A nameless client has no identity to claim with, so it leaves the owner alone.
+        DebouncerClient(nameless, opts).debounce("k", 1000000, 4)
+        status = dbos._sys_db.get_workflow_status(handle.workflow_id)
+        assert status is not None and status["application_name"] == "app-a"
+
+        DBOS.cancel_workflow(handle.workflow_id)
+    finally:
+        nameless.destroy()
+        client_a.destroy()
+        client_b.destroy()
+
+
 def test_debounce_bounce_atomic_with_checkpoint(
     dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
