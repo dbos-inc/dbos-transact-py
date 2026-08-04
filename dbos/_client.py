@@ -50,6 +50,8 @@ from dbos._serialization import (
     safe_deserialize_schedule_context,
 )
 from dbos._sys_db import (
+    DEFAULT_RENAME_BATCH_SIZE,
+    ApplicationRowCounts,
     ClientScheduleInput,
     SendMessage,
     StepInfo,
@@ -1557,5 +1559,73 @@ class DBOSClient:
         await asyncio.to_thread(
             lambda: self.set_latest_application_version(
                 version_name, application_name=application_name
+            )
+        )
+
+    # ── Application Rename API ──────────────────────────────────
+
+    def rename_application(
+        self,
+        old_name: Optional[str],
+        new_name: str,
+        *,
+        batch_size: Optional[int] = DEFAULT_RENAME_BATCH_SIZE,
+        adopt_unclaimed_rows: bool = False,
+    ) -> ApplicationRowCounts:
+        """Give an application ownership of rows another name holds, rows nobody
+        holds, or both.
+
+        Ownership is recorded on each row, so renaming an application in its
+        configuration strands everything written under the old name: those
+        workflows stop being dequeued, recovered, or garbage collected. Run this
+        against the system database to move them, then start the application
+        under its new name.
+
+        Omitting ``old_name`` and setting ``adopt_unclaimed_rows`` adopts without
+        renaming, which is how an application takes over a system database whose
+        rows predate ownership.
+
+        This is deliberately not available on a launched :class:`DBOS`: an
+        application cannot safely rename itself, because its own dequeues would
+        stamp the old name back onto rows the rename has already passed. Stop the
+        application first.
+
+        :param old_name: The application's previous name. ``None`` moves nothing
+            but the unclaimed rows, so it requires ``adopt_unclaimed_rows``.
+        :param new_name: The application that ends up owning the rows.
+        :param batch_size: Terminal workflows and steps are re-owned this many at
+            a time. ``None`` moves them in a single transaction.
+        :param adopt_unclaimed_rows: Also take rows no application owns. They
+            belong to every application sharing this system database, so adopting
+            them takes them from any peer. Defaults to ``False``, which leaves
+            them alone.
+
+        :returns: The number of rows moved, by table.
+        """
+        _warn_sync_db_call_in_async_context(
+            "DBOSClient.rename_application", "DBOSClient.rename_application_async"
+        )
+        return self._sys_db.rename_application(
+            old_name,
+            new_name,
+            batch_size=batch_size,
+            adopt_unclaimed_rows=adopt_unclaimed_rows,
+        )
+
+    async def rename_application_async(
+        self,
+        old_name: Optional[str],
+        new_name: str,
+        *,
+        batch_size: Optional[int] = DEFAULT_RENAME_BATCH_SIZE,
+        adopt_unclaimed_rows: bool = False,
+    ) -> ApplicationRowCounts:
+        """Async version of :meth:`rename_application`."""
+        return await asyncio.to_thread(
+            lambda: self._sys_db.rename_application(
+                old_name,
+                new_name,
+                batch_size=batch_size,
+                adopt_unclaimed_rows=adopt_unclaimed_rows,
             )
         )

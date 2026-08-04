@@ -91,7 +91,12 @@ def insert_foreign_workflow(
 
 
 def insert_foreign_step(
-    dbos: DBOS, workflow_id: str, *, function_name: str, completed_at: int = 1
+    dbos: DBOS,
+    workflow_id: str,
+    *,
+    function_name: str,
+    completed_at: int = 1,
+    application_name: Optional[str] = OTHER_APP,
 ) -> None:
     with dbos._sys_db.engine.begin() as c:
         c.execute(
@@ -101,7 +106,7 @@ def insert_foreign_step(
                 function_name=function_name,
                 completed_at_epoch_ms=completed_at,
                 started_at_epoch_ms=completed_at,
-                application_name=OTHER_APP,
+                application_name=application_name,
             )
         )
 
@@ -849,3 +854,265 @@ def test_two_applications_share_one_system_database(dbos: DBOS, config: Any) -> 
             c.destroy()
         for p in peers.values():
             p.destroy()
+
+
+# ── Renaming an application ───────────────────────────────────────────────────
+
+
+RENAMED_APP = "renamed-app"
+
+
+def insert_foreign_control_plane(dbos: DBOS, suffix: str = "") -> None:
+    """A queue, a schedule, and a version, all held by OTHER_APP."""
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.insert(SystemSchema.queues).values(
+                queue_id=f"rename-queue-id{suffix}",
+                name=f"rename-queue{suffix}",
+                created_at=1,
+                updated_at=1,
+                application_name=OTHER_APP,
+            )
+        )
+        c.execute(
+            sa.insert(SystemSchema.workflow_schedules).values(
+                schedule_id=f"rename-schedule-id{suffix}",
+                schedule_name=f"rename-schedule{suffix}",
+                workflow_name="foreign_workflow",
+                schedule=daily_cron_far_from_now(),
+                status="ACTIVE",
+                context="null",
+                application_name=OTHER_APP,
+            )
+        )
+        c.execute(
+            sa.insert(SystemSchema.application_versions).values(
+                version_id=f"rename-version-id{suffix}",
+                version_name=f"rename-version{suffix}",
+                version_timestamp=7,
+                created_at=7,
+                application_name=OTHER_APP,
+            )
+        )
+
+
+def owners_of_everything(dbos: DBOS) -> dict[str, set[Any]]:
+    """Every owner recorded in each of the five owned tables."""
+    tables = {
+        "queues": SystemSchema.queues,
+        "schedules": SystemSchema.workflow_schedules,
+        "versions": SystemSchema.application_versions,
+        "workflows": SystemSchema.workflow_status,
+        "steps": SystemSchema.operation_outputs,
+    }
+    with dbos._sys_db.engine.begin() as c:
+        return {
+            label: {r[0] for r in c.execute(sa.select(table.c.application_name))}
+            for label, table in tables.items()
+        }
+
+
+def test_rename_moves_every_owned_table(dbos: DBOS) -> None:
+    """Ownership lives on the rows, so renaming an application is a re-own of all
+    five tables. Counts are reported per table so an operator can check the move."""
+    insert_foreign_workflow(dbos, "rename-terminal", status="SUCCESS")
+    insert_foreign_workflow(dbos, "rename-inflight", status="ENQUEUED")
+    insert_foreign_step(dbos, "rename-terminal", function_name="step")
+    insert_foreign_control_plane(dbos)
+
+    assert dbos._sys_db.rename_application(OTHER_APP, RENAMED_APP) == {
+        "queues": 1,
+        "schedules": 1,
+        "versions": 1,
+        # Both the ENQUEUED row, moved atomically, and the terminal one, moved in batches.
+        "workflows": 2,
+        "steps": 1,
+    }
+
+    # Nothing is left behind in any table.
+    for label, owners in owners_of_everything(dbos).items():
+        assert OTHER_APP not in owners, label
+        assert RENAMED_APP in owners, label
+
+
+def test_rename_spares_peers_and_unclaimed_rows(dbos: DBOS) -> None:
+    """Only the named application moves. Unclaimed rows belong to everyone, so a
+    rename must not quietly adopt them."""
+
+    @DBOS.workflow()
+    def mine() -> int:
+        return 5
+
+    insert_foreign_workflow(dbos, "rename-mine", status="SUCCESS")
+    insert_foreign_workflow(
+        dbos, "rename-unclaimed", status="SUCCESS", application_name=None
+    )
+    handle: WorkflowHandle[int] = DBOS.start_workflow(mine)
+    assert handle.get_result() == 5
+
+    dbos._sys_db.rename_application(OTHER_APP, RENAMED_APP)
+
+    assert application_name_of(dbos, "rename-mine") == RENAMED_APP
+    assert application_name_of(dbos, "rename-unclaimed") is None
+    # The live application is untouched, so it still dequeues and recovers its own work.
+    assert application_name_of(dbos, handle.workflow_id) == APP_NAME
+
+
+def test_rename_batches_terminal_rows_and_resumes(dbos: DBOS) -> None:
+    """Terminal workflows and steps move in batches, so a long history does not run
+    in one transaction. The predicate shrinks as it goes, so a re-run resumes."""
+    for i in range(5):
+        insert_foreign_workflow(dbos, f"rename-batched-{i}", status="SUCCESS")
+        insert_foreign_step(dbos, f"rename-batched-{i}", function_name="step")
+
+    moved = dbos._sys_db.rename_application(OTHER_APP, RENAMED_APP, batch_size=1)
+    assert moved["workflows"] == 5
+    assert moved["steps"] == 5
+
+    # Idempotent: a second pass finds nothing, which is what makes an interrupted one resumable.
+    again = dbos._sys_db.rename_application(OTHER_APP, RENAMED_APP, batch_size=1)
+    assert again["workflows"] == 0 and again["steps"] == 0
+    for i in range(5):
+        assert application_name_of(dbos, f"rename-batched-{i}") == RENAMED_APP
+
+
+def test_rename_rejects_names_an_application_could_not_use(dbos: DBOS) -> None:
+    """A rename to a name the config validator rejects would strand the rows again,
+    since no application could ever launch under it."""
+    with pytest.raises(DBOSException, match="Invalid application name"):
+        dbos._sys_db.rename_application(OTHER_APP, "No Spaces Allowed")
+    with pytest.raises(DBOSException, match="Invalid application name"):
+        dbos._sys_db.rename_application(OTHER_APP, "ab")
+    with pytest.raises(DBOSException, match="already holds that name"):
+        dbos._sys_db.rename_application(OTHER_APP, OTHER_APP)
+    with pytest.raises(DBOSException, match="cannot be empty"):
+        dbos._sys_db.rename_application("", RENAMED_APP)
+    # Neither source named: a no-op that is almost certainly a mistake.
+    with pytest.raises(DBOSException, match="Nothing to re-own"):
+        dbos._sys_db.rename_application(None, RENAMED_APP)
+    with pytest.raises(ValueError, match="batch_size"):
+        dbos._sys_db.rename_application(OTHER_APP, RENAMED_APP, batch_size=0)
+
+
+def test_unclaimed_rows_are_adopted_only_when_asked(dbos: DBOS) -> None:
+    """Unclaimed rows belong to every application, so a rename leaves them alone
+    unless it is told to take them from the peers that share them."""
+    insert_foreign_workflow(dbos, "adopt-me", status="SUCCESS", application_name=None)
+    insert_foreign_workflow(dbos, "rename-me", status="SUCCESS")
+
+    moved = dbos._sys_db.rename_application(OTHER_APP, RENAMED_APP)
+    assert moved["workflows"] == 1
+    assert application_name_of(dbos, "rename-me") == RENAMED_APP
+    assert application_name_of(dbos, "adopt-me") is None
+
+    adopted = dbos._sys_db.rename_application(
+        RENAMED_APP, "adopting-app", adopt_unclaimed_rows=True
+    )
+    assert adopted["workflows"] == 2
+    assert application_name_of(dbos, "adopt-me") == "adopting-app"
+    assert application_name_of(dbos, "rename-me") == "adopting-app"
+
+
+def test_unclaimed_rows_can_be_adopted_without_a_rename(dbos: DBOS) -> None:
+    """Taking over a system database whose rows predate ownership is an adoption with
+    no old name to move, so the previous name is optional."""
+    insert_foreign_workflow(dbos, "legacy-wf", status="SUCCESS", application_name=None)
+    insert_foreign_step(dbos, "legacy-wf", function_name="step", application_name=None)
+    insert_foreign_workflow(dbos, "peer-wf", status="SUCCESS")
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.insert(SystemSchema.queues).values(
+                queue_id="legacy-queue-id",
+                name="legacy-queue",
+                created_at=1,
+                updated_at=1,
+                application_name=None,
+            )
+        )
+
+    moved = dbos._sys_db.rename_application(
+        None, RENAMED_APP, adopt_unclaimed_rows=True
+    )
+    assert moved["workflows"] == 1 and moved["steps"] == 1 and moved["queues"] == 1
+    assert application_name_of(dbos, "legacy-wf") == RENAMED_APP
+    assert step_owners(dbos, "legacy-wf") == {RENAMED_APP}
+    # A peer's own rows are never in scope for an adoption.
+    assert application_name_of(dbos, "peer-wf") == OTHER_APP
+
+
+def test_registration_conflict_points_at_the_rename_command(dbos: DBOS) -> None:
+    """The wrong order -- starting under the new name before re-owning -- fails at
+    registration. That error is where an operator learns the remedy exists."""
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.insert(SystemSchema.application_versions).values(
+                version_id="conflict-version-id",
+                version_name="conflict-version",
+                version_timestamp=7,
+                created_at=7,
+                application_name=OTHER_APP,
+            )
+        )
+    with pytest.raises(DBOSException) as excinfo:
+        dbos._sys_db.create_application_version(
+            "conflict-version", application_name=RENAMED_APP
+        )
+    assert f"dbos rename-application --from {OTHER_APP} --to {RENAMED_APP}" in str(
+        excinfo.value
+    )
+
+
+def test_cli_renames_application(dbos: DBOS, config: Any) -> None:
+    """Click binds options to parameters by name, which mypy cannot check, so the
+    command needs one real invocation."""
+    from click.testing import CliRunner
+
+    from dbos.cli.cli import app
+
+    insert_foreign_workflow(dbos, "cli-rename-me", status="SUCCESS")
+    insert_foreign_workflow(
+        dbos, "cli-adopt-me", status="SUCCESS", application_name=None
+    )
+    insert_foreign_control_plane(dbos)
+    url = config["system_database_url"]
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        ["rename-application", "-s", url, "-f", OTHER_APP, "-t", RENAMED_APP, "-y"],
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["workflows"] == 1
+    assert application_name_of(dbos, "cli-rename-me") == RENAMED_APP
+    assert application_name_of(dbos, "cli-adopt-me") is None
+
+    adopted = runner.invoke(
+        app,
+        [
+            "rename-application",
+            "-s",
+            url,
+            "-f",
+            RENAMED_APP,
+            "-t",
+            "adopting-app",
+            "--adopt-unclaimed-rows",
+            "-y",
+        ],
+    )
+    assert adopted.exit_code == 0, adopted.output
+    assert application_name_of(dbos, "cli-adopt-me") == "adopting-app"
+
+    # A name no application could launch under is refused, with a non-zero exit.
+    bad = runner.invoke(
+        app, ["rename-application", "-s", url, "-f", "adopting-app", "-t", "ab", "-y"]
+    )
+    assert bad.exit_code == 1
+    assert "Invalid application name" in bad.output
+
+    # Neither source named is CLI misuse, caught before anything connects.
+    neither = runner.invoke(
+        app, ["rename-application", "-s", url, "-t", "some-app", "-y"]
+    )
+    assert neither.exit_code == 2
+    assert "Nothing to re-own" in neither.output

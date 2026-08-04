@@ -29,7 +29,7 @@ from .._dbos_config import (
 )
 from .._docker_pg_helper import start_docker_pg, stop_docker_pg
 from .._logger import dbos_logger, init_logger
-from .._sys_db import SystemDatabase
+from .._sys_db import DEFAULT_RENAME_BATCH_SIZE, SystemDatabase
 from .._utils import GlobalParams
 from ..cli._github_init import create_template_from_github
 from ._template_init import copy_template, get_project_name, get_templates_directory
@@ -405,6 +405,91 @@ def reset(
     except Exception as e:
         click.echo(f"Error resetting system database: {str(e)}")
         return
+
+
+@app.command(
+    name="rename-application",
+    help="Re-own a system database's rows after an application is renamed",
+)
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
+@click.option(
+    "--sys-db-url", "-s", "system_database_url", help="Your DBOS system database URL"
+)
+@click.option(
+    "--from",
+    "-f",
+    "old_name",
+    help="The application's previous name. Omit to only adopt unclaimed rows.",
+)
+@click.option(
+    "--to",
+    "-t",
+    "new_name",
+    required=True,
+    help="The application that ends up owning the rows",
+)
+@click.option(
+    "--adopt-unclaimed-rows",
+    is_flag=True,
+    help="Also take rows no application owns, which every peer sharing this system database would otherwise share",
+)
+@click.option(
+    "--batch-size",
+    type=int,
+    default=DEFAULT_RENAME_BATCH_SIZE,
+    help="Terminal workflows and steps re-owned per transaction",
+)
+@click.option(
+    "--schema",
+    help='Schema name for DBOS system tables. Defaults to "dbos".',
+)
+def rename_application(
+    yes: bool,
+    system_database_url: Optional[str],
+    old_name: Optional[str],
+    new_name: str,
+    adopt_unclaimed_rows: bool,
+    batch_size: int,
+    schema: Optional[str],
+) -> None:
+    sources = []
+    if old_name:
+        sources.append(f"'{old_name}''s rows")
+    if adopt_unclaimed_rows:
+        sources.append("rows no application owns")
+    if not sources:
+        raise click.UsageError(
+            "Nothing to re-own: pass --from, --adopt-unclaimed-rows, or both."
+        )
+    if not yes:
+        confirm = click.confirm(
+            f"This command re-owns {' and '.join(sources)} in your DBOS system "
+            f"database as '{new_name}'. Stop the application being renamed first, or "
+            "its own dequeues may stamp the old name back. Are you sure you want to "
+            "proceed?"
+        )
+        if not confirm:
+            click.echo("Operation cancelled.")
+            raise click.exceptions.Exit()
+    system_database_url, _ = _get_db_url(
+        system_database_url=system_database_url, application_database_url=None
+    )
+    client = DBOSClient(
+        system_database_url=system_database_url, dbos_system_schema=schema
+    )
+    try:
+        moved = client.rename_application(
+            old_name,
+            new_name,
+            batch_size=batch_size,
+            adopt_unclaimed_rows=adopt_unclaimed_rows,
+        )
+        print(json.dumps(moved, indent=2))
+    except click.exceptions.Exit:
+        raise
+    except Exception as e:
+        click.echo(f"Error renaming application: {str(e)}", err=True)
+        raise click.exceptions.Exit(code=1)
 
 
 @workflow.command(name="list", help="List workflows for your application")

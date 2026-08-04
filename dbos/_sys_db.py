@@ -359,6 +359,20 @@ class VersionInfo(TypedDict):
     application_name: Optional[str]
 
 
+# Workflows re-owned per transaction by a rename. Matches the GC default.
+DEFAULT_RENAME_BATCH_SIZE = 10_000
+
+
+class ApplicationRowCounts(TypedDict):
+    """Rows a rename moved, by table."""
+
+    queues: int
+    schedules: int
+    versions: int
+    workflows: int
+    steps: int
+
+
 class StepInfo(TypedDict):
     # The unique ID of the step in the workflow
     function_id: int
@@ -767,7 +781,9 @@ class SystemDatabase(ABC):
         raise DBOSException(
             f"{kind} '{name}' is already registered by application "
             f"'{current}' in this system database. {kind} names must be "
-            f"unique across applications sharing a system database."
+            f"unique across applications sharing a system database. "
+            f"If you renamed '{current}' to '{owner}', re-own its rows first: "
+            f"dbos rename-application --from {current} --to {owner}"
         )
 
     def _insert_workflow_status(
@@ -6170,6 +6186,159 @@ class SystemDatabase(ABC):
                 created_at=row[3],
                 application_name=row[4],
             )
+
+    # ── Application Rename ──────────────────────────────────────
+
+    # Rows a rename must move atomically: a half-owned application dequeues work whose version row it can no longer see.
+    _RENAME_ATOMIC_STATUSES = [
+        WorkflowStatusString.PENDING.value,
+        WorkflowStatusString.ENQUEUED.value,
+        WorkflowStatusString.DELAYED.value,
+    ]
+
+    @staticmethod
+    def _rename_source(
+        col: sa.ColumnElement[Any],
+        old_name: Optional[str],
+        adopt_unclaimed_rows: bool,
+    ) -> sa.ColumnElement[bool]:
+        """Rows a rename moves: an application's own, unclaimed ones, or both. Unlike
+        _name_filter, unclaimed rows are not implied -- they belong to every
+        application, so a rename takes them only when asked."""
+        clauses = []
+        if old_name is not None:
+            clauses.append(col == old_name)
+        if adopt_unclaimed_rows:
+            clauses.append(col.is_(None))
+        # Callers validate that at least one source is named.
+        return sa.or_(*clauses)
+
+    def _rename_rows_in_batches(
+        self,
+        table: sa.Table,
+        key_col: sa.ColumnElement[Any],
+        old_name: Optional[str],
+        new_name: str,
+        batch_size: Optional[int],
+        adopt_unclaimed_rows: bool,
+    ) -> int:
+        """Re-own a table's rows, batching by key so a long history does not move in one
+        transaction. Each pass shrinks its own predicate, so this terminates on its own
+        and a re-run resumes an interrupted rename."""
+        predicate = self._rename_source(
+            table.c.application_name, old_name, adopt_unclaimed_rows
+        )
+        if batch_size is None:
+            with self.engine.begin() as c:
+                return c.execute(
+                    sa.update(table).where(predicate).values(application_name=new_name)
+                ).rowcount
+        total = 0
+        while True:
+            with self.engine.begin() as c:
+                # correlate(None): otherwise SQLAlchemy correlates the subquery to the UPDATE target and drops its FROM.
+                keys = (
+                    sa.select(key_col)
+                    .select_from(table)
+                    .where(predicate)
+                    .distinct()
+                    .limit(batch_size)
+                    .correlate(None)
+                )
+                # Re-check the predicate: a key may also address rows another application owns, which this rename must not take.
+                updated = c.execute(
+                    sa.update(table)
+                    .where(key_col.in_(keys), predicate)
+                    .values(application_name=new_name)
+                ).rowcount
+            if updated == 0:
+                return total
+            total += updated
+
+    def rename_application(
+        self,
+        old_name: Optional[str],
+        new_name: str,
+        *,
+        batch_size: Optional[int] = DEFAULT_RENAME_BATCH_SIZE,
+        adopt_unclaimed_rows: bool = False,
+    ) -> ApplicationRowCounts:
+        """Give ``new_name`` ownership of rows another name holds, rows nobody holds,
+        or both. Naming ``old_name`` alone renames an application; omitting it and
+        setting ``adopt_unclaimed_rows`` only adopts, which is how an application takes
+        over a system database whose rows predate ownership.
+
+        Queue, schedule, and version names are globally unique whatever their owner, so
+        this can never collide: it is pure re-ownership, never a merge.
+
+        The control-plane rows and every in-flight workflow move in one transaction, so
+        the application is never half-owned. Terminal workflows and their steps follow in
+        batches; they scope only observability and garbage collection, so they may lag.
+
+        The application named by ``old_name`` must not be running: a dequeue racing this
+        stamps the old name back onto a row this has already passed.
+
+        ``adopt_unclaimed_rows`` takes rows no application owns. They belong to every
+        application sharing this system database, so adopting them takes them from any
+        peer; left false, unclaimed rows are not touched.
+        """
+        from ._dbos_config import _is_valid_app_name
+
+        if old_name is not None and not old_name:
+            raise DBOSException("The application's previous name cannot be empty.")
+        if old_name is None and not adopt_unclaimed_rows:
+            raise DBOSException(
+                "Nothing to re-own: name the application to rename, adopt unclaimed "
+                "rows, or both."
+            )
+        if not _is_valid_app_name(new_name):
+            raise DBOSException(
+                f"Invalid application name '{new_name}'. Application names must be "
+                "between 3 and 30 characters long and contain only lowercase letters, "
+                "numbers, dashes, and underscores."
+            )
+        if old_name == new_name:
+            raise DBOSException(
+                f"Application '{new_name}' already holds that name; nothing to rename."
+            )
+        if batch_size is not None and batch_size < 1:
+            raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
+
+        ws = SystemSchema.workflow_status
+        with self.engine.begin() as c:
+
+            def move(table: sa.Table, *extra: sa.ColumnElement[bool]) -> int:
+                return c.execute(
+                    sa.update(table)
+                    .where(
+                        self._rename_source(
+                            table.c.application_name, old_name, adopt_unclaimed_rows
+                        ),
+                        *extra,
+                    )
+                    .values(application_name=new_name)
+                ).rowcount
+
+            queues = move(SystemSchema.queues)
+            schedules = move(SystemSchema.workflow_schedules)
+            versions = move(SystemSchema.application_versions)
+            in_flight = move(ws, ws.c.status.in_(self._RENAME_ATOMIC_STATUSES))
+
+        # Phase one already moved the in-flight rows, so these predicates now match only terminal ones.
+        terminal = self._rename_rows_in_batches(
+            ws, ws.c.workflow_uuid, old_name, new_name, batch_size, adopt_unclaimed_rows
+        )
+        oo = SystemSchema.operation_outputs
+        steps = self._rename_rows_in_batches(
+            oo, oo.c.workflow_uuid, old_name, new_name, batch_size, adopt_unclaimed_rows
+        )
+        return ApplicationRowCounts(
+            queues=queues,
+            schedules=schedules,
+            versions=versions,
+            workflows=in_flight + terminal,
+            steps=steps,
+        )
 
     @db_retry()
     def call_txn_as_step(
