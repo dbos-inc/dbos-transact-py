@@ -6203,8 +6203,7 @@ class SystemDatabase(ABC):
         adopt_unclaimed_rows: bool,
     ) -> sa.ColumnElement[bool]:
         """Rows a rename moves: an application's own, unclaimed ones, or both. Unlike
-        _name_filter, unclaimed rows are not implied; a rename takes them only when asked.
-        """
+        _name_filter, unclaimed rows are not implied; they move only when asked."""
         clauses = []
         if old_name is not None:
             clauses.append(col == old_name)
@@ -6222,8 +6221,8 @@ class SystemDatabase(ABC):
         batch_size: Optional[int],
         adopt_unclaimed_rows: bool,
     ) -> int:
-        """Re-own a table's rows in half-open key ranges, so a long history neither moves
-        in one transaction nor rescans what it already moved; a re-run resumes."""
+        """Re-own a table's rows in half-open key ranges, so a long history neither
+        moves in one transaction nor rescans what it already moved; a re-run resumes."""
         predicate = self._rename_source(
             table.c.application_name, old_name, adopt_unclaimed_rows
         )
@@ -6269,9 +6268,8 @@ class SystemDatabase(ABC):
         batch_size: Optional[int] = DEFAULT_RENAME_BATCH_SIZE,
         adopt_unclaimed_rows: bool = False,
     ) -> ApplicationRowCounts:
-        """Give ``new_name`` ownership of the rows ``old_name`` holds, of unclaimed rows,
-        or of both. The renamed application must be stopped, or its dequeues race this.
-        """
+        """Give ``new_name`` ownership of rows ``old_name`` holds, of unclaimed rows, or
+        of both. The renamed application must be stopped, or its dequeues race this."""
         from ._dbos_config import _is_valid_app_name
 
         if old_name is not None and not old_name:

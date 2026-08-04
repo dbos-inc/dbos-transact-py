@@ -431,13 +431,13 @@ def reset(
 @click.option(
     "--adopt-unclaimed-rows",
     is_flag=True,
-    help="Also take rows no application owns, which every peer sharing this system database would otherwise share",
+    help="Also take rows no application owns (application_name=NULL)",
 )
 @click.option(
     "--batch-size",
     type=int,
     default=DEFAULT_RENAME_BATCH_SIZE,
-    help="Terminal workflows and steps re-owned per transaction",
+    help="Workflows and steps re-owned per transaction",
 )
 @click.option(
     "--schema",
@@ -464,9 +464,8 @@ def rename_application(
     if not yes:
         confirm = click.confirm(
             f"This command re-owns {' and '.join(sources)} in your DBOS system "
-            f"database as '{new_name}'. Stop the application being renamed first, or "
-            "its own dequeues may stamp the old name back. Are you sure you want to "
-            "proceed?"
+            f"database as '{new_name}'. Stop the application being renamed before "
+            "running this. Are you sure you want to proceed?"
         )
         if not confirm:
             click.echo("Operation cancelled.")

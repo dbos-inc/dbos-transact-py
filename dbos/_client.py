@@ -1573,17 +1573,15 @@ class DBOSClient:
         adopt_unclaimed_rows: bool = False,
     ) -> ApplicationRowCounts:
         """Give an application ownership of rows another name holds, rows nobody holds,
-        or both. Stop the application being renamed first, or its dequeues race this.
+        or both. Do not run while your application is running.
 
         :param old_name: The application's previous name. ``None`` moves nothing
             but the unclaimed rows, so it requires ``adopt_unclaimed_rows``.
         :param new_name: The application that ends up owning the rows.
         :param batch_size: Terminal workflows and steps are re-owned this many at
             a time. ``None`` moves them in a single transaction.
-        :param adopt_unclaimed_rows: Also take rows no application owns. They
-            belong to every application sharing this system database, so adopting
-            them takes them from any peer. Defaults to ``False``, which leaves
-            them alone.
+        :param adopt_unclaimed_rows: Also take rows no application owns
+            (``application_name=NULL``). Default to ``False``.
 
         :returns: The number of rows moved, by table.
         """
