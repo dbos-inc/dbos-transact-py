@@ -928,6 +928,9 @@ class DBOS:
             - ``"always_update"``: always overwrite the existing row.
             - ``"never_update"``: leave the existing row unchanged.
 
+            A queue already registered by a different application raises in every
+            mode: the name is its address, so a collision is not ours to resolve.
+
         :returns: A :class:`Queue` reflecting the persisted configuration.
         """
         check_async("register_queue")

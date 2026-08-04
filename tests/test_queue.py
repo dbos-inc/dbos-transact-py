@@ -2852,7 +2852,7 @@ def test_partitioned_batch_dequeue_skips_requeued_rows(dbos: DBOS) -> None:
     # Resume onto another unpolled queue: the internal queue is live, and its worker would drain the row before the assertions below.
     resume_target = f"unpolled-resume-{uuid.uuid4().hex[:8]}"
 
-    # Fire between the candidate snapshot (starts WITH RECURSIVE) and the lock select (a plain SELECT ... IN).
+    # Fire between the candidate snapshot (starts WITH RECURSIVE) and the lock select, which is the sweep's only SELECT keyed on workflow_uuid.
     moved = threading.Event()
 
     def before_cursor_execute(
@@ -2864,7 +2864,11 @@ def test_partitioned_batch_dequeue_skips_requeued_rows(dbos: DBOS) -> None:
         executemany: bool,
     ) -> None:
         stmt = statement.lstrip().upper()
-        if not moved.is_set() and stmt.startswith("SELECT") and " IN " in stmt:
+        if (
+            not moved.is_set()
+            and stmt.startswith("SELECT")
+            and "WORKFLOW_UUID IN" in stmt
+        ):
             moved.set()  # Set first: resume_workflows itself runs a SELECT ... IN
             dbos._sys_db.resume_workflows([head_id], queue_name=resume_target)
 

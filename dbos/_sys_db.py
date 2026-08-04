@@ -742,7 +742,7 @@ class SystemDatabase(ABC):
         names = [value] if isinstance(value, str) else value
         return sa.or_(col.in_(names), col.is_(None))
 
-    def _check_row_owner(
+    def _resolve_row_owner(
         self,
         conn: sa.Connection,
         table: sa.Table,
@@ -750,17 +750,21 @@ class SystemDatabase(ABC):
         name: str,
         owner: Optional[str],
         kind: str,
-    ) -> None:
-        """Reject writing over a row owned by a different application: names are
-        globally unique, so a collision is a conflict, not a last-writer-wins race."""
+    ) -> Optional[str]:
+        """Owner to persist when writing a row that may already exist. A writer with
+        no identity of its own acts on any row and leaves that row's owner intact; a
+        named one collides only with a different name, as names are globally unique."""
         existing = conn.execute(
             sa.select(table.c.application_name).where(name_col == name)
         ).fetchone()
-        if existing is None or existing[0] is None or existing[0] == owner:
-            return
+        if existing is None or existing[0] is None:
+            return owner
+        current: Optional[str] = existing[0]
+        if owner is None or current == owner:
+            return current
         raise DBOSException(
             f"{kind} '{name}' is already registered by application "
-            f"'{existing[0]}' in this system database. {kind} names must be "
+            f"'{current}' in this system database. {kind} names must be "
             f"unique across applications sharing a system database."
         )
 
@@ -5620,7 +5624,7 @@ class SystemDatabase(ABC):
         self, schedule: WorkflowSchedule, conn: Optional[sa.Connection] = None
     ) -> None:
         def _do(c: sa.Connection) -> None:
-            self._check_row_owner(
+            owner = self._resolve_row_owner(
                 c,
                 SystemSchema.workflow_schedules,
                 SystemSchema.workflow_schedules.c.schedule_name,
@@ -5642,7 +5646,7 @@ class SystemDatabase(ABC):
                         automatic_backfill=schedule.get("automatic_backfill", False),
                         cron_timezone=schedule.get("cron_timezone"),
                         queue_name=schedule.get("queue_name"),
-                        application_name=schedule.get("application_name"),
+                        application_name=owner,
                     )
                 )
             except sa.exc.IntegrityError:
@@ -5661,7 +5665,7 @@ class SystemDatabase(ABC):
     ) -> None:
         # Idempotent upsert by schedule_name; preserves schedule_id, status, and last_fired_at on conflict. The scheduler loop detects the changed definition and restarts the thread.
         def _do(c: sa.Connection) -> None:
-            self._check_row_owner(
+            owner = self._resolve_row_owner(
                 c,
                 SystemSchema.workflow_schedules,
                 SystemSchema.workflow_schedules.c.schedule_name,
@@ -5683,7 +5687,7 @@ class SystemDatabase(ABC):
                     automatic_backfill=schedule.get("automatic_backfill", False),
                     cron_timezone=schedule.get("cron_timezone"),
                     queue_name=schedule.get("queue_name"),
-                    application_name=schedule.get("application_name"),
+                    application_name=owner,
                 )
                 .on_conflict_do_update(
                     index_elements=["schedule_name"],
@@ -5695,7 +5699,7 @@ class SystemDatabase(ABC):
                         "automatic_backfill": schedule.get("automatic_backfill", False),
                         "cron_timezone": schedule.get("cron_timezone"),
                         "queue_name": schedule.get("queue_name"),
-                        "application_name": schedule.get("application_name"),
+                        "application_name": owner,
                     },
                 )
             )
@@ -6083,14 +6087,6 @@ class SystemDatabase(ABC):
             "application_name": owner,
         }
         with self.engine.begin() as c:
-            self._check_row_owner(
-                c,
-                SystemSchema.queues,
-                SystemSchema.queues.c.name,
-                name,
-                owner,
-                "Queue",
-            )
             existed = (
                 c.execute(
                     sa.select(SystemSchema.queues.c.name).where(
@@ -6098,6 +6094,16 @@ class SystemDatabase(ABC):
                     )
                 ).fetchone()
                 is not None
+            )
+            # A name collision is a conflict in every mode: the name is the queue's
+            # address, and declining to update it does not make it ours to enqueue to.
+            values["application_name"] = self._resolve_row_owner(
+                c,
+                SystemSchema.queues,
+                SystemSchema.queues.c.name,
+                name,
+                owner,
+                "Queue",
             )
             stmt = self.dialect.insert(SystemSchema.queues).values(**values)
             if update_existing:

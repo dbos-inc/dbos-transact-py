@@ -638,9 +638,12 @@ def test_versions_are_per_application(dbos: DBOS, client: DBOSClient) -> None:
 # ── Pre-upgrade rows and conflicts ────────────────────────────────────────────
 
 
-def test_conflicting_names_across_applications_raise(dbos: DBOS) -> None:
+def test_conflicting_names_across_applications_raise(
+    dbos: DBOS, client: DBOSClient
+) -> None:
     """Queue and schedule names stay globally unique — they are addresses — so a
-    collision is a conflict rather than a silent overwrite."""
+    collision is a conflict rather than a silent overwrite. A writer with no
+    identity of its own is exempt: it administers any row without taking it."""
 
     @DBOS.workflow()
     def scheduled(scheduled_at: datetime, ctx: Any) -> None:
@@ -675,6 +678,61 @@ def test_conflicting_names_across_applications_raise(dbos: DBOS) -> None:
             workflow_fn=scheduled,
             schedule=daily_cron_far_from_now(),
         )
+
+    def conflict_queue() -> Any:
+        with dbos._sys_db.engine.begin() as c:
+            return c.execute(
+                sa.select(
+                    SystemSchema.queues.c.application_name,
+                    SystemSchema.queues.c.concurrency,
+                ).where(SystemSchema.queues.c.name == "conflict-queue")
+            ).one()
+
+    def upsert(sys_db: Any, concurrency: Optional[int], update_existing: bool) -> bool:
+        return bool(
+            sys_db.upsert_queue(
+                name="conflict-queue",
+                concurrency=concurrency,
+                worker_concurrency=None,
+                rate_limit_max=None,
+                rate_limit_period_sec=None,
+                priority_enabled=False,
+                partition_queue=False,
+                polling_interval_sec=1.0,
+                update_existing=update_existing,
+            )
+        )
+
+    # Declining to update is still a collision: silently leaving the row alone would
+    # strand every workflow enqueued here, since only its owner polls it.
+    with pytest.raises(DBOSException, match="already registered by application"):
+        upsert(dbos._sys_db, 3, update_existing=False)
+    assert conflict_queue() == (OTHER_APP, None)
+
+    # A nameless writer updates the row without stripping the owner off it.
+    assert not upsert(client._sys_db, 7, update_existing=True)
+    assert conflict_queue() == (OTHER_APP, 7)
+
+    # Same through the schedule upsert's update clause, the other way to strip one.
+    new_cron = daily_cron_far_from_now()
+    client.apply_schedules(
+        [
+            {
+                "schedule_name": "conflict-schedule",
+                "workflow_name": "scheduled",
+                "schedule": new_cron,
+            }
+        ]
+    )
+    with dbos._sys_db.engine.begin() as c:
+        assert c.execute(
+            sa.select(
+                SystemSchema.workflow_schedules.c.application_name,
+                SystemSchema.workflow_schedules.c.schedule,
+            ).where(
+                SystemSchema.workflow_schedules.c.schedule_name == "conflict-schedule"
+            )
+        ).one() == (OTHER_APP, new_cron)
 
 
 def test_cli_filters_by_application(dbos: DBOS, config: Any) -> None:
