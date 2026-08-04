@@ -123,8 +123,7 @@ def _enqueue_scheduled_workflow(
     application_name: Optional[str] = None,
 ) -> None:
     """Enqueue a single scheduled workflow execution via init_workflow."""
-    # The schedule's owner routes its runs, whoever fires them; an unclaimed
-    # schedule falls back to the firing handle, which may itself have no identity.
+    # The schedule's owner routes its runs, whoever fires them; an unclaimed one falls back to the firing handle, which may have no identity itself.
     owner = application_name if application_name is not None else sys_db.app_name
     # Scheduled workflows are always enqueued to their owner's latest application version
     latest_application_version = sys_db.get_latest_application_version(

@@ -942,8 +942,7 @@ def get_dbos_migration_fortyseven(schema: str, is_cockroach: bool) -> str:
 
 
 def get_dbos_migration_hundred(schema: str) -> str:
-    # NULL means unclaimed: any application may read and claim the row. One table per
-    # migration, so a table blocked by a reader does not hold the others' locks with it.
+    # NULL means unclaimed: any application may read and claim the row. One table per migration, so a blocked table does not hold the others' locks.
     return f"""
 ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
 """

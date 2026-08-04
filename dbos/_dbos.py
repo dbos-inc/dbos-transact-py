@@ -301,10 +301,7 @@ class DBOSRegistry:
         and because it iterates through the workflows in sorted order.
         This way, if the app's workflows are updated (which would break recovery), its version changes.
         App version can be manually set through the application_version field in DBOSConfig.
-
-        The application's name is hashed in too: version names are globally unique across
-        applications sharing a system database, so two applications built from the same
-        workflow source must not compute the same version and collide on registration.
+        The application name is hashed in too, so peers built from one source do not collide.
         """
         hasher = hashlib.md5()
         try:
@@ -1319,8 +1316,7 @@ class DBOS:
         the latest registered application version.
 
         The enqueued workflow is owned by this application unless
-        ``application_name`` names another one. Enqueueing onto an application
-        that does not share this one's name requires setting it explicitly.
+        ``application_name`` names another one.
         """
         return enqueue_workflow_with_options(
             _get_dbos_instance(), options, args, kwargs

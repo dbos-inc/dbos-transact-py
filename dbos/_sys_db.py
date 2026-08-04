@@ -767,9 +767,8 @@ class SystemDatabase(ABC):
         owner: Optional[str],
         kind: str,
     ) -> Optional[str]:
-        """Owner to persist when writing a row that may already exist. A writer with
-        no identity of its own acts on any row and leaves that row's owner intact; a
-        named one collides only with a different name, as names are globally unique."""
+        """Owner to persist when writing a row that may already exist. A nameless writer
+        leaves the owner intact; a named one collides only with a different name."""
         existing = conn.execute(
             sa.select(table.c.application_name).where(name_col == name)
         ).fetchone()
@@ -1182,8 +1181,7 @@ class SystemDatabase(ABC):
                     inputs=inputs,
                     serialization=serialization,
                     updated_at=self._now_ms_sql(),
-                    # Claim it, as dequeue does: an unclaimed holder left unclaimed would let
-                    # every peer coalesce onto one workflow, last inputs winning.
+                    # Claim it, as dequeue does: left unclaimed, every peer coalesces onto the one workflow and the last inputs win.
                     application_name=sa.func.coalesce(
                         wsc.application_name, sa.literal(self.app_name)
                     ),
@@ -1329,8 +1327,7 @@ class SystemDatabase(ABC):
                             assumed_role=status[7],
                             forked_from=original_workflow_id,
                             attributes=status[10],
-                            # Inherit the source's owner so the fork runs on the same
-                            # application; claim an unclaimed one, as dequeue does.
+                            # Inherit the source's owner so the fork runs on the same application; claim an unclaimed one, as dequeue does.
                             application_name=(
                                 status[11] if status[11] is not None else self.app_name
                             ),
@@ -5740,8 +5737,7 @@ class SystemDatabase(ABC):
                         "automatic_backfill": schedule.get("automatic_backfill", False),
                         "cron_timezone": schedule.get("cron_timezone"),
                         "queue_name": schedule.get("queue_name"),
-                        # Claim only an unclaimed row, so a registration that lands
-                        # between the check above and this write keeps the name it took.
+                        # Claim only an unclaimed row, so a registration landing between the check above and this write keeps the name it took.
                         "application_name": sa.func.coalesce(
                             SystemSchema.workflow_schedules.c.application_name, owner
                         ),
@@ -5950,10 +5946,9 @@ class SystemDatabase(ABC):
     def create_application_version(
         self, version_name: str, application_name: Optional[str] = None
     ) -> None:
-        """Register this version, claiming the row if nobody owns it yet, so a pinned
-        application_version does not stay unclaimed for the life of the deployment.
-        Names are global addresses, so a peer's is a collision rather than a share:
-        raising here is what keeps an application from launching without a version."""
+        """Register this version, claiming the row if nobody owns it yet so a pinned version
+        does not stay unclaimed. A peer's name is a collision, which is why this raises.
+        """
         owner = application_name if application_name is not None else self.app_name
         av = SystemSchema.application_versions
         with self.engine.begin() as c:
@@ -5963,8 +5958,7 @@ class SystemDatabase(ABC):
                     version_name=version_name,
                     application_name=owner,
                 )
-                # Claims a pre-upgrade row without recreating or retiming it. Guarded so
-                # a registration that lands first cannot be overwritten by a later one.
+                # Claims a pre-upgrade row without recreating or retiming it; guarded so a registration landing first is not overwritten.
                 .on_conflict_do_update(
                     index_elements=["version_name"],
                     set_={"application_name": owner},
@@ -5982,9 +5976,9 @@ class SystemDatabase(ABC):
         new_timestamp: int,
         application_name: Optional[str] = None,
     ) -> None:
-        """Promote a version to latest. Names are global addresses, so promoting a peer's
-        is a collision, not a retiming. Promotion claims an unclaimed row, which would
-        otherwise stay every application's latest."""
+        """Promote a version to latest. Promoting a peer's is a collision, not a retiming;
+        promotion claims an unclaimed row, which would otherwise be every peer's latest.
+        """
         owner = application_name if application_name is not None else self.app_name
         av = SystemSchema.application_versions
         with self.engine.begin() as c:
@@ -6141,8 +6135,7 @@ class SystemDatabase(ABC):
                 update_set: Dict[str, Any] = {
                     k: v for k, v in values.items() if k != "name"
                 }
-                # Claim only an unclaimed row, so a registration that lands between the
-                # check above and this write keeps the name it just took.
+                # Claim only an unclaimed row, so a registration landing between the check above and this write keeps the name it just took.
                 update_set["application_name"] = sa.func.coalesce(
                     SystemSchema.queues.c.application_name, values["application_name"]
                 )
