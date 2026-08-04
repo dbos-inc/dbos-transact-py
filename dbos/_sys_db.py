@@ -6103,7 +6103,12 @@ class SystemDatabase(ABC):
             c.execute(stmt)
             return not existed
 
-    def get_latest_application_version(self) -> VersionInfo:
+    def get_latest_application_version(
+        self, application_name: Optional[str] = None
+    ) -> VersionInfo:
+        """Latest version registered by an application. Defaults to this handle's, so
+        a caller acting for another one — firing its schedule — must name it."""
+        owner = application_name if application_name is not None else self.app_name
         with self.engine.begin() as c:
             row = c.execute(
                 sa.select(
@@ -6116,7 +6121,7 @@ class SystemDatabase(ABC):
                 .where(
                     self._name_filter(
                         SystemSchema.application_versions.c.application_name,
-                        self.app_name,
+                        owner,
                     )
                 )
                 .order_by(SystemSchema.application_versions.c.version_timestamp.desc())

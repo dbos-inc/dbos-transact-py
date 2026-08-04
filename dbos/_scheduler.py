@@ -35,6 +35,7 @@ class _ScheduleThread:
         tz_name = schedule.get("cron_timezone")
         self.tzinfo = ZoneInfo(tz_name) if tz_name else timezone.utc
         self.queue_name: Optional[str] = schedule.get("queue_name")
+        self.application_name: Optional[str] = schedule.get("application_name")
         # Definition snapshot; the loop restarts the thread when it changes.
         self.signature: tuple[Any, ...] = self.compute_signature(schedule)
         self._stop_event = threading.Event()
@@ -89,6 +90,7 @@ class _ScheduleThread:
                         self.context,
                         self.class_name,
                         self.queue_name,
+                        self.application_name,
                     )
                 dbos._sys_db.update_last_fired_at(
                     self.schedule_name, next_exec_time.isoformat()
@@ -118,10 +120,16 @@ def _enqueue_scheduled_workflow(
     context: Any = None,
     class_name: Optional[str] = None,
     queue_name: Optional[str] = None,
+    application_name: Optional[str] = None,
 ) -> None:
     """Enqueue a single scheduled workflow execution via init_workflow."""
-    # Scheduled workflows are always enqueued to the latest application version
-    latest_application_version = sys_db.get_latest_application_version()["version_name"]
+    # The schedule's owner routes its runs, whoever fires them; an unclaimed
+    # schedule falls back to the firing handle, which may itself have no identity.
+    owner = application_name if application_name is not None else sys_db.app_name
+    # Scheduled workflows are always enqueued to their owner's latest application version
+    latest_application_version = sys_db.get_latest_application_version(
+        application_name=owner
+    )["version_name"]
     inputs: WorkflowInputs = {"args": (scheduled_at, context), "kwargs": {}}
     status: WorkflowStatusInternal = {
         "workflow_uuid": workflow_id,
@@ -157,8 +165,8 @@ def _enqueue_scheduled_workflow(
         "schedule_name": schedule_name,
         "debounce_deadline_epoch_ms": None,
         "is_debounced": False,
-        # Always owned: the internal queue's shared name cannot route an unclaimed row.
-        "application_name": sys_db.app_name,
+        # Owned where possible: the internal queue's shared name cannot route an unclaimed row.
+        "application_name": owner,
     }
     sys_db.init_workflow(
         status,
@@ -206,6 +214,7 @@ def backfill_schedule(
                 context,
                 class_name,
                 queue_name,
+                schedule.get("application_name"),
             )
         workflow_ids.append(workflow_id)
     return workflow_ids
@@ -230,6 +239,7 @@ def trigger_schedule(sys_db: "SystemDatabase", schedule_name: str) -> str:
         context,
         class_name,
         queue_name,
+        schedule.get("application_name"),
     )
     return workflow_id
 
