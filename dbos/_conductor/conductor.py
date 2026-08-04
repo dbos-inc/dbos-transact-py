@@ -640,6 +640,7 @@ class ConductorWebsocket(threading.Thread):
                                     sys_metrics = self.dbos._sys_db.get_metrics(
                                         get_metrics_message.start_time,
                                         get_metrics_message.end_time,
+                                        get_metrics_message.application_name,
                                     )
                                     metrics_data = [
                                         p.MetricData(

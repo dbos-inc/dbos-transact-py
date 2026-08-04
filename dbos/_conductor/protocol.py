@@ -498,6 +498,9 @@ class GetMetricsRequest(BaseMessage):
     start_time: str  # ISO 8601
     end_time: str  # ISO 8601
     metric_class: str
+    # Defaulted so a Conductor predating the field still deserializes; unset counts
+    # every co-tenant application's workflows and steps.
+    application_name: Optional[List[str]] = None
 
 
 @dataclass
