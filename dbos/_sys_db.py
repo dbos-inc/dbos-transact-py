@@ -5912,20 +5912,23 @@ class SystemDatabase(ABC):
         owner = application_name if application_name is not None else self.app_name
         av = SystemSchema.application_versions
         with self.engine.begin() as c:
-            resolved = self._resolve_row_owner(
-                c, av, av.c.version_name, version_name, owner, "Application version"
-            )
             c.execute(
                 self.dialect.insert(av).values(
                     version_id=generate_uuid(),
                     version_name=version_name,
-                    application_name=resolved,
+                    application_name=owner,
                 )
-                # Claims a pre-upgrade row without recreating or retiming it.
+                # Claims a pre-upgrade row without recreating or retiming it. Guarded so
+                # a registration that lands first cannot be overwritten by a later one.
                 .on_conflict_do_update(
                     index_elements=["version_name"],
-                    set_={"application_name": resolved},
+                    set_={"application_name": owner},
+                    where=av.c.application_name.is_(None),
                 )
+            )
+            # Read back, since the guard above is silent about why it declined to claim.
+            self._resolve_row_owner(
+                c, av, av.c.version_name, version_name, owner, "Application version"
             )
 
     def update_application_version_timestamp(
