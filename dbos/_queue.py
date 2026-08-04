@@ -171,6 +171,7 @@ class Queue:
         self._priority_enabled = latest._priority_enabled
         self._partition_queue = latest._partition_queue
         self._polling_interval_sec = latest._polling_interval_sec
+        self.application_name = latest.application_name
 
     async def _configure_thread_pool(self) -> None:
         """Route ``asyncio.to_thread`` through DBOS's executor for DBOS-bound

@@ -130,6 +130,14 @@ def test_runtime_stamps_its_own_application(dbos: DBOS) -> None:
         assert application_name_of(dbos, workflow_id) == APP_NAME, workflow_id
 
 
+def test_destroy_clears_the_application_identity(dbos: DBOS) -> None:
+    """Identity is set at launch, so a relaunch under another name must not
+    inherit this one from the process."""
+    assert GlobalParams.app_name == APP_NAME
+    DBOS.destroy()
+    assert GlobalParams.app_name is None
+
+
 def test_explicit_application_name_wins(dbos: DBOS, client: DBOSClient) -> None:
     """Naming a target is the only way to enqueue across applications, from either
     the runtime or a client."""
@@ -434,7 +442,9 @@ def test_bulk_operations_spare_another_application(dbos: DBOS) -> None:
     assert not workflow_exists(dbos, handle.workflow_id)
 
 
-def test_unclaimed_rows_belong_to_every_application(dbos: DBOS) -> None:
+def test_unclaimed_rows_belong_to_every_application(
+    dbos: DBOS, client: DBOSClient
+) -> None:
     """One rule everywhere: naming an application lists its rows plus unclaimed
     ones. Re-registering an unclaimed row claims it through the ordinary upsert."""
 
@@ -496,6 +506,17 @@ def test_unclaimed_rows_belong_to_every_application(dbos: DBOS) -> None:
     assert {q.name for q in theirs} == {"theirs-queue", "unclaimed-queue"}
     # The listing is attributable: a Queue carries its owner.
     assert {q.application_name for q in theirs} == {OTHER_APP, None}
+    # The client runs the same query, so it takes the same filter.
+    assert {q.name for q in client.list_queues(application_name=OTHER_APP)} == {
+        "theirs-queue",
+        "unclaimed-queue",
+    }
+
+    # A read-through handle picks up ownership along with the rest of the row.
+    handle = Queue("theirs-queue", database_backed_queue=True)
+    assert handle.application_name is None
+    assert handle.concurrency is None
+    assert handle.application_name == OTHER_APP
 
     # Name-addressed lookups stay global: a globally unique name is an identity.
     assert dbos._sys_db.get_queue("theirs-queue") is not None

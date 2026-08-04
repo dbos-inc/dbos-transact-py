@@ -456,16 +456,28 @@ class DBOSClient:
         """Async version of :meth:`delete_queue`."""
         await asyncio.to_thread(self.delete_queue, name)
 
-    def list_queues(self) -> List[Queue]:
-        """List all database-backed queues registered in the system database."""
+    def list_queues(
+        self, *, application_name: Optional[Union[str, List[str]]] = None
+    ) -> List[Queue]:
+        """List all database-backed queues registered in the system database.
+
+        :param application_name: Restrict to queues owned by these applications.
+            Unset lists every application's, as on :meth:`list_workflows`.
+        """
         _warn_sync_db_call_in_async_context(
             "DBOSClient.list_queues", "DBOSClient.list_queues_async"
         )
-        return self._sys_db.list_queues(client_system_database=self._sys_db)
+        return self._sys_db.list_queues(
+            application_name=application_name, client_system_database=self._sys_db
+        )
 
-    async def list_queues_async(self) -> List[Queue]:
+    async def list_queues_async(
+        self, *, application_name: Optional[Union[str, List[str]]] = None
+    ) -> List[Queue]:
         """Async version of :meth:`list_queues`."""
-        return await asyncio.to_thread(self.list_queues)
+        return await asyncio.to_thread(
+            lambda: self.list_queues(application_name=application_name)
+        )
 
     def retrieve_workflow(self, workflow_id: str) -> "WorkflowHandle[R]":
         status = get_workflow(self._sys_db, workflow_id)
