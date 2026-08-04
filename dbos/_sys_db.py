@@ -5895,38 +5895,74 @@ class SystemDatabase(ABC):
         """Register this version, claiming the row if nobody owns it yet, so a pinned
         application_version does not stay unclaimed for the life of the deployment."""
         owner = application_name if application_name is not None else self.app_name
+        av = SystemSchema.application_versions
         with self.engine.begin() as c:
-            self._check_row_owner(
-                c,
-                SystemSchema.application_versions,
-                SystemSchema.application_versions.c.version_name,
-                version_name,
-                owner,
-                "Application version",
+            if owner is not None:
+                mine = c.execute(
+                    sa.select(av.c.version_id).where(
+                        av.c.version_name == version_name,
+                        av.c.application_name == owner,
+                    )
+                ).fetchone()
+                if mine is None:
+                    # Claim a pre-upgrade row so a pinned version does not stay
+                    # unclaimed; skipped if this application already has its own.
+                    c.execute(
+                        sa.update(av)
+                        .where(
+                            av.c.version_name == version_name,
+                            av.c.application_name.is_(None),
+                        )
+                        .values(application_name=owner)
+                    )
+            stmt = self.dialect.insert(av).values(
+                version_id=generate_uuid(),
+                version_name=version_name,
+                application_name=owner,
             )
-            c.execute(
-                self.dialect.insert(SystemSchema.application_versions).values(
-                    version_id=generate_uuid(),
-                    version_name=version_name,
-                    application_name=owner,
-                )
-                # Sets only the owner, so redeploying a version is still not a promotion.
-                .on_conflict_do_update(
+            # The conflict target must name the partial index matching this owner.
+            if owner is None:
+                stmt = stmt.on_conflict_do_nothing(
                     index_elements=["version_name"],
-                    set_={"application_name": owner},
-                    where=SystemSchema.application_versions.c.application_name.is_(
-                        None
-                    ),
+                    index_where=av.c.application_name.is_(None),
                 )
-            )
+            else:
+                stmt = stmt.on_conflict_do_nothing(
+                    index_elements=["application_name", "version_name"],
+                    index_where=av.c.application_name.isnot(None),
+                )
+            c.execute(stmt)
 
     def update_application_version_timestamp(
-        self, version_name: str, new_timestamp: int
+        self,
+        version_name: str,
+        new_timestamp: int,
+        application_name: Optional[str] = None,
     ) -> None:
+        """Promote a version to latest. Raises when the caller's scope spans more
+        than one application, rather than retiming someone else's deploy."""
+        owner = application_name if application_name is not None else self.app_name
+        av = SystemSchema.application_versions
+        scope = self._name_filter(av.c.application_name, owner)
         with self.engine.begin() as c:
+            owners = [
+                r[0]
+                for r in c.execute(
+                    sa.select(av.c.application_name)
+                    .where(av.c.version_name == version_name)
+                    .where(scope)
+                )
+            ]
+            if len(owners) > 1:
+                raise DBOSException(
+                    f"Application version '{version_name}' is registered by more than "
+                    f"one application ({sorted(str(o) for o in owners)}). Pass "
+                    f"application_name to say which one to promote."
+                )
             c.execute(
-                sa.update(SystemSchema.application_versions)
-                .where(SystemSchema.application_versions.c.version_name == version_name)
+                sa.update(av)
+                .where(av.c.version_name == version_name)
+                .where(scope)
                 .values(version_timestamp=new_timestamp)
             )
 

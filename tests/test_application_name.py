@@ -548,9 +548,9 @@ def test_latest_version_is_scoped(dbos: DBOS) -> None:
     )
 
 
-def test_create_application_version_claims_only_unclaimed_rows(dbos: DBOS) -> None:
-    """Claiming keeps a pinned application_version — whose string never changes,
-    so no fresh owned row is ever minted — from staying unclaimed forever."""
+def test_versions_are_per_application(dbos: DBOS, client: DBOSClient) -> None:
+    """A version is content, not an address, so two applications legitimately
+    compute the same one and each gets its own row."""
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.insert(SystemSchema.application_versions).values(
@@ -594,13 +594,37 @@ def test_create_application_version_claims_only_unclaimed_rows(dbos: DBOS) -> No
     # Already owned, so re-registering is a no-op.
     assert rows["2.0.0"] == (APP_NAME, "owned-version-id", 7)
 
+    # The same version name under another application is a second row, not a
+    # conflict — this is what lets both applications launch.
+    dbos._sys_db.create_application_version("1.0.0", application_name=OTHER_APP)
+    with dbos._sys_db.engine.begin() as c:
+        owners = {
+            r[0]
+            for r in c.execute(
+                sa.select(SystemSchema.application_versions.c.application_name).where(
+                    SystemSchema.application_versions.c.version_name == "1.0.0"
+                )
+            )
+        }
+    assert owners == {APP_NAME, OTHER_APP}
+
+    # This application promotes its own row unambiguously.
+    dbos._sys_db.update_application_version_timestamp("1.0.0", FUTURE_MS)
+    assert dbos._sys_db.get_latest_application_version()["version_name"] == "1.0.0"
+
+    # A nameless client spans both rows, so promoting raises rather than
+    # retiming someone else's deploy. Naming one resolves it.
+    with pytest.raises(DBOSException, match="registered by more than one application"):
+        client.set_latest_application_version("1.0.0")
+    client.set_latest_application_version("1.0.0", application_name=OTHER_APP)
+
 
 # ── Pre-upgrade rows and conflicts ────────────────────────────────────────────
 
 
 def test_conflicting_names_across_applications_raise(dbos: DBOS) -> None:
-    """Names stay globally unique, so a collision is a conflict rather than a
-    silent overwrite of another application's configuration."""
+    """Queue and schedule names stay globally unique — they are addresses — so a
+    collision is a conflict rather than a silent overwrite."""
 
     @DBOS.workflow()
     def scheduled(scheduled_at: datetime, ctx: Any) -> None:
@@ -627,15 +651,6 @@ def test_conflicting_names_across_applications_raise(dbos: DBOS) -> None:
                 application_name=OTHER_APP,
             )
         )
-        c.execute(
-            sa.insert(SystemSchema.application_versions).values(
-                version_id="conflict-version-id",
-                version_name="conflict-version",
-                version_timestamp=1,
-                created_at=1,
-                application_name=OTHER_APP,
-            )
-        )
     with pytest.raises(DBOSException, match="already registered by application"):
         DBOS.register_queue("conflict-queue")
     with pytest.raises(DBOSException, match="already registered by application"):
@@ -644,8 +659,6 @@ def test_conflicting_names_across_applications_raise(dbos: DBOS) -> None:
             workflow_fn=scheduled,
             schedule=daily_cron_far_from_now(),
         )
-    with pytest.raises(DBOSException, match="already registered by application"):
-        dbos._sys_db.create_application_version("conflict-version")
 
 
 def test_cli_filters_by_application(dbos: DBOS, config: Any) -> None:

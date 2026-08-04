@@ -3190,11 +3190,20 @@ class DBOS:
         return dbos._sys_db.get_latest_application_version()
 
     @classmethod
-    def set_latest_application_version(cls, version_name: str) -> None:
-        """Set a version as the latest by updating its timestamp to now."""
+    def set_latest_application_version(
+        cls, version_name: str, *, application_name: Optional[str] = None
+    ) -> None:
+        """Set a version as the latest by updating its timestamp to now.
+
+        :param application_name: Which application's version to promote.
+            Defaults to this caller's; required when the version name is
+            registered by more than one application.
+        """
         dbos = _get_dbos_instance()
         new_timestamp = int(time.time() * 1000)
-        dbos._sys_db.update_application_version_timestamp(version_name, new_timestamp)
+        dbos._sys_db.update_application_version_timestamp(
+            version_name, new_timestamp, application_name=application_name
+        )
 
     @classmethod
     async def list_application_versions_async(cls) -> List[VersionInfo]:
@@ -3209,10 +3218,16 @@ class DBOS:
         return await asyncio.to_thread(cls.get_latest_application_version)
 
     @classmethod
-    async def set_latest_application_version_async(cls, version_name: str) -> None:
+    async def set_latest_application_version_async(
+        cls, version_name: str, *, application_name: Optional[str] = None
+    ) -> None:
         """Async version of :meth:`set_latest_application_version`."""
         await cls._configure_asyncio_thread_pool()
-        await asyncio.to_thread(cls.set_latest_application_version, version_name)
+        await asyncio.to_thread(
+            lambda: cls.set_latest_application_version(
+                version_name, application_name=application_name
+            )
+        )
 
     @classproperty
     def application_version(cls) -> str:

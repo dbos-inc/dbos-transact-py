@@ -214,7 +214,7 @@ _APPLICATION_NAME_TABLES = (
 
 def test_application_name_schema(dbos: DBOS, skip_with_sqlite: None) -> None:
     """application_name is nullable everywhere it appears — NULL is what SDKs
-    predating it write — and it changes no existing unique, which stay global."""
+    predating it write — and only the version unique changes shape."""
     with dbos._sys_db.engine.connect() as connection:
         for table in _APPLICATION_NAME_TABLES:
             row = connection.execute(
@@ -227,11 +227,15 @@ def test_application_name_schema(dbos: DBOS, skip_with_sqlite: None) -> None:
             ).fetchone()
             assert row == ("text", "YES"), f"{table}.application_name"
 
+        # Queue and schedule names are addresses, so they stay globally unique. A
+        # version is content, so its identity is (application_name, version_name),
+        # split across two partial indexes because a composite does not dedupe NULLs.
         uniques = {
             "uq_workflow_status_dedup_id",
             "queues_name_key",
             "workflow_schedules_schedule_name_key",
-            "application_versions_version_name_key",
+            "uq_application_versions_owned_name",
+            "uq_application_versions_unclaimed_name",
         }
         found = {
             row[0]
