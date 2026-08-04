@@ -795,8 +795,7 @@ def test_debounce_collision_across_applications(dbos: DBOS, config: Any) -> None
         assert status["status"] == "DELAYED"
         assert status["application_name"] == "app-a"
 
-        # Pinned directly, so a regression fails here rather than by spinning until
-        # the suite timeout: a foreign holder never leaves DELAYED on our account.
+        # Pinned directly, so a regression fails here rather than by spinning until the timeout.
         assert (
             _classify_bounce(
                 {

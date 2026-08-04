@@ -227,9 +227,7 @@ def test_application_name_schema(dbos: DBOS, skip_with_sqlite: None) -> None:
             ).fetchone()
             assert row == ("text", "YES"), f"{table}.application_name"
 
-        # Queue and schedule names are addresses, so they stay globally unique. A
-        # version is content, so its identity is (application_name, version_name),
-        # split across two partial indexes because a composite does not dedupe NULLs.
+        # Names stay global addresses; a version's identity is (application_name, version_name).
         uniques = {
             "uq_workflow_status_dedup_id",
             "queues_name_key",

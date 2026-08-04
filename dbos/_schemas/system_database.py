@@ -292,8 +292,7 @@ class SystemSchema:
         "application_versions",
         metadata_obj,
         Column("version_id", Text, primary_key=True),
-        # Identity is (application_name, version_name): a version is content, not an
-        # address, so two applications legitimately compute the same one.
+        # Identity is (application_name, version_name): a version is content, not an address.
         Column("version_name", Text, nullable=False),
         Column(
             "version_timestamp",

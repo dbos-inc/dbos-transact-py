@@ -1153,8 +1153,7 @@ class SystemDatabase(ABC):
                 .where(wsc.deduplication_id == deduplication_id)
                 .where(wsc.status == WorkflowStatusString.DELAYED.value)
                 .where(wsc.is_debounced == True)
-                # Never extend another application's workflow: its poller would run
-                # its own code against our inputs. Falls through to the holder below.
+                # Never extend another application's workflow; falls through to the holder below.
                 .where(self._name_filter(wsc.application_name, self.app_name))
                 .values(
                     delay_until_epoch_ms=capped_delay,
@@ -1172,8 +1171,7 @@ class SystemDatabase(ABC):
                     "holder_workflow_name": None,
                     "holder_application_name": None,
                 }
-            # No match: the key is unheld, or held by a non-debounced, name-colliding,
-            # or foreign-application workflow. Unscoped, so the holder is reportable.
+            # Unscoped, so a holder that blocked the update above is reportable.
             holder = c.execute(
                 sa.select(
                     wsc.workflow_uuid, wsc.is_debounced, wsc.name, wsc.application_name
@@ -5920,8 +5918,7 @@ class SystemDatabase(ABC):
                     )
                 ).fetchone()
                 if mine is None:
-                    # Claim a pre-upgrade row so a pinned version does not stay
-                    # unclaimed; skipped if this application already has its own.
+                    # Claim a pre-upgrade row, unless this application already has its own.
                     c.execute(
                         sa.update(av)
                         .where(
@@ -6106,8 +6103,7 @@ class SystemDatabase(ABC):
                 ).fetchone()
                 is not None
             )
-            # A name collision is a conflict in every mode: the name is the queue's
-            # address, and declining to update it does not make it ours to enqueue to.
+            # A name collision is a conflict in every mode: the name is the queue's address.
             values["application_name"] = self._resolve_row_owner(
                 c,
                 SystemSchema.queues,

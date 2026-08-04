@@ -948,9 +948,7 @@ ALTER TABLE "{schema}"."workflow_schedules" ADD COLUMN IF NOT EXISTS "applicatio
 ALTER TABLE "{schema}"."application_versions" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
 ALTER TABLE "{schema}"."operation_outputs" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
 """
-    # A version name is content, not an address: two applications legitimately
-    # compute the same one, so identity is (application_name, version_name).
-    # Two partial indexes because a composite unique does not dedupe NULLs.
+    # Identity is (application_name, version_name); two indexes since a composite unique keeps no NULLs apart.
     if is_cockroach:
         migration += f"""
 DROP INDEX IF EXISTS "{schema}"."application_versions_version_name_key" CASCADE;
@@ -1402,9 +1400,7 @@ sqlite_migration_fortyseven = (
     'DROP INDEX IF EXISTS "idx_workflow_status_partition_dequeue"'
 )
 
-# NULL means unclaimed: any application may read and claim the row.
-# application_versions is rebuilt because SQLite declared its UNIQUE inline, which
-# leaves an undroppable autoindex; the table is bounded by deploy count.
+# Rebuilt because SQLite declared the UNIQUE inline, leaving an undroppable autoindex.
 sqlite_migration_hundred = f"""
 ALTER TABLE workflow_status ADD COLUMN "application_name" TEXT DEFAULT NULL;
 ALTER TABLE queues ADD COLUMN "application_name" TEXT DEFAULT NULL;

@@ -132,9 +132,6 @@ def _classify_bounce(
     if result["holder_workflow_name"] != workflow_name:
         return "raise"
     # A foreign holder never leaves DELAYED on our account, so retrying would spin.
-    # Mirrors the scope of the bounce itself: unclaimed rows and nameless callers match.
-    # A foreign holder never leaves DELAYED on our account, so retrying would spin.
-    # Mirrors the scope of the bounce itself: unclaimed rows and nameless callers match.
     holder_app = result["holder_application_name"]
     if application_name is not None and holder_app is not None:
         if holder_app != application_name:

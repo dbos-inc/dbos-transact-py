@@ -109,14 +109,19 @@ def insert_foreign_step(
 # ── Stamping ──────────────────────────────────────────────────────────────────
 
 
-def test_runtime_stamps_its_own_application(dbos: DBOS) -> None:
-    """Ownership never depends on the target queue: one code path stamps
-    everything this application starts or enqueues."""
+def test_runtime_stamps_everything_it_writes(dbos: DBOS) -> None:
+    """Workflows, whatever queue they target, and the metadata rows that route
+    them. Ownership never consults the queue, which for the internal one is
+    shared and so cannot route anything."""
     served = Queue("served-queue")
 
     @DBOS.workflow()
     def wf() -> int:
         return 5
+
+    @DBOS.workflow()
+    def scheduled(scheduled_at: datetime, ctx: Any) -> None:
+        pass
 
     workflow_ids = [DBOS.start_workflow(wf).workflow_id, served.enqueue(wf).workflow_id]
     # An earlier design consulted the queue here, leaving the unknown one unclaimed.
@@ -126,8 +131,30 @@ def test_runtime_stamps_its_own_application(dbos: DBOS) -> None:
                 {"workflow_name": wf.__qualname__, "queue_name": queue_name}
             ).workflow_id
         )
+
+    DBOS.register_queue("registered-queue")
+    DBOS.create_schedule(
+        schedule_name="owned-schedule",
+        workflow_fn=scheduled,
+        schedule=daily_cron_far_from_now(),
+    )
+    # trigger_schedule enqueues through the same path the cron loop uses.
+    workflow_ids.append(DBOS.trigger_schedule("owned-schedule").workflow_id)
     for workflow_id in workflow_ids:
         assert application_name_of(dbos, workflow_id) == APP_NAME, workflow_id
+
+    with dbos._sys_db.engine.begin() as c:
+        queue_owner = c.execute(
+            sa.select(SystemSchema.queues.c.application_name).where(
+                SystemSchema.queues.c.name == "registered-queue"
+            )
+        ).scalar()
+    schedule = dbos._sys_db.get_schedule("owned-schedule")
+    assert queue_owner == APP_NAME
+    assert schedule is not None and schedule["application_name"] == APP_NAME
+    assert [
+        v["application_name"] for v in dbos._sys_db.list_application_versions()
+    ] == [APP_NAME]
 
 
 def test_destroy_clears_the_application_identity(dbos: DBOS) -> None:
@@ -182,37 +209,6 @@ def test_client_without_identity_writes_unclaimed_rows(
     )
     assert polled.get_result() == 7
     assert application_name_of(dbos, polled.workflow_id) == APP_NAME
-
-
-def test_metadata_rows_are_owned(dbos: DBOS) -> None:
-    """Queue, schedule, and version rows, plus the workflows a schedule fires —
-    those land on the internal queue, whose shared name cannot route them."""
-
-    @DBOS.workflow()
-    def scheduled(scheduled_at: datetime, ctx: Any) -> None:
-        pass
-
-    DBOS.register_queue("registered-queue")
-    DBOS.create_schedule(
-        schedule_name="owned-schedule",
-        workflow_fn=scheduled,
-        schedule=daily_cron_far_from_now(),
-    )
-    with dbos._sys_db.engine.begin() as c:
-        queue_owner = c.execute(
-            sa.select(SystemSchema.queues.c.application_name).where(
-                SystemSchema.queues.c.name == "registered-queue"
-            )
-        ).scalar()
-    schedule = dbos._sys_db.get_schedule("owned-schedule")
-    versions = dbos._sys_db.list_application_versions()
-    assert queue_owner == APP_NAME
-    assert schedule is not None and schedule["application_name"] == APP_NAME
-    assert [v["application_name"] for v in versions] == [APP_NAME]
-
-    # trigger_schedule enqueues through the same path the cron loop uses.
-    fired = DBOS.trigger_schedule("owned-schedule")
-    assert application_name_of(dbos, fired.workflow_id) == APP_NAME
 
 
 def test_steps_carry_owner_and_forks_inherit_it(dbos: DBOS) -> None:
@@ -340,8 +336,7 @@ def test_observability_filters_include_unclaimed_rows(dbos: DBOS) -> None:
         "their_step"
     }
 
-    # The Conductor's metrics fan-out is per-application, so its request has to carry
-    # the predicate; one sent by a Conductor predating the field is still unscoped.
+    # The Conductor's metrics fan-out is per-application, so its request must carry the predicate.
     fields = {
         "type": "get_metrics",
         "request_id": "r",
@@ -358,9 +353,10 @@ def test_observability_filters_include_unclaimed_rows(dbos: DBOS) -> None:
 # ── Isolation between applications ────────────────────────────────────────────
 
 
-def test_dequeue_skips_another_applications_workflow(dbos: DBOS) -> None:
-    """The internal queue is the load-bearing case: its name is shared, so only
-    ownership can keep one application off another's workflows."""
+def test_claiming_skips_another_applications_workflows(dbos: DBOS) -> None:
+    """Dequeue and recovery, the two ways a row gets picked up. Both collide
+    across applications by default — the internal queue's name is shared and
+    executor_id is the literal "local" — so only ownership separates them."""
     queue = Queue("shared-name-queue")
 
     @DBOS.workflow()
@@ -384,10 +380,7 @@ def test_dequeue_skips_another_applications_workflow(dbos: DBOS) -> None:
     assert status_of(dbos, "foreign-named") == "ENQUEUED"
     assert status_of(dbos, "foreign-internal") == "ENQUEUED"
 
-
-def test_recovery_skips_another_applications_workflow(dbos: DBOS) -> None:
-    """executor_id defaults to the literal "local", so it collides across
-    applications; ownership is what disambiguates recovery."""
+    # Recovery matches on executor and version, which another application shares.
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.insert(SystemSchema.workflow_status).values(
@@ -551,9 +544,10 @@ def test_unclaimed_rows_belong_to_every_application(
 # ── Application versions ──────────────────────────────────────────────────────
 
 
-def test_latest_version_is_scoped(dbos: DBOS) -> None:
-    """Another application's deploy must not demote this one, but an unclaimed
-    newer row is an older-SDK peer's deploy and really does."""
+def test_versions_are_per_application(dbos: DBOS, client: DBOSClient) -> None:
+    """A version is content, not an address, so two applications legitimately
+    compute the same one and each gets its own row. Another application's deploy
+    must not demote this one, but an unclaimed newer row is an older SDK's and does."""
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.insert(SystemSchema.application_versions).values(
@@ -584,10 +578,6 @@ def test_latest_version_is_scoped(dbos: DBOS) -> None:
         == "unclaimed-version"
     )
 
-
-def test_versions_are_per_application(dbos: DBOS, client: DBOSClient) -> None:
-    """A version is content, not an address, so two applications legitimately
-    compute the same one and each gets its own row."""
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.insert(SystemSchema.application_versions).values(
@@ -631,8 +621,7 @@ def test_versions_are_per_application(dbos: DBOS, client: DBOSClient) -> None:
     # Already owned, so re-registering is a no-op.
     assert rows["2.0.0"] == (APP_NAME, "owned-version-id", 7)
 
-    # The same version name under another application is a second row, not a
-    # conflict — this is what lets both applications launch.
+    # The same name under another application is a second row, which is what lets both launch.
     dbos._sys_db.create_application_version("1.0.0", application_name=OTHER_APP)
     with dbos._sys_db.engine.begin() as c:
         owners = {
@@ -645,12 +634,11 @@ def test_versions_are_per_application(dbos: DBOS, client: DBOSClient) -> None:
         }
     assert owners == {APP_NAME, OTHER_APP}
 
-    # This application promotes its own row unambiguously.
-    dbos._sys_db.update_application_version_timestamp("1.0.0", FUTURE_MS)
+    # This application promotes its own row unambiguously, past the unclaimed one.
+    dbos._sys_db.update_application_version_timestamp("1.0.0", FUTURE_MS + 1)
     assert dbos._sys_db.get_latest_application_version()["version_name"] == "1.0.0"
 
-    # A nameless client spans both rows, so promoting raises rather than
-    # retiming someone else's deploy. Naming one resolves it.
+    # A nameless client spans both rows, so promoting raises; naming one resolves it.
     with pytest.raises(DBOSException, match="registered by more than one application"):
         client.set_latest_application_version("1.0.0")
     client.set_latest_application_version("1.0.0", application_name=OTHER_APP)
@@ -724,8 +712,7 @@ def test_conflicting_names_across_applications_raise(
             )
         )
 
-    # Declining to update is still a collision: silently leaving the row alone would
-    # strand every workflow enqueued here, since only its owner polls it.
+    # Declining to update is still a collision: only the owner ever polls the queue.
     with pytest.raises(DBOSException, match="already registered by application"):
         upsert(dbos._sys_db, 3, update_existing=False)
     assert conflict_queue() == (OTHER_APP, None)
@@ -827,17 +814,14 @@ def test_two_applications_share_one_system_database(dbos: DBOS, config: Any) -> 
                 polling_interval_sec=1.0,
                 update_existing=True,
             )
-            # A client that names its application owns what it writes, with no
-            # per-call option. Everything lands on the internal queue, the one
-            # name every application shares, so only ownership can route it.
+            # All on the internal queue, the one name every application shares, so only ownership routes it.
             handle: WorkflowHandle[int] = clients[name].enqueue(
                 {"workflow_name": "wf", "queue_name": INTERNAL_QUEUE_NAME}
             )
             enqueued[name] = handle.workflow_id
             assert application_name_of(dbos, handle.workflow_id) == name
 
-        # Each application dequeues its own work and only its own — the positive
-        # half, which rows written by a single application cannot demonstrate.
+        # Each application dequeues its own work and only its own.
         internal = Queue(INTERNAL_QUEUE_NAME, database_backed_queue=True)
         for name in names:
             dequeued = peers[name].start_queued_workflows(
@@ -845,8 +829,7 @@ def test_two_applications_share_one_system_database(dbos: DBOS, config: Any) -> 
             )
             assert dequeued == [enqueued[name]], name
 
-        # Registration made each queue owned, so neither application enumerates
-        # the other's.
+        # Registration made each queue owned, so neither application enumerates the other's.
         for name in names:
             visible = {q.name for q in peers[name].list_queues(application_name=name)}
             assert f"{name}-queue" in visible
