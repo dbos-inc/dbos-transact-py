@@ -675,3 +675,76 @@ def test_cli_filters_by_application(dbos: DBOS, config: Any) -> None:
         ["workflow", "list", "-s", config["system_database_url"], "-a", OTHER_APP],
     )
     assert "cli-foreign" in listed.output
+
+
+# ── Two applications, one system database ─────────────────────────────────────
+
+
+def test_two_applications_share_one_system_database(dbos: DBOS, config: Any) -> None:
+    """The only test with genuine second and third applications. DBOS is a process
+    singleton, so each peer is its own SystemDatabase against the same database."""
+    from dbos._serialization import DefaultSerializer
+    from dbos._sys_db import SystemDatabase
+
+    url = config["system_database_url"]
+    names = ("app-a", "app-b")
+    peers = {
+        name: SystemDatabase.create(
+            system_database_url=url,
+            engine_kwargs={},
+            engine=None,
+            schema=dbos._sys_db.schema,
+            serializer=DefaultSerializer(),
+            executor_id=f"exec-{name}",
+            use_listen_notify=False,
+            app_name=name,
+        )
+        for name in names
+    }
+    clients = {
+        name: DBOSClient(system_database_url=url, application_name=name)
+        for name in names
+    }
+    try:
+        enqueued = {}
+        for name in names:
+            peers[name].upsert_queue(
+                name=f"{name}-queue",
+                concurrency=None,
+                worker_concurrency=None,
+                rate_limit_max=None,
+                rate_limit_period_sec=None,
+                priority_enabled=False,
+                partition_queue=False,
+                polling_interval_sec=1.0,
+                update_existing=True,
+            )
+            # A client that names its application owns what it writes, with no
+            # per-call option. Everything lands on the internal queue, the one
+            # name every application shares, so only ownership can route it.
+            handle: WorkflowHandle[int] = clients[name].enqueue(
+                {"workflow_name": "wf", "queue_name": INTERNAL_QUEUE_NAME}
+            )
+            enqueued[name] = handle.workflow_id
+            assert application_name_of(dbos, handle.workflow_id) == name
+
+        # Each application dequeues its own work and only its own — the positive
+        # half, which rows written by a single application cannot demonstrate.
+        internal = Queue(INTERNAL_QUEUE_NAME, database_backed_queue=True)
+        for name in names:
+            dequeued = peers[name].start_queued_workflows(
+                internal, f"exec-{name}", f"version-{name}", None, 0
+            )
+            assert dequeued == [enqueued[name]], name
+
+        # Registration made each queue owned, so neither application enumerates
+        # the other's.
+        for name in names:
+            visible = {q.name for q in peers[name].list_queues(application_name=name)}
+            assert f"{name}-queue" in visible
+            assert not {f"{other}-queue" for other in names if other != name} & visible
+    finally:
+        for c in clients.values():
+            c.destroy()
+        for p in peers.values():
+            p.destroy()
