@@ -942,17 +942,38 @@ def get_dbos_migration_fortyseven(schema: str, is_cockroach: bool) -> str:
 
 
 def get_dbos_migration_hundred(schema: str) -> str:
-    # Catalog-only. NULL means unclaimed: any application may read and claim the row.
+    # NULL means unclaimed: any application may read and claim the row. One table per
+    # migration, so a table blocked by a reader does not hold the others' locks with it.
     return f"""
 ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
+"""
+
+
+def get_dbos_migration_hundredone(schema: str) -> str:
+    return f"""
 ALTER TABLE "{schema}"."queues" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
+"""
+
+
+def get_dbos_migration_hundredtwo(schema: str) -> str:
+    return f"""
 ALTER TABLE "{schema}"."workflow_schedules" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
+"""
+
+
+def get_dbos_migration_hundredthree(schema: str) -> str:
+    return f"""
 ALTER TABLE "{schema}"."application_versions" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
+"""
+
+
+def get_dbos_migration_hundredfour(schema: str) -> str:
+    return f"""
 ALTER TABLE "{schema}"."operation_outputs" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
 """
 
 
-def get_dbos_migration_hundredone(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_hundredfive(schema: str, is_cockroach: bool) -> str:
     # Callers omitting the trailing application_name enqueue an unclaimed workflow.
     migration = f"""
 DROP FUNCTION IF EXISTS "{schema}".enqueue_workflow(
@@ -1114,7 +1135,11 @@ def get_dbos_migrations(
     return [
         *_pad_to_shared_base(history),
         get_dbos_migration_hundred(schema),
-        get_dbos_migration_hundredone(schema, is_cockroach),
+        get_dbos_migration_hundredone(schema),
+        get_dbos_migration_hundredtwo(schema),
+        get_dbos_migration_hundredthree(schema),
+        get_dbos_migration_hundredfour(schema),
+        get_dbos_migration_hundredfive(schema, is_cockroach),
     ]
 
 
@@ -1383,13 +1408,25 @@ sqlite_migration_fortyseven = (
     'DROP INDEX IF EXISTS "idx_workflow_status_partition_dequeue"'
 )
 
-sqlite_migration_hundred = """
-ALTER TABLE workflow_status ADD COLUMN "application_name" TEXT DEFAULT NULL;
-ALTER TABLE queues ADD COLUMN "application_name" TEXT DEFAULT NULL;
-ALTER TABLE workflow_schedules ADD COLUMN "application_name" TEXT DEFAULT NULL;
-ALTER TABLE application_versions ADD COLUMN "application_name" TEXT DEFAULT NULL;
-ALTER TABLE operation_outputs ADD COLUMN "application_name" TEXT DEFAULT NULL;
-"""
+sqlite_migration_hundred = (
+    'ALTER TABLE workflow_status ADD COLUMN "application_name" TEXT DEFAULT NULL'
+)
+
+sqlite_migration_hundredone = (
+    'ALTER TABLE queues ADD COLUMN "application_name" TEXT DEFAULT NULL'
+)
+
+sqlite_migration_hundredtwo = (
+    'ALTER TABLE workflow_schedules ADD COLUMN "application_name" TEXT DEFAULT NULL'
+)
+
+sqlite_migration_hundredthree = (
+    'ALTER TABLE application_versions ADD COLUMN "application_name" TEXT DEFAULT NULL'
+)
+
+sqlite_migration_hundredfour = (
+    'ALTER TABLE operation_outputs ADD COLUMN "application_name" TEXT DEFAULT NULL'
+)
 
 _sqlite_history = [
     sqlite_migration_one,
@@ -1442,6 +1479,10 @@ _sqlite_history = [
 sqlite_migrations = [
     *_pad_to_shared_base(_sqlite_history),
     sqlite_migration_hundred,
-    # Postgres migration 101 rewrites a stored function; SQLite has none.
+    sqlite_migration_hundredone,
+    sqlite_migration_hundredtwo,
+    sqlite_migration_hundredthree,
+    sqlite_migration_hundredfour,
+    # Postgres migration 105 rewrites a stored function; SQLite has none.
     "",
 ]
