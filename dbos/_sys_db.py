@@ -778,7 +778,7 @@ class SystemDatabase(ABC):
         current: Optional[str] = existing[0]
         if owner is None or current == owner:
             return current
-        # A version name is computed or pinned, never chosen like a queue's, so say so.
+        # A version name is computed or pinned, so "pick another" is config advice, not a rename.
         take_a_new_name = (
             f"set a distinct application_version for '{owner}'"
             if kind == "Application version"
@@ -787,10 +787,9 @@ class SystemDatabase(ABC):
         raise DBOSException(
             f"{kind} '{name}' is already registered by application "
             f"'{current}' in this system database. {kind} names must be "
-            f"unique across applications sharing a system database. Either "
+            "unique across applications sharing a system database. Either "
             f"{take_a_new_name}, or, if '{current}' was renamed to '{owner}', "
-            f"re-own its rows first with "
-            f"dbos rename-application"
+            "re-own its rows first with dbos rename-application"
         )
 
     def _insert_workflow_status(
