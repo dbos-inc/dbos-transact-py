@@ -109,14 +109,17 @@ def _reject_conflicting_options(
 _BounceAction = Literal["return", "enqueue", "raise", "retry"]
 
 
-def _classify_bounce(result: DebounceResult, workflow_name: str) -> _BounceAction:
+def _classify_bounce(
+    result: DebounceResult, workflow_name: str, application_name: Optional[str]
+) -> _BounceAction:
     """Decide what a debounce caller should do after a bounce attempt.
 
     - "return": an existing debounced workflow was extended; return a handle to
       ``result["bounced_workflow_id"]``.
     - "enqueue": the key is unheld; enqueue a fresh debounced workflow.
-    - "raise": the key is held by a non-debounced workflow or by a different
-      workflow whose debounce key collides; surface the deduplication conflict.
+    - "raise": the key is held by a non-debounced workflow, by a different
+      workflow whose debounce key collides, or by another application; surface
+      the deduplication conflict.
     - "retry": a same-name debounced holder flipped out of DELAYED mid-bounce
       (a rare race); retry the bounce.
     """
@@ -128,6 +131,14 @@ def _classify_bounce(result: DebounceResult, workflow_name: str) -> _BounceActio
         return "raise"
     if result["holder_workflow_name"] != workflow_name:
         return "raise"
+    # A foreign holder never leaves DELAYED on our account, so retrying would spin.
+    # Mirrors the scope of the bounce itself: unclaimed rows and nameless callers match.
+    # A foreign holder never leaves DELAYED on our account, so retrying would spin.
+    # Mirrors the scope of the bounce itself: unclaimed rows and nameless callers match.
+    holder_app = result["holder_application_name"]
+    if application_name is not None and holder_app is not None:
+        if holder_app != application_name:
+            return "raise"
     return "retry"
 
 
@@ -300,7 +311,9 @@ class Debouncer(Generic[P, R]):
                     args,
                     kwargs,
                 )
-            action = _classify_bounce(result, self.options["workflow_name"])
+            action = _classify_bounce(
+                result, self.options["workflow_name"], dbos._sys_db.app_name
+            )
             if action == "return":
                 bounced_wfid = result["bounced_workflow_id"]
                 assert bounced_wfid is not None
@@ -406,7 +419,11 @@ class DebouncerClient:
                 inputs=inputs,
                 serialization=serialization,
             )
-            action = _classify_bounce(result, self.debouncer_options["workflow_name"])
+            action = _classify_bounce(
+                result,
+                self.debouncer_options["workflow_name"],
+                self.client._sys_db.app_name,
+            )
             if action == "return":
                 bounced_wfid = result["bounced_workflow_id"]
                 assert bounced_wfid is not None

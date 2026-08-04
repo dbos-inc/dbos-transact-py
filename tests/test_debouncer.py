@@ -15,6 +15,7 @@ from dbos import (
 )
 from dbos._client import EnqueueOptions
 from dbos._context import SetEnqueueOptions, SetWorkflowTimeout
+from dbos._debouncer import _classify_bounce
 from dbos._debug_trigger import DebugAction, DebugTriggers
 from dbos._error import DBOSException, DBOSQueueDeduplicatedError
 from dbos._queue import Queue
@@ -773,6 +774,62 @@ def test_debounce_key_collision_between_workflows(
     assert handle_a2.workflow_id == handle_a.workflow_id
 
     DBOS.cancel_workflow(handle_a.workflow_id)
+
+
+def test_debounce_collision_across_applications(dbos: DBOS, config: Any) -> None:
+    """A dedup key is a global address, so two applications contending for one is a
+    conflict. Extending the holder would run its owner's code against our inputs."""
+    queue_name = f"cross-app-queue-{uuid.uuid4()}"
+    DBOS.register_queue(queue_name)
+    url = config["system_database_url"]
+    client_a = DBOSClient(system_database_url=url, application_name="app-a")
+    client_b = DBOSClient(system_database_url=url, application_name="app-b")
+    try:
+        opts: Any = {"workflow_name": "shared_wf", "queue_name": queue_name}
+        # A huge period keeps app-a's workflow DELAYED, holding the key.
+        handle: WorkflowHandle[int] = DebouncerClient(client_a, opts).debounce(
+            "k", 1000000, 1
+        )
+        status = dbos._sys_db.get_workflow_status(handle.workflow_id)
+        assert status is not None
+        assert status["status"] == "DELAYED"
+        assert status["application_name"] == "app-a"
+
+        # Pinned directly, so a regression fails here rather than by spinning until
+        # the suite timeout: a foreign holder never leaves DELAYED on our account.
+        assert (
+            _classify_bounce(
+                {
+                    "bounced_workflow_id": None,
+                    "holder_workflow_id": handle.workflow_id,
+                    "holder_is_debounced": True,
+                    "holder_workflow_name": "shared_wf",
+                    "holder_application_name": "app-a",
+                },
+                "shared_wf",
+                "app-b",
+            )
+            == "raise"
+        )
+
+        # Same workflow name, same key, different application: a conflict, not a takeover.
+        with pytest.raises(DBOSQueueDeduplicatedError):
+            DebouncerClient(client_b, opts).debounce("k", 1, 2)
+
+        # The holder is untouched, and its owner still coalesces onto it.
+        status = dbos._sys_db.get_workflow_status(handle.workflow_id)
+        assert status is not None
+        assert status["status"] == "DELAYED"
+        assert status["application_name"] == "app-a"
+        again: WorkflowHandle[int] = DebouncerClient(client_a, opts).debounce(
+            "k", 1000000, 3
+        )
+        assert again.workflow_id == handle.workflow_id
+
+        DBOS.cancel_workflow(handle.workflow_id)
+    finally:
+        client_a.destroy()
+        client_b.destroy()
 
 
 def test_debounce_bounce_atomic_with_checkpoint(

@@ -281,6 +281,8 @@ class DebounceResult(TypedDict):
     holder_is_debounced: bool
     # The holder's workflow name; a mismatch with the caller's means a debounce-key collision between workflows.
     holder_workflow_name: Optional[str]
+    # The holder's owning application; a mismatch means the collision is across applications.
+    holder_application_name: Optional[str]
 
 
 class RecordedResult(TypedDict):
@@ -1151,6 +1153,9 @@ class SystemDatabase(ABC):
                 .where(wsc.deduplication_id == deduplication_id)
                 .where(wsc.status == WorkflowStatusString.DELAYED.value)
                 .where(wsc.is_debounced == True)
+                # Never extend another application's workflow: its poller would run
+                # its own code against our inputs. Falls through to the holder below.
+                .where(self._name_filter(wsc.application_name, self.app_name))
                 .values(
                     delay_until_epoch_ms=capped_delay,
                     inputs=inputs,
@@ -1165,10 +1170,14 @@ class SystemDatabase(ABC):
                     "holder_workflow_id": None,
                     "holder_is_debounced": False,
                     "holder_workflow_name": None,
+                    "holder_application_name": None,
                 }
-            # No match: the key is unheld, or held by a non-debounced or name-colliding workflow.
+            # No match: the key is unheld, or held by a non-debounced, name-colliding,
+            # or foreign-application workflow. Unscoped, so the holder is reportable.
             holder = c.execute(
-                sa.select(wsc.workflow_uuid, wsc.is_debounced, wsc.name)
+                sa.select(
+                    wsc.workflow_uuid, wsc.is_debounced, wsc.name, wsc.application_name
+                )
                 .where(wsc.queue_name == queue_name)
                 .where(wsc.deduplication_id == deduplication_id)
             ).fetchone()
@@ -1178,12 +1187,14 @@ class SystemDatabase(ABC):
                     "holder_workflow_id": None,
                     "holder_is_debounced": False,
                     "holder_workflow_name": None,
+                    "holder_application_name": None,
                 }
             return {
                 "bounced_workflow_id": None,
                 "holder_workflow_id": holder[0],
                 "holder_is_debounced": bool(holder[1]),
                 "holder_workflow_name": holder[2],
+                "holder_application_name": holder[3],
             }
 
         if conn is not None:
