@@ -6223,8 +6223,15 @@ class SystemDatabase(ABC):
         adopt_unclaimed_rows: bool,
     ) -> int:
         """Re-own a table's rows, batching by key so a long history does not move in one
-        transaction. Each pass shrinks its own predicate, so this terminates on its own
-        and a re-run resumes an interrupted rename."""
+        transaction. A re-run resumes an interrupted rename, since moved rows stop
+        matching.
+
+        Each batch is a half-open key range, advancing a watermark, so both the probe
+        and the update are index range scans. Selecting the batch with LIMIT instead
+        costs O(batches^2): the rows already moved no longer match, but the scan still
+        pages them in to skip them, and an IN list of keys plans as a whole-table hash
+        join. Both only look cheap while the table fits in cache.
+        """
         predicate = self._rename_source(
             table.c.application_name, old_name, adopt_unclaimed_rows
         )
@@ -6234,26 +6241,32 @@ class SystemDatabase(ABC):
                     sa.update(table).where(predicate).values(application_name=new_name)
                 ).rowcount
         total = 0
+        watermark: Optional[Any] = None
         while True:
+            scope = (
+                predicate
+                if watermark is None
+                else sa.and_(predicate, key_col > watermark)
+            )
             with self.engine.begin() as c:
-                # correlate(None): otherwise SQLAlchemy correlates the subquery to the UPDATE target and drops its FROM.
-                keys = (
+                # The batch_size-th matching key bounds this range; distinct, so a key's rows are never split across batches.
+                upper = c.execute(
                     sa.select(key_col)
-                    .select_from(table)
-                    .where(predicate)
+                    .where(scope)
                     .distinct()
-                    .limit(batch_size)
-                    .correlate(None)
-                )
-                # Re-check the predicate: a key may also address rows another application owns, which this rename must not take.
-                updated = c.execute(
+                    .order_by(key_col)
+                    .limit(1)
+                    .offset(batch_size - 1)
+                ).scalar()
+                total += c.execute(
                     sa.update(table)
-                    .where(key_col.in_(keys), predicate)
+                    .where(scope if upper is None else sa.and_(scope, key_col <= upper))
                     .values(application_name=new_name)
                 ).rowcount
-            if updated == 0:
+            # Fewer than a full batch remained, so that update took the rest.
+            if upper is None:
                 return total
-            total += updated
+            watermark = upper
 
     def rename_application(
         self,
