@@ -5907,30 +5907,26 @@ class SystemDatabase(ABC):
     ) -> None:
         """Register this version, claiming the row if nobody owns it yet, so a pinned
         application_version does not stay unclaimed for the life of the deployment.
-        Silent when another application already registered the name: launch must not
-        fail over a version string two applications happen to share."""
+        Names are global addresses, so a peer's is a collision rather than a share:
+        raising here is what keeps an application from launching without a version."""
         owner = application_name if application_name is not None else self.app_name
         av = SystemSchema.application_versions
         with self.engine.begin() as c:
+            resolved = self._resolve_row_owner(
+                c, av, av.c.version_name, version_name, owner, "Application version"
+            )
             c.execute(
-                self.dialect.insert(av)
-                .values(
+                self.dialect.insert(av).values(
                     version_id=generate_uuid(),
                     version_name=version_name,
-                    application_name=owner,
+                    application_name=resolved,
                 )
-                .on_conflict_do_nothing(index_elements=["version_name"])
+                # Claims a pre-upgrade row without recreating or retiming it.
+                .on_conflict_do_update(
+                    index_elements=["version_name"],
+                    set_={"application_name": resolved},
+                )
             )
-            if owner is not None:
-                # One row per name, so claim a pre-upgrade one and leave a peer's alone.
-                c.execute(
-                    sa.update(av)
-                    .where(
-                        av.c.version_name == version_name,
-                        av.c.application_name.is_(None),
-                    )
-                    .values(application_name=owner)
-                )
 
     def update_application_version_timestamp(
         self,

@@ -621,18 +621,9 @@ def test_versions_are_per_application(dbos: DBOS, client: DBOSClient) -> None:
     # Already owned, so re-registering is a no-op.
     assert rows["2.0.0"] == (APP_NAME, "owned-version-id", 7)
 
-    # A taken name is a silent no-op: launch must not fail over a shared version string.
-    dbos._sys_db.create_application_version("1.0.0", application_name=OTHER_APP)
-    with dbos._sys_db.engine.begin() as c:
-        owners = {
-            r[0]
-            for r in c.execute(
-                sa.select(SystemSchema.application_versions.c.application_name).where(
-                    SystemSchema.application_versions.c.version_name == "1.0.0"
-                )
-            )
-        }
-    assert owners == {APP_NAME}
+    # A name another application holds is a collision, so the caller's launch fails.
+    with pytest.raises(DBOSException, match="already registered by application"):
+        dbos._sys_db.create_application_version("1.0.0", application_name=OTHER_APP)
 
     # Promoting a name another application owns is a collision, not a retiming.
     with pytest.raises(DBOSException, match="already registered by application"):
