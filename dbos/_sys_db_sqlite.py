@@ -78,6 +78,20 @@ class SQLiteSystemDatabase(SystemDatabase):
                 ).fetchone()
                 last_applied = version_result[0] if version_result else 0
 
+            def record_version(version: int) -> None:
+                if last_applied == 0:
+                    conn.execute(
+                        sa.text(
+                            "INSERT INTO dbos_migrations (version) VALUES (:version)"
+                        ),
+                        {"version": version},
+                    )
+                else:
+                    conn.execute(
+                        sa.text("UPDATE dbos_migrations SET version = :version"),
+                        {"version": version},
+                    )
+
             # Apply migrations starting from the next version
             for i, migration_sql in enumerate(sqlite_migrations, 1):
                 if i <= last_applied:
@@ -87,28 +101,22 @@ class SQLiteSystemDatabase(SystemDatabase):
                 statements = [
                     stmt.strip() for stmt in migration_sql.split(";") if stmt.strip()
                 ]
-                # Renumbering left long runs of empty migrations; say nothing of them.
-                if statements:
-                    dbos_logger.info(
-                        f"Applying DBOS SQLite system database schema migration {i}"
-                    )
+                # Renumbering left long runs of empty migrations; skip them entirely.
+                if not statements:
+                    continue
+
+                dbos_logger.info(
+                    f"Applying DBOS SQLite system database schema migration {i}"
+                )
                 for statement in statements:
                     conn.execute(sa.text(statement))
 
-                # Update the single row with the new version
-                if last_applied == 0:
-                    conn.execute(
-                        sa.text(
-                            "INSERT INTO dbos_migrations (version) VALUES (:version)"
-                        ),
-                        {"version": i},
-                    )
-                else:
-                    conn.execute(
-                        sa.text("UPDATE dbos_migrations SET version = :version"),
-                        {"version": i},
-                    )
+                record_version(i)
                 last_applied = i
+
+            # Empty migrations at the end still count as applied; record them in one write.
+            if len(sqlite_migrations) > last_applied:
+                record_version(len(sqlite_migrations))
 
     def _cleanup_connections(self) -> None:
         # SQLite doesn't require special connection cleanup

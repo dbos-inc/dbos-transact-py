@@ -174,10 +174,8 @@ def run_dbos_migrations(
         if i <= last_applied:
             continue
 
-        # Renumbering left long runs of empty migrations; say nothing of them.
+        # Renumbering left long runs of empty migrations; skip them without a round trip.
         if not migration_sql.strip():
-            _bump_migration_version(engine, schema, i, last_applied)
-            last_applied = i
             continue
 
         dbos_logger.info(f"Applying DBOS system database schema migration {i}")
@@ -232,6 +230,10 @@ def run_dbos_migrations(
                     {"version": i},
                 )
             last_applied = i
+
+    # Empty migrations at the end still count as applied, so record them in one write.
+    if len(migrations) > last_applied:
+        _bump_migration_version(engine, schema, len(migrations), last_applied)
 
 
 def get_dbos_migration_one(schema: str, use_listen_notify: bool) -> str:

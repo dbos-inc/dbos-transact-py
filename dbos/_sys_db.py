@@ -1302,8 +1302,11 @@ class SystemDatabase(ABC):
                             assumed_role=status[7],
                             forked_from=original_workflow_id,
                             attributes=status[10],
-                            # Inherit the source's owner so the fork runs on the same application.
-                            application_name=status[11],
+                            # Inherit the source's owner so the fork runs on the same
+                            # application; claim an unclaimed one, as dequeue does.
+                            application_name=(
+                                status[11] if status[11] is not None else self.app_name
+                            ),
                         )
                         for original_workflow_id, forked_workflow_id, status in zip(
                             original_workflow_ids, forked_workflow_ids, statuses
@@ -1386,8 +1389,10 @@ class SystemDatabase(ABC):
                             child_wf_expr,
                             oo.c.started_at_epoch_ms,
                             oo.c.completed_at_epoch_ms,
-                            # Copied steps inherit the owner the forked workflow inherited.
-                            oo.c.application_name,
+                            # Copied steps carry the owner the fork itself resolved to.
+                            sa.func.coalesce(
+                                oo.c.application_name, sa.literal(self.app_name)
+                            ),
                         ).select_from(
                             mapping_subquery.join(
                                 oo,
@@ -5708,9 +5713,22 @@ class SystemDatabase(ABC):
                         "automatic_backfill": schedule.get("automatic_backfill", False),
                         "cron_timezone": schedule.get("cron_timezone"),
                         "queue_name": schedule.get("queue_name"),
-                        "application_name": owner,
+                        # Claim only an unclaimed row, so a registration that lands
+                        # between the check above and this write keeps the name it took.
+                        "application_name": sa.func.coalesce(
+                            SystemSchema.workflow_schedules.c.application_name, owner
+                        ),
                     },
                 )
+            )
+            # Read back, since the guard above is silent about why it declined to claim.
+            self._resolve_row_owner(
+                c,
+                SystemSchema.workflow_schedules,
+                SystemSchema.workflow_schedules.c.schedule_name,
+                schedule["schedule_name"],
+                schedule.get("application_name"),
+                "Schedule",
             )
 
         if conn is not None:
@@ -6093,7 +6111,14 @@ class SystemDatabase(ABC):
             )
             stmt = self.dialect.insert(SystemSchema.queues).values(**values)
             if update_existing:
-                update_set = {k: v for k, v in values.items() if k != "name"}
+                update_set: Dict[str, Any] = {
+                    k: v for k, v in values.items() if k != "name"
+                }
+                # Claim only an unclaimed row, so a registration that lands between the
+                # check above and this write keeps the name it just took.
+                update_set["application_name"] = sa.func.coalesce(
+                    SystemSchema.queues.c.application_name, values["application_name"]
+                )
                 stmt = stmt.on_conflict_do_update(
                     index_elements=["name"],
                     set_=update_set,
@@ -6101,6 +6126,15 @@ class SystemDatabase(ABC):
             else:
                 stmt = stmt.on_conflict_do_nothing(index_elements=["name"])
             c.execute(stmt)
+            # Read back, since the guard above is silent about why it declined to claim.
+            self._resolve_row_owner(
+                c,
+                SystemSchema.queues,
+                SystemSchema.queues.c.name,
+                name,
+                owner,
+                "Queue",
+            )
             return not existed
 
     def get_latest_application_version(
