@@ -124,7 +124,7 @@ def test_runtime_stamps_everything_it_writes(dbos: DBOS) -> None:
         pass
 
     workflow_ids = [DBOS.start_workflow(wf).workflow_id, served.enqueue(wf).workflow_id]
-    # An earlier design consulted the queue here, leaving the unknown one unclaimed.
+    # A known queue and an unknown one: ownership is stamped the same either way.
     for queue_name in ("served-queue", "never-served-queue"):
         workflow_ids.append(
             DBOS.enqueue_workflow_with_options(
@@ -545,9 +545,9 @@ def test_unclaimed_rows_belong_to_every_application(
 
 
 def test_versions_are_per_application(dbos: DBOS, client: DBOSClient) -> None:
-    """A version is content, not an address, so two applications legitimately
-    compute the same one and each gets its own row. Another application's deploy
-    must not demote this one, but an unclaimed newer row is an older SDK's and does."""
+    """Version names stay global addresses, so a row records which application
+    registered it. Another application's deploy must not demote this one, but an
+    unclaimed newer row is an older SDK's and does."""
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.insert(SystemSchema.application_versions).values(
@@ -621,7 +621,7 @@ def test_versions_are_per_application(dbos: DBOS, client: DBOSClient) -> None:
     # Already owned, so re-registering is a no-op.
     assert rows["2.0.0"] == (APP_NAME, "owned-version-id", 7)
 
-    # The same name under another application is a second row, which is what lets both launch.
+    # A taken name is a silent no-op: launch must not fail over a shared version string.
     dbos._sys_db.create_application_version("1.0.0", application_name=OTHER_APP)
     with dbos._sys_db.engine.begin() as c:
         owners = {
@@ -632,16 +632,35 @@ def test_versions_are_per_application(dbos: DBOS, client: DBOSClient) -> None:
                 )
             )
         }
-    assert owners == {APP_NAME, OTHER_APP}
+    assert owners == {APP_NAME}
 
-    # This application promotes its own row unambiguously, past the unclaimed one.
+    # Promoting a name another application owns is a collision, not a retiming.
+    with pytest.raises(DBOSException, match="already registered by application"):
+        dbos._sys_db.update_application_version_timestamp(
+            "1.0.0", FUTURE_MS + 1, application_name=OTHER_APP
+        )
+
+    # This application owns the row, so it promotes it, past the unclaimed one.
     dbos._sys_db.update_application_version_timestamp("1.0.0", FUTURE_MS + 1)
     assert dbos._sys_db.get_latest_application_version()["version_name"] == "1.0.0"
 
-    # A nameless client spans both rows, so promoting raises; naming one resolves it.
-    with pytest.raises(DBOSException, match="registered by more than one application"):
-        client.set_latest_application_version("1.0.0")
-    client.set_latest_application_version("1.0.0", application_name=OTHER_APP)
+    def owner_of(version_name: str) -> Any:
+        with dbos._sys_db.engine.begin() as c:
+            return c.execute(
+                sa.select(SystemSchema.application_versions.c.application_name).where(
+                    SystemSchema.application_versions.c.version_name == version_name
+                )
+            ).scalar()
+
+    # A nameless client administers any row without taking it.
+    client.set_latest_application_version("1.0.0")
+    assert owner_of("1.0.0") == APP_NAME
+
+    # Promotion claims an unclaimed row, which would otherwise be every peer's latest.
+    dbos._sys_db.update_application_version_timestamp(
+        "unclaimed-version", FUTURE_MS + 2
+    )
+    assert owner_of("unclaimed-version") == APP_NAME
 
 
 # ── Pre-upgrade rows and conflicts ────────────────────────────────────────────

@@ -4141,7 +4141,7 @@ class SystemDatabase(ABC):
 
             latest_version = c.execute(
                 sa.select(SystemSchema.application_versions.c.version_name)
-                # This application's latest; a newer unclaimed row is a peer's deploy.
+                # Own plus unclaimed: a named peer's deploy must not demote this one.
                 .where(
                     self._name_filter(
                         SystemSchema.application_versions.c.application_name,
@@ -4276,7 +4276,7 @@ class SystemDatabase(ABC):
         with self.engine.begin() as c:
             latest_version = c.execute(
                 sa.select(SystemSchema.application_versions.c.version_name)
-                # This application's latest; a newer unclaimed row is a peer's deploy.
+                # Own plus unclaimed: a named peer's deploy must not demote this one.
                 .where(
                     self._name_filter(
                         SystemSchema.application_versions.c.application_name,
@@ -5906,44 +5906,31 @@ class SystemDatabase(ABC):
         self, version_name: str, application_name: Optional[str] = None
     ) -> None:
         """Register this version, claiming the row if nobody owns it yet, so a pinned
-        application_version does not stay unclaimed for the life of the deployment."""
+        application_version does not stay unclaimed for the life of the deployment.
+        Silent when another application already registered the name: launch must not
+        fail over a version string two applications happen to share."""
         owner = application_name if application_name is not None else self.app_name
         av = SystemSchema.application_versions
         with self.engine.begin() as c:
-            if owner is not None:
-                mine = c.execute(
-                    sa.select(av.c.version_id).where(
-                        av.c.version_name == version_name,
-                        av.c.application_name == owner,
-                    )
-                ).fetchone()
-                if mine is None:
-                    # Claim a pre-upgrade row, unless this application already has its own.
-                    c.execute(
-                        sa.update(av)
-                        .where(
-                            av.c.version_name == version_name,
-                            av.c.application_name.is_(None),
-                        )
-                        .values(application_name=owner)
-                    )
-            stmt = self.dialect.insert(av).values(
-                version_id=generate_uuid(),
-                version_name=version_name,
-                application_name=owner,
+            c.execute(
+                self.dialect.insert(av)
+                .values(
+                    version_id=generate_uuid(),
+                    version_name=version_name,
+                    application_name=owner,
+                )
+                .on_conflict_do_nothing(index_elements=["version_name"])
             )
-            # The conflict target must name the partial index matching this owner.
-            if owner is None:
-                stmt = stmt.on_conflict_do_nothing(
-                    index_elements=["version_name"],
-                    index_where=av.c.application_name.is_(None),
+            if owner is not None:
+                # One row per name, so claim a pre-upgrade one and leave a peer's alone.
+                c.execute(
+                    sa.update(av)
+                    .where(
+                        av.c.version_name == version_name,
+                        av.c.application_name.is_(None),
+                    )
+                    .values(application_name=owner)
                 )
-            else:
-                stmt = stmt.on_conflict_do_nothing(
-                    index_elements=["application_name", "version_name"],
-                    index_where=av.c.application_name.isnot(None),
-                )
-            c.execute(stmt)
 
     def update_application_version_timestamp(
         self,
@@ -5951,31 +5938,24 @@ class SystemDatabase(ABC):
         new_timestamp: int,
         application_name: Optional[str] = None,
     ) -> None:
-        """Promote a version to latest. Raises when the caller's scope spans more
-        than one application, rather than retiming someone else's deploy."""
+        """Promote a version to latest. Names are global addresses, so promoting a peer's
+        is a collision, not a retiming. Promotion claims an unclaimed row, which would
+        otherwise stay every application's latest."""
         owner = application_name if application_name is not None else self.app_name
         av = SystemSchema.application_versions
-        scope = self._name_filter(av.c.application_name, owner)
         with self.engine.begin() as c:
-            owners = [
-                r[0]
-                for r in c.execute(
-                    sa.select(av.c.application_name)
-                    .where(av.c.version_name == version_name)
-                    .where(scope)
-                )
-            ]
-            if len(owners) > 1:
-                raise DBOSException(
-                    f"Application version '{version_name}' is registered by more than "
-                    f"one application ({sorted(str(o) for o in owners)}). Pass "
-                    f"application_name to say which one to promote."
-                )
+            resolved = self._resolve_row_owner(
+                c,
+                av,
+                av.c.version_name,
+                version_name,
+                owner,
+                "Application version",
+            )
             c.execute(
                 sa.update(av)
                 .where(av.c.version_name == version_name)
-                .where(scope)
-                .values(version_timestamp=new_timestamp)
+                .values(version_timestamp=new_timestamp, application_name=resolved)
             )
 
     def list_application_versions(self) -> List[VersionInfo]:

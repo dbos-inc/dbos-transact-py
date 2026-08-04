@@ -292,8 +292,7 @@ class SystemSchema:
         "application_versions",
         metadata_obj,
         Column("version_id", Text, primary_key=True),
-        # Identity is (application_name, version_name): a version is content, not an address.
-        Column("version_name", Text, nullable=False),
+        Column("version_name", Text, nullable=False, unique=True),
         Column(
             "version_timestamp",
             BigInteger,
@@ -304,23 +303,8 @@ class SystemSchema:
             BigInteger,
             nullable=False,
         ),
-        # Owning application. NULL means unclaimed.
+        # Owning application. NULL means unclaimed; version_name stays globally unique.
         Column("application_name", Text, nullable=True),
-        Index(
-            "uq_application_versions_owned_name",
-            "application_name",
-            "version_name",
-            unique=True,
-            postgresql_where=text("application_name IS NOT NULL"),
-            sqlite_where=text("application_name IS NOT NULL"),
-        ),
-        Index(
-            "uq_application_versions_unclaimed_name",
-            "version_name",
-            unique=True,
-            postgresql_where=text("application_name IS NULL"),
-            sqlite_where=text("application_name IS NULL"),
-        ),
     )
 
     queues = Table(

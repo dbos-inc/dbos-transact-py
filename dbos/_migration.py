@@ -939,34 +939,15 @@ def get_dbos_migration_fortyseven(schema: str, is_cockroach: bool) -> str:
     )
 
 
-def get_dbos_migration_hundred(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_hundred(schema: str) -> str:
     # Catalog-only. NULL means unclaimed: any application may read and claim the row.
-    migration = f"""
+    return f"""
 ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
 ALTER TABLE "{schema}"."queues" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
 ALTER TABLE "{schema}"."workflow_schedules" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
 ALTER TABLE "{schema}"."application_versions" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
 ALTER TABLE "{schema}"."operation_outputs" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
 """
-    # Identity is (application_name, version_name); two indexes since a composite unique keeps no NULLs apart.
-    if is_cockroach:
-        migration += f"""
-DROP INDEX IF EXISTS "{schema}"."application_versions_version_name_key" CASCADE;
-"""
-    else:
-        migration += f"""
-ALTER TABLE "{schema}"."application_versions"
-    DROP CONSTRAINT IF EXISTS application_versions_version_name_key;
-"""
-    migration += f"""
-CREATE UNIQUE INDEX IF NOT EXISTS "uq_application_versions_owned_name"
-    ON "{schema}"."application_versions" ("application_name", "version_name")
-    WHERE "application_name" IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS "uq_application_versions_unclaimed_name"
-    ON "{schema}"."application_versions" ("version_name")
-    WHERE "application_name" IS NULL;
-"""
-    return migration
 
 
 def get_dbos_migration_hundredone(schema: str, is_cockroach: bool) -> str:
@@ -1130,7 +1111,7 @@ def get_dbos_migrations(
     ]
     return [
         *_pad_to_shared_base(history),
-        get_dbos_migration_hundred(schema, is_cockroach),
+        get_dbos_migration_hundred(schema),
         get_dbos_migration_hundredone(schema, is_cockroach),
     ]
 
@@ -1400,31 +1381,12 @@ sqlite_migration_fortyseven = (
     'DROP INDEX IF EXISTS "idx_workflow_status_partition_dequeue"'
 )
 
-# Rebuilt because SQLite declared the UNIQUE inline, leaving an undroppable autoindex.
-sqlite_migration_hundred = f"""
+sqlite_migration_hundred = """
 ALTER TABLE workflow_status ADD COLUMN "application_name" TEXT DEFAULT NULL;
 ALTER TABLE queues ADD COLUMN "application_name" TEXT DEFAULT NULL;
 ALTER TABLE workflow_schedules ADD COLUMN "application_name" TEXT DEFAULT NULL;
 ALTER TABLE application_versions ADD COLUMN "application_name" TEXT DEFAULT NULL;
 ALTER TABLE operation_outputs ADD COLUMN "application_name" TEXT DEFAULT NULL;
-CREATE TABLE application_versions_rebuilt (
-    version_id TEXT NOT NULL PRIMARY KEY,
-    version_name TEXT NOT NULL,
-    version_timestamp INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
-    created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
-    application_name TEXT DEFAULT NULL
-);
-INSERT INTO application_versions_rebuilt
-    SELECT version_id, version_name, version_timestamp, created_at, application_name
-    FROM application_versions;
-DROP TABLE application_versions;
-ALTER TABLE application_versions_rebuilt RENAME TO application_versions;
-CREATE UNIQUE INDEX "uq_application_versions_owned_name"
-    ON application_versions ("application_name", "version_name")
-    WHERE "application_name" IS NOT NULL;
-CREATE UNIQUE INDEX "uq_application_versions_unclaimed_name"
-    ON application_versions ("version_name")
-    WHERE "application_name" IS NULL;
 """
 
 _sqlite_history = [

@@ -1533,9 +1533,9 @@ class DBOSClient:
     ) -> None:
         """Set a version as the latest by updating its timestamp to now.
 
-        :param application_name: Which application's version to promote.
-            Defaults to this caller's; required when the version name is
-            registered by more than one application.
+        :param application_name: The application to act as. Defaults to this
+            caller's. Version names are global, so promoting one registered by
+            a different application raises.
         """
         new_timestamp = int(time.time() * 1000)
         self._sys_db.update_application_version_timestamp(
