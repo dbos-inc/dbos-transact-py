@@ -1058,9 +1058,9 @@ def test_version_is_per_application(dbos: DBOS) -> None:
         assert registry.compute_app_version("app-b") == "DEFAULT_VERSION-app-b"
 
 
-def test_registration_conflict_points_at_the_rename_command(dbos: DBOS) -> None:
-    """The wrong order -- starting under the new name before re-owning -- fails at
-    registration. That error is where an operator learns the remedy exists."""
+def test_registration_conflict_names_both_remedies(dbos: DBOS) -> None:
+    """A name collision has two causes, and the error cannot tell them apart: two
+    applications that chose one name, or one renamed before re-owning its rows."""
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.insert(SystemSchema.application_versions).values(
@@ -1075,9 +1075,40 @@ def test_registration_conflict_points_at_the_rename_command(dbos: DBOS) -> None:
         dbos._sys_db.create_application_version(
             "conflict-version", application_name=RENAMED_APP
         )
-    assert f"dbos rename-application --from {OTHER_APP} --to {RENAMED_APP}" in str(
-        excinfo.value
+    message = str(excinfo.value)
+    assert f"dbos rename-application --from {OTHER_APP} --to {RENAMED_APP}" in message
+    # A version is computed or pinned, so telling the caller to rename it would misdirect.
+    assert f"set a distinct application_version for '{RENAMED_APP}'" in message
+
+    dbos._sys_db.upsert_queue(
+        name="conflict-queue",
+        concurrency=None,
+        worker_concurrency=None,
+        rate_limit_max=None,
+        rate_limit_period_sec=None,
+        priority_enabled=False,
+        partition_queue=False,
+        polling_interval_sec=1.0,
+        update_existing=True,
+        application_name=OTHER_APP,
     )
+    with pytest.raises(DBOSException) as excinfo:
+        dbos._sys_db.upsert_queue(
+            name="conflict-queue",
+            concurrency=None,
+            worker_concurrency=None,
+            rate_limit_max=None,
+            rate_limit_period_sec=None,
+            priority_enabled=False,
+            partition_queue=False,
+            polling_interval_sec=1.0,
+            update_existing=True,
+            application_name=RENAMED_APP,
+        )
+    message = str(excinfo.value)
+    assert f"dbos rename-application --from {OTHER_APP} --to {RENAMED_APP}" in message
+    # A queue name is the caller's to choose, unlike a version's.
+    assert f"give '{RENAMED_APP}' a different queue name" in message
 
 
 def test_cli_renames_application(dbos: DBOS, config: Any) -> None:
