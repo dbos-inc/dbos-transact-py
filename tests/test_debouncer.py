@@ -20,7 +20,7 @@ from dbos._debug_trigger import DebugAction, DebugTriggers
 from dbos._error import DBOSException, DBOSQueueDeduplicatedError
 from dbos._queue import Queue
 from dbos._registrations import get_dbos_func_name
-from dbos._utils import GlobalParams
+from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from tests.conftest import set_workflow_status
 
 
@@ -837,19 +837,49 @@ def test_debounce_ownership_across_applications(dbos: DBOS, config: Any) -> None
             client.destroy()
 
 
-def test_debounce_rejects_application_name(dbos: DBOS, config: Any) -> None:
-    """A debounce always acts as the client's own application, so a divergent target
-    in the options is rejected rather than half-honored (stamped by the fresh
-    enqueue but ignored by the bounce, which scopes by client identity)."""
-    client = DBOSClient(system_database_url=config["system_database_url"])
+def test_debounce_targets_another_application(dbos: DBOS, config: Any) -> None:
+    """Both debouncers can act for a named application: the fresh enqueue stamps it,
+    later bounces from any caller naming the same target coalesce onto the holder,
+    and a caller resolving to a different target collides."""
+    client = DBOSClient(
+        system_database_url=config["system_database_url"], application_name="app-a"
+    )
+
+    @DBOS.workflow()
+    def wf(x: int) -> int:
+        return x
+
+    def owner_of(workflow_id: str) -> Any:
+        status = dbos._sys_db.get_workflow_status(workflow_id)
+        assert status is not None and status["status"] == "DELAYED"
+        return status["application_name"]
+
     try:
+        # Runtime debouncer acting for another application; a huge period keeps the holder DELAYED.
+        debouncer = Debouncer.create(wf, application_name="other-app")
+        first = debouncer.debounce("k", 1000000, 1)
+        assert owner_of(first.workflow_id) == "other-app"
+        assert debouncer.debounce("k", 1000000, 2).workflow_id == first.workflow_id
+
+        # Cross-application rows carry no version, so the target's latest version runs them.
+        status = dbos._sys_db.get_workflow_status(first.workflow_id)
+        assert status is not None and status["app_version"] is None
+
+        # A client with its own identity coalesces onto the same holder when it names the target.
         opts: Any = {
-            "workflow_name": "shared_wf",
-            "queue_name": "some-queue",
-            "application_name": "other-app",
+            "workflow_name": get_dbos_func_name(wf),
+            "queue_name": INTERNAL_QUEUE_NAME,
         }
-        with pytest.raises(DBOSException, match="application_name"):
-            DebouncerClient(client, opts).debounce("k", 1, 1)
+        targeted = DebouncerClient(client, opts, application_name="other-app")
+        assert targeted.debounce("k", 1000000, 3).workflow_id == first.workflow_id
+        assert owner_of(first.workflow_id) == "other-app"
+
+        # Without naming the target, the client acts as itself and collides.
+        with pytest.raises(DBOSQueueDeduplicatedError):
+            DebouncerClient(client, opts).debounce("k", 1, 4)
+        assert owner_of(first.workflow_id) == "other-app"
+
+        DBOS.cancel_workflow(first.workflow_id)
     finally:
         client.destroy()
 

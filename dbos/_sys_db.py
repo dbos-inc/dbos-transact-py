@@ -270,6 +270,8 @@ class EnqueueOptionsInternal(TypedDict):
     debounce_deadline_epoch_ms: Optional[int]
     # True if this workflow's dedup ID is a debounce key to clear on the DELAYED->ENQUEUED transition.
     is_debounced: bool
+    # The application the workflow is enqueued for; None means the enqueuer's own.
+    application_name: Optional[str]
 
 
 class DebounceResult(TypedDict):
@@ -1139,6 +1141,7 @@ class SystemDatabase(ABC):
         delay_until_epoch_ms: int,
         inputs: str,
         serialization: Optional[str],
+        application_name: Optional[str],
         conn: Optional[sa.Connection] = None,
     ) -> DebounceResult:
         """Extend an existing debounced DELAYED workflow's delay and update its inputs.
@@ -1147,6 +1150,8 @@ class SystemDatabase(ABC):
         workflow's debounce_deadline_epoch_ms, if one is set. Matching on
         workflow_name ensures a debounce-key collision between different workflows
         (e.g. "a"+"b-c" vs "a-b"+"c") never overwrites another workflow's inputs.
+        The bounce acts for ``application_name``: it extends only that
+        application's holders plus unclaimed ones, which it claims for it.
         If nothing matched, returns the current holder (or that the key is unheld)
         so the caller can decide whether to start fresh or surface a conflict.
 
@@ -1174,16 +1179,16 @@ class SystemDatabase(ABC):
                 .where(wsc.deduplication_id == deduplication_id)
                 .where(wsc.status == WorkflowStatusString.DELAYED.value)
                 .where(wsc.is_debounced == True)
-                # Never extend another application's workflow; falls through to the holder below.
-                .where(self._name_filter(wsc.application_name, self.app_name))
+                # Never extend a workflow the target application doesn't own; falls through to the holder below.
+                .where(self._name_filter(wsc.application_name, application_name))
                 .values(
                     delay_until_epoch_ms=capped_delay,
                     inputs=inputs,
                     serialization=serialization,
                     updated_at=self._now_ms_sql(),
-                    # Claim it, as dequeue does: left unclaimed, every peer coalesces onto the one workflow and the last inputs win.
+                    # Claim it for the target, as its dequeue would: left unclaimed, every peer coalesces onto the one workflow and the last inputs win.
                     application_name=sa.func.coalesce(
-                        wsc.application_name, sa.literal(self.app_name)
+                        wsc.application_name, sa.literal(application_name)
                     ),
                 )
                 .returning(wsc.workflow_uuid)

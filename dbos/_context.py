@@ -156,6 +156,8 @@ class DBOSContext:
         self.debounce_deadline_epoch_ms: Optional[int] = None
         # Whether the next enqueued workflow is debounced (its dedup ID is a debounce key cleared on DELAYED->ENQUEUED).
         self.is_debounced: bool = False
+        # The application the next debounced enqueue acts for; None means this one.
+        self.debounce_application_name: Optional[str] = None
 
     def create_child(self, *, is_for_workflow: bool) -> DBOSContext:
         rv = DBOSContext()
@@ -200,6 +202,7 @@ class DBOSContext:
         rv.delay_until_epoch_ms = self.delay_until_epoch_ms
         rv.debounce_deadline_epoch_ms = self.debounce_deadline_epoch_ms
         rv.is_debounced = self.is_debounced
+        rv.debounce_application_name = self.debounce_application_name
         rv.workflow_attributes = self.workflow_attributes
         rv.otel_carrier = self.otel_carrier
         self.function_id += 1
@@ -838,9 +841,10 @@ class SetWorkflowDebounce:
     """Internal: mark the next enqueued workflow as debounced.
 
     Sets the deduplication ID (a debounce key), the initial delay, the absolute
-    debounce deadline, and the is_debounced flag on the context, restoring them
-    on exit. Unlike SetEnqueueOptions, it leaves priority/app_version/partition
-    untouched so a debounced workflow still inherits the caller's other options.
+    debounce deadline, the is_debounced flag, and the application the debounce
+    acts for on the context, restoring them on exit. Unlike SetEnqueueOptions,
+    it leaves priority/app_version/partition untouched so a debounced workflow
+    still inherits the caller's other options.
 
     It also clears any propagated workflow deadline: a debounce called inside a
     workflow that has a timeout would otherwise pass that workflow's absolute
@@ -856,16 +860,19 @@ class SetWorkflowDebounce:
         deduplication_id: str,
         delay_until_epoch_ms: int,
         debounce_deadline_epoch_ms: Optional[int],
+        application_name: Optional[str] = None,
     ) -> None:
         self.created_ctx = False
         self.deduplication_id = deduplication_id
         self.delay_until_epoch_ms = delay_until_epoch_ms
         self.debounce_deadline_epoch_ms = debounce_deadline_epoch_ms
+        self.application_name = application_name
         self.saved_deduplication_id: Optional[str] = None
         self.saved_delay_until_epoch_ms: Optional[int] = None
         self.saved_debounce_deadline_epoch_ms: Optional[int] = None
         self.saved_is_debounced: bool = False
         self.saved_workflow_deadline_epoch_ms: Optional[int] = None
+        self.saved_debounce_application_name: Optional[str] = None
 
     def __enter__(self) -> SetWorkflowDebounce:
         ctx = get_local_dbos_context()
@@ -878,10 +885,12 @@ class SetWorkflowDebounce:
         self.saved_debounce_deadline_epoch_ms = ctx.debounce_deadline_epoch_ms
         self.saved_is_debounced = ctx.is_debounced
         self.saved_workflow_deadline_epoch_ms = ctx.workflow_deadline_epoch_ms
+        self.saved_debounce_application_name = ctx.debounce_application_name
         ctx.deduplication_id = self.deduplication_id
         ctx.delay_until_epoch_ms = self.delay_until_epoch_ms
         ctx.debounce_deadline_epoch_ms = self.debounce_deadline_epoch_ms
         ctx.is_debounced = True
+        ctx.debounce_application_name = self.application_name
         # Don't inherit the caller workflow's deadline onto the debounced workflow.
         ctx.workflow_deadline_epoch_ms = None
         return self
@@ -898,6 +907,7 @@ class SetWorkflowDebounce:
         curr_ctx.debounce_deadline_epoch_ms = self.saved_debounce_deadline_epoch_ms
         curr_ctx.is_debounced = self.saved_is_debounced
         curr_ctx.workflow_deadline_epoch_ms = self.saved_workflow_deadline_epoch_ms
+        curr_ctx.debounce_application_name = self.saved_debounce_application_name
         if self.created_ctx:
             _clear_local_dbos_context()
         return False
