@@ -4063,6 +4063,12 @@ class SystemDatabase(ABC):
                     == WorkflowStatusString.DELAYED.value
                 )
                 .where(SystemSchema.workflow_status.c.delay_until_epoch_ms <= now_ms)
+                # Only what this application would dequeue: a peer's debounce key is not ours to clear.
+                .where(
+                    self._name_filter(
+                        SystemSchema.workflow_status.c.application_name, self.app_name
+                    )
+                )
                 .values(
                     status=WorkflowStatusString.ENQUEUED.value,
                     deduplication_id=sa.case(
@@ -6254,10 +6260,10 @@ class SystemDatabase(ABC):
                     .limit(1)
                     .offset(batch_size - 1)
                 ).scalar()
+                # The final batch drops the watermark, so rows that appeared below it still move.
+                batch = predicate if upper is None else sa.and_(scope, key_col <= upper)
                 total += c.execute(
-                    sa.update(table)
-                    .where(scope if upper is None else sa.and_(scope, key_col <= upper))
-                    .values(application_name=new_name)
+                    sa.update(table).where(batch).values(application_name=new_name)
                 ).rowcount
             # Fewer than a full batch remained, so that update took the rest.
             if upper is None:

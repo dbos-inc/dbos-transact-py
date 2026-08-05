@@ -441,6 +441,7 @@ def reset(
 )
 @click.option(
     "--schema",
+    default="dbos",
     help='Schema name for DBOS system tables. Defaults to "dbos".',
 )
 def rename_application(
@@ -454,7 +455,7 @@ def rename_application(
 ) -> None:
     sources = []
     if old_name:
-        sources.append(f"'{old_name}''s rows")
+        sources.append(f"'{old_name}'s rows")
     if adopt_unclaimed_rows:
         sources.append("rows no application owns")
     if not sources:

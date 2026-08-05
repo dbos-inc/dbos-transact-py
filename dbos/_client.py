@@ -157,7 +157,7 @@ class DBOSClient:
             system_database_pool_size (int): System database pool size. Defaults to 5.
             system_database_polling_concurrency (int): Maximum number of DB-backed polling reads (from wait operations such as get_result, get_event, and read_stream) that may run concurrently against the system database pool. Defaults to half the system database pool size (minimum 1). Set to a non-positive value to disable the limiter.
             use_listen_notify (bool): Whether to run a listener thread so get_event and read_stream are woken by notifications rather than polling the database. Defaults to False. Only enable this if the system database was created with use_listen_notify=True (the DBOS default).
-            application_name (str): The application this client acts on behalf of. Defaults to None, meaning no application identity: the client sees every application's rows and writes unclaimed ones, which any application may run. Set it when several applications share this system database, so the client's writes are owned and its reads are scoped. Individual methods take an application_name that overrides this.
+            application_name (str): The application this client acts on behalf of. Defaults to None, meaning no application identity: the client writes unclaimed rows, which any application may run. Set it when several applications share this system database, so the client's writes are owned by that application.
 
         Raises:
             Exception: If the system database cannot be reached.
