@@ -1171,7 +1171,13 @@ class _RetryOnceEngine:
     def begin(self) -> Any:
         if not self.fired and threading.get_ident() == self._thread_id:
             self.fired = True
-            raise Exception("database is locked")  # retriable on pg and sqlite
+            # connection_invalidated makes this retriable on both pg and sqlite
+            raise DBAPIError(
+                "SELECT 1",
+                None,
+                Exception("simulated dropped connection"),
+                connection_invalidated=True,
+            )
         return self._real.begin()
 
     def __getattr__(self, name: str) -> Any:
