@@ -1151,7 +1151,7 @@ class SystemDatabase(ABC):
         workflow_name ensures a debounce-key collision between different workflows
         (e.g. "a"+"b-c" vs "a-b"+"c") never overwrites another workflow's inputs.
         The bounce acts for ``application_name``: it extends only that
-        application's holders plus unclaimed ones, which it claims for it.
+        application's holders plus unclaimed ones, claiming those for it.
         If nothing matched, returns the current holder (or that the key is unheld)
         so the caller can decide whether to start fresh or surface a conflict.
 

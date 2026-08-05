@@ -420,7 +420,7 @@ class DebouncerClient:
         )
         deduplication_id = f"{self.debouncer_options['workflow_name']}-{debounce_key}"
         timeout_sec = self.debouncer_options["debounce_timeout_sec"]
-        # One owner for the whole operation: the debouncer's target wins, then the workflow options', then the client's identity.
+        # Same one-owner rule as Debouncer.debounce; the debouncer's target wins, then the workflow options', then the client's identity.
         target_app = self.debouncer_options["application_name"]
         if target_app is None:
             target_app = self.workflow_options.get("application_name")
@@ -473,7 +473,6 @@ class DebouncerClient:
                     "queue_name": queue_name,
                     "deduplication_id": deduplication_id,
                     "delay_seconds": delay_sec,
-                    # The resolved target, so the fresh holder matches the bounce scope.
                     "application_name": target_app,
                 },
             )
