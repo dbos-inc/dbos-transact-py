@@ -227,12 +227,14 @@ def test_application_name_schema(dbos: DBOS, skip_with_sqlite: None) -> None:
             ).fetchone()
             assert row == ("text", "YES"), f"{table}.application_name"
 
-        # Names stay global addresses, version names included.
+        # Names stay global addresses; version_name only until the contract migration, whose replacement key migration 106 already carries.
         uniques = {
             "uq_workflow_status_dedup_id",
             "queues_name_key",
             "workflow_schedules_schedule_name_key",
             "application_versions_version_name_key",
+            "uq_application_versions_owner_version",
+            "uq_application_versions_unclaimed_version",
         }
         found = {
             row[0]
@@ -245,6 +247,30 @@ def test_application_name_schema(dbos: DBOS, skip_with_sqlite: None) -> None:
             )
         }
     assert found == uniques
+
+
+def test_application_version_expand_indexes(dbos: DBOS, skip_with_sqlite: None) -> None:
+    """The expand half of retiring version_name's global uniqueness: the ownership-scoped
+    key exists and is enforced, and the constraint it will replace is still in place."""
+    av = "dbos.application_versions (version_id, version_name, application_name)"
+
+    def insert(connection: sa.Connection, version_id: str, owner: str) -> None:
+        connection.execute(
+            sa.text(
+                f"INSERT INTO {av} VALUES ('{version_id}', 'shared-version', {owner})"
+            )
+        )
+
+    with dbos._sys_db.engine.begin() as connection:
+        insert(connection, "v1", "'app-a'")
+        # One row per owner, unclaimed included; the last case is the not-yet-dropped constraint still refusing a peer.
+        for version_id, owner in (("v2", "'app-a'"), ("v3", "NULL"), ("v4", "'app-b'")):
+            with pytest.raises(sa.exc.IntegrityError):
+                with connection.begin_nested():
+                    insert(connection, version_id, owner)
+        connection.execute(
+            sa.text("DELETE FROM dbos.application_versions WHERE version_id = 'v1'")
+        )
 
 
 def test_enqueue_workflow_function_application_name(

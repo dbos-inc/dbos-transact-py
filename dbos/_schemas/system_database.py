@@ -303,8 +303,24 @@ class SystemSchema:
             BigInteger,
             nullable=False,
         ),
-        # Owning application. NULL means unclaimed; version_name stays globally unique.
+        # Owning application. NULL means unclaimed; version_name's global uniqueness is being retired for the indexes below, so no write may infer it as an ON CONFLICT arbiter.
         Column("application_name", Text, nullable=True),
+        # Two partial indexes, not one composite: NULL owners would otherwise be free to duplicate.
+        Index(
+            "uq_application_versions_owner_version",
+            "application_name",
+            "version_name",
+            unique=True,
+            postgresql_where=text("application_name IS NOT NULL"),
+            sqlite_where=text("application_name IS NOT NULL"),
+        ),
+        Index(
+            "uq_application_versions_unclaimed_version",
+            "version_name",
+            unique=True,
+            postgresql_where=text("application_name IS NULL"),
+            sqlite_where=text("application_name IS NULL"),
+        ),
     )
 
     queues = Table(

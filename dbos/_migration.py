@@ -1079,6 +1079,19 @@ ALTER FUNCTION "{schema}".enqueue_workflow(
     return migration
 
 
+def get_dbos_migration_hundredsix(schema: str) -> str:
+    # Expand half of retiring version_name's global uniqueness: the ownership-scoped key that replaces it, unclaimed counting as its own owner. The constraint may not be dropped until every SDK reaching this database is past this migration.
+    return f"""
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_application_versions_owner_version"
+    ON "{schema}"."application_versions" ("application_name", "version_name")
+    WHERE "application_name" IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_application_versions_unclaimed_version"
+    ON "{schema}"."application_versions" ("version_name")
+    WHERE "application_name" IS NULL;
+"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -1139,6 +1152,7 @@ def get_dbos_migrations(
         get_dbos_migration_hundredthree(schema),
         get_dbos_migration_hundredfour(schema),
         get_dbos_migration_hundredfive(schema, is_cockroach),
+        get_dbos_migration_hundredsix(schema),
     ]
 
 
@@ -1427,6 +1441,17 @@ sqlite_migration_hundredfour = (
     'ALTER TABLE operation_outputs ADD COLUMN "application_name" TEXT DEFAULT NULL'
 )
 
+# See get_dbos_migration_hundredsix: the same key, built while the constraint still implies it.
+sqlite_migration_hundredsix = """
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_application_versions_owner_version"
+    ON application_versions ("application_name", "version_name")
+    WHERE "application_name" IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_application_versions_unclaimed_version"
+    ON application_versions ("version_name")
+    WHERE "application_name" IS NULL;
+"""
+
 _sqlite_history = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -1484,4 +1509,5 @@ sqlite_migrations = [
     sqlite_migration_hundredfour,
     # Postgres migration 105 rewrites a stored function; SQLite has none.
     "",
+    sqlite_migration_hundredsix,
 ]

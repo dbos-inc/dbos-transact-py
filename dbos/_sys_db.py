@@ -5958,20 +5958,25 @@ class SystemDatabase(ABC):
         owner = application_name if application_name is not None else self.app_name
         av = SystemSchema.application_versions
         with self.engine.begin() as c:
-            c.execute(
-                self.dialect.insert(av).values(
-                    version_id=generate_uuid(),
-                    version_name=version_name,
-                    application_name=owner,
+            # Claim a pre-upgrade row in place, so the version is not recreated or retimed.
+            claimed = c.execute(
+                sa.update(av)
+                .where(av.c.version_name == version_name)
+                .where(av.c.application_name.is_(None))
+                .values(application_name=owner)
+            ).rowcount
+            if not claimed:
+                # Targetless DO NOTHING: names no arbiter, so it survives version_name's uniqueness being dropped while still absorbing a concurrent registrar.
+                c.execute(
+                    self.dialect.insert(av)
+                    .values(
+                        version_id=generate_uuid(),
+                        version_name=version_name,
+                        application_name=owner,
+                    )
+                    .on_conflict_do_nothing()
                 )
-                # Claims a pre-upgrade row without recreating or retiming it; guarded so a registration landing first is not overwritten.
-                .on_conflict_do_update(
-                    index_elements=["version_name"],
-                    set_={"application_name": owner},
-                    where=av.c.application_name.is_(None),
-                )
-            )
-            # Read back, since the guard above is silent about why it declined to claim.
+            # Read back, since the writes above are silent about why they declined to claim.
             self._resolve_row_owner(
                 c, av, av.c.version_name, version_name, owner, "Application version"
             )
@@ -5996,9 +6001,14 @@ class SystemDatabase(ABC):
                 owner,
                 "Application version",
             )
+            # Scoped to the row this writer resolved to: once version_name is no longer globally unique, a bare name match would retime every peer's version.
+            scope: sa.ColumnElement[bool] = av.c.application_name.is_(None)
+            if resolved is not None:
+                scope = sa.or_(av.c.application_name == resolved, scope)
             c.execute(
                 sa.update(av)
                 .where(av.c.version_name == version_name)
+                .where(scope)
                 .values(version_timestamp=new_timestamp, application_name=resolved)
             )
 
