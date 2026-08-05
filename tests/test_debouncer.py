@@ -837,6 +837,23 @@ def test_debounce_ownership_across_applications(dbos: DBOS, config: Any) -> None
             client.destroy()
 
 
+def test_debounce_rejects_application_name(dbos: DBOS, config: Any) -> None:
+    """A debounce always acts as the client's own application, so a divergent target
+    in the options is rejected rather than half-honored (stamped by the fresh
+    enqueue but ignored by the bounce, which scopes by client identity)."""
+    client = DBOSClient(system_database_url=config["system_database_url"])
+    try:
+        opts: Any = {
+            "workflow_name": "shared_wf",
+            "queue_name": "some-queue",
+            "application_name": "other-app",
+        }
+        with pytest.raises(DBOSException, match="application_name"):
+            DebouncerClient(client, opts).debounce("k", 1, 1)
+    finally:
+        client.destroy()
+
+
 def test_debounce_bounce_atomic_with_checkpoint(
     dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:

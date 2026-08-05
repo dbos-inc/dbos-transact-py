@@ -77,12 +77,14 @@ def _reject_conflicting_options(
     has_delay: bool,
     has_priority: bool,
     has_partition_key: bool,
+    has_application_name: bool = False,
 ) -> None:
     """A debounce owns the workflow's deduplication ID (the debounce key) and its
     delay (the debounce period), so a caller must not also set them. Priority and
     partition keys are rejected because they cannot apply to a debounced enqueue
     (the default internal queue has no priority, and partitioned queues do not
-    support the deduplication a debounce requires)."""
+    support the deduplication a debounce requires). An application_name is
+    rejected because a debounce always acts as its caller's own application."""
     if has_deduplication_id:
         raise DBOSException(
             "Cannot debounce a workflow with a deduplication_id set: the debounce "
@@ -102,6 +104,12 @@ def _reject_conflicting_options(
         raise DBOSException(
             "Cannot debounce a workflow with a queue partition key set: partitioned "
             "queues do not support deduplication, which debouncing requires."
+        )
+    if has_application_name:
+        raise DBOSException(
+            "Cannot debounce a workflow with an application_name set: a debounce "
+            "always acts as the client's own application. Create the DBOSClient "
+            "with application_name set to the target application instead."
         )
 
 
@@ -384,13 +392,15 @@ class DebouncerClient:
     def debounce(
         self, debounce_key: str, debounce_period_sec: float, *args: Any, **kwargs: Any
     ) -> "WorkflowHandle[R]":
-        # The workflow options must not set a deduplication_id, delay, priority, or partition key.
+        # The workflow options must not set a deduplication_id, delay, priority, partition key, or application_name.
         _reject_conflicting_options(
             has_deduplication_id=self.workflow_options.get("deduplication_id")
             is not None,
             has_delay=self.workflow_options.get("delay_seconds") is not None,
             has_priority=self.workflow_options.get("priority") is not None,
             has_partition_key=self.workflow_options.get("queue_partition_key")
+            is not None,
+            has_application_name=self.workflow_options.get("application_name")
             is not None,
         )
 
