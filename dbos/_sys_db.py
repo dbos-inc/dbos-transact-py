@@ -499,10 +499,14 @@ def db_retry(
 
                     # Determine if this is a retriable exception
                     postgres_retriable = retriable_postgres_exception(e)
-                    if not postgres_retriable and not retriable_sqlite_exception(e):
+                    # The SQLite heuristic matches rendered error text, which can include program data, so only trust it on an actual SQLite database.
+                    sqlite_retriable = getattr(
+                        db, "_is_sqlite", True
+                    ) and retriable_sqlite_exception(e)
+                    if not postgres_retriable and not sqlite_retriable:
                         raise
 
-                    # Connection-error retries are optional. Judge the error itself: a DBAPIError renders its parameters, so program data can read as lock contention.
+                    # Connection-error retries are optional; SQLite lock contention is not a connection error and always retries.
                     if postgres_retriable and not getattr(
                         db, "_retry_connection_errors", True
                     ):
@@ -628,6 +632,8 @@ class SystemDatabase(ABC):
         self.use_listen_notify = use_listen_notify
         # Whether db_retry blocks on a lost connection until it recovers, or raises.
         self._retry_connection_errors = retry_connection_errors
+        # db_retry trusts the text-based SQLite retriability heuristic only on SQLite.
+        self._is_sqlite = system_database_url.startswith("sqlite")
 
         if system_database_url.startswith("sqlite"):
             self.schema = None

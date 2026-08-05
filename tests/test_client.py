@@ -545,6 +545,8 @@ def test_client_lazy_defers_connecting() -> None:
     try:
         with pytest.raises(Exception):
             client.check_connection()
+        with pytest.raises(Exception):
+            asyncio.run(client.check_connection_async())
     finally:
         client.destroy()
 
@@ -598,8 +600,11 @@ def test_db_retry_connection_error_opt_out() -> None:
     but SQLite lock contention is not a connection error and always retries."""
 
     class FakeSystemDatabase:
-        def __init__(self, retry_connection_errors: bool) -> None:
+        def __init__(
+            self, retry_connection_errors: bool, is_sqlite: bool = True
+        ) -> None:
             self._retry_connection_errors = retry_connection_errors
+            self._is_sqlite = is_sqlite
 
     calls = 0
 
@@ -623,6 +628,12 @@ def test_db_retry_connection_error_opt_out() -> None:
     locked = OperationalError("SELECT 1", None, Exception("database is locked"))
     assert flaky(FakeSystemDatabase(False), locked) == "ok"
     assert calls == 3
+
+    # On Postgres, "database is locked" can only be rendered program data, so it is not retriable at all.
+    calls = 0
+    with pytest.raises(OperationalError):
+        flaky(FakeSystemDatabase(True, is_sqlite=False), locked)
+    assert calls == 1
 
     # A DBAPIError renders its parameters, so program data can read as lock contention.
     calls = 0

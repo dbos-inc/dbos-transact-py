@@ -157,7 +157,7 @@ class DBOSClient:
             system_database_pool_size (int): System database pool size. Defaults to 5.
             system_database_polling_concurrency (int): Maximum number of DB-backed polling reads (from wait operations such as get_result, get_event, and read_stream) that may run concurrently against the system database pool. Defaults to half the system database pool size (minimum 1). Set to a non-positive value to disable the limiter.
             use_listen_notify (bool): Whether to run a listener thread so get_event and read_stream are woken by notifications rather than polling the database. Defaults to False. Only enable this if the system database was created with use_listen_notify=True (the DBOS default).
-            lazy (bool): Whether to defer connecting until the client is first used. Defaults to False, meaning the connection is checked on construction. Call check_connection() to check it explicitly. Cannot be combined with use_listen_notify, whose listener connects immediately.
+            lazy (bool): Whether to defer connecting until the client is first used. Defaults to False, meaning the connection is checked on construction. Call check_connection() or check_connection_async() to check it explicitly. Cannot be combined with use_listen_notify, whose listener connects immediately.
             retry_connection_errors (bool): Whether an operation that loses its database connection blocks and retries until the connection recovers. Defaults to True. Set to False to raise instead, so an unreachable database surfaces as an error rather than a wait.
 
         Raises:
@@ -220,7 +220,14 @@ class DBOSClient:
 
     def check_connection(self) -> None:
         """Verify the client can reach the system database, raising if it cannot."""
+        _warn_sync_db_call_in_async_context(
+            "DBOSClient.check_connection", "DBOSClient.check_connection_async"
+        )
         self._sys_db.check_connection()
+
+    async def check_connection_async(self) -> None:
+        """Verify the client can reach the system database, raising if it cannot."""
+        await asyncio.to_thread(self._sys_db.check_connection)
 
     def destroy(self) -> None:
         if self._notification_listener_thread is not None:
