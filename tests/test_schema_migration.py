@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import click
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.exc import IntegrityError
 
 # Public API
 from dbos import DBOS, DBOSConfig, run_dbos_database_migrations
@@ -265,7 +266,7 @@ def test_application_version_expand_indexes(dbos: DBOS, skip_with_sqlite: None) 
         insert(connection, "v1", "'app-a'")
         # One row per owner, unclaimed included; the last case is the not-yet-dropped constraint still refusing a peer.
         for version_id, owner in (("v2", "'app-a'"), ("v3", "NULL"), ("v4", "'app-b'")):
-            with pytest.raises(sa.exc.IntegrityError):
+            with pytest.raises(IntegrityError):
                 with connection.begin_nested():
                     insert(connection, version_id, owner)
         connection.execute(
