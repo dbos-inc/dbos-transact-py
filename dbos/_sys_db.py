@@ -469,19 +469,27 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 
 def db_retry(
-    initial_backoff: float = 1.0, max_backoff: float = 60.0
+    initial_backoff: float = 1.0,
+    max_backoff: float = 60.0,
+    *,
+    sys_db: Optional["SystemDatabase"] = None,
 ) -> Callable[[F], F]:
     """
     If a workflow encounters a database connection issue while performing an operation,
     block the workflow and retry the operation until it reconnects and succeeds.
 
     In other words, if DBOS loses its database connection, everything pauses until the connection is recovered,
-    trading off availability for correctness.
+    trading off availability for correctness. A system database created with
+    retry_connection_errors=False opts out, raising connection errors instead.
+
+    Args:
+        sys_db (SystemDatabase): The system database whose retry setting applies, for call sites where it is not the first argument (closures within a method).
     """
 
     def decorator(func: F) -> F:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
+            db = sys_db if sys_db is not None else (args[0] if args else None)
             retries: int = 0
             backoff: float = initial_backoff
             while True:
@@ -490,9 +498,18 @@ def db_retry(
                 except Exception as e:
 
                     # Determine if this is a retriable exception
-                    if not retriable_postgres_exception(
-                        e
-                    ) and not retriable_sqlite_exception(e):
+                    postgres_retriable = retriable_postgres_exception(e)
+                    # The SQLite heuristic matches rendered error text, which can include program data, so only trust it on an actual SQLite database.
+                    sqlite_retriable = getattr(
+                        db, "_is_sqlite", True
+                    ) and retriable_sqlite_exception(e)
+                    if not postgres_retriable and not sqlite_retriable:
+                        raise
+
+                    # Connection-error retries are optional; SQLite lock contention is not a connection error and always retries.
+                    if postgres_retriable and not getattr(
+                        db, "_retry_connection_errors", True
+                    ):
                         raise
 
                     retries += 1
@@ -533,6 +550,7 @@ class SystemDatabase(ABC):
         notification_listener_polling_interval_sec: float = 1.0,
         notification_coalesce_sec: float = DEFAULT_NOTIFICATION_COALESCE_SEC,
         polling_concurrency: Optional[int] = None,
+        retry_connection_errors: bool = True,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
         if system_database_url.startswith("sqlite"):
@@ -549,6 +567,7 @@ class SystemDatabase(ABC):
                 notification_listener_polling_interval_sec=notification_listener_polling_interval_sec,
                 notification_coalesce_sec=notification_coalesce_sec,
                 polling_concurrency=polling_concurrency,
+                retry_connection_errors=retry_connection_errors,
             )
         else:
             from ._sys_db_postgres import PostgresSystemDatabase
@@ -564,6 +583,7 @@ class SystemDatabase(ABC):
                 notification_listener_polling_interval_sec=notification_listener_polling_interval_sec,
                 notification_coalesce_sec=notification_coalesce_sec,
                 polling_concurrency=polling_concurrency,
+                retry_connection_errors=retry_connection_errors,
             )
 
     def __init__(
@@ -579,6 +599,7 @@ class SystemDatabase(ABC):
         notification_listener_polling_interval_sec: float = 1.0,
         notification_coalesce_sec: float = DEFAULT_NOTIFICATION_COALESCE_SEC,
         polling_concurrency: Optional[int] = None,
+        retry_connection_errors: bool = True,
     ):
         import sqlalchemy.dialects.postgresql as pg
         import sqlalchemy.dialects.sqlite as sq
@@ -609,6 +630,10 @@ class SystemDatabase(ABC):
         self.dialect = sq if system_database_url.startswith("sqlite") else pg
         self.serializer = serializer
         self.use_listen_notify = use_listen_notify
+        # Whether db_retry blocks on a lost connection until it recovers, or raises.
+        self._retry_connection_errors = retry_connection_errors
+        # db_retry trusts the text-based SQLite retriability heuristic only on SQLite.
+        self._is_sqlite = system_database_url.startswith("sqlite")
 
         if system_database_url.startswith("sqlite"):
             self.schema = None
@@ -1133,7 +1158,7 @@ class SystemDatabase(ABC):
         if conn is not None:
             return _do(conn)
 
-        @db_retry()
+        @db_retry(sys_db=self)
         def _standalone() -> DebounceResult:
             with self.engine.begin() as c:
                 return _do(c)
@@ -2551,7 +2576,7 @@ class SystemDatabase(ABC):
             else int(time.time() * 1000)
         )
 
-        @db_retry()
+        @db_retry(sys_db=self)
         def record_operation_result_retry() -> None:
             with self.engine.begin() as c:
                 self._record_operation_result_txn(result, completed_at, c)
@@ -2579,7 +2604,7 @@ class SystemDatabase(ABC):
         workflow_id = ctx.workflow_id
         function_id = ctx.function_id
 
-        @db_retry()
+        @db_retry(sys_db=self)
         def record() -> None:
             # Because there's no corresponding check, we do nothing on conflict
             # and do not raise a DBOSWorkflowConflictIDError

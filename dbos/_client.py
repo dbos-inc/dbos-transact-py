@@ -133,13 +133,16 @@ class DBOSClient:
         system_database_pool_size: Optional[int] = None,
         system_database_polling_concurrency: Optional[int] = None,
         use_listen_notify: bool = False,
+        lazy: bool = False,
+        retry_connection_errors: bool = True,
     ):
         """Create a client for interacting with a DBOS application from outside it.
 
         The client talks only to the system database, so it can enqueue workflows,
         send messages, read events and streams, and manage workflows, queues, and
         schedules without registering or running any workflow code itself. It
-        connects on construction and raises if the system database is unreachable.
+        connects on construction and raises if the system database is
+        unreachable, unless it is created with lazy=True.
 
         Unlike DBOS itself, the client never runs schema migrations: the system
         database must already have been created by a DBOS application.
@@ -154,10 +157,17 @@ class DBOSClient:
             system_database_pool_size (int): System database pool size. Defaults to 5.
             system_database_polling_concurrency (int): Maximum number of DB-backed polling reads (from wait operations such as get_result, get_event, and read_stream) that may run concurrently against the system database pool. Defaults to half the system database pool size (minimum 1). Set to a non-positive value to disable the limiter.
             use_listen_notify (bool): Whether to run a listener thread so get_event and read_stream are woken by notifications rather than polling the database. Defaults to False. Only enable this if the system database was created with use_listen_notify=True (the DBOS default).
+            lazy (bool): Whether to defer connecting until the client is first used. Defaults to False, meaning the connection is checked on construction. Call check_connection() or check_connection_async() to check it explicitly. Cannot be combined with use_listen_notify, whose listener connects immediately.
+            retry_connection_errors (bool): Whether an operation that loses its database connection blocks and retries until the connection recovers. Defaults to True. Set to False to raise instead, so an unreachable database surfaces as an error rather than a wait.
 
         Raises:
-            Exception: If the system database cannot be reached.
+            Exception: If the system database cannot be reached, unless lazy is True.
+            DBOSException: If both lazy and use_listen_notify are set.
         """
+        if lazy and use_listen_notify:
+            raise DBOSException(
+                "A DBOSClient cannot be both lazy and use_listen_notify: the notification listener connects immediately."
+            )
         self._serializer = serializer
         if system_database_engine:
             if "sqlite" in system_database_engine.dialect.name:
@@ -195,16 +205,29 @@ class DBOSClient:
             executor_id=None,
             use_listen_notify=use_listen_notify,
             polling_concurrency=system_database_polling_concurrency,
+            retry_connection_errors=retry_connection_errors,
+        )
+        self._notification_listener_thread: Optional[threading.Thread] = None
+        if not lazy:
+            self._sys_db.check_connection()
+            if use_listen_notify:
+                # Without this thread, get_event polls the database on every wait instead.
+                self._notification_listener_thread = threading.Thread(
+                    target=self._sys_db.run_notification_listener,
+                    daemon=True,
+                )
+                self._notification_listener_thread.start()
+
+    def check_connection(self) -> None:
+        """Verify the client can reach the system database, raising if it cannot."""
+        _warn_sync_db_call_in_async_context(
+            "DBOSClient.check_connection", "DBOSClient.check_connection_async"
         )
         self._sys_db.check_connection()
-        self._notification_listener_thread: Optional[threading.Thread] = None
-        if use_listen_notify:
-            # Without this thread, get_event polls the database on every wait instead.
-            self._notification_listener_thread = threading.Thread(
-                target=self._sys_db.run_notification_listener,
-                daemon=True,
-            )
-            self._notification_listener_thread.start()
+
+    async def check_connection_async(self) -> None:
+        """Verify the client can reach the system database, raising if it cannot."""
+        await asyncio.to_thread(self._sys_db.check_connection)
 
     def destroy(self) -> None:
         if self._notification_listener_thread is not None:
