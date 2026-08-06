@@ -17,12 +17,6 @@ SHARED_MIGRATION_BASE = 100
 def _pad_to_shared_base(migrations: list[str]) -> list[str]:
     """Pad a language's own history out to SHARED_MIGRATION_BASE - 1. Earlier
     indices stay per-language, safe to skip only because the schemas converge."""
-    if len(migrations) >= SHARED_MIGRATION_BASE:
-        raise ValueError(
-            f"Migration history is {len(migrations)} long, which reaches the "
-            f"shared numbering base {SHARED_MIGRATION_BASE}. Shared migrations "
-            f"must be appended after it, not merged into the history."
-        )
     return migrations + [""] * (SHARED_MIGRATION_BASE - 1 - len(migrations))
 
 
