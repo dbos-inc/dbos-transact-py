@@ -1302,6 +1302,7 @@ class SystemDatabase(ABC):
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
         replacement_children: Optional[dict[str, str]] = None,
+        workflow_timeout_ms: Optional[int] = None,
     ) -> list[str]:
         if not original_workflow_ids:
             return []
@@ -1372,6 +1373,7 @@ class SystemDatabase(ABC):
                             attributes=status[10],
                             # Inherit the source's owner so the fork runs on the same application; claim an unclaimed one, as dequeue does.
                             application_name=fork_owners[forked_workflow_id],
+                            workflow_timeout_ms=workflow_timeout_ms,
                         )
                         for original_workflow_id, forked_workflow_id, status in zip(
                             original_workflow_ids, forked_workflow_ids, statuses
