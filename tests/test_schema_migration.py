@@ -57,8 +57,7 @@ def test_systemdb_migration_custom_schema(
     skip_with_sqlite: None,
     drop_test_databases: None,
 ) -> None:
-    # Needs a dropped database: it asserts the default "dbos" schema is absent,
-    # and leaves behind a schema of its own.
+    # Needs a dropped database: asserts the "dbos" schema is absent, leaves its own.
     config["application_database_url"] = None
     schema = "F8nny_sCHem@-n@m3"
     config["dbos_system_schema"] = schema
@@ -99,9 +98,7 @@ def test_two_schemas_isolated_in_one_process(
 ) -> None:
     """Two system databases with different schemas must stay isolated within one process.
 
-    Needs a dropped database: it counts the rows in schemas it creates itself,
-    which truncation of the default schema would neither empty nor remove.
-    """
+    Needs a dropped database: truncation spares the schemas this creates itself."""
     sys_db_url = config["system_database_url"]
     assert sys_db_url is not None
 
@@ -901,9 +898,7 @@ def test_should_migrate(dbos_dropped_databases: DBOS, skip_with_sqlite: None) ->
     dbos_migrations table is missing, or the recorded version is behind the
     latest; and False once the schema is fully migrated.
 
-    Needs a dropped database: it ends with dbos_migrations gone, which only a
-    drop can put right.
-    """
+    Needs a dropped database: it ends with dbos_migrations gone."""
     from dbos._migration import should_migrate
 
     engine = dbos_dropped_databases._sys_db.engine

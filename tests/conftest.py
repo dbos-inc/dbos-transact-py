@@ -123,9 +123,7 @@ def db_engine() -> Generator[sa.Engine, Any, None]:
 def _truncate_application_database(application_database_url: str) -> None:
     """Empty every table in the application database, leaving its schemas intact.
 
-    Covers DBOS's own transaction_outputs plus whatever tables tests create, so a
-    workflow ID reused across tests cannot replay a stale transaction output.
-    """
+    Stale transaction_outputs would let a reused workflow ID replay."""
     engine = sa.create_engine(
         sa.make_url(application_database_url).set(drivername="postgresql+psycopg"),
         connect_args={"connect_timeout": 30},
@@ -162,9 +160,7 @@ def _reset_test_databases(db_engine: sa.Engine, *, drop: bool) -> None:
     names = [str(sa.make_url(url).database) for url in (app_db_url, sys_db_url)]
     with db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
-        # DROP DATABASE ... WITH (FORCE) evicted leaked connections for us, and
-        # truncation needs that too: a thread an earlier test failed to stop can
-        # block TRUNCATE, or write into the database the next test just emptied.
+        # As DROP DATABASE ... WITH (FORCE) did: a leaked thread blocks or defeats TRUNCATE.
         connection.execute(
             sa.text(
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
@@ -197,11 +193,7 @@ def _reset_test_databases(db_engine: sa.Engine, *, drop: bool) -> None:
 def cleanup_test_databases(db_engine: sa.Engine) -> None:
     """Give the test empty databases, without dropping them.
 
-    Truncating is several times faster than dropping, because the next launch
-    finds its schema already migrated. Tests that need the databases or the DBOS
-    schema to be genuinely absent, or that leave a schema truncation cannot
-    repair, must use drop_test_databases instead.
-    """
+    Tests needing them genuinely absent must use drop_test_databases instead."""
     _reset_test_databases(db_engine, drop=False)
 
 
@@ -209,11 +201,7 @@ def cleanup_test_databases(db_engine: sa.Engine) -> None:
 def drop_test_databases(db_engine: sa.Engine) -> Generator[None, Any, None]:
     """cleanup_test_databases, but dropping the databases outright.
 
-    For tests that need the databases (or the DBOS schema inside them) to not
-    exist, that must exercise a from-scratch migration, or that leave behind a
-    schema truncation cannot repair. Drops on both sides, so neither this test
-    nor the next one inherits the damage.
-    """
+    Drops on both sides, so damage escapes into neither test."""
     _reset_test_databases(db_engine, drop=True)
     yield
     _reset_test_databases(db_engine, drop=True)

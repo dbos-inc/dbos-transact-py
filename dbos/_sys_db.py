@@ -3565,11 +3565,7 @@ class SystemDatabase(ABC):
     ) -> None:
         """Reset the system database by calling the appropriate implementation.
 
-        By default the system database is destroyed outright, so the next launch
-        recreates and re-migrates it. With truncate=True the database and its
-        schema are left in place and only their rows are deleted, which is much
-        faster but keeps whatever schema version is already there.
-        """
+        truncate=True empties the tables instead, keeping the migrated schema."""
         if database_url.startswith("sqlite"):
             from ._sys_db_sqlite import SQLiteSystemDatabase
 

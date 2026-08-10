@@ -144,9 +144,7 @@ class SQLiteSystemDatabase(SystemDatabase):
     def _truncate_system_database(database_url: str, db_path: str) -> None:
         """Empty every DBOS table in the system database, leaving the file intact.
 
-        dbos_migrations is preserved: it records the schema version, so clearing it
-        would send the next launch through migrations the tables already have.
-        """
+        dbos_migrations is spared: clearing it would re-run applied migrations."""
         if not os.path.exists(db_path):
             dbos_logger.info(f"SQLite database file does not exist: {db_path}")
             return
@@ -160,8 +158,7 @@ class SQLiteSystemDatabase(SystemDatabase):
                     ).scalars()
                     if table != "dbos_migrations" and not table.startswith("sqlite_")
                 ]
-                # SQLite has no TRUNCATE, and foreign keys are off by default on a
-                # bare connection, so unordered deletes are safe here.
+                # SQLite has no TRUNCATE; foreign keys are off here, so order is free.
                 for table in tables:
                     conn.execute(sa.text(f'DELETE FROM "{table}"'))
         finally:

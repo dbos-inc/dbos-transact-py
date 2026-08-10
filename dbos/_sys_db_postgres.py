@@ -132,9 +132,7 @@ class PostgresSystemDatabase(SystemDatabase):
     def _truncate_system_database(database_url: str, schema: str) -> None:
         """Empty every DBOS table in the system database, leaving the schema intact.
 
-        dbos_migrations is preserved: it records the schema version, so clearing it
-        would send the next launch through migrations the tables already have.
-        """
+        dbos_migrations is spared: clearing it would re-run applied migrations."""
         engine = sa.create_engine(
             sa.make_url(database_url).set(drivername="postgresql+psycopg"),
             connect_args={"connect_timeout": 10},
@@ -157,8 +155,7 @@ class PostgresSystemDatabase(SystemDatabase):
                         sa.text(f"TRUNCATE TABLE {targets} RESTART IDENTITY CASCADE")
                     )
         except OperationalError:
-            # An absent system database holds no state to reset. Connection failures
-            # carry no SQLSTATE, so ask the server whether the database is there.
+            # An absent database holds no state, but the failure carries no SQLSTATE.
             if PostgresSystemDatabase._database_exists(database_url):
                 raise
             dbos_logger.info(
