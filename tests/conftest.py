@@ -134,6 +134,14 @@ def _truncate_application_database(application_database_url: str) -> None:
     )
     try:
         with engine.begin() as connection:
+            # As the system database truncate does: a leaked lock would block the TRUNCATE.
+            connection.execute(
+                sa.text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = current_database() AND pid <> pg_backend_pid()"
+                )
+            )
+        with engine.begin() as connection:
             tables = connection.execute(
                 sa.text(
                     "SELECT schemaname, tablename FROM pg_tables "
@@ -164,14 +172,6 @@ def _reset_test_databases(db_engine: sa.Engine, *, drop: bool) -> None:
     names = [str(sa.make_url(url).database) for url in (app_db_url, sys_db_url)]
     with db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
-        # As DROP DATABASE ... WITH (FORCE) did: a leaked thread blocks or defeats TRUNCATE.
-        connection.execute(
-            sa.text(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                "WHERE datname = ANY(:names) AND pid <> pg_backend_pid()"
-            ),
-            {"names": names},
-        )
         if drop:
             for name in names:
                 connection.execute(

@@ -138,6 +138,19 @@ class PostgresSystemDatabase(SystemDatabase):
             url = url.set(drivername="postgresql+psycopg")
         engine = sa.create_engine(url, connect_args={"connect_timeout": 10})
         try:
+            try:
+                # Evict other backends, as DROP DATABASE ... WITH (FORCE) does, or one
+                # holding a lock blocks the TRUNCATE. Its own transaction, and best
+                # effort: CockroachDB has no pg_terminate_backend, and a role may not signal.
+                with engine.begin() as conn:
+                    conn.execute(
+                        sa.text(
+                            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                            "WHERE datname = current_database() AND pid <> pg_backend_pid()"
+                        )
+                    )
+            except Exception as e:
+                dbos_logger.debug(f"Could not evict connections before truncating: {e}")
             with engine.begin() as conn:
                 tables = [
                     table

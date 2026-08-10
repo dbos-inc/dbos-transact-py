@@ -265,6 +265,38 @@ def test_reset_truncate(
     DBOS.destroy()
 
 
+def test_reset_truncate_evicts_connections(
+    config: DBOSConfig, cleanup_test_databases: None, skip_with_sqlite: None
+) -> None:
+    """Truncating evicts other connections, as DROP DATABASE ... WITH (FORCE) did.
+
+    A leaked transaction holding a lock would otherwise block TRUNCATE forever."""
+    sys_db_url = config["system_database_url"]
+    assert sys_db_url is not None
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+    DBOS.launch()
+    DBOS.destroy()
+
+    # Stand in for a thread an earlier test failed to stop: an open transaction
+    # holding a lock TRUNCATE needs.
+    squatter = sa.create_engine(sys_db_url)
+    connection = squatter.connect()
+    read_status = sa.text('SELECT count(*) FROM "dbos".workflow_status')
+    connection.execute(read_status)
+
+    try:
+        DBOS(config=config)
+        DBOS.reset_system_database(truncate=True)
+        # The squatter's connection is gone, so its next statement fails
+        with pytest.raises(sa.exc.DBAPIError):
+            connection.execute(read_status)
+    finally:
+        connection.invalidate()
+        squatter.dispose()
+        DBOS.destroy()
+
+
 def test_reset_explicit_url(
     config: DBOSConfig,
     db_engine: sa.Engine,
@@ -316,6 +348,8 @@ def test_reset_explicit_url(
     DBOS.reset_system_database(
         system_database_url=other_db_url, schema=other_schema, truncate=True
     )
+    # Truncation evicts every other connection, this test's pool included
+    other_db.engine.dispose()
     with other_db.engine.begin() as c:
         assert c.execute(count).scalar_one() == 0
     other_db.destroy()
