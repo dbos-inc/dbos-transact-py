@@ -160,7 +160,7 @@ class DBOSClient:
             system_database_pool_size (int): System database pool size. Defaults to 5.
             system_database_polling_concurrency (int): Maximum number of DB-backed polling reads (from wait operations such as get_result, get_event, and read_stream) that may run concurrently against the system database pool. Defaults to half the system database pool size (minimum 1). Set to a non-positive value to disable the limiter.
             use_listen_notify (bool): Whether to run a listener thread so get_event and read_stream are woken by notifications rather than polling the database. Defaults to False. Only enable this if the system database was created with use_listen_notify=True (the DBOS default).
-            application_name (str): The application this client acts on behalf of. Defaults to None, meaning no application identity: the client writes unclaimed rows, which any application may run. Set it when several applications share this system database, so the client's writes are owned by that application.
+            application_name (str): The application this client acts on behalf of. Always set this when several applications share this system database, so workflows, schedules, and queues created by this client are owned by that application.
             lazy (bool): Whether to defer connecting until the client is first used. Defaults to False, meaning the connection is checked on construction. Call check_connection() or check_connection_async() to check it explicitly. Cannot be combined with use_listen_notify, whose listener connects immediately.
             retry_connection_errors (bool): Whether an operation that loses its database connection blocks and retries until the connection recovers. Defaults to True. Set to False to raise instead, so an unreachable database surfaces as an error rather than a wait.
 
@@ -486,8 +486,8 @@ class DBOSClient:
     ) -> List[Queue]:
         """List all database-backed queues registered in the system database.
 
-        :param application_name: Restrict to queues owned by these applications.
-            Unset lists every application's, as on :meth:`list_workflows`.
+        :param application_name: List only queues owned by these applications.
+            By default, only list this application's queues.
         """
         _warn_sync_db_call_in_async_context(
             "DBOSClient.list_queues", "DBOSClient.list_queues_async"
@@ -1344,8 +1344,8 @@ class DBOSClient:
             status: Filter by status (e.g. ``"ACTIVE"``) or a list of statuses
             workflow_name: Filter by workflow name or a list of names
             schedule_name_prefix: Filter by schedule name prefix or a list of prefixes
-            application_name: Restrict to schedules owned by these applications.
-                Unset lists every application's, as on list_workflows.
+            application_name: List only schedules owned by these applications.
+                By default, only list this application's schedules.
         """
         schedules = self._sys_db.list_schedules(
             status=status,

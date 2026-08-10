@@ -1044,8 +1044,8 @@ class DBOS:
         """
         List database-backed queues registered in the system database.
 
-        :param application_name: Restrict to queues owned by these applications.
-            Unset lists every application's, as on :meth:`list_workflows`.
+        :param application_name: List only queues owned by these applications.
+            By default, only list this application's queues.
         """
         check_async("list_queues")
         return _get_dbos_instance()._sys_db.list_queues(
@@ -2871,8 +2871,8 @@ class DBOS:
             status: Filter by status (e.g. ``"ACTIVE"``) or a list of statuses
             workflow_name: Filter by workflow name or a list of names
             schedule_name_prefix: Filter by schedule name prefix or a list of prefixes
-            application_name: Restrict to schedules owned by these applications.
-                Unset lists every application's, as on list_workflows.
+            application_name: List only schedules owned by these applications.
+                By default, only list this application's schedules.
         """
         dbos = _get_dbos_instance()
         ctx = snapshot_step_context(reserve_sleep_id=False)

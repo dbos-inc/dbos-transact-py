@@ -785,6 +785,14 @@ class SystemDatabase(ABC):
         names = [value] if isinstance(value, str) else value
         return sa.or_(col.in_(names), col.is_(None))
 
+    def _observability_filter(
+        self, col: sa.ColumnElement[Any], value: Optional[Union[str, List[str]]]
+    ) -> sa.ColumnElement[bool]:
+        """_name_filter defaulted to this handle's own application: an unset filter
+        scopes to what this application owns, not to every application's rows. A
+        handle with no application of its own still matches every one."""
+        return self._name_filter(col, value if value is not None else self.app_name)
+
     def _resolve_row_owner(
         self,
         conn: sa.Connection,
@@ -1912,8 +1920,10 @@ class SystemDatabase(ABC):
         executor_id_list = _to_list(executor_id)
         prefix_list = _to_list(workflow_id_prefix)
         schedule_name_list = _to_list(schedule_name)
-        # An ordinary filter, not the claiming scope: unset means every application.
-        application_name_list = _to_list(application_name)
+        # Unset scopes to this application, as on every other observability query.
+        application_name_list = _to_list(
+            application_name if application_name is not None else self.app_name
+        )
 
         load_columns = [
             SystemSchema.workflow_status.c.workflow_uuid,
@@ -2423,7 +2433,7 @@ class SystemDatabase(ABC):
                 SystemSchema.workflow_status.c.schedule_name.in_(schedule_name)
             )
         query = query.where(
-            self._name_filter(
+            self._observability_filter(
                 SystemSchema.workflow_status.c.application_name, application_name
             )
         )
@@ -2597,7 +2607,7 @@ class SystemDatabase(ABC):
                 <= datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
             )
         query = query.where(
-            self._name_filter(
+            self._observability_filter(
                 SystemSchema.operation_outputs.c.application_name, application_name
             )
         )
@@ -5202,8 +5212,8 @@ class SystemDatabase(ABC):
         Args:
             start_time: ISO 8601 formatted start time
             end_time: ISO 8601 formatted end time
-            application_name: Restrict to these owning applications. Unset counts
-                every application's workflows and steps.
+            application_name: Count only workflows and steps owned by these
+                applications. By default, only count this application's.
         """
         # Convert ISO 8601 times to epoch milliseconds
         start_epoch_ms = int(
@@ -5231,7 +5241,7 @@ class SystemDatabase(ABC):
                 .group_by(SystemSchema.workflow_status.c.name)
             )
             workflow_query = workflow_query.where(
-                self._name_filter(
+                self._observability_filter(
                     SystemSchema.workflow_status.c.application_name, application_name
                 )
             )
@@ -5263,7 +5273,7 @@ class SystemDatabase(ABC):
                 .group_by(SystemSchema.operation_outputs.c.function_name)
             )
             step_query = step_query.where(
-                self._name_filter(
+                self._observability_filter(
                     SystemSchema.operation_outputs.c.application_name, application_name
                 )
             )
@@ -5817,10 +5827,10 @@ class SystemDatabase(ABC):
         application_name: Optional[Union[str, List[str]]] = None,
         conn: Optional[sa.Connection] = None,
     ) -> List[WorkflowSchedule]:
-        """Schedules owned by these applications, plus unclaimed ones. Unset lists
-        every application's, as on list_workflows."""
+        """List only schedules owned by these applications, plus unclaimed ones.
+        By default, only list this application's schedules."""
         return self._list_schedules(
-            self._name_filter(
+            self._observability_filter(
                 SystemSchema.workflow_schedules.c.application_name, application_name
             ),
             status=status,
@@ -6105,12 +6115,12 @@ class SystemDatabase(ABC):
         application_name: Optional[Union[str, List[str]]] = None,
         client_system_database: Optional["SystemDatabase"] = None,
     ) -> List["Queue"]:
-        """Queues owned by these applications, plus unclaimed ones. Unset lists
-        every application's, as on list_workflows."""
+        """List only queues owned by these applications, plus unclaimed ones.
+        By default, only list this application's queues."""
         with self.engine.begin() as c:
             rows = c.execute(
                 sa.select(SystemSchema.queues).where(
-                    self._name_filter(
+                    self._observability_filter(
                         SystemSchema.queues.c.application_name, application_name
                     )
                 )
