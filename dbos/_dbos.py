@@ -793,7 +793,11 @@ class DBOS:
 
     @classmethod
     def reset_system_database(
-        cls, *, system_database_url: Optional[str] = None, truncate: bool = False
+        cls,
+        *,
+        system_database_url: Optional[str] = None,
+        schema: Optional[str] = None,
+        truncate: bool = False,
     ) -> None:
         """
         Destroy the DBOS system database. Useful for resetting the state of DBOS between tests.
@@ -802,20 +806,30 @@ class DBOS:
 
         We recommend using `truncate=True` to empty the system database instead of destroying it;
         this is substantially faster.
+
+        `schema` names the system schema to empty, defaulting to the configured one.
         """
         if _dbos_global_instance is not None:
             _dbos_global_instance._reset_system_database(
-                system_database_url=system_database_url, truncate=truncate
+                system_database_url=system_database_url,
+                schema=schema,
+                truncate=truncate,
             )
         elif system_database_url is not None:
-            SystemDatabase.reset_system_database(system_database_url, truncate=truncate)
+            SystemDatabase.reset_system_database(
+                system_database_url, truncate=truncate, schema=schema
+            )
         else:
             dbos_logger.warning(
                 "reset_system_database has no effect because global DBOS object does not exist"
             )
 
     def _reset_system_database(
-        self, *, system_database_url: Optional[str] = None, truncate: bool = False
+        self,
+        *,
+        system_database_url: Optional[str] = None,
+        schema: Optional[str] = None,
+        truncate: bool = False,
     ) -> None:
         assert (
             not self._launched
@@ -828,7 +842,9 @@ class DBOS:
                 else get_system_database_url(self._config)
             ),
             truncate=truncate,
-            schema=self._config.get("dbos_system_schema"),
+            schema=(
+                schema if schema is not None else self._config.get("dbos_system_schema")
+            ),
         )
 
     def _destroy(self, *, workflow_completion_timeout_sec: int) -> None:

@@ -133,10 +133,10 @@ class PostgresSystemDatabase(SystemDatabase):
         """Empty every DBOS table in the system database, leaving the schema intact.
 
         dbos_migrations is spared: clearing it would re-run applied migrations."""
-        engine = sa.create_engine(
-            sa.make_url(database_url).set(drivername="postgresql+psycopg"),
-            connect_args={"connect_timeout": 10},
-        )
+        url = sa.make_url(database_url)
+        if not url.drivername.startswith("cockroachdb"):
+            url = url.set(drivername="postgresql+psycopg")
+        engine = sa.create_engine(url, connect_args={"connect_timeout": 10})
         try:
             with engine.begin() as conn:
                 tables = [
@@ -151,9 +151,7 @@ class PostgresSystemDatabase(SystemDatabase):
                 ]
                 if tables:
                     targets = ", ".join(f'"{schema}"."{table}"' for table in tables)
-                    conn.execute(
-                        sa.text(f"TRUNCATE TABLE {targets} RESTART IDENTITY CASCADE")
-                    )
+                    conn.execute(sa.text(f"TRUNCATE TABLE {targets} CASCADE"))
         except OperationalError:
             # An absent database holds no state, but the failure carries no SQLSTATE.
             if PostgresSystemDatabase._database_exists(database_url):

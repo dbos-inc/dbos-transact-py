@@ -271,8 +271,8 @@ def test_reset_explicit_url(
     cleanup_test_databases: None,
     skip_with_sqlite: None,
 ) -> None:
-    """An explicit system database URL is reset in place of the configured one,
-    with or without a global DBOS object."""
+    """An explicit system database URL and schema are reset in place of the
+    configured ones, with or without a global DBOS object."""
     sys_db_url = config["system_database_url"]
     assert sys_db_url is not None
     other_db_url = (
@@ -281,6 +281,7 @@ def test_reset_explicit_url(
         .render_as_string(hide_password=False)
     )
     other_db_name = sa.make_url(other_db_url).database
+    other_schema = "F8nny_sCHem@-n@m3"
 
     def other_db_exists() -> bool:
         with db_engine.connect() as c:
@@ -292,19 +293,35 @@ def test_reset_explicit_url(
                 ).scalar()
             )
 
-    # No global DBOS object: the URL alone is enough to migrate and then destroy
+    # No global DBOS object: the URL and schema alone are enough to reset
     DBOS.destroy(destroy_registry=True)
     other_db = SystemDatabase.create(
         system_database_url=other_db_url,
         engine_kwargs={},
         engine=None,
-        schema="dbos",
+        schema=other_schema,
         serializer=DefaultSerializer(),
         executor_id=None,
     )
     other_db.run_migrations()
+    version_row = SystemSchema.application_versions.insert().values(
+        version_id="v1", version_name="v1", version_timestamp=1, created_at=1
+    )
+    count = sa.select(sa.func.count()).select_from(SystemSchema.application_versions)
+    with other_db.engine.begin() as c:
+        c.execute(version_row)
+        assert c.execute(count).scalar_one() == 1
+
+    # Without the schema, truncation would find no tables and silently do nothing
+    DBOS.reset_system_database(
+        system_database_url=other_db_url, schema=other_schema, truncate=True
+    )
+    with other_db.engine.begin() as c:
+        assert c.execute(count).scalar_one() == 0
     other_db.destroy()
     assert other_db_exists()
+
+    # Dropping needs no schema, and takes the database with it
     DBOS.reset_system_database(system_database_url=other_db_url)
     assert not other_db_exists()
 
