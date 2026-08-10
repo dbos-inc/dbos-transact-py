@@ -281,9 +281,11 @@ def test_export_import_round_trips_owner(dbos: DBOS) -> None:
     assert application_name_of(dbos, handle.workflow_id) == APP_NAME
 
 
-def test_observability_filters_include_unclaimed_rows(dbos: DBOS) -> None:
-    """All four surfaces follow the one rule: unset lists every application, and
-    naming one lists its rows plus unclaimed ones."""
+def test_observability_filters_include_unclaimed_rows(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    """All four surfaces follow the one rule: unset lists this application's rows
+    plus unclaimed ones, and naming one lists its rows plus unclaimed ones."""
 
     @DBOS.step()
     def a_step() -> int:
@@ -304,13 +306,19 @@ def test_observability_filters_include_unclaimed_rows(dbos: DBOS) -> None:
         dbos, "unclaimed-listed", status="SUCCESS", application_name=None
     )
 
+    # Unset is this application's scope, so naming it changes nothing.
     unfiltered = {w.workflow_id for w in DBOS.list_workflows()}
-    assert {handle.workflow_id, "foreign-listed", "unclaimed-listed"} <= unfiltered
+    assert {handle.workflow_id, "unclaimed-listed"} <= unfiltered
+    assert "foreign-listed" not in unfiltered
     mine = {w.workflow_id for w in DBOS.list_workflows(application_name=APP_NAME)}
     assert {handle.workflow_id, "unclaimed-listed"} <= mine
     assert "foreign-listed" not in mine
     theirs = {w.workflow_id for w in DBOS.list_workflows(application_name=OTHER_APP)}
     assert theirs == {"foreign-listed", "unclaimed-listed"}
+    # A client with no application of its own has no scope to default to.
+    assert {handle.workflow_id, "foreign-listed", "unclaimed-listed"} <= {
+        w.workflow_id for w in client.list_workflows()
+    }
 
     aggregates = dbos._sys_db.get_workflow_aggregates(
         group_by_name=True, select_count=True, application_name=[OTHER_APP]
@@ -319,13 +327,22 @@ def test_observability_filters_include_unclaimed_rows(dbos: DBOS) -> None:
 
     # Grouping partitions where the filter deliberately overlaps.
     grouped = dbos._sys_db.get_workflow_aggregates(
-        group_by_application_name=True, select_count=True
+        group_by_application_name=True,
+        select_count=True,
+        application_name=[APP_NAME, OTHER_APP],
     )
     assert {r["group"]["application_name"] for r in grouped} == {
         APP_NAME,
         OTHER_APP,
         None,
     }
+    # Unset would have dropped the peer's group entirely.
+    assert {
+        r["group"]["application_name"]
+        for r in dbos._sys_db.get_workflow_aggregates(
+            group_by_application_name=True, select_count=True
+        )
+    } == {APP_NAME, None}
 
     steps = dbos._sys_db.get_step_aggregates(
         group_by_function_name=True, select_count=True, application_name=[OTHER_APP]
@@ -483,13 +500,9 @@ def test_unclaimed_rows_belong_to_every_application(
                 )
             )
 
-    # Unset lists every application.
-    assert {"mine", "theirs", "unclaimed"} <= {
-        s["schedule_name"] for s in DBOS.list_schedules()
-    }
-    assert {"mine-queue", "theirs-queue", "unclaimed-queue"} <= {
-        q.name for q in DBOS.list_queues()
-    }
+    # Unset is this application's scope: its own rows plus unclaimed, never a peer's.
+    assert {s["schedule_name"] for s in DBOS.list_schedules()} == {"mine", "unclaimed"}
+    assert {q.name for q in DBOS.list_queues()} == {"mine-queue", "unclaimed-queue"}
 
     # Naming an application adds the unclaimed rows, as the loops themselves do.
     assert {
