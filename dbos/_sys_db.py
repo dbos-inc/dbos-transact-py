@@ -1983,7 +1983,13 @@ class SystemDatabase(ABC):
                 SystemSchema.workflow_status.c.schedule_name.in_(schedule_name_list)
             )
         query = query.where(
-            self._observability_filter(
+            # A workflow ID is a global address, so an ID-keyed read is an identity
+            # read: it takes an explicit filter but is never defaulted to this one.
+            self._name_filter(
+                SystemSchema.workflow_status.c.application_name, application_name
+            )
+            if workflow_ids
+            else self._observability_filter(
                 SystemSchema.workflow_status.c.application_name, application_name
             )
         )

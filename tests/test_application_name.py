@@ -264,6 +264,22 @@ def test_reads_surface_owner_and_ids_stay_global(dbos: DBOS) -> None:
     foreign = dbos._sys_db.get_workflow_status("foreign-visible")
     assert foreign is not None and foreign["application_name"] == OTHER_APP
 
+    # Every public identity read reaches a peer's row too: these go through
+    # list_workflows, whose unset filter otherwise scopes to this application.
+    by_id = DBOS.list_workflows(workflow_ids=["foreign-visible"])
+    assert [w.workflow_id for w in by_id] == ["foreign-visible"]
+    assert by_id[0].application_name == OTHER_APP
+    assert DBOS.get_workflow_status("foreign-visible") is not None
+    assert (
+        DBOS.retrieve_workflow("foreign-visible").get_status().application_name
+        == OTHER_APP
+    )
+    # An explicit filter still narrows, even for an ID-keyed read.
+    assert (
+        DBOS.list_workflows(workflow_ids=["foreign-visible"], application_name=APP_NAME)
+        == []
+    )
+
 
 def test_export_import_round_trips_owner(dbos: DBOS) -> None:
     @DBOS.workflow()
