@@ -268,6 +268,70 @@ def test_reset_truncate(
     DBOS.destroy()
 
 
+def test_reset_explicit_url(
+    config: DBOSConfig,
+    db_engine: sa.Engine,
+    cleanup_test_databases: None,
+    skip_with_sqlite: None,
+) -> None:
+    """An explicit system database URL is reset in place of the configured one,
+    with or without a global DBOS object."""
+    sys_db_url = config["system_database_url"]
+    assert sys_db_url is not None
+    other_db_url = (
+        sa.make_url(sys_db_url)
+        .set(database="reset_explicit_url_test")
+        .render_as_string(hide_password=False)
+    )
+    other_db_name = sa.make_url(other_db_url).database
+
+    def other_db_exists() -> bool:
+        with db_engine.connect() as c:
+            return bool(
+                c.execute(
+                    sa.text(
+                        f"SELECT 1 FROM pg_database WHERE datname = '{other_db_name}'"
+                    )
+                ).scalar()
+            )
+
+    # No global DBOS object: the URL alone is enough to migrate and then destroy
+    DBOS.destroy(destroy_registry=True)
+    other_db = SystemDatabase.create(
+        system_database_url=other_db_url,
+        engine_kwargs={},
+        engine=None,
+        schema="dbos",
+        serializer=DefaultSerializer(),
+        executor_id=None,
+    )
+    other_db.run_migrations()
+    other_db.destroy()
+    assert other_db_exists()
+    DBOS.reset_system_database(system_database_url=other_db_url)
+    assert not other_db_exists()
+
+    # With a global DBOS object, the explicit URL wins over its configuration
+    DBOS(config=config)
+
+    @DBOS.workflow()
+    def workflow() -> str:
+        assert DBOS.workflow_id
+        return DBOS.workflow_id
+
+    DBOS.launch()
+    workflow_id = workflow()
+    DBOS.destroy()
+    DBOS(config=config)
+    # Truncating the now-absent database is a no-op, not an error
+    DBOS.reset_system_database(system_database_url=other_db_url, truncate=True)
+
+    # The configured system database is untouched
+    DBOS.launch()
+    assert [w.workflow_id for w in DBOS.list_workflows()] == [workflow_id]
+    DBOS.destroy()
+
+
 _APPLICATION_NAME_TABLES = (
     "workflow_status",
     "queues",
