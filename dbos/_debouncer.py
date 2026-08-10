@@ -109,14 +109,17 @@ def _reject_conflicting_options(
 _BounceAction = Literal["return", "enqueue", "raise", "retry"]
 
 
-def _classify_bounce(result: DebounceResult, workflow_name: str) -> _BounceAction:
+def _classify_bounce(
+    result: DebounceResult, workflow_name: str, target_application_name: Optional[str]
+) -> _BounceAction:
     """Decide what a debounce caller should do after a bounce attempt.
 
     - "return": an existing debounced workflow was extended; return a handle to
       ``result["bounced_workflow_id"]``.
     - "enqueue": the key is unheld; enqueue a fresh debounced workflow.
-    - "raise": the key is held by a non-debounced workflow or by a different
-      workflow whose debounce key collides; surface the deduplication conflict.
+    - "raise": the key is held by a non-debounced workflow, by a different
+      workflow whose debounce key collides, or by an application other than the
+      target; surface the deduplication conflict.
     - "retry": a same-name debounced holder flipped out of DELAYED mid-bounce
       (a rare race); retry the bounce.
     """
@@ -128,6 +131,11 @@ def _classify_bounce(result: DebounceResult, workflow_name: str) -> _BounceActio
         return "raise"
     if result["holder_workflow_name"] != workflow_name:
         return "raise"
+    # A foreign holder never leaves DELAYED on the target's account, so retrying would spin.
+    holder_app = result.get("holder_application_name")
+    if target_application_name is not None and holder_app is not None:
+        if holder_app != target_application_name:
+            return "raise"
     return "retry"
 
 
@@ -136,6 +144,8 @@ class DebouncerOptions(TypedDict):
     workflow_name: str
     debounce_timeout_sec: Optional[float]
     queue_name: Optional[str]
+    # The application the debounce acts for; None means the caller's own.
+    application_name: Optional[str]
 
 
 class Debouncer(Generic[P, R]):
@@ -146,12 +156,14 @@ class Debouncer(Generic[P, R]):
         *,
         debounce_timeout_sec: Optional[float] = None,
         queue: Optional[Union[Queue, str]] = None,
+        application_name: Optional[str] = None,
     ):
         self.func_name = workflow_name
         self.options: DebouncerOptions = {
             "debounce_timeout_sec": debounce_timeout_sec,
             "queue_name": _resolve_queue_name(queue),
             "workflow_name": workflow_name,
+            "application_name": application_name,
         }
 
     @staticmethod
@@ -160,6 +172,7 @@ class Debouncer(Generic[P, R]):
         *,
         debounce_timeout_sec: Optional[float] = None,
         queue: Optional[Union[Queue, str]] = None,
+        application_name: Optional[str] = None,
     ) -> "Debouncer[P, R]":
 
         if isinstance(workflow, (types.MethodType)):
@@ -168,6 +181,7 @@ class Debouncer(Generic[P, R]):
             get_dbos_func_name(workflow),
             debounce_timeout_sec=debounce_timeout_sec,
             queue=queue,
+            application_name=application_name,
         )
 
     @staticmethod
@@ -176,6 +190,7 @@ class Debouncer(Generic[P, R]):
         *,
         debounce_timeout_sec: Optional[float] = None,
         queue: Optional[Union[Queue, str]] = None,
+        application_name: Optional[str] = None,
     ) -> "Debouncer[P, R]":
 
         if isinstance(workflow, (types.MethodType)):
@@ -184,6 +199,7 @@ class Debouncer(Generic[P, R]):
             get_dbos_func_name(workflow),
             debounce_timeout_sec=debounce_timeout_sec,
             queue=queue,
+            application_name=application_name,
         )
 
     def _bounce(
@@ -195,6 +211,8 @@ class Debouncer(Generic[P, R]):
         debounce_period_sec: float,
         args: Tuple[Any, ...],
         kwargs: Dict[str, Any],
+        *,
+        application_name: Optional[str],
         conn: Optional[sa.Connection] = None,
     ) -> DebounceResult:
         # Serialize new inputs with the workflow's format so a bounce stays consistent with the initial enqueue.
@@ -211,6 +229,7 @@ class Debouncer(Generic[P, R]):
             delay_until_epoch_ms=delay_until_epoch_ms,
             inputs=inputs,
             serialization=serialization,
+            application_name=application_name,
             conn=conn,
         )
         return result
@@ -265,6 +284,12 @@ class Debouncer(Generic[P, R]):
 
         deduplication_id = f"{self.options['workflow_name']}-{debounce_key}"
         timeout_sec = self.options["debounce_timeout_sec"]
+        # One owner for the whole operation: the bounce scope, the conflict check, and the fresh enqueue must agree.
+        target_app = (
+            self.options["application_name"]
+            if self.options["application_name"] is not None
+            else dbos._sys_db.app_name
+        )
 
         while True:
             # Try to extend an existing debounced workflow for this key first (hot path, sole coalescing mechanism).
@@ -287,6 +312,7 @@ class Debouncer(Generic[P, R]):
                             debounce_period_sec,
                             args,
                             kwargs,
+                            application_name=target_app,
                             conn=c,
                         ),
                     )
@@ -299,8 +325,9 @@ class Debouncer(Generic[P, R]):
                     debounce_period_sec,
                     args,
                     kwargs,
+                    application_name=target_app,
                 )
-            action = _classify_bounce(result, self.options["workflow_name"])
+            action = _classify_bounce(result, self.options["workflow_name"], target_app)
             if action == "return":
                 bounced_wfid = result["bounced_workflow_id"]
                 assert bounced_wfid is not None
@@ -328,6 +355,7 @@ class Debouncer(Generic[P, R]):
                     deduplication_id=deduplication_id,
                     delay_until_epoch_ms=delay_until_ms,
                     debounce_deadline_epoch_ms=deadline_ms,
+                    application_name=self.options["application_name"],
                 ):
                     return queue.enqueue(func, *args, **kwargs)
             except (DBOSQueueDeduplicatedError, PortableWorkflowError) as e:
@@ -362,12 +390,14 @@ class DebouncerClient:
         *,
         debounce_timeout_sec: Optional[float] = None,
         queue: Optional[Union[Queue, str]] = None,
+        application_name: Optional[str] = None,
     ):
         self.workflow_options = workflow_options
         self.debouncer_options: DebouncerOptions = {
             "debounce_timeout_sec": debounce_timeout_sec,
             "queue_name": _resolve_queue_name(queue),
             "workflow_name": workflow_options["workflow_name"],
+            "application_name": application_name,
         }
         self.client = client
 
@@ -390,6 +420,12 @@ class DebouncerClient:
         )
         deduplication_id = f"{self.debouncer_options['workflow_name']}-{debounce_key}"
         timeout_sec = self.debouncer_options["debounce_timeout_sec"]
+        # Same one-owner rule as Debouncer.debounce; the debouncer's target wins, then the workflow options', then the client's identity.
+        target_app = self.debouncer_options["application_name"]
+        if target_app is None:
+            target_app = self.workflow_options.get("application_name")
+        if target_app is None:
+            target_app = self.client._sys_db.app_name
         serialization_type = self.workflow_options.get("serialization_type")
 
         while True:
@@ -405,8 +441,13 @@ class DebouncerClient:
                 delay_until_epoch_ms=bounce_delay_ms,
                 inputs=inputs,
                 serialization=serialization,
+                application_name=target_app,
             )
-            action = _classify_bounce(result, self.debouncer_options["workflow_name"])
+            action = _classify_bounce(
+                result,
+                self.debouncer_options["workflow_name"],
+                target_app,
+            )
             if action == "return":
                 bounced_wfid = result["bounced_workflow_id"]
                 assert bounced_wfid is not None
@@ -432,6 +473,7 @@ class DebouncerClient:
                     "queue_name": queue_name,
                     "deduplication_id": deduplication_id,
                     "delay_seconds": delay_sec,
+                    "application_name": target_app,
                 },
             )
             try:

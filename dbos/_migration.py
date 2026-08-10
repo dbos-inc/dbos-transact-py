@@ -8,7 +8,34 @@ from ._logger import dbos_logger
 # autocommit (CREATE/DROP INDEX CONCURRENTLY cannot run inside a transaction
 # block on Postgres). On CockroachDB, schema changes are inherently online,
 # so this set is ignored and the regular transactional path is used.
-_ONLINE_MIGRATIONS = {22, 23, 24, 25, 26, 27, 29, 30, 31, 32, 34, 35, 37, 45, 46, 47}
+_ONLINE_MIGRATIONS = {
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    29,
+    30,
+    31,
+    32,
+    34,
+    35,
+    37,
+    45,
+    46,
+    47,
+    107,
+}
+
+# From this index on, every SDK defines the same migration at the same index.
+SHARED_MIGRATION_BASE = 100
+
+
+def _pad_to_shared_base(migrations: list[str]) -> list[str]:
+    """Pad a language's own history out to SHARED_MIGRATION_BASE - 1. Earlier
+    indices stay per-language, safe to skip only because the schemas converge."""
+    return migrations + [""] * (SHARED_MIGRATION_BASE - 1 - len(migrations))
 
 
 def _concurrently(is_cockroach: bool) -> str:
@@ -159,13 +186,11 @@ def run_dbos_migrations(
         if i <= last_applied:
             continue
 
-        dbos_logger.info(f"Applying DBOS system database schema migration {i}")
-
+        # Renumbering left long runs of empty migrations; skip them without a round trip.
         if not migration_sql.strip():
-            dbos_logger.info(f"Migration {i} has no statements; skipping.")
-            _bump_migration_version(engine, schema, i, last_applied)
-            last_applied = i
             continue
+
+        dbos_logger.info(f"Applying DBOS system database schema migration {i}")
 
         # Online migrations contain CONCURRENTLY index DDL and must run with
         # autocommit. On CockroachDB, schema changes are inherently online, so
@@ -217,6 +242,10 @@ def run_dbos_migrations(
                     {"version": i},
                 )
             last_applied = i
+
+    # Empty migrations at the end still count as applied, so record them in one write.
+    if len(migrations) > last_applied:
+        _bump_migration_version(engine, schema, len(migrations), last_applied)
 
 
 def get_dbos_migration_one(schema: str, use_listen_notify: bool) -> str:
@@ -924,10 +953,164 @@ def get_dbos_migration_fortyseven(schema: str, is_cockroach: bool) -> str:
     )
 
 
+def get_dbos_migration_hundred(schema: str) -> str:
+    # NULL means unclaimed: any application may read and claim the row. One table per migration, so a blocked table does not hold the others' locks.
+    return f"""
+ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
+"""
+
+
+def get_dbos_migration_hundredone(schema: str) -> str:
+    return f"""
+ALTER TABLE "{schema}"."queues" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
+"""
+
+
+def get_dbos_migration_hundredtwo(schema: str) -> str:
+    return f"""
+ALTER TABLE "{schema}"."workflow_schedules" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
+"""
+
+
+def get_dbos_migration_hundredthree(schema: str) -> str:
+    return f"""
+ALTER TABLE "{schema}"."application_versions" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
+"""
+
+
+def get_dbos_migration_hundredfour(schema: str) -> str:
+    return f"""
+ALTER TABLE "{schema}"."operation_outputs" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
+"""
+
+
+def get_dbos_migration_hundredfive(schema: str, is_cockroach: bool) -> str:
+    # Callers omitting the trailing application_name enqueue an unclaimed workflow.
+    migration = f"""
+DROP FUNCTION IF EXISTS "{schema}".enqueue_workflow(
+    TEXT, TEXT, JSON[], JSON, TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, INT4, TEXT, TEXT, TEXT, BIGINT
+);
+
+CREATE OR REPLACE FUNCTION "{schema}".enqueue_workflow(
+    workflow_name TEXT,
+    queue_name TEXT,
+    positional_args JSON[] DEFAULT ARRAY[]::JSON[],
+    named_args JSON DEFAULT '{{}}'::JSON,
+    class_name TEXT DEFAULT NULL,
+    config_name TEXT DEFAULT NULL,
+    workflow_id TEXT DEFAULT NULL,
+    app_version TEXT DEFAULT NULL,
+    timeout_ms BIGINT DEFAULT NULL,
+    deadline_epoch_ms BIGINT DEFAULT NULL,
+    deduplication_id TEXT DEFAULT NULL,
+    priority INT4 DEFAULT NULL,
+    queue_partition_key TEXT DEFAULT NULL,
+    authenticated_user TEXT DEFAULT NULL,
+    authenticated_roles TEXT DEFAULT NULL,
+    delay_until_epoch_ms BIGINT DEFAULT NULL,
+    application_name TEXT DEFAULT NULL
+) RETURNS TEXT AS $$
+DECLARE
+    v_workflow_id TEXT;
+    v_serialized_inputs TEXT;
+    v_owner_xid TEXT;
+    v_now BIGINT;
+    v_recovery_attempts INT4 := 0;
+    v_priority INT4;
+    v_status TEXT;
+BEGIN
+
+    -- Validate required parameters
+    IF workflow_name IS NULL OR workflow_name = '' THEN
+        RAISE EXCEPTION 'Workflow name cannot be null or empty';
+    END IF;
+    IF queue_name IS NULL OR queue_name = '' THEN
+        RAISE EXCEPTION 'Queue name cannot be null or empty';
+    END IF;
+    IF named_args IS NOT NULL AND jsonb_typeof(named_args::jsonb) != 'object' THEN
+        RAISE EXCEPTION 'Named args must be a JSON object';
+    END IF;
+    IF workflow_id IS NOT NULL AND workflow_id = '' THEN
+        RAISE EXCEPTION 'Workflow ID cannot be an empty string if provided.';
+    END IF;
+    IF delay_until_epoch_ms IS NOT NULL AND delay_until_epoch_ms < 0 THEN
+        RAISE EXCEPTION 'delay_until_epoch_ms must be >= 0';
+    END IF;
+
+    v_workflow_id := COALESCE(workflow_id, gen_random_uuid()::TEXT);
+    v_owner_xid := gen_random_uuid()::TEXT;
+    v_priority := COALESCE(priority, 0);
+    v_serialized_inputs := json_build_object(
+        'positionalArgs', positional_args,
+        'namedArgs', named_args
+    )::TEXT;
+    v_now := EXTRACT(epoch FROM now()) * 1000;
+    v_status := CASE WHEN delay_until_epoch_ms IS NULL THEN 'ENQUEUED' ELSE 'DELAYED' END;
+
+    INSERT INTO "{schema}".workflow_status (
+        workflow_uuid, status, inputs,
+        name, class_name, config_name,
+        queue_name, deduplication_id, priority, queue_partition_key,
+        application_version,
+        created_at, updated_at, recovery_attempts,
+        workflow_timeout_ms, workflow_deadline_epoch_ms,
+        parent_workflow_id, owner_xid, serialization,
+        authenticated_user, authenticated_roles,
+        delay_until_epoch_ms, application_name
+    ) VALUES (
+        v_workflow_id, v_status, v_serialized_inputs,
+        workflow_name, class_name, config_name,
+        queue_name, deduplication_id, v_priority, queue_partition_key,
+        app_version,
+        v_now, v_now, v_recovery_attempts,
+        timeout_ms, deadline_epoch_ms,
+        NULL, v_owner_xid, 'portable_json',
+        authenticated_user, authenticated_roles,
+        delay_until_epoch_ms, application_name
+    )
+    ON CONFLICT (workflow_uuid)
+    DO UPDATE SET
+        updated_at = EXCLUDED.updated_at;
+
+    RETURN v_workflow_id;
+
+EXCEPTION
+    WHEN unique_violation THEN
+        RAISE EXCEPTION 'DBOS queue duplicated'
+            USING DETAIL = format('Workflow %s with queue %s and deduplication ID %s already exists', v_workflow_id, queue_name, deduplication_id),
+                ERRCODE = 'unique_violation';
+END;
+$$ LANGUAGE plpgsql;
+"""
+    if not is_cockroach:
+        migration += f"""
+ALTER FUNCTION "{schema}".enqueue_workflow(
+    TEXT, TEXT, JSON[], JSON, TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, INT4, TEXT, TEXT, TEXT, BIGINT, TEXT
+) SET search_path = pg_catalog, pg_temp;
+"""
+    return migration
+
+
+def get_dbos_migration_hundredsix(schema: str) -> str:
+    # With 107, the key replacing version_name's retiring global uniqueness, unclaimed counting as its own owner. The constraint may not be dropped until every SDK reaching this database is past 107, which runs online because every unclaimed row matches its predicate.
+    return f"""
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_application_versions_owner_version"
+    ON "{schema}"."application_versions" ("application_name", "version_name")
+    WHERE "application_name" IS NOT NULL;
+"""
+
+
+def get_dbos_migration_hundredseven(schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f"""CREATE UNIQUE INDEX {c} IF NOT EXISTS "uq_application_versions_unclaimed_version"
+    ON "{schema}"."application_versions" ("version_name")
+    WHERE "application_name" IS NULL"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
-    return [
+    history = [
         get_dbos_migration_one(schema, use_listen_notify),
         get_dbos_migration_two(schema),
         get_dbos_migration_three(schema),
@@ -975,6 +1158,17 @@ def get_dbos_migrations(
         get_dbos_migration_fortyfive(schema, is_cockroach),
         get_dbos_migration_fortysix(schema, is_cockroach),
         get_dbos_migration_fortyseven(schema, is_cockroach),
+    ]
+    return [
+        *_pad_to_shared_base(history),
+        get_dbos_migration_hundred(schema),
+        get_dbos_migration_hundredone(schema),
+        get_dbos_migration_hundredtwo(schema),
+        get_dbos_migration_hundredthree(schema),
+        get_dbos_migration_hundredfour(schema),
+        get_dbos_migration_hundredfive(schema, is_cockroach),
+        get_dbos_migration_hundredsix(schema),
+        get_dbos_migration_hundredseven(schema, is_cockroach),
     ]
 
 
@@ -1243,7 +1437,40 @@ sqlite_migration_fortyseven = (
     'DROP INDEX IF EXISTS "idx_workflow_status_partition_dequeue"'
 )
 
-sqlite_migrations = [
+sqlite_migration_hundred = (
+    'ALTER TABLE workflow_status ADD COLUMN "application_name" TEXT DEFAULT NULL'
+)
+
+sqlite_migration_hundredone = (
+    'ALTER TABLE queues ADD COLUMN "application_name" TEXT DEFAULT NULL'
+)
+
+sqlite_migration_hundredtwo = (
+    'ALTER TABLE workflow_schedules ADD COLUMN "application_name" TEXT DEFAULT NULL'
+)
+
+sqlite_migration_hundredthree = (
+    'ALTER TABLE application_versions ADD COLUMN "application_name" TEXT DEFAULT NULL'
+)
+
+sqlite_migration_hundredfour = (
+    'ALTER TABLE operation_outputs ADD COLUMN "application_name" TEXT DEFAULT NULL'
+)
+
+# See get_dbos_migration_hundredsix: the same key, built while the constraint still implies it.
+sqlite_migration_hundredsix = """
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_application_versions_owner_version"
+    ON application_versions ("application_name", "version_name")
+    WHERE "application_name" IS NOT NULL;
+"""
+
+sqlite_migration_hundredseven = """
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_application_versions_unclaimed_version"
+    ON application_versions ("version_name")
+    WHERE "application_name" IS NULL;
+"""
+
+_sqlite_history = [
     sqlite_migration_one,
     sqlite_migration_two,
     sqlite_migration_three,
@@ -1289,4 +1516,17 @@ sqlite_migrations = [
     sqlite_migration_fortyfive,
     sqlite_migration_fortysix,
     sqlite_migration_fortyseven,
+]
+
+sqlite_migrations = [
+    *_pad_to_shared_base(_sqlite_history),
+    sqlite_migration_hundred,
+    sqlite_migration_hundredone,
+    sqlite_migration_hundredtwo,
+    sqlite_migration_hundredthree,
+    sqlite_migration_hundredfour,
+    # Postgres migration 105 rewrites a stored function; SQLite has none.
+    "",
+    sqlite_migration_hundredsix,
+    sqlite_migration_hundredseven,
 ]

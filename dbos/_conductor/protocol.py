@@ -1,5 +1,5 @@
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -198,6 +198,7 @@ class ListWorkflowsBody(TypedDict, total=False):
     has_parent: Optional[bool]
     attributes: Optional[Dict[str, Any]]
     schedule_name: Optional[Union[str, List[str]]]
+    application_name: Optional[Union[str, List[str]]]
 
 
 @dataclass
@@ -231,6 +232,7 @@ class WorkflowsOutput:
     CompletedAt: Optional[str]
     Attributes: Optional[str]
     ScheduleName: Optional[str]
+    ApplicationName: Optional[str]
 
     @classmethod
     def from_workflow_information(cls, info: WorkflowStatus) -> "WorkflowsOutput":
@@ -302,6 +304,7 @@ class WorkflowsOutput:
             CompletedAt=completed_at_str,
             Attributes=attributes_str,
             ScheduleName=info.schedule_name,
+            ApplicationName=info.application_name,
         )
 
 
@@ -377,6 +380,7 @@ class ListQueuedWorkflowsBody(TypedDict, total=False):
     has_parent: Optional[bool]
     attributes: Optional[Dict[str, Any]]
     schedule_name: Optional[Union[str, List[str]]]
+    application_name: Optional[Union[str, List[str]]]
 
 
 @dataclass
@@ -494,6 +498,8 @@ class GetMetricsRequest(BaseMessage):
     start_time: str  # ISO 8601
     end_time: str  # ISO 8601
     metric_class: str
+    # Defaulted so a Conductor predating the field still deserializes, as unscoped.
+    application_name: Optional[List[str]] = None
 
 
 @dataclass
@@ -561,6 +567,7 @@ class ScheduleOutput:
     automatic_backfill: bool
     cron_timezone: Optional[str]
     queue_name: Optional[str]
+    application_name: Optional[str]
 
     @classmethod
     def from_schedule(
@@ -593,6 +600,7 @@ class ScheduleOutput:
             automatic_backfill=s.get("automatic_backfill", False),
             cron_timezone=s.get("cron_timezone"),
             queue_name=s.get("queue_name"),
+            application_name=s.get("application_name"),
         )
 
 
@@ -600,6 +608,7 @@ class ListSchedulesBody(TypedDict, total=False):
     status: Optional[Union[str, List[str]]]
     workflow_name: Optional[Union[str, List[str]]]
     schedule_name_prefix: Optional[Union[str, List[str]]]
+    application_name: Optional[Union[str, List[str]]]
     load_context: bool
 
 
@@ -790,6 +799,7 @@ class GetWorkflowAggregatesBody(TypedDict, total=False):
     group_by_queue_name: bool
     group_by_executor_id: bool
     group_by_application_version: bool
+    group_by_application_name: bool
     select_count: bool
     select_min_created_at: bool
     select_max_queue_wait_ms: bool
@@ -812,6 +822,7 @@ class GetWorkflowAggregatesBody(TypedDict, total=False):
     parent_workflow_id: Optional[List[str]]
     user: Optional[List[str]]
     schedule_name: Optional[List[str]]
+    application_name: Optional[List[str]]
     was_forked_from: Optional[bool]
     has_parent: Optional[bool]
     attributes: Optional[Dict[str, Any]]
@@ -848,6 +859,7 @@ class GetStepAggregatesBody(TypedDict, total=False):
     workflow_id_prefix: Optional[List[str]]
     completed_after: Optional[str]
     completed_before: Optional[str]
+    application_name: Optional[List[str]]
 
 
 @dataclass
@@ -881,6 +893,7 @@ class QueueOutput:
     priority_enabled: bool
     partition_queue: bool
     polling_interval_sec: float
+    application_name: Optional[str]
 
     @classmethod
     def from_queue(cls, q: "Queue") -> "QueueOutput":
@@ -893,12 +906,18 @@ class QueueOutput:
             priority_enabled=q._priority_enabled,
             partition_queue=q._partition_queue,
             polling_interval_sec=q._polling_interval_sec,
+            application_name=q.application_name,
         )
+
+
+class ListQueuesBody(TypedDict, total=False):
+    application_name: Optional[Union[str, List[str]]]
 
 
 @dataclass
 class ListQueuesRequest(BaseMessage):
-    pass
+    # Defaulted: a Conductor that predates the filter still sends no body.
+    body: ListQueuesBody = field(default_factory=lambda: ListQueuesBody())
 
 
 @dataclass

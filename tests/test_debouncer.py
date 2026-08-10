@@ -15,11 +15,12 @@ from dbos import (
 )
 from dbos._client import EnqueueOptions
 from dbos._context import SetEnqueueOptions, SetWorkflowTimeout
+from dbos._debouncer import _classify_bounce
 from dbos._debug_trigger import DebugAction, DebugTriggers
 from dbos._error import DBOSException, DBOSQueueDeduplicatedError
 from dbos._queue import Queue
 from dbos._registrations import get_dbos_func_name
-from dbos._utils import GlobalParams
+from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from tests.conftest import set_workflow_status
 
 
@@ -773,6 +774,114 @@ def test_debounce_key_collision_between_workflows(
     assert handle_a2.workflow_id == handle_a.workflow_id
 
     DBOS.cancel_workflow(handle_a.workflow_id)
+
+
+def test_debounce_ownership_across_applications(dbos: DBOS, config: Any) -> None:
+    """A dedup key is a global address, so bouncing claims the holder and a peer
+    contending for it collides rather than overwriting the owner's inputs."""
+    queue_name = f"cross-app-queue-{uuid.uuid4()}"
+    DBOS.register_queue(queue_name)
+    url = config["system_database_url"]
+    nameless = DBOSClient(system_database_url=url)
+    client_a = DBOSClient(system_database_url=url, application_name="app-a")
+    client_b = DBOSClient(system_database_url=url, application_name="app-b")
+
+    def owner_of(workflow_id: str) -> Any:
+        status = dbos._sys_db.get_workflow_status(workflow_id)
+        assert status is not None and status["status"] == "DELAYED"
+        return status["application_name"]
+
+    try:
+        opts: Any = {"workflow_name": "shared_wf", "queue_name": queue_name}
+        # A huge period keeps the workflow DELAYED, holding the key.
+        handle: WorkflowHandle[int] = DebouncerClient(nameless, opts).debounce(
+            "k", 1000000, 1
+        )
+        assert owner_of(handle.workflow_id) is None
+
+        # Bouncing an unclaimed holder claims it, as dequeue does.
+        again: WorkflowHandle[int] = DebouncerClient(client_a, opts).debounce(
+            "k", 1000000, 2
+        )
+        assert again.workflow_id == handle.workflow_id
+        assert owner_of(handle.workflow_id) == "app-a"
+
+        # Pinned directly, so a regression fails here rather than by spinning until the timeout.
+        assert (
+            _classify_bounce(
+                {
+                    "bounced_workflow_id": None,
+                    "holder_workflow_id": handle.workflow_id,
+                    "holder_is_debounced": True,
+                    "holder_workflow_name": "shared_wf",
+                    "holder_application_name": "app-a",
+                },
+                "shared_wf",
+                "app-b",
+            )
+            == "raise"
+        )
+
+        # Same workflow name, same key, different application: a conflict, not a takeover.
+        with pytest.raises(DBOSQueueDeduplicatedError):
+            DebouncerClient(client_b, opts).debounce("k", 1, 3)
+        assert owner_of(handle.workflow_id) == "app-a"
+
+        # A nameless client has no identity to claim with, so it leaves the owner alone.
+        DebouncerClient(nameless, opts).debounce("k", 1000000, 4)
+        assert owner_of(handle.workflow_id) == "app-a"
+
+        DBOS.cancel_workflow(handle.workflow_id)
+    finally:
+        for client in (nameless, client_a, client_b):
+            client.destroy()
+
+
+def test_debounce_targets_another_application(dbos: DBOS, config: Any) -> None:
+    """Both debouncers can act for a named application: the fresh enqueue stamps it,
+    later bounces from any caller naming the same target coalesce onto the holder,
+    and a caller resolving to a different target collides."""
+    client = DBOSClient(
+        system_database_url=config["system_database_url"], application_name="app-a"
+    )
+
+    @DBOS.workflow()
+    def wf(x: int) -> int:
+        return x
+
+    def owner_of(workflow_id: str) -> Any:
+        status = dbos._sys_db.get_workflow_status(workflow_id)
+        assert status is not None and status["status"] == "DELAYED"
+        return status["application_name"]
+
+    try:
+        # Runtime debouncer acting for another application; a huge period keeps the holder DELAYED.
+        debouncer = Debouncer.create(wf, application_name="other-app")
+        first = debouncer.debounce("k", 1000000, 1)
+        assert owner_of(first.workflow_id) == "other-app"
+        assert debouncer.debounce("k", 1000000, 2).workflow_id == first.workflow_id
+
+        # Cross-application rows carry no version, so the target's latest version runs them.
+        status = dbos._sys_db.get_workflow_status(first.workflow_id)
+        assert status is not None and status["app_version"] is None
+
+        # A client with its own identity coalesces onto the same holder when it names the target.
+        opts: Any = {
+            "workflow_name": get_dbos_func_name(wf),
+            "queue_name": INTERNAL_QUEUE_NAME,
+        }
+        targeted = DebouncerClient(client, opts, application_name="other-app")
+        assert targeted.debounce("k", 1000000, 3).workflow_id == first.workflow_id
+        assert owner_of(first.workflow_id) == "other-app"
+
+        # Without naming the target, the client acts as itself and collides.
+        with pytest.raises(DBOSQueueDeduplicatedError):
+            DebouncerClient(client, opts).debounce("k", 1, 4)
+        assert owner_of(first.workflow_id) == "other-app"
+
+        DBOS.cancel_workflow(first.workflow_id)
+    finally:
+        client.destroy()
 
 
 def test_debounce_bounce_atomic_with_checkpoint(

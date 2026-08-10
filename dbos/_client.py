@@ -50,6 +50,8 @@ from dbos._serialization import (
     safe_deserialize_schedule_context,
 )
 from dbos._sys_db import (
+    DEFAULT_RENAME_BATCH_SIZE,
+    ApplicationRowCounts,
     ClientScheduleInput,
     SendMessage,
     StepInfo,
@@ -133,6 +135,7 @@ class DBOSClient:
         system_database_pool_size: Optional[int] = None,
         system_database_polling_concurrency: Optional[int] = None,
         use_listen_notify: bool = False,
+        application_name: Optional[str] = None,
         lazy: bool = False,
         retry_connection_errors: bool = True,
     ):
@@ -157,6 +160,7 @@ class DBOSClient:
             system_database_pool_size (int): System database pool size. Defaults to 5.
             system_database_polling_concurrency (int): Maximum number of DB-backed polling reads (from wait operations such as get_result, get_event, and read_stream) that may run concurrently against the system database pool. Defaults to half the system database pool size (minimum 1). Set to a non-positive value to disable the limiter.
             use_listen_notify (bool): Whether to run a listener thread so get_event and read_stream are woken by notifications rather than polling the database. Defaults to False. Only enable this if the system database was created with use_listen_notify=True (the DBOS default).
+            application_name (str): The application this client acts on behalf of. Always set this when several applications share this system database, so workflows, schedules, and queues created by this client are owned by that application.
             lazy (bool): Whether to defer connecting until the client is first used. Defaults to False, meaning the connection is checked on construction. Call check_connection() or check_connection_async() to check it explicitly. Cannot be combined with use_listen_notify, whose listener connects immediately.
             retry_connection_errors (bool): Whether an operation that loses its database connection blocks and retries until the connection recovers. Defaults to True. Set to False to raise instead, so an unreachable database surfaces as an error rather than a wait.
 
@@ -205,6 +209,7 @@ class DBOSClient:
             executor_id=None,
             use_listen_notify=use_listen_notify,
             polling_concurrency=system_database_polling_concurrency,
+            app_name=application_name,
             retry_connection_errors=retry_connection_errors,
         )
         self._notification_listener_thread: Optional[threading.Thread] = None
@@ -245,7 +250,13 @@ class DBOSClient:
     def _build_enqueue_status(
         self, options: EnqueueOptions, *args: Any, **kwargs: Any
     ) -> tuple[str, WorkflowStatusInternal]:
-        return build_enqueue_status(options, self._serializer, args, kwargs)
+        workflow_id, status = build_enqueue_status(
+            options, self._serializer, args, kwargs
+        )
+        if status["application_name"] is None:
+            # Fall back to the client's own application, if it was given one.
+            status["application_name"] = self._sys_db.app_name
+        return workflow_id, status
 
     def _enqueue(self, options: EnqueueOptions, *args: Any, **kwargs: Any) -> str:
         workflow_id, status = self._build_enqueue_status(options, *args, **kwargs)
@@ -343,6 +354,7 @@ class DBOSClient:
         partition_queue: bool = False,
         polling_interval_sec: float = 1.0,
         on_conflict: QueueConflictResolution = "always_update",
+        application_name: Optional[str] = None,
     ) -> Queue:
         """Register a queue from a client and persist it to the system database.
 
@@ -374,6 +386,9 @@ class DBOSClient:
             ``"update_if_latest_version"`` is rejected because clients are not
             associated with an application version. ``"never_update"`` leaves
             the existing row unchanged.
+        :param application_name: The application that owns this queue and polls
+            it. Defaults to the client's own application. Registering a queue
+            already owned by a different application raises.
 
         :returns: A :class:`Queue` bound to this client's system database.
         """
@@ -408,6 +423,7 @@ class DBOSClient:
             partition_queue=partition_queue,
             polling_interval_sec=polling_interval_sec,
             update_existing=update_existing,
+            application_name=application_name,
         )
         queue = self._sys_db.get_queue(name, client_system_database=self._sys_db)
         assert queue is not None, f"Queue {name} missing from database after upsert"
@@ -426,6 +442,7 @@ class DBOSClient:
         partition_queue: bool = False,
         polling_interval_sec: float = 1.0,
         on_conflict: QueueConflictResolution = "always_update",
+        application_name: Optional[str] = None,
     ) -> Queue:
         """Async version of :meth:`register_queue`."""
         return await asyncio.to_thread(
@@ -438,6 +455,7 @@ class DBOSClient:
                 partition_queue=partition_queue,
                 polling_interval_sec=polling_interval_sec,
                 on_conflict=on_conflict,
+                application_name=application_name,
             )
         )
 
@@ -463,16 +481,28 @@ class DBOSClient:
         """Async version of :meth:`delete_queue`."""
         await asyncio.to_thread(self.delete_queue, name)
 
-    def list_queues(self) -> List[Queue]:
-        """List all database-backed queues registered in the system database."""
+    def list_queues(
+        self, *, application_name: Optional[Union[str, List[str]]] = None
+    ) -> List[Queue]:
+        """List all database-backed queues registered in the system database.
+
+        :param application_name: List only queues owned by these applications.
+            By default, only list this application's queues.
+        """
         _warn_sync_db_call_in_async_context(
             "DBOSClient.list_queues", "DBOSClient.list_queues_async"
         )
-        return self._sys_db.list_queues(client_system_database=self._sys_db)
+        return self._sys_db.list_queues(
+            application_name=application_name, client_system_database=self._sys_db
+        )
 
-    async def list_queues_async(self) -> List[Queue]:
+    async def list_queues_async(
+        self, *, application_name: Optional[Union[str, List[str]]] = None
+    ) -> List[Queue]:
         """Async version of :meth:`list_queues`."""
-        return await asyncio.to_thread(self.list_queues)
+        return await asyncio.to_thread(
+            lambda: self.list_queues(application_name=application_name)
+        )
 
     def retrieve_workflow(self, workflow_id: str) -> "WorkflowHandle[R]":
         status = get_workflow(self._sys_db, workflow_id)
@@ -862,6 +892,7 @@ class DBOSClient:
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
         schedule_name: Optional[str | list[str]] = None,
+        application_name: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         return self._sys_db.list_workflows(
             workflow_ids=workflow_ids,
@@ -890,6 +921,7 @@ class DBOSClient:
             has_parent=has_parent,
             attributes=attributes,
             schedule_name=schedule_name,
+            application_name=application_name,
         )
 
     async def list_workflows_async(
@@ -921,6 +953,7 @@ class DBOSClient:
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
         schedule_name: Optional[str | list[str]] = None,
+        application_name: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         return await asyncio.to_thread(
             self.list_workflows,
@@ -950,6 +983,7 @@ class DBOSClient:
             has_parent=has_parent,
             attributes=attributes,
             schedule_name=schedule_name,
+            application_name=application_name,
         )
 
     def list_queued_workflows(
@@ -978,6 +1012,7 @@ class DBOSClient:
         executor_id: Optional[str | list[str]] = None,
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
+        application_name: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         return self._sys_db.list_workflows(
             workflow_ids=workflow_ids,
@@ -1004,6 +1039,7 @@ class DBOSClient:
             queues_only=True,
             has_parent=has_parent,
             attributes=attributes,
+            application_name=application_name,
         )
 
     async def list_queued_workflows_async(
@@ -1032,6 +1068,7 @@ class DBOSClient:
         executor_id: Optional[str | list[str]] = None,
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
+        application_name: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         return await asyncio.to_thread(
             self.list_queued_workflows,
@@ -1058,6 +1095,7 @@ class DBOSClient:
             executor_id=executor_id,
             has_parent=has_parent,
             attributes=attributes,
+            application_name=application_name,
         )
 
     def list_workflow_steps(
@@ -1244,6 +1282,7 @@ class DBOSClient:
         automatic_backfill: bool = False,
         cron_timezone: Optional[str] = None,
         queue_name: Optional[str] = None,
+        application_name: Optional[str] = None,
     ) -> None:
         """
         Create a cron schedule that periodically invokes a workflow.
@@ -1257,9 +1296,10 @@ class DBOSClient:
             automatic_backfill: If ``True``, on startup the scheduler will automatically backfill missed executions since the last time the schedule fired. Defaults to ``False``.
             cron_timezone: IANA timezone name (e.g. ``"America/New_York"``) in which to evaluate the cron expression. Defaults to ``None`` (UTC).
             queue_name: Optional name of a queue to enqueue scheduled workflows to. If ``None``, uses the internal queue. Defaults to ``None``.
+            application_name: The application that owns this schedule and runs its workflows. Defaults to the client's own application. Leaving both unset creates an unclaimed schedule, which every application sharing the system database will run.
 
         Raises:
-            DBOSException: If the cron expression is invalid or a schedule with the same name already exists.
+            DBOSException: If the cron expression is invalid, a schedule with the same name already exists, or the existing schedule belongs to another application.
         """
         if not croniter.is_valid(schedule, second_at_beginning=True):
             raise DBOSException(f"Invalid cron schedule: '{schedule}'")
@@ -1281,6 +1321,11 @@ class DBOSClient:
                 automatic_backfill=automatic_backfill,
                 cron_timezone=cron_timezone,
                 queue_name=queue_name,
+                application_name=(
+                    application_name
+                    if application_name is not None
+                    else self._sys_db.app_name
+                ),
             )
         )
 
@@ -1290,6 +1335,7 @@ class DBOSClient:
         status: Optional[Union[str, List[str]]] = None,
         workflow_name: Optional[Union[str, List[str]]] = None,
         schedule_name_prefix: Optional[Union[str, List[str]]] = None,
+        application_name: Optional[Union[str, List[str]]] = None,
     ) -> List[WorkflowSchedule]:
         """
         Return all registered workflow schedules, optionally filtered.
@@ -1298,11 +1344,14 @@ class DBOSClient:
             status: Filter by status (e.g. ``"ACTIVE"``) or a list of statuses
             workflow_name: Filter by workflow name or a list of names
             schedule_name_prefix: Filter by schedule name prefix or a list of prefixes
+            application_name: List only schedules owned by these applications.
+                By default, only list this application's schedules.
         """
         schedules = self._sys_db.list_schedules(
             status=status,
             workflow_name=workflow_name,
             schedule_name_prefix=schedule_name_prefix,
+            application_name=application_name,
         )
         for s in schedules:
             s["context"] = safe_deserialize_schedule_context(
@@ -1338,6 +1387,7 @@ class DBOSClient:
         automatic_backfill: bool = False,
         cron_timezone: Optional[str] = None,
         queue_name: Optional[str] = None,
+        application_name: Optional[str] = None,
     ) -> None:
         """Async version of :meth:`create_schedule`."""
         await asyncio.to_thread(
@@ -1350,6 +1400,7 @@ class DBOSClient:
             automatic_backfill=automatic_backfill,
             cron_timezone=cron_timezone,
             queue_name=queue_name,
+            application_name=application_name,
         )
 
     async def list_schedules_async(
@@ -1358,6 +1409,7 @@ class DBOSClient:
         status: Optional[Union[str, List[str]]] = None,
         workflow_name: Optional[Union[str, List[str]]] = None,
         schedule_name_prefix: Optional[Union[str, List[str]]] = None,
+        application_name: Optional[Union[str, List[str]]] = None,
     ) -> List[WorkflowSchedule]:
         """Async version of :meth:`list_schedules`."""
         return await asyncio.to_thread(
@@ -1365,6 +1417,7 @@ class DBOSClient:
             status=status,
             workflow_name=workflow_name,
             schedule_name_prefix=schedule_name_prefix,
+            application_name=application_name,
         )
 
     async def get_schedule_async(self, name: str) -> Optional[WorkflowSchedule]:
@@ -1432,6 +1485,9 @@ class DBOSClient:
                     automatic_backfill=entry.get("automatic_backfill", False),
                     cron_timezone=cron_timezone,
                     queue_name=entry.get("queue_name"),
+                    application_name=entry.get(
+                        "application_name", self._sys_db.app_name
+                    ),
                 )
             )
         with self._sys_db.engine.begin() as c:
@@ -1497,10 +1553,19 @@ class DBOSClient:
         """Return the latest application version."""
         return self._sys_db.get_latest_application_version()
 
-    def set_latest_application_version(self, version_name: str) -> None:
-        """Set a version as the latest by updating its timestamp to now."""
+    def set_latest_application_version(
+        self, version_name: str, *, application_name: Optional[str] = None
+    ) -> None:
+        """Set a version as the latest by updating its timestamp to now.
+
+        :param application_name: The application to act as. Defaults to this
+            caller's. Version names are global, so promoting one registered by
+            a different application raises.
+        """
         new_timestamp = int(time.time() * 1000)
-        self._sys_db.update_application_version_timestamp(version_name, new_timestamp)
+        self._sys_db.update_application_version_timestamp(
+            version_name, new_timestamp, application_name=application_name
+        )
 
     async def list_application_versions_async(self) -> List[VersionInfo]:
         """Async version of :meth:`list_application_versions`."""
@@ -1510,6 +1575,63 @@ class DBOSClient:
         """Async version of :meth:`get_latest_application_version`."""
         return await asyncio.to_thread(self.get_latest_application_version)
 
-    async def set_latest_application_version_async(self, version_name: str) -> None:
+    async def set_latest_application_version_async(
+        self, version_name: str, *, application_name: Optional[str] = None
+    ) -> None:
         """Async version of :meth:`set_latest_application_version`."""
-        await asyncio.to_thread(self.set_latest_application_version, version_name)
+        await asyncio.to_thread(
+            lambda: self.set_latest_application_version(
+                version_name, application_name=application_name
+            )
+        )
+
+    # ── Application Rename API ──────────────────────────────────
+
+    def rename_application(
+        self,
+        old_name: Optional[str],
+        new_name: str,
+        *,
+        batch_size: Optional[int] = DEFAULT_RENAME_BATCH_SIZE,
+        adopt_unclaimed_rows: bool = False,
+    ) -> ApplicationRowCounts:
+        """Give an application ownership of rows another name holds, rows nobody holds,
+        or both. Do not run while your application is running.
+
+        :param old_name: The application's previous name. ``None`` moves nothing
+            but the unclaimed rows, so it requires ``adopt_unclaimed_rows``.
+        :param new_name: The application that ends up owning the rows.
+        :param batch_size: Terminal workflows and steps are re-owned this many at
+            a time. ``None`` moves them in a single transaction.
+        :param adopt_unclaimed_rows: Also take rows no application owns
+            (``application_name=NULL``). Default to ``False``.
+
+        :returns: The number of rows moved, by table.
+        """
+        _warn_sync_db_call_in_async_context(
+            "DBOSClient.rename_application", "DBOSClient.rename_application_async"
+        )
+        return self._sys_db.rename_application(
+            old_name,
+            new_name,
+            batch_size=batch_size,
+            adopt_unclaimed_rows=adopt_unclaimed_rows,
+        )
+
+    async def rename_application_async(
+        self,
+        old_name: Optional[str],
+        new_name: str,
+        *,
+        batch_size: Optional[int] = DEFAULT_RENAME_BATCH_SIZE,
+        adopt_unclaimed_rows: bool = False,
+    ) -> ApplicationRowCounts:
+        """Async version of :meth:`rename_application`."""
+        return await asyncio.to_thread(
+            lambda: self._sys_db.rename_application(
+                old_name,
+                new_name,
+                batch_size=batch_size,
+                adopt_unclaimed_rows=adopt_unclaimed_rows,
+            )
+        )

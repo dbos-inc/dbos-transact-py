@@ -461,6 +461,14 @@ def _assemble_workflow_status(
         inputs["args"], inputs["kwargs"], sertype, dbos._serializer
     )
 
+    # This application owns what it starts; only a debounce acting for another names one here.
+    owner_app = (
+        enqueue_options["application_name"]
+        if enqueue_options is not None
+        and enqueue_options["application_name"] is not None
+        else GlobalParams.app_name
+    )
+
     # Initialize a workflow status object from the context
     status: WorkflowStatusInternal = {
         "workflow_uuid": wfid,
@@ -484,7 +492,10 @@ def _assemble_workflow_status(
             enqueue_options["app_version"]
             if enqueue_options is not None
             and enqueue_options["app_version"] is not None
-            else GlobalParams.app_version
+            # Left unset for another application, whose own latest version must run it.
+            else (
+                GlobalParams.app_version if owner_app == GlobalParams.app_name else None
+            )
         ),
         "executor_id": ctx.executor_id,
         "recovery_attempts": None,
@@ -540,6 +551,7 @@ def _assemble_workflow_status(
         # schedule_name is only set by the persistent scheduler, which builds
         # the workflow status directly rather than going through this path.
         "schedule_name": None,
+        "application_name": owner_app,
     }
     # Consume the attributes from the workflow's context so that workflows
     # started inside this workflow do not inherit them.
@@ -686,6 +698,7 @@ def prepare_enqueued_workflow(
         delay_until_epoch_ms=None,
         debounce_deadline_epoch_ms=None,
         is_debounced=False,
+        application_name=None,
     )
     return _assemble_workflow_status(
         dbos,
@@ -1302,6 +1315,9 @@ def start_workflow(
             local_ctx.debounce_deadline_epoch_ms if local_ctx is not None else None
         ),
         is_debounced=(local_ctx.is_debounced if local_ctx is not None else False),
+        application_name=(
+            local_ctx.debounce_application_name if local_ctx is not None else None
+        ),
     )
     new_wf_ctx = DBOSContext.create_start_workflow_child(local_ctx)
     new_child_workflow_id = new_wf_ctx.id_assigned_for_next_workflow
@@ -1438,6 +1454,9 @@ async def start_workflow_async(
             local_ctx.debounce_deadline_epoch_ms if local_ctx is not None else None
         ),
         is_debounced=(local_ctx.is_debounced if local_ctx is not None else False),
+        application_name=(
+            local_ctx.debounce_application_name if local_ctx is not None else None
+        ),
     )
     new_child_workflow_id = new_wf_ctx.id_assigned_for_next_workflow
 
@@ -1578,6 +1597,9 @@ def _build_enqueue_with_options(
 
     _, status = build_enqueue_status(resolved, dbos._serializer, args, kwargs)
 
+    if status["application_name"] is None:
+        # No explicit target, so this application owns it.
+        status["application_name"] = GlobalParams.app_name
     status["app_id"] = new_wf_ctx.app_id
     status["parent_workflow_id"] = (
         new_wf_ctx.parent_workflow_id if new_wf_ctx.has_parent() else None

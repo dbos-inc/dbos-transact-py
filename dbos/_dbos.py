@@ -294,13 +294,14 @@ class DBOSRegistry:
         else:
             self.instance_info_map[fn] = inst
 
-    def compute_app_version(self) -> str:
+    def compute_app_version(self, app_name: str) -> str:
         """
         An application's version is computed from a hash of the source of its workflows.
         This is guaranteed to be stable given identical source code because it uses an MD5 hash
         and because it iterates through the workflows in sorted order.
         This way, if the app's workflows are updated (which would break recovery), its version changes.
         App version can be manually set through the application_version field in DBOSConfig.
+        The application name is hashed in too, so peers built from one source do not collide.
         """
         hasher = hashlib.md5()
         try:
@@ -309,11 +310,13 @@ class DBOSRegistry:
             )
         except Exception:
             dbos_logger.warning(
-                "Could not get workflow source code to compute an application version, defaulting application version to 'DEFAULT_VERSION'. Set a custom version through the 'application_version' field in DBOSConfig"
+                "Could not get workflow source code to compute an application version, defaulting application version to 'DEFAULT_VERSION-<app name>'. Set a custom version through the 'application_version' field in DBOSConfig"
             )
-            return "DEFAULT_VERSION"
+            # Suffixed, so peers sharing a system database do not all fall back onto one name.
+            return f"DEFAULT_VERSION-{app_name}"
         # Different DBOS versions should produce different app versions
         sources.append(GlobalParams.dbos_version)
+        sources.append(app_name)
         for source in sources:
             hasher.update(source.encode("utf-8"))
         return hasher.hexdigest()
@@ -399,6 +402,8 @@ class DBOS:
             _dbos_global_registry = None
         GlobalParams.app_version = os.environ.get("DBOS__APPVERSION", "")
         GlobalParams.executor_id = os.environ.get("DBOS__VMID", "local")
+        # Set at launch from the config, so a relaunch under another name must not inherit this one.
+        GlobalParams.app_name = None
         dbos_logger.info("DBOS successfully shut down")
 
     def __init__(
@@ -554,12 +559,16 @@ class DBOS:
                 dbos_logger.warning(f"DBOS was already launched")
                 return
             self._launched = True
+            GlobalParams.app_name = self._config["name"]
             if GlobalParams.app_version == "":
-                GlobalParams.app_version = self._registry.compute_app_version()
+                GlobalParams.app_version = self._registry.compute_app_version(
+                    GlobalParams.app_name
+                )
             if self.conductor_key is not None:
                 GlobalParams.executor_id = generate_uuid()
             dbos_logger.info(f"Executor ID: {GlobalParams.executor_id}")
             dbos_logger.info(f"Application version: {GlobalParams.app_version}")
+            dbos_logger.info(f"Application name: {GlobalParams.app_name}")
 
             max_executor_threads = (
                 self._config.get("runtimeConfig", {}).get("max_executor_threads")
@@ -597,6 +606,7 @@ class DBOS:
                 polling_concurrency=self._config["database"].get(
                     "sys_db_polling_concurrency"
                 ),
+                app_name=GlobalParams.app_name,
             )
             assert self._config["database"]["db_engine_kwargs"] is not None
             if self._config["database_url"]:
@@ -925,6 +935,9 @@ class DBOS:
             - ``"always_update"``: always overwrite the existing row.
             - ``"never_update"``: leave the existing row unchanged.
 
+            A queue already registered by a different application raises in every
+            mode: the name is its address, so a collision is not ours to resolve.
+
         :returns: A :class:`Queue` reflecting the persisted configuration.
         """
         check_async("register_queue")
@@ -1025,18 +1038,29 @@ class DBOS:
         await asyncio.to_thread(cls.delete_queue, name)
 
     @classmethod
-    def list_queues(cls) -> List[Queue]:
+    def list_queues(
+        cls, *, application_name: Optional[Union[str, List[str]]] = None
+    ) -> List[Queue]:
         """
-        List all database-backed queues registered in the system database.
+        List database-backed queues registered in the system database.
+
+        :param application_name: List only queues owned by these applications.
+            By default, only list this application's queues.
         """
         check_async("list_queues")
-        return _get_dbos_instance()._sys_db.list_queues()
+        return _get_dbos_instance()._sys_db.list_queues(
+            application_name=application_name
+        )
 
     @classmethod
-    async def list_queues_async(cls) -> List[Queue]:
+    async def list_queues_async(
+        cls, *, application_name: Optional[Union[str, List[str]]] = None
+    ) -> List[Queue]:
         """Async version of :meth:`list_queues`."""
         await cls._configure_asyncio_thread_pool()
-        return await asyncio.to_thread(cls.list_queues)
+        return await asyncio.to_thread(
+            lambda: cls.list_queues(application_name=application_name)
+        )
 
     # Decorators for DBOS functionality
     @classmethod
@@ -1290,6 +1314,9 @@ class DBOS:
         against the local registry, and ``app_version`` is left unset unless
         given. An unset ``app_version`` is only dequeued by an executor running
         the latest registered application version.
+
+        The enqueued workflow is owned by this application unless
+        ``application_name`` names another one.
         """
         return enqueue_workflow_with_options(
             _get_dbos_instance(), options, args, kwargs
@@ -2448,6 +2475,7 @@ class DBOS:
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
         schedule_name: Optional[str | list[str]] = None,
+        application_name: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         check_async("list_workflows")
 
@@ -2479,6 +2507,7 @@ class DBOS:
                 has_parent=has_parent,
                 attributes=attributes,
                 schedule_name=schedule_name,
+                application_name=application_name,
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
@@ -2515,6 +2544,7 @@ class DBOS:
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
         schedule_name: Optional[str | list[str]] = None,
+        application_name: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
@@ -2547,6 +2577,7 @@ class DBOS:
                 has_parent=has_parent,
                 attributes=attributes,
                 schedule_name=schedule_name,
+                application_name=application_name,
             )
 
         return await asyncio.to_thread(
@@ -2583,6 +2614,7 @@ class DBOS:
         executor_id: Optional[str | list[str]] = None,
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
+        application_name: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         check_async("list_queued_workflows")
 
@@ -2612,6 +2644,7 @@ class DBOS:
                 queues_only=True,
                 has_parent=has_parent,
                 attributes=attributes,
+                application_name=application_name,
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
@@ -2647,6 +2680,7 @@ class DBOS:
         executor_id: Optional[str | list[str]] = None,
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
+        application_name: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
@@ -2677,6 +2711,7 @@ class DBOS:
                 queues_only=True,
                 has_parent=has_parent,
                 attributes=attributes,
+                application_name=application_name,
             )
 
         return await asyncio.to_thread(
@@ -2806,6 +2841,7 @@ class DBOS:
             automatic_backfill=automatic_backfill,
             cron_timezone=cron_timezone,
             queue_name=queue_name,
+            application_name=GlobalParams.app_name,
         )
         ctx = snapshot_step_context(reserve_sleep_id=False)
         if ctx and ctx.is_workflow():
@@ -2826,6 +2862,7 @@ class DBOS:
         status: Optional[Union[str, List[str]]] = None,
         workflow_name: Optional[Union[str, List[str]]] = None,
         schedule_name_prefix: Optional[Union[str, List[str]]] = None,
+        application_name: Optional[Union[str, List[str]]] = None,
     ) -> List["WorkflowSchedule"]:
         """
         Return all registered workflow schedules, optionally filtered.
@@ -2834,6 +2871,8 @@ class DBOS:
             status: Filter by status (e.g. ``"ACTIVE"``) or a list of statuses
             workflow_name: Filter by workflow name or a list of names
             schedule_name_prefix: Filter by schedule name prefix or a list of prefixes
+            application_name: List only schedules owned by these applications.
+                By default, only list this application's schedules.
         """
         dbos = _get_dbos_instance()
         ctx = snapshot_step_context(reserve_sleep_id=False)
@@ -2847,6 +2886,7 @@ class DBOS:
                         status=status,
                         workflow_name=workflow_name,
                         schedule_name_prefix=schedule_name_prefix,
+                        application_name=application_name,
                         conn=c,
                     ),
                 )
@@ -2855,6 +2895,7 @@ class DBOS:
                 status=status,
                 workflow_name=workflow_name,
                 schedule_name_prefix=schedule_name_prefix,
+                application_name=application_name,
             )
         for s in schedules:
             s["context"] = safe_deserialize_schedule_context(
@@ -2935,6 +2976,7 @@ class DBOS:
         status: Optional[Union[str, List[str]]] = None,
         workflow_name: Optional[Union[str, List[str]]] = None,
         schedule_name_prefix: Optional[Union[str, List[str]]] = None,
+        application_name: Optional[Union[str, List[str]]] = None,
     ) -> List["WorkflowSchedule"]:
         """Async version of :meth:`list_schedules`."""
         await cls._configure_asyncio_thread_pool()
@@ -2943,6 +2985,7 @@ class DBOS:
             status=status,
             workflow_name=workflow_name,
             schedule_name_prefix=schedule_name_prefix,
+            application_name=application_name,
         )
 
     @classmethod
@@ -3070,6 +3113,7 @@ class DBOS:
                     automatic_backfill=entry.get("automatic_backfill", False),
                     cron_timezone=cron_timezone,
                     queue_name=entry_queue_name,
+                    application_name=GlobalParams.app_name,
                 )
             )
         with dbos._sys_db.engine.begin() as c:
@@ -3155,11 +3199,20 @@ class DBOS:
         return dbos._sys_db.get_latest_application_version()
 
     @classmethod
-    def set_latest_application_version(cls, version_name: str) -> None:
-        """Set a version as the latest by updating its timestamp to now."""
+    def set_latest_application_version(
+        cls, version_name: str, *, application_name: Optional[str] = None
+    ) -> None:
+        """Set a version as the latest by updating its timestamp to now.
+
+        :param application_name: The application to act as. Defaults to this
+            caller's. Version names are global, so promoting one registered by
+            a different application raises.
+        """
         dbos = _get_dbos_instance()
         new_timestamp = int(time.time() * 1000)
-        dbos._sys_db.update_application_version_timestamp(version_name, new_timestamp)
+        dbos._sys_db.update_application_version_timestamp(
+            version_name, new_timestamp, application_name=application_name
+        )
 
     @classmethod
     async def list_application_versions_async(cls) -> List[VersionInfo]:
@@ -3174,10 +3227,16 @@ class DBOS:
         return await asyncio.to_thread(cls.get_latest_application_version)
 
     @classmethod
-    async def set_latest_application_version_async(cls, version_name: str) -> None:
+    async def set_latest_application_version_async(
+        cls, version_name: str, *, application_name: Optional[str] = None
+    ) -> None:
         """Async version of :meth:`set_latest_application_version`."""
         await cls._configure_asyncio_thread_pool()
-        await asyncio.to_thread(cls.set_latest_application_version, version_name)
+        await asyncio.to_thread(
+            lambda: cls.set_latest_application_version(
+                version_name, application_name=application_name
+            )
+        )
 
     @classproperty
     def application_version(cls) -> str:

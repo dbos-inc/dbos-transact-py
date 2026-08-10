@@ -78,6 +78,8 @@ class SystemSchema:
         Column("schedule_name", Text, nullable=True),
         Column("debounce_deadline_epoch_ms", BigInteger, nullable=True),
         Column("is_debounced", Boolean, nullable=False, server_default="false"),
+        # Owning application. NULL means unclaimed: any application may read and claim the row.
+        Column("application_name", Text, nullable=True),
         Index("workflow_status_created_at_index", "created_at"),
         Index(
             "idx_workflow_status_delayed",
@@ -172,6 +174,8 @@ class SystemSchema:
         Column("started_at_epoch_ms", BigInteger, nullable=True),
         Column("completed_at_epoch_ms", BigInteger, nullable=True),
         Column("serialization", Text()),
+        # Denormalized from the parent so step observability filters without a join.
+        Column("application_name", Text, nullable=True),
         PrimaryKeyConstraint("workflow_uuid", "function_id"),
         Index(
             "idx_operation_outputs_completed_at_function_name",
@@ -280,6 +284,8 @@ class SystemSchema:
         Column("automatic_backfill", Boolean, nullable=False, server_default="false"),
         Column("cron_timezone", Text, nullable=True),
         Column("queue_name", Text, nullable=True),
+        # Owning application. NULL means unclaimed; schedule_name stays globally unique.
+        Column("application_name", Text, nullable=True),
     )
 
     application_versions = Table(
@@ -296,6 +302,24 @@ class SystemSchema:
             "created_at",
             BigInteger,
             nullable=False,
+        ),
+        # Owning application. NULL means unclaimed; version_name's global uniqueness is being retired for the indexes below, so no write may infer it as an ON CONFLICT arbiter.
+        Column("application_name", Text, nullable=True),
+        # Two partial indexes, not one composite: NULL owners would otherwise be free to duplicate.
+        Index(
+            "uq_application_versions_owner_version",
+            "application_name",
+            "version_name",
+            unique=True,
+            postgresql_where=text("application_name IS NOT NULL"),
+            sqlite_where=text("application_name IS NOT NULL"),
+        ),
+        Index(
+            "uq_application_versions_unclaimed_version",
+            "version_name",
+            unique=True,
+            postgresql_where=text("application_name IS NULL"),
+            sqlite_where=text("application_name IS NULL"),
         ),
     )
 
@@ -318,4 +342,6 @@ class SystemSchema:
         Column("polling_interval_sec", Float, nullable=False, server_default="1.0"),
         Column("created_at", BigInteger, nullable=False),
         Column("updated_at", BigInteger, nullable=False),
+        # Owning application. NULL means unclaimed; name stays globally unique.
+        Column("application_name", Text, nullable=True),
     )

@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import click
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.exc import IntegrityError
 
 # Public API
 from dbos import DBOS, DBOSConfig, run_dbos_database_migrations
@@ -202,6 +203,121 @@ def test_reset(
         DBOS.reset_system_database()
 
 
+_APPLICATION_NAME_TABLES = (
+    "workflow_status",
+    "queues",
+    "workflow_schedules",
+    "application_versions",
+    # Denormalized from the parent so step observability filters without a join.
+    "operation_outputs",
+)
+
+
+def test_application_name_schema(dbos: DBOS, skip_with_sqlite: None) -> None:
+    """application_name is nullable everywhere it appears — NULL is what SDKs
+    predating it write — and every name that addresses a row stays globally unique."""
+    with dbos._sys_db.engine.connect() as connection:
+        for table in _APPLICATION_NAME_TABLES:
+            row = connection.execute(
+                sa.text(
+                    "SELECT data_type, is_nullable FROM information_schema.columns "
+                    "WHERE table_schema='dbos' AND table_name=:t "
+                    "AND column_name='application_name'"
+                ),
+                {"t": table},
+            ).fetchone()
+            assert row == ("text", "YES"), f"{table}.application_name"
+
+        # Names stay global addresses; version_name only until the contract migration, whose replacement key migration 106 already carries.
+        uniques = {
+            "uq_workflow_status_dedup_id",
+            "queues_name_key",
+            "workflow_schedules_schedule_name_key",
+            "application_versions_version_name_key",
+            "uq_application_versions_owner_version",
+            "uq_application_versions_unclaimed_version",
+        }
+        found = {
+            row[0]
+            for row in connection.execute(
+                sa.text(
+                    "SELECT indexname FROM pg_indexes WHERE schemaname='dbos' "
+                    "AND indexname = ANY(:names)"
+                ),
+                {"names": list(uniques)},
+            )
+        }
+    assert found == uniques
+
+
+def test_application_version_expand_indexes(dbos: DBOS, skip_with_sqlite: None) -> None:
+    """The expand half of retiring version_name's global uniqueness: the ownership-scoped
+    key exists and is enforced, and the constraint it will replace is still in place."""
+    av = "dbos.application_versions (version_id, version_name, application_name)"
+
+    def insert(connection: sa.Connection, version_id: str, owner: str) -> None:
+        connection.execute(
+            sa.text(
+                f"INSERT INTO {av} VALUES ('{version_id}', 'shared-version', {owner})"
+            )
+        )
+
+    with dbos._sys_db.engine.begin() as connection:
+        insert(connection, "v1", "'app-a'")
+        # One row per owner, unclaimed included; the last case is the not-yet-dropped constraint still refusing a peer.
+        for version_id, owner in (("v2", "'app-a'"), ("v3", "NULL"), ("v4", "'app-b'")):
+            with pytest.raises(IntegrityError):
+                with connection.begin_nested():
+                    insert(connection, version_id, owner)
+        connection.execute(
+            sa.text("DELETE FROM dbos.application_versions WHERE version_id = 'v1'")
+        )
+
+
+def test_enqueue_workflow_function_application_name(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    """The SQL enqueue entry point takes application_name as a trailing optional
+    argument, so callers that predate it still enqueue (as unclaimed)."""
+    with dbos._sys_db.engine.begin() as connection:
+        overloads = connection.execute(
+            sa.text(
+                "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
+                "WHERE n.nspname='dbos' AND p.proname='enqueue_workflow'"
+            )
+        ).scalar()
+        # The migration must drop the previous signature, else calls are ambiguous.
+        assert overloads == 1
+
+        connection.execute(
+            sa.text(
+                "INSERT INTO dbos.queues (name, created_at, updated_at) "
+                "VALUES ('sql-fn-queue', 1, 1)"
+            )
+        )
+        old_style = connection.execute(
+            sa.text("SELECT dbos.enqueue_workflow('wf', 'sql-fn-queue')")
+        ).scalar()
+        new_style = connection.execute(
+            sa.text(
+                "SELECT dbos.enqueue_workflow(workflow_name => 'wf', "
+                "queue_name => 'sql-fn-queue', application_name => 'other-app')"
+            )
+        ).scalar()
+        owners = {
+            row[0]: row[1]
+            for row in connection.execute(
+                sa.text(
+                    "SELECT workflow_uuid, application_name FROM dbos.workflow_status "
+                    "WHERE workflow_uuid IN (:a, :b)"
+                ),
+                {"a": old_style, "b": new_style},
+            )
+        }
+    assert owners[old_style] is None
+    assert owners[new_style] == "other-app"
+
+
 def test_sqlite_systemdb_migration() -> None:
     """Test SQLite system database migration."""
     # Create a temporary SQLite database file
@@ -265,6 +381,17 @@ def test_sqlite_systemdb_migration() -> None:
             fk_result = connection.execute(sa.text("PRAGMA foreign_keys"))
             fk_enabled = fk_result.fetchone()
             assert fk_enabled and fk_enabled[0] == 1  # 1 means enabled
+
+            # application_name must be nullable everywhere it appears
+            for table in _APPLICATION_NAME_TABLES:
+                columns = {
+                    row[1]: row[3]  # name -> notnull
+                    for row in connection.execute(
+                        sa.text(f"PRAGMA table_info({table})")
+                    )
+                }
+                assert "application_name" in columns, table
+                assert columns["application_name"] == 0, table
 
         # Clean up
         sys_db.destroy()

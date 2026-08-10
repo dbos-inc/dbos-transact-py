@@ -1,10 +1,9 @@
-from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
 from dbos._context import get_local_dbos_context
 from dbos._utils import generate_uuid
 
-from ._sys_db import SystemDatabase, WorkflowStatus, WorkflowStatusString
+from ._sys_db import SystemDatabase, WorkflowStatus
 
 if TYPE_CHECKING:
     from ._dbos import DBOS
@@ -99,13 +98,8 @@ def garbage_collect(
 
 
 def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:
-    cutoff_iso = datetime.fromtimestamp(cutoff_epoch_timestamp_ms / 1000).isoformat()
-    for workflow in dbos.list_workflows(
-        status=[
-            WorkflowStatusString.PENDING.value,
-            WorkflowStatusString.ENQUEUED.value,
-            WorkflowStatusString.DELAYED.value,
-        ],
-        end_time=cutoff_iso,
+    # IDs only, so a bulk timeout does not deserialize every row's inputs and outputs.
+    for workflow_id in dbos._sys_db.list_timed_out_workflow_ids(
+        cutoff_epoch_timestamp_ms
     ):
-        dbos.cancel_workflow(workflow.workflow_id)
+        dbos.cancel_workflow(workflow_id)

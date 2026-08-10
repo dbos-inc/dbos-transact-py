@@ -78,37 +78,45 @@ class SQLiteSystemDatabase(SystemDatabase):
                 ).fetchone()
                 last_applied = version_result[0] if version_result else 0
 
-            # Apply migrations starting from the next version
-            for i, migration_sql in enumerate(sqlite_migrations, 1):
-                if i <= last_applied:
-                    continue
-
-                # Execute the migration
-                dbos_logger.info(
-                    f"Applying DBOS SQLite system database schema migration {i}"
-                )
-
-                # SQLite only allows one statement at a time, so split by semicolon
-                statements = [
-                    stmt.strip() for stmt in migration_sql.split(";") if stmt.strip()
-                ]
-                for statement in statements:
-                    conn.execute(sa.text(statement))
-
-                # Update the single row with the new version
+            def record_version(version: int) -> None:
                 if last_applied == 0:
                     conn.execute(
                         sa.text(
                             "INSERT INTO dbos_migrations (version) VALUES (:version)"
                         ),
-                        {"version": i},
+                        {"version": version},
                     )
                 else:
                     conn.execute(
                         sa.text("UPDATE dbos_migrations SET version = :version"),
-                        {"version": i},
+                        {"version": version},
                     )
+
+            # Apply migrations starting from the next version
+            for i, migration_sql in enumerate(sqlite_migrations, 1):
+                if i <= last_applied:
+                    continue
+
+                # SQLite only allows one statement at a time, so split by semicolon
+                statements = [
+                    stmt.strip() for stmt in migration_sql.split(";") if stmt.strip()
+                ]
+                # Renumbering left long runs of empty migrations; skip them entirely.
+                if not statements:
+                    continue
+
+                dbos_logger.info(
+                    f"Applying DBOS SQLite system database schema migration {i}"
+                )
+                for statement in statements:
+                    conn.execute(sa.text(statement))
+
+                record_version(i)
                 last_applied = i
+
+            # Empty migrations at the end still count as applied; record them in one write.
+            if len(sqlite_migrations) > last_applied:
+                record_version(len(sqlite_migrations))
 
     def _cleanup_connections(self) -> None:
         # SQLite doesn't require special connection cleanup

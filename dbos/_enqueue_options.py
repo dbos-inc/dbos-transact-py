@@ -52,6 +52,8 @@ class EnqueueOptions(_EnqueueOptionsRequired, total=False):
     class_name: str
     instance_name: str
     attributes: Dict[str, Any]
+    # Owning application. Unset defaults to the caller's name.
+    application_name: Optional[str]
     # Parents the enqueued workflow's span to this OpenTelemetry context, so it joins
     # this trace when it runs. The client-side PropagateOtelContext.
     otel_context: "OtelContext"
@@ -174,5 +176,6 @@ def build_enqueue_status(
         # Set only by the debouncer via _enqueue_debounced, never from options.
         "debounce_deadline_epoch_ms": None,
         "is_debounced": False,
+        "application_name": options.get("application_name"),
     }
     return workflow_id, status

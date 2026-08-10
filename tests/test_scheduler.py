@@ -495,6 +495,7 @@ def test_schedule_thread_signature() -> None:
         "automatic_backfill": False,
         "cron_timezone": None,
         "queue_name": None,
+        "application_name": "app-a",
     }
     sig = _ScheduleThread.compute_signature(base)
 
@@ -504,6 +505,8 @@ def test_schedule_thread_signature() -> None:
         ("status", "PAUSED"),
         ("last_fired_at", "2020-01-01T00:00:00+00:00"),
         ("automatic_backfill", True),
+        # Ownership, not definition: re-owning a schedule must not restart its thread.
+        ("application_name", "app-b"),
     ]:
         assert _ScheduleThread.compute_signature({**base, field: value}) == sig  # type: ignore[misc]
 
