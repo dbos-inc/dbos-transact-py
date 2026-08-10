@@ -1920,10 +1920,6 @@ class SystemDatabase(ABC):
         executor_id_list = _to_list(executor_id)
         prefix_list = _to_list(workflow_id_prefix)
         schedule_name_list = _to_list(schedule_name)
-        # Unset scopes to this application, as on every other observability query.
-        application_name_list = _to_list(
-            application_name if application_name is not None else self.app_name
-        )
 
         load_columns = [
             SystemSchema.workflow_status.c.workflow_uuid,
@@ -1987,8 +1983,8 @@ class SystemDatabase(ABC):
                 SystemSchema.workflow_status.c.schedule_name.in_(schedule_name_list)
             )
         query = query.where(
-            self._name_filter(
-                SystemSchema.workflow_status.c.application_name, application_name_list
+            self._observability_filter(
+                SystemSchema.workflow_status.c.application_name, application_name
             )
         )
         if user_list:
