@@ -20,7 +20,11 @@ from dbos._sys_db import SystemDatabase
 from dbos.cli.migration import print_dbos_migrations, print_dbos_user_role_sql
 
 
-def test_systemdb_migration(dbos: DBOS, skip_with_sqlite: None) -> None:
+def test_systemdb_migration(
+    dbos_dropped_databases: DBOS, skip_with_sqlite: None
+) -> None:
+    # Needs a dropped database so this exercises a from-scratch migration.
+    dbos = dbos_dropped_databases
     # Make sure all tables exist
     with dbos._sys_db.engine.connect() as connection:
         sql = SystemSchema.workflow_status.select()
@@ -51,9 +55,10 @@ def test_systemdb_migration(dbos: DBOS, skip_with_sqlite: None) -> None:
 def test_systemdb_migration_custom_schema(
     config: DBOSConfig,
     skip_with_sqlite: None,
-    cleanup_test_databases: None,
+    drop_test_databases: None,
 ) -> None:
-
+    # Needs a dropped database: it asserts the default "dbos" schema is absent,
+    # and leaves behind a schema of its own.
     config["application_database_url"] = None
     schema = "F8nny_sCHem@-n@m3"
     config["dbos_system_schema"] = schema
@@ -90,9 +95,13 @@ def test_systemdb_migration_custom_schema(
 def test_two_schemas_isolated_in_one_process(
     config: DBOSConfig,
     skip_with_sqlite: None,
-    cleanup_test_databases: None,
+    drop_test_databases: None,
 ) -> None:
-    """Two system databases with different schemas must stay isolated within one process."""
+    """Two system databases with different schemas must stay isolated within one process.
+
+    Needs a dropped database: it counts the rows in schemas it creates itself,
+    which truncation of the default schema would neither empty nor remove.
+    """
     sys_db_url = config["system_database_url"]
     assert sys_db_url is not None
 
@@ -201,6 +210,62 @@ def test_reset(
     # Verify that resetting after launch throws
     with pytest.raises(AssertionError):
         DBOS.reset_system_database()
+
+
+def test_reset_truncate(
+    config: DBOSConfig,
+    db_engine: sa.Engine,
+    cleanup_test_databases: None,
+    skip_with_sqlite: None,
+) -> None:
+    """Truncating empties the tables but leaves the database and its migrated schema."""
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def workflow() -> str:
+        assert DBOS.workflow_id
+        DBOS.set_event(DBOS.workflow_id, DBOS.workflow_id)
+        return DBOS.workflow_id
+
+    DBOS.launch()
+    workflow_id = workflow()
+    assert DBOS.get_event(workflow_id, workflow_id) == workflow_id
+    assert len(DBOS.list_workflows()) == 1
+    sysdb_name = dbos._sys_db.engine.url.database
+    latest_version = len(get_dbos_migrations("dbos", True))
+
+    DBOS.destroy()
+    dbos = DBOS(config=config)
+    DBOS.reset_system_database(truncate=True)
+
+    # Unlike a reset, the database itself survives
+    with db_engine.connect() as c:
+        count: int = c.execute(
+            sa.text(f"SELECT COUNT(*) FROM pg_database WHERE datname = '{sysdb_name}'")
+        ).scalar_one()
+        assert count == 1
+
+    DBOS.launch()
+    assert DBOS.list_workflows() == []
+    with dbos._sys_db.engine.connect() as c:
+        assert (
+            c.execute(
+                sa.select(sa.func.count()).select_from(SystemSchema.workflow_events)
+            ).scalar_one()
+            == 0
+        )
+        # The schema survives fully migrated, so the launch above ran no migrations
+        assert (
+            c.execute(sa.text('SELECT version FROM "dbos".dbos_migrations')).scalar()
+            == latest_version
+        )
+    assert should_migrate(dbos._sys_db.engine, "dbos", True) is False
+
+    # Truncating after launch is refused, same as resetting
+    with pytest.raises(AssertionError):
+        DBOS.reset_system_database(truncate=True)
+    DBOS.destroy()
 
 
 _APPLICATION_NAME_TABLES = (
@@ -392,6 +457,31 @@ def test_sqlite_systemdb_migration() -> None:
                 }
                 assert "application_name" in columns, table
                 assert columns["application_name"] == 0, table
+
+        # Test truncating the system database: the rows go, the schema stays
+        with sys_db.engine.begin() as connection:
+            connection.execute(
+                SystemSchema.application_versions.insert().values(
+                    version_id="v1",
+                    version_name="v1",
+                    version_timestamp=1,
+                    created_at=1,
+                )
+            )
+        SystemDatabase.reset_system_database(sqlite_url, truncate=True)
+        assert os.path.exists(temp_db_path)
+        with sys_db.engine.connect() as connection:
+            assert (
+                connection.execute(
+                    sa.select(sa.func.count()).select_from(
+                        SystemSchema.application_versions
+                    )
+                ).scalar_one()
+                == 0
+            )
+            assert connection.execute(
+                sa.text("SELECT version FROM dbos_migrations")
+            ).scalar() == len(sqlite_migrations)
 
         # Clean up
         sys_db.destroy()
@@ -742,13 +832,17 @@ def test_version_not_bumped_on_migration_failure(
         assert version == final_version
 
 
-def test_should_migrate(dbos: DBOS, skip_with_sqlite: None) -> None:
+def test_should_migrate(dbos_dropped_databases: DBOS, skip_with_sqlite: None) -> None:
     """should_migrate must return True when the schema is missing, the
     dbos_migrations table is missing, or the recorded version is behind the
-    latest; and False once the schema is fully migrated."""
+    latest; and False once the schema is fully migrated.
+
+    Needs a dropped database: it ends with dbos_migrations gone, which only a
+    drop can put right.
+    """
     from dbos._migration import should_migrate
 
-    engine = dbos._sys_db.engine
+    engine = dbos_dropped_databases._sys_db.engine
     schema = "dbos"
     latest_version = len(get_dbos_migrations(schema, True))
 

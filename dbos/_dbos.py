@@ -792,25 +792,33 @@ class DBOS:
             raise
 
     @classmethod
-    def reset_system_database(cls) -> None:
+    def reset_system_database(cls, *, truncate: bool = False) -> None:
         """
         Destroy the DBOS system database. Useful for resetting the state of DBOS between tests.
         This is a destructive operation and should only be used in a test environment.
         More information on testing DBOS apps: https://docs.dbos.dev/python/tutorials/testing
+
+        If truncate is set, the system database is emptied instead of destroyed:
+        its schema survives, so the next launch skips migrations. This is much
+        faster, but keeps whatever schema version is already in place.
         """
         if _dbos_global_instance is not None:
-            _dbos_global_instance._reset_system_database()
+            _dbos_global_instance._reset_system_database(truncate=truncate)
         else:
             dbos_logger.warning(
                 "reset_system_database has no effect because global DBOS object does not exist"
             )
 
-    def _reset_system_database(self) -> None:
+    def _reset_system_database(self, *, truncate: bool = False) -> None:
         assert (
             not self._launched
         ), "The system database cannot be reset after DBOS is launched. Resetting the system database is a destructive operation that should only be used in a test environment."
 
-        SystemDatabase.reset_system_database(get_system_database_url(self._config))
+        SystemDatabase.reset_system_database(
+            get_system_database_url(self._config),
+            truncate=truncate,
+            schema=self._config.get("dbos_system_schema"),
+        )
 
     def _destroy(self, *, workflow_completion_timeout_sec: int) -> None:
         self._initialized = False

@@ -141,8 +141,35 @@ class SQLiteSystemDatabase(SystemDatabase):
         return "FOREIGN KEY constraint failed" in str(dbapi_error.orig)
 
     @staticmethod
-    def _reset_system_database(database_url: str) -> None:
-        """Reset the SQLite system database by deleting the database file."""
+    def _truncate_system_database(database_url: str, db_path: str) -> None:
+        """Empty every DBOS table in the system database, leaving the file intact.
+
+        dbos_migrations is preserved: it records the schema version, so clearing it
+        would send the next launch through migrations the tables already have.
+        """
+        if not os.path.exists(db_path):
+            dbos_logger.info(f"SQLite database file does not exist: {db_path}")
+            return
+        engine = sa.create_engine(database_url)
+        try:
+            with engine.begin() as conn:
+                tables = [
+                    table
+                    for table in conn.execute(
+                        sa.text("SELECT name FROM sqlite_master WHERE type='table'")
+                    ).scalars()
+                    if table != "dbos_migrations" and not table.startswith("sqlite_")
+                ]
+                # SQLite has no TRUNCATE, and foreign keys are off by default on a
+                # bare connection, so unordered deletes are safe here.
+                for table in tables:
+                    conn.execute(sa.text(f'DELETE FROM "{table}"'))
+        finally:
+            engine.dispose()
+
+    @staticmethod
+    def _reset_system_database(database_url: str, *, truncate: bool = False) -> None:
+        """Reset the SQLite system database by deleting the file, or by emptying its tables."""
 
         # Parse the SQLite database URL to get the file path
         url = sa.make_url(database_url)
@@ -150,6 +177,10 @@ class SQLiteSystemDatabase(SystemDatabase):
 
         if db_path is None:
             raise ValueError(f"System database path not found in URL {url}")
+
+        if truncate:
+            SQLiteSystemDatabase._truncate_system_database(database_url, db_path)
+            return
 
         try:
             if os.path.exists(db_path):

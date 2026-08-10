@@ -2583,8 +2583,9 @@ def test_custom_database(
 
 
 def test_custom_schema(
-    config: DBOSConfig, cleanup_test_databases: None, skip_with_sqlite: None
+    config: DBOSConfig, drop_test_databases: None, skip_with_sqlite: None
 ) -> None:
+    # Needs a dropped database: it asserts the default "dbos" schema is absent.
     DBOS.destroy(destroy_registry=True)
     config["dbos_system_schema"] = "F8nny_sCHem@-n@m3"
     dbos = DBOS(config=config)
@@ -2641,10 +2642,11 @@ def test_custom_schema(
 
 def test_custom_engine(
     config: DBOSConfig,
-    cleanup_test_databases: None,
+    drop_test_databases: None,
     db_engine: sa.Engine,
     skip_with_sqlite: None,
 ) -> None:
+    # Needs a dropped database: it asserts launch fails before the database exists.
     DBOS.destroy(destroy_registry=True)
     assert config["system_database_url"]
     config["application_database_url"] = None

@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional, cast
 import psycopg
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, OperationalError
 
 from dbos._migration import ensure_dbos_schema, run_dbos_migrations, should_migrate
 
@@ -129,13 +129,82 @@ class PostgresSystemDatabase(SystemDatabase):
         return dbapi_error.orig.sqlstate == "23503"  # type: ignore
 
     @staticmethod
-    def _reset_system_database(database_url: str) -> None:
-        """Reset the PostgreSQL system database by dropping it."""
+    def _truncate_system_database(database_url: str, schema: str) -> None:
+        """Empty every DBOS table in the system database, leaving the schema intact.
+
+        dbos_migrations is preserved: it records the schema version, so clearing it
+        would send the next launch through migrations the tables already have.
+        """
+        engine = sa.create_engine(
+            sa.make_url(database_url).set(drivername="postgresql+psycopg"),
+            connect_args={"connect_timeout": 10},
+        )
+        try:
+            with engine.begin() as conn:
+                tables = [
+                    table
+                    for table in conn.execute(
+                        sa.text(
+                            "SELECT tablename FROM pg_tables WHERE schemaname = :schema"
+                        ),
+                        {"schema": schema},
+                    ).scalars()
+                    if table != "dbos_migrations"
+                ]
+                if tables:
+                    targets = ", ".join(f'"{schema}"."{table}"' for table in tables)
+                    conn.execute(
+                        sa.text(f"TRUNCATE TABLE {targets} RESTART IDENTITY CASCADE")
+                    )
+        except OperationalError:
+            # An absent system database holds no state to reset. Connection failures
+            # carry no SQLSTATE, so ask the server whether the database is there.
+            if PostgresSystemDatabase._database_exists(database_url):
+                raise
+            dbos_logger.info(
+                f"System database {sa.make_url(database_url).database} does not exist, nothing to reset"
+            )
+        finally:
+            engine.dispose()
+
+    @staticmethod
+    def _database_exists(database_url: str) -> bool:
+        """Whether the database named in the URL exists, per the postgres database."""
+        url = sa.make_url(database_url)
+        engine = sa.create_engine(
+            url.set(database="postgres", drivername="postgresql+psycopg"),
+            connect_args={"connect_timeout": 10},
+        )
+        try:
+            with engine.connect() as conn:
+                return bool(
+                    conn.execute(
+                        sa.text("SELECT 1 FROM pg_database WHERE datname = :db_name"),
+                        {"db_name": url.database},
+                    ).scalar()
+                )
+        except Exception:
+            # Cannot tell; let the caller surface its original failure.
+            return True
+        finally:
+            engine.dispose()
+
+    @staticmethod
+    def _reset_system_database(
+        database_url: str, *, truncate: bool = False, schema: Optional[str] = None
+    ) -> None:
+        """Reset the PostgreSQL system database by dropping it, or by emptying its tables."""
         system_db_url = sa.make_url(database_url)
         sysdb_name = system_db_url.database
 
         if sysdb_name is None:
             raise ValueError(f"System database name not found in URL {system_db_url}")
+
+        if truncate:
+            PostgresSystemDatabase._truncate_system_database(
+                database_url, schema if schema else "dbos"
+            )
+            return
 
         try:
             # Connect to postgres default database

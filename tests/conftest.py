@@ -120,33 +120,151 @@ def db_engine() -> Generator[sa.Engine, Any, None]:
     engine.dispose()
 
 
+def _clear_dbos_env_vars() -> None:
+    os.environ.pop("DBOS__VMID") if "DBOS__VMID" in os.environ else None
+    os.environ.pop("DBOS__APPVERSION") if "DBOS__APPVERSION" in os.environ else None
+    os.environ.pop("DBOS__APPID") if "DBOS__APPID" in os.environ else None
+
+
+def _truncate_application_database(
+    application_database_url: str, db_engine: sa.Engine
+) -> None:
+    """Empty every table in the application database, leaving its schemas intact.
+
+    Covers DBOS's own transaction_outputs plus whatever tables tests create, so a
+    workflow ID reused across tests cannot replay a stale transaction output.
+    """
+    app_db_name = sa.make_url(application_database_url).database
+    with db_engine.connect() as connection:
+        if not connection.execute(
+            sa.text("SELECT 1 FROM pg_database WHERE datname = :db_name"),
+            {"db_name": app_db_name},
+        ).scalar():
+            # An absent application database holds no state to reset.
+            return
+
+    engine = sa.create_engine(
+        sa.make_url(application_database_url).set(drivername="postgresql+psycopg"),
+        connect_args={"connect_timeout": 30},
+    )
+    try:
+        with engine.begin() as connection:
+            tables = list(
+                connection.execute(
+                    sa.text(
+                        "SELECT schemaname, tablename FROM pg_tables "
+                        "WHERE schemaname NOT IN ('pg_catalog', 'information_schema')"
+                    )
+                )
+            )
+            if tables:
+                targets = ", ".join(f'"{schema}"."{table}"' for schema, table in tables)
+                connection.execute(
+                    sa.text(f"TRUNCATE TABLE {targets} RESTART IDENTITY CASCADE")
+                )
+    finally:
+        engine.dispose()
+
+
+def _terminate_connections(db_names: Tuple[str, ...], db_engine: sa.Engine) -> None:
+    """Evict anything still connected to the test databases.
+
+    DROP DATABASE ... WITH (FORCE) used to do this for us. Truncation needs it too:
+    a thread an earlier test failed to stop can hold locks that block TRUNCATE, or
+    write rows into the database the next test just emptied.
+    """
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(
+            sa.text(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = ANY(:db_names) AND pid <> pg_backend_pid()"
+            ),
+            {"db_names": list(db_names)},
+        )
+
+
+def _drop_databases(db_names: Tuple[str, ...], db_engine: sa.Engine) -> None:
+    if not db_names:
+        return
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        for db_name in db_names:
+            connection.execute(
+                sa.text(f"DROP DATABASE IF EXISTS {db_name} WITH (FORCE)")
+            )
+
+
 @pytest.fixture()
 def cleanup_test_databases(config: DBOSConfig, db_engine: sa.Engine) -> None:
+    """Give the test empty databases, without dropping them.
+
+    Truncating is several times faster than dropping, because the next launch
+    finds its schema already migrated. Tests that need the databases or the DBOS
+    schema to be genuinely absent, or that leave a schema truncation cannot
+    repair, must use drop_test_databases instead.
+    """
     assert config["application_database_url"] is not None
     assert config["system_database_url"] is not None
 
-    # Stop any DBOS an earlier test left running before dropping its database.
+    # Stop any DBOS an earlier test left running before emptying its database.
     DBOS.destroy(destroy_registry=True)
 
     # SQLite needs no reset here: sqlite_path is a fresh file per test.
     if not using_sqlite():
-        # For PostgreSQL, drop the databases
-        app_db_name = sa.make_url(config["application_database_url"]).database
-        sys_db_name = sa.make_url(config["system_database_url"]).database
+        app_db_url = config["application_database_url"]
+        sys_db_url = config["system_database_url"]
+        _terminate_connections(
+            (
+                str(sa.make_url(app_db_url).database),
+                str(sa.make_url(sys_db_url).database),
+            ),
+            db_engine,
+        )
+        SystemDatabase.reset_system_database(
+            sys_db_url, truncate=True, schema=config.get("dbos_system_schema")
+        )
+        _truncate_application_database(app_db_url, db_engine)
 
-        with db_engine.connect() as connection:
-            connection.execution_options(isolation_level="AUTOCOMMIT")
-            connection.execute(
-                sa.text(f"DROP DATABASE IF EXISTS {app_db_name} WITH (FORCE)")
-            )
-            connection.execute(
-                sa.text(f"DROP DATABASE IF EXISTS {sys_db_name} WITH (FORCE)")
-            )
+    _clear_dbos_env_vars()
 
-    # Clean up environment variables
-    os.environ.pop("DBOS__VMID") if "DBOS__VMID" in os.environ else None
-    os.environ.pop("DBOS__APPVERSION") if "DBOS__APPVERSION" in os.environ else None
-    os.environ.pop("DBOS__APPID") if "DBOS__APPID" in os.environ else None
+
+@pytest.fixture()
+def drop_test_databases(
+    config: DBOSConfig, db_engine: sa.Engine
+) -> Generator[None, Any, None]:
+    """cleanup_test_databases, but dropping the databases outright.
+
+    For tests that need the databases (or the DBOS schema inside them) to not
+    exist, that must exercise a from-scratch migration, or that leave behind a
+    schema truncation cannot repair. Drops on both sides, so neither this test
+    nor the next one inherits the damage.
+    """
+    assert config["application_database_url"] is not None
+    assert config["system_database_url"] is not None
+    # Named up front, since tests are free to repoint config elsewhere.
+    # SQLite needs no drop here: sqlite_path is a fresh file per test.
+    db_names: Tuple[str, ...] = (
+        ()
+        if using_sqlite()
+        else tuple(
+            name
+            for name in (
+                sa.make_url(config["application_database_url"]).database,
+                sa.make_url(config["system_database_url"]).database,
+            )
+            if name is not None
+        )
+    )
+
+    DBOS.destroy(destroy_registry=True)
+    _drop_databases(db_names, db_engine)
+    _clear_dbos_env_vars()
+
+    yield
+
+    DBOS.destroy(destroy_registry=True)
+    _drop_databases(db_names, db_engine)
 
 
 @pytest.fixture()
@@ -160,6 +278,18 @@ def dbos(
     #     launch themselves.
     # If your test is tricky and has a problem with this, use a different
     #   fixture that does not launch.
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    yield dbos
+    DBOS.destroy(destroy_registry=True)
+
+
+@pytest.fixture()
+def dbos_dropped_databases(
+    config: DBOSConfig, drop_test_databases: None
+) -> Generator[DBOS, Any, None]:
+    """The dbos fixture on dropped databases, so launch migrates from scratch."""
     dbos = DBOS(config=config)
     DBOS.launch()
 

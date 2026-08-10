@@ -3560,16 +3560,26 @@ class SystemDatabase(ABC):
                     time.sleep(self._notification_listener_polling_interval_sec)
 
     @staticmethod
-    def reset_system_database(database_url: str) -> None:
-        """Reset the system database by calling the appropriate implementation."""
+    def reset_system_database(
+        database_url: str, *, truncate: bool = False, schema: Optional[str] = None
+    ) -> None:
+        """Reset the system database by calling the appropriate implementation.
+
+        By default the system database is destroyed outright, so the next launch
+        recreates and re-migrates it. With truncate=True the database and its
+        schema are left in place and only their rows are deleted, which is much
+        faster but keeps whatever schema version is already there.
+        """
         if database_url.startswith("sqlite"):
             from ._sys_db_sqlite import SQLiteSystemDatabase
 
-            SQLiteSystemDatabase._reset_system_database(database_url)
+            SQLiteSystemDatabase._reset_system_database(database_url, truncate=truncate)
         else:
             from ._sys_db_postgres import PostgresSystemDatabase
 
-            PostgresSystemDatabase._reset_system_database(database_url)
+            PostgresSystemDatabase._reset_system_database(
+                database_url, truncate=truncate, schema=schema
+            )
 
     @db_retry()
     def record_sleep(
