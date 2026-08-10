@@ -132,7 +132,7 @@ def _classify_bounce(
     if result["holder_workflow_name"] != workflow_name:
         return "raise"
     # A foreign holder never leaves DELAYED on the target's account, so retrying would spin.
-    holder_app = result["holder_application_name"]
+    holder_app = result.get("holder_application_name")
     if target_application_name is not None and holder_app is not None:
         if holder_app != target_application_name:
             return "raise"

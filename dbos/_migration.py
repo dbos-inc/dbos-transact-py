@@ -8,7 +8,25 @@ from ._logger import dbos_logger
 # autocommit (CREATE/DROP INDEX CONCURRENTLY cannot run inside a transaction
 # block on Postgres). On CockroachDB, schema changes are inherently online,
 # so this set is ignored and the regular transactional path is used.
-_ONLINE_MIGRATIONS = {22, 23, 24, 25, 26, 27, 29, 30, 31, 32, 34, 35, 37, 45, 46, 47}
+_ONLINE_MIGRATIONS = {
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    29,
+    30,
+    31,
+    32,
+    34,
+    35,
+    37,
+    45,
+    46,
+    47,
+    107,
+}
 
 # From this index on, every SDK defines the same migration at the same index.
 SHARED_MIGRATION_BASE = 100
@@ -1074,16 +1092,19 @@ ALTER FUNCTION "{schema}".enqueue_workflow(
 
 
 def get_dbos_migration_hundredsix(schema: str) -> str:
-    # Expand half of retiring version_name's global uniqueness: the ownership-scoped key that replaces it, unclaimed counting as its own owner. The constraint may not be dropped until every SDK reaching this database is past this migration.
+    # With 107, the key replacing version_name's retiring global uniqueness, unclaimed counting as its own owner. The constraint may not be dropped until every SDK reaching this database is past 107, which runs online because every unclaimed row matches its predicate.
     return f"""
 CREATE UNIQUE INDEX IF NOT EXISTS "uq_application_versions_owner_version"
     ON "{schema}"."application_versions" ("application_name", "version_name")
     WHERE "application_name" IS NOT NULL;
-
-CREATE UNIQUE INDEX IF NOT EXISTS "uq_application_versions_unclaimed_version"
-    ON "{schema}"."application_versions" ("version_name")
-    WHERE "application_name" IS NULL;
 """
+
+
+def get_dbos_migration_hundredseven(schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f"""CREATE UNIQUE INDEX {c} IF NOT EXISTS "uq_application_versions_unclaimed_version"
+    ON "{schema}"."application_versions" ("version_name")
+    WHERE "application_name" IS NULL"""
 
 
 def get_dbos_migrations(
@@ -1147,6 +1168,7 @@ def get_dbos_migrations(
         get_dbos_migration_hundredfour(schema),
         get_dbos_migration_hundredfive(schema, is_cockroach),
         get_dbos_migration_hundredsix(schema),
+        get_dbos_migration_hundredseven(schema, is_cockroach),
     ]
 
 
@@ -1440,7 +1462,9 @@ sqlite_migration_hundredsix = """
 CREATE UNIQUE INDEX IF NOT EXISTS "uq_application_versions_owner_version"
     ON application_versions ("application_name", "version_name")
     WHERE "application_name" IS NOT NULL;
+"""
 
+sqlite_migration_hundredseven = """
 CREATE UNIQUE INDEX IF NOT EXISTS "uq_application_versions_unclaimed_version"
     ON application_versions ("version_name")
     WHERE "application_name" IS NULL;
@@ -1504,4 +1528,5 @@ sqlite_migrations = [
     # Postgres migration 105 rewrites a stored function; SQLite has none.
     "",
     sqlite_migration_hundredsix,
+    sqlite_migration_hundredseven,
 ]

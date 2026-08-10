@@ -1332,6 +1332,11 @@ class SystemDatabase(ABC):
                 if original_workflow_id not in status_by_id:
                     raise DBOSNonExistentWorkflowError("target", original_workflow_id)
             statuses = [status_by_id[wid] for wid in original_workflow_ids]
+            # One owner per fork, shared by its status row and its copied steps.
+            fork_owners = {
+                fork_id: (status[11] if status[11] is not None else self.app_name)
+                for fork_id, status in zip(forked_workflow_ids, statuses)
+            }
             # Bulk insert all forked workflow status rows in one statement.
             c.execute(
                 sa.insert(SystemSchema.workflow_status).values(
@@ -1358,9 +1363,7 @@ class SystemDatabase(ABC):
                             forked_from=original_workflow_id,
                             attributes=status[10],
                             # Inherit the source's owner so the fork runs on the same application; claim an unclaimed one, as dequeue does.
-                            application_name=(
-                                status[11] if status[11] is not None else self.app_name
-                            ),
+                            application_name=fork_owners[forked_workflow_id],
                         )
                         for original_workflow_id, forked_workflow_id, status in zip(
                             original_workflow_ids, forked_workflow_ids, statuses
@@ -1398,6 +1401,10 @@ class SystemDatabase(ABC):
                             sa.literal(orig_id).label("orig_id"),
                             sa.literal(fork_id).label("fork_id"),
                             sa.literal(step).label("start_step"),
+                            # Cast, since an unclaimed fork makes this a bare NULL the union cannot type.
+                            sa.cast(sa.literal(fork_owners[fork_id]), sa.Text).label(
+                                "owner"
+                            ),
                         )
                         for orig_id, fork_id, step in fork_mappings
                     ]
@@ -1444,9 +1451,7 @@ class SystemDatabase(ABC):
                             oo.c.started_at_epoch_ms,
                             oo.c.completed_at_epoch_ms,
                             # Copied steps carry the owner the fork itself resolved to.
-                            sa.func.coalesce(
-                                oo.c.application_name, sa.literal(self.app_name)
-                            ),
+                            mapping_subquery.c.owner,
                         ).select_from(
                             mapping_subquery.join(
                                 oo,
@@ -4287,6 +4292,13 @@ class SystemDatabase(ABC):
                     .where(
                         SystemSchema.workflow_status.c.status
                         == WorkflowStatusString.ENQUEUED.value
+                    )
+                    # Re-check ownership alongside status, as the partitioned claim_guard does.
+                    .where(
+                        self._name_filter(
+                            SystemSchema.workflow_status.c.application_name,
+                            self.app_name,
+                        )
                     )
                     .values(
                         status=WorkflowStatusString.PENDING.value,
