@@ -81,6 +81,10 @@ def default_config(sqlite_path: Path) -> DBOSConfig:
         ),
         "enable_otlp": False,
         "notification_listener_polling_interval_sec": 0.01,
+        # Kafka consumers enqueue onto the internal queues, whose 1s default poll
+        # otherwise dominates every consumer test. Tests asserting on that default
+        # pop this key.
+        "kafka_queue_polling_interval_sec": 0.05,
     }
 
 

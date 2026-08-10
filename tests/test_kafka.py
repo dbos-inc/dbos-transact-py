@@ -33,6 +33,8 @@ from dbos._logger import dbos_logger
 #           KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
 #           KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
 #           KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+#           # Every test uses a fresh group; the 3s default delays each one's first message.
+#           KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
 #           CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
 
 NUM_EVENTS = 3
@@ -52,13 +54,10 @@ def send_test_messages(server: str, topic: str) -> bool:
                 topic, key=f"test message key {i}", value=f"test message value {i}"
             )
 
-        producer.poll(10)
-        producer.flush(10)
-        return True
+        # flush() serves delivery callbacks and waits; poll() would only block its full timeout.
+        return producer.flush(10) == 0
     except Exception as e:
         return False
-    finally:
-        pass
 
 
 def produce_one_message(server: str, topic: str) -> bool:
@@ -69,9 +68,7 @@ def produce_one_message(server: str, topic: str) -> bool:
 
         producer = Producer({"bootstrap.servers": server, "error_cb": on_error})
         producer.produce(topic, key=b"offset-loss-key", value=b"offset-loss-value")
-        producer.poll(10)
-        producer.flush(10)
-        return True
+        return producer.flush(10) == 0
     except Exception:
         return False
 
@@ -516,7 +513,6 @@ def test_kafka_throughput(
         producer = Producer({"bootstrap.servers": server})
         for i in range(num_messages):
             producer.produce(topic, value=f"message-{i}")
-        producer.poll(10)
         if producer.flush(10) > 0:
             pytest.skip("Kafka not available")
     except Exception:
@@ -848,6 +844,8 @@ def test_kafka_queue_polling_interval_default(
     from dbos._kafka import KAFKA_QUEUE_NAME
 
     DBOS.destroy(destroy_registry=True)
+    # Drop the fixture's speed-up value: this test is about the unconfigured path.
+    del config["kafka_queue_polling_interval_sec"]
     suffix = random.randrange(1_000_000_000)
 
     @DBOS.kafka_consumer(

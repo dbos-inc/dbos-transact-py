@@ -72,6 +72,8 @@ jobs:
           KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
           KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
           KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+          # Every consumer test uses a fresh group; the 3s default delays each one's first message.
+          KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
           CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
 
     steps:
