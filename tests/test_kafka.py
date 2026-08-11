@@ -38,41 +38,42 @@ from dbos._logger import dbos_logger
 #           CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
 
 NUM_EVENTS = 3
-# Generous, since an undrained flush is reported as "Kafka not available" and skips the test.
+# Generous, since a broker that is up but slow to drain must not be mistaken for a failure.
 FLUSH_TIMEOUT_SEC = 30
 
 
-def send_test_messages(server: str, topic: str) -> bool:
+def _producer_or_skip(server: str) -> Producer:
+    """A producer for a reachable broker, skipping the test if there is none.
 
+    Only unreachability skips: a broker that fails to deliver is a real failure."""
+
+    def on_error(err: KafkaError) -> NoReturn:
+        raise Exception(err)
+
+    producer = Producer({"bootstrap.servers": server, "error_cb": on_error})
     try:
-
-        def on_error(err: KafkaError) -> NoReturn:
-            raise Exception(err)
-
-        producer = Producer({"bootstrap.servers": server, "error_cb": on_error})
-
-        for i in range(NUM_EVENTS):
-            producer.produce(
-                topic, key=f"test message key {i}", value=f"test message value {i}"
-            )
-
-        # flush() serves delivery callbacks and waits; poll() would only block its full timeout.
-        return producer.flush(FLUSH_TIMEOUT_SEC) == 0
-    except Exception as e:
-        return False
-
-
-def produce_one_message(server: str, topic: str) -> bool:
-    try:
-
-        def on_error(err: KafkaError) -> NoReturn:
-            raise Exception(err)
-
-        producer = Producer({"bootstrap.servers": server, "error_cb": on_error})
-        producer.produce(topic, key=b"offset-loss-key", value=b"offset-loss-value")
-        return producer.flush(FLUSH_TIMEOUT_SEC) == 0
+        producer.list_topics(timeout=10)
     except Exception:
-        return False
+        pytest.skip("Kafka not available")
+    return producer
+
+
+def send_test_messages(server: str, topic: str) -> None:
+    producer = _producer_or_skip(server)
+
+    for i in range(NUM_EVENTS):
+        producer.produce(
+            topic, key=f"test message key {i}", value=f"test message value {i}"
+        )
+
+    # flush() serves delivery callbacks and waits; poll() would only block its full timeout.
+    assert producer.flush(FLUSH_TIMEOUT_SEC) == 0, f"undelivered messages to {topic}"
+
+
+def produce_one_message(server: str, topic: str) -> None:
+    producer = _producer_or_skip(server)
+    producer.produce(topic, key=b"offset-loss-key", value=b"offset-loss-value")
+    assert producer.flush(FLUSH_TIMEOUT_SEC) == 0, f"undelivered message to {topic}"
 
 
 def test_kafka_no_offset_loss_on_relaunch(
@@ -86,8 +87,7 @@ def test_kafka_no_offset_loss_on_relaunch(
     topic = f"dbos-kafka-offsetloss-{suffix}"
     group_id = f"dbos-kafka-offsetloss-{suffix}"
 
-    if not produce_one_message(server, topic):
-        pytest.skip("Kafka not available")
+    produce_one_message(server, topic)
 
     # Wrap the real Consumer that dbos._kafka uses so we can pause inside consume().
     original_consumer_cls = Consumer
@@ -159,8 +159,7 @@ def test_kafka(dbos: DBOS) -> None:
     server = "localhost:9092"
     topic = f"dbos-kafka-{random.randrange(1_000_000_000)}"
 
-    if not send_test_messages(server, topic):
-        pytest.skip("Kafka not available")
+    send_test_messages(server, topic)
 
     @DBOS.kafka_consumer(
         {
@@ -191,8 +190,7 @@ def test_kafka_async(dbos: DBOS) -> None:
     server = "localhost:9092"
     topic = f"dbos-kafka-{random.randrange(1_000_000_000)}"
 
-    if not send_test_messages(server, topic):
-        pytest.skip("Kafka not available")
+    send_test_messages(server, topic)
 
     @DBOS.kafka_consumer(
         {
@@ -223,8 +221,7 @@ def test_kafka_in_order(dbos: DBOS) -> None:
     server = "localhost:9092"
     topic = f"dbos-kafka-{random.randrange(1_000_000_000)}"
 
-    if not send_test_messages(server, topic):
-        pytest.skip("Kafka not available")
+    send_test_messages(server, topic)
 
     with pytest.warns(DeprecationWarning):
 
@@ -260,11 +257,9 @@ def test_kafka_no_groupid(dbos: DBOS) -> None:
     topic1 = f"dbos-kafka-{random.randrange(1_000_000_000, 2_000_000_000)}"
     topic2 = f"dbos-kafka-{random.randrange(2_000_000_000, 3_000_000_000)}"
 
-    if not send_test_messages(server, topic1):
-        pytest.skip("Kafka not available")
+    send_test_messages(server, topic1)
 
-    if not send_test_messages(server, topic2):
-        pytest.skip("Kafka not available")
+    send_test_messages(server, topic2)
 
     @DBOS.kafka_consumer(
         {
@@ -315,7 +310,7 @@ def test_kafka_partition_ordering(dbos: DBOS) -> None:
     for p in range(num_partitions):
         for i in range(num_per_partition):
             producer.produce(topic, partition=p, value=f"{i}")
-    producer.flush(10)
+    assert producer.flush(10) == 0, f"undelivered messages to {topic}"
 
     lock = threading.Lock()
     seen: dict[int, list[int]] = {p: [] for p in range(num_partitions)}
@@ -362,8 +357,7 @@ def test_kafka_db_outage(dbos: DBOS, monkeypatch: pytest.MonkeyPatch) -> None:
     server = "localhost:9092"
     topic = f"dbos-kafka-outage-{random.randrange(1_000_000_000)}"
 
-    if not send_test_messages(server, topic):
-        pytest.skip("Kafka not available")
+    send_test_messages(server, topic)
 
     fail_remaining = 3
     failures_injected = 0
@@ -415,8 +409,7 @@ def test_kafka_listen_queues_still_polls_consumer(
     server = "localhost:9092"
     topic = f"dbos-kafka-listen-{random.randrange(1_000_000_000)}"
 
-    if not send_test_messages(server, topic):
-        pytest.skip("Kafka not available")
+    send_test_messages(server, topic)
 
     DBOS.destroy(destroy_registry=True)
     DBOS(config=config)
@@ -459,8 +452,7 @@ def test_kafka_listen_queues_polls_db_backed_consumer_queue(
     server = "localhost:9092"
     topic = f"dbos-kafka-dbq-{random.randrange(1_000_000_000)}"
 
-    if not send_test_messages(server, topic):
-        pytest.skip("Kafka not available")
+    send_test_messages(server, topic)
 
     # Persist a database-backed queue via the public API: it lives in the DB, not the
     # in-memory registry. The fixture instance is launched, so _sys_db is available.
@@ -511,14 +503,10 @@ def test_kafka_throughput(
     topic = f"dbos-kafka-bench-{random.randrange(1_000_000_000)}"
     num_messages = 1000
 
-    try:
-        producer = Producer({"bootstrap.servers": server})
-        for i in range(num_messages):
-            producer.produce(topic, value=f"message-{i}")
-        if producer.flush(10) > 0:
-            pytest.skip("Kafka not available")
-    except Exception:
-        pytest.skip("Kafka not available")
+    producer = _producer_or_skip(server)
+    for i in range(num_messages):
+        producer.produce(topic, value=f"message-{i}")
+    assert producer.flush(10) == 0, f"undelivered messages to {topic}"
 
     inserted_total = 0
     first_insert_at: Optional[float] = None
@@ -589,8 +577,7 @@ def test_kafka_two_groups_same_topic(dbos: DBOS) -> None:
     server = "localhost:9092"
     topic = f"dbos-kafka-fanout-{random.randrange(1_000_000_000)}"
 
-    if not send_test_messages(server, topic):
-        pytest.skip("Kafka not available")
+    send_test_messages(server, topic)
 
     lock = threading.Lock()
     seen: dict[str, set[int]] = {"a": set(), "b": set()}
@@ -653,8 +640,7 @@ def test_kafka_two_ordered_consumers_same_topic(dbos: DBOS) -> None:
     producer = Producer({"bootstrap.servers": server})
     for i in range(num_messages):
         producer.produce(topic, partition=0, value=f"{i}")
-    if producer.flush(10) > 0:
-        pytest.skip("Kafka not available")
+    assert producer.flush(10) == 0, f"undelivered messages to {topic}"
 
     lock = threading.Lock()
     seen: dict[str, list[int]] = {"a": [], "b": []}
@@ -976,8 +962,7 @@ def test_kafka_ordering_across_batches(dbos: DBOS) -> None:
     for p in range(num_partitions):
         for i in range(num_per_partition):
             producer.produce(topic, partition=p, value=f"{i}")
-    if producer.flush(10) > 0:
-        pytest.skip("Kafka not available")
+    assert producer.flush(10) == 0, f"undelivered messages to {topic}"
 
     lock = threading.Lock()
     seen: dict[int, list[int]] = {p: [] for p in range(num_partitions)}
@@ -1033,8 +1018,7 @@ def test_kafka_topic_ordering_multi_partition(dbos: DBOS) -> None:
     for p in range(num_partitions):
         for i in range(num_per_partition):
             producer.produce(topic, partition=p, value=f"{i}")
-    if producer.flush(10) > 0:
-        pytest.skip("Kafka not available")
+    assert producer.flush(10) == 0, f"undelivered messages to {topic}"
 
     lock = threading.Lock()
     seen: dict[int, list[int]] = {p: [] for p in range(num_partitions)}
@@ -2087,8 +2071,7 @@ def test_kafka_custom_queue(dbos: DBOS) -> None:
     producer = Producer({"bootstrap.servers": server})
     for i in range(num_messages):
         producer.produce(topic, partition=0, value=f"{i}")
-    if producer.flush(10) > 0:
-        pytest.skip("Kafka not available")
+    assert producer.flush(10) == 0, f"undelivered messages to {topic}"
 
     queue_name = f"kafka-custom-q-{random.randrange(1_000_000_000)}"
     DBOS.register_queue(queue_name, concurrency=1)
