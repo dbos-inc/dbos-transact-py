@@ -17,10 +17,6 @@ from ._sys_db import (
     _dbos_workflow_events_channel,
 )
 
-# TRUNCATE rewrites a file per table and per index at a flat cost, which DELETE only
-# overtakes around 15k rows on this schema. Below this, empty a table row by row.
-_TRUNCATE_ROW_THRESHOLD = 10_000
-
 
 class PostgresSystemDatabase(SystemDatabase):
     """PostgreSQL-specific implementation of SystemDatabase."""
@@ -170,13 +166,14 @@ class PostgresSystemDatabase(SystemDatabase):
                     # Count each table in one round trip, capped so a huge table is cheap.
                     probe = ", ".join(
                         f'(SELECT count(*) FROM (SELECT 1 FROM "{schema}"."{table}" '
-                        f"LIMIT {_TRUNCATE_ROW_THRESHOLD + 1}) s)"
+                        "LIMIT 10001) s)"
                         for table in tables
                     )
                     counts = conn.execute(sa.text(f"SELECT {probe}")).one()
                     bulky = []
                     for table, rows in zip(tables, counts):
-                        if rows > _TRUNCATE_ROW_THRESHOLD:
+                        # TRUNCATE rewrites a file per table and index at a flat cost DELETE beats below ~15k rows.
+                        if rows > 10000:
                             bulky.append(table)
                         elif rows:
                             conn.execute(sa.text(f'DELETE FROM "{schema}"."{table}"'))
