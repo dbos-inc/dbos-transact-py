@@ -37,34 +37,30 @@ class PostgresSystemDatabase(SystemDatabase):
         """Run PostgreSQL-specific migrations."""
         system_db_url = self.engine.url
         sysdb_name = system_db_url.database
-        # Validate the engine can connect. Reaching for the postgres database to
-        # check existence first would cost a second connection on every launch, so
-        # only go there when this connection failed on the database being absent.
-        try:
-            with self.engine.connect() as conn:
-                conn.execute(sa.text("SELECT 1"))
-        except OperationalError as e:
-            if (
-                not self.created_engine
-                or f'database "{sysdb_name}" does not exist' not in str(e.orig)
-            ):
-                raise
-            assert sysdb_name is not None
-            engine = sa.create_engine(
-                system_db_url.set(database="postgres"), **self._engine_kwargs
-            )
+        # Unless we were provided an engine, if the system database does not already exist, create it
+        if self.created_engine:
             try:
+                engine = sa.create_engine(
+                    system_db_url.set(database="postgres"), **self._engine_kwargs
+                )
                 with engine.connect() as conn:
                     conn.execution_options(isolation_level="AUTOCOMMIT")
-                    dbos_logger.info(f"Creating system database {sysdb_name}")
-                    conn.execute(sa.text(f'CREATE DATABASE "{sysdb_name}"'))
+                    if not conn.execute(
+                        sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
+                        parameters={"db_name": sysdb_name},
+                    ).scalar():
+                        dbos_logger.info(f"Creating system database {sysdb_name}")
+                        conn.execute(sa.text(f'CREATE DATABASE "{sysdb_name}"'))
             except Exception:
-                # Tolerate a role that cannot create, or a concurrent launch that won.
                 dbos_logger.warning(
-                    f"Could not create system database {sysdb_name}. Continuing..."
+                    f"Could not connect to postgres database to verify existence of {sysdb_name}. Continuing..."
                 )
             finally:
                 engine.dispose()
+        else:
+            # If we were provided an engine, validate it can connect
+            with self.engine.connect() as conn:
+                conn.execute(sa.text("SELECT 1"))
 
         assert self.schema
         # Skip the advisory lock and migration work entirely if the schema
