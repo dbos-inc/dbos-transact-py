@@ -2638,6 +2638,8 @@ def test_custom_schema(
     steps = client.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 4
     assert "transaction" in steps[0]["function_name"]
+    # A live client would outlive the teardown drop and reconnect to the next test's database
+    client.destroy()
 
 
 def test_custom_engine(
@@ -2713,6 +2715,7 @@ def test_custom_engine(
     steps = client.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 3
     assert "setEvent" in steps[0]["function_name"]
+    client.destroy()
 
     # Test custom engine with client and no URL
     client = DBOSClient(
@@ -2722,6 +2725,8 @@ def test_custom_engine(
     steps = client.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 3
     assert "setEvent" in steps[0]["function_name"]
+    # A live client would outlive the teardown drop and reconnect to the next test's database
+    client.destroy()
 
 
 def test_get_events(dbos: DBOS) -> None:

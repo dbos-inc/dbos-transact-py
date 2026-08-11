@@ -172,11 +172,14 @@ def test_cockroachdb_reset_truncate() -> None:
         DBOS.set_event("key", "value")
         return DBOS.workflow_id
 
+    sys_db_engine = create_engine(test_url)
+    # A second engine for the post-truncation read: truncation evicts the pool above.
+    check_engine = create_engine(test_url)
     config: DBOSConfig = {
         "name": "cockroachdb-truncate-test",
         "system_database_url": test_url,
         "use_listen_notify": False,
-        "system_database_engine": create_engine(test_url),
+        "system_database_engine": sys_db_engine,
     }
     try:
         DBOS(config=config)
@@ -191,7 +194,7 @@ def test_cockroachdb_reset_truncate() -> None:
         DBOS.reset_system_database(truncate=True)
 
         # The database survives, fully migrated, so the relaunch runs no migrations
-        with create_engine(test_url).connect() as conn:
+        with check_engine.connect() as conn:
             assert (
                 conn.execute(
                     text(f"SELECT count(*) FROM {db_name}.dbos.workflow_status")
@@ -203,3 +206,10 @@ def test_cockroachdb_reset_truncate() -> None:
         assert DBOS.get_event(workflow_id, "key", timeout_seconds=0) is None
     finally:
         DBOS.destroy(destroy_registry=True)
+        # DBOS never disposes an engine it was handed, and no fixture knows this database.
+        sys_db_engine.dispose()
+        check_engine.dispose()
+        cleanup_engine = create_engine(database_url, isolation_level="AUTOCOMMIT")
+        with cleanup_engine.connect() as conn:
+            conn.execute(text(f"DROP DATABASE IF EXISTS {db_name} CASCADE"))
+        cleanup_engine.dispose()
