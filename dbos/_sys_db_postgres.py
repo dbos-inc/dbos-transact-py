@@ -152,7 +152,9 @@ class PostgresSystemDatabase(SystemDatabase):
                         )
                     )
             except Exception as e:
-                dbos_logger.debug(f"Could not evict connections before truncating: {e}")
+                dbos_logger.warning(
+                    f"Could not evict connections before truncating: {e}"
+                )
             with engine.begin() as conn:
                 tables = [
                     table
