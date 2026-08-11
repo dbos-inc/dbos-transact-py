@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional, cast
 import psycopg
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import DBAPIError
 
 from dbos._migration import ensure_dbos_schema, run_dbos_migrations, should_migrate
 
@@ -171,35 +171,6 @@ class PostgresSystemDatabase(SystemDatabase):
                 # For small test tables, DELETE is far faster than TRUNCATE
                 for table in tables:
                     conn.execute(sa.text(f'DELETE FROM "{schema}"."{table}"'))
-        except OperationalError:
-            # An absent database holds no state, but the failure carries no SQLSTATE.
-            if PostgresSystemDatabase._database_exists(database_url):
-                raise
-            dbos_logger.info(
-                f"System database {sa.make_url(database_url).database} does not exist, nothing to reset"
-            )
-        finally:
-            engine.dispose()
-
-    @staticmethod
-    def _database_exists(database_url: str) -> bool:
-        """Whether the database named in the URL exists, per the postgres database."""
-        url = sa.make_url(database_url)
-        engine = sa.create_engine(
-            url.set(database="postgres", drivername="postgresql+psycopg"),
-            connect_args={"connect_timeout": 10},
-        )
-        try:
-            with engine.connect() as conn:
-                return bool(
-                    conn.execute(
-                        sa.text("SELECT 1 FROM pg_database WHERE datname = :db_name"),
-                        {"db_name": url.database},
-                    ).scalar()
-                )
-        except Exception:
-            # Cannot tell; let the caller surface its original failure.
-            return True
         finally:
             engine.dispose()
 
