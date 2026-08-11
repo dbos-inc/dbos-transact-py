@@ -25,7 +25,7 @@ from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, InMemoryLogE
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from dbos import DBOS, DBOSClient, DBOSConfig
+from dbos import DBOS, DBOSClient, DBOSConfig, run_dbos_database_migrations
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 from dbos._sys_db_postgres import PostgresSystemDatabase
@@ -208,6 +208,37 @@ def drop_test_databases(db_engine: sa.Engine) -> Generator[None, Any, None]:
     _reset_test_databases(db_engine, drop=True)
     yield
     _reset_test_databases(db_engine, drop=True)
+
+
+@pytest.fixture()
+def migrated_system_database(db_engine: sa.Engine) -> None:
+    """cleanup_test_databases, but the system database is left present and migrated.
+
+    For tests running SQL directly instead of launching DBOS: a preceding
+    drop_test_databases test leaves the shared databases absent."""
+    _reset_test_databases(db_engine, drop=False)
+    if not using_sqlite():
+        run_dbos_database_migrations(postgres_urls()[1])
+
+
+def ensure_application_database() -> None:
+    """Create the shared application database if a drop_test_databases test removed it.
+
+    For tests connecting to it directly, which DBOS is not there to recreate it for."""
+    url = sa.make_url(postgres_urls()[0]).set(drivername="postgresql+psycopg")
+    engine = sa.create_engine(
+        url.set(database="postgres"), connect_args={"connect_timeout": 30}
+    )
+    try:
+        with engine.connect() as connection:
+            connection.execution_options(isolation_level="AUTOCOMMIT")
+            if not connection.execute(
+                sa.text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                {"name": url.database},
+            ).scalar():
+                connection.execute(sa.text(f'CREATE DATABASE "{url.database}"'))
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture()
