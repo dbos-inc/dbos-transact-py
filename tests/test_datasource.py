@@ -17,6 +17,7 @@ from dbos import DBOS, AsyncSQLAlchemyDatasource, SetWorkflowID, SQLAlchemyDatas
 from dbos._datasource_postgres import PostgresAsyncDatasource, PostgresSyncDatasource
 from dbos._datasource_sqlite import SqliteAsyncDatasource, SqliteSyncDatasource
 from dbos._error import DBOSException
+from dbos._schemas import SCHEMA_PLACEHOLDER
 from dbos._schemas.datasource_database import DatasourceSchema
 from dbos._schemas.system_database import SystemSchema
 from tests.conftest import ensure_application_database, postgres_urls
@@ -24,6 +25,13 @@ from tests.conftest import ensure_application_database, postgres_urls
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+# Application table used to prove a losing duplicate execution's writes are rolled back.
+_race_side_effects = sa.Table(
+    "race_side_effects",
+    sa.MetaData(schema=SCHEMA_PLACEHOLDER),
+    sa.Column("tag", sa.Text),
+)
 
 
 def _skip_if_pg_unreachable(raw_pg_url: str) -> None:
@@ -566,6 +574,70 @@ def test_sync_ds_recovers_from_sysdb_loss(
     assert call_count["n"] == 1
 
 
+def test_sync_ds_replays_when_duplicate_execution_wins(
+    dbos: DBOS, sync_ds: SQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A duplicate execution that loses the witness-row race replays the winner's
+    recorded result instead of surfacing the primary-key IntegrityError (#812)."""
+    _race_side_effects.create(sync_ds.engine, checkfirst=True)
+    call_count = {"n": 0}
+
+    def step_fn() -> str:
+        call_count["n"] += 1
+        sync_ds.sql_session().execute(
+            _race_side_effects.insert().values(tag=f"run-{call_count['n']}")
+        )
+        return f"result-{call_count['n']}"
+
+    @DBOS.workflow()
+    def my_workflow() -> str:
+        return sync_ds.run_tx_step(None, step_fn)
+
+    wfid = str(uuid.uuid4())
+
+    # The winning execution: commits its app writes and its datasource_outputs row.
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "result-1"
+    assert call_count["n"] == 1
+
+    # Drop the sysdb record so the step body re-runs, as it does for a workflow
+    # recovered while its original executor is still alive.
+    with dbos._sys_db.engine.begin() as conn:
+        conn.execute(
+            sa.delete(SystemSchema.workflow_status).where(
+                SystemSchema.workflow_status.c.workflow_uuid == wfid
+            )
+        )
+
+    # The losing execution's pre-check misses the winner's row, exactly as it does
+    # when both executions check before either commits.
+    real_check = sync_ds._check_execution
+    precheck_calls = {"n": 0}
+
+    def blind_first_check(workflow_id: str, step_id: int) -> Any:
+        precheck_calls["n"] += 1
+        if precheck_calls["n"] == 1:
+            return None
+        return real_check(workflow_id, step_id)
+
+    monkeypatch.setattr(sync_ds, "_check_execution", blind_first_check)
+
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "result-1"
+    assert call_count["n"] == 2  # the loser did run its body
+
+    # The loser's writes were discarded and the winner's record still stands.
+    with sync_ds.engine.connect() as conn:
+        tags = [row.tag for row in conn.execute(sa.select(_race_side_effects.c.tag))]
+        ds_rows = conn.execute(
+            sa.select(DatasourceSchema.datasource_outputs.c.step_id).where(
+                DatasourceSchema.datasource_outputs.c.workflow_id == wfid
+            )
+        ).fetchall()
+    assert tags == ["run-1"]
+    assert len(ds_rows) == 1
+
+
 # ---------------------------------------------------------------------------
 # Async bare-run tests (no DBOS workflow needed)
 # ---------------------------------------------------------------------------
@@ -1041,3 +1113,73 @@ async def test_async_ds_recovers_from_sysdb_loss(
     with SetWorkflowID(wfid):
         assert await my_workflow() == "recovered"
     assert call_count["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_async_ds_replays_when_duplicate_execution_wins(
+    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A duplicate execution that loses the witness-row race replays the winner's
+    recorded result instead of surfacing the primary-key IntegrityError (#812)."""
+    async with async_ds.engine.begin() as conn:
+        await conn.run_sync(_race_side_effects.create, checkfirst=True)
+    call_count = {"n": 0}
+
+    async def step_fn() -> str:
+        call_count["n"] += 1
+        await async_ds.sql_session().execute(
+            _race_side_effects.insert().values(tag=f"run-{call_count['n']}")
+        )
+        return f"result-{call_count['n']}"
+
+    @DBOS.workflow()
+    async def my_workflow() -> str:
+        return await async_ds.run_tx_step_async(None, step_fn)
+
+    wfid = str(uuid.uuid4())
+
+    # The winning execution: commits its app writes and its datasource_outputs row.
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "result-1"
+    assert call_count["n"] == 1
+
+    # Drop the sysdb record so the step body re-runs, as it does for a workflow
+    # recovered while its original executor is still alive.
+    with dbos._sys_db.engine.begin() as conn:
+        conn.execute(
+            sa.delete(SystemSchema.workflow_status).where(
+                SystemSchema.workflow_status.c.workflow_uuid == wfid
+            )
+        )
+
+    # The losing execution's pre-check misses the winner's row, exactly as it does
+    # when both executions check before either commits.
+    real_check = async_ds._check_execution
+    precheck_calls = {"n": 0}
+
+    async def blind_first_check(workflow_id: str, step_id: int) -> Any:
+        precheck_calls["n"] += 1
+        if precheck_calls["n"] == 1:
+            return None
+        return await real_check(workflow_id, step_id)
+
+    monkeypatch.setattr(async_ds, "_check_execution", blind_first_check)
+
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "result-1"
+    assert call_count["n"] == 2  # the loser did run its body
+
+    # The loser's writes were discarded and the winner's record still stands.
+    async with async_ds.engine.connect() as conn:
+        tags = [
+            row.tag for row in (await conn.execute(sa.select(_race_side_effects.c.tag)))
+        ]
+        ds_rows = (
+            await conn.execute(
+                sa.select(DatasourceSchema.datasource_outputs.c.step_id).where(
+                    DatasourceSchema.datasource_outputs.c.workflow_id == wfid
+                )
+            )
+        ).fetchall()
+    assert tags == ["run-1"]
+    assert len(ds_rows) == 1
