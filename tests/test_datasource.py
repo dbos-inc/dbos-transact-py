@@ -11,7 +11,7 @@ import pytest_asyncio
 import sqlalchemy as sa
 from psycopg.errors import SerializationFailure
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, ResourceClosedError
 
 from dbos import DBOS, AsyncSQLAlchemyDatasource, SetWorkflowID, SQLAlchemyDatasource
 from dbos._app_db import RecordedResult
@@ -600,8 +600,7 @@ def test_sync_ds_replays_when_duplicate_execution_wins(
     wfid = str(uuid.uuid4())
 
     def forget_workflow() -> None:
-        # Drop the sysdb record so the step body re-runs, as it does for a workflow
-        # recovered while its original executor is still alive.
+        # Drop the sysdb checkpoint so run_step calls _body again instead of replaying.
         with dbos._sys_db.engine.begin() as conn:
             conn.execute(
                 sa.delete(SystemSchema.workflow_status).where(
@@ -609,8 +608,7 @@ def test_sync_ds_replays_when_duplicate_execution_wins(
                 )
             )
 
-    # A losing execution's pre-check misses the winner's row, exactly as it does
-    # when both executions check before either commits.
+    # Blind one pre-check, so a loser misses the winner's row as it does in the real race.
     real_check = sync_ds._check_execution
     blind = {"next": False}
 
@@ -634,8 +632,7 @@ def test_sync_ds_replays_when_duplicate_execution_wins(
         assert my_workflow() == "result-1"
     assert call_count["n"] == 2  # the loser did run its body
 
-    # A loser whose body fails: the collision moves to the error-recording insert,
-    # and the winner's result still wins over the loser's ValueError.
+    # A loser whose body fails: the collision moves to the error-recording insert.
     forget_workflow()
     blind["next"] = True
     should_fail["v"] = True
@@ -643,7 +640,7 @@ def test_sync_ds_replays_when_duplicate_execution_wins(
         assert my_workflow() == "result-1"
     assert call_count["n"] == 3
 
-    # Both losers' writes were discarded and the winner's record still stands.
+    # The succeeding loser's writes were discarded and the winner's record still stands.
     with sync_ds.engine.connect() as conn:
         tags = [row.tag for row in conn.execute(sa.select(_race_side_effects.c.tag))]
         ds_rows = conn.execute(
@@ -932,6 +929,66 @@ async def test_async_ds_retries_locked_precheck(
 
 
 @pytest.mark.asyncio
+async def test_async_ds_retries_returning_cursor_flake(
+    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """pysqlite can invalidate the witness insert's RETURNING cursor under concurrent
+    writes; that flake must be retried, not recorded as the step's permanent error."""
+    body_calls = {"n": 0}
+    record_calls = {"n": 0}
+    real_record = async_ds._record_result
+
+    # ResourceClosedError is not a DBAPIError, so it bypasses the dialect retry predicates.
+    async def flaky_record(
+        conn: Any,
+        workflow_id: str,
+        step_id: int,
+        output: Optional[str],
+        error: Optional[str],
+        serialization: Optional[str],
+    ) -> None:
+        record_calls["n"] += 1
+        if record_calls["n"] == 1:
+            raise ResourceClosedError(
+                "This result object does not return rows. "
+                "It has been closed automatically."
+            )
+        await real_record(conn, workflow_id, step_id, output, error, serialization)
+
+    monkeypatch.setattr(async_ds, "_record_result", flaky_record)
+
+    async def step_fn() -> str:
+        body_calls["n"] += 1
+        return "ok"
+
+    @DBOS.workflow()
+    async def my_workflow() -> str:
+        return await async_ds.run_tx_step_async(None, step_fn)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "ok"
+
+    # The flaky attempt was retried, and the retry recorded the result.
+    assert body_calls["n"] == 2
+    assert record_calls["n"] == 2
+
+    # The success, not the driver error, is what became durable.
+    async with async_ds.engine.connect() as conn:
+        row = (
+            await conn.execute(
+                sa.select(
+                    DatasourceSchema.datasource_outputs.c.output,
+                    DatasourceSchema.datasource_outputs.c.error,
+                ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+            )
+        ).first()
+    assert row is not None
+    assert row.error is None
+    assert row.output is not None
+
+
+@pytest.mark.asyncio
 async def test_async_ds_non_retryable_error_records_and_replays(
     dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource
 ) -> None:
@@ -1160,8 +1217,7 @@ async def test_async_ds_replays_when_duplicate_execution_wins(
     wfid = str(uuid.uuid4())
 
     def forget_workflow() -> None:
-        # Drop the sysdb record so the step body re-runs, as it does for a workflow
-        # recovered while its original executor is still alive.
+        # Drop the sysdb checkpoint so run_step calls _body again instead of replaying.
         with dbos._sys_db.engine.begin() as conn:
             conn.execute(
                 sa.delete(SystemSchema.workflow_status).where(
@@ -1169,8 +1225,7 @@ async def test_async_ds_replays_when_duplicate_execution_wins(
                 )
             )
 
-    # A losing execution's pre-check misses the winner's row, exactly as it does
-    # when both executions check before either commits.
+    # Blind one pre-check, so a loser misses the winner's row as it does in the real race.
     real_check = async_ds._check_execution
     blind = {"next": False}
 
@@ -1196,8 +1251,7 @@ async def test_async_ds_replays_when_duplicate_execution_wins(
         assert await my_workflow() == "result-1"
     assert call_count["n"] == 2  # the loser did run its body
 
-    # A loser whose body fails: the collision moves to the error-recording insert,
-    # and the winner's result still wins over the loser's ValueError.
+    # A loser whose body fails: the collision moves to the error-recording insert.
     forget_workflow()
     blind["next"] = True
     should_fail["v"] = True
@@ -1205,7 +1259,7 @@ async def test_async_ds_replays_when_duplicate_execution_wins(
         assert await my_workflow() == "result-1"
     assert call_count["n"] == 3
 
-    # Both losers' writes were discarded and the winner's record still stands.
+    # The succeeding loser's writes were discarded and the winner's record still stands.
     async with async_ds.engine.connect() as conn:
         tags = [
             row.tag for row in (await conn.execute(sa.select(_race_side_effects.c.tag)))

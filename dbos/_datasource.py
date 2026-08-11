@@ -18,7 +18,7 @@ from typing import (
 )
 
 import sqlalchemy as sa
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, ResourceClosedError
 from sqlalchemy.ext.asyncio import (
     AsyncConnection,
     AsyncEngine,
@@ -41,7 +41,7 @@ from dbos._serialization import (
     serialize_exception,
     serialize_value,
 )
-from dbos._utils import retriable_postgres_exception
+from dbos._utils import retriable_postgres_exception, retriable_sqlite_exception
 
 from ._logger import dbos_logger
 
@@ -56,8 +56,20 @@ R = TypeVar("R")
 class _StepAlreadyRecorded(Exception):
     """Internal signal: a concurrent execution recorded this step's result first.
 
-    Raised inside the user transaction so its writes roll back before we replay.
+    Raised by _record_result, so the user transaction is always rolled back by the
+    time it is handled — either by this raise unwinding it, or by an earlier failure.
     """
+
+
+def _is_retriable_db_error(error: Exception, is_serialization_error: Any) -> bool:
+    """Transient database errors worth re-running the attempt for."""
+    # pysqlite can invalidate an "INSERT ... RETURNING" cursor under concurrent writes,
+    # which surfaces as ResourceClosedError rather than as a DBAPIError.
+    if isinstance(error, ResourceClosedError):
+        return retriable_sqlite_exception(error)
+    return isinstance(error, DBAPIError) and (
+        retriable_postgres_exception(error) or is_serialization_error(error)
+    )
 
 
 def _parse_ds_options(
@@ -278,6 +290,7 @@ class AsyncSQLAlchemyDatasource(ABC):
                     DatasourceSchema.datasource_outputs.c.step_id,
                 ]
             )
+            # RETURNING, not rowcount: SQLite reports 0 whether or not the row was inserted.
             .returning(DatasourceSchema.datasource_outputs.c.workflow_id)
         )
         if result.first() is None:
@@ -353,10 +366,10 @@ class AsyncSQLAlchemyDatasource(ABC):
                                 break
                             except _StepAlreadyRecorded:
                                 raise  # the recorded result wins; don't record an error over it
-                            except DBAPIError as dbapi_error:
-                                if retriable_postgres_exception(
-                                    dbapi_error
-                                ) or self._is_serialization_error(dbapi_error):
+                            except Exception as e:
+                                if _is_retriable_db_error(
+                                    e, self._is_serialization_error
+                                ):
                                     inner_ctx = get_local_dbos_context()
                                     span = (
                                         inner_ctx.get_current_dbos_span()
@@ -374,18 +387,6 @@ class AsyncSQLAlchemyDatasource(ABC):
                                         _MAX_RETRY_WAIT_SECONDS,
                                     )
                                     continue
-                                if in_wf:
-                                    serialized_e, serialization = serialize_exception(
-                                        dbapi_error, None, self.serializer
-                                    )
-                                    await self._record_error(
-                                        workflow_id,
-                                        step_id,
-                                        serialized_e,
-                                        serialization,
-                                    )
-                                raise
-                            except Exception as e:
                                 if in_wf:
                                     serialized_e, serialization = serialize_exception(
                                         e, None, self.serializer
@@ -629,7 +630,7 @@ class SQLAlchemyDatasource(ABC):
                     DatasourceSchema.datasource_outputs.c.step_id,
                 ]
             )
-            # RETURNING, not rowcount: implicit returning leaves rowcount at -1 for this insert.
+            # RETURNING, not rowcount: SQLite reports 0 whether or not the row was inserted.
             .returning(DatasourceSchema.datasource_outputs.c.workflow_id)
         )
         if result.first() is None:
@@ -705,10 +706,10 @@ class SQLAlchemyDatasource(ABC):
                                 break
                             except _StepAlreadyRecorded:
                                 raise  # the recorded result wins; don't record an error over it
-                            except DBAPIError as dbapi_error:
-                                if retriable_postgres_exception(
-                                    dbapi_error
-                                ) or self._is_serialization_error(dbapi_error):
+                            except Exception as e:
+                                if _is_retriable_db_error(
+                                    e, self._is_serialization_error
+                                ):
                                     inner_ctx = get_local_dbos_context()
                                     span = (
                                         inner_ctx.get_current_dbos_span()
@@ -726,18 +727,6 @@ class SQLAlchemyDatasource(ABC):
                                         _MAX_RETRY_WAIT_SECONDS,
                                     )
                                     continue
-                                if in_wf:
-                                    serialized_e, serialization = serialize_exception(
-                                        dbapi_error, None, self.serializer
-                                    )
-                                    self._record_error(
-                                        workflow_id,
-                                        step_id,
-                                        serialized_e,
-                                        serialization,
-                                    )
-                                raise
-                            except Exception as e:
                                 if in_wf:
                                     serialized_e, serialization = serialize_exception(
                                         e, None, self.serializer
