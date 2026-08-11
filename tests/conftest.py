@@ -156,6 +156,10 @@ def _truncate_application_database(application_database_url: str) -> None:
         engine.dispose()
 
 
+# Whether this session has dropped the shared databases yet.
+_databases_dropped = False
+
+
 def _reset_test_databases(db_engine: sa.Engine, *, drop: bool) -> None:
     """Hand the test empty shared databases, by dropping them or by emptying them."""
     # Stop any DBOS an earlier test left running before touching its databases.
@@ -166,6 +170,13 @@ def _reset_test_databases(db_engine: sa.Engine, *, drop: bool) -> None:
     # SQLite needs no reset here: sqlite_path is a fresh file per test.
     if using_sqlite():
         return
+
+    # A run killed mid-test can leave the schema half-migrated, which truncation
+    # spares and the next launch then fails on. One drop per session repairs it.
+    global _databases_dropped
+    if not _databases_dropped:
+        _databases_dropped = True
+        drop = True
 
     app_db_url, sys_db_url = postgres_urls()
     names = [str(sa.make_url(url).database) for url in (app_db_url, sys_db_url)]

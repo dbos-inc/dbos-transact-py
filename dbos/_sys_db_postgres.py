@@ -133,9 +133,7 @@ class PostgresSystemDatabase(SystemDatabase):
         """Empty every DBOS table in the system database, leaving the schema intact.
 
         dbos_migrations is spared: clearing it would re-run applied migrations."""
-        url = sa.make_url(database_url)
-        if not url.drivername.startswith("cockroachdb"):
-            url = url.set(drivername="postgresql+psycopg")
+        url = sa.make_url(database_url).set(drivername="postgresql+psycopg")
         engine = sa.create_engine(url, connect_args={"connect_timeout": 10})
         try:
             try:
