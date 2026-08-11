@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import click
 import pytest
 import sqlalchemy as sa
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 # Public API
 from dbos import DBOS, DBOSConfig, run_dbos_database_migrations
@@ -289,7 +289,7 @@ def test_reset_truncate_evicts_connections(
         DBOS(config=config)
         DBOS.reset_system_database(truncate=True)
         # The squatter's connection is gone, so its next statement fails
-        with pytest.raises(sa.exc.DBAPIError):
+        with pytest.raises(DBAPIError):
             connection.execute(read_status)
     finally:
         connection.invalidate()
