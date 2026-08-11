@@ -140,7 +140,7 @@ class PostgresSystemDatabase(SystemDatabase):
         try:
             try:
                 # Evict other backends, as DROP DATABASE ... WITH (FORCE) does, or one
-                # holding a lock blocks the TRUNCATE. Its own transaction, and best
+                # holding a lock blocks the deletes. Its own transaction, and best
                 # effort: CockroachDB has no pg_terminate_backend, and a role may not signal.
                 with engine.begin() as conn:
                     conn.execute(
@@ -162,24 +162,15 @@ class PostgresSystemDatabase(SystemDatabase):
                     ).scalars()
                     if table != "dbos_migrations"
                 ]
-                if tables:
-                    # Count each table in one round trip, capped so a huge table is cheap.
-                    probe = ", ".join(
-                        f'(SELECT count(*) FROM (SELECT 1 FROM "{schema}"."{table}" '
-                        "LIMIT 10001) s)"
-                        for table in tables
+                if not tables:
+                    dbos_logger.warning(
+                        f'Found no tables to empty in schema "{schema}" of system '
+                        f"database {url.database}. If it uses a different schema, "
+                        "pass that schema to reset_system_database."
                     )
-                    counts = conn.execute(sa.text(f"SELECT {probe}")).one()
-                    bulky = []
-                    for table, rows in zip(tables, counts):
-                        # TRUNCATE rewrites a file per table and index at a flat cost DELETE beats below ~15k rows.
-                        if rows > 10000:
-                            bulky.append(table)
-                        elif rows:
-                            conn.execute(sa.text(f'DELETE FROM "{schema}"."{table}"'))
-                    if bulky:
-                        targets = ", ".join(f'"{schema}"."{table}"' for table in bulky)
-                        conn.execute(sa.text(f"TRUNCATE TABLE {targets} CASCADE"))
+                # For small test tables, DELETE is far faster than TRUNCATE
+                for table in tables:
+                    conn.execute(sa.text(f'DELETE FROM "{schema}"."{table}"'))
         except OperationalError:
             # An absent database holds no state, but the failure carries no SQLSTATE.
             if PostgresSystemDatabase._database_exists(database_url):

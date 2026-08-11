@@ -186,8 +186,7 @@ def test_cockroachdb_reset_truncate() -> None:
         assert len(DBOS.list_workflows()) == 1
         DBOS.destroy()
 
-        # CockroachDB's TRUNCATE accepts no RESTART IDENTITY, so a Postgres-only
-        # statement would fail here rather than empty the tables.
+        # Truncation must empty the tables using only SQL CockroachDB accepts.
         DBOS(config=config)
         DBOS.reset_system_database(truncate=True)
 

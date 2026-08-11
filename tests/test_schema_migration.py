@@ -344,7 +344,7 @@ def test_reset_explicit_url(
         c.execute(version_row)
         assert c.execute(count).scalar_one() == 1
 
-    # Without the schema, truncation would find no tables and silently do nothing
+    # Without the schema, truncation would find no tables and only warn
     DBOS.reset_system_database(
         system_database_url=other_db_url, schema=other_schema, truncate=True
     )
