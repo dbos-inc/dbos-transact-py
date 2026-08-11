@@ -149,6 +149,14 @@ class SQLiteSystemDatabase(SystemDatabase):
             dbos_logger.info(f"SQLite database file does not exist: {db_path}")
             return
         engine = sa.create_engine(database_url)
+
+        @event.listens_for(engine, "connect")
+        def set_sqlite_immediate(dbapi_conn: Any, connection_record: Any) -> None:
+            # As _create_engine does, so a competing writer is waited out rather than
+            # failing at sqlite3's 5s default. Foreign keys stay off: see below.
+            dbapi_conn.isolation_level = "IMMEDIATE"
+            dbapi_conn.execute("PRAGMA busy_timeout=30000")
+
         try:
             with engine.begin() as conn:
                 tables = [

@@ -38,6 +38,8 @@ from dbos._logger import dbos_logger
 #           CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
 
 NUM_EVENTS = 3
+# Generous, since an undrained flush is reported as "Kafka not available" and skips the test.
+FLUSH_TIMEOUT_SEC = 30
 
 
 def send_test_messages(server: str, topic: str) -> bool:
@@ -55,7 +57,7 @@ def send_test_messages(server: str, topic: str) -> bool:
             )
 
         # flush() serves delivery callbacks and waits; poll() would only block its full timeout.
-        return producer.flush(10) == 0
+        return producer.flush(FLUSH_TIMEOUT_SEC) == 0
     except Exception as e:
         return False
 
@@ -68,7 +70,7 @@ def produce_one_message(server: str, topic: str) -> bool:
 
         producer = Producer({"bootstrap.servers": server, "error_cb": on_error})
         producer.produce(topic, key=b"offset-loss-key", value=b"offset-loss-value")
-        return producer.flush(10) == 0
+        return producer.flush(FLUSH_TIMEOUT_SEC) == 0
     except Exception:
         return False
 
