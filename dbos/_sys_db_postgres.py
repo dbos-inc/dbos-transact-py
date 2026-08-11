@@ -17,6 +17,10 @@ from ._sys_db import (
     _dbos_workflow_events_channel,
 )
 
+# TRUNCATE rewrites a file per table and per index at a flat cost, which DELETE only
+# overtakes around 15k rows on this schema. Below this, empty a table row by row.
+_TRUNCATE_ROW_THRESHOLD = 10_000
+
 
 class PostgresSystemDatabase(SystemDatabase):
     """PostgreSQL-specific implementation of SystemDatabase."""
@@ -163,8 +167,22 @@ class PostgresSystemDatabase(SystemDatabase):
                     if table != "dbos_migrations"
                 ]
                 if tables:
-                    targets = ", ".join(f'"{schema}"."{table}"' for table in tables)
-                    conn.execute(sa.text(f"TRUNCATE TABLE {targets} CASCADE"))
+                    # Count each table in one round trip, capped so a huge table is cheap.
+                    probe = ", ".join(
+                        f'(SELECT count(*) FROM (SELECT 1 FROM "{schema}"."{table}" '
+                        f"LIMIT {_TRUNCATE_ROW_THRESHOLD + 1}) s)"
+                        for table in tables
+                    )
+                    counts = conn.execute(sa.text(f"SELECT {probe}")).one()
+                    bulky = []
+                    for table, rows in zip(tables, counts):
+                        if rows > _TRUNCATE_ROW_THRESHOLD:
+                            bulky.append(table)
+                        elif rows:
+                            conn.execute(sa.text(f'DELETE FROM "{schema}"."{table}"'))
+                    if bulky:
+                        targets = ", ".join(f'"{schema}"."{table}"' for table in bulky)
+                        conn.execute(sa.text(f"TRUNCATE TABLE {targets} CASCADE"))
         except OperationalError:
             # An absent database holds no state, but the failure carries no SQLSTATE.
             if PostgresSystemDatabase._database_exists(database_url):

@@ -134,7 +134,7 @@ def _truncate_application_database(application_database_url: str) -> None:
     )
     try:
         with engine.begin() as connection:
-            # As the system database truncate does: a leaked lock would block the TRUNCATE.
+            # As the system database reset does: a leaked writer's locks block these deletes.
             connection.execute(
                 sa.text(
                     "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
@@ -148,11 +148,10 @@ def _truncate_application_database(application_database_url: str) -> None:
                     "WHERE schemaname NOT IN ('pg_catalog', 'information_schema')"
                 )
             ).all()
-            if tables:
-                targets = ", ".join(f'"{schema}"."{table}"' for schema, table in tables)
-                connection.execute(
-                    sa.text(f"TRUNCATE TABLE {targets} RESTART IDENTITY CASCADE")
-                )
+            # Test tables hold a handful of rows and no foreign keys, so unordered
+            # deletes are both correct and far cheaper than TRUNCATE's file rewrite.
+            for schema, table in tables:
+                connection.execute(sa.text(f'DELETE FROM "{schema}"."{table}"'))
     finally:
         engine.dispose()
 
