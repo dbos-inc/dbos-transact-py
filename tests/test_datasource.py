@@ -22,6 +22,7 @@ from dbos._error import DBOSException
 from dbos._schemas import SCHEMA_PLACEHOLDER
 from dbos._schemas.datasource_database import DatasourceSchema
 from dbos._schemas.system_database import SystemSchema
+from dbos._serialization import deserialize_value
 from tests.conftest import ensure_application_database, postgres_urls
 
 # ---------------------------------------------------------------------------
@@ -602,6 +603,7 @@ def test_sync_ds_replays_when_duplicate_execution_wins(
 
     def forget_workflow() -> None:
         # Drop the sysdb checkpoint so run_step calls _body again instead of replaying.
+        # A real concurrent duplicate keeps that row and ends in DBOSWorkflowConflictIDError instead.
         with dbos._sys_db.engine.begin() as conn:
             conn.execute(
                 sa.delete(SystemSchema.workflow_status).where(
@@ -621,6 +623,18 @@ def test_sync_ds_replays_when_duplicate_execution_wins(
 
     monkeypatch.setattr(sync_ds, "_check_execution", blind_next_check)
 
+    # Count error-recording attempts, to pin that a lost result race never tries one.
+    real_record_error = sync_ds._record_error
+    record_error_calls = {"n": 0}
+
+    def counting_record_error(
+        workflow_id: str, step_id: int, error: str, serialization: Optional[str]
+    ) -> None:
+        record_error_calls["n"] += 1
+        real_record_error(workflow_id, step_id, error, serialization)
+
+    monkeypatch.setattr(sync_ds, "_record_error", counting_record_error)
+
     # The winning execution: commits its app writes and its datasource_outputs row.
     with SetWorkflowID(wfid):
         assert my_workflow() == "result-1"
@@ -632,6 +646,9 @@ def test_sync_ds_replays_when_duplicate_execution_wins(
     with SetWorkflowID(wfid):
         assert my_workflow() == "result-1"
     assert call_count["n"] == 2  # the loser did run its body
+    assert (
+        record_error_calls["n"] == 0
+    )  # the recorded result won without an error write
 
     # A loser whose body fails: the collision moves to the error-recording insert.
     forget_workflow()
@@ -640,18 +657,25 @@ def test_sync_ds_replays_when_duplicate_execution_wins(
     with SetWorkflowID(wfid):
         assert my_workflow() == "result-1"
     assert call_count["n"] == 3
+    assert record_error_calls["n"] == 1
 
     # The succeeding loser's writes were discarded and the winner's record still stands.
     with sync_ds.engine.connect() as conn:
         tags = [row.tag for row in conn.execute(sa.select(_race_side_effects.c.tag))]
-        ds_rows = conn.execute(
-            sa.select(DatasourceSchema.datasource_outputs.c.error).where(
-                DatasourceSchema.datasource_outputs.c.workflow_id == wfid
-            )
-        ).fetchall()
+        ds_row = conn.execute(
+            sa.select(
+                DatasourceSchema.datasource_outputs.c.output,
+                DatasourceSchema.datasource_outputs.c.error,
+                DatasourceSchema.datasource_outputs.c.serialization,
+            ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+        ).one()
     assert tags == ["run-1"]
-    assert len(ds_rows) == 1
-    assert ds_rows[0].error is None  # no loser error was ever recorded
+    assert ds_row.error is None  # no loser error was ever recorded
+    # The winner's output is still the one on record, unmodified by either loser.
+    assert (
+        deserialize_value(ds_row.output, ds_row.serialization, sync_ds.serializer)
+        == "result-1"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1238,6 +1262,7 @@ async def test_async_ds_replays_when_duplicate_execution_wins(
 
     def forget_workflow() -> None:
         # Drop the sysdb checkpoint so run_step calls _body again instead of replaying.
+        # A real concurrent duplicate keeps that row and ends in DBOSWorkflowConflictIDError instead.
         with dbos._sys_db.engine.begin() as conn:
             conn.execute(
                 sa.delete(SystemSchema.workflow_status).where(
@@ -1259,6 +1284,18 @@ async def test_async_ds_replays_when_duplicate_execution_wins(
 
     monkeypatch.setattr(async_ds, "_check_execution", blind_next_check)
 
+    # Count error-recording attempts, to pin that a lost result race never tries one.
+    real_record_error = async_ds._record_error
+    record_error_calls = {"n": 0}
+
+    async def counting_record_error(
+        workflow_id: str, step_id: int, error: str, serialization: Optional[str]
+    ) -> None:
+        record_error_calls["n"] += 1
+        await real_record_error(workflow_id, step_id, error, serialization)
+
+    monkeypatch.setattr(async_ds, "_record_error", counting_record_error)
+
     # The winning execution: commits its app writes and its datasource_outputs row.
     with SetWorkflowID(wfid):
         assert await my_workflow() == "result-1"
@@ -1270,6 +1307,9 @@ async def test_async_ds_replays_when_duplicate_execution_wins(
     with SetWorkflowID(wfid):
         assert await my_workflow() == "result-1"
     assert call_count["n"] == 2  # the loser did run its body
+    assert (
+        record_error_calls["n"] == 0
+    )  # the recorded result won without an error write
 
     # A loser whose body fails: the collision moves to the error-recording insert.
     forget_workflow()
@@ -1278,19 +1318,26 @@ async def test_async_ds_replays_when_duplicate_execution_wins(
     with SetWorkflowID(wfid):
         assert await my_workflow() == "result-1"
     assert call_count["n"] == 3
+    assert record_error_calls["n"] == 1
 
     # The succeeding loser's writes were discarded and the winner's record still stands.
     async with async_ds.engine.connect() as conn:
         tags = [
             row.tag for row in (await conn.execute(sa.select(_race_side_effects.c.tag)))
         ]
-        ds_rows = (
+        ds_row = (
             await conn.execute(
-                sa.select(DatasourceSchema.datasource_outputs.c.error).where(
-                    DatasourceSchema.datasource_outputs.c.workflow_id == wfid
-                )
+                sa.select(
+                    DatasourceSchema.datasource_outputs.c.output,
+                    DatasourceSchema.datasource_outputs.c.error,
+                    DatasourceSchema.datasource_outputs.c.serialization,
+                ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
             )
-        ).fetchall()
+        ).one()
     assert tags == ["run-1"]
-    assert len(ds_rows) == 1
-    assert ds_rows[0].error is None  # no loser error was ever recorded
+    assert ds_row.error is None  # no loser error was ever recorded
+    # The winner's output is still the one on record, unmodified by either loser.
+    assert (
+        deserialize_value(ds_row.output, ds_row.serialization, async_ds.serializer)
+        == "result-1"
+    )

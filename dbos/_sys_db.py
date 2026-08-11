@@ -1647,8 +1647,8 @@ class SystemDatabase(ABC):
                             f"Workflow {wid} has no step named '{from_step_name}'"
                         )
 
-            # A workflow with no recorded steps has nothing to resume from, so restart it from the beginning.
-            start_steps = [start_step_by_id.get(wid, 0) for wid in workflow_ids]
+            # A workflow with no recorded steps has nothing to resume from, so restart it from step 1, the beginning.
+            start_steps = [start_step_by_id.get(wid, 1) for wid in workflow_ids]
 
         forked_ids = [generate_uuid() for _ in workflow_ids]
         return self.fork_workflow(

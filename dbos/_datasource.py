@@ -62,7 +62,9 @@ class _StepAlreadyRecorded(Exception):
 
 
 def _is_retriable_db_error(
-    error: Exception, is_serialization_error: Any, is_sqlite: bool
+    error: Exception,
+    is_serialization_error: Callable[[Exception], bool],
+    is_sqlite: bool,
 ) -> bool:
     """Transient database errors worth re-running the attempt for."""
     if isinstance(error, DBAPIError) and (
@@ -239,7 +241,7 @@ class AsyncSQLAlchemyDatasource(ABC):
     async def _check_execution_with_retry(
         self, workflow_id: str, step_id: int
     ) -> Optional[RecordedResult]:
-        # Retry the OAOO pre-check read on transient concurrency errors, matching the transaction body's retry policy.
+        # Retry the OAOO pre-check read on transient connection and serialization errors.
         retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
         while True:
             try:
@@ -293,7 +295,7 @@ class AsyncSQLAlchemyDatasource(ABC):
                     DatasourceSchema.datasource_outputs.c.step_id,
                 ]
             )
-            # RETURNING, not rowcount: SQLite reports 0 whether or not the row was inserted.
+            # A returned row means this attempt inserted it; no row means a concurrent execution won.
             .returning(DatasourceSchema.datasource_outputs.c.workflow_id)
         )
         if result.first() is None:
@@ -583,7 +585,7 @@ class SQLAlchemyDatasource(ABC):
     def _check_execution_with_retry(
         self, workflow_id: str, step_id: int
     ) -> Optional[RecordedResult]:
-        # Retry the OAOO pre-check read on transient concurrency errors, matching the transaction body's retry policy.
+        # Retry the OAOO pre-check read on transient connection and serialization errors.
         retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
         while True:
             try:
@@ -635,7 +637,7 @@ class SQLAlchemyDatasource(ABC):
                     DatasourceSchema.datasource_outputs.c.step_id,
                 ]
             )
-            # RETURNING, not rowcount: SQLite reports 0 whether or not the row was inserted.
+            # A returned row means this attempt inserted it; no row means a concurrent execution won.
             .returning(DatasourceSchema.datasource_outputs.c.workflow_id)
         )
         if result.first() is None:
