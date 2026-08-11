@@ -172,8 +172,13 @@ def test_two_schemas_isolated_in_one_process(
 
 
 def test_reset(
-    config: DBOSConfig, db_engine: sa.Engine, skip_with_sqlite: None
+    config: DBOSConfig,
+    db_engine: sa.Engine,
+    cleanup_test_databases: None,
+    skip_with_sqlite: None,
 ) -> None:
+    # Asserts workflow_status is empty at launch, so it needs the databases emptied
+    # rather than whatever the preceding test happened to leave behind.
     DBOS.destroy()
     dbos = DBOS(config=config)
     DBOS.launch()

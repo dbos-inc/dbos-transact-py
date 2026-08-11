@@ -2727,6 +2727,8 @@ def test_custom_engine(
     assert "setEvent" in steps[0]["function_name"]
     # A live client would outlive the teardown drop and reconnect to the next test's database
     client.destroy()
+    # DBOS never disposes an engine it was handed, so this test owns it
+    engine.dispose()
 
 
 def test_get_events(dbos: DBOS) -> None:
