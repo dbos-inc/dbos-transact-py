@@ -171,6 +171,9 @@ class PostgresSystemDatabase(SystemDatabase):
                 # For small test tables, DELETE is far faster than TRUNCATE
                 for table in tables:
                     conn.execute(sa.text(f'DELETE FROM "{schema}"."{table}"'))
+        except Exception as e:
+            # Best effort: an absent or unreachable database must not fail the caller.
+            dbos_logger.warning(f"Could not empty system database {url.database}: {e}")
         finally:
             engine.dispose()
 

@@ -169,6 +169,9 @@ class SQLiteSystemDatabase(SystemDatabase):
                 # SQLite has no TRUNCATE; foreign keys are off here, so order is free.
                 for table in tables:
                     conn.execute(sa.text(f'DELETE FROM "{table}"'))
+        except Exception as e:
+            # Best effort, as the Postgres path is: a locked file must not fail the caller.
+            dbos_logger.warning(f"Could not empty system database {db_path}: {e}")
         finally:
             engine.dispose()
 

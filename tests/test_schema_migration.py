@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import click
 import pytest
 import sqlalchemy as sa
-from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 # Public API
 from dbos import DBOS, DBOSConfig, run_dbos_database_migrations
@@ -374,9 +374,8 @@ def test_reset_explicit_url(
         workflow_id = workflow()
         DBOS.destroy()
         DBOS(config=config)
-        # Truncating the now-absent database surfaces the connection failure
-        with pytest.raises(OperationalError):
-            DBOS.reset_system_database(system_database_url=other_db_url, truncate=True)
+        # Truncating the now-absent database warns, rather than raising
+        DBOS.reset_system_database(system_database_url=other_db_url, truncate=True)
 
         # The configured system database is untouched
         DBOS.launch()
