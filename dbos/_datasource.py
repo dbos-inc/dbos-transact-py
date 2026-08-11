@@ -53,6 +53,13 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
+class _StepAlreadyRecorded(Exception):
+    """Internal signal: a concurrent execution recorded this step's result first.
+
+    Raised inside the user transaction so its writes roll back before we replay.
+    """
+
+
 def _parse_ds_options(
     ds_options: Optional["DatasourceOptions"], func: Callable[..., Any]
 ) -> "tuple[str, str]":
@@ -240,9 +247,9 @@ class AsyncSQLAlchemyDatasource(ABC):
         step_id: int,
         error: str,
         serialization: Optional[str],
-    ) -> None:
+    ) -> bool:
         async with self.engine.begin() as conn:
-            await self._record_result(
+            return await self._record_result(
                 conn, workflow_id, step_id, None, error, serialization
             )
 
@@ -254,16 +261,37 @@ class AsyncSQLAlchemyDatasource(ABC):
         output: Optional[str],
         error: Optional[str],
         serialization: Optional[str],
-    ) -> None:
-        await conn.execute(
-            sa.insert(DatasourceSchema.datasource_outputs).values(
+    ) -> bool:
+        """Record this step's outcome, returning False if a concurrent execution recorded it first."""
+        result = await conn.execute(
+            self.dialect.insert(DatasourceSchema.datasource_outputs)
+            .values(
                 workflow_id=workflow_id,
                 step_id=step_id,
                 output=output,
                 error=error,
                 serialization=serialization,
             )
+            .on_conflict_do_nothing(
+                index_elements=[
+                    DatasourceSchema.datasource_outputs.c.workflow_id,
+                    DatasourceSchema.datasource_outputs.c.step_id,
+                ]
+            )
+            # RETURNING, not rowcount: implicit returning leaves rowcount at -1 for this insert.
+            .returning(DatasourceSchema.datasource_outputs.c.workflow_id)
         )
+        return result.first() is not None
+
+    async def _replay_conflicting_step(self, workflow_id: str, step_id: int) -> Any:
+        # A duplicate execution of this workflow won the race, so its recorded result is the durable one.
+        recorded = await self._check_execution_with_retry(workflow_id, step_id)
+        if recorded is None:
+            raise DBOSException(
+                f"Datasource step {step_id} of workflow {workflow_id} conflicted with a "
+                "concurrent execution, but no recorded result was found"
+            )
+        return _replay_recorded(recorded, self.serializer)
 
     async def run_tx_step_async(
         self,
@@ -313,15 +341,23 @@ class AsyncSQLAlchemyDatasource(ABC):
                                     serialized, serialization = serialize_value(
                                         output, None, self.serializer
                                     )
-                                    await self._record_result(
+                                    if not await self._record_result(
                                         session,
                                         workflow_id,
                                         step_id,
                                         serialized,
                                         None,
                                         serialization,
-                                    )
+                                    ):
+                                        raise _StepAlreadyRecorded()
                             break
+                        except _StepAlreadyRecorded:
+                            return cast(
+                                R,
+                                await self._replay_conflicting_step(
+                                    workflow_id, step_id
+                                ),
+                            )
                         except DBAPIError as dbapi_error:
                             if retriable_postgres_exception(
                                 dbapi_error
@@ -347,18 +383,30 @@ class AsyncSQLAlchemyDatasource(ABC):
                                 serialized_e, serialization = serialize_exception(
                                     dbapi_error, None, self.serializer
                                 )
-                                await self._record_error(
+                                if not await self._record_error(
                                     workflow_id, step_id, serialized_e, serialization
-                                )
+                                ):
+                                    return cast(
+                                        R,
+                                        await self._replay_conflicting_step(
+                                            workflow_id, step_id
+                                        ),
+                                    )
                             raise
                         except Exception as e:
                             if in_wf:
                                 serialized_e, serialization = serialize_exception(
                                     e, None, self.serializer
                                 )
-                                await self._record_error(
+                                if not await self._record_error(
                                     workflow_id, step_id, serialized_e, serialization
-                                )
+                                ):
+                                    return cast(
+                                        R,
+                                        await self._replay_conflicting_step(
+                                            workflow_id, step_id
+                                        ),
+                                    )
                             raise
                         finally:
                             exec_ctx.end_async_ds_transaction()
@@ -559,9 +607,11 @@ class SQLAlchemyDatasource(ABC):
         step_id: int,
         error: str,
         serialization: Optional[str],
-    ) -> None:
+    ) -> bool:
         with self.engine.begin() as conn:
-            self._record_result(conn, workflow_id, step_id, None, error, serialization)
+            return self._record_result(
+                conn, workflow_id, step_id, None, error, serialization
+            )
 
     def _record_result(
         self,
@@ -571,16 +621,37 @@ class SQLAlchemyDatasource(ABC):
         output: Optional[str],
         error: Optional[str],
         serialization: Optional[str],
-    ) -> None:
-        conn.execute(
-            sa.insert(DatasourceSchema.datasource_outputs).values(
+    ) -> bool:
+        """Record this step's outcome, returning False if a concurrent execution recorded it first."""
+        result = conn.execute(
+            self.dialect.insert(DatasourceSchema.datasource_outputs)
+            .values(
                 workflow_id=workflow_id,
                 step_id=step_id,
                 output=output,
                 error=error,
                 serialization=serialization,
             )
+            .on_conflict_do_nothing(
+                index_elements=[
+                    DatasourceSchema.datasource_outputs.c.workflow_id,
+                    DatasourceSchema.datasource_outputs.c.step_id,
+                ]
+            )
+            # RETURNING, not rowcount: implicit returning leaves rowcount at -1 for this insert.
+            .returning(DatasourceSchema.datasource_outputs.c.workflow_id)
         )
+        return result.first() is not None
+
+    def _replay_conflicting_step(self, workflow_id: str, step_id: int) -> Any:
+        # A duplicate execution of this workflow won the race, so its recorded result is the durable one.
+        recorded = self._check_execution_with_retry(workflow_id, step_id)
+        if recorded is None:
+            raise DBOSException(
+                f"Datasource step {step_id} of workflow {workflow_id} conflicted with a "
+                "concurrent execution, but no recorded result was found"
+            )
+        return _replay_recorded(recorded, self.serializer)
 
     def run_tx_step(
         self,
@@ -630,15 +701,20 @@ class SQLAlchemyDatasource(ABC):
                                     serialized, serialization = serialize_value(
                                         output, None, self.serializer
                                     )
-                                    self._record_result(
+                                    if not self._record_result(
                                         session,
                                         workflow_id,
                                         step_id,
                                         serialized,
                                         None,
                                         serialization,
-                                    )
+                                    ):
+                                        raise _StepAlreadyRecorded()
                             break
+                        except _StepAlreadyRecorded:
+                            return cast(
+                                R, self._replay_conflicting_step(workflow_id, step_id)
+                            )
                         except DBAPIError as dbapi_error:
                             if retriable_postgres_exception(
                                 dbapi_error
@@ -664,18 +740,30 @@ class SQLAlchemyDatasource(ABC):
                                 serialized_e, serialization = serialize_exception(
                                     dbapi_error, None, self.serializer
                                 )
-                                self._record_error(
+                                if not self._record_error(
                                     workflow_id, step_id, serialized_e, serialization
-                                )
+                                ):
+                                    return cast(
+                                        R,
+                                        self._replay_conflicting_step(
+                                            workflow_id, step_id
+                                        ),
+                                    )
                             raise
                         except Exception as e:
                             if in_wf:
                                 serialized_e, serialization = serialize_exception(
                                     e, None, self.serializer
                                 )
-                                self._record_error(
+                                if not self._record_error(
                                     workflow_id, step_id, serialized_e, serialization
-                                )
+                                ):
+                                    return cast(
+                                        R,
+                                        self._replay_conflicting_step(
+                                            workflow_id, step_id
+                                        ),
+                                    )
                             raise
                         finally:
                             exec_ctx.end_sync_ds_transaction()
