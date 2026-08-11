@@ -2583,8 +2583,9 @@ def test_custom_database(
 
 
 def test_custom_schema(
-    config: DBOSConfig, cleanup_test_databases: None, skip_with_sqlite: None
+    config: DBOSConfig, drop_test_databases: None, skip_with_sqlite: None
 ) -> None:
+    # Needs a dropped database: it asserts the default "dbos" schema is absent.
     DBOS.destroy(destroy_registry=True)
     config["dbos_system_schema"] = "F8nny_sCHem@-n@m3"
     dbos = DBOS(config=config)
@@ -2637,14 +2638,17 @@ def test_custom_schema(
     steps = client.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 4
     assert "transaction" in steps[0]["function_name"]
+    # A live client would outlive the teardown drop and reconnect to the next test's database
+    client.destroy()
 
 
 def test_custom_engine(
     config: DBOSConfig,
-    cleanup_test_databases: None,
+    drop_test_databases: None,
     db_engine: sa.Engine,
     skip_with_sqlite: None,
 ) -> None:
+    # Needs a dropped database: it asserts launch fails before the database exists.
     DBOS.destroy(destroy_registry=True)
     assert config["system_database_url"]
     config["application_database_url"] = None
@@ -2711,6 +2715,7 @@ def test_custom_engine(
     steps = client.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 3
     assert "setEvent" in steps[0]["function_name"]
+    client.destroy()
 
     # Test custom engine with client and no URL
     client = DBOSClient(
@@ -2720,6 +2725,10 @@ def test_custom_engine(
     steps = client.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 3
     assert "setEvent" in steps[0]["function_name"]
+    # A live client would outlive the teardown drop and reconnect to the next test's database
+    client.destroy()
+    # DBOS never disposes an engine it was handed, so this test owns it
+    engine.dispose()
 
 
 def test_get_events(dbos: DBOS) -> None:

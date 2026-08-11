@@ -149,3 +149,67 @@ def test_cockroachdb_fork() -> None:
         assert any(w.workflow_id == forked.workflow_id for w in not_forked_from_list)
     finally:
         DBOS.destroy(destroy_registry=True)
+
+
+def test_cockroachdb_reset_truncate() -> None:
+    database_url = os.environ.get("DBOS_COCKROACHDB_URL")
+    if database_url is None:
+        pytest.skip("No CockroachDB database URL provided")
+
+    db_name = "dbos_test_truncate"
+    default_engine = create_engine(database_url, isolation_level="AUTOCOMMIT")
+    with default_engine.connect() as conn:
+        conn.execute(text(f"DROP DATABASE IF EXISTS {db_name} CASCADE"))
+        conn.execute(text(f"CREATE DATABASE {db_name}"))
+    default_engine.dispose()
+
+    parsed = urlparse(database_url)
+    test_url = urlunparse(parsed._replace(path=f"/{db_name}"))
+
+    @DBOS.workflow()
+    def workflow() -> str:
+        assert DBOS.workflow_id
+        DBOS.set_event("key", "value")
+        return DBOS.workflow_id
+
+    sys_db_engine = create_engine(test_url)
+    # A second engine for the post-truncation read: truncation evicts the pool above.
+    check_engine = create_engine(test_url)
+    config: DBOSConfig = {
+        "name": "cockroachdb-truncate-test",
+        "system_database_url": test_url,
+        "use_listen_notify": False,
+        "system_database_engine": sys_db_engine,
+    }
+    try:
+        DBOS(config=config)
+        DBOS.launch()
+        workflow_id = workflow()
+        assert DBOS.get_event(workflow_id, "key") == "value"
+        assert len(DBOS.list_workflows()) == 1
+        DBOS.destroy()
+
+        # Truncation must empty the tables using only SQL CockroachDB accepts.
+        DBOS(config=config)
+        DBOS.reset_system_database(truncate=True)
+
+        # The database survives, fully migrated, so the relaunch runs no migrations
+        with check_engine.connect() as conn:
+            assert (
+                conn.execute(
+                    text(f"SELECT count(*) FROM {db_name}.dbos.workflow_status")
+                ).scalar()
+                == 0
+            )
+        DBOS.launch()
+        assert DBOS.list_workflows() == []
+        assert DBOS.get_event(workflow_id, "key", timeout_seconds=0) is None
+    finally:
+        DBOS.destroy(destroy_registry=True)
+        # DBOS never disposes an engine it was handed, and no fixture knows this database.
+        sys_db_engine.dispose()
+        check_engine.dispose()
+        cleanup_engine = create_engine(database_url, isolation_level="AUTOCOMMIT")
+        with cleanup_engine.connect() as conn:
+            conn.execute(text(f"DROP DATABASE IF EXISTS {db_name} CASCADE"))
+        cleanup_engine.dispose()

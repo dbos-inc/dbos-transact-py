@@ -25,7 +25,7 @@ from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, InMemoryLogE
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from dbos import DBOS, DBOSClient, DBOSConfig
+from dbos import DBOS, DBOSClient, DBOSConfig, run_dbos_database_migrations
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 from dbos._sys_db_postgres import PostgresSystemDatabase
@@ -81,6 +81,10 @@ def default_config(sqlite_path: Path) -> DBOSConfig:
         ),
         "enable_otlp": False,
         "notification_listener_polling_interval_sec": 0.01,
+        # Kafka consumers enqueue onto the internal queues, whose 1s default poll
+        # otherwise dominates every consumer test. Tests asserting on that default
+        # pop this key.
+        "kafka_queue_polling_interval_sec": 0.05,
     }
 
 
@@ -120,33 +124,132 @@ def db_engine() -> Generator[sa.Engine, Any, None]:
     engine.dispose()
 
 
-@pytest.fixture()
-def cleanup_test_databases(config: DBOSConfig, db_engine: sa.Engine) -> None:
-    assert config["application_database_url"] is not None
-    assert config["system_database_url"] is not None
+def _truncate_application_database(application_database_url: str) -> None:
+    """Empty every table in the application database, leaving its schemas intact.
 
-    # Stop any DBOS an earlier test left running before dropping its database.
+    Stale transaction_outputs would let a reused workflow ID replay."""
+    engine = sa.create_engine(
+        sa.make_url(application_database_url).set(drivername="postgresql+psycopg"),
+        connect_args={"connect_timeout": 30},
+    )
+    try:
+        with engine.begin() as connection:
+            # As the system database reset does: a leaked writer's locks block these deletes.
+            connection.execute(
+                sa.text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = current_database() AND pid <> pg_backend_pid()"
+                )
+            )
+        with engine.begin() as connection:
+            tables = connection.execute(
+                sa.text(
+                    "SELECT schemaname, tablename FROM pg_tables "
+                    "WHERE schemaname NOT IN ('pg_catalog', 'information_schema')"
+                )
+            ).all()
+            # Test tables hold a handful of rows and no foreign keys, so unordered
+            # deletes are both correct and far cheaper than TRUNCATE's file rewrite.
+            for schema, table in tables:
+                connection.execute(sa.text(f'DELETE FROM "{schema}"."{table}"'))
+    finally:
+        engine.dispose()
+
+
+# Whether this session has dropped the shared databases yet.
+_databases_dropped = False
+
+
+def _reset_test_databases(db_engine: sa.Engine, *, drop: bool) -> None:
+    """Hand the test empty shared databases, by dropping them or by emptying them."""
+    # Stop any DBOS an earlier test left running before touching its databases.
     DBOS.destroy(destroy_registry=True)
+    for var in ("DBOS__VMID", "DBOS__APPVERSION", "DBOS__APPID"):
+        os.environ.pop(var, None)
 
     # SQLite needs no reset here: sqlite_path is a fresh file per test.
+    if using_sqlite():
+        return
+
+    # A run killed mid-test can leave the schema half-migrated, which truncation
+    # spares and the next launch then fails on. One drop per session repairs it.
+    global _databases_dropped
+    if not _databases_dropped:
+        _databases_dropped = True
+        drop = True
+
+    app_db_url, sys_db_url = postgres_urls()
+    names = [str(sa.make_url(url).database) for url in (app_db_url, sys_db_url)]
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        if drop:
+            for name in names:
+                connection.execute(
+                    sa.text(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
+                )
+            return
+        # An absent database holds no state to empty, and connecting to one errors.
+        present = set(
+            connection.execute(
+                sa.text("SELECT datname FROM pg_database WHERE datname = ANY(:names)"),
+                {"names": names},
+            ).scalars()
+        )
+
+    app_db_name, sys_db_name = names
+    if sys_db_name in present:
+        SystemDatabase.reset_system_database(sys_db_url, truncate=True)
+    if app_db_name in present:
+        _truncate_application_database(app_db_url)
+
+
+@pytest.fixture()
+def cleanup_test_databases(db_engine: sa.Engine) -> None:
+    """Give the test empty databases, without dropping them.
+
+    Tests needing them genuinely absent must use drop_test_databases instead."""
+    _reset_test_databases(db_engine, drop=False)
+
+
+@pytest.fixture()
+def drop_test_databases(db_engine: sa.Engine) -> Generator[None, Any, None]:
+    """cleanup_test_databases, but dropping the databases outright.
+
+    Drops on both sides, so damage escapes into neither test."""
+    _reset_test_databases(db_engine, drop=True)
+    yield
+    _reset_test_databases(db_engine, drop=True)
+
+
+@pytest.fixture()
+def migrated_system_database(db_engine: sa.Engine) -> None:
+    """cleanup_test_databases, but the system database is left present and migrated.
+
+    For tests running SQL directly instead of launching DBOS: a preceding
+    drop_test_databases test leaves the shared databases absent."""
+    _reset_test_databases(db_engine, drop=False)
     if not using_sqlite():
-        # For PostgreSQL, drop the databases
-        app_db_name = sa.make_url(config["application_database_url"]).database
-        sys_db_name = sa.make_url(config["system_database_url"]).database
+        run_dbos_database_migrations(postgres_urls()[1])
 
-        with db_engine.connect() as connection:
+
+def ensure_application_database() -> None:
+    """Create the shared application database if a drop_test_databases test removed it.
+
+    For tests connecting to it directly, which DBOS is not there to recreate it for."""
+    url = sa.make_url(postgres_urls()[0]).set(drivername="postgresql+psycopg")
+    engine = sa.create_engine(
+        url.set(database="postgres"), connect_args={"connect_timeout": 30}
+    )
+    try:
+        with engine.connect() as connection:
             connection.execution_options(isolation_level="AUTOCOMMIT")
-            connection.execute(
-                sa.text(f"DROP DATABASE IF EXISTS {app_db_name} WITH (FORCE)")
-            )
-            connection.execute(
-                sa.text(f"DROP DATABASE IF EXISTS {sys_db_name} WITH (FORCE)")
-            )
-
-    # Clean up environment variables
-    os.environ.pop("DBOS__VMID") if "DBOS__VMID" in os.environ else None
-    os.environ.pop("DBOS__APPVERSION") if "DBOS__APPVERSION" in os.environ else None
-    os.environ.pop("DBOS__APPID") if "DBOS__APPID" in os.environ else None
+            if not connection.execute(
+                sa.text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                {"name": url.database},
+            ).scalar():
+                connection.execute(sa.text(f'CREATE DATABASE "{url.database}"'))
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture()
@@ -160,6 +263,18 @@ def dbos(
     #     launch themselves.
     # If your test is tricky and has a problem with this, use a different
     #   fixture that does not launch.
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    yield dbos
+    DBOS.destroy(destroy_registry=True)
+
+
+@pytest.fixture()
+def dbos_dropped_databases(
+    config: DBOSConfig, drop_test_databases: None
+) -> Generator[DBOS, Any, None]:
+    """The dbos fixture on dropped databases, so launch migrates from scratch."""
     dbos = DBOS(config=config)
     DBOS.launch()
 

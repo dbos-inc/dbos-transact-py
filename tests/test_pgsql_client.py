@@ -324,7 +324,9 @@ def test_pgsql_enqueue_wrong_appver(
     assert wf_status.app_version == "0123456789abcdef"
 
 
-def test_pgsql_enqueue_idempotent(config: DBOSConfig, skip_with_sqlite: None) -> None:
+def test_pgsql_enqueue_idempotent(
+    config: DBOSConfig, migrated_system_database: None, skip_with_sqlite: None
+) -> None:
     """Test enqueue_workflow idempotent behavior."""
     DBOS.destroy(destroy_registry=True)
 

@@ -3560,16 +3560,22 @@ class SystemDatabase(ABC):
                     time.sleep(self._notification_listener_polling_interval_sec)
 
     @staticmethod
-    def reset_system_database(database_url: str) -> None:
-        """Reset the system database by calling the appropriate implementation."""
+    def reset_system_database(
+        database_url: str, *, truncate: bool = False, schema: Optional[str] = None
+    ) -> None:
+        """Reset the system database by calling the appropriate implementation.
+
+        truncate=True empties the tables instead, keeping the migrated schema."""
         if database_url.startswith("sqlite"):
             from ._sys_db_sqlite import SQLiteSystemDatabase
 
-            SQLiteSystemDatabase._reset_system_database(database_url)
+            SQLiteSystemDatabase._reset_system_database(database_url, truncate=truncate)
         else:
             from ._sys_db_postgres import PostgresSystemDatabase
 
-            PostgresSystemDatabase._reset_system_database(database_url)
+            PostgresSystemDatabase._reset_system_database(
+                database_url, truncate=truncate, schema=schema
+            )
 
     @db_retry()
     def record_sleep(

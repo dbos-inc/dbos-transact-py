@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import click
 import pytest
 import sqlalchemy as sa
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 # Public API
 from dbos import DBOS, DBOSConfig, run_dbos_database_migrations
@@ -20,7 +20,11 @@ from dbos._sys_db import SystemDatabase
 from dbos.cli.migration import print_dbos_migrations, print_dbos_user_role_sql
 
 
-def test_systemdb_migration(dbos: DBOS, skip_with_sqlite: None) -> None:
+def test_systemdb_migration(
+    dbos_dropped_databases: DBOS, skip_with_sqlite: None
+) -> None:
+    # Needs a dropped database so this exercises a from-scratch migration.
+    dbos = dbos_dropped_databases
     # Make sure all tables exist
     with dbos._sys_db.engine.connect() as connection:
         sql = SystemSchema.workflow_status.select()
@@ -51,9 +55,9 @@ def test_systemdb_migration(dbos: DBOS, skip_with_sqlite: None) -> None:
 def test_systemdb_migration_custom_schema(
     config: DBOSConfig,
     skip_with_sqlite: None,
-    cleanup_test_databases: None,
+    drop_test_databases: None,
 ) -> None:
-
+    # Needs a dropped database: asserts the "dbos" schema is absent, leaves its own.
     config["application_database_url"] = None
     schema = "F8nny_sCHem@-n@m3"
     config["dbos_system_schema"] = schema
@@ -90,9 +94,11 @@ def test_systemdb_migration_custom_schema(
 def test_two_schemas_isolated_in_one_process(
     config: DBOSConfig,
     skip_with_sqlite: None,
-    cleanup_test_databases: None,
+    drop_test_databases: None,
 ) -> None:
-    """Two system databases with different schemas must stay isolated within one process."""
+    """Two system databases with different schemas must stay isolated within one process.
+
+    Needs a dropped database: truncation spares the schemas this creates itself."""
     sys_db_url = config["system_database_url"]
     assert sys_db_url is not None
 
@@ -166,8 +172,13 @@ def test_two_schemas_isolated_in_one_process(
 
 
 def test_reset(
-    config: DBOSConfig, db_engine: sa.Engine, skip_with_sqlite: None
+    config: DBOSConfig,
+    db_engine: sa.Engine,
+    cleanup_test_databases: None,
+    skip_with_sqlite: None,
 ) -> None:
+    # Asserts workflow_status is empty at launch, so it needs the databases emptied
+    # rather than whatever the preceding test happened to leave behind.
     DBOS.destroy()
     dbos = DBOS(config=config)
     DBOS.launch()
@@ -201,6 +212,186 @@ def test_reset(
     # Verify that resetting after launch throws
     with pytest.raises(AssertionError):
         DBOS.reset_system_database()
+
+
+def test_reset_truncate(
+    config: DBOSConfig,
+    db_engine: sa.Engine,
+    cleanup_test_databases: None,
+    skip_with_sqlite: None,
+) -> None:
+    """Truncating empties the tables but leaves the database and its migrated schema."""
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def workflow() -> str:
+        assert DBOS.workflow_id
+        DBOS.set_event(DBOS.workflow_id, DBOS.workflow_id)
+        return DBOS.workflow_id
+
+    DBOS.launch()
+    workflow_id = workflow()
+    assert DBOS.get_event(workflow_id, workflow_id) == workflow_id
+    assert len(DBOS.list_workflows()) == 1
+    sysdb_name = dbos._sys_db.engine.url.database
+    latest_version = len(get_dbos_migrations("dbos", True))
+
+    DBOS.destroy()
+    dbos = DBOS(config=config)
+    DBOS.reset_system_database(truncate=True)
+
+    # Unlike a reset, the database itself survives
+    with db_engine.connect() as c:
+        count: int = c.execute(
+            sa.text(f"SELECT COUNT(*) FROM pg_database WHERE datname = '{sysdb_name}'")
+        ).scalar_one()
+        assert count == 1
+
+    DBOS.launch()
+    assert DBOS.list_workflows() == []
+    with dbos._sys_db.engine.connect() as c:
+        assert (
+            c.execute(
+                sa.select(sa.func.count()).select_from(SystemSchema.workflow_events)
+            ).scalar_one()
+            == 0
+        )
+        # The schema survives fully migrated, so the launch above ran no migrations
+        assert (
+            c.execute(sa.text('SELECT version FROM "dbos".dbos_migrations')).scalar()
+            == latest_version
+        )
+    assert should_migrate(dbos._sys_db.engine, "dbos", True) is False
+
+    # Truncating after launch is refused, same as resetting
+    with pytest.raises(AssertionError):
+        DBOS.reset_system_database(truncate=True)
+    DBOS.destroy()
+
+
+def test_reset_truncate_evicts_connections(
+    config: DBOSConfig, cleanup_test_databases: None, skip_with_sqlite: None
+) -> None:
+    """Truncating evicts other connections, as DROP DATABASE ... WITH (FORCE) did.
+
+    A leaked transaction holding a lock would otherwise block TRUNCATE forever."""
+    sys_db_url = config["system_database_url"]
+    assert sys_db_url is not None
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+    DBOS.launch()
+    DBOS.destroy()
+
+    # Stand in for a thread an earlier test failed to stop: an open transaction
+    # holding a lock TRUNCATE needs.
+    squatter = sa.create_engine(sys_db_url)
+    connection = squatter.connect()
+    read_status = sa.text('SELECT count(*) FROM "dbos".workflow_status')
+    connection.execute(read_status)
+
+    try:
+        DBOS(config=config)
+        DBOS.reset_system_database(truncate=True)
+        # The squatter's connection is gone, so its next statement fails
+        with pytest.raises(DBAPIError):
+            connection.execute(read_status)
+    finally:
+        connection.invalidate()
+        squatter.dispose()
+        DBOS.destroy()
+
+
+def test_reset_explicit_url(
+    config: DBOSConfig,
+    db_engine: sa.Engine,
+    cleanup_test_databases: None,
+    skip_with_sqlite: None,
+) -> None:
+    """An explicit system database URL and schema are reset in place of the
+    configured ones, with or without a global DBOS object."""
+    sys_db_url = config["system_database_url"]
+    assert sys_db_url is not None
+    other_db_url = (
+        sa.make_url(sys_db_url)
+        .set(database="reset_explicit_url_test")
+        .render_as_string(hide_password=False)
+    )
+    other_db_name = sa.make_url(other_db_url).database
+    other_schema = "F8nny_sCHem@-n@m3"
+
+    def other_db_exists() -> bool:
+        with db_engine.connect() as c:
+            return bool(
+                c.execute(
+                    sa.text(
+                        f"SELECT 1 FROM pg_database WHERE datname = '{other_db_name}'"
+                    )
+                ).scalar()
+            )
+
+    try:
+        # No global DBOS object: the URL and schema alone are enough to reset
+        DBOS.destroy(destroy_registry=True)
+        other_db = SystemDatabase.create(
+            system_database_url=other_db_url,
+            engine_kwargs={},
+            engine=None,
+            schema=other_schema,
+            serializer=DefaultSerializer(),
+            executor_id=None,
+        )
+        other_db.run_migrations()
+        version_row = SystemSchema.application_versions.insert().values(
+            version_id="v1", version_name="v1", version_timestamp=1, created_at=1
+        )
+        count = sa.select(sa.func.count()).select_from(
+            SystemSchema.application_versions
+        )
+        with other_db.engine.begin() as c:
+            c.execute(version_row)
+            assert c.execute(count).scalar_one() == 1
+
+        # Without the schema, truncation would find no tables and only warn
+        DBOS.reset_system_database(
+            system_database_url=other_db_url, schema=other_schema, truncate=True
+        )
+        # Truncation evicts every other connection, this test's pool included
+        other_db.engine.dispose()
+        with other_db.engine.begin() as c:
+            assert c.execute(count).scalar_one() == 0
+        other_db.destroy()
+        assert other_db_exists()
+
+        # Dropping needs no schema, and takes the database with it
+        DBOS.reset_system_database(system_database_url=other_db_url)
+        assert not other_db_exists()
+
+        # With a global DBOS object, the explicit URL wins over its configuration
+        DBOS(config=config)
+
+        @DBOS.workflow()
+        def workflow() -> str:
+            assert DBOS.workflow_id
+            return DBOS.workflow_id
+
+        DBOS.launch()
+        workflow_id = workflow()
+        DBOS.destroy()
+        DBOS(config=config)
+        # Truncating the now-absent database warns, rather than raising
+        DBOS.reset_system_database(system_database_url=other_db_url, truncate=True)
+
+        # The configured system database is untouched
+        DBOS.launch()
+        assert [w.workflow_id for w in DBOS.list_workflows()] == [workflow_id]
+        DBOS.destroy()
+    finally:
+        # No fixture knows about this database, and a leaked one keeps its
+        # application_versions row, failing every later run on the insert above.
+        with db_engine.connect() as c:
+            c.execution_options(isolation_level="AUTOCOMMIT")
+            c.execute(sa.text(f"DROP DATABASE IF EXISTS {other_db_name} WITH (FORCE)"))
 
 
 _APPLICATION_NAME_TABLES = (
@@ -392,6 +583,31 @@ def test_sqlite_systemdb_migration() -> None:
                 }
                 assert "application_name" in columns, table
                 assert columns["application_name"] == 0, table
+
+        # Test truncating the system database: the rows go, the schema stays
+        with sys_db.engine.begin() as connection:
+            connection.execute(
+                SystemSchema.application_versions.insert().values(
+                    version_id="v1",
+                    version_name="v1",
+                    version_timestamp=1,
+                    created_at=1,
+                )
+            )
+        SystemDatabase.reset_system_database(sqlite_url, truncate=True)
+        assert os.path.exists(temp_db_path)
+        with sys_db.engine.connect() as connection:
+            assert (
+                connection.execute(
+                    sa.select(sa.func.count()).select_from(
+                        SystemSchema.application_versions
+                    )
+                ).scalar_one()
+                == 0
+            )
+            assert connection.execute(
+                sa.text("SELECT version FROM dbos_migrations")
+            ).scalar() == len(sqlite_migrations)
 
         # Clean up
         sys_db.destroy()
@@ -669,13 +885,17 @@ def test_concurrent_migrations(db_engine: sa.Engine, skip_with_sqlite: None) -> 
         )
 
 
-def test_online_migrations_are_idempotent(dbos: DBOS, skip_with_sqlite: None) -> None:
+def test_online_migrations_are_idempotent(
+    dbos_dropped_databases: DBOS, skip_with_sqlite: None
+) -> None:
     """Re-running every migration from the first online one onward against an
     already-migrated schema must succeed without error. Guards against
-    missing IF [NOT] EXISTS clauses in any drop/create migration."""
+    missing IF [NOT] EXISTS clauses in any drop/create migration.
+
+    Needs a dropped database: it rewinds dbos_migrations, which truncation spares."""
     from dbos._migration import _ONLINE_MIGRATIONS, run_dbos_migrations
 
-    engine = dbos._sys_db.engine
+    engine = dbos_dropped_databases._sys_db.engine
     schema = "dbos"
     rewind_to = min(_ONLINE_MIGRATIONS) - 1
     final_version = len(get_dbos_migrations(schema, True))
@@ -696,15 +916,17 @@ def test_online_migrations_are_idempotent(dbos: DBOS, skip_with_sqlite: None) ->
 
 
 def test_version_not_bumped_on_migration_failure(
-    dbos: DBOS, skip_with_sqlite: None
+    dbos_dropped_databases: DBOS, skip_with_sqlite: None
 ) -> None:
     """If a migration raises mid-flight, the version counter must stay at the
-    prior value so the runner re-attempts it on the next start."""
+    prior value so the runner re-attempts it on the next start.
+
+    Needs a dropped database: it rewinds dbos_migrations, which truncation spares."""
     from unittest.mock import patch
 
     from dbos._migration import run_dbos_migrations
 
-    engine = dbos._sys_db.engine
+    engine = dbos_dropped_databases._sys_db.engine
     schema = "dbos"
     rewind_to_version = 31  # one before migration 32
     final_version = len(get_dbos_migrations(schema, True))
@@ -742,13 +964,15 @@ def test_version_not_bumped_on_migration_failure(
         assert version == final_version
 
 
-def test_should_migrate(dbos: DBOS, skip_with_sqlite: None) -> None:
+def test_should_migrate(dbos_dropped_databases: DBOS, skip_with_sqlite: None) -> None:
     """should_migrate must return True when the schema is missing, the
     dbos_migrations table is missing, or the recorded version is behind the
-    latest; and False once the schema is fully migrated."""
+    latest; and False once the schema is fully migrated.
+
+    Needs a dropped database: it ends with dbos_migrations gone."""
     from dbos._migration import should_migrate
 
-    engine = dbos._sys_db.engine
+    engine = dbos_dropped_databases._sys_db.engine
     schema = "dbos"
     latest_version = len(get_dbos_migrations(schema, True))
 
@@ -782,13 +1006,18 @@ def test_should_migrate(dbos: DBOS, skip_with_sqlite: None) -> None:
     )
 
 
-def test_runner_resumes_after_invalid_index(dbos: DBOS, skip_with_sqlite: None) -> None:
+def test_runner_resumes_after_invalid_index(
+    dbos_dropped_databases: DBOS, skip_with_sqlite: None
+) -> None:
     """Simulate a CREATE INDEX CONCURRENTLY that crashed mid-build (leaving an
     INVALID index) and verify the runner cleans it up and re-runs the
-    migration on the next start."""
+    migration on the next start.
+
+    Needs a dropped database: it plants an invalid index and rewinds
+    dbos_migrations, which truncation spares."""
     from dbos._migration import run_dbos_migrations
 
-    engine = dbos._sys_db.engine
+    engine = dbos_dropped_databases._sys_db.engine
     schema = "dbos"
     target_index = "idx_workflow_status_in_flight"
     rewind_to_version = 31  # one before migration 32 which builds target_index

@@ -19,7 +19,7 @@ from dbos._datasource_sqlite import SqliteAsyncDatasource, SqliteSyncDatasource
 from dbos._error import DBOSException
 from dbos._schemas.datasource_database import DatasourceSchema
 from dbos._schemas.system_database import SystemSchema
-from tests.conftest import postgres_urls
+from tests.conftest import ensure_application_database, postgres_urls
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -28,8 +28,12 @@ from tests.conftest import postgres_urls
 
 def _skip_if_pg_unreachable(raw_pg_url: str) -> None:
     try:
+        # Probe the maintenance database: the shared application database may have
+        # been dropped by a drop_test_databases test, which is not unreachability.
         engine = sa.create_engine(
-            sa.make_url(raw_pg_url).set(drivername="postgresql+psycopg"),
+            sa.make_url(raw_pg_url)
+            .set(drivername="postgresql+psycopg")
+            .set(database="postgres"),
             connect_args={"connect_timeout": 3},
         )
         with engine.connect():
@@ -112,6 +116,7 @@ def sync_ds(
         if not url.startswith("postgresql"):
             pytest.skip("not a PostgreSQL environment")
         _skip_if_pg_unreachable(url)
+        ensure_application_database()
         schema = f"ds_test_{uuid.uuid4().hex[:8]}"
         ds = SQLAlchemyDatasource.create(
             url.replace("postgresql://", "postgresql+psycopg://"), schema=schema
@@ -138,6 +143,7 @@ async def async_ds(
         if not url.startswith("postgresql"):
             pytest.skip("not a PostgreSQL environment")
         _skip_if_pg_unreachable(url)
+        ensure_application_database()
         schema = f"ds_test_{uuid.uuid4().hex[:8]}"
         ds = await AsyncSQLAlchemyDatasource.create(
             url.replace("postgresql://", "postgresql+psycopg://"), schema=schema
