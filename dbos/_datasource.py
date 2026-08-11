@@ -247,9 +247,9 @@ class AsyncSQLAlchemyDatasource(ABC):
         step_id: int,
         error: str,
         serialization: Optional[str],
-    ) -> bool:
+    ) -> None:
         async with self.engine.begin() as conn:
-            return await self._record_result(
+            await self._record_result(
                 conn, workflow_id, step_id, None, error, serialization
             )
 
@@ -261,8 +261,8 @@ class AsyncSQLAlchemyDatasource(ABC):
         output: Optional[str],
         error: Optional[str],
         serialization: Optional[str],
-    ) -> bool:
-        """Record this step's outcome, returning False if a concurrent execution recorded it first."""
+    ) -> None:
+        """Record this step's outcome, raising _StepAlreadyRecorded if a concurrent execution beat us to it."""
         result = await conn.execute(
             self.dialect.insert(DatasourceSchema.datasource_outputs)
             .values(
@@ -281,7 +281,8 @@ class AsyncSQLAlchemyDatasource(ABC):
             # RETURNING, not rowcount: implicit returning leaves rowcount at -1 for this insert.
             .returning(DatasourceSchema.datasource_outputs.c.workflow_id)
         )
-        return result.first() is not None
+        if result.first() is None:
+            raise _StepAlreadyRecorded()
 
     async def _replay_conflicting_step(self, workflow_id: str, step_id: int) -> Any:
         # A duplicate execution of this workflow won the race, so its recorded result is the durable one.
@@ -325,91 +326,84 @@ class AsyncSQLAlchemyDatasource(ABC):
 
             output: R
             retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
-            with DBOSContextEnsure() as exec_ctx:
-                while True:
-                    async with self.sessionmaker() as session:
-                        exec_ctx.start_async_ds_transaction(session)
-                        try:
-                            async with session.begin():
-                                await session.connection(
-                                    execution_options={
-                                        "isolation_level": isolation_level
-                                    }
-                                )
-                                output = await func(*args, **kwargs)
-                                if in_wf:
-                                    serialized, serialization = serialize_value(
-                                        output, None, self.serializer
+            try:
+                with DBOSContextEnsure() as exec_ctx:
+                    while True:
+                        async with self.sessionmaker() as session:
+                            exec_ctx.start_async_ds_transaction(session)
+                            try:
+                                async with session.begin():
+                                    await session.connection(
+                                        execution_options={
+                                            "isolation_level": isolation_level
+                                        }
                                     )
-                                    if not await self._record_result(
-                                        session,
+                                    output = await func(*args, **kwargs)
+                                    if in_wf:
+                                        serialized, serialization = serialize_value(
+                                            output, None, self.serializer
+                                        )
+                                        await self._record_result(
+                                            session,
+                                            workflow_id,
+                                            step_id,
+                                            serialized,
+                                            None,
+                                            serialization,
+                                        )
+                                break
+                            except _StepAlreadyRecorded:
+                                raise  # the recorded result wins; don't record an error over it
+                            except DBAPIError as dbapi_error:
+                                if retriable_postgres_exception(
+                                    dbapi_error
+                                ) or self._is_serialization_error(dbapi_error):
+                                    inner_ctx = get_local_dbos_context()
+                                    span = (
+                                        inner_ctx.get_current_dbos_span()
+                                        if inner_ctx is not None
+                                        else None
+                                    )
+                                    if span:
+                                        span.add_event(
+                                            "Transaction Failure",
+                                            {"retry_wait_seconds": retry_wait_seconds},
+                                        )
+                                    await asyncio.sleep(retry_wait_seconds)
+                                    retry_wait_seconds = min(
+                                        retry_wait_seconds * _RETRY_BACKOFF_FACTOR,
+                                        _MAX_RETRY_WAIT_SECONDS,
+                                    )
+                                    continue
+                                if in_wf:
+                                    serialized_e, serialization = serialize_exception(
+                                        dbapi_error, None, self.serializer
+                                    )
+                                    await self._record_error(
                                         workflow_id,
                                         step_id,
-                                        serialized,
-                                        None,
+                                        serialized_e,
                                         serialization,
-                                    ):
-                                        raise _StepAlreadyRecorded()
-                            break
-                        except _StepAlreadyRecorded:
-                            return cast(
-                                R,
-                                await self._replay_conflicting_step(
-                                    workflow_id, step_id
-                                ),
-                            )
-                        except DBAPIError as dbapi_error:
-                            if retriable_postgres_exception(
-                                dbapi_error
-                            ) or self._is_serialization_error(dbapi_error):
-                                inner_ctx = get_local_dbos_context()
-                                span = (
-                                    inner_ctx.get_current_dbos_span()
-                                    if inner_ctx is not None
-                                    else None
-                                )
-                                if span:
-                                    span.add_event(
-                                        "Transaction Failure",
-                                        {"retry_wait_seconds": retry_wait_seconds},
                                     )
-                                await asyncio.sleep(retry_wait_seconds)
-                                retry_wait_seconds = min(
-                                    retry_wait_seconds * _RETRY_BACKOFF_FACTOR,
-                                    _MAX_RETRY_WAIT_SECONDS,
-                                )
-                                continue
-                            if in_wf:
-                                serialized_e, serialization = serialize_exception(
-                                    dbapi_error, None, self.serializer
-                                )
-                                if not await self._record_error(
-                                    workflow_id, step_id, serialized_e, serialization
-                                ):
-                                    return cast(
-                                        R,
-                                        await self._replay_conflicting_step(
-                                            workflow_id, step_id
-                                        ),
+                                raise
+                            except Exception as e:
+                                if in_wf:
+                                    serialized_e, serialization = serialize_exception(
+                                        e, None, self.serializer
                                     )
-                            raise
-                        except Exception as e:
-                            if in_wf:
-                                serialized_e, serialization = serialize_exception(
-                                    e, None, self.serializer
-                                )
-                                if not await self._record_error(
-                                    workflow_id, step_id, serialized_e, serialization
-                                ):
-                                    return cast(
-                                        R,
-                                        await self._replay_conflicting_step(
-                                            workflow_id, step_id
-                                        ),
+                                    await self._record_error(
+                                        workflow_id,
+                                        step_id,
+                                        serialized_e,
+                                        serialization,
                                     )
-                            raise
-                        finally:
-                            exec_ctx.end_async_ds_transaction()
+                                raise
+                            finally:
+                                exec_ctx.end_async_ds_transaction()
+            except _StepAlreadyRecorded:
+                return cast(
+                    R, await self._replay_conflicting_step(workflow_id, step_id)
+                )
 
             return output
 
@@ -607,11 +601,9 @@ class SQLAlchemyDatasource(ABC):
         step_id: int,
         error: str,
         serialization: Optional[str],
-    ) -> bool:
+    ) -> None:
         with self.engine.begin() as conn:
-            return self._record_result(
-                conn, workflow_id, step_id, None, error, serialization
-            )
+            self._record_result(conn, workflow_id, step_id, None, error, serialization)
 
     def _record_result(
         self,
@@ -621,8 +613,8 @@ class SQLAlchemyDatasource(ABC):
         output: Optional[str],
         error: Optional[str],
         serialization: Optional[str],
-    ) -> bool:
-        """Record this step's outcome, returning False if a concurrent execution recorded it first."""
+    ) -> None:
+        """Record this step's outcome, raising _StepAlreadyRecorded if a concurrent execution beat us to it."""
         result = conn.execute(
             self.dialect.insert(DatasourceSchema.datasource_outputs)
             .values(
@@ -641,7 +633,8 @@ class SQLAlchemyDatasource(ABC):
             # RETURNING, not rowcount: implicit returning leaves rowcount at -1 for this insert.
             .returning(DatasourceSchema.datasource_outputs.c.workflow_id)
         )
-        return result.first() is not None
+        if result.first() is None:
+            raise _StepAlreadyRecorded()
 
     def _replay_conflicting_step(self, workflow_id: str, step_id: int) -> Any:
         # A duplicate execution of this workflow won the race, so its recorded result is the durable one.
@@ -685,88 +678,82 @@ class SQLAlchemyDatasource(ABC):
 
             output: R
             retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
-            with DBOSContextEnsure() as exec_ctx:
-                while True:
-                    with self.sessionmaker() as session:
-                        exec_ctx.start_sync_ds_transaction(session)
-                        try:
-                            with session.begin():
-                                session.connection(
-                                    execution_options={
-                                        "isolation_level": isolation_level
-                                    }
-                                )
-                                output = func(*args, **kwargs)
-                                if in_wf:
-                                    serialized, serialization = serialize_value(
-                                        output, None, self.serializer
+            try:
+                with DBOSContextEnsure() as exec_ctx:
+                    while True:
+                        with self.sessionmaker() as session:
+                            exec_ctx.start_sync_ds_transaction(session)
+                            try:
+                                with session.begin():
+                                    session.connection(
+                                        execution_options={
+                                            "isolation_level": isolation_level
+                                        }
                                     )
-                                    if not self._record_result(
-                                        session,
+                                    output = func(*args, **kwargs)
+                                    if in_wf:
+                                        serialized, serialization = serialize_value(
+                                            output, None, self.serializer
+                                        )
+                                        self._record_result(
+                                            session,
+                                            workflow_id,
+                                            step_id,
+                                            serialized,
+                                            None,
+                                            serialization,
+                                        )
+                                break
+                            except _StepAlreadyRecorded:
+                                raise  # the recorded result wins; don't record an error over it
+                            except DBAPIError as dbapi_error:
+                                if retriable_postgres_exception(
+                                    dbapi_error
+                                ) or self._is_serialization_error(dbapi_error):
+                                    inner_ctx = get_local_dbos_context()
+                                    span = (
+                                        inner_ctx.get_current_dbos_span()
+                                        if inner_ctx is not None
+                                        else None
+                                    )
+                                    if span:
+                                        span.add_event(
+                                            "Transaction Failure",
+                                            {"retry_wait_seconds": retry_wait_seconds},
+                                        )
+                                    time.sleep(retry_wait_seconds)
+                                    retry_wait_seconds = min(
+                                        retry_wait_seconds * _RETRY_BACKOFF_FACTOR,
+                                        _MAX_RETRY_WAIT_SECONDS,
+                                    )
+                                    continue
+                                if in_wf:
+                                    serialized_e, serialization = serialize_exception(
+                                        dbapi_error, None, self.serializer
+                                    )
+                                    self._record_error(
                                         workflow_id,
                                         step_id,
-                                        serialized,
-                                        None,
+                                        serialized_e,
                                         serialization,
-                                    ):
-                                        raise _StepAlreadyRecorded()
-                            break
-                        except _StepAlreadyRecorded:
-                            return cast(
-                                R, self._replay_conflicting_step(workflow_id, step_id)
-                            )
-                        except DBAPIError as dbapi_error:
-                            if retriable_postgres_exception(
-                                dbapi_error
-                            ) or self._is_serialization_error(dbapi_error):
-                                inner_ctx = get_local_dbos_context()
-                                span = (
-                                    inner_ctx.get_current_dbos_span()
-                                    if inner_ctx is not None
-                                    else None
-                                )
-                                if span:
-                                    span.add_event(
-                                        "Transaction Failure",
-                                        {"retry_wait_seconds": retry_wait_seconds},
                                     )
-                                time.sleep(retry_wait_seconds)
-                                retry_wait_seconds = min(
-                                    retry_wait_seconds * _RETRY_BACKOFF_FACTOR,
-                                    _MAX_RETRY_WAIT_SECONDS,
-                                )
-                                continue
-                            if in_wf:
-                                serialized_e, serialization = serialize_exception(
-                                    dbapi_error, None, self.serializer
-                                )
-                                if not self._record_error(
-                                    workflow_id, step_id, serialized_e, serialization
-                                ):
-                                    return cast(
-                                        R,
-                                        self._replay_conflicting_step(
-                                            workflow_id, step_id
-                                        ),
+                                raise
+                            except Exception as e:
+                                if in_wf:
+                                    serialized_e, serialization = serialize_exception(
+                                        e, None, self.serializer
                                     )
-                            raise
-                        except Exception as e:
-                            if in_wf:
-                                serialized_e, serialization = serialize_exception(
-                                    e, None, self.serializer
-                                )
-                                if not self._record_error(
-                                    workflow_id, step_id, serialized_e, serialization
-                                ):
-                                    return cast(
-                                        R,
-                                        self._replay_conflicting_step(
-                                            workflow_id, step_id
-                                        ),
+                                    self._record_error(
+                                        workflow_id,
+                                        step_id,
+                                        serialized_e,
+                                        serialization,
                                     )
-                            raise
-                        finally:
-                            exec_ctx.end_sync_ds_transaction()
+                                raise
+                            finally:
+                                exec_ctx.end_sync_ds_transaction()
+            except _StepAlreadyRecorded:
+                return cast(R, self._replay_conflicting_step(workflow_id, step_id))
 
             return output
 

@@ -638,6 +638,61 @@ def test_sync_ds_replays_when_duplicate_execution_wins(
     assert len(ds_rows) == 1
 
 
+def test_sync_ds_replays_when_losing_execution_errors(
+    dbos: DBOS, sync_ds: SQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A duplicate execution whose own body fails still adopts the winner's recorded
+    result, so the error-recording insert cannot mask it with an IntegrityError (#812).
+    """
+    call_count = {"n": 0}
+
+    def step_fn() -> str:
+        call_count["n"] += 1
+        if call_count["n"] > 1:
+            raise ValueError("loser's own failure")
+        return "winner"
+
+    @DBOS.workflow()
+    def my_workflow() -> str:
+        return sync_ds.run_tx_step(None, step_fn)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "winner"
+
+    with dbos._sys_db.engine.begin() as conn:
+        conn.execute(
+            sa.delete(SystemSchema.workflow_status).where(
+                SystemSchema.workflow_status.c.workflow_uuid == wfid
+            )
+        )
+
+    real_check = sync_ds._check_execution
+    precheck_calls = {"n": 0}
+
+    def blind_first_check(workflow_id: str, step_id: int) -> Any:
+        precheck_calls["n"] += 1
+        if precheck_calls["n"] == 1:
+            return None
+        return real_check(workflow_id, step_id)
+
+    monkeypatch.setattr(sync_ds, "_check_execution", blind_first_check)
+
+    # The loser's ValueError is discarded in favour of the durable recorded result.
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "winner"
+    assert call_count["n"] == 2
+
+    with sync_ds.engine.connect() as conn:
+        row = conn.execute(
+            sa.select(
+                DatasourceSchema.datasource_outputs.c.error,
+            ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+        ).first()
+    assert row is not None
+    assert row.error is None  # the loser's error was never recorded
+
+
 # ---------------------------------------------------------------------------
 # Async bare-run tests (no DBOS workflow needed)
 # ---------------------------------------------------------------------------
@@ -1183,3 +1238,61 @@ async def test_async_ds_replays_when_duplicate_execution_wins(
         ).fetchall()
     assert tags == ["run-1"]
     assert len(ds_rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_ds_replays_when_losing_execution_errors(
+    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A duplicate execution whose own body fails still adopts the winner's recorded
+    result, so the error-recording insert cannot mask it with an IntegrityError (#812).
+    """
+    call_count = {"n": 0}
+
+    async def step_fn() -> str:
+        call_count["n"] += 1
+        if call_count["n"] > 1:
+            raise ValueError("loser's own failure")
+        return "winner"
+
+    @DBOS.workflow()
+    async def my_workflow() -> str:
+        return await async_ds.run_tx_step_async(None, step_fn)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "winner"
+
+    with dbos._sys_db.engine.begin() as conn:
+        conn.execute(
+            sa.delete(SystemSchema.workflow_status).where(
+                SystemSchema.workflow_status.c.workflow_uuid == wfid
+            )
+        )
+
+    real_check = async_ds._check_execution
+    precheck_calls = {"n": 0}
+
+    async def blind_first_check(workflow_id: str, step_id: int) -> Any:
+        precheck_calls["n"] += 1
+        if precheck_calls["n"] == 1:
+            return None
+        return await real_check(workflow_id, step_id)
+
+    monkeypatch.setattr(async_ds, "_check_execution", blind_first_check)
+
+    # The loser's ValueError is discarded in favour of the durable recorded result.
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "winner"
+    assert call_count["n"] == 2
+
+    async with async_ds.engine.connect() as conn:
+        row = (
+            await conn.execute(
+                sa.select(
+                    DatasourceSchema.datasource_outputs.c.error,
+                ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+            )
+        ).first()
+    assert row is not None
+    assert row.error is None  # the loser's error was never recorded
