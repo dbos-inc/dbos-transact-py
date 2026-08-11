@@ -15,6 +15,7 @@ from sqlalchemy.exc import OperationalError, ResourceClosedError
 
 from dbos import DBOS, AsyncSQLAlchemyDatasource, SetWorkflowID, SQLAlchemyDatasource
 from dbos._app_db import RecordedResult
+from dbos._datasource import _is_retriable_db_error
 from dbos._datasource_postgres import PostgresAsyncDatasource, PostgresSyncDatasource
 from dbos._datasource_sqlite import SqliteAsyncDatasource, SqliteSyncDatasource
 from dbos._error import DBOSException
@@ -928,12 +929,31 @@ async def test_async_ds_retries_locked_precheck(
     assert row.output is not None
 
 
+def test_is_retriable_db_error_scopes_sqlite_heuristic_by_dialect() -> None:
+    """The text-based SQLite heuristic must only be trusted on an actual SQLite datasource."""
+
+    def never_serialization(error: Exception) -> bool:
+        return False
+
+    flake = ResourceClosedError(
+        "This result object does not return rows. It has been closed automatically."
+    )
+    assert _is_retriable_db_error(flake, never_serialization, True)
+    assert not _is_retriable_db_error(flake, never_serialization, False)
+    # Non-database errors are never retriable, on either dialect.
+    assert not _is_retriable_db_error(ValueError("boom"), never_serialization, True)
+    assert not _is_retriable_db_error(ValueError("boom"), never_serialization, False)
+
+
 @pytest.mark.asyncio
 async def test_async_ds_retries_returning_cursor_flake(
     dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """pysqlite can invalidate the witness insert's RETURNING cursor under concurrent
     writes; that flake must be retried, not recorded as the step's permanent error."""
+    if not isinstance(async_ds, SqliteAsyncDatasource):
+        pytest.skip("SQLite-specific: RETURNING cursor flake retry")
+
     body_calls = {"n": 0}
     record_calls = {"n": 0}
     real_record = async_ds._record_result
