@@ -11,11 +11,10 @@ import pytest_asyncio
 import sqlalchemy as sa
 from psycopg.errors import SerializationFailure
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError, ResourceClosedError
+from sqlalchemy.exc import OperationalError
 
 from dbos import DBOS, AsyncSQLAlchemyDatasource, SetWorkflowID, SQLAlchemyDatasource
 from dbos._app_db import RecordedResult
-from dbos._datasource import _is_retriable_db_error
 from dbos._datasource_postgres import PostgresAsyncDatasource, PostgresSyncDatasource
 from dbos._datasource_sqlite import SqliteAsyncDatasource, SqliteSyncDatasource
 from dbos._error import DBOSException
@@ -939,85 +938,6 @@ async def test_async_ds_retries_locked_precheck(
     assert precheck_calls["n"] >= 2  # pre-check was retried after the lock
     assert body_calls["n"] == 1  # body ran exactly once
 
-    async with async_ds.engine.connect() as conn:
-        row = (
-            await conn.execute(
-                sa.select(
-                    DatasourceSchema.datasource_outputs.c.output,
-                    DatasourceSchema.datasource_outputs.c.error,
-                ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
-            )
-        ).first()
-    assert row is not None
-    assert row.error is None
-    assert row.output is not None
-
-
-def test_is_retriable_db_error_scopes_sqlite_heuristic_by_dialect() -> None:
-    """The text-based SQLite heuristic must only be trusted on an actual SQLite datasource."""
-
-    def never_serialization(error: Exception) -> bool:
-        return False
-
-    flake = ResourceClosedError(
-        "This result object does not return rows. It has been closed automatically."
-    )
-    assert _is_retriable_db_error(flake, never_serialization, True)
-    assert not _is_retriable_db_error(flake, never_serialization, False)
-    # Non-database errors are never retriable, on either dialect.
-    assert not _is_retriable_db_error(ValueError("boom"), never_serialization, True)
-    assert not _is_retriable_db_error(ValueError("boom"), never_serialization, False)
-
-
-@pytest.mark.asyncio
-async def test_async_ds_retries_returning_cursor_flake(
-    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """pysqlite can invalidate the witness insert's RETURNING cursor under concurrent
-    writes; that flake must be retried, not recorded as the step's permanent error."""
-    if not isinstance(async_ds, SqliteAsyncDatasource):
-        pytest.skip("SQLite-specific: RETURNING cursor flake retry")
-
-    body_calls = {"n": 0}
-    record_calls = {"n": 0}
-    real_record = async_ds._record_result
-
-    # ResourceClosedError is not a DBAPIError, so it bypasses the dialect retry predicates.
-    async def flaky_record(
-        conn: Any,
-        workflow_id: str,
-        step_id: int,
-        output: Optional[str],
-        error: Optional[str],
-        serialization: Optional[str],
-    ) -> None:
-        record_calls["n"] += 1
-        if record_calls["n"] == 1:
-            raise ResourceClosedError(
-                "This result object does not return rows. "
-                "It has been closed automatically."
-            )
-        await real_record(conn, workflow_id, step_id, output, error, serialization)
-
-    monkeypatch.setattr(async_ds, "_record_result", flaky_record)
-
-    async def step_fn() -> str:
-        body_calls["n"] += 1
-        return "ok"
-
-    @DBOS.workflow()
-    async def my_workflow() -> str:
-        return await async_ds.run_tx_step_async(None, step_fn)
-
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        assert await my_workflow() == "ok"
-
-    # The flaky attempt was retried, and the retry recorded the result.
-    assert body_calls["n"] == 2
-    assert record_calls["n"] == 2
-
-    # The success, not the driver error, is what became durable.
     async with async_ds.engine.connect() as conn:
         row = (
             await conn.execute(

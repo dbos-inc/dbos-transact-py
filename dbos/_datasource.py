@@ -41,7 +41,7 @@ from dbos._serialization import (
     serialize_exception,
     serialize_value,
 )
-from dbos._utils import retriable_postgres_exception, retriable_sqlite_exception
+from dbos._utils import retriable_postgres_exception
 
 from ._logger import dbos_logger
 
@@ -64,15 +64,11 @@ class _StepAlreadyRecorded(Exception):
 def _is_retriable_db_error(
     error: Exception,
     is_serialization_error: Callable[[Exception], bool],
-    is_sqlite: bool,
 ) -> bool:
     """Transient database errors worth re-running the attempt for."""
-    if isinstance(error, DBAPIError) and (
+    return isinstance(error, DBAPIError) and (
         retriable_postgres_exception(error) or is_serialization_error(error)
-    ):
-        return True
-    # The SQLite heuristic matches rendered error text, which can include program data, so only trust it on an actual SQLite database.
-    return is_sqlite and retriable_sqlite_exception(error)
+    )
 
 
 def _parse_ds_options(
@@ -148,8 +144,6 @@ class AsyncSQLAlchemyDatasource(ABC):
             "AsyncDatasource", database_url, engine_kwargs, bool(engine)
         )
         self.dialect = sq if database_url.startswith("sqlite") else pg
-        # The retry loop trusts the text-based SQLite retriability heuristic only on SQLite.
-        self._is_sqlite = database_url.startswith("sqlite")
         self.schema = _resolve_schema(database_url, schema)
         if engine:
             base_engine = engine
@@ -373,7 +367,7 @@ class AsyncSQLAlchemyDatasource(ABC):
                                 raise  # the recorded result wins; don't record an error over it
                             except Exception as e:
                                 if _is_retriable_db_error(
-                                    e, self._is_serialization_error, self._is_sqlite
+                                    e, self._is_serialization_error
                                 ):
                                     inner_ctx = get_local_dbos_context()
                                     span = (
@@ -492,8 +486,6 @@ class SQLAlchemyDatasource(ABC):
             "SyncDatasource", database_url, engine_kwargs, bool(engine)
         )
         self.dialect = sq if database_url.startswith("sqlite") else pg
-        # The retry loop trusts the text-based SQLite retriability heuristic only on SQLite.
-        self._is_sqlite = database_url.startswith("sqlite")
         self.schema = _resolve_schema(database_url, schema)
         if engine:
             base_engine = engine
@@ -715,7 +707,7 @@ class SQLAlchemyDatasource(ABC):
                                 raise  # the recorded result wins; don't record an error over it
                             except Exception as e:
                                 if _is_retriable_db_error(
-                                    e, self._is_serialization_error, self._is_sqlite
+                                    e, self._is_serialization_error
                                 ):
                                     inner_ctx = get_local_dbos_context()
                                     span = (

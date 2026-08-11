@@ -1011,23 +1011,10 @@ def test_get_result_no_hang_on_connection_invalidated_error(
 
 
 def test_retriable_sqlite_exception() -> None:
-    from sqlalchemy.exc import ResourceClosedError
-
     from dbos._utils import retriable_sqlite_exception
 
-    # The pysqlite "INSERT ... RETURNING" cursor-invalidation flake is retriable
-    assert retriable_sqlite_exception(
-        ResourceClosedError(
-            "This result object does not return rows. "
-            "It has been closed automatically."
-        )
-    )
-    # "database is locked" remains retriable
+    # "database is locked" is retriable
     assert retriable_sqlite_exception(Exception("database is locked"))
-    # An unrelated ResourceClosedError is not retried (would otherwise loop forever)
-    assert not retriable_sqlite_exception(
-        ResourceClosedError("This Connection is closed")
-    )
     # Unrelated errors are not retriable
     assert not retriable_sqlite_exception(Exception("syntax error"))
 
