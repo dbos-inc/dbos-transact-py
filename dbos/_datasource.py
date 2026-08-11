@@ -278,7 +278,6 @@ class AsyncSQLAlchemyDatasource(ABC):
                     DatasourceSchema.datasource_outputs.c.step_id,
                 ]
             )
-            # RETURNING, not rowcount: implicit returning leaves rowcount at -1 for this insert.
             .returning(DatasourceSchema.datasource_outputs.c.workflow_id)
         )
         if result.first() is None:
