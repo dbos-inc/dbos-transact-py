@@ -1642,15 +1642,15 @@ class SystemDatabase(ABC):
                 rows = c.execute(query).fetchall()
 
             start_step_by_id = {row[0]: row[1] for row in rows}
-            for wid in workflow_ids:
-                if wid not in start_step_by_id:
-                    if from_step_name is not None:
+            if from_step_name is not None:
+                for wid in workflow_ids:
+                    if wid not in start_step_by_id:
                         raise Exception(
                             f"Workflow {wid} has no step named '{from_step_name}'"
                         )
-                    raise Exception(f"Workflow {wid} has no steps")
 
-            start_steps = [start_step_by_id[wid] for wid in workflow_ids]
+            # A workflow with no recorded steps has nothing to resume from, so restart it from step 1, the beginning.
+            start_steps = [start_step_by_id.get(wid, 1) for wid in workflow_ids]
 
         forked_ids = [generate_uuid() for _ in workflow_ids]
         return self.fork_workflow(

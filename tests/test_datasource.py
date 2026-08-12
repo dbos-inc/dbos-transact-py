@@ -4,7 +4,7 @@ import base64
 import pickle
 import sqlite3
 import uuid
-from typing import Any, AsyncGenerator, Generator
+from typing import Any, AsyncGenerator, Generator, Optional
 
 import pytest
 import pytest_asyncio
@@ -14,16 +14,26 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
 from dbos import DBOS, AsyncSQLAlchemyDatasource, SetWorkflowID, SQLAlchemyDatasource
+from dbos._app_db import RecordedResult
 from dbos._datasource_postgres import PostgresAsyncDatasource, PostgresSyncDatasource
 from dbos._datasource_sqlite import SqliteAsyncDatasource, SqliteSyncDatasource
 from dbos._error import DBOSException
+from dbos._schemas import SCHEMA_PLACEHOLDER
 from dbos._schemas.datasource_database import DatasourceSchema
 from dbos._schemas.system_database import SystemSchema
+from dbos._serialization import deserialize_value
 from tests.conftest import ensure_application_database, postgres_urls
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+# Application table used to prove a losing duplicate execution's writes are rolled back.
+_race_side_effects = sa.Table(
+    "race_side_effects",
+    sa.MetaData(schema=SCHEMA_PLACEHOLDER),
+    sa.Column("tag", sa.Text),
+)
 
 
 def _skip_if_pg_unreachable(raw_pg_url: str) -> None:
@@ -566,6 +576,107 @@ def test_sync_ds_recovers_from_sysdb_loss(
     assert call_count["n"] == 1
 
 
+def test_sync_ds_replays_when_duplicate_execution_wins(
+    dbos: DBOS, sync_ds: SQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A duplicate execution that loses the witness-row race replays the winner's
+    recorded result instead of surfacing the primary-key IntegrityError (#812)."""
+    _race_side_effects.create(sync_ds.engine, checkfirst=True)
+    call_count = {"n": 0}
+    should_fail = {"v": False}
+
+    def step_fn() -> str:
+        call_count["n"] += 1
+        sync_ds.sql_session().execute(
+            _race_side_effects.insert().values(tag=f"run-{call_count['n']}")
+        )
+        if should_fail["v"]:
+            raise ValueError("loser's own failure")
+        return f"result-{call_count['n']}"
+
+    @DBOS.workflow()
+    def my_workflow() -> str:
+        return sync_ds.run_tx_step(None, step_fn)
+
+    wfid = str(uuid.uuid4())
+
+    def forget_workflow() -> None:
+        # Drop the sysdb checkpoint so run_step calls _body again instead of replaying.
+        # A real concurrent duplicate keeps that row and ends in DBOSWorkflowConflictIDError instead.
+        with dbos._sys_db.engine.begin() as conn:
+            conn.execute(
+                sa.delete(SystemSchema.workflow_status).where(
+                    SystemSchema.workflow_status.c.workflow_uuid == wfid
+                )
+            )
+
+    # Blind one pre-check, so a loser misses the winner's row as it does in the real race.
+    real_check = sync_ds._check_execution
+    blind = {"next": False}
+
+    def blind_next_check(workflow_id: str, step_id: int) -> Optional[RecordedResult]:
+        if blind["next"]:
+            blind["next"] = False
+            return None
+        return real_check(workflow_id, step_id)
+
+    monkeypatch.setattr(sync_ds, "_check_execution", blind_next_check)
+
+    # Count error-recording attempts, to pin that a lost result race never tries one.
+    real_record_error = sync_ds._record_error
+    record_error_calls = {"n": 0}
+
+    def counting_record_error(
+        workflow_id: str, step_id: int, error: str, serialization: Optional[str]
+    ) -> None:
+        record_error_calls["n"] += 1
+        real_record_error(workflow_id, step_id, error, serialization)
+
+    monkeypatch.setattr(sync_ds, "_record_error", counting_record_error)
+
+    # The winning execution: commits its app writes and its datasource_outputs row.
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "result-1"
+    assert call_count["n"] == 1
+
+    # A loser whose body succeeds: the collision happens on the result-recording insert.
+    forget_workflow()
+    blind["next"] = True
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "result-1"
+    assert call_count["n"] == 2  # the loser did run its body
+    assert (
+        record_error_calls["n"] == 0
+    )  # the recorded result won without an error write
+
+    # A loser whose body fails: the collision moves to the error-recording insert.
+    forget_workflow()
+    blind["next"] = True
+    should_fail["v"] = True
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "result-1"
+    assert call_count["n"] == 3
+    assert record_error_calls["n"] == 1
+
+    # The succeeding loser's writes were discarded and the winner's record still stands.
+    with sync_ds.engine.connect() as conn:
+        tags = [row.tag for row in conn.execute(sa.select(_race_side_effects.c.tag))]
+        ds_row = conn.execute(
+            sa.select(
+                DatasourceSchema.datasource_outputs.c.output,
+                DatasourceSchema.datasource_outputs.c.error,
+                DatasourceSchema.datasource_outputs.c.serialization,
+            ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+        ).one()
+    assert tags == ["run-1"]
+    assert ds_row.error is None  # no loser error was ever recorded
+    # The winner's output is still the one on record, unmodified by either loser.
+    assert (
+        deserialize_value(ds_row.output, ds_row.serialization, sync_ds.serializer)
+        == "result-1"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Async bare-run tests (no DBOS workflow needed)
 # ---------------------------------------------------------------------------
@@ -1041,3 +1152,112 @@ async def test_async_ds_recovers_from_sysdb_loss(
     with SetWorkflowID(wfid):
         assert await my_workflow() == "recovered"
     assert call_count["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_async_ds_replays_when_duplicate_execution_wins(
+    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A duplicate execution that loses the witness-row race replays the winner's
+    recorded result instead of surfacing the primary-key IntegrityError (#812)."""
+    async with async_ds.engine.begin() as conn:
+        await conn.run_sync(_race_side_effects.create, checkfirst=True)
+    call_count = {"n": 0}
+    should_fail = {"v": False}
+
+    async def step_fn() -> str:
+        call_count["n"] += 1
+        await async_ds.sql_session().execute(
+            _race_side_effects.insert().values(tag=f"run-{call_count['n']}")
+        )
+        if should_fail["v"]:
+            raise ValueError("loser's own failure")
+        return f"result-{call_count['n']}"
+
+    @DBOS.workflow()
+    async def my_workflow() -> str:
+        return await async_ds.run_tx_step_async(None, step_fn)
+
+    wfid = str(uuid.uuid4())
+
+    def forget_workflow() -> None:
+        # Drop the sysdb checkpoint so run_step calls _body again instead of replaying.
+        # A real concurrent duplicate keeps that row and ends in DBOSWorkflowConflictIDError instead.
+        with dbos._sys_db.engine.begin() as conn:
+            conn.execute(
+                sa.delete(SystemSchema.workflow_status).where(
+                    SystemSchema.workflow_status.c.workflow_uuid == wfid
+                )
+            )
+
+    # Blind one pre-check, so a loser misses the winner's row as it does in the real race.
+    real_check = async_ds._check_execution
+    blind = {"next": False}
+
+    async def blind_next_check(
+        workflow_id: str, step_id: int
+    ) -> Optional[RecordedResult]:
+        if blind["next"]:
+            blind["next"] = False
+            return None
+        return await real_check(workflow_id, step_id)
+
+    monkeypatch.setattr(async_ds, "_check_execution", blind_next_check)
+
+    # Count error-recording attempts, to pin that a lost result race never tries one.
+    real_record_error = async_ds._record_error
+    record_error_calls = {"n": 0}
+
+    async def counting_record_error(
+        workflow_id: str, step_id: int, error: str, serialization: Optional[str]
+    ) -> None:
+        record_error_calls["n"] += 1
+        await real_record_error(workflow_id, step_id, error, serialization)
+
+    monkeypatch.setattr(async_ds, "_record_error", counting_record_error)
+
+    # The winning execution: commits its app writes and its datasource_outputs row.
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "result-1"
+    assert call_count["n"] == 1
+
+    # A loser whose body succeeds: the collision happens on the result-recording insert.
+    forget_workflow()
+    blind["next"] = True
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "result-1"
+    assert call_count["n"] == 2  # the loser did run its body
+    assert (
+        record_error_calls["n"] == 0
+    )  # the recorded result won without an error write
+
+    # A loser whose body fails: the collision moves to the error-recording insert.
+    forget_workflow()
+    blind["next"] = True
+    should_fail["v"] = True
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "result-1"
+    assert call_count["n"] == 3
+    assert record_error_calls["n"] == 1
+
+    # The succeeding loser's writes were discarded and the winner's record still stands.
+    async with async_ds.engine.connect() as conn:
+        tags = [
+            row.tag for row in (await conn.execute(sa.select(_race_side_effects.c.tag)))
+        ]
+        ds_row = (
+            await conn.execute(
+                sa.select(
+                    DatasourceSchema.datasource_outputs.c.output,
+                    DatasourceSchema.datasource_outputs.c.error,
+                    DatasourceSchema.datasource_outputs.c.serialization,
+                ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+            )
+        ).one()
+    assert tags == ["run-1"]
+    assert ds_row.error is None  # no loser error was ever recorded
+    # The winner's output is still the one on record, unmodified by either loser.
+    assert (
+        deserialize_value(ds_row.output, ds_row.serialization, async_ds.serializer)
+        == "result-1"
+    )
