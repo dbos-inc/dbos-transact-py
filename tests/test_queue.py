@@ -1380,7 +1380,8 @@ def test_cancelling_queued_workflows(dbos: DBOS) -> None:
     @DBOS.workflow()
     def stuck_workflow() -> None:
         start_event.set()
-        blocking_event.wait()
+        # Bounded so a failing assertion below fails the test instead of hanging teardown.
+        blocking_event.wait(timeout=30)
 
     @DBOS.workflow()
     def regular_workflow() -> None:
