@@ -1028,10 +1028,7 @@ class SystemDatabase(ABC):
             # Dead-lettering belongs to the dequeue path, which counts every dispatch;
             # starting a workflow already in the DLQ just reports it. The upsert's own
             # write rolls back with this raise.
-            if (
-                wf_status == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
-                and max_recovery_attempts is not None
-            ):
+            if wf_status == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value:
                 raise MaxRecoveryAttemptsExceededError(
                     status["workflow_uuid"], max_recovery_attempts
                 )
