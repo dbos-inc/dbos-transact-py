@@ -1074,6 +1074,32 @@ class SystemDatabase(ABC):
         return wf_status, workflow_deadline_epoch_ms, should_execute
 
     @db_retry()
+    def dead_letter_workflows(self, workflow_ids: List[str]) -> None:
+        """Move claimed workflows that exhausted their attempts off the queue.
+
+        Guarded on PENDING like every other claim-owning write: a row someone
+        else has already moved on is left alone.
+        """
+        if not workflow_ids:
+            return
+        with self.engine.begin() as c:
+            c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids))
+                .where(
+                    SystemSchema.workflow_status.c.status
+                    == WorkflowStatusString.PENDING.value
+                )
+                .values(
+                    status=WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value,
+                    deduplication_id=None,
+                    started_at_epoch_ms=None,
+                    queue_name=None,
+                    updated_at=self._now_ms_sql(),
+                )
+            )
+
+    @db_retry()
     def update_workflow_outcome(
         self,
         workflow_id: str,
@@ -4365,6 +4391,10 @@ class SystemDatabase(ABC):
                         application_name=self.app_name,
                         started_at_epoch_ms=start_time_ms,
                         rate_limited=queue._limiter is not None,
+                        # Count this dispatch against the DLQ limit; no later insert does it.
+                        recovery_attempts=SystemSchema.workflow_status.c.recovery_attempts
+                        + 1,
+                        updated_at=self._now_ms_sql(),
                         # If a timeout is set, set the deadline on dequeue
                         workflow_deadline_epoch_ms=sa.case(
                             (
@@ -4544,6 +4574,9 @@ class SystemDatabase(ABC):
                     application_name=self.app_name,
                     started_at_epoch_ms=start_time_ms,
                     rate_limited=False,
+                    # Count this dispatch against the DLQ limit; no later insert does it.
+                    recovery_attempts=ws.c.recovery_attempts + 1,
+                    updated_at=self._now_ms_sql(),
                     # If a timeout is set, set the deadline on dequeue
                     workflow_deadline_epoch_ms=sa.case(
                         (
