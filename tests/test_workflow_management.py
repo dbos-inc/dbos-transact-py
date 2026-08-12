@@ -1272,6 +1272,34 @@ def test_fork_version(
     assert queue_entries_are_cleaned_up(dbos)
 
 
+def test_fork_timeout(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def blocking_workflow() -> None:
+        while True:
+            DBOS.sleep(0.1)
+
+    workflow_id = str(uuid.uuid4())
+    with SetWorkflowID(workflow_id):
+        handle = DBOS.start_workflow(blocking_workflow)
+    DBOS.cancel_workflow(workflow_id)
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        handle.get_result()
+
+    # Forking with a short timeout should cancel the forked workflow too.
+    forked_handle = DBOS.fork_workflow(workflow_id, 1, timeout_seconds=0.1)
+    assert forked_handle.get_status().workflow_timeout_ms == 100
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        forked_handle.get_result()
+    assert queue_entries_are_cleaned_up(dbos)
+
+    # Forking without a timeout should leave it unset.
+    no_timeout_handle = DBOS.fork_workflow(workflow_id, 1)
+    assert no_timeout_handle.get_status().workflow_timeout_ms is None
+    DBOS.cancel_workflow(no_timeout_handle.workflow_id)
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        no_timeout_handle.get_result()
+
+
 def test_resume_and_fork_to_queue(dbos: DBOS) -> None:
     step_one_count = 0
     step_two_count = 0

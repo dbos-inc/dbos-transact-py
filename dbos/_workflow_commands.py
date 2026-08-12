@@ -35,7 +35,15 @@ def fork_workflow(
     queue_name: Optional[str] = None,
     queue_partition_key: Optional[str] = None,
     replacement_children: Optional[dict[str, str]] = None,
+    timeout_seconds: Optional[float] = None,
 ) -> str:
+    if timeout_seconds is not None and not timeout_seconds > 0:
+        raise Exception(
+            f"Invalid workflow timeout {timeout_seconds}. Timeouts must be positive."
+        )
+    workflow_timeout_ms = (
+        int(timeout_seconds * 1000) if timeout_seconds is not None else None
+    )
 
     ctx = get_local_dbos_context()
     if ctx is not None and len(ctx.id_assigned_for_next_workflow) > 0:
@@ -51,6 +59,7 @@ def fork_workflow(
         queue_name=queue_name,
         queue_partition_key=queue_partition_key,
         replacement_children=replacement_children,
+        workflow_timeout_ms=workflow_timeout_ms,
     )
     return forked_workflow_id
 

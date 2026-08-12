@@ -2411,6 +2411,7 @@ class DBOS:
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
         replacement_children: Optional[dict[str, str]] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> WorkflowHandle[Any]:
         """Restart a workflow with a new workflow ID from a specific step"""
         check_async("fork_workflow")
@@ -2425,6 +2426,7 @@ class DBOS:
                 queue_name=queue_name,
                 queue_partition_key=queue_partition_key,
                 replacement_children=replacement_children,
+                timeout_seconds=timeout_seconds,
             )
 
         new_id = _get_dbos_instance()._sys_db.call_function_as_step(
@@ -2442,6 +2444,7 @@ class DBOS:
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
         replacement_children: Optional[dict[str, str]] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> WorkflowHandleAsync[Any]:
         """Restart a workflow with a new workflow ID from a specific step"""
         step_ctx_res = snapshot_step_context(reserve_sleep_id=False)
@@ -2458,6 +2461,7 @@ class DBOS:
                 queue_name=queue_name,
                 queue_partition_key=queue_partition_key,
                 replacement_children=replacement_children,
+                timeout_seconds=timeout_seconds,
             )
 
         new_id = await asyncio.to_thread(
