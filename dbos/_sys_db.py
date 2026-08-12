@@ -916,7 +916,6 @@ class SystemDatabase(ABC):
         *,
         max_recovery_attempts: Optional[int],
         owner_xid: Optional[str],
-        is_dequeued_request: Optional[bool],
     ) -> tuple[WorkflowStatuses, Optional[int], bool]:
         """Insert or update workflow status using PostgreSQL upsert operations."""
         wf_status: WorkflowStatuses = status["status"]
@@ -927,16 +926,9 @@ class SystemDatabase(ABC):
             WorkflowStatusString.DELAYED.value,
         ]
 
-        # Values to update when a row already exists for this workflow
+        # Values to update when a row already exists for this workflow.
+        # recovery_attempts is absent by design: only the queue's claim counts a dispatch.
         update_values: dict[str, Any] = {
-            "recovery_attempts": sa.case(
-                (
-                    SystemSchema.workflow_status.c.status.notin_(_enqueued_statuses),
-                    SystemSchema.workflow_status.c.recovery_attempts
-                    + (1 if is_dequeued_request else 0),
-                ),
-                else_=SystemSchema.workflow_status.c.recovery_attempts,
-            ),
             "updated_at": self._now_ms_sql(),
         }
         # Don't update an existing executor ID when enqueueing a workflow.
@@ -985,7 +977,6 @@ class SystemDatabase(ABC):
         )
 
         cmd = cmd.returning(
-            SystemSchema.workflow_status.c.recovery_attempts,
             SystemSchema.workflow_status.c.status,
             SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
             SystemSchema.workflow_status.c.name,
@@ -1014,62 +1005,41 @@ class SystemDatabase(ABC):
         row = results.fetchone()
 
         if row is not None:
+            m = row._mapping
             # Check the started workflow matches the expected name, class_name, config_name, and queue_name
             # A mismatch indicates a workflow starting with the same UUID but different functions, which would throw an exception.
-            recovery_attempts: int = row[0]
-            wf_status = row[1]
-            workflow_deadline_epoch_ms = row[2]
+            wf_status = m["status"]
+            workflow_deadline_epoch_ms = m["workflow_deadline_epoch_ms"]
             err_msg: Optional[str] = None
-            if row[3] != status["name"]:
-                err_msg = f"Workflow already exists with a different function name: {row[3]}, but the provided function name is: {status['name']}"
-            elif row[4] != status["class_name"]:
-                err_msg = f"Workflow already exists with a different class name: {row[4]}, but the provided class name is: {status['class_name']}"
-            elif row[5] != status["config_name"]:
-                err_msg = f"Workflow already exists with a different config name: {row[5]}, but the provided config name is: {status['config_name']}"
-            elif row[6] != status["queue_name"]:
+            if m["name"] != status["name"]:
+                err_msg = f"Workflow already exists with a different function name: {m['name']}, but the provided function name is: {status['name']}"
+            elif m["class_name"] != status["class_name"]:
+                err_msg = f"Workflow already exists with a different class name: {m['class_name']}, but the provided class name is: {status['class_name']}"
+            elif m["config_name"] != status["config_name"]:
+                err_msg = f"Workflow already exists with a different config name: {m['config_name']}, but the provided config name is: {status['config_name']}"
+            elif m["queue_name"] != status["queue_name"]:
                 # This is a warning because a different queue name is not necessarily an error.
                 dbos_logger.warning(
-                    f"Workflow already exists in queue: {row[6]}, but the provided queue name is: {status['queue_name']}. The queue is not updated."
+                    f"Workflow already exists in queue: {m['queue_name']}, but the provided queue name is: {status['queue_name']}. The queue is not updated."
                 )
             if err_msg is not None:
                 raise DBOSConflictingWorkflowError(status["workflow_uuid"], err_msg)
 
-            # Every time we start executing a workflow (and thus attempt to insert its status), we increment `recovery_attempts` by 1.
-            # When this number becomes equal to `maxRetries + 1`, we mark the workflow as `MAX_RECOVERY_ATTEMPTS_EXCEEDED`.
+            # Dead-lettering belongs to the dequeue path, which counts every dispatch;
+            # starting a workflow already in the DLQ just reports it. The upsert's own
+            # write rolls back with this raise.
             if (
-                (wf_status != "SUCCESS" and wf_status != "ERROR")
+                wf_status == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value
                 and max_recovery_attempts is not None
-                and recovery_attempts > max_recovery_attempts + 1
-                and owner_xid != row[7]
             ):
-                dlq_cmd = (
-                    sa.update(SystemSchema.workflow_status)
-                    .where(
-                        SystemSchema.workflow_status.c.workflow_uuid
-                        == status["workflow_uuid"]
-                    )
-                    .where(
-                        SystemSchema.workflow_status.c.status
-                        == WorkflowStatusString.PENDING.value
-                    )
-                    .values(
-                        status=WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value,
-                        deduplication_id=None,
-                        started_at_epoch_ms=None,
-                        queue_name=None,
-                    )
-                )
-                conn.execute(dlq_cmd)
-                # Need to commit here because we're throwing an exception
-                conn.commit()
                 raise MaxRecoveryAttemptsExceededError(
                     status["workflow_uuid"], max_recovery_attempts
                 )
 
-            if owner_xid != row[7] and not is_dequeued_request:
+            if owner_xid != m["owner_xid"]:
                 should_execute = False
 
-            status["serialization"] = row[8]
+            status["serialization"] = m["serialization"]
 
         return wf_status, workflow_deadline_epoch_ms, should_execute
 
@@ -4740,7 +4710,6 @@ class SystemDatabase(ABC):
         *,
         max_recovery_attempts: Optional[int],
         owner_xid: Optional[str],
-        is_dequeued_request: Optional[bool],
     ) -> tuple[WorkflowStatuses, Optional[int], bool]:
         """
         Record the initial status and inputs for a workflow, and indicate if this is a new record
@@ -4752,7 +4721,6 @@ class SystemDatabase(ABC):
                     conn,
                     max_recovery_attempts=max_recovery_attempts,
                     owner_xid=owner_xid,
-                    is_dequeued_request=is_dequeued_request,
                 )
             )
         DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_INITWF_COMMIT)
@@ -4931,7 +4899,6 @@ class SystemDatabase(ABC):
             conn,
             max_recovery_attempts=max_recovery_attempts,
             owner_xid=owner_xid,
-            is_dequeued_request=False,
         )
 
     def check_connection(self) -> None:
