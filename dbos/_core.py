@@ -1270,16 +1270,13 @@ def _dispatch_dequeued_workflow(
     serialization_type = fi.serialization_type or WorkflowSerializationFormat.DEFAULT
     if status["serialization"] == DBOSPortableJSON.name():
         serialization_type = WorkflowSerializationFormat.PORTABLE
+    # Only a PENDING row can own its outcome, so a row moved on since the claim would run for nothing.
+    if status["status"] != WorkflowStatusString.PENDING.value:
+        return WorkflowHandlePolling(workflow_id, dbos)
+
     ctx.serialization_type = serialization_type
     ctx.workflow_deadline_epoch_ms = status["workflow_deadline_epoch_ms"]
     _schedule_workflow_timeout(dbos, workflow_id, status["workflow_deadline_epoch_ms"])
-
-    # Defensive: the claim admits only ENQUEUED rows, so a terminal row cannot reach here.
-    if status["status"] in (
-        WorkflowStatusString.ERROR.value,
-        WorkflowStatusString.SUCCESS.value,
-    ):
-        return WorkflowHandlePolling(workflow_id, dbos)
 
     func = cast("Workflow[..., Any]", wf_func.__orig_func)  # type: ignore
     if inspect.iscoroutinefunction(func):
