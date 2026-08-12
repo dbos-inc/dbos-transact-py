@@ -1971,6 +1971,43 @@ def test_fork_from_failure(dbos: DBOS) -> None:
     assert step_two_count == 7  # re-run
     assert step_three_count == 10  # re-run
 
+    # --- stepless workflows restart from the beginning ---
+    # A workflow with no recorded steps has nothing to resume from, so both
+    # step-deriving modes fork it from step 1 rather than failing.
+    stepless_count = 0
+
+    @DBOS.workflow()
+    def stepless_workflow() -> int:
+        nonlocal stepless_count
+        stepless_count += 1
+        return 42
+
+    wf4_id = str(uuid.uuid4())
+    with SetWorkflowID(wf4_id):
+        assert stepless_workflow() == 42
+    assert stepless_count == 1
+    assert DBOS.list_workflow_steps(wf4_id) == []
+
+    for mode in ({"from_last_failure": True}, {"from_last_step": True}):
+        forked_stepless = dbos._sys_db.fork_from_failure(
+            [wf4_id], application_version=None, **mode  # type: ignore[arg-type]
+        )
+        fk: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_stepless[0])
+        assert fk.get_result() == 42
+    assert stepless_count == 3  # the body re-ran from the top for both forks
+
+    # A stepless workflow mixed into a batch does not break its peers.
+    forked_mixed = dbos._sys_db.fork_from_failure(
+        [wf4_id, wf3_id],
+        application_version=None,
+        from_last_step=True,
+    )
+    mixed_stepless: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_mixed[0])
+    mixed_stepped: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_mixed[1])
+    assert mixed_stepless.get_result() == 42
+    assert mixed_stepped.get_result() == 6
+    assert stepless_count == 4
+
     # --- validation: from_step_name errors when step not found ---
     # wf1 never ran step_three, so this should raise
     with pytest.raises(Exception, match="has no step named"):
@@ -1978,6 +2015,13 @@ def test_fork_from_failure(dbos: DBOS) -> None:
             [wf1_id],
             application_version=None,
             from_step_name=step_three.__qualname__,
+        )
+    # A stepless workflow has no named step either, so this still raises.
+    with pytest.raises(Exception, match="has no step named"):
+        dbos._sys_db.fork_from_failure(
+            [wf4_id],
+            application_version=None,
+            from_step_name=step_one.__qualname__,
         )
     # Nonexistent step name should also raise
     with pytest.raises(Exception, match="has no step named"):
@@ -2001,14 +2045,19 @@ def test_fork_from_failure(dbos: DBOS) -> None:
         )
 
     # All originals should be marked as having been forked from.
-    for wid in [wf1_id, wf2_id, wf3_id]:
+    for wid in [wf1_id, wf2_id, wf3_id, wf4_id]:
         wid_status = DBOS.get_workflow_status(wid)
         assert wid_status is not None
         assert wid_status.was_forked_from is True
 
     # Verify list_workflows filter still works.
     forked_from_workflows = DBOS.list_workflows(was_forked_from=True)
-    assert {w.workflow_id for w in forked_from_workflows} == {wf1_id, wf2_id, wf3_id}
+    assert {w.workflow_id for w in forked_from_workflows} == {
+        wf1_id,
+        wf2_id,
+        wf3_id,
+        wf4_id,
+    }
 
 
 def test_fork_replacement_children(dbos: DBOS) -> None:

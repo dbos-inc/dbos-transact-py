@@ -39,6 +39,15 @@ _CREATE_TABLE_SQL = sa.text(
 )
 
 
+def _set_sqlite_pragmas(dbapi_conn: Any, connection_record: Any) -> None:
+    # Match the system database: serialize writers and ride out lock contention
+    # rather than failing fast with "database is locked" (the sqlite3 default is
+    # only 5 seconds, which slow disks can exceed under load).
+    dbapi_conn.isolation_level = "IMMEDIATE"
+    dbapi_conn.execute("PRAGMA busy_timeout=30000")
+    dbapi_conn.execute("PRAGMA foreign_keys=ON")
+
+
 def _filter_sqlite_kwargs(engine_kwargs: Dict[str, Any]) -> Dict[str, Any]:
     kwargs = engine_kwargs.copy()
     connect_args = kwargs.get("connect_args", {})
@@ -61,14 +70,8 @@ class SqliteAsyncDatasource(AsyncSQLAlchemyDatasource):
         engine = create_async_engine(
             database_url, **_filter_sqlite_kwargs(engine_kwargs)
         )
-
-        # Use IMMEDIATE transactions to serialize writers and prevent race conditions
         # AsyncEngine events must be attached to the underlying sync engine
-        @event.listens_for(engine.sync_engine, "connect")
-        def set_sqlite_immediate(dbapi_conn: Any, connection_record: Any) -> None:
-            dbapi_conn.isolation_level = "IMMEDIATE"
-            dbapi_conn.execute("PRAGMA foreign_keys=ON")
-
+        event.listens_for(engine.sync_engine, "connect")(_set_sqlite_pragmas)
         return engine
 
     async def run_migrations(self) -> None:
@@ -86,7 +89,9 @@ class SqliteSyncDatasource(SQLAlchemyDatasource):
     def _create_engine(
         self, database_url: str, engine_kwargs: Dict[str, Any]
     ) -> sa.Engine:
-        return sa.create_engine(database_url, **_filter_sqlite_kwargs(engine_kwargs))
+        engine = sa.create_engine(database_url, **_filter_sqlite_kwargs(engine_kwargs))
+        event.listens_for(engine, "connect")(_set_sqlite_pragmas)
+        return engine
 
     def run_migrations(self) -> None:
         with self.engine.begin() as conn:
