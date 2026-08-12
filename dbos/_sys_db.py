@@ -4190,12 +4190,18 @@ class SystemDatabase(ABC):
                 if num_recent_queries >= queue._limiter["limit"]:
                     return []
 
-            # Compute max_tasks, the number of workflows that can be dequeued given local and global concurrency limits,
+            # Compute max_tasks, the number of workflows that can be dequeued given the rate limit and the local and global concurrency limits.
             max_tasks = sys.maxsize
+
+            if queue._limiter is not None:
+                # Bound the claim by the limiter's remaining slots so a backlogged queue locks only what it can start.
+                max_tasks = queue._limiter["limit"] - num_recent_queries
 
             if queue._worker_concurrency is not None:
                 # Use the in-memory registry for this worker's running count — avoids a DB round trip.
-                max_tasks = max(0, queue._worker_concurrency - local_running_count)
+                max_tasks = min(
+                    max_tasks, max(0, queue._worker_concurrency - local_running_count)
+                )
 
             if queue._concurrency is not None:
                 # Global concurrency still requires a DB query since other workers may be running workflows too.
@@ -4294,19 +4300,19 @@ class SystemDatabase(ABC):
                 dbos_logger.debug(
                     f"[{queue.name}] dequeueing {len(dequeued_ids)} task(s)"
                 )
-            ret_ids: list[str] = []
-
-            for id in dequeued_ids:
-                # If we have a limiter, stop dequeueing workflows when the number
-                # of workflows started this period exceeds the limit.
-                if queue._limiter is not None:
-                    if len(ret_ids) + num_recent_queries >= queue._limiter["limit"]:
-                        break
-
-                # Start the workflow by marking it as PENDING and updating its executor ID.
-                update_res = c.execute(
+            claimed: Set[str] = set()
+            # Chunk the IN list to stay under bind-parameter limits (SQLite caps at 32766, libpq at 65535).
+            chunk_size = 4096
+            for start in range(0, len(dequeued_ids), chunk_size):
+                # Start the workflows by marking them PENDING and updating their executor ID.
+                # RETURNING reports exactly the rows this statement flipped (requires SQLite >= 3.35).
+                flipped_rows = c.execute(
                     SystemSchema.workflow_status.update()
-                    .where(SystemSchema.workflow_status.c.workflow_uuid == id)
+                    .where(
+                        SystemSchema.workflow_status.c.workflow_uuid.in_(
+                            dequeued_ids[start : start + chunk_size]
+                        )
+                    )
                     .where(
                         SystemSchema.workflow_status.c.status
                         == WorkflowStatusString.ENQUEUED.value
@@ -4343,12 +4349,12 @@ class SystemDatabase(ABC):
                             else_=SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
                         ),
                     )
-                )
-                if update_res.rowcount > 0:
-                    ret_ids.append(id)
+                    .returning(SystemSchema.workflow_status.c.workflow_uuid)
+                ).fetchall()
+                claimed.update(row[0] for row in flipped_rows)
 
-            # Return the IDs of all functions we started
-            return ret_ids
+            # Return the IDs of all functions we started, in dequeue order: RETURNING order is unspecified.
+            return [id for id in dequeued_ids if id in claimed]
 
     # Max heads dequeued per partitioned sweep: bounds the IN-list bind params below (SQLite caps at 32766, libpq at 65535); leftover partitions rotate in on later polls via the PENDING gate.
     PARTITIONED_DEQUEUE_SWEEP_CAP = 8192
