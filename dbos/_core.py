@@ -1271,13 +1271,23 @@ def execute_dequeued_workflow(
 
             func = cast("Workflow[..., Any]", wf_func.__orig_func)  # type: ignore
             if inspect.iscoroutinefunction(func):
-                # Onto the event loop
-                dbos._background_event_loop.submit_coroutine_nowait(
-                    _execute_workflow_async(
-                        dbos, status, func, ctx, inputs["args"], inputs["kwargs"]
-                    ),
-                    task_set=dbos._workflow_tasks,
-                )
+
+                async def start_workflow_task() -> None:
+                    task = asyncio.create_task(
+                        _execute_workflow_async(
+                            dbos, status, func, ctx, inputs["args"], inputs["kwargs"]
+                        )
+                    )
+                    # The loop keeps only weak references to tasks, and the dequeue path keeps no handle (#710).
+                    dbos._workflow_tasks.add(task)
+                    task.add_done_callback(dbos._workflow_tasks.discard)
+                    # Nothing awaits this task, so mark its exception retrieved (#796).
+                    task.add_done_callback(retrieve_future_exception)
+
+                # Onto the event loop, blocking until the task exists: dispatching
+                # faster than the loop starts workflows would let the next poll
+                # dequeue against a local concurrency count that has not caught up.
+                dbos._background_event_loop.submit_coroutine(start_workflow_task())
                 return WorkflowHandlePolling(workflow_id, dbos)
             else:
                 # Onto the thread pool
