@@ -2,7 +2,16 @@ import asyncio
 import copy
 import random
 import threading
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Literal, Optional, TypedDict
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Coroutine,
+    List,
+    Literal,
+    Optional,
+    TypedDict,
+)
 
 QueueConflictResolution = Literal[
     "update_if_latest_version", "always_update", "never_update"
@@ -16,7 +25,7 @@ from dbos._error import DBOSException
 from dbos._logger import dbos_logger
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 
-from ._core import P, R, execute_workflow_by_id, start_workflow, start_workflow_async
+from ._core import P, R, execute_dequeued_workflow, start_workflow, start_workflow_async
 
 if TYPE_CHECKING:
     from ._dbos import DBOS, WorkflowHandle, WorkflowHandleAsync
@@ -444,6 +453,23 @@ class Queue:
         )
 
 
+def _start_dequeued_workflows(dbos: "DBOS", workflow_ids: List[str]) -> None:
+    """Fetch the claimed workflows' statuses in one round trip, then dispatch each."""
+    statuses = dbos._sys_db.get_workflow_statuses(workflow_ids)
+    found = {status["workflow_uuid"] for status in statuses}
+    for missing in (id for id in workflow_ids if id not in found):
+        dbos.logger.error(
+            f"Error executing workflow {missing}: Workflow status not found"
+        )
+    for status in statuses:
+        try:
+            execute_dequeued_workflow(dbos, status)
+        except Exception as e:
+            dbos.logger.error(
+                f"Error executing workflow {status['workflow_uuid']}: {e}"
+            )
+
+
 def queue_worker_thread(
     stop_event: threading.Event, dbos: "DBOS", queue: Queue
 ) -> None:
@@ -493,11 +519,7 @@ def queue_worker_thread(
                     GlobalParams.executor_id,
                     GlobalParams.app_version,
                 )
-                for id in dequeued_workflows:
-                    try:
-                        execute_workflow_by_id(dbos, id)
-                    except Exception as e:
-                        dbos.logger.error(f"Error executing workflow {id}: {e}")
+                _start_dequeued_workflows(dbos, dequeued_workflows)
             elif queue._partition_queue:
                 # Every other partitioned config sweeps one partition at a time.
                 queue_partition_keys = dbos._sys_db.get_queue_partitions(queue.name)
@@ -521,11 +543,7 @@ def queue_worker_thread(
                         ):
                             continue
                         raise
-                    for id in dequeued_workflows:
-                        try:
-                            execute_workflow_by_id(dbos, id)
-                        except Exception as e:
-                            dbos.logger.error(f"Error executing workflow {id}: {e}")
+                    _start_dequeued_workflows(dbos, dequeued_workflows)
             else:
                 local_running_count = dbos._active_workflows_set.count_for_queue(
                     queue.name, None
@@ -537,11 +555,7 @@ def queue_worker_thread(
                     None,
                     local_running_count,
                 )
-                for id in dequeued_workflows:
-                    try:
-                        execute_workflow_by_id(dbos, id)
-                    except Exception as e:
-                        dbos.logger.error(f"Error executing workflow {id}: {e}")
+                _start_dequeued_workflows(dbos, dequeued_workflows)
         except OperationalError as e:
             if isinstance(e.orig, errors.LockNotAvailable):
                 # Another worker is dequeueing this queue right now; retry next

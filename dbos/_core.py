@@ -1114,11 +1114,11 @@ async def _execute_workflow_async(
                     release_active()
 
 
-def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]":
+def execute_dequeued_workflow(
+    dbos: "DBOS", status: WorkflowStatusInternal
+) -> "WorkflowHandle[Any]":
     """Run a workflow the queue has just claimed, from its persisted status."""
-    status = dbos._sys_db.get_workflow_status(workflow_id)
-    if not status:
-        raise DBOSRecoveryError(workflow_id, "Workflow status not found")
+    workflow_id = status["workflow_uuid"]
     if not workflow_id.strip():
         # Empty or whitespace workflow IDs are not allowed
         recovery_error = DBOSRecoveryError(
@@ -1519,7 +1519,7 @@ async def start_workflow_async(
     inner_task = asyncio.create_task(coro)
     # Hold a strong reference to the workflow task until it completes: the
     # event loop only keeps weak references to tasks, and callers (notably
-    # execute_workflow_by_id on the dequeue path) may discard the returned
+    # execute_dequeued_workflow on the dequeue path) may discard the returned
     # handle. Without this, a cyclic GC pass can destroy the pending task
     # mid-execution, killing the workflow with GeneratorExit (#710).
     dbos._workflow_tasks.add(inner_task)
