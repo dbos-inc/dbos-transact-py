@@ -1,4 +1,5 @@
 import os
+import pathlib
 import shutil
 import subprocess
 import tempfile
@@ -1392,3 +1393,39 @@ def test_migrate_print_from_migration(
         connection.execute(
             sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
         )
+
+
+def test_migrate_print_migrations_without_database_url(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--print-migrations never connects, so a missing database URL is not an
+    error: it only leaves the URL out of the header comment."""
+    print_dbos_migrations(None, schema="dbos", migration="all")
+    out = capsys.readouterr().out
+    assert out.startswith("-- DBOS system database migrations\n")
+    assert 'CREATE SCHEMA IF NOT EXISTS "dbos";' in out
+
+    # An empty directory has no dbos-config.yaml, so the CLI resolves no URL
+    env = {k: v for k, v in os.environ.items() if not k.startswith("DBOS")}
+    result = subprocess.run(
+        ["dbos", "migrate", "--print-migrations", "all"],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env=env,
+    )
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == out
+
+    # Actually running migrations still requires a URL
+    result = subprocess.run(
+        ["dbos", "migrate"],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env=env,
+    )
+    assert result.returncode != 0
+    assert "Missing database URL" in result.stderr

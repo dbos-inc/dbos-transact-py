@@ -47,9 +47,9 @@ class OrderedGroup(click.Group):
         return list(self.commands)
 
 
-def _get_db_url(
+def _resolve_db_urls(
     *, system_database_url: Optional[str], application_database_url: Optional[str]
-) -> Tuple[str, str | None]:
+) -> Optional[Tuple[str, str | None]]:
     """
     Get the database URL to use for the DBOS application.
     Order of precedence:
@@ -59,6 +59,8 @@ def _get_db_url(
 
     Otherwise fallback to the same SQLite Postgres URL than the DBOS library.
     Note that for the latter to be possible, a configuration file must have been found, with an application name set.
+
+    Returns None if no URL can be resolved.
     """
     dbos_logger.setLevel(logging.WARNING)  # The CLI should not emit INFO logs
     if os.environ.get("DBOS__CLOUD") == "true":
@@ -86,11 +88,24 @@ def _get_db_url(
                 default_url = f"sqlite:///{_app_db_name}.sqlite"
                 return default_url, None
         except (FileNotFoundError, OSError):
-            click.echo(
-                f"Error: Missing database URL: please set it using CLI flags or your dbos-config.yaml file.",
-                err=True,
-            )
-            raise click.exceptions.Exit(code=1)
+            return None
+
+
+def _get_db_url(
+    *, system_database_url: Optional[str], application_database_url: Optional[str]
+) -> Tuple[str, str | None]:
+    """Like _resolve_db_urls, but exits when no database URL can be resolved."""
+    urls = _resolve_db_urls(
+        system_database_url=system_database_url,
+        application_database_url=application_database_url,
+    )
+    if urls is None:
+        click.echo(
+            f"Error: Missing database URL: please set it using CLI flags or your dbos-config.yaml file.",
+            err=True,
+        )
+        raise click.exceptions.Exit(code=1)
+    return urls
 
 
 @click.group(
@@ -303,10 +318,6 @@ def migrate(
     print_migrations: Optional[str],
     print_user_role: bool,
 ) -> None:
-    system_database_url, application_database_url = _get_db_url(
-        system_database_url=system_database_url,
-        application_database_url=application_database_url,
-    )
     if schema is None:
         schema = "dbos"
 
@@ -320,8 +331,14 @@ def migrate(
             click.echo("--print-user-role requires --app-role", err=True)
             raise click.exceptions.Exit(code=1)
         if print_migrations is not None:
-            print_dbos_migrations(
+            # Print modes never connect, so a missing database URL is fine: it
+            # only leaves the URL out of the header comment.
+            urls = _resolve_db_urls(
                 system_database_url=system_database_url,
+                application_database_url=application_database_url,
+            )
+            print_dbos_migrations(
+                urls[0] if urls is not None else None,
                 schema=schema,
                 migration=print_migrations,
             )
@@ -329,6 +346,11 @@ def migrate(
             assert application_role is not None
             print_dbos_user_role_sql(schema=schema, role_name=application_role)
         return
+
+    system_database_url, application_database_url = _get_db_url(
+        system_database_url=system_database_url,
+        application_database_url=application_database_url,
+    )
 
     # Emit INFO logs from migrations
     init_logger()
