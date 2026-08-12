@@ -1124,7 +1124,12 @@ async def _execute_workflow_async(
 def execute_dequeued_workflow(
     dbos: "DBOS", status: WorkflowStatusInternal
 ) -> "WorkflowHandle[Any]":
-    """Run a workflow the queue has just claimed, from its persisted status."""
+    """Run a workflow the queue has just claimed, from its persisted status.
+
+    Deliberately skips _init_workflow: the claim already wrote everything it would
+    (PENDING, executor, deadline, recovery_attempts) and this status was read back
+    from that row, so re-upserting it only rewrites the columns it just read.
+    """
     workflow_id = status["workflow_uuid"]
     if not workflow_id.strip():
         # Empty or whitespace workflow IDs are not allowed
@@ -1242,62 +1247,47 @@ def execute_dequeued_workflow(
                 otel_carrier_from_attributes(status.get("attributes"))
             ),
         ):
-            return _dispatch_dequeued_workflow(
-                dbos, status, wf_func, fi, inputs["args"], inputs["kwargs"]
+            # Only a PENDING row can own its outcome, so a row moved on since the claim would run for nothing.
+            if status["status"] != WorkflowStatusString.PENDING.value:
+                return WorkflowHandlePolling(workflow_id, dbos)
+
+            # Same context start_workflow builds: create_start_workflow_child consumes the
+            # ambient SetWorkflowID, so the run adopts the claimed row's ID.
+            ctx = DBOSContext.create_start_workflow_child(get_local_dbos_context())
+            # The row is authoritative: a workflow enqueued under another serializer must replay under it.
+            serialization_type = (
+                fi.serialization_type or WorkflowSerializationFormat.DEFAULT
+            )
+            if status["serialization"] == DBOSPortableJSON.name():
+                serialization_type = WorkflowSerializationFormat.PORTABLE
+            ctx.serialization_type = serialization_type
+            ctx.workflow_deadline_epoch_ms = status["workflow_deadline_epoch_ms"]
+            _schedule_workflow_timeout(
+                dbos, workflow_id, status["workflow_deadline_epoch_ms"]
             )
 
+            func = cast("Workflow[..., Any]", wf_func.__orig_func)  # type: ignore
+            if inspect.iscoroutinefunction(func):
+                dbos._background_event_loop.submit_coroutine_nowait(
+                    _execute_workflow_async(
+                        dbos, status, func, ctx, inputs["args"], inputs["kwargs"]
+                    ),
+                    task_set=dbos._workflow_tasks,
+                )
+                return WorkflowHandlePolling(workflow_id, dbos)
 
-def _dispatch_dequeued_workflow(
-    dbos: "DBOS",
-    status: WorkflowStatusInternal,
-    wf_func: "Callable[..., Any]",
-    fi: "DBOSFuncInfo",
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-) -> "WorkflowHandle[Any]":
-    """Submit a claimed workflow for execution.
-
-    Deliberately skips _init_workflow: the claim already wrote everything it
-    would (PENDING, executor, deadline, recovery_attempts), and the status here
-    was read back from that row, so re-upserting it is a round trip that only
-    rewrites the columns it just read.
-    """
-    workflow_id = status["workflow_uuid"]
-    # Same context start_workflow builds: create_start_workflow_child consumes the
-    # ambient SetWorkflowID, so the run adopts the claimed row's ID.
-    ctx = DBOSContext.create_start_workflow_child(get_local_dbos_context())
-    # The row is authoritative: a workflow enqueued under another serializer must replay under it.
-    serialization_type = fi.serialization_type or WorkflowSerializationFormat.DEFAULT
-    if status["serialization"] == DBOSPortableJSON.name():
-        serialization_type = WorkflowSerializationFormat.PORTABLE
-    # Only a PENDING row can own its outcome, so a row moved on since the claim would run for nothing.
-    if status["status"] != WorkflowStatusString.PENDING.value:
-        return WorkflowHandlePolling(workflow_id, dbos)
-
-    ctx.serialization_type = serialization_type
-    ctx.workflow_deadline_epoch_ms = status["workflow_deadline_epoch_ms"]
-    _schedule_workflow_timeout(dbos, workflow_id, status["workflow_deadline_epoch_ms"])
-
-    func = cast("Workflow[..., Any]", wf_func.__orig_func)  # type: ignore
-    if inspect.iscoroutinefunction(func):
-        dbos._background_event_loop.submit_coroutine_nowait(
-            _execute_workflow_async(dbos, status, func, ctx, args, kwargs),
-            task_set=dbos._workflow_tasks,
-        )
-        return WorkflowHandlePolling(workflow_id, dbos)
-
-    # Captured on the caller's thread, re-attached inside the executor thread.
-    future = dbos._executor.submit(
-        cast(Callable[..., Any], _execute_workflow_wthread),
-        dbos,
-        status,
-        func,
-        ctx,
-        args,
-        kwargs,
-        _capture_otel_context(),
-    )
-    return WorkflowHandleFuture(workflow_id, future, dbos)
+            # Captured on the caller's thread, re-attached inside the executor thread.
+            future = dbos._executor.submit(
+                cast(Callable[..., Any], _execute_workflow_wthread),
+                dbos,
+                status,
+                func,
+                ctx,
+                inputs["args"],
+                inputs["kwargs"],
+                _capture_otel_context(),
+            )
+            return WorkflowHandleFuture(workflow_id, future, dbos)
 
 
 def start_workflow(
