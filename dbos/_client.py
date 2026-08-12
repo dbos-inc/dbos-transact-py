@@ -1131,6 +1131,7 @@ class DBOSClient:
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
         replacement_children: Optional[dict[str, str]] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> "WorkflowHandle[Any]":
         forked_workflow_id = fork_workflow(
             self._sys_db,
@@ -1140,6 +1141,7 @@ class DBOSClient:
             queue_name=queue_name,
             queue_partition_key=queue_partition_key,
             replacement_children=replacement_children,
+            timeout_seconds=timeout_seconds,
         )
         return WorkflowHandleClientPolling[Any](forked_workflow_id, self._sys_db)
 
@@ -1152,6 +1154,7 @@ class DBOSClient:
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
         replacement_children: Optional[dict[str, str]] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> "WorkflowHandleAsync[Any]":
         forked_workflow_id = await asyncio.to_thread(
             fork_workflow,
@@ -1162,6 +1165,7 @@ class DBOSClient:
             queue_name=queue_name,
             queue_partition_key=queue_partition_key,
             replacement_children=replacement_children,
+            timeout_seconds=timeout_seconds,
         )
         return WorkflowHandleClientAsyncPolling[Any](forked_workflow_id, self._sys_db)
 
