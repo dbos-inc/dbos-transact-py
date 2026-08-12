@@ -435,8 +435,9 @@ def test_class_recovery(dbos: DBOS) -> None:
 
     assert exc_cnt == 1
 
-    # Test we can execute the workflow by uuid as recovery would do
-    handle = DBOS._execute_workflow_id("run1")
+    # Starting the completed workflow by ID returns its recorded result
+    with SetWorkflowID("run1"):
+        handle = DBOS.start_workflow(DBOSTestClassRec.check_cls, "arg1")
     assert handle.get_result() == "ran"
     assert exc_cnt == 1
 
@@ -467,9 +468,10 @@ def test_inst_recovery(dbos: DBOS) -> None:
     assert exc_cnt == 1
     assert last_inst is inst
 
-    # Test we can execute the workflow by uuid as recovery would do
+    # Starting the completed workflow by ID returns its recorded result
     last_inst = None
-    handle = DBOS._execute_workflow_id(wfid)
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(inst.check_inst, "arg1")
     assert handle.get_result() == "ran2"
     assert exc_cnt == 1
     # Workflow has finished so last_inst should be None
@@ -507,11 +509,13 @@ def test_inst_async_recovery(dbos: DBOS) -> None:
     assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == "test_class"
 
-    recovery_handle = DBOS._execute_workflow_id(wfid)
+    # Recovering the still-running workflow must not double-execute it.
+    recovery_handles = DBOS._recover_pending_workflows()
+    assert [h.get_workflow_id() for h in recovery_handles] == [wfid]
 
     event.set()
     assert orig_handle.get_result() == input * multiplier
-    assert recovery_handle.get_result() == input * multiplier
+    assert recovery_handles[0].get_result() == input * multiplier
 
 
 def test_inst_async_step_recovery(dbos: DBOS) -> None:
@@ -541,11 +545,13 @@ def test_inst_async_step_recovery(dbos: DBOS) -> None:
     assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == "test_class"
 
-    recovery_handle = DBOS._execute_workflow_id(wfid)
+    # Recovering the still-running workflow must not double-execute it.
+    recovery_handles = DBOS._recover_pending_workflows()
+    assert [h.get_workflow_id() for h in recovery_handles] == [wfid]
 
     event.set()
     assert orig_handle.get_result() == input * multiplier
-    assert recovery_handle.get_result() == input * multiplier
+    assert recovery_handles[0].get_result() == input * multiplier
 
 
 def test_step_recovery(dbos: DBOS) -> None:
@@ -586,12 +592,14 @@ def test_step_recovery(dbos: DBOS) -> None:
     assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == "test_class"
 
-    recovery_handle = DBOS._execute_workflow_id(wfid)
+    # Recovering the still-running workflow must not double-execute it.
+    recovery_handles = DBOS._recover_pending_workflows()
+    assert [h.get_workflow_id() for h in recovery_handles] == [wfid]
 
     blocking_event.set()
     thread.join()
     assert return_value == input * multiplier
-    assert recovery_handle.get_result() == input * multiplier
+    assert recovery_handles[0].get_result() == input * multiplier
 
 
 def test_class_queue_recovery(dbos: DBOS) -> None:

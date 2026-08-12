@@ -1999,7 +1999,8 @@ def test_queue_deduplication_recovery(dbos: DBOS) -> None:
     assert isinstance(steps[1]["error"], DBOSQueueDeduplicatedError)
 
     set_workflow_status(dbos._sys_db, parent_id, "PENDING")
-    assert dbos._execute_workflow_id(parent_id).get_result() == child_id
+    DBOS._recover_pending_workflows()
+    assert DBOS.retrieve_workflow(parent_id).get_result() == child_id
 
     assert queue_entries_are_cleaned_up(dbos)
 

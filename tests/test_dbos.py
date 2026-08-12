@@ -35,7 +35,6 @@ from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSConflictingRegistrationError,
     DBOSException,
-    DBOSRecoveryError,
 )
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import _dbos_null_topic
@@ -92,8 +91,9 @@ def test_simple_workflow(dbos: DBOS) -> None:
     assert step_counter == 2  # Only increment once
     assert wf_counter == 2  # Only increment once
 
-    # Test we can execute the workflow by uuid
-    handle = DBOS._execute_workflow_id(wfuuid)
+    # Starting a completed workflow by ID returns its recorded result
+    with SetWorkflowID(wfuuid):
+        handle = DBOS.start_workflow(test_workflow, "alice", "alice")
     assert handle.get_result() == "alice1alice"
     assert wf_counter == 2
 
@@ -300,8 +300,9 @@ def test_exception_workflow(dbos: DBOS) -> None:
     assert step_counter == 2  # Only increment once
     assert bad_txn_counter == 2  # Only increment once
 
-    # Test we can execute the workflow by uuid, shouldn't throw errors
-    handle = DBOS._execute_workflow_id(wfuuid)
+    # Starting a failed workflow by ID surfaces its recorded error, not a new run
+    with SetWorkflowID(wfuuid):
+        handle = DBOS.start_workflow(exception_workflow)
     with pytest.raises(Exception) as exc_info:
         handle.get_result()
     assert "test error" == str(exc_info.value)
@@ -587,8 +588,6 @@ def test_duplicate_recovery_does_not_rerun_running_workflow(dbos: DBOS) -> None:
 
 def test_recovery_empty_id_dead_letters(dbos: DBOS) -> None:
     # A poisoned empty-string workflow_uuid must be dead-lettered as ERROR, never ghost-forked under a fresh UUID (#759).
-    from dbos._core import execute_workflow_by_id
-
     wf_counter: int = 0
 
     @DBOS.workflow()
@@ -610,15 +609,18 @@ def test_recovery_empty_id_dead_letters(dbos: DBOS) -> None:
             .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
         )
 
-    # Recovery of the poisoned row must raise, not silently fork a new execution.
-    with pytest.raises(DBOSRecoveryError):
-        execute_workflow_by_id(dbos, "", True, False)
+    # Recovery must dead-letter the poisoned row, not silently fork a new execution.
+    DBOS._recover_pending_workflows()
 
-    # The workflow body did not run again, and the row is now terminal ERROR.
+    def poisoned_row_is_dead_lettered() -> None:
+        empty_status = dbos._sys_db.get_workflow_status("")
+        assert empty_status is not None
+        assert empty_status["status"] == WorkflowStatusString.ERROR.value
+
+    retry_until_success(poisoned_row_is_dead_lettered, interval=0.5, max_attempts=20)
+
+    # The workflow body did not run again.
     assert wf_counter == 1
-    empty_status = dbos._sys_db.get_workflow_status("")
-    assert empty_status is not None
-    assert empty_status["status"] == WorkflowStatusString.ERROR.value
 
 
 def test_recovery_workflow_step(dbos: DBOS) -> None:

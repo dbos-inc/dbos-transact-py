@@ -448,8 +448,8 @@ def test_portable_ser(dbos: DBOS, client: DBOSClient) -> None:
 
     # Reexecute
     set_workflow_status(dbos._sys_db, wfhd.workflow_id, "PENDING")
-    wfhrex = dbos._execute_workflow_id(wfhd.workflow_id)
-    assert wfhrex.get_result() == 's-1-k:v@"m"'
+    DBOS._recover_pending_workflows()
+    assert DBOS.retrieve_workflow(wfhd.workflow_id).get_result() == 's-1-k:v@"m"'
 
     # Errors
     with pytest.raises(Exception):

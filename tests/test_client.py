@@ -34,7 +34,7 @@ from dbos._sys_db import db_retry
 from dbos._utils import retriable_sqlite_exception
 from tests import client_collateral
 from tests.client_collateral import event_test, retrieve_test, send_test
-from tests.conftest import TestOtelType, set_workflow_status, wait_for_client_listener
+from tests.conftest import TestOtelType, wait_for_client_listener
 
 
 class Person(TypedDict):
@@ -449,11 +449,6 @@ def test_client_send_idempotent(
     handle: WorkflowHandle[str] = DBOS.retrieve_workflow(wfid)
     result2 = handle.get_result()
     assert result2 == message
-
-
-def reexecute_workflow_by_id(dbos: DBOS, wfid: str) -> "WorkflowHandle[Any]":
-    set_workflow_status(dbos._sys_db, wfid, "PENDING")
-    return dbos._execute_workflow_id(wfid)
 
 
 def test_client_get_event(client: DBOSClient, dbos: DBOS) -> None:
