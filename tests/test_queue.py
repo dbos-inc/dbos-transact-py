@@ -1374,7 +1374,9 @@ def test_queue_concurrency_under_recovery(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_cancelling_queued_workflows(dbos: DBOS) -> None:
+def test_cancelling_queued_workflows(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
     start_event = threading.Event()
     blocking_event = threading.Event()
 

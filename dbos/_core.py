@@ -1254,6 +1254,9 @@ def execute_dequeued_workflow(
             # Same context start_workflow builds: create_start_workflow_child consumes the
             # ambient SetWorkflowID, so the run adopts the claimed row's ID.
             ctx = DBOSContext.create_start_workflow_child(get_local_dbos_context())
+            # Consume the restored carrier so workflows started inside this one do not inherit it.
+            ctx.workflow_attributes = None
+            ctx.otel_carrier = None
             # The row is authoritative: a workflow enqueued under another serializer must replay under it.
             serialization_type = (
                 fi.serialization_type or WorkflowSerializationFormat.DEFAULT
@@ -1686,7 +1689,9 @@ def _persist_enqueue_with_options(
             max_recovery_attempts=None,
             owner_xid=None,
         )
-    except DBOSQueueDeduplicatedError as e:
+    # Neither can ever succeed for this ID, so checkpoint the failure: an unrecorded
+    # raise would let a replay re-enqueue and succeed, diverging from the original run.
+    except (DBOSQueueDeduplicatedError, MaxRecoveryAttemptsExceededError) as e:
         sererr, serialization = serialize_exception(
             e,
             status["serialization"],
