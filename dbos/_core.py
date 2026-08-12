@@ -67,6 +67,7 @@ from ._error import (
     DBOSWorkflowFunctionNotFoundError,
     MaxRecoveryAttemptsExceededError,
 )
+from ._event_loop import retrieve_future_exception
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSFuncInfo,
@@ -1278,21 +1279,10 @@ def _dispatch_dequeued_workflow(
 
     func = cast("Workflow[..., Any]", wf_func.__orig_func)  # type: ignore
     if inspect.iscoroutinefunction(func):
-
-        async def run() -> None:
-            coro = _execute_workflow_async(dbos, status, func, ctx, args, kwargs)
-            inner_task = asyncio.create_task(coro)
-            # Same strong reference start_workflow_async holds: the dequeue path
-            # discards this handle, and a weakly-referenced task can be GC'd
-            # mid-execution (#710).
-            dbos._workflow_tasks.add(inner_task)
-            inner_task.add_done_callback(dbos._workflow_tasks.discard)
-            task = asyncio.shield(inner_task)
-            # Nothing awaits this future once the handle is discarded (#796)
-            task.add_done_callback(_retrieve_future_exception)
-
-        # Blocks only until the task is created, not until the workflow finishes.
-        dbos._background_event_loop.submit_coroutine(run())
+        dbos._background_event_loop.submit_coroutine_nowait(
+            _execute_workflow_async(dbos, status, func, ctx, args, kwargs),
+            task_set=dbos._workflow_tasks,
+        )
         return WorkflowHandlePolling(workflow_id, dbos)
 
     # Captured on the caller's thread, re-attached inside the executor thread.
@@ -1441,12 +1431,6 @@ def start_workflow(
     return WorkflowHandleFuture(new_child_workflow_id, future, dbos)
 
 
-def _retrieve_future_exception(future: "asyncio.Future[Any]") -> None:
-    """Mark a future's exception as retrieved so asyncio does not report it at GC."""
-    if not future.cancelled():
-        future.exception()
-
-
 async def start_workflow_async(
     dbos: "DBOS",
     local_ctx: Optional[DBOSContext],
@@ -1579,7 +1563,7 @@ async def start_workflow_async(
     # Shield the workflow task from cancellation
     task = asyncio.shield(inner_task)
     # Nothing awaits this future when dequeue/recovery callers discard the handle (#796)
-    task.add_done_callback(_retrieve_future_exception)
+    task.add_done_callback(retrieve_future_exception)
     return WorkflowHandleAsyncTask(new_child_workflow_id, task, dbos)
 
 
