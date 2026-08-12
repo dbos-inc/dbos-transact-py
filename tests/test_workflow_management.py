@@ -1973,7 +1973,7 @@ def test_fork_from_failure(dbos: DBOS) -> None:
 
     # --- stepless workflows restart from the beginning ---
     # A workflow with no recorded steps has nothing to resume from, so both
-    # step-deriving modes fork it from step 0 rather than failing.
+    # step-deriving modes fork it from step 1 rather than failing.
     stepless_count = 0
 
     @DBOS.workflow()

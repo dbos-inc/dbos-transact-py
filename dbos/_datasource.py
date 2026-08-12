@@ -241,16 +241,15 @@ class AsyncSQLAlchemyDatasource(ABC):
             try:
                 return await self._check_execution(workflow_id, step_id)
             except DBAPIError as dbapi_error:
-                if retriable_postgres_exception(
-                    dbapi_error
-                ) or self._is_serialization_error(dbapi_error):
-                    await asyncio.sleep(retry_wait_seconds)
-                    retry_wait_seconds = min(
-                        retry_wait_seconds * _RETRY_BACKOFF_FACTOR,
-                        _MAX_RETRY_WAIT_SECONDS,
-                    )
-                    continue
-                raise
+                if not _is_retriable_db_error(
+                    dbapi_error, self._is_serialization_error
+                ):
+                    raise
+                await asyncio.sleep(retry_wait_seconds)
+                retry_wait_seconds = min(
+                    retry_wait_seconds * _RETRY_BACKOFF_FACTOR,
+                    _MAX_RETRY_WAIT_SECONDS,
+                )
 
     async def _record_error(
         self,
@@ -289,7 +288,9 @@ class AsyncSQLAlchemyDatasource(ABC):
                     DatasourceSchema.datasource_outputs.c.step_id,
                 ]
             )
-            # A returned row means this attempt inserted it; no row means a concurrent execution won.
+            # No row back means a concurrent execution's row was already visible to this
+            # snapshot. Above READ COMMITTED it can instead surface as a serialization
+            # error, which the caller's retry loop converges to this case.
             .returning(DatasourceSchema.datasource_outputs.c.workflow_id)
         )
         if result.first() is None:
@@ -336,6 +337,7 @@ class AsyncSQLAlchemyDatasource(ABC):
                     return cast(R, _replay_recorded(recorded, self.serializer))
 
             output: R
+            conflicted = False
             retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
             try:
                 with DBOSContextEnsure() as exec_ctx:
@@ -400,6 +402,11 @@ class AsyncSQLAlchemyDatasource(ABC):
                             finally:
                                 exec_ctx.end_async_ds_transaction()
             except _StepAlreadyRecorded:
+                conflicted = True
+
+            # Replayed outside the handler, so the internal signal stays out of the
+            # traceback chain of whatever the recorded result raises.
+            if conflicted:
                 return cast(
                     R, await self._replay_conflicting_step(workflow_id, step_id)
                 )
@@ -583,16 +590,15 @@ class SQLAlchemyDatasource(ABC):
             try:
                 return self._check_execution(workflow_id, step_id)
             except DBAPIError as dbapi_error:
-                if retriable_postgres_exception(
-                    dbapi_error
-                ) or self._is_serialization_error(dbapi_error):
-                    time.sleep(retry_wait_seconds)
-                    retry_wait_seconds = min(
-                        retry_wait_seconds * _RETRY_BACKOFF_FACTOR,
-                        _MAX_RETRY_WAIT_SECONDS,
-                    )
-                    continue
-                raise
+                if not _is_retriable_db_error(
+                    dbapi_error, self._is_serialization_error
+                ):
+                    raise
+                time.sleep(retry_wait_seconds)
+                retry_wait_seconds = min(
+                    retry_wait_seconds * _RETRY_BACKOFF_FACTOR,
+                    _MAX_RETRY_WAIT_SECONDS,
+                )
 
     def _record_error(
         self,
@@ -629,7 +635,9 @@ class SQLAlchemyDatasource(ABC):
                     DatasourceSchema.datasource_outputs.c.step_id,
                 ]
             )
-            # A returned row means this attempt inserted it; no row means a concurrent execution won.
+            # No row back means a concurrent execution's row was already visible to this
+            # snapshot. Above READ COMMITTED it can instead surface as a serialization
+            # error, which the caller's retry loop converges to this case.
             .returning(DatasourceSchema.datasource_outputs.c.workflow_id)
         )
         if result.first() is None:
@@ -676,6 +684,7 @@ class SQLAlchemyDatasource(ABC):
                     return cast(R, _replay_recorded(recorded, self.serializer))
 
             output: R
+            conflicted = False
             retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
             try:
                 with DBOSContextEnsure() as exec_ctx:
@@ -740,6 +749,11 @@ class SQLAlchemyDatasource(ABC):
                             finally:
                                 exec_ctx.end_sync_ds_transaction()
             except _StepAlreadyRecorded:
+                conflicted = True
+
+            # Replayed outside the handler, so the internal signal stays out of the
+            # traceback chain of whatever the recorded result raises.
+            if conflicted:
                 return cast(R, self._replay_conflicting_step(workflow_id, step_id))
 
             return output
