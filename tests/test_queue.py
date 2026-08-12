@@ -963,13 +963,15 @@ def test_one_at_a_time_with_worker_concurrency(dbos: DBOS) -> None:
 
 
 # Declare a workflow globally (we need it to be registered across process under a known name)
-start_event = threading.Event()
+# Counting, not a flag: several dequeued workflows start at once, and an Event would
+# collapse their starts into one, leaving the waiter below short.
+start_counter = threading.Semaphore(0)
 end_event = threading.Event()
 
 
 @DBOS.workflow()
 def worker_concurrency_test_workflow() -> None:
-    start_event.set()
+    start_counter.release()
     end_event.wait()
 
 
@@ -997,8 +999,7 @@ def run_dbos_test_in_process(
     # the queue manager picks it up via list_queues.
     # Wait to dequeue as many tasks as we can locally
     for _ in range(0, local_concurrency_limit):
-        start_event.wait()
-        start_event.clear()
+        start_counter.acquire()
     # Signal the parent process we've dequeued
     start_signal.set()
     # Wait for the parent process to signal we can move on
