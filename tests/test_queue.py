@@ -1395,7 +1395,11 @@ def test_cancelling_queued_workflows(dbos: DBOS) -> None:
 
     # Verify that the blocked workflow starts and is PENDING while the regular workflow remains ENQUEUED.
     start_event.wait()
-    assert blocked_handle.get_status().status == WorkflowStatusString.PENDING.value
+    blocked_status = blocked_handle.get_status()
+    assert blocked_status.status == WorkflowStatusString.PENDING.value
+    # The dequeue refreshes updated_at, and nothing else has written this row since it was enqueued.
+    assert blocked_status.created_at and blocked_status.updated_at
+    assert blocked_status.updated_at > blocked_status.created_at
     assert regular_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
 
     # Cancel the blocked workflow. Verify this lets the regular workflow run.

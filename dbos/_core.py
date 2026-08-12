@@ -1041,8 +1041,9 @@ def _execute_workflow_wthread(
                     )
                     return output
             except Exception as e:
+                # This path runs on the executor thread pool, not the event loop.
                 dbos.logger.error(
-                    f"Exception encountered in asynchronous workflow:", exc_info=e
+                    f"Exception encountered in background workflow:", exc_info=e
                 )
                 raise
             finally:
