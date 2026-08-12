@@ -4301,7 +4301,7 @@ class SystemDatabase(ABC):
                     f"[{queue.name}] dequeueing {len(dequeued_ids)} task(s)"
                 )
             claimed: Set[str] = set()
-            # Chunk the IN list to stay under bind-parameter limits (SQLite caps at 32766, libpq at 65535).
+            # Chunk dequeues to stay under bind-parameter limits (SQLite caps at 32766, libpq at 65535).
             chunk_size = 4096
             for start in range(0, len(dequeued_ids), chunk_size):
                 # Start the workflows by marking them PENDING and updating their executor ID.
