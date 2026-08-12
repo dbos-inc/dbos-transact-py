@@ -245,89 +245,6 @@ class WorkflowStatusInternal(TypedDict):
     application_name: Optional[str]
 
 
-def _workflow_status_columns() -> List[Any]:
-    """Columns _status_from_row reads; deferred so SystemSchema is bound at call time."""
-    ws = SystemSchema.workflow_status
-    return [
-        ws.c.workflow_uuid,
-        ws.c.status,
-        ws.c.name,
-        ws.c.recovery_attempts,
-        ws.c.config_name,
-        ws.c.class_name,
-        ws.c.authenticated_user,
-        ws.c.authenticated_roles,
-        ws.c.assumed_role,
-        ws.c.queue_name,
-        ws.c.executor_id,
-        ws.c.created_at,
-        ws.c.updated_at,
-        ws.c.application_version,
-        ws.c.application_id,
-        ws.c.workflow_deadline_epoch_ms,
-        ws.c.workflow_timeout_ms,
-        ws.c.deduplication_id,
-        ws.c.priority,
-        ws.c.inputs,
-        ws.c.queue_partition_key,
-        ws.c.forked_from,
-        ws.c.parent_workflow_id,
-        ws.c.started_at_epoch_ms,
-        ws.c.serialization,
-        ws.c.delay_until_epoch_ms,
-        ws.c.attributes,
-        ws.c.schedule_name,
-        ws.c.debounce_deadline_epoch_ms,
-        ws.c.is_debounced,
-        ws.c.application_name,
-    ]
-
-
-def _status_from_row(row: Any) -> WorkflowStatusInternal:
-    """Build a status dict from a row selecting _workflow_status_columns().
-
-    Keyed by column name rather than position so adding a column cannot silently
-    shift every field after it. output/error/owner_xid are never selected here.
-    """
-    m = row._mapping
-    return {
-        "workflow_uuid": m["workflow_uuid"],
-        "output": None,
-        "error": None,
-        "owner_xid": None,
-        "status": m["status"],
-        "name": m["name"],
-        "recovery_attempts": m["recovery_attempts"],
-        "config_name": m["config_name"],
-        "class_name": m["class_name"],
-        "authenticated_user": m["authenticated_user"],
-        "authenticated_roles": m["authenticated_roles"],
-        "assumed_role": m["assumed_role"],
-        "queue_name": m["queue_name"],
-        "executor_id": m["executor_id"],
-        "created_at": m["created_at"],
-        "updated_at": m["updated_at"],
-        "app_version": m["application_version"],
-        "app_id": m["application_id"],
-        "workflow_deadline_epoch_ms": m["workflow_deadline_epoch_ms"],
-        "workflow_timeout_ms": m["workflow_timeout_ms"],
-        "deduplication_id": m["deduplication_id"],
-        "priority": m["priority"],
-        "inputs": m["inputs"],
-        "queue_partition_key": m["queue_partition_key"],
-        "forked_from": m["forked_from"],
-        "parent_workflow_id": m["parent_workflow_id"],
-        "started_at_epoch_ms": m["started_at_epoch_ms"],
-        "serialization": m["serialization"],
-        "delay_until_epoch_ms": m["delay_until_epoch_ms"],
-        "attributes": m["attributes"],
-        "schedule_name": m["schedule_name"],
-        "debounce_deadline_epoch_ms": m["debounce_deadline_epoch_ms"],
-        "is_debounced": bool(m["is_debounced"]),
-        "application_name": m["application_name"],
-    }
-
-
 class MetricData(TypedDict):
     """
     Metrics data for workflows and steps within a time range.
@@ -1738,18 +1655,6 @@ class SystemDatabase(ABC):
         statuses = self.get_workflow_statuses([workflow_uuid])
         return statuses[0] if statuses else None
 
-    @db_retry()
-    def _get_workflow_status_chunk(
-        self, workflow_ids: List[str]
-    ) -> List[WorkflowStatusInternal]:
-        with self.engine.begin() as c:
-            rows = c.execute(
-                sa.select(*_workflow_status_columns()).where(
-                    SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids)
-                )
-            ).fetchall()
-        return [_status_from_row(row) for row in rows]
-
     def get_workflow_statuses(
         self, workflow_ids: List[str]
     ) -> List[WorkflowStatusInternal]:
@@ -1757,13 +1662,94 @@ class SystemDatabase(ABC):
 
         IDs with no row are omitted, so the result may be shorter than the input.
         """
+        ws = SystemSchema.workflow_status
+
+        # Decorated per chunk so a reconnect retries one chunk, not the whole loop.
+        @db_retry(sys_db=self)
+        def fetch_chunk(chunk: List[str]) -> List[WorkflowStatusInternal]:
+            with self.engine.begin() as c:
+                rows = c.execute(
+                    sa.select(
+                        ws.c.workflow_uuid,
+                        ws.c.status,
+                        ws.c.name,
+                        ws.c.recovery_attempts,
+                        ws.c.config_name,
+                        ws.c.class_name,
+                        ws.c.authenticated_user,
+                        ws.c.authenticated_roles,
+                        ws.c.assumed_role,
+                        ws.c.queue_name,
+                        ws.c.executor_id,
+                        ws.c.created_at,
+                        ws.c.updated_at,
+                        ws.c.application_version,
+                        ws.c.application_id,
+                        ws.c.workflow_deadline_epoch_ms,
+                        ws.c.workflow_timeout_ms,
+                        ws.c.deduplication_id,
+                        ws.c.priority,
+                        ws.c.inputs,
+                        ws.c.queue_partition_key,
+                        ws.c.forked_from,
+                        ws.c.parent_workflow_id,
+                        ws.c.started_at_epoch_ms,
+                        ws.c.serialization,
+                        ws.c.delay_until_epoch_ms,
+                        ws.c.attributes,
+                        ws.c.schedule_name,
+                        ws.c.debounce_deadline_epoch_ms,
+                        ws.c.is_debounced,
+                        ws.c.application_name,
+                    ).where(ws.c.workflow_uuid.in_(chunk))
+                ).fetchall()
+            # Keyed by column name, not position, so adding a column above cannot
+            # silently shift every field. output/error/owner_xid are never selected.
+            return [
+                {
+                    "workflow_uuid": m["workflow_uuid"],
+                    "output": None,
+                    "error": None,
+                    "owner_xid": None,
+                    "status": m["status"],
+                    "name": m["name"],
+                    "recovery_attempts": m["recovery_attempts"],
+                    "config_name": m["config_name"],
+                    "class_name": m["class_name"],
+                    "authenticated_user": m["authenticated_user"],
+                    "authenticated_roles": m["authenticated_roles"],
+                    "assumed_role": m["assumed_role"],
+                    "queue_name": m["queue_name"],
+                    "executor_id": m["executor_id"],
+                    "created_at": m["created_at"],
+                    "updated_at": m["updated_at"],
+                    "app_version": m["application_version"],
+                    "app_id": m["application_id"],
+                    "workflow_deadline_epoch_ms": m["workflow_deadline_epoch_ms"],
+                    "workflow_timeout_ms": m["workflow_timeout_ms"],
+                    "deduplication_id": m["deduplication_id"],
+                    "priority": m["priority"],
+                    "inputs": m["inputs"],
+                    "queue_partition_key": m["queue_partition_key"],
+                    "forked_from": m["forked_from"],
+                    "parent_workflow_id": m["parent_workflow_id"],
+                    "started_at_epoch_ms": m["started_at_epoch_ms"],
+                    "serialization": m["serialization"],
+                    "delay_until_epoch_ms": m["delay_until_epoch_ms"],
+                    "attributes": m["attributes"],
+                    "schedule_name": m["schedule_name"],
+                    "debounce_deadline_epoch_ms": m["debounce_deadline_epoch_ms"],
+                    "is_debounced": bool(m["is_debounced"]),
+                    "application_name": m["application_name"],
+                }
+                for m in (row._mapping for row in rows)
+            ]
+
         found: Dict[str, WorkflowStatusInternal] = {}
         # Chunk the IN list to stay under bind-parameter limits (SQLite caps at 32766, libpq at 65535).
         chunk_size = 4096
         for start in range(0, len(workflow_ids), chunk_size):
-            for status in self._get_workflow_status_chunk(
-                workflow_ids[start : start + chunk_size]
-            ):
+            for status in fetch_chunk(workflow_ids[start : start + chunk_size]):
                 found[status["workflow_uuid"]] = status
         return [found[id] for id in workflow_ids if id in found]
 
