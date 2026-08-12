@@ -1237,7 +1237,7 @@ def execute_dequeued_workflow(
             if fi.func_type != DBOSFuncType.Static:
                 inputs["args"] = (class_object,) + inputs["args"]
 
-        # Propagate the workflow's partition key and trace carrier from its persisted status.
+        # Restore the claimed row's ID and trace carrier onto the worker's ambient context.
         with (
             SetWorkflowID(workflow_id),
             SetEnqueueOptions(queue_partition_key=status.get("queue_partition_key")),
@@ -1282,9 +1282,8 @@ def execute_dequeued_workflow(
                     # Nothing awaits this task, so mark its exception retrieved (#796).
                     task.add_done_callback(retrieve_future_exception)
 
-                # Onto the event loop, blocking until the task exists: dispatching
-                # faster than the loop starts workflows would let the next poll
-                # dequeue against a local concurrency count that has not caught up.
+                # Onto the event loop. Blocks only until the task is created, so a stopped
+                # loop surfaces here; the local concurrency count lags until it acquires.
                 dbos._background_event_loop.submit_coroutine(start_workflow_task())
                 return WorkflowHandlePolling(workflow_id, dbos)
             else:

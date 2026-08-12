@@ -1648,7 +1648,7 @@ class SystemDatabase(ABC):
     def get_workflow_statuses(
         self, workflow_ids: List[str]
     ) -> List[WorkflowStatusInternal]:
-        """Fetch many statuses in one round trip, in the order requested.
+        """Fetch many statuses in one round trip per chunk, in the order requested.
 
         IDs with no row are omitted, so the result may be shorter than the input.
         """
