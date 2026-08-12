@@ -495,7 +495,7 @@ def queue_worker_thread(
                 )
                 for id in dequeued_workflows:
                     try:
-                        execute_workflow_by_id(dbos, id, False, True)
+                        execute_workflow_by_id(dbos, id)
                     except Exception as e:
                         dbos.logger.error(f"Error executing workflow {id}: {e}")
             elif queue._partition_queue:
@@ -523,7 +523,7 @@ def queue_worker_thread(
                         raise
                     for id in dequeued_workflows:
                         try:
-                            execute_workflow_by_id(dbos, id, False, True)
+                            execute_workflow_by_id(dbos, id)
                         except Exception as e:
                             dbos.logger.error(f"Error executing workflow {id}: {e}")
             else:
@@ -539,7 +539,7 @@ def queue_worker_thread(
                 )
                 for id in dequeued_workflows:
                     try:
-                        execute_workflow_by_id(dbos, id, False, True)
+                        execute_workflow_by_id(dbos, id)
                     except Exception as e:
                         dbos.logger.error(f"Error executing workflow {id}: {e}")
         except OperationalError as e:

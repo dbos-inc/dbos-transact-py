@@ -833,13 +833,11 @@ class SystemDatabase(ABC):
         *,
         max_recovery_attempts: Optional[int],
         owner_xid: Optional[str],
-        is_recovery_request: Optional[bool],
         is_dequeued_request: Optional[bool],
     ) -> tuple[WorkflowStatuses, Optional[int], bool]:
         """Insert or update workflow status using PostgreSQL upsert operations."""
         wf_status: WorkflowStatuses = status["status"]
         workflow_deadline_epoch_ms: Optional[int] = status["workflow_deadline_epoch_ms"]
-        force_execute = is_recovery_request or is_dequeued_request
         should_execute = True
         _enqueued_statuses = [
             WorkflowStatusString.ENQUEUED.value,
@@ -852,7 +850,7 @@ class SystemDatabase(ABC):
                 (
                     SystemSchema.workflow_status.c.status.notin_(_enqueued_statuses),
                     SystemSchema.workflow_status.c.recovery_attempts
-                    + (1 if force_execute else 0),
+                    + (1 if is_dequeued_request else 0),
                 ),
                 else_=SystemSchema.workflow_status.c.recovery_attempts,
             ),
@@ -985,11 +983,7 @@ class SystemDatabase(ABC):
                     status["workflow_uuid"], max_recovery_attempts
                 )
 
-            if (
-                owner_xid != row[7]
-                and not is_dequeued_request
-                and not is_recovery_request
-            ):
+            if owner_xid != row[7] and not is_dequeued_request:
                 should_execute = False
 
             status["serialization"] = row[8]
@@ -4674,7 +4668,6 @@ class SystemDatabase(ABC):
         *,
         max_recovery_attempts: Optional[int],
         owner_xid: Optional[str],
-        is_recovery_request: Optional[bool],
         is_dequeued_request: Optional[bool],
     ) -> tuple[WorkflowStatuses, Optional[int], bool]:
         """
@@ -4687,7 +4680,6 @@ class SystemDatabase(ABC):
                     conn,
                     max_recovery_attempts=max_recovery_attempts,
                     owner_xid=owner_xid,
-                    is_recovery_request=is_recovery_request,
                     is_dequeued_request=is_dequeued_request,
                 )
             )
@@ -4867,7 +4859,6 @@ class SystemDatabase(ABC):
             conn,
             max_recovery_attempts=max_recovery_attempts,
             owner_xid=owner_xid,
-            is_recovery_request=False,
             is_dequeued_request=False,
         )
 

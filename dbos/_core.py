@@ -573,7 +573,6 @@ def _init_workflow(
     workflow_deadline_epoch_ms: Optional[int],
     max_recovery_attempts: Optional[int],
     enqueue_options: Optional[EnqueueOptionsInternal],
-    is_recovery_request: Optional[bool],
     is_dequeued_request: Optional[bool],
     serialization_type: Optional[WorkflowSerializationFormat],
     child_workflow_id: Optional[str] = None,
@@ -602,7 +601,6 @@ def _init_workflow(
                 status,
                 max_recovery_attempts=max_recovery_attempts,
                 is_dequeued_request=is_dequeued_request,
-                is_recovery_request=is_recovery_request,
                 owner_xid=str(uuid.uuid4()),
             )
         )
@@ -1116,9 +1114,8 @@ async def _execute_workflow_async(
                     release_active()
 
 
-def execute_workflow_by_id(
-    dbos: "DBOS", workflow_id: str, is_recovery: bool, is_dequeue: bool
-) -> "WorkflowHandle[Any]":
+def execute_workflow_by_id(dbos: "DBOS", workflow_id: str) -> "WorkflowHandle[Any]":
+    """Run a workflow the queue has just claimed, from its persisted status."""
     status = dbos._sys_db.get_workflow_status(workflow_id)
     if not status:
         raise DBOSRecoveryError(workflow_id, "Workflow status not found")
@@ -1241,8 +1238,7 @@ def execute_workflow_by_id(
                         inputs["kwargs"],
                         queue_name=status["queue_name"],
                         execute_workflow=True,
-                        is_recovery_request=is_recovery,
-                        is_dequeued_request=is_dequeue,
+                        is_dequeued_request=True,
                     )
                 )
                 return WorkflowHandlePolling(async_handle.get_workflow_id(), dbos)
@@ -1253,8 +1249,7 @@ def execute_workflow_by_id(
                 inputs["kwargs"],
                 queue_name=status["queue_name"],
                 execute_workflow=True,
-                is_recovery=is_recovery,
-                is_dequeued=is_dequeue,
+                is_dequeued=True,
             )
 
 
@@ -1265,7 +1260,6 @@ def start_workflow(
     kwargs: dict[str, Any],
     queue_name: Optional[str] = None,
     execute_workflow: bool = True,
-    is_recovery: bool = False,
     is_dequeued: bool = False,
 ) -> "WorkflowHandle[R]":
 
@@ -1351,7 +1345,6 @@ def start_workflow(
         workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
         max_recovery_attempts=fi.max_recovery_attempts,
         enqueue_options=enqueue_options,
-        is_recovery_request=is_recovery,
         is_dequeued_request=is_dequeued,
         serialization_type=serialization_type,
         child_workflow_id=new_child_workflow_id,
@@ -1409,7 +1402,6 @@ async def start_workflow_async(
     kwargs: dict[str, Any],
     queue_name: Optional[str] = None,
     execute_workflow: bool = True,
-    is_recovery_request: bool = False,
     is_dequeued_request: bool = False,
 ) -> "WorkflowHandleAsync[R]":
     # If the function has a class, add the class object as its first argument
@@ -1493,7 +1485,6 @@ async def start_workflow_async(
         workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
         max_recovery_attempts=fi.max_recovery_attempts,
         enqueue_options=enqueue_options,
-        is_recovery_request=is_recovery_request,
         is_dequeued_request=is_dequeued_request,
         serialization_type=serialization_type,
         child_workflow_id=new_child_workflow_id,
@@ -1666,7 +1657,6 @@ def _persist_enqueue_with_options(
             # Ignored like every other options-based enqueue; the executor that runs the workflow applies its own limit.
             max_recovery_attempts=None,
             owner_xid=None,
-            is_recovery_request=False,
             is_dequeued_request=False,
         )
     except DBOSQueueDeduplicatedError as e:
@@ -1848,7 +1838,6 @@ def workflow_wrapper(
                 workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
                 max_recovery_attempts=max_recovery_attempts,
                 enqueue_options=None,
-                is_recovery_request=False,
                 is_dequeued_request=False,
                 serialization_type=fi.serialization_type,
                 child_workflow_id=child_wfid,
