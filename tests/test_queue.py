@@ -14,7 +14,9 @@ from typing import Any, List
 
 import pytest
 import sqlalchemy as sa
+from psycopg import errors
 from pydantic import BaseModel
+from sqlalchemy.exc import OperationalError
 
 from dbos import (
     DBOS,
@@ -797,6 +799,58 @@ def test_limiter(dbos: DBOS) -> None:
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_limiter_dequeue_blocks_on_peer_claim(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    """A peer mid-claim must block a rate-limited dequeue, not be skipped past.
+
+    Under skip_locked the two dequeuers claim disjoint rows, each against its own
+    pre-claim snapshot of the limiter budget, so each spends it in full.
+    """
+
+    @DBOS.workflow()
+    def noop() -> str:
+        return "done"
+
+    limit = 2
+    # A version this executor never runs, so the live queue worker leaves these rows alone.
+    parked_version = "parked-version"
+    queue = DBOS.register_queue(
+        "limiter_lock_queue",
+        limiter={"limit": limit, "period": 60},
+        priority_enabled=True,
+    )
+    # Distinct priorities so the head of the queue is deterministic.
+    ids = []
+    for priority in range(1, limit * 2 + 1):
+        with SetEnqueueOptions(priority=priority, app_version=parked_version):
+            ids.append(DBOS.enqueue_workflow(queue.name, noop).workflow_id)
+
+    ws = SystemSchema.workflow_status
+    head = (
+        sa.select(ws.c.workflow_uuid)
+        .where(ws.c.queue_name == queue.name)
+        .where(ws.c.status == WorkflowStatusString.ENQUEUED.value)
+        .order_by(ws.c.priority.asc(), ws.c.created_at.asc())
+        .limit(limit)
+        .with_for_update()
+    )
+    with dbos._sys_db.engine.begin() as peer:
+        # A peer dequeuer holding an open claim on the whole limiter budget.
+        assert [row[0] for row in peer.execute(head)] == ids[:limit]
+        with pytest.raises(OperationalError) as exc_info:
+            dbos._sys_db.start_queued_workflows(
+                queue, "test-executor", parked_version, None
+            )
+    assert isinstance(exc_info.value.orig, errors.LockNotAvailable)
+
+    # Nothing was admitted behind the peer's back.
+    for id in ids:
+        status = dbos._sys_db.get_workflow_status(id)
+        assert status is not None
+        assert status["status"] == WorkflowStatusString.ENQUEUED.value
 
 
 def test_multiple_queues(dbos: DBOS) -> None:

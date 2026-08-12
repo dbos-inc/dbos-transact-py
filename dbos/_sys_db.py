@@ -4272,7 +4272,9 @@ class SystemDatabase(ABC):
 
             # Retrieve the first max_tasks workflows in the queue.
             # Only dequeue workflows of the local version; version-less ones only when this worker runs the latest version.
-            skip_locks = queue._concurrency is None
+            # A rate limit is a global budget like concurrency: skip_locked would hand a peer
+            # disjoint rows, letting it spend the same budget against its own pre-claim snapshot.
+            skip_locks = queue._concurrency is None and queue._limiter is None
             query = (
                 sa.select(
                     SystemSchema.workflow_status.c.workflow_uuid,
@@ -4289,9 +4291,8 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.application_name, self.app_name
                     )
                 )
-                # Unless global concurrency is set, use skip_locked to only select
-                # rows that can be locked. If global concurrency is set, use no_wait
-                # to ensure all processes have a consistent view of the table.
+                # Without a global budget, use skip_locked to only select rows that can be
+                # locked. With one, use no_wait so all processes see a consistent table.
                 .with_for_update(skip_locked=skip_locks, nowait=(not skip_locks))
             )
             if queue_partition_key is not None:
