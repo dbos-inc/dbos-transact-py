@@ -52,7 +52,6 @@ from ._error import (
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
-    MaxRecoveryAttemptsExceededError,
 )
 from ._logger import dbos_logger
 from ._outcome import NoResult
@@ -831,7 +830,6 @@ class SystemDatabase(ABC):
         status: WorkflowStatusInternal,
         conn: Union[sa.Connection, Session],
         *,
-        max_recovery_attempts: Optional[int],
         owner_xid: Optional[str],
     ) -> tuple[WorkflowStatuses, Optional[int], bool]:
         """Insert or update workflow status using PostgreSQL upsert operations."""
@@ -941,14 +939,6 @@ class SystemDatabase(ABC):
                 )
             if err_msg is not None:
                 raise DBOSConflictingWorkflowError(status["workflow_uuid"], err_msg)
-
-            # Dead-lettering belongs to the dequeue path, which counts every dispatch;
-            # starting a workflow already in the DLQ just reports it. The upsert's own
-            # write rolls back with this raise.
-            if wf_status == WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value:
-                raise MaxRecoveryAttemptsExceededError(
-                    status["workflow_uuid"], max_recovery_attempts
-                )
 
             if owner_xid != m["owner_xid"]:
                 should_execute = False
@@ -4694,7 +4684,6 @@ class SystemDatabase(ABC):
         self,
         status: WorkflowStatusInternal,
         *,
-        max_recovery_attempts: Optional[int],
         owner_xid: Optional[str],
     ) -> tuple[WorkflowStatuses, Optional[int], bool]:
         """
@@ -4705,7 +4694,6 @@ class SystemDatabase(ABC):
                 self._insert_workflow_status(
                     status,
                     conn,
-                    max_recovery_attempts=max_recovery_attempts,
                     owner_xid=owner_xid,
                 )
             )
@@ -4868,7 +4856,6 @@ class SystemDatabase(ABC):
         status: WorkflowStatusInternal,
         conn: Union[sa.Connection, Session],
         *,
-        max_recovery_attempts: Optional[int] = None,
         owner_xid: Optional[str] = None,
     ) -> tuple[WorkflowStatuses, Optional[int], bool]:
         """
@@ -4883,7 +4870,6 @@ class SystemDatabase(ABC):
         return self._insert_workflow_status(
             status,
             conn,
-            max_recovery_attempts=max_recovery_attempts,
             owner_xid=owner_xid,
         )
 

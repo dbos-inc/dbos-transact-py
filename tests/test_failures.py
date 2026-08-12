@@ -23,7 +23,6 @@ from dbos._error import (
     DBOSQueueDeduplicatedError,
     DBOSUnexpectedStepError,
     DBOSWorkflowConflictIDError,
-    MaxRecoveryAttemptsExceededError,
 )
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._schemas.system_database import SystemSchema
@@ -192,8 +191,7 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
         recovered[0].get_result()
         assert recovery_count == i + 2
 
-    # Verify an additional attempt (either through recovery or through a direct call) throws a DLQ error
-    # and puts the workflow in the DLQ status.
+    # Verify an additional attempt puts the workflow in the DLQ status.
     set_workflow_status(dbos._sys_db, wfid, "PENDING")
     DBOS._recover_pending_workflows()
 
@@ -205,10 +203,11 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
         )
 
     retry_until_success(check_dlq)
+    # A direct call does not re-run the body; it awaits the row and surfaces its terminal status.
     with pytest.raises(Exception) as exc_info:
         with SetWorkflowID(wfid):
             dead_letter_workflow()
-    assert exc_info.errisinstance(MaxRecoveryAttemptsExceededError)
+    assert exc_info.errisinstance(DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded)
 
     # Resume the workflow. Verify it can recover again without error.
     resumed_handle = dbos.resume_workflow(wfid)

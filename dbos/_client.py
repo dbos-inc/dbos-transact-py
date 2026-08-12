@@ -262,7 +262,6 @@ class DBOSClient:
         workflow_id, status = self._build_enqueue_status(options, *args, **kwargs)
         self._sys_db.init_workflow(
             status,
-            max_recovery_attempts=None,
             owner_xid=None,
         )
         return workflow_id
@@ -278,7 +277,6 @@ class DBOSClient:
         self._sys_db.init_workflow_with_connection(
             status,
             conn_or_session,
-            max_recovery_attempts=None,
             owner_xid=None,
         )
         return workflow_id
@@ -300,7 +298,6 @@ class DBOSClient:
         status["is_debounced"] = True
         self._sys_db.init_workflow(
             status,
-            max_recovery_attempts=None,
             owner_xid=None,
         )
         return workflow_id

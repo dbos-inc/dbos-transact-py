@@ -596,7 +596,6 @@ def _init_workflow(
     queue: Optional[str],
     workflow_timeout_ms: Optional[int],
     workflow_deadline_epoch_ms: Optional[int],
-    max_recovery_attempts: Optional[int],
     enqueue_options: Optional[EnqueueOptionsInternal],
     serialization_type: Optional[WorkflowSerializationFormat],
     child_workflow_id: Optional[str] = None,
@@ -623,7 +622,6 @@ def _init_workflow(
         wf_status, workflow_deadline_epoch_ms, should_execute = (
             dbos._sys_db.init_workflow(
                 status,
-                max_recovery_attempts=max_recovery_attempts,
                 owner_xid=str(uuid.uuid4()),
             )
         )
@@ -1393,7 +1391,6 @@ def start_workflow(
         queue=queue_name,
         workflow_timeout_ms=workflow_timeout_ms,
         workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
-        max_recovery_attempts=fi.max_recovery_attempts,
         enqueue_options=enqueue_options,
         serialization_type=serialization_type,
         child_workflow_id=new_child_workflow_id,
@@ -1525,7 +1522,6 @@ async def start_workflow_async(
         queue=queue_name,
         workflow_timeout_ms=workflow_timeout_ms,
         workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
-        max_recovery_attempts=fi.max_recovery_attempts,
         enqueue_options=enqueue_options,
         serialization_type=serialization_type,
         child_workflow_id=new_child_workflow_id,
@@ -1695,13 +1691,9 @@ def _persist_enqueue_with_options(
     try:
         dbos._sys_db.init_workflow(
             status,
-            # Ignored like every other options-based enqueue; the executor that runs the workflow applies its own limit.
-            max_recovery_attempts=None,
             owner_xid=None,
         )
-    # Neither can ever succeed for this ID, so checkpoint the failure: an unrecorded
-    # raise would let a replay re-enqueue and succeed, diverging from the original run.
-    except (DBOSQueueDeduplicatedError, MaxRecoveryAttemptsExceededError) as e:
+    except DBOSQueueDeduplicatedError as e:
         sererr, serialization = serialize_exception(
             e,
             status["serialization"],
@@ -1878,7 +1870,6 @@ def workflow_wrapper(
                 queue=None,
                 workflow_timeout_ms=workflow_timeout_ms,
                 workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
-                max_recovery_attempts=max_recovery_attempts,
                 enqueue_options=None,
                 serialization_type=fi.serialization_type,
                 child_workflow_id=child_wfid,
