@@ -1268,6 +1268,7 @@ def execute_dequeued_workflow(
 
             func = cast("Workflow[..., Any]", wf_func.__orig_func)  # type: ignore
             if inspect.iscoroutinefunction(func):
+                # Onto the event loop
                 dbos._background_event_loop.submit_coroutine_nowait(
                     _execute_workflow_async(
                         dbos, status, func, ctx, inputs["args"], inputs["kwargs"]
@@ -1275,19 +1276,19 @@ def execute_dequeued_workflow(
                     task_set=dbos._workflow_tasks,
                 )
                 return WorkflowHandlePolling(workflow_id, dbos)
-
-            # Captured on the caller's thread, re-attached inside the executor thread.
-            future = dbos._executor.submit(
-                cast(Callable[..., Any], _execute_workflow_wthread),
-                dbos,
-                status,
-                func,
-                ctx,
-                inputs["args"],
-                inputs["kwargs"],
-                _capture_otel_context(),
-            )
-            return WorkflowHandleFuture(workflow_id, future, dbos)
+            else:
+                # Onto the thread pool
+                future = dbos._executor.submit(
+                    cast(Callable[..., Any], _execute_workflow_wthread),
+                    dbos,
+                    status,
+                    func,
+                    ctx,
+                    inputs["args"],
+                    inputs["kwargs"],
+                    _capture_otel_context(),
+                )
+                return WorkflowHandleFuture(workflow_id, future, dbos)
 
 
 def start_workflow(
