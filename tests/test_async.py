@@ -1432,10 +1432,9 @@ def test_failed_dequeued_async_workflow_leaves_no_unretrieved_future(
 ) -> None:
     """Regression test for https://github.com/dbos-inc/dbos-transact-py/issues/796
 
-    The dequeue path discards the handle start_workflow_async returns, so nothing
-    ever awaits the asyncio.shield future wrapping the workflow task. If its
-    exception goes unretrieved, asyncio logs an ERROR of its own when the future is
-    collected, on top of the error DBOS already logged: a false positive for the
+    The dequeue path discards its handle, so nothing ever awaits the workflow task.
+    If its exception goes unretrieved, asyncio logs an ERROR of its own when the task
+    is collected, on top of the error DBOS already logged: a false positive for the
     ordinary outcome of a queued workflow failing.
     """
     DBOS.register_queue("test_queue")
