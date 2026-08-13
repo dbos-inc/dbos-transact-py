@@ -21,7 +21,7 @@ from psycopg import errors
 from sqlalchemy.exc import OperationalError
 
 from dbos._context import DBOSContext, get_local_dbos_context
-from dbos._error import DBOSException
+from dbos._error import DBOSException, DBOSRecoveryError
 from dbos._logger import dbos_logger
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 
@@ -462,19 +462,22 @@ def queue_worker_thread(
 
     def start_dequeued_workflows(workflow_ids: List[str]) -> None:
         """Fetch the claimed workflows' statuses in one round trip, then dispatch each."""
-        statuses = dbos._sys_db.get_workflow_statuses(workflow_ids)
-        found = {status["workflow_uuid"] for status in statuses}
-        for missing in (id for id in workflow_ids if id not in found):
-            dbos.logger.error(
-                f"Error executing workflow {missing}: Workflow status not found"
-            )
-        for status in statuses:
+        try:
+            found = {
+                status["workflow_uuid"]: status
+                for status in dbos._sys_db.get_workflow_statuses(workflow_ids)
+            }
+        except Exception as e:
+            dbos.logger.warning(f"Error fetching dequeued workflow statuses: {e}")
+            found = {}
+        for id in workflow_ids:
             try:
+                status = found.get(id) or dbos._sys_db.get_workflow_status(id)
+                if status is None:
+                    raise DBOSRecoveryError(id, "Workflow status not found")
                 execute_dequeued_workflow(dbos, status)
             except Exception as e:
-                dbos.logger.error(
-                    f"Error executing workflow {status['workflow_uuid']}: {e}"
-                )
+                dbos.logger.error(f"Error executing workflow {id}: {e}")
 
     while not stop_event.is_set():
         # Reload database-backed queue config once per iteration so dynamic
