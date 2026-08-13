@@ -192,6 +192,8 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
         assert recovery_count == i + 2
 
     # Verify an additional attempt puts the workflow in the DLQ status.
+    completed_before_dlq = handle.get_status().completed_at
+    assert completed_before_dlq is not None
     set_workflow_status(dbos._sys_db, wfid, "PENDING")
     DBOS._recover_pending_workflows()
 
@@ -203,6 +205,9 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
         )
 
     retry_until_success(check_dlq)
+    # Terminal like ERROR/CANCELLED, so the DLQ write stamps its own completion time.
+    dlq_completed_at = handle.get_status().completed_at
+    assert dlq_completed_at is not None and dlq_completed_at > completed_before_dlq
     # A direct call does not re-run the body; it awaits the row and surfaces its terminal status.
     with pytest.raises(Exception) as exc_info:
         with SetWorkflowID(wfid):

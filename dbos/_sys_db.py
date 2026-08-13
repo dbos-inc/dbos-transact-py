@@ -960,6 +960,7 @@ class SystemDatabase(ABC):
         if not workflow_ids:
             return
         with self.engine.begin() as c:
+            now_ms = self._now_ms_sql()
             c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .where(SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids))
@@ -976,7 +977,8 @@ class SystemDatabase(ABC):
                     deduplication_id=None,
                     started_at_epoch_ms=None,
                     queue_name=None,
-                    updated_at=self._now_ms_sql(),
+                    updated_at=now_ms,
+                    completed_at=now_ms,
                 )
             )
 
