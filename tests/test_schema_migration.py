@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import click
 import pytest
 import sqlalchemy as sa
-from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 
 # Public API
 from dbos import DBOS, DBOSConfig, run_dbos_database_migrations
@@ -1455,12 +1455,14 @@ def _drop_database(db_engine: sa.Engine, database_name: str) -> None:
         )
 
 
-def _launch_expecting_failure(config: DBOSConfig) -> str:
-    """Launch DBOS, returning the initialization error it must raise."""
+def _launch_expecting_failure(
+    config: DBOSConfig, error: type[Exception] = DBOSInitializationError
+) -> str:
+    """Launch DBOS, returning the error it must raise."""
     DBOS.destroy(destroy_registry=True)
     DBOS(config=config)
     try:
-        with pytest.raises(DBOSInitializationError) as exc_info:
+        with pytest.raises(error) as exc_info:
             DBOS.launch()
         return str(exc_info.value)
     finally:
@@ -1532,17 +1534,17 @@ def test_run_migrations_false_does_not_create_database(
         .render_as_string(hide_password=False)
     )
     try:
+        # Verification does not relabel driver errors, so the missing database
+        # surfaces as the connection failure itself.
         message = _launch_expecting_failure(
             {
                 **config,
                 "system_database_url": system_database_url,
                 "run_migrations": False,
-            }
+            },
+            error=OperationalError,
         )
-        assert "Unable to connect to system database" in message
-        # The password is masked out of the error (it is "postgres" here, which
-        # also appears as the username, so assert on the mask itself).
-        assert ":***@" in message
+        assert f'database "{database_name}" does not exist' in message
 
         with db_engine.connect() as connection:
             assert (

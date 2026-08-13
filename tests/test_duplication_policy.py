@@ -1,10 +1,9 @@
 import asyncio
 import threading
 import uuid
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 import pytest
-import sqlalchemy as sa
 
 from dbos import (
     DBOS,
@@ -12,7 +11,6 @@ from dbos import (
     Debouncer,
     DebouncerClient,
     EnqueueOptions,
-    Queue,
     SetEnqueueOptions,
     SetWorkflowID,
     WorkflowHandle,
@@ -20,7 +18,7 @@ from dbos import (
 from dbos._dbos import WorkflowHandleAsync
 from dbos._error import DBOSException, DBOSQueueDeduplicatedError
 from dbos._registrations import get_dbos_func_name
-from tests.conftest import queue_entries_are_cleaned_up
+from tests.conftest import queue_entries_are_cleaned_up, set_workflow_status
 
 QUEUE_NAME = "test_duplication_policy_queue"
 
@@ -95,12 +93,12 @@ def test_return_existing_rejects_without_queue(dbos: DBOS) -> None:
     def simple_workflow() -> str:
         return "done"
 
-    # Not being enqueued: there is no queue to deduplicate on.
+    # Not being enqueued: there is no queue to deduplicate on. Set no other enqueue
+    # option, so only the policy itself can be what the error rejects.
     with pytest.raises(DBOSException) as exc_info:
-        with SetEnqueueOptions(
-            deduplication_id=str(uuid.uuid4()), duplication_policy="return-existing"
-        ):
+        with SetEnqueueOptions(duplication_policy="return-existing"):
             DBOS.start_workflow(simple_workflow)
+    assert "duplication_policy" in str(exc_info.value)
     assert "not being enqueued" in str(exc_info.value)
 
 
@@ -218,7 +216,12 @@ def test_return_existing_in_parent_workflow(dbos: DBOS) -> None:
     """
     _register_queue()
     workflow_event = threading.Event()
-    marker_step_runs = 0
+    # Released by each parent once it has attached, so the gate below only opens
+    # after both have: a parent that enqueued after the holder completed would
+    # find the deduplication ID free and start a child of its own.
+    parent_attached = threading.Semaphore(0)
+    # Appended to rather than incremented: two parents run this step concurrently.
+    marker_step_runs: List[int] = []
     dedup_id = str(uuid.uuid4())
 
     @DBOS.workflow()
@@ -228,8 +231,7 @@ def test_return_existing_in_parent_workflow(dbos: DBOS) -> None:
 
     @DBOS.step()
     def marker_step() -> str:
-        nonlocal marker_step_runs
-        marker_step_runs += 1
+        marker_step_runs.append(1)
         return "after-attach"
 
     @DBOS.workflow()
@@ -240,6 +242,7 @@ def test_return_existing_in_parent_workflow(dbos: DBOS) -> None:
             handle: WorkflowHandle[str] = DBOS.enqueue_workflow(
                 QUEUE_NAME, gated_workflow, child_input
             )
+        parent_attached.release()
         result = handle.get_result()
         marker_step()
         return result
@@ -261,18 +264,26 @@ def test_return_existing_in_parent_workflow(dbos: DBOS) -> None:
             return None
         return original(queue_name, deduplication_id)
 
+    # Parent A runs alone under the patch, so it is deterministically the one whose
+    # lookup misses and whose function IDs the assertions below cover.
     setattr(dbos._sys_db, "get_deduplicated_workflow", lookup_misses_once)
     try:
         parent_a = DBOS.start_workflow(parent_workflow, "second")
-        parent_b = DBOS.start_workflow(parent_workflow, "third")
-        workflow_event.set()
-        assert parent_a.get_result() == "first-done"
-        assert parent_b.get_result() == "first-done"
+        assert parent_attached.acquire(timeout=30)
     finally:
         setattr(dbos._sys_db, "get_deduplicated_workflow", original)
+    assert calls == 2
+
+    parent_b = DBOS.start_workflow(parent_workflow, "third")
+    assert parent_attached.acquire(timeout=30)
+
+    # Both parents are attached, so releasing the holder cannot let either start its own child.
+    workflow_event.set()
+    assert parent_a.get_result() == "first-done"
+    assert parent_b.get_result() == "first-done"
 
     assert child_handle.get_result() == "first-done"
-    assert marker_step_runs == 2
+    assert len(marker_step_runs) == 2
 
     # The attach, the awaited result, and marker_step: three operations at
     # contiguous function IDs, because the retry consumed no extra ID.
@@ -288,7 +299,7 @@ def test_return_existing_in_parent_workflow(dbos: DBOS) -> None:
         parent_a.workflow_id, marker["function_id"] + 1
     )
     assert forked.get_result() == "first-done"
-    assert marker_step_runs == 2
+    assert len(marker_step_runs) == 2
     forked_steps = DBOS.list_workflow_steps(forked.workflow_id)
     assert len(forked_steps) == 3
     assert forked_steps[0]["child_workflow_id"] == child_handle.workflow_id
@@ -332,8 +343,19 @@ def test_return_existing_recovery(dbos: DBOS) -> None:
     # The attach is checkpointed as a child, not as a deduplication error.
     assert steps[0]["error"] is None
 
+    # Let the holder finish, which releases the deduplication ID: a recovered parent
+    # that ignored its checkpoint would now win the ID and start a child of its own.
     workflow_event.set()
     assert first_handle.get_result() == "first-done"
+
+    set_workflow_status(dbos._sys_db, parent_id, "PENDING")
+    DBOS._recover_pending_workflows()
+    recovered: WorkflowHandle[str] = DBOS.retrieve_workflow(parent_id)
+    assert recovered.get_result() == first_handle.workflow_id
+    # Still one child, recorded once, pointing at the workflow it originally attached to.
+    recovered_steps = DBOS.list_workflow_steps(parent_id)
+    assert len(recovered_steps) == 1
+    assert recovered_steps[0]["child_workflow_id"] == first_handle.workflow_id
 
 
 @pytest.mark.asyncio
