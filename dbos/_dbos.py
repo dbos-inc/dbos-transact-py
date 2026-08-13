@@ -618,8 +618,14 @@ class DBOS:
                 )
 
             # Run migrations for the system and application databases
-            dbos_logger.debug("Running system database migrations")
-            self._sys_db.run_migrations()
+            if self._config.get("run_migrations", True):
+                dbos_logger.debug("Running system database migrations")
+                self._sys_db.run_migrations()
+            else:
+                # Configured not to migrate, so verify instead: this process may not
+                # be allowed to run DDL, but it still requires an up-to-date schema.
+                dbos_logger.debug("Verifying system database migrations")
+                self._sys_db.verify_migrations()
             if self._app_db:
                 dbos_logger.debug("Running application database migrations")
                 self._app_db.run_migrations()

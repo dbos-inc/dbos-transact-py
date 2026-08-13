@@ -47,6 +47,7 @@ from ._error import (
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
     DBOSConflictingWorkflowError,
     DBOSException,
+    DBOSInitializationError,
     DBOSNonExistentWorkflowError,
     DBOSQueueDeduplicatedError,
     DBOSUnexpectedStepError,
@@ -752,6 +753,33 @@ class SystemDatabase(ABC):
     def run_migrations(self) -> None:
         """Run database migrations specific to the database type."""
         pass
+
+    @abstractmethod
+    def verify_migrations(self) -> None:
+        """Check the system database is migrated to the version this build requires.
+
+        Creates and changes nothing: for a process configured with run_migrations
+        disabled, whose database role may not be allowed to run DDL at all. Raises
+        DBOSInitializationError if the database is missing or behind.
+        """
+        pass
+
+    def _assert_migration_version(
+        self, current_version: int, latest_version: int
+    ) -> None:
+        """Raise unless the recorded migration version satisfies this build's."""
+        # A database ahead of this build belongs to a newer peer, which the migration runner also tolerates.
+        if current_version < latest_version:
+            printable_url = self.engine.url.render_as_string(hide_password=True)
+            raise DBOSInitializationError(
+                f"System database {printable_url} is at schema version {current_version}, but this "
+                f"version of DBOS requires {latest_version}. This process is configured with "
+                f"run_migrations disabled, so it will not migrate it: either migrate the system "
+                f"database out of band (`dbos migrate`) or launch with run_migrations enabled."
+            )
+        dbos_logger.debug(
+            f"System database schema version {current_version} satisfies the required version {latest_version}"
+        )
 
     # Destroy the pool when finished
     def destroy(self) -> None:

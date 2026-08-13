@@ -6,9 +6,9 @@ import sqlalchemy as sa
 from sqlalchemy import event
 from sqlalchemy.exc import DBAPIError
 
-from dbos._migration import sqlite_migrations
+from dbos._migration import get_sqlite_migration_versions, sqlite_migrations
 
-from ._error import DBOSException
+from ._error import DBOSException, DBOSInitializationError
 from ._logger import dbos_logger
 from ._sys_db import SystemDatabase
 
@@ -117,6 +117,21 @@ class SQLiteSystemDatabase(SystemDatabase):
             # Empty migrations at the end still count as applied; record them in one write.
             if len(sqlite_migrations) > last_applied:
                 record_version(len(sqlite_migrations))
+
+    def verify_migrations(self) -> None:
+        """Check the system database is migrated, creating and changing nothing."""
+        # Connecting to a missing SQLite file creates it, so check the path first.
+        database_path = self.engine.url.database
+        if database_path is not None and database_path != ":memory:":
+            if not os.path.exists(database_path):
+                raise DBOSInitializationError(
+                    f"System database file {database_path} does not exist. This process is "
+                    f"configured with run_migrations disabled, so it will not create it: either "
+                    f"create and migrate the system database out of band (`dbos migrate`) or "
+                    f"launch with run_migrations enabled."
+                )
+        current_version, latest_version = get_sqlite_migration_versions(self.engine)
+        self._assert_migration_version(current_version, latest_version)
 
     def _cleanup_connections(self) -> None:
         # SQLite doesn't require special connection cleanup

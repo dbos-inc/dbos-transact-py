@@ -12,9 +12,10 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 
 # Public API
 from dbos import DBOS, DBOSConfig, run_dbos_database_migrations
-from dbos._migration import get_dbos_migrations, should_migrate, sqlite_migrations
 
 # Private API because this is a unit test
+from dbos._error import DBOSInitializationError
+from dbos._migration import get_dbos_migrations, should_migrate, sqlite_migrations
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
@@ -1429,3 +1430,215 @@ def test_migrate_print_migrations_without_database_url(
     )
     assert result.returncode != 0
     assert "Missing database URL" in result.stderr
+
+
+def _create_unmigrated_database(db_engine: sa.Engine, database_name: str) -> str:
+    """An empty database with no DBOS schema, and the URL to reach it."""
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(
+            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+        )
+        connection.execute(sa.text(f"CREATE DATABASE {database_name}"))
+    return (
+        db_engine.url.set(database=database_name)
+        .set(drivername="postgresql+psycopg")
+        .render_as_string(hide_password=False)
+    )
+
+
+def _drop_database(db_engine: sa.Engine, database_name: str) -> None:
+    with db_engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(
+            sa.text(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+        )
+
+
+def _launch_expecting_failure(config: DBOSConfig) -> str:
+    """Launch DBOS, returning the initialization error it must raise."""
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+    try:
+        with pytest.raises(DBOSInitializationError) as exc_info:
+            DBOS.launch()
+        return str(exc_info.value)
+    finally:
+        DBOS.destroy(destroy_registry=True)
+
+
+def test_run_migrations_false_launches_migrated_database(
+    dbos: DBOS, config: DBOSConfig
+) -> None:
+    """A system database the fixture already migrated launches with migrations off."""
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config={**config, "run_migrations": False})
+
+    @DBOS.workflow()
+    def workflow() -> str:
+        return "migrated"
+
+    DBOS.launch()
+    assert workflow() == "migrated"
+
+
+def test_run_migrations_false_rejects_unmigrated_database(
+    dbos: DBOS, config: DBOSConfig, db_engine: sa.Engine, skip_with_sqlite: None
+) -> None:
+    """A database with no DBOS schema is at version 0, so launch must fail."""
+    database_name = "dbostestpy_unmigrated_sys"
+    system_database_url = _create_unmigrated_database(db_engine, database_name)
+    try:
+        latest_version = len(get_dbos_migrations("dbos", True))
+        message = _launch_expecting_failure(
+            {
+                **config,
+                "system_database_url": system_database_url,
+                "run_migrations": False,
+            }
+        )
+        assert (
+            f"is at schema version 0, but this version of DBOS requires {latest_version}"
+            in message
+        )
+
+        # Verifying must not have migrated it on the way past.
+        engine = sa.create_engine(system_database_url)
+        try:
+            with engine.connect() as connection:
+                assert (
+                    connection.execute(
+                        sa.text(
+                            "SELECT 1 FROM information_schema.schemata WHERE schema_name = 'dbos'"
+                        )
+                    ).fetchone()
+                    is None
+                )
+        finally:
+            engine.dispose()
+    finally:
+        _drop_database(db_engine, database_name)
+
+
+def test_run_migrations_false_does_not_create_database(
+    dbos: DBOS, config: DBOSConfig, db_engine: sa.Engine, skip_with_sqlite: None
+) -> None:
+    """A missing system database must fail launch rather than be created."""
+    database_name = "dbostestpy_missing_sys"
+    _drop_database(db_engine, database_name)
+    system_database_url = (
+        db_engine.url.set(database=database_name)
+        .set(drivername="postgresql+psycopg")
+        .render_as_string(hide_password=False)
+    )
+    try:
+        message = _launch_expecting_failure(
+            {
+                **config,
+                "system_database_url": system_database_url,
+                "run_migrations": False,
+            }
+        )
+        assert "Unable to connect to system database" in message
+        # The password is masked out of the error (it is "postgres" here, which
+        # also appears as the username, so assert on the mask itself).
+        assert ":***@" in message
+
+        with db_engine.connect() as connection:
+            assert (
+                connection.execute(
+                    sa.text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                    {"name": database_name},
+                ).fetchone()
+                is None
+            )
+    finally:
+        _drop_database(db_engine, database_name)
+
+
+def test_run_migrations_false_version_comparison(
+    dbos: DBOS, config: DBOSConfig, db_engine: sa.Engine, skip_with_sqlite: None
+) -> None:
+    """A database behind this build fails launch; one ahead of it is tolerated."""
+    database_name = "dbostestpy_versioned_sys"
+    system_database_url = _create_unmigrated_database(db_engine, database_name)
+    disabled_config: DBOSConfig = {
+        **config,
+        "system_database_url": system_database_url,
+        "run_migrations": False,
+    }
+    try:
+        run_dbos_database_migrations(system_database_url)
+        latest_version = len(get_dbos_migrations("dbos", True))
+        engine = sa.create_engine(system_database_url)
+
+        def set_version(version: int) -> None:
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text('UPDATE "dbos".dbos_migrations SET version = :v'),
+                    {"v": version},
+                )
+
+        try:
+            set_version(latest_version - 1)
+            message = _launch_expecting_failure(disabled_config)
+            assert (
+                f"is at schema version {latest_version - 1}, but this version of DBOS "
+                f"requires {latest_version}" in message
+            )
+
+            # A database ahead of this build belongs to a newer peer, which is tolerated.
+            set_version(latest_version + 1)
+            DBOS.destroy(destroy_registry=True)
+            DBOS(config=disabled_config)
+            DBOS.launch()
+        finally:
+            engine.dispose()
+    finally:
+        DBOS.destroy(destroy_registry=True)
+        _drop_database(db_engine, database_name)
+
+
+def test_sqlite_verify_migrations(tmp_path: pathlib.Path) -> None:
+    """SQLite verification reports a missing file, an unmigrated one, and a migrated one."""
+    missing_path = tmp_path / "missing.sqlite"
+    missing_db = SystemDatabase.create(
+        system_database_url=f"sqlite:///{missing_path}",
+        engine_kwargs={},
+        engine=None,
+        schema=None,
+        executor_id=None,
+        serializer=DefaultSerializer(),
+    )
+    try:
+        with pytest.raises(DBOSInitializationError) as exc_info:
+            missing_db.verify_migrations()
+        assert "does not exist" in str(exc_info.value)
+        # Verifying must not have created the file.
+        assert not missing_path.exists()
+    finally:
+        missing_db.destroy()
+
+    empty_path = tmp_path / "empty.sqlite"
+    empty_path.touch()
+    sys_db = SystemDatabase.create(
+        system_database_url=f"sqlite:///{empty_path}",
+        engine_kwargs={},
+        engine=None,
+        schema=None,
+        executor_id=None,
+        serializer=DefaultSerializer(),
+    )
+    try:
+        with pytest.raises(DBOSInitializationError) as exc_info:
+            sys_db.verify_migrations()
+        assert (
+            f"is at schema version 0, but this version of DBOS requires "
+            f"{len(sqlite_migrations)}" in str(exc_info.value)
+        )
+
+        # Once migrated, verification passes.
+        sys_db.run_migrations()
+        sys_db.verify_migrations()
+    finally:
+        sys_db.destroy()

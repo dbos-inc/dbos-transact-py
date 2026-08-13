@@ -6,8 +6,14 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import DBAPIError
 
-from dbos._migration import ensure_dbos_schema, run_dbos_migrations, should_migrate
+from dbos._migration import (
+    ensure_dbos_schema,
+    get_migration_versions,
+    run_dbos_migrations,
+    should_migrate,
+)
 
+from ._error import DBOSInitializationError
 from ._logger import dbos_logger
 from ._schemas.system_database import SystemSchema
 from ._sys_db import (
@@ -102,6 +108,24 @@ class PostgresSystemDatabase(SystemDatabase):
                         sa.text("SELECT pg_advisory_unlock(:lock_id)"),
                         {"lock_id": MIGRATION_LOCK_ID},
                     )
+
+    def verify_migrations(self) -> None:
+        """Check the system database is migrated, creating and changing nothing."""
+        assert self.schema
+        printable_url = self.engine.url.render_as_string(hide_password=True)
+        try:
+            # Never creates the database, so a missing one surfaces here as a connection error.
+            current_version, latest_version = get_migration_versions(
+                self.engine, self.schema, self.use_listen_notify
+            )
+        except Exception as e:
+            raise DBOSInitializationError(
+                f"Unable to connect to system database {printable_url}: {e}. This process is "
+                f"configured with run_migrations disabled, so it will not create it: either "
+                f"create and migrate the system database out of band (`dbos migrate`) or "
+                f"launch with run_migrations enabled."
+            ) from e
+        self._assert_migration_version(current_version, latest_version)
 
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""
