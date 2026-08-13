@@ -1,25 +1,12 @@
 import uuid
 from concurrent.futures import ThreadPoolExecutor, wait
 from time import sleep
-from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.exc import OperationalError
 
 from dbos import DBOS, SetWorkflowID
-from dbos._core import execute_dequeued_workflow
 from dbos._debug_trigger import DebugAction, DebugTriggers
-from tests.conftest import set_workflow_status
-
-if TYPE_CHECKING:
-    from dbos._dbos import WorkflowHandle
-
-
-def reexecute_workflow_by_id(dbos: DBOS, wfid: str) -> "WorkflowHandle[Any]":
-    """Dispatch a workflow off its persisted row, exactly as a queue claim does."""
-    set_workflow_status(dbos._sys_db, wfid, "PENDING")
-    status = dbos._sys_db.get_workflow_status(wfid)
-    assert status is not None
-    return execute_dequeued_workflow(dbos, status)
+from tests.conftest import reexecute_workflow_by_id, set_workflow_status
 
 
 def test_simple_workflow(dbos: DBOS) -> None:

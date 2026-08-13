@@ -7,7 +7,16 @@ import sys
 import threading
 import time
 import traceback
-from typing import Any, Callable, Generator, Optional, Tuple, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Generator,
+    Optional,
+    Tuple,
+    TypeVar,
+    cast,
+)
 
 T = TypeVar("T")
 from pathlib import Path
@@ -26,9 +35,13 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from dbos import DBOS, DBOSClient, DBOSConfig, run_dbos_database_migrations
+from dbos._core import execute_dequeued_workflow
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 from dbos._sys_db_postgres import PostgresSystemDatabase
+
+if TYPE_CHECKING:
+    from dbos._dbos import WorkflowHandle
 
 
 @pytest.fixture(scope="session")
@@ -376,6 +389,14 @@ def set_workflow_status(sys_db: SystemDatabase, workflow_id: str, status: str) -
             .values({"status": status})
             .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
         )
+
+
+def reexecute_workflow_by_id(dbos: DBOS, wfid: str) -> "WorkflowHandle[Any]":
+    """Dispatch a workflow off its persisted row, exactly as a queue claim does."""
+    set_workflow_status(dbos._sys_db, wfid, "PENDING")
+    status = dbos._sys_db.get_workflow_status(wfid)
+    assert status is not None
+    return execute_dequeued_workflow(dbos, status)
 
 
 def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:

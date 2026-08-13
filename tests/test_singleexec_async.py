@@ -8,7 +8,7 @@ from sqlalchemy.exc import OperationalError
 
 from dbos import DBOS, SetWorkflowID
 from dbos._debug_trigger import DebugAction, DebugTriggers
-from tests.conftest import set_workflow_status
+from tests.conftest import reexecute_workflow_by_id, set_workflow_status
 
 
 @pytest.mark.asyncio
@@ -68,6 +68,11 @@ async def test_simple_workflow(dbos: DBOS) -> None:
         set_workflow_status(dbos._sys_db, wfid, "PENDING")
         for handle in DBOS._recover_pending_workflows():
             handle.get_result()
+        # Two dequeue dispatches of one ID race: only the active-workflow guard stops a double run.
+        wfh1r = reexecute_workflow_by_id(dbos, wfid)
+        wfh2r = reexecute_workflow_by_id(dbos, wfid)
+        wfh1r.get_result()
+        wfh2r.get_result()
 
     await asyncio.to_thread(recover_in_thread)
 
