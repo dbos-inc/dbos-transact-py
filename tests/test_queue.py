@@ -3406,7 +3406,11 @@ def test_wait_first_queue(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_delay(dbos: DBOS, client: DBOSClient) -> None:
+def test_delay(
+    dbos: DBOS, client: DBOSClient, skip_with_sqlite_imprecise_time: None
+) -> None:
+    # dequeued_at is database-stamped and delay_until_epoch_ms is not, so the
+    # assertions below need the two clocks at the same resolution.
     DBOS.register_queue("test_delay_queue", polling_interval_sec=0.1)
 
     @DBOS.workflow()
