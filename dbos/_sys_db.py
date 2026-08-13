@@ -948,11 +948,14 @@ class SystemDatabase(ABC):
         return wf_status, workflow_deadline_epoch_ms, should_execute
 
     @db_retry()
-    def dead_letter_workflows(self, workflow_ids: List[str]) -> None:
+    def dead_letter_workflows(
+        self, workflow_ids: List[str], *, min_recovery_attempts: int
+    ) -> None:
         """Move claimed workflows that exhausted their attempts off the queue.
 
-        Guarded on PENDING like every other claim-owning write: a row someone
-        else has already moved on is left alone.
+        Guarded on PENDING like every other claim-owning write, and on the attempt
+        count the decision was read from: a row someone else has already moved on,
+        or given a fresh budget by resume, is left alone.
         """
         if not workflow_ids:
             return
@@ -963,6 +966,10 @@ class SystemDatabase(ABC):
                 .where(
                     SystemSchema.workflow_status.c.status
                     == WorkflowStatusString.PENDING.value
+                )
+                .where(
+                    SystemSchema.workflow_status.c.recovery_attempts
+                    >= min_recovery_attempts
                 )
                 .values(
                     status=WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value,

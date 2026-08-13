@@ -1179,7 +1179,9 @@ def execute_dequeued_workflow(
         and recovery_attempts is not None
         and recovery_attempts > fi.max_recovery_attempts + 1
     ):
-        dbos._sys_db.dead_letter_workflows([workflow_id])
+        dbos._sys_db.dead_letter_workflows(
+            [workflow_id], min_recovery_attempts=recovery_attempts
+        )
         raise MaxRecoveryAttemptsExceededError(workflow_id, fi.max_recovery_attempts)
     # Type-coerce arguments whose type is lost to portable JSON serialization.
     using_portable_serialization = status[
