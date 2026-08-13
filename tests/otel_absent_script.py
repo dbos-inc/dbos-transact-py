@@ -57,7 +57,7 @@ def main() -> None:
     # The executor path: start_workflow captures the caller's otel context.
     assert DBOS.start_workflow(a_workflow).get_result() == "stepped"
 
-    # The dequeue path: execute_workflow_by_id reads the carrier out of the status.
+    # The dequeue path: execute_dequeued_workflow reads the carrier out of the status.
     assert queue.enqueue(a_workflow).get_result() == "stepped"
 
     # A carrier written by another process that *does* have opentelemetry installed.

@@ -1484,7 +1484,8 @@ def test_sleep_timing_unchanged_on_replay(dbos: DBOS) -> None:
 
     # Without the PENDING reset the body is short-circuited and never re-runs.
     set_workflow_status(dbos._sys_db, wfid, "PENDING")
-    dbos._execute_workflow_id(wfid).get_result()
+    DBOS._recover_pending_workflows()
+    DBOS.retrieve_workflow(wfid).get_result()
     assert len(runs) == 2
 
     after = _only_step(DBOS.list_workflow_steps(wfid), "DBOS.sleep")

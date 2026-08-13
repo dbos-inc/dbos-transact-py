@@ -2,7 +2,16 @@ import asyncio
 import copy
 import random
 import threading
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Literal, Optional, TypedDict
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Coroutine,
+    List,
+    Literal,
+    Optional,
+    TypedDict,
+)
 
 QueueConflictResolution = Literal[
     "update_if_latest_version", "always_update", "never_update"
@@ -12,11 +21,11 @@ from psycopg import errors
 from sqlalchemy.exc import OperationalError
 
 from dbos._context import DBOSContext, get_local_dbos_context
-from dbos._error import DBOSException
+from dbos._error import DBOSException, DBOSRecoveryError
 from dbos._logger import dbos_logger
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 
-from ._core import P, R, execute_workflow_by_id, start_workflow, start_workflow_async
+from ._core import P, R, execute_dequeued_workflow, start_workflow, start_workflow_async
 
 if TYPE_CHECKING:
     from ._dbos import DBOS, WorkflowHandle, WorkflowHandleAsync
@@ -451,6 +460,25 @@ def queue_worker_thread(
     polling_interval = queue._polling_interval_sec
     max_polling_interval = max(queue._polling_interval_sec, 120.0)
 
+    def start_dequeued_workflows(workflow_ids: List[str]) -> None:
+        """Fetch the claimed workflows' statuses in one round trip, then dispatch each."""
+        try:
+            found = {
+                status["workflow_uuid"]: status
+                for status in dbos._sys_db.get_workflow_statuses(workflow_ids)
+            }
+        except Exception as e:
+            dbos.logger.warning(f"Error fetching dequeued workflow statuses: {e}")
+            found = {}
+        for id in workflow_ids:
+            try:
+                status = found.get(id) or dbos._sys_db.get_workflow_status(id)
+                if status is None:
+                    raise DBOSRecoveryError(id, "Workflow status not found")
+                execute_dequeued_workflow(dbos, status)
+            except Exception as e:
+                dbos.logger.error(f"Error executing workflow {id}: {e}")
+
     while not stop_event.is_set():
         # Reload database-backed queue config once per iteration so dynamic
         # changes (concurrency, polling interval, etc.) take effect without
@@ -493,11 +521,7 @@ def queue_worker_thread(
                     GlobalParams.executor_id,
                     GlobalParams.app_version,
                 )
-                for id in dequeued_workflows:
-                    try:
-                        execute_workflow_by_id(dbos, id, False, True)
-                    except Exception as e:
-                        dbos.logger.error(f"Error executing workflow {id}: {e}")
+                start_dequeued_workflows(dequeued_workflows)
             elif queue._partition_queue:
                 # Every other partitioned config sweeps one partition at a time.
                 queue_partition_keys = dbos._sys_db.get_queue_partitions(queue.name)
@@ -521,11 +545,7 @@ def queue_worker_thread(
                         ):
                             continue
                         raise
-                    for id in dequeued_workflows:
-                        try:
-                            execute_workflow_by_id(dbos, id, False, True)
-                        except Exception as e:
-                            dbos.logger.error(f"Error executing workflow {id}: {e}")
+                    start_dequeued_workflows(dequeued_workflows)
             else:
                 local_running_count = dbos._active_workflows_set.count_for_queue(
                     queue.name, None
@@ -537,11 +557,7 @@ def queue_worker_thread(
                     None,
                     local_running_count,
                 )
-                for id in dequeued_workflows:
-                    try:
-                        execute_workflow_by_id(dbos, id, False, True)
-                    except Exception as e:
-                        dbos.logger.error(f"Error executing workflow {id}: {e}")
+                start_dequeued_workflows(dequeued_workflows)
         except OperationalError as e:
             if isinstance(e.orig, errors.LockNotAvailable):
                 # Another worker is dequeueing this queue right now; retry next

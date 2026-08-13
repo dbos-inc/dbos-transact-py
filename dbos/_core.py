@@ -65,7 +65,9 @@ from ._error import (
     DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
     DBOSWorkflowFunctionNotFoundError,
+    MaxRecoveryAttemptsExceededError,
 )
+from ._event_loop import retrieve_future_exception
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSFuncInfo,
@@ -560,6 +562,29 @@ def _assemble_workflow_status(
     return status
 
 
+def _schedule_workflow_timeout(
+    dbos: "DBOS", wfid: str, workflow_deadline_epoch_ms: Optional[int]
+) -> None:
+    """Cancel wfid once its deadline passes. A None deadline is a no-op."""
+    if workflow_deadline_epoch_ms is None:
+        return
+    deadline_ms = workflow_deadline_epoch_ms
+
+    async def timeout_func() -> None:
+        try:
+            time_to_wait_sec = (deadline_ms - (time.time() * 1000)) / 1000
+            if time_to_wait_sec > 0:
+                await asyncio.sleep(time_to_wait_sec)
+
+            await asyncio.to_thread(dbos._sys_db.cancel_workflows, [wfid])
+        except Exception as e:
+            dbos.logger.warning(f"Exception in timeout task for workflow {wfid}: {e}")
+
+    dbos._background_event_loop.submit_coroutine_nowait(
+        timeout_func(), task_set=dbos._timeout_tasks
+    )
+
+
 def _init_workflow(
     dbos: "DBOS",
     ctx: DBOSContext,
@@ -571,10 +596,7 @@ def _init_workflow(
     queue: Optional[str],
     workflow_timeout_ms: Optional[int],
     workflow_deadline_epoch_ms: Optional[int],
-    max_recovery_attempts: Optional[int],
     enqueue_options: Optional[EnqueueOptionsInternal],
-    is_recovery_request: Optional[bool],
-    is_dequeued_request: Optional[bool],
     serialization_type: Optional[WorkflowSerializationFormat],
     child_workflow_id: Optional[str] = None,
     child_start_time_ms: Optional[int] = None,
@@ -600,9 +622,6 @@ def _init_workflow(
         wf_status, workflow_deadline_epoch_ms, should_execute = (
             dbos._sys_db.init_workflow(
                 status,
-                max_recovery_attempts=max_recovery_attempts,
-                is_dequeued_request=is_dequeued_request,
-                is_recovery_request=is_recovery_request,
                 owner_xid=str(uuid.uuid4()),
             )
         )
@@ -629,25 +648,8 @@ def _init_workflow(
             dbos._sys_db.record_operation_result(result)
         raise
 
-    if should_execute and workflow_deadline_epoch_ms is not None:
-
-        async def timeout_func() -> None:
-            try:
-                time_to_wait_sec = (
-                    workflow_deadline_epoch_ms - (time.time() * 1000)
-                ) / 1000
-                if time_to_wait_sec > 0:
-                    await asyncio.sleep(time_to_wait_sec)
-
-                await asyncio.to_thread(dbos._sys_db.cancel_workflows, [wfid])
-            except Exception as e:
-                dbos.logger.warning(
-                    f"Exception in timeout task for workflow {wfid}: {e}"
-                )
-
-        dbos._background_event_loop.submit_coroutine_nowait(
-            timeout_func(), task_set=dbos._timeout_tasks
-        )
+    if should_execute:
+        _schedule_workflow_timeout(dbos, wfid, workflow_deadline_epoch_ms)
 
     ctx.workflow_deadline_epoch_ms = workflow_deadline_epoch_ms
     status["workflow_deadline_epoch_ms"] = workflow_deadline_epoch_ms
@@ -1037,8 +1039,9 @@ def _execute_workflow_wthread(
                     )
                     return output
             except Exception as e:
+                # This path runs on the executor thread pool, not the event loop.
                 dbos.logger.error(
-                    f"Exception encountered in asynchronous workflow:", exc_info=e
+                    f"Exception encountered in background workflow:", exc_info=e
                 )
                 raise
             finally:
@@ -1116,12 +1119,16 @@ async def _execute_workflow_async(
                     release_active()
 
 
-def execute_workflow_by_id(
-    dbos: "DBOS", workflow_id: str, is_recovery: bool, is_dequeue: bool
+def execute_dequeued_workflow(
+    dbos: "DBOS", status: WorkflowStatusInternal
 ) -> "WorkflowHandle[Any]":
-    status = dbos._sys_db.get_workflow_status(workflow_id)
-    if not status:
-        raise DBOSRecoveryError(workflow_id, "Workflow status not found")
+    """Run a workflow the queue has just claimed, from its persisted status.
+
+    Deliberately skips _init_workflow: the claim already wrote everything it would
+    (PENDING, executor, deadline, recovery_attempts) and this status was read back
+    from that row, so re-upserting it only rewrites the columns it just read.
+    """
+    workflow_id = status["workflow_uuid"]
     if not workflow_id.strip():
         # Empty or whitespace workflow IDs are not allowed
         recovery_error = DBOSRecoveryError(
@@ -1163,6 +1170,19 @@ def execute_workflow_by_id(
             "<NONE>",
             f"{wf_func.__name__} is not a registered workflow function",
         )
+    # The claim counted this dispatch; dead-letter the workflow if that exhausted its attempts.
+    recovery_attempts = status["recovery_attempts"]
+    if (
+        status["status"]
+        not in (WorkflowStatusString.SUCCESS.value, WorkflowStatusString.ERROR.value)
+        and fi.max_recovery_attempts is not None
+        and recovery_attempts is not None
+        and recovery_attempts > fi.max_recovery_attempts + 1
+    ):
+        dbos._sys_db.dead_letter_workflows(
+            [workflow_id], min_recovery_attempts=recovery_attempts
+        )
+        raise MaxRecoveryAttemptsExceededError(workflow_id, fi.max_recovery_attempts)
     # Type-coerce arguments whose type is lost to portable JSON serialization.
     using_portable_serialization = status[
         "serialization"
@@ -1219,7 +1239,7 @@ def execute_workflow_by_id(
             if fi.func_type != DBOSFuncType.Static:
                 inputs["args"] = (class_object,) + inputs["args"]
 
-        # Propagate the workflow's partition key and trace carrier from its persisted status.
+        # Restore the claimed row's ID and trace carrier onto the worker's ambient context.
         with (
             SetWorkflowID(workflow_id),
             SetEnqueueOptions(queue_partition_key=status.get("queue_partition_key")),
@@ -1227,35 +1247,60 @@ def execute_workflow_by_id(
                 otel_carrier_from_attributes(status.get("attributes"))
             ),
         ):
-            if inspect.iscoroutinefunction(wf_func):
-                ctx = get_local_dbos_context()
-                parent_ctx_copy = copy.copy(ctx)
-                child_ctx = DBOSContext.create_start_workflow_child(ctx)
-                async_handle = dbos._background_event_loop.submit_coroutine(
-                    start_workflow_async(
-                        dbos,
-                        parent_ctx_copy,
-                        child_ctx,
-                        wf_func,
-                        inputs["args"],
-                        inputs["kwargs"],
-                        queue_name=status["queue_name"],
-                        execute_workflow=True,
-                        is_recovery_request=is_recovery,
-                        is_dequeued_request=is_dequeue,
-                    )
-                )
-                return WorkflowHandlePolling(async_handle.get_workflow_id(), dbos)
-            return start_workflow(
-                dbos,
-                wf_func,
-                inputs["args"],
-                inputs["kwargs"],
-                queue_name=status["queue_name"],
-                execute_workflow=True,
-                is_recovery=is_recovery,
-                is_dequeued=is_dequeue,
+            # Only a PENDING row can own its outcome, so a row moved on since the claim would run for nothing.
+            if status["status"] != WorkflowStatusString.PENDING.value:
+                return WorkflowHandlePolling(workflow_id, dbos)
+
+            # Same context start_workflow builds: create_start_workflow_child consumes the
+            # ambient SetWorkflowID, so the run adopts the claimed row's ID.
+            ctx = DBOSContext.create_start_workflow_child(get_local_dbos_context())
+            # Consume the restored carrier so workflows started inside this one do not inherit it.
+            ctx.workflow_attributes = None
+            ctx.otel_carrier = None
+            # The row is authoritative: a workflow enqueued under another serializer must replay under it.
+            serialization_type = (
+                fi.serialization_type or WorkflowSerializationFormat.DEFAULT
             )
+            if status["serialization"] == DBOSPortableJSON.name():
+                serialization_type = WorkflowSerializationFormat.PORTABLE
+            ctx.serialization_type = serialization_type
+            ctx.workflow_deadline_epoch_ms = status["workflow_deadline_epoch_ms"]
+            _schedule_workflow_timeout(
+                dbos, workflow_id, status["workflow_deadline_epoch_ms"]
+            )
+
+            func = cast("Workflow[..., Any]", wf_func.__orig_func)  # type: ignore
+            if inspect.iscoroutinefunction(func):
+
+                async def start_workflow_task() -> None:
+                    task = asyncio.create_task(
+                        _execute_workflow_async(
+                            dbos, status, func, ctx, inputs["args"], inputs["kwargs"]
+                        )
+                    )
+                    # The loop keeps only weak references to tasks, and the dequeue path keeps no handle (#710).
+                    dbos._workflow_tasks.add(task)
+                    task.add_done_callback(dbos._workflow_tasks.discard)
+                    # Nothing awaits this task, so mark its exception retrieved (#796).
+                    task.add_done_callback(retrieve_future_exception)
+
+                # Onto the event loop. Blocks only until the task is created, so a stopped
+                # loop surfaces here; the local concurrency count lags until it acquires.
+                dbos._background_event_loop.submit_coroutine(start_workflow_task())
+                return WorkflowHandlePolling(workflow_id, dbos)
+            else:
+                # Onto the thread pool
+                future = dbos._executor.submit(
+                    cast(Callable[..., Any], _execute_workflow_wthread),
+                    dbos,
+                    status,
+                    func,
+                    ctx,
+                    inputs["args"],
+                    inputs["kwargs"],
+                    _capture_otel_context(),
+                )
+                return WorkflowHandleFuture(workflow_id, future, dbos)
 
 
 def start_workflow(
@@ -1265,8 +1310,6 @@ def start_workflow(
     kwargs: dict[str, Any],
     queue_name: Optional[str] = None,
     execute_workflow: bool = True,
-    is_recovery: bool = False,
-    is_dequeued: bool = False,
 ) -> "WorkflowHandle[R]":
 
     # If the function has a class, add the class object as its first argument
@@ -1349,10 +1392,7 @@ def start_workflow(
         queue=queue_name,
         workflow_timeout_ms=workflow_timeout_ms,
         workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
-        max_recovery_attempts=fi.max_recovery_attempts,
         enqueue_options=enqueue_options,
-        is_recovery_request=is_recovery,
-        is_dequeued_request=is_dequeued,
         serialization_type=serialization_type,
         child_workflow_id=new_child_workflow_id,
         child_start_time_ms=child_start_time,
@@ -1394,12 +1434,6 @@ def start_workflow(
     return WorkflowHandleFuture(new_child_workflow_id, future, dbos)
 
 
-def _retrieve_future_exception(future: "asyncio.Future[Any]") -> None:
-    """Mark a future's exception as retrieved so asyncio does not report it at GC."""
-    if not future.cancelled():
-        future.exception()
-
-
 async def start_workflow_async(
     dbos: "DBOS",
     local_ctx: Optional[DBOSContext],
@@ -1409,8 +1443,6 @@ async def start_workflow_async(
     kwargs: dict[str, Any],
     queue_name: Optional[str] = None,
     execute_workflow: bool = True,
-    is_recovery_request: bool = False,
-    is_dequeued_request: bool = False,
 ) -> "WorkflowHandleAsync[R]":
     # If the function has a class, add the class object as its first argument
     fself: Optional[object] = None
@@ -1491,10 +1523,7 @@ async def start_workflow_async(
         queue=queue_name,
         workflow_timeout_ms=workflow_timeout_ms,
         workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
-        max_recovery_attempts=fi.max_recovery_attempts,
         enqueue_options=enqueue_options,
-        is_recovery_request=is_recovery_request,
-        is_dequeued_request=is_dequeued_request,
         serialization_type=serialization_type,
         child_workflow_id=new_child_workflow_id,
         child_start_time_ms=child_start_time,
@@ -1528,7 +1557,7 @@ async def start_workflow_async(
     inner_task = asyncio.create_task(coro)
     # Hold a strong reference to the workflow task until it completes: the
     # event loop only keeps weak references to tasks, and callers (notably
-    # execute_workflow_by_id on the dequeue path) may discard the returned
+    # execute_dequeued_workflow on the dequeue path) may discard the returned
     # handle. Without this, a cyclic GC pass can destroy the pending task
     # mid-execution, killing the workflow with GeneratorExit (#710).
     dbos._workflow_tasks.add(inner_task)
@@ -1536,7 +1565,7 @@ async def start_workflow_async(
     # Shield the workflow task from cancellation
     task = asyncio.shield(inner_task)
     # Nothing awaits this future when dequeue/recovery callers discard the handle (#796)
-    task.add_done_callback(_retrieve_future_exception)
+    task.add_done_callback(retrieve_future_exception)
     return WorkflowHandleAsyncTask(new_child_workflow_id, task, dbos)
 
 
@@ -1663,11 +1692,7 @@ def _persist_enqueue_with_options(
     try:
         dbos._sys_db.init_workflow(
             status,
-            # Ignored like every other options-based enqueue; the executor that runs the workflow applies its own limit.
-            max_recovery_attempts=None,
             owner_xid=None,
-            is_recovery_request=False,
-            is_dequeued_request=False,
         )
     except DBOSQueueDeduplicatedError as e:
         sererr, serialization = serialize_exception(
@@ -1846,10 +1871,7 @@ def workflow_wrapper(
                 queue=None,
                 workflow_timeout_ms=workflow_timeout_ms,
                 workflow_deadline_epoch_ms=workflow_deadline_epoch_ms,
-                max_recovery_attempts=max_recovery_attempts,
                 enqueue_options=None,
-                is_recovery_request=False,
-                is_dequeued_request=False,
                 serialization_type=fi.serialization_type,
                 child_workflow_id=child_wfid,
                 child_start_time_ms=child_start_time,

@@ -74,7 +74,8 @@ def test_debouncer(dbos: DBOS) -> None:
 
     # Rerun the workflow, verify it looks up by name and still works
     set_workflow_status(dbos._sys_db, wfid, "PENDING")
-    dbos._execute_workflow_id(wfid).get_result()
+    DBOS._recover_pending_workflows()
+    DBOS.retrieve_workflow(wfid).get_result()
 
 
 def test_debouncer_timeout(dbos: DBOS) -> None:

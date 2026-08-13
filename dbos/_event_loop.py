@@ -5,6 +5,12 @@ from typing import Any, Coroutine, Optional, TypeVar
 from ._logger import dbos_logger
 
 
+def retrieve_future_exception(future: "asyncio.Future[Any]") -> None:
+    """Mark a future's exception as retrieved so asyncio does not report it at GC."""
+    if not future.cancelled():
+        future.exception()
+
+
 class BackgroundEventLoop:
     """
     This is the event loop to which DBOS submits any coroutines that are not started from within an event loop.
@@ -120,15 +126,19 @@ class BackgroundEventLoop:
     ) -> None:
         """Submit a coroutine to the background event loop without waiting.
 
+        Nothing can await the result, so the task's exception is marked retrieved to
+        keep asyncio from reporting it at GC. Callers that care must log it themselves.
         If task_set is provided, the created task is added to it and
         automatically removed when the task completes.
         """
         loop = self.target_loop()
         if loop is None:
+            coro.close()
             raise RuntimeError("Event loop not started")
 
         def _create_task() -> None:
             task = loop.create_task(coro)
+            task.add_done_callback(retrieve_future_exception)
             if task_set is not None:
                 task_set.add(task)
                 task.add_done_callback(task_set.discard)

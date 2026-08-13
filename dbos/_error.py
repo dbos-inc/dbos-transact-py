@@ -126,9 +126,12 @@ class DBOSNonExistentWorkflowError(DBOSException):
 class MaxRecoveryAttemptsExceededError(DBOSException):
     """Exception raised when a workflow exceeds its max recovery attempts."""
 
-    def __init__(self, wf_id: str, max_retries: int):
+    def __init__(self, wf_id: str, max_retries: Optional[int] = None):
+        limit = "its maximum" + (
+            f" of {max_retries}" if max_retries is not None else " number of"
+        )
         super().__init__(
-            f"Workflow {wf_id} has exceeded its maximum of {max_retries} execution or recovery attempts. Further attempts to execute or recover it will fail. See documentation for details: https://docs.dbos.dev/python/reference/decorators",
+            f"Workflow {wf_id} has exceeded {limit} execution or recovery attempts. Further attempts to execute or recover it will fail. See documentation for details: https://docs.dbos.dev/python/reference/decorators",
             dbos_error_code=DBOSErrorCode.MaxRecoveryAttemptsExceeded.value,
         )
 

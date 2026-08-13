@@ -14,7 +14,9 @@ from typing import Any, List
 
 import pytest
 import sqlalchemy as sa
+from psycopg import errors
 from pydantic import BaseModel
+from sqlalchemy.exc import OperationalError
 
 from dbos import (
     DBOS,
@@ -42,6 +44,7 @@ from dbos._sys_db import WorkflowStatusString
 from dbos._utils import GlobalParams
 from tests.conftest import (
     default_config,
+    imprecise_timestamps,
     queue_entries_are_cleaned_up,
     retry_until_success,
     retry_until_success_async,
@@ -83,7 +86,11 @@ def test_simple_queue(dbos: DBOS) -> None:
     # Verify started_at_epoch_ms is set correctly
     status = handle.get_status()
     assert status.dequeued_at and status.created_at
-    assert status.dequeued_at > status.created_at
+    # Both are database-stamped, so a second-resolution clock can land the enqueue and its dequeue on one tick.
+    if imprecise_timestamps():
+        assert status.dequeued_at >= status.created_at
+    else:
+        assert status.dequeued_at > status.created_at
 
 
 def test_in_memory_queues(dbos: DBOS, config: DBOSConfig) -> None:
@@ -799,6 +806,58 @@ def test_limiter(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
+def test_limiter_dequeue_blocks_on_peer_claim(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    """A peer mid-claim must block a rate-limited dequeue, not be skipped past.
+
+    Under skip_locked the two dequeuers claim disjoint rows, each against its own
+    pre-claim snapshot of the limiter budget, so each spends it in full.
+    """
+
+    @DBOS.workflow()
+    def noop() -> str:
+        return "done"
+
+    limit = 2
+    # A version this executor never runs, so the live queue worker leaves these rows alone.
+    parked_version = "parked-version"
+    queue = DBOS.register_queue(
+        "limiter_lock_queue",
+        limiter={"limit": limit, "period": 60},
+        priority_enabled=True,
+    )
+    # Distinct priorities so the head of the queue is deterministic.
+    ids = []
+    for priority in range(1, limit * 2 + 1):
+        with SetEnqueueOptions(priority=priority, app_version=parked_version):
+            ids.append(DBOS.enqueue_workflow(queue.name, noop).workflow_id)
+
+    ws = SystemSchema.workflow_status
+    head = (
+        sa.select(ws.c.workflow_uuid)
+        .where(ws.c.queue_name == queue.name)
+        .where(ws.c.status == WorkflowStatusString.ENQUEUED.value)
+        .order_by(ws.c.priority.asc(), ws.c.created_at.asc())
+        .limit(limit)
+        .with_for_update()
+    )
+    with dbos._sys_db.engine.begin() as peer:
+        # A peer dequeuer holding an open claim on the whole limiter budget.
+        assert [row[0] for row in peer.execute(head)] == ids[:limit]
+        with pytest.raises(OperationalError) as exc_info:
+            dbos._sys_db.start_queued_workflows(
+                queue, "test-executor", parked_version, None
+            )
+    assert isinstance(exc_info.value.orig, errors.LockNotAvailable)
+
+    # Nothing was admitted behind the peer's back.
+    for id in ids:
+        status = dbos._sys_db.get_workflow_status(id)
+        assert status is not None
+        assert status["status"] == WorkflowStatusString.ENQUEUED.value
+
+
 def test_multiple_queues(dbos: DBOS) -> None:
 
     wf_counter = 0
@@ -963,13 +1022,15 @@ def test_one_at_a_time_with_worker_concurrency(dbos: DBOS) -> None:
 
 
 # Declare a workflow globally (we need it to be registered across process under a known name)
-start_event = threading.Event()
+# Counting, not a flag: several dequeued workflows start at once, and an Event would
+# collapse their starts into one, leaving the waiter below short.
+start_counter = threading.Semaphore(0)
 end_event = threading.Event()
 
 
 @DBOS.workflow()
 def worker_concurrency_test_workflow() -> None:
-    start_event.set()
+    start_counter.release()
     end_event.wait()
 
 
@@ -997,8 +1058,7 @@ def run_dbos_test_in_process(
     # the queue manager picks it up via list_queues.
     # Wait to dequeue as many tasks as we can locally
     for _ in range(0, local_concurrency_limit):
-        start_event.wait()
-        start_event.clear()
+        start_counter.acquire()
     # Signal the parent process we've dequeued
     start_signal.set()
     # Wait for the parent process to signal we can move on
@@ -1373,14 +1433,17 @@ def test_queue_concurrency_under_recovery(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_cancelling_queued_workflows(dbos: DBOS) -> None:
+def test_cancelling_queued_workflows(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
     start_event = threading.Event()
     blocking_event = threading.Event()
 
     @DBOS.workflow()
     def stuck_workflow() -> None:
         start_event.set()
-        blocking_event.wait()
+        # Bounded so a failing assertion below fails the test instead of hanging teardown.
+        blocking_event.wait(timeout=30)
 
     @DBOS.workflow()
     def regular_workflow() -> None:
@@ -1395,7 +1458,11 @@ def test_cancelling_queued_workflows(dbos: DBOS) -> None:
 
     # Verify that the blocked workflow starts and is PENDING while the regular workflow remains ENQUEUED.
     start_event.wait()
-    assert blocked_handle.get_status().status == WorkflowStatusString.PENDING.value
+    blocked_status = blocked_handle.get_status()
+    assert blocked_status.status == WorkflowStatusString.PENDING.value
+    # The dequeue refreshes updated_at, and nothing else has written this row since it was enqueued.
+    assert blocked_status.created_at and blocked_status.updated_at
+    assert blocked_status.updated_at > blocked_status.created_at
     assert regular_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
 
     # Cancel the blocked workflow. Verify this lets the regular workflow run.
@@ -1999,7 +2066,8 @@ def test_queue_deduplication_recovery(dbos: DBOS) -> None:
     assert isinstance(steps[1]["error"], DBOSQueueDeduplicatedError)
 
     set_workflow_status(dbos._sys_db, parent_id, "PENDING")
-    assert dbos._execute_workflow_id(parent_id).get_result() == child_id
+    DBOS._recover_pending_workflows()
+    assert DBOS.retrieve_workflow(parent_id).get_result() == child_id
 
     assert queue_entries_are_cleaned_up(dbos)
 
@@ -3343,7 +3411,11 @@ def test_wait_first_queue(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_delay(dbos: DBOS, client: DBOSClient) -> None:
+def test_delay(
+    dbos: DBOS, client: DBOSClient, skip_with_sqlite_imprecise_time: None
+) -> None:
+    # dequeued_at is database-stamped and delay_until_epoch_ms is not, so the
+    # assertions below need the two clocks at the same resolution.
     DBOS.register_queue("test_delay_queue", polling_interval_sec=0.1)
 
     @DBOS.workflow()

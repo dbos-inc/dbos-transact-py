@@ -169,10 +169,7 @@ def _enqueue_scheduled_workflow(
     }
     sys_db.init_workflow(
         status,
-        max_recovery_attempts=None,
         owner_xid=None,
-        is_dequeued_request=False,
-        is_recovery_request=False,
     )
 
 

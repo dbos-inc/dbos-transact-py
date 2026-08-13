@@ -64,7 +64,6 @@ from ._core import (
     decorate_workflow,
     enqueue_workflow_with_options,
     enqueue_workflow_with_options_async,
-    execute_workflow_by_id,
     record_sleep,
     run_step,
     run_step_async,
@@ -2054,11 +2053,6 @@ class DBOS:
             "DBOS.get_events",
             step_ctx,
         )
-
-    @classmethod
-    def _execute_workflow_id(cls, workflow_id: str) -> WorkflowHandle[Any]:
-        """Execute a workflow by ID directly. Internal, used only for testing."""
-        return execute_workflow_by_id(_get_dbos_instance(), workflow_id, True, False)
 
     @classmethod
     def _recover_pending_workflows(
