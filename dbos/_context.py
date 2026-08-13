@@ -956,8 +956,8 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         # workflow's children (instead we propagate the deadline)
         self.saved_workflow_timeout = ctx.workflow_timeout_ms
         ctx.workflow_timeout_ms = None
-        # Unset the deduplication_id and priority context var so it is not applied to this
-        # workflow's children
+        # Unset the deduplication_id, duplication policy, and priority context vars so
+        # they are not applied to this workflow's children
         self.saved_deduplication_id = ctx.deduplication_id
         ctx.deduplication_id = None
         self.saved_duplication_policy = ctx.duplication_policy
@@ -985,7 +985,7 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         ctx.workflow_timeout_ms = self.saved_workflow_timeout
         # Clear any propagating timeout
         ctx.workflow_deadline_epoch_ms = None
-        # Restore the saved deduplication ID and priority
+        # Restore the saved deduplication ID, duplication policy, and priority
         ctx.priority = self.saved_priority
         ctx.deduplication_id = self.saved_deduplication_id
         ctx.duplication_policy = self.saved_duplication_policy

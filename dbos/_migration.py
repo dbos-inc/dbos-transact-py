@@ -106,15 +106,6 @@ def get_migration_versions(
             get_dbos_migrations(schema, use_listen_notify, is_cockroach)
         )
 
-        schema_exists = conn.execute(
-            sa.text(
-                "SELECT 1 FROM information_schema.schemata WHERE schema_name = :schema"
-            ),
-            {"schema": schema},
-        ).fetchone()
-        if schema_exists is None:
-            return 0, latest_version
-
         table_exists = conn.execute(
             sa.text(
                 "SELECT 1 FROM information_schema.tables "

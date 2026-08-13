@@ -80,10 +80,11 @@ def _reject_conflicting_options(
     has_return_existing: bool = False,
 ) -> None:
     """A debounce owns the workflow's deduplication ID (the debounce key) and its
-    delay (the debounce period), so a caller must not also set them. Priority and
-    partition keys are rejected because they cannot apply to a debounced enqueue
-    (the default internal queue has no priority, and partitioned queues do not
-    support the deduplication a debounce requires)."""
+    delay (the debounce period), so a caller must not also set them, nor a
+    duplication policy over the key the debounce owns. Priority and partition keys
+    are rejected because they cannot apply to a debounced enqueue (the default
+    internal queue has no priority, and partitioned queues do not support the
+    deduplication a debounce requires)."""
     if has_deduplication_id:
         raise DBOSException(
             "Cannot debounce a workflow with a deduplication_id set: the debounce "
@@ -251,7 +252,7 @@ class Debouncer(Generic[P, R]):
 
         dbos = _get_dbos_instance()
 
-        # The caller must not set a deduplication_id, delay, priority, or partition key.
+        # The caller must not set a deduplication_id, duplication policy, delay, priority, or partition key.
         ctx = get_local_dbos_context()
         if ctx is not None:
             _reject_conflicting_options(
@@ -411,7 +412,7 @@ class DebouncerClient:
     def debounce(
         self, debounce_key: str, debounce_period_sec: float, *args: Any, **kwargs: Any
     ) -> "WorkflowHandle[R]":
-        # The workflow options must not set a deduplication_id, delay, priority, or partition key.
+        # The workflow options must not set a deduplication_id, duplication policy, delay, priority, or partition key.
         _reject_conflicting_options(
             has_deduplication_id=self.workflow_options.get("deduplication_id")
             is not None,

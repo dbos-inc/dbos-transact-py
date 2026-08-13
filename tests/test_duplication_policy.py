@@ -95,11 +95,19 @@ def test_return_existing_rejects_without_queue(dbos: DBOS) -> None:
 
     # Not being enqueued: there is no queue to deduplicate on. Set no other enqueue
     # option, so only the policy itself can be what the error rejects.
+    wfid = str(uuid.uuid4())
     with pytest.raises(DBOSException) as exc_info:
         with SetEnqueueOptions(duplication_policy="return-existing"):
-            DBOS.start_workflow(simple_workflow)
+            with SetWorkflowID(wfid):
+                DBOS.start_workflow(simple_workflow)
     assert "duplication_policy" in str(exc_info.value)
-    assert "not being enqueued" in str(exc_info.value)
+    assert "requires a queue" in str(exc_info.value)
+    # Rejected before any row is written, leaving no orphaned PENDING workflow.
+    assert DBOS.get_workflow_status(wfid) is None
+
+    # "reject" is the default and a no-op without a queue, so it is not rejected.
+    with SetEnqueueOptions(duplication_policy="reject"):
+        assert DBOS.start_workflow(simple_workflow).get_result() == "done"
 
 
 def test_return_existing_rejects_invalid_policy(dbos: DBOS) -> None:
