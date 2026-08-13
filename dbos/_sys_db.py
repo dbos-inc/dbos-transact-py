@@ -1151,6 +1151,25 @@ class SystemDatabase(ABC):
                 )
             )
 
+    @db_retry()
+    def get_deduplicated_workflow(
+        self, queue_name: str, deduplication_id: str
+    ) -> Optional[str]:
+        """The workflow currently holding this deduplication ID, or None if it is unheld.
+
+        A workflow releases its deduplication ID when it leaves the queue, so this
+        returns only workflows still enqueued (or running, until they complete).
+        """
+        with self.engine.begin() as c:
+            row = c.execute(
+                sa.select(SystemSchema.workflow_status.c.workflow_uuid)
+                .where(SystemSchema.workflow_status.c.queue_name == queue_name)
+                .where(
+                    SystemSchema.workflow_status.c.deduplication_id == deduplication_id
+                )
+            ).fetchone()
+        return row[0] if row is not None else None
+
     def debounce_delayed_workflow(
         self,
         *,

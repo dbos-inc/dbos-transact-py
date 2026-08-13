@@ -77,6 +77,7 @@ def _reject_conflicting_options(
     has_delay: bool,
     has_priority: bool,
     has_partition_key: bool,
+    has_return_existing: bool = False,
 ) -> None:
     """A debounce owns the workflow's deduplication ID (the debounce key) and its
     delay (the debounce period), so a caller must not also set them. Priority and
@@ -102,6 +103,11 @@ def _reject_conflicting_options(
         raise DBOSException(
             "Cannot debounce a workflow with a queue partition key set: partitioned "
             "queues do not support deduplication, which debouncing requires."
+        )
+    if has_return_existing:
+        raise DBOSException(
+            "Cannot debounce a workflow with duplication_policy 'return-existing': "
+            "a debounce owns the workflow's deduplication behavior."
         )
 
 
@@ -253,6 +259,7 @@ class Debouncer(Generic[P, R]):
                 has_delay=ctx.delay_until_epoch_ms is not None,
                 has_priority=ctx.priority is not None,
                 has_partition_key=ctx.queue_partition_key is not None,
+                has_return_existing=ctx.duplication_policy == "return-existing",
             )
 
         # Capture a SetWorkflowID-pinned ID once: it is re-applied on every enqueue attempt (a lost dedup race consumes it before raising) and must not stay armed for the caller's next workflow when a bounce coalesces or a conflict raises.
@@ -412,6 +419,8 @@ class DebouncerClient:
             has_priority=self.workflow_options.get("priority") is not None,
             has_partition_key=self.workflow_options.get("queue_partition_key")
             is not None,
+            has_return_existing=self.workflow_options.get("duplication_policy")
+            == "return-existing",
         )
 
         # Run on the debouncer's queue if one was given, else the queue named in the workflow options.

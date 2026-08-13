@@ -3,6 +3,7 @@ from ._client import DBOSClient, EnqueueOptions
 from ._context import (
     DBOSContextEnsure,
     DBOSContextSetAuth,
+    DuplicationPolicy,
     PropagateOtelContext,
     SetEnqueueOptions,
     SetWorkflowAttributes,
@@ -48,6 +49,7 @@ __all__ = [
     "DBOSPortableJSONSerializer",
     "DBOSContextEnsure",
     "DBOSContextSetAuth",
+    "DuplicationPolicy",
     "ScheduleInput",
     "EnqueueOptions",
     "KafkaMessage",
