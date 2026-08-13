@@ -4182,9 +4182,10 @@ class SystemDatabase(ABC):
                             ]
                         )
                     )
+                    # Database clock on both sides, as the claim stamps started_at_epoch_ms with it.
                     .where(
                         SystemSchema.workflow_status.c.started_at_epoch_ms
-                        > start_time_ms - limiter_period_ms
+                        > self._now_ms_sql() - limiter_period_ms
                     )
                     # Count only what this application would dequeue, matching the select below.
                     .where(
@@ -4344,7 +4345,7 @@ class SystemDatabase(ABC):
                         executor_id=executor_id,
                         # Claim it, so the unclaimed partition drains as workflows run.
                         application_name=self.app_name,
-                        started_at_epoch_ms=start_time_ms,
+                        started_at_epoch_ms=self._now_ms_sql(),
                         rate_limited=queue._limiter is not None,
                         # Count this dispatch against the DLQ limit; no later insert does it.
                         recovery_attempts=SystemSchema.workflow_status.c.recovery_attempts
@@ -4527,7 +4528,7 @@ class SystemDatabase(ABC):
                     executor_id=executor_id,
                     # Claim the row, as the unpartitioned dequeue does.
                     application_name=self.app_name,
-                    started_at_epoch_ms=start_time_ms,
+                    started_at_epoch_ms=self._now_ms_sql(),
                     rate_limited=False,
                     # Count this dispatch against the DLQ limit; no later insert does it.
                     recovery_attempts=ws.c.recovery_attempts + 1,
