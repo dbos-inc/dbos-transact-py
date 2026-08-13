@@ -44,6 +44,7 @@ from dbos._sys_db import WorkflowStatusString
 from dbos._utils import GlobalParams
 from tests.conftest import (
     default_config,
+    imprecise_timestamps,
     queue_entries_are_cleaned_up,
     retry_until_success,
     retry_until_success_async,
@@ -85,7 +86,11 @@ def test_simple_queue(dbos: DBOS) -> None:
     # Verify started_at_epoch_ms is set correctly
     status = handle.get_status()
     assert status.dequeued_at and status.created_at
-    assert status.dequeued_at > status.created_at
+    # Both are database-stamped, so a second-resolution clock can land the enqueue and its dequeue on one tick.
+    if imprecise_timestamps():
+        assert status.dequeued_at >= status.created_at
+    else:
+        assert status.dequeued_at > status.created_at
 
 
 def test_in_memory_queues(dbos: DBOS, config: DBOSConfig) -> None:
