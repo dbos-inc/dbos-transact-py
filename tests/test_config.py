@@ -650,6 +650,7 @@ def test_translate_dbosconfig_full_input():
     assert translated_config["runtimeConfig"]["run_admin_server"] == False
     assert translated_config["dbos_system_schema"] == "foobar"
     assert translated_config["use_listen_notify"] == True
+    assert translated_config["run_migrations"] == True
     assert "start" not in translated_config["runtimeConfig"]
     assert "setup" not in translated_config["runtimeConfig"]
     assert "env" not in translated_config
@@ -668,6 +669,16 @@ def test_translate_dbosconfig_notification_coalesce_sec():
                 {"name": "test-app", "notification_coalesce_sec": bad}
             )
         assert "notification_coalesce_sec" in str(exc_info.value)
+
+
+def test_translate_dbosconfig_run_migrations():
+    # Defaults to True, and an explicit setting survives translation.
+    assert (
+        translate_dbos_config_to_config_file({"name": "test-app"})["run_migrations"]
+        == True
+    )
+    disabled: DBOSConfig = {"name": "test-app", "run_migrations": False}
+    assert translate_dbos_config_to_config_file(disabled)["run_migrations"] == False
 
 
 def test_translate_dbosconfig_kafka_queue_polling_interval_sec():

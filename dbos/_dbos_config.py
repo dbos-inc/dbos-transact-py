@@ -48,6 +48,7 @@ class DBOSConfig(TypedDict, total=False):
         conductor_executor_metadata (Dict[str, Any]): Metadata associated with this executor that may be used to identify an executor on the Conductor dashboard. Must be JSON-serializable.
         serializer (Serializer): A custom serializer and deserializer DBOS uses when storing program data in the system database
         use_listen_notify (bool): Whether to use LISTEN/NOTIFY or polling to listen for notifications and events.  Defaults to True. As this affects migrations, may not be changed after the system database is first created.
+        run_migrations (bool): Whether to create and migrate the system database on launch. Defaults to True. Set to False for a process that must not alter the schema, such as one whose database role cannot run DDL, or a deployment that migrates out of band with `dbos migrate`. Launch then verifies the schema instead: a system database that is missing, or behind the version this build requires, fails launch rather than being created or migrated.
         notification_listener_polling_interval_sec (float): Polling interval in seconds for the notification listener background process. Defaults to 1.0. Minimum value is 0.001. Lower values can speed up test execution.
         notification_coalesce_sec (float): Interval in seconds for coalescing LISTEN/NOTIFY notifications (streams and events) pushed off the write path. Bounds read latency and caps the rate of notifying commits independent of write throughput. Defaults to 0.01. Minimum value is 0.001.
         scheduler_polling_interval_sec (float): Polling interval in seconds for the scheduler thread to detect new workflow schedules. Defaults to 30.0.
@@ -85,6 +86,7 @@ class DBOSConfig(TypedDict, total=False):
     serializer: Optional[Serializer]
     enable_patching: Optional[bool]
     use_listen_notify: Optional[bool]
+    run_migrations: Optional[bool]
     max_executor_threads: Optional[int]
     notification_listener_polling_interval_sec: Optional[float]
     notification_coalesce_sec: Optional[float]
@@ -148,6 +150,7 @@ class ConfigFile(TypedDict, total=False):
     system_database_engine: Optional[sa.Engine]
     dbos_system_schema: Optional[str]
     use_listen_notify: bool
+    run_migrations: bool
 
 
 def _default_run_admin_server() -> bool:
@@ -275,6 +278,10 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     use_listen_notify = config.get("use_listen_notify", None)
     translated_config["use_listen_notify"] = (
         use_listen_notify if use_listen_notify is not None else True
+    )
+    run_migrations = config.get("run_migrations", None)
+    translated_config["run_migrations"] = (
+        run_migrations if run_migrations is not None else True
     )
 
     return translated_config

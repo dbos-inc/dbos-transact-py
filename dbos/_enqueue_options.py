@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, TypedDict
 
 from dbos._context import (
     OTEL_CARRIER_ATTRIBUTE,
+    DuplicationPolicy,
     MaxPriority,
     MinPriority,
     inject_trace_context,
@@ -43,6 +44,10 @@ class EnqueueOptions(_EnqueueOptionsRequired, total=False):
     workflow_timeout: float
     delay_seconds: float
     deduplication_id: str
+    # How to react to a collision on deduplication_id. "reject" (the default) raises
+    # DBOSQueueDeduplicatedError; "return-existing" returns a handle to the workflow
+    # already holding the ID, discarding these arguments. Requires deduplication_id.
+    duplication_policy: DuplicationPolicy
     priority: int
     max_recovery_attempts: int
     queue_partition_key: str
@@ -59,6 +64,30 @@ class EnqueueOptions(_EnqueueOptionsRequired, total=False):
     otel_context: "OtelContext"
 
 
+def validate_duplication_policy(
+    duplication_policy: Optional[DuplicationPolicy],
+    queue_name: Optional[str],
+    deduplication_id: Optional[str],
+) -> None:
+    """Reject a 'return-existing' enqueue that has no deduplication ID to attach to."""
+    if duplication_policy is None or duplication_policy == "reject":
+        return
+    if duplication_policy != "return-existing":
+        raise DBOSException(
+            f"Invalid duplication_policy {duplication_policy}. "
+            "Must be either 'reject' or 'return-existing'."
+        )
+    if queue_name is None:
+        raise DBOSException(
+            "duplication_policy 'return-existing' requires a queue. It is only "
+            "supported when enqueueing a workflow onto a queue."
+        )
+    if deduplication_id is None:
+        raise DBOSException(
+            "duplication_policy 'return-existing' requires a deduplication_id."
+        )
+
+
 def validate_enqueue_options(options: EnqueueOptions) -> None:
     priority = options.get("priority")
     if priority is not None and (priority < MinPriority or priority > MaxPriority):
@@ -68,6 +97,11 @@ def validate_enqueue_options(options: EnqueueOptions) -> None:
     workflow_id = options.get("workflow_id")
     if workflow_id is not None:
         validate_workflow_id(workflow_id)
+    validate_duplication_policy(
+        options.get("duplication_policy"),
+        options.get("queue_name"),
+        options.get("deduplication_id"),
+    )
 
 
 def attributes_with_otel_context(

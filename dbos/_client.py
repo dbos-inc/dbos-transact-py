@@ -41,7 +41,11 @@ if TYPE_CHECKING:
 
 from dbos._croniter import croniter  # type: ignore
 from dbos._dbos_config import get_system_database_url, is_valid_database_url
-from dbos._error import DBOSException, DBOSNonExistentWorkflowError
+from dbos._error import (
+    DBOSException,
+    DBOSNonExistentWorkflowError,
+    DBOSQueueDeduplicatedError,
+)
 from dbos._scheduler import backfill_schedule, trigger_schedule
 from dbos._serialization import (
     DefaultSerializer,
@@ -260,11 +264,26 @@ class DBOSClient:
 
     def _enqueue(self, options: EnqueueOptions, *args: Any, **kwargs: Any) -> str:
         workflow_id, status = self._build_enqueue_status(options, *args, **kwargs)
-        self._sys_db.init_workflow(
-            status,
-            owner_xid=None,
-        )
-        return workflow_id
+        return_existing = options.get("duplication_policy") == "return-existing"
+        while True:
+            try:
+                self._sys_db.init_workflow(
+                    status,
+                    owner_xid=None,
+                )
+                return workflow_id
+            except DBOSQueueDeduplicatedError:
+                if not return_existing:
+                    raise
+                queue_name, dedup_id = status["queue_name"], status["deduplication_id"]
+                assert queue_name is not None and dedup_id is not None
+                existing_id = self._sys_db.get_deduplicated_workflow(
+                    queue_name, dedup_id
+                )
+                if existing_id is not None:
+                    return existing_id
+                # The holder released the deduplication ID between our insert and this
+                # lookup (it completed or was cancelled), so retry to claim the slot.
 
     def _enqueue_with_connection(
         self,
@@ -273,6 +292,13 @@ class DBOSClient:
         *args: Any,
         **kwargs: Any,
     ) -> str:
+        if options.get("duplication_policy") == "return-existing":
+            # Attaching means retrying the insert, which cannot be done inside a
+            # transaction the caller owns: the collision aborts it.
+            raise DBOSException(
+                "duplication_policy 'return-existing' is not supported by "
+                "enqueue_in_transaction. Use enqueue instead."
+            )
         workflow_id, status = self._build_enqueue_status(options, *args, **kwargs)
         self._sys_db.init_workflow_with_connection(
             status,

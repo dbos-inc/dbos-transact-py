@@ -50,6 +50,12 @@ OperationTypes = Literal["handler", "workflow", "transaction", "step", "procedur
 MaxPriority = 2**31 - 1  # 2,147,483,647
 MinPriority = 1
 
+# How to handle a collision with another workflow that has the same deduplication ID on the
+# same queue. "reject" (the default) raises DBOSQueueDeduplicatedError; "return-existing"
+# returns a handle to the workflow already holding the deduplication ID, discarding the
+# colliding caller's arguments.
+DuplicationPolicy = Literal["reject", "return-existing"]
+
 # Reserved workflow attribute holding the trace carrier set by PropagateOtelContext.
 OTEL_CARRIER_ATTRIBUTE = "dbos.otelContext"
 
@@ -142,6 +148,8 @@ class DBOSContext:
 
         # A user-specified deduplication ID for the enqueuing workflow.
         self.deduplication_id: Optional[str] = None
+        # How the enqueuing workflow reacts to a collision on its deduplication ID.
+        self.duplication_policy: Optional[DuplicationPolicy] = None
         # A user-specified priority for the enqueuing workflow.
         self.priority: Optional[int] = None
         # User-specified attributes to attach to the next started workflow.
@@ -197,6 +205,7 @@ class DBOSContext:
         rv.workflow_deadline_epoch_ms = self.workflow_deadline_epoch_ms
         rv.workflow_timeout_ms = self.workflow_timeout_ms
         rv.deduplication_id = self.deduplication_id
+        rv.duplication_policy = self.duplication_policy
         rv.priority = self.priority
         rv.queue_partition_key = self.queue_partition_key
         rv.delay_until_epoch_ms = self.delay_until_epoch_ms
@@ -779,10 +788,13 @@ class SetEnqueueOptions:
         app_version: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
         delay_seconds: Optional[float] = None,
+        duplication_policy: Optional[DuplicationPolicy] = None,
     ) -> None:
         self.created_ctx = False
         self.deduplication_id: Optional[str] = deduplication_id
         self.saved_deduplication_id: Optional[str] = None
+        self.duplication_policy: Optional[DuplicationPolicy] = duplication_policy
+        self.saved_duplication_policy: Optional[DuplicationPolicy] = None
         if priority is not None and (priority < MinPriority or priority > MaxPriority):
             raise Exception(
                 f"Invalid priority {priority}. Priority must be between {MinPriority}~{MaxPriority}."
@@ -809,6 +821,8 @@ class SetEnqueueOptions:
         ctx = assert_current_dbos_context()
         self.saved_deduplication_id = ctx.deduplication_id
         ctx.deduplication_id = self.deduplication_id
+        self.saved_duplication_policy = ctx.duplication_policy
+        ctx.duplication_policy = self.duplication_policy
         self.saved_priority = ctx.priority
         ctx.priority = self.priority
         self.saved_app_version = ctx.app_version
@@ -827,6 +841,7 @@ class SetEnqueueOptions:
     ) -> Literal[False]:
         curr_ctx = assert_current_dbos_context()
         curr_ctx.deduplication_id = self.saved_deduplication_id
+        curr_ctx.duplication_policy = self.saved_duplication_policy
         curr_ctx.priority = self.saved_priority
         curr_ctx.app_version = self.saved_app_version
         curr_ctx.queue_partition_key = self.saved_queue_partition_key
@@ -920,6 +935,7 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         self.attributes = attributes
         self.saved_workflow_timeout: Optional[int] = None
         self.saved_deduplication_id: Optional[str] = None
+        self.saved_duplication_policy: Optional[DuplicationPolicy] = None
         self.saved_priority: Optional[int] = None
         self.saved_is_within_set_workflow_id_block: bool = False
         self.use_ctx = ctx
@@ -940,10 +956,12 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         # workflow's children (instead we propagate the deadline)
         self.saved_workflow_timeout = ctx.workflow_timeout_ms
         ctx.workflow_timeout_ms = None
-        # Unset the deduplication_id and priority context var so it is not applied to this
-        # workflow's children
+        # Unset the deduplication_id, duplication policy, and priority context vars so
+        # they are not applied to this workflow's children
         self.saved_deduplication_id = ctx.deduplication_id
         ctx.deduplication_id = None
+        self.saved_duplication_policy = ctx.duplication_policy
+        ctx.duplication_policy = None
         self.saved_priority = ctx.priority
         ctx.priority = None
         ctx.start_workflow(
@@ -967,9 +985,10 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         ctx.workflow_timeout_ms = self.saved_workflow_timeout
         # Clear any propagating timeout
         ctx.workflow_deadline_epoch_ms = None
-        # Restore the saved deduplication ID and priority
+        # Restore the saved deduplication ID, duplication policy, and priority
         ctx.priority = self.saved_priority
         ctx.deduplication_id = self.saved_deduplication_id
+        ctx.duplication_policy = self.saved_duplication_policy
         # Code to clean up the basic context if we created it
         _set_local_dbos_context(self.prev_ctx)
         return False  # Did not handle

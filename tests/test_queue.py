@@ -761,16 +761,15 @@ def test_queue_transaction(dbos: DBOS) -> None:
 def test_limiter(dbos: DBOS) -> None:
 
     @DBOS.workflow()
-    def test_workflow(var1: str, var2: str) -> float:
+    def test_workflow(var1: str, var2: str) -> None:
         assert var1 == "abc" and var2 == "123"
-        return time.time()
 
     limit = 5
     period = 1.8
+    period_ms = int(period * 1000)
     DBOS.register_queue("test_queue", limiter={"limit": limit, "period": period})
 
-    handles: list[WorkflowHandle[float]] = []
-    times: list[float] = []
+    handles: list[WorkflowHandle[None]] = []
 
     # Launch a number of tasks equal to three times the limit.
     # This should lead to three "waves" of the limit tasks being
@@ -781,26 +780,39 @@ def test_limiter(dbos: DBOS) -> None:
         h = DBOS.enqueue_workflow("test_queue", test_workflow, "abc", "123")
         handles.append(h)
     for h in handles:
-        times.append(h.get_result())
+        h.get_result()
 
-    # Verify that each "wave" of tasks started at the ~same time. Use a
-    # generous tolerance: under CI load tasks within a wave can be spread
-    # out by hundreds of ms even though the limiter released them together.
-    for wave in range(num_waves):
-        for i in range(wave * limit, (wave + 1) * limit - 1):
-            assert times[i + 1] - times[i] < 1.0
-
-    # Verify that the gap between "waves" is ~equal to the period. The
-    # tolerance has to cover the same intra-wave skew (since we're
-    # comparing the first task of each wave, not the wave start times),
-    # so use a window wider than the worst-case intra-wave spread.
-    for wave in range(num_waves - 1):
-        assert times[limit * (wave + 1)] - times[limit * wave] > period - 1.0
-        assert times[limit * (wave + 1)] - times[limit * wave] < period + 1.0
-
-    # Verify all workflows get the SUCCESS status eventually
+    # Time the limiter by dequeued_at, the database-side timestamp it actually
+    # gates on. A wall clock read inside the workflow body would also measure how
+    # long the executor took to pick the task up, which CI load stretches by
+    # seconds, and how a wave splits across polls is not guaranteed either.
+    dequeued_at: list[int] = []
     for h in handles:
-        assert h.get_status().status == WorkflowStatusString.SUCCESS.value
+        status = h.get_status()
+        # Verify all workflows get the SUCCESS status eventually
+        assert status.status == WorkflowStatusString.SUCCESS.value
+        assert status.dequeued_at is not None
+        dequeued_at.append(status.dequeued_at)
+    dequeued_at.sort()
+
+    # The limiter admits a workflow only when fewer than `limit` others were
+    # dequeued in the preceding `period`. Both sides of that comparison come from
+    # the same database clock, so the window holds exactly, give or take the
+    # rounding into the millisecond column.
+    for i in range(len(dequeued_at) - limit):
+        assert dequeued_at[i + limit] - dequeued_at[i] >= period_ms - 10
+
+    # ...and it spends that whole budget rather than trickling. Counted over a
+    # window rather than per wave, because nothing guarantees a wave is claimed by
+    # a single poll: an early poll can catch the enqueue loop midway and take the
+    # rest on the next one.
+    assert sum(1 for t in dequeued_at if t < dequeued_at[0] + period_ms) == limit
+
+    # And it does not stall. Deliberately loose: a wave goes out on the first poll
+    # after its window opens, and how the polls line up is a CI-load lottery. The
+    # window above is what pins the limiter down.
+    spread = dequeued_at[-1] - dequeued_at[0]
+    assert spread < num_waves * (period_ms + 2000)
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)

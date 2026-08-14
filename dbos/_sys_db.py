@@ -47,6 +47,7 @@ from ._error import (
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
     DBOSConflictingWorkflowError,
     DBOSException,
+    DBOSInitializationError,
     DBOSNonExistentWorkflowError,
     DBOSQueueDeduplicatedError,
     DBOSUnexpectedStepError,
@@ -753,6 +754,33 @@ class SystemDatabase(ABC):
         """Run database migrations specific to the database type."""
         pass
 
+    @abstractmethod
+    def verify_migrations(self) -> None:
+        """Check the system database is migrated to the version this build requires.
+
+        Creates and changes nothing: for a process configured with run_migrations
+        disabled, whose database role may not be allowed to run DDL at all. Raises
+        if the database is missing or behind.
+        """
+        pass
+
+    def _assert_migration_version(
+        self, current_version: int, latest_version: int
+    ) -> None:
+        """Raise unless the recorded migration version satisfies this build's."""
+        # A database ahead of this build belongs to a newer peer, which the migration runner also tolerates.
+        if current_version < latest_version:
+            printable_url = self.engine.url.render_as_string(hide_password=True)
+            raise DBOSInitializationError(
+                f"System database {printable_url} is at schema version {current_version}, but this "
+                f"version of DBOS requires {latest_version}. This process is configured with "
+                f"run_migrations disabled, so it will not migrate it: either migrate the system "
+                f"database out of band (`dbos migrate`) or launch with run_migrations enabled."
+            )
+        dbos_logger.debug(
+            f"System database schema version {current_version} satisfies the required version {latest_version}"
+        )
+
     # Destroy the pool when finished
     def destroy(self) -> None:
         self._run_background_processes = False
@@ -1150,6 +1178,25 @@ class SystemDatabase(ABC):
                     updated_at=self._now_ms_sql(),
                 )
             )
+
+    @db_retry()
+    def get_deduplicated_workflow(
+        self, queue_name: str, deduplication_id: str
+    ) -> Optional[str]:
+        """The workflow currently holding this deduplication ID, or None if it is unheld.
+
+        A workflow releases its deduplication ID when it leaves the queue, so this
+        returns only workflows still enqueued (or running, until they complete).
+        """
+        with self.engine.begin() as c:
+            row = c.execute(
+                sa.select(SystemSchema.workflow_status.c.workflow_uuid)
+                .where(SystemSchema.workflow_status.c.queue_name == queue_name)
+                .where(
+                    SystemSchema.workflow_status.c.deduplication_id == deduplication_id
+                )
+            ).fetchone()
+        return row[0] if row is not None else None
 
     def debounce_delayed_workflow(
         self,

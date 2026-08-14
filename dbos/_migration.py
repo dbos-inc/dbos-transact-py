@@ -92,18 +92,19 @@ def _bump_migration_version(
             )
 
 
-def should_migrate(engine: sa.Engine, schema: str, use_listen_notify: bool) -> bool:
-    """Return True if the schema or dbos_migrations table is missing, or if
-    the recorded migration version is behind the latest. Postgres-only."""
+def get_migration_versions(
+    engine: sa.Engine, schema: str, use_listen_notify: bool
+) -> tuple[int, int]:
+    """The (recorded, latest) migration versions of this system database. Postgres-only.
+
+    A missing schema or dbos_migrations table reads as version 0.
+    """
     with engine.begin() as conn:
-        schema_exists = conn.execute(
-            sa.text(
-                "SELECT 1 FROM information_schema.schemata WHERE schema_name = :schema"
-            ),
-            {"schema": schema},
-        ).fetchone()
-        if schema_exists is None:
-            return True
+        version_str = conn.execute(sa.text("SELECT version()")).scalar() or ""
+        is_cockroach = "cockroachdb" in version_str.lower()
+        latest_version = len(
+            get_dbos_migrations(schema, use_listen_notify, is_cockroach)
+        )
 
         table_exists = conn.execute(
             sa.text(
@@ -113,20 +114,44 @@ def should_migrate(engine: sa.Engine, schema: str, use_listen_notify: bool) -> b
             {"schema": schema},
         ).fetchone()
         if table_exists is None:
-            return True
+            return 0, latest_version
 
         current_version_row = conn.execute(
             sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
         ).fetchone()
         current_version = current_version_row[0] if current_version_row else 0
+        return current_version, latest_version
 
-        version_str = conn.execute(sa.text("SELECT version()")).scalar() or ""
-        is_cockroach = "cockroachdb" in version_str.lower()
 
-        latest_version = len(
-            get_dbos_migrations(schema, use_listen_notify, is_cockroach)
-        )
-        return current_version < latest_version
+def should_migrate(engine: sa.Engine, schema: str, use_listen_notify: bool) -> bool:
+    """Return True if the schema or dbos_migrations table is missing, or if
+    the recorded migration version is behind the latest. Postgres-only."""
+    current_version, latest_version = get_migration_versions(
+        engine, schema, use_listen_notify
+    )
+    return current_version < latest_version
+
+
+def get_sqlite_migration_versions(engine: sa.Engine) -> tuple[int, int]:
+    """The (recorded, latest) migration versions of this SQLite system database.
+
+    A missing dbos_migrations table reads as version 0.
+    """
+    latest_version = len(sqlite_migrations)
+    with engine.begin() as conn:
+        table_exists = conn.execute(
+            sa.text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='dbos_migrations'"
+            )
+        ).fetchone()
+        if table_exists is None:
+            return 0, latest_version
+
+        current_version_row = conn.execute(
+            sa.text("SELECT version FROM dbos_migrations")
+        ).fetchone()
+        current_version = current_version_row[0] if current_version_row else 0
+        return current_version, latest_version
 
 
 def ensure_dbos_schema(engine: sa.Engine, schema: str) -> None:

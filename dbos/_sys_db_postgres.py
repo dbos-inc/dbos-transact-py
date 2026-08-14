@@ -6,7 +6,12 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import DBAPIError
 
-from dbos._migration import ensure_dbos_schema, run_dbos_migrations, should_migrate
+from dbos._migration import (
+    ensure_dbos_schema,
+    get_migration_versions,
+    run_dbos_migrations,
+    should_migrate,
+)
 
 from ._logger import dbos_logger
 from ._schemas.system_database import SystemSchema
@@ -102,6 +107,14 @@ class PostgresSystemDatabase(SystemDatabase):
                         sa.text("SELECT pg_advisory_unlock(:lock_id)"),
                         {"lock_id": MIGRATION_LOCK_ID},
                     )
+
+    def verify_migrations(self) -> None:
+        """Check the system database is migrated, creating and changing nothing."""
+        assert self.schema
+        current_version, latest_version = get_migration_versions(
+            self.engine, self.schema, self.use_listen_notify
+        )
+        self._assert_migration_version(current_version, latest_version)
 
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""
