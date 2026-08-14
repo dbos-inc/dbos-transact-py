@@ -760,7 +760,7 @@ class SystemDatabase(ABC):
 
         Creates and changes nothing: for a process configured with run_migrations
         disabled, whose database role may not be allowed to run DDL at all. Raises
-        DBOSInitializationError if the database is missing or behind.
+        if the database is missing or behind.
         """
         pass
 
