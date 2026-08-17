@@ -4540,12 +4540,17 @@ class SystemDatabase(ABC):
             )
             # This worker's own budget bounds the sweep alongside the bind-param cap.
             sweep_limit = min(self.PARTITIONED_DEQUEUE_SWEEP_CAP, max_tasks)
-            # Probe partitions in random order to prevent starvation
+            # When local concurrency is constrained, probe partitions in random order to prevent starvation
+            sweep_order = (
+                partitions.c.pk.asc()
+                if max_tasks >= self.PARTITIONED_DEQUEUE_SWEEP_CAP
+                else sa.func.random()
+            )
             chosen = (
                 sa.select(partitions.c.pk)
                 .where(partitions.c.pk.isnot(None))
                 .where(~pending_probe)
-                .order_by(sa.func.random())
+                .order_by(sweep_order)
                 .limit(sweep_limit)
                 .subquery("chosen")
             )

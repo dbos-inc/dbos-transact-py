@@ -3489,9 +3489,9 @@ def _enqueue_partition_rows(
 def test_partitioned_batch_dequeue_sweep_cap(
     dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A sweep admits at most PARTITIONED_DEQUEUE_SWEEP_CAP heads, drawn in random
-    partition order; admitted partitions are PENDING-gated, so the next sweep picks
-    up the remaining partitions."""
+    """A sweep bounded only by PARTITIONED_DEQUEUE_SWEEP_CAP admits that many heads in
+    partition order; admitted partitions are PENDING-gated, so the next sweep rotates
+    onward to the remaining partitions."""
 
     @DBOS.workflow()
     def batch_wf(value: str) -> None:
@@ -3511,11 +3511,8 @@ def test_partitioned_batch_dequeue_sweep_cap(
             queue, GlobalParams.executor_id, GlobalParams.app_version
         )
 
-    capped, remainder = start(), start()
-    assert len(capped) == 5
-    assert len(remainder) == 3
-    # Which five come first varies with the random order; together they are every head.
-    assert set(capped) | set(remainder) == {ids[p][0] for p in partitions}
+    assert start() == [ids[p][0] for p in partitions[:5]]
+    assert start() == [ids[p][0] for p in partitions[5:]]
     assert start() == []
 
 
@@ -3549,8 +3546,9 @@ def test_partitioned_batch_dequeue_worker_budget(dbos: DBOS) -> None:
 
 
 def test_partitioned_batch_dequeue_varies_partitions(dbos: DBOS) -> None:
-    """A budget below the partition count draws partitions at random, so no key is
-    starved for sorting late. A fixed order would pick the same partition every time."""
+    """A caller budget below the partition count draws partitions at random, so no key
+    is starved for sorting late. A fixed order would pick the same partition every time.
+    """
 
     @DBOS.workflow()
     def batch_wf(value: str) -> None:
@@ -3602,7 +3600,7 @@ def test_partitioned_batch_dequeue_exclusive_direct(dbos: DBOS) -> None:
         )
 
     # Heads only, one per partition
-    assert set(start()) == {ids[p][0] for p in partitions}
+    assert start() == [ids[p][0] for p in partitions]
     # Every partition has a PENDING head, so nothing else is admitted
     assert start() == []
     # Completing one partition's head opens that partition alone
