@@ -2970,6 +2970,78 @@ async def test_partition_queue_worker_concurrency_async(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
+def test_partition_concurrency_with_worker_concurrency(dbos: DBOS) -> None:
+    """partition_concurrency caps each partition across all executors while
+    worker_concurrency caps the whole queue on this one: at most one workflow per
+    partition, and at most worker_concurrency of them running here."""
+
+    worker_concurrency = 3
+    partitions = [f"partition-{i}" for i in range(5)]
+    wfs_per_partition = 3
+
+    unblock_event = threading.Event()
+    lock = threading.Lock()
+    running: dict[str, int] = {p: 0 for p in partitions}
+    max_running: dict[str, int] = {p: 0 for p in partitions}
+    total_running = 0
+    max_total_running = 0
+
+    @DBOS.workflow()
+    def blocking_workflow(partition: str) -> str:
+        nonlocal total_running, max_total_running
+        with lock:
+            running[partition] += 1
+            total_running += 1
+            max_running[partition] = max(max_running[partition], running[partition])
+            max_total_running = max(max_total_running, total_running)
+        unblock_event.wait()
+        with lock:
+            running[partition] -= 1
+            total_running -= 1
+        assert DBOS.workflow_id is not None
+        return DBOS.workflow_id
+
+    queue = DBOS.register_queue(
+        "partition_and_worker_queue",
+        partition_concurrency=1,
+        worker_concurrency=worker_concurrency,
+        polling_interval_sec=0.5,
+    )
+
+    handles: list[WorkflowHandle[str]] = []
+    for partition in partitions:
+        with SetEnqueueOptions(queue_partition_key=partition):
+            for _ in range(wfs_per_partition):
+                handles.append(
+                    DBOS.enqueue_workflow(queue.name, blocking_workflow, partition)
+                )
+
+    # The worker saturates its queue-wide limit, drawing from distinct partitions.
+    def worker_saturated() -> None:
+        with lock:
+            assert total_running == worker_concurrency
+
+    retry_until_success(worker_saturated)
+
+    # Let several polling intervals pass: neither limit is ever exceeded, and the
+    # two partitions with no room stay blocked rather than sharing the worker's.
+    time.sleep(2)
+    with lock:
+        assert max_total_running == worker_concurrency
+        assert all(max_running[p] <= 1 for p in partitions)
+
+    unblock_event.set()
+    for handle in handles:
+        assert handle.get_result() is not None
+
+    # Every partition ran, and none ever ran two at once, through the drain as well.
+    with lock:
+        assert max_total_running == worker_concurrency
+        assert all(max_running[p] == 1 for p in partitions)
+
+    assert queue_entries_are_cleaned_up(dbos)
+
+
 def _enqueue_partition_rows(
     dbos: DBOS,
     func: Any,
@@ -3032,6 +3104,32 @@ def test_partitioned_batch_dequeue_sweep_cap(
     assert start() == [ids[p][0] for p in partitions[:5]]
     assert start() == [ids[p][0] for p in partitions[5:]]
     assert start() == []
+
+
+def test_partitioned_batch_dequeue_worker_budget(dbos: DBOS) -> None:
+    """max_tasks bounds a sweep to this worker's remaining room, in partition order."""
+
+    @DBOS.workflow()
+    def batch_wf(value: str) -> None:
+        pass
+
+    queue_name = f"unpolled-budget-{uuid.uuid4().hex[:8]}"
+    queue = Queue(
+        queue_name, concurrency=1, partition_queue=True, database_backed_queue=True
+    )
+    partitions = [f"p{i}" for i in range(4)]
+    ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "budget", partitions, 1)
+
+    def start(max_tasks: int) -> List[str]:
+        return dbos._sys_db.start_queued_partitioned_workflows(
+            queue, GlobalParams.executor_id, GlobalParams.app_version, max_tasks
+        )
+
+    # An exhausted budget claims nothing, a partial one only the first partitions.
+    assert start(0) == []
+    assert start(2) == [ids[p][0] for p in partitions[:2]]
+    # Those partitions are now PENDING-gated, so the rest follow.
+    assert start(10) == [ids[p][0] for p in partitions[2:]]
 
 
 def test_partitioned_batch_dequeue_exclusive_direct(dbos: DBOS) -> None:
@@ -3209,9 +3307,9 @@ def test_partitioned_batch_dequeue_contention(dbos: DBOS) -> None:
 def test_partitioned_queue_fallback_routing(
     dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Partitioned configs the batched path does not support -- a rate limiter, and
-    worker_concurrency=0 (the pause-dequeue idiom, which it would ignore) -- route to
-    the per-partition sweep, which drains the first and honors the pause on the second.
+    """A partitioned config the batched path does not support -- a rate limiter --
+    routes to the per-partition sweep and drains. worker_concurrency=0 (the
+    pause-dequeue idiom) exhausts this worker's budget before either path runs.
     """
 
     @DBOS.workflow()
@@ -3262,12 +3360,14 @@ def test_partitioned_queue_fallback_routing(
     for handle in handles:
         assert handle.get_result()
 
-    def paused_queue_swept() -> None:
-        assert paused_queue.name in swept_queues
+    def limiter_queue_swept() -> None:
+        assert limiter_queue.name in swept_queues
 
-    retry_until_success(paused_queue_swept, interval=0.1, max_attempts=100)
+    retry_until_success(limiter_queue_swept, interval=0.1, max_attempts=100)
     assert limiter_queue.name not in batched_queues
+    # The paused queue polls on the same interval, so it has had its turn by now.
     assert paused_queue.name not in batched_queues
+    assert paused_queue.name not in swept_queues
     assert paused_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
 
 

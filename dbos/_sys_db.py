@@ -4460,14 +4460,20 @@ class SystemDatabase(ABC):
         queue: "Queue",
         executor_id: str,
         app_version: str,
+        max_tasks: int = sys.maxsize,
     ) -> List[str]:
         """Dequeue every partition's head-of-line workflow in one transaction, at most
-        PARTITIONED_DEQUEUE_SWEEP_CAP per sweep. Valid only for concurrency=1, no-limiter queues:
-        all workers rank the same head, so guarded flips admit at most one row per partition.
+        min(max_tasks, PARTITIONED_DEQUEUE_SWEEP_CAP) per sweep. Valid only when per-partition
+        concurrency is 1 and worker concurrency is the sole other limit: all workers rank the
+        same head, so guarded flips admit at most one row per partition, and a per-worker
+        budget binds nothing peers must also see. Callers pass that budget as max_tasks.
         """
-        assert queue._concurrency == 1
-        assert queue._limiter is None
+        limits = queue._resolve_limits()
         assert queue._partition_queue
+        assert limits.partition_concurrency == 1
+        assert limits.global_concurrency is None
+        assert limits.limiter is None
+        assert limits.partition_limiter is None
         start_time_ms = int(time.time() * 1000)
         ws = SystemSchema.workflow_status
         with self.engine.begin() as c:
@@ -4542,6 +4548,8 @@ class SystemDatabase(ABC):
                 .where(ws.c.queue_partition_key == partitions.c.pk)
                 .exists()
             )
+            # This worker's own budget bounds the sweep alongside the bind-param cap.
+            sweep_limit = min(self.PARTITIONED_DEQUEUE_SWEEP_CAP, max_tasks)
             if self.engine.dialect.name == "postgresql":
                 # LATERAL joins plan as tight nested loops; correlated scalar subqueries run as slower per-row SubPlans on Postgres.
                 head = head_query.lateral("head")
@@ -4551,7 +4559,7 @@ class SystemDatabase(ABC):
                     .where(partitions.c.pk.isnot(None))
                     .where(~pending_probe)
                     .order_by(partitions.c.pk.asc())
-                    .limit(self.PARTITIONED_DEQUEUE_SWEEP_CAP)
+                    .limit(sweep_limit)
                 )
             else:
                 # SQLite has no LATERAL; a correlated scalar subquery probes each head, with version-ineligible (NULL-head) partitions filtered in the outer select.
@@ -4568,7 +4576,7 @@ class SystemDatabase(ABC):
                     sa.select(heads.c.workflow_uuid)
                     .where(heads.c.workflow_uuid.isnot(None))
                     .order_by(heads.c.pk.asc())
-                    .limit(self.PARTITIONED_DEQUEUE_SWEEP_CAP)
+                    .limit(sweep_limit)
                 )
             candidate_ids = [row[0] for row in c.execute(cand_query).fetchall()]
             if not candidate_ids:
