@@ -704,16 +704,16 @@ def queue_worker_thread(
                 # Every other partitioned config sweeps one partition at a time.
                 queue_partition_keys = dbos._sys_db.get_queue_partitions(queue.name)
                 for key in queue_partition_keys:
-                    local_running_count = dbos._active_workflows_set.count_for_queue(
-                        queue.name, key
-                    )
                     try:
                         dequeued_workflows = dbos._sys_db.start_queued_workflows(
                             queue,
                             GlobalParams.executor_id,
                             GlobalParams.app_version,
                             key,
-                            local_running_count,
+                            dbos._active_workflows_set.count_for_queue(queue.name),
+                            dbos._active_workflows_set.count_for_partition(
+                                queue.name, key
+                            ),
                         )
                     except OperationalError as e:
                         # Lock held or claim raced by another worker: skip just this partition, no queue-wide backoff.
@@ -726,7 +726,7 @@ def queue_worker_thread(
                     start_dequeued_workflows(dequeued_workflows)
             else:
                 local_running_count = dbos._active_workflows_set.count_for_queue(
-                    queue.name, None
+                    queue.name
                 )
                 dequeued_workflows = dbos._sys_db.start_queued_workflows(
                     queue,

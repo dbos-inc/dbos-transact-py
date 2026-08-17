@@ -2861,7 +2861,8 @@ def test_partition_serialization_failure_skips_key(
         executor_id: str,
         app_version: str,
         queue_partition_key: Any = None,
-        local_running_count: int = 0,
+        *args: Any,
+        **kwargs: Any,
     ) -> List[str]:
         if (
             poison_active.is_set()
@@ -2874,7 +2875,8 @@ def test_partition_serialization_failure_skips_key(
             executor_id,
             app_version,
             queue_partition_key,
-            local_running_count,
+            *args,
+            **kwargs,
         )
 
     monkeypatch.setattr(dbos._sys_db, "start_queued_workflows", poisoned_start)
