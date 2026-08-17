@@ -4214,8 +4214,7 @@ class SystemDatabase(ABC):
     ) -> List[str]:
         start_time_ms = int(time.time() * 1000)
         ws = SystemSchema.workflow_status
-        # Resolve from the queue's locally cached private state to avoid recursive DB
-        # reads via the @property getters within this transaction.
+        # Resolve from the queue's locally cached private state to avoid recursive DB reads
         limits = queue._resolve_limits()
         # Budgets peer workers also spend, at either scope: those need a consistent snapshot.
         has_shared_budget = (
@@ -4275,9 +4274,7 @@ class SystemDatabase(ABC):
                     query = query.where(ws.c.queue_partition_key == queue_partition_key)
                 return c.execute(query).scalar() or 0
 
-            # Compute max_tasks, the number of workflows that can be dequeued given every
-            # limit in force, each counted at the scope it is enforced at. In-memory terms
-            # come first so an exhausted worker budget costs no queries.
+            # Compute max_tasks under every flow control limit enforced on this queue
             max_tasks = sys.maxsize
 
             if limits.worker_concurrency is not None:
@@ -4559,9 +4556,7 @@ class SystemDatabase(ABC):
             )
             # This worker's own budget bounds the sweep alongside the bind-param cap.
             sweep_limit = min(self.PARTITIONED_DEQUEUE_SWEEP_CAP, max_tasks)
-            # Random order, not partition order: a budget below the partition count would
-            # otherwise spend itself on the same lowest keys every sweep, and peers would
-            # all contend for those same heads. Costs a sort of the partition set.
+            # Randomize partition order to avoid starvation
             sweep_order = sa.func.random()
             if self.engine.dialect.name == "postgresql":
                 # LATERAL joins plan as tight nested loops; correlated scalar subqueries run as slower per-row SubPlans on Postgres.

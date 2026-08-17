@@ -103,13 +103,11 @@ class Queue:
         database_backed_queue: bool = False,
         client_system_database: Optional["SystemDatabase"] = None,
         application_name: Optional[str] = None,
-        # Deprecated, retained for backwards compatibility. concurrency and limiter
-        # keep their positional slots above: moving them would rebind Queue("q", 5).
+        # Deprecated, retained for backwards compatibility. concurrency and limiter keep their positional slots above: moving them would rebind Queue("q", 5).
         priority_enabled: bool = False,
         partition_queue: bool = False,
     ) -> None:
-        # Rows are validated when written, and a row legitimately carries both
-        # partition_queue and the partition limits, which no caller may combine.
+        # Rows are validated when written, and a row legitimately carries both partition_queue and the partition limits, which no caller may combine.
         if not database_backed_queue:
             Queue._validate_queue(
                 concurrency=concurrency,
@@ -130,9 +128,7 @@ class Queue:
         # DBOS singleton's. This allows a DBOSClient to manipulate queues
         # without depending on a launched DBOS process.
         self._client_system_database = client_system_database
-        # Local cache of configurable params, mirroring the queues-table columns.
-        # Property getters consult this for in-memory queues and the database for
-        # database-backed queues.
+        # Local cache of the queues-table columns; getters consult it for in-memory queues and the database for database-backed ones.
         self._concurrency = (
             concurrency if global_concurrency is None else global_concurrency
         )
@@ -207,8 +203,7 @@ class Queue:
             raise ValueError(
                 "worker_concurrency must be greater than or equal to partition_worker_concurrency"
             )
-        # Under the deprecated partition_queue spelling, concurrency is itself a
-        # per-partition limit, so the worker_concurrency check below compares like with like.
+        # Under the deprecated partition_queue spelling concurrency is itself a per-partition limit, so the worker_concurrency check below compares like with like.
         queue_concurrency = (
             concurrency if global_concurrency is None else global_concurrency
         )
@@ -408,8 +403,6 @@ class Queue:
         _warn_sync_db_call_in_async_context(
             "Queue.set_global_concurrency", "Queue.set_global_concurrency_async"
         )
-        # Refresh the local cache so the mode and cross-field checks below see
-        # the latest configuration stored in the database.
         self._refresh_fields(self._read_from_db())
         self._require_not_legacy_partitioned("global_concurrency")
         self._check_concurrency_bounds(value)
@@ -830,8 +823,7 @@ def queue_worker_thread(
         already claimed this sweep: dispatch is asynchronous, so the active set does
         not count them yet."""
         if limits.worker_concurrency is None:
-            # A legacy per-partition worker limit is enforced per partition instead,
-            # except for zero, which stops this worker dequeueing at all.
+            # A legacy per-partition worker limit is enforced per partition instead, except for zero, which stops this worker dequeueing at all.
             return 0 if limits.partition_worker_concurrency == 0 else sys.maxsize
         return max(
             0,
@@ -886,9 +878,7 @@ def queue_worker_thread(
                 and limits.limiter is None
                 and limits.partition_limiter is None
             ):
-                # Batched path: one transaction claims every partition's head. Only this
-                # worker's own budget bounds it, so nothing peers must also see is at
-                # stake (see start_queued_partitioned_workflows).
+                # Optimization: Batch dequeue if partition concurrency is 1
                 max_tasks = worker_budget(limits)
                 if max_tasks > 0:
                     dequeued_workflows = (
@@ -901,9 +891,7 @@ def queue_worker_thread(
                     )
                     start_dequeued_workflows(dequeued_workflows)
             else:
-                # Every other partitioned config sweeps one partition at a time, in
-                # random order: a budget that runs out partway through would otherwise
-                # strand the same keys every sweep.
+                # Iterate through partitions one at a time in random order to prevent starvation.
                 partition_keys = dbos._sys_db.get_queue_partitions(queue.name)
                 random.shuffle(partition_keys)
                 claimed = 0
@@ -916,8 +904,6 @@ def queue_worker_thread(
                             GlobalParams.executor_id,
                             GlobalParams.app_version,
                             key,
-                            # Rows claimed earlier in this sweep dispatch asynchronously,
-                            # so the active set does not count them yet.
                             dbos._active_workflows_set.count_for_queue(queue.name)
                             + claimed,
                             dbos._active_workflows_set.count_for_partition(

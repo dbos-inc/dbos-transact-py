@@ -2413,8 +2413,7 @@ async def test_queue_deduplication_async(dbos: DBOS) -> None:
 
 
 def test_priority_queue(dbos: DBOS) -> None:
-    # Make sure that we can enqueue workflows with different priorities correctly.
-    # priority_enabled is deprecated and ignored: priority needs no opt-in.
+    # Enqueue workflows with different priorities; priority_enabled is deprecated and ignored, so priority needs no opt-in.
     DBOS.register_queue("test_queue_priority", concurrency=1)
     DBOS.register_queue("test_queue_child")
 
@@ -3119,8 +3118,7 @@ def test_partition_concurrency_with_worker_concurrency(dbos: DBOS) -> None:
 
     retry_until_success(worker_saturated)
 
-    # Let several polling intervals pass: neither limit is ever exceeded, and the
-    # two partitions with no room stay blocked rather than sharing the worker's.
+    # Let several polling intervals pass: neither limit is ever exceeded, and the two partitions with no room stay blocked rather than sharing the worker's.
     time.sleep(2)
     with lock:
         assert max_total_running == worker_concurrency
@@ -3387,8 +3385,7 @@ def test_partition_limiter_with_queue_wide_limiter(dbos: DBOS) -> None:
     def statuses() -> List[str]:
         return [dbos._sys_db.get_workflow_status(id)["status"] for id in ids]  # type: ignore
 
-    # The queue-wide window caps the total at three, one from each of three partitions:
-    # the per-partition window admits only one apiece.
+    # The queue-wide window caps the total at three, one from each of three partitions: the per-partition window admits only one apiece.
     def limiter_budget_spent() -> None:
         assert statuses().count(WorkflowStatusString.SUCCESS.value) == queue_limit
 
@@ -3580,8 +3577,7 @@ def test_partitioned_batch_dequeue_varies_partitions(dbos: DBOS) -> None:
             dbos._sys_db, claimed[0], WorkflowStatusString.SUCCESS.value
         )
 
-    # Twenty draws over five always-eligible partitions: fewer than three distinct
-    # winners has probability ~1e-7, while a fixed order would yield exactly one.
+    # Twenty draws over five always-eligible partitions: fewer than three distinct winners has probability ~1e-7, while a fixed order would yield exactly one.
     assert len(chosen) >= 3
 
 
