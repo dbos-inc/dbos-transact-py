@@ -1138,6 +1138,14 @@ ALTER TABLE "{schema}"."queues" ADD COLUMN IF NOT EXISTS "partition_concurrency"
 """
 
 
+def get_dbos_migration_hundrednine(schema: str) -> str:
+    return f"""
+ALTER TABLE "{schema}"."queues" ADD COLUMN IF NOT EXISTS "partition_worker_concurrency" INT4 DEFAULT NULL;
+ALTER TABLE "{schema}"."queues" ADD COLUMN IF NOT EXISTS "partition_rate_limit_max" INT4 DEFAULT NULL;
+ALTER TABLE "{schema}"."queues" ADD COLUMN IF NOT EXISTS "partition_rate_limit_period_sec" DOUBLE PRECISION DEFAULT NULL;
+"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -1201,6 +1209,7 @@ def get_dbos_migrations(
         get_dbos_migration_hundredsix(schema),
         get_dbos_migration_hundredseven(schema, is_cockroach),
         get_dbos_migration_hundredeight(schema),
+        get_dbos_migration_hundrednine(schema),
     ]
 
 
@@ -1506,6 +1515,12 @@ sqlite_migration_hundredeight = (
     'ALTER TABLE queues ADD COLUMN "partition_concurrency" INTEGER DEFAULT NULL'
 )
 
+sqlite_migration_hundrednine = """
+ALTER TABLE queues ADD COLUMN "partition_worker_concurrency" INTEGER DEFAULT NULL;
+ALTER TABLE queues ADD COLUMN "partition_rate_limit_max" INTEGER DEFAULT NULL;
+ALTER TABLE queues ADD COLUMN "partition_rate_limit_period_sec" REAL DEFAULT NULL;
+"""
+
 _sqlite_history = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -1566,4 +1581,5 @@ sqlite_migrations = [
     sqlite_migration_hundredsix,
     sqlite_migration_hundredseven,
     sqlite_migration_hundredeight,
+    sqlite_migration_hundrednine,
 ]

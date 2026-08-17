@@ -88,6 +88,12 @@ def queue_from_db_row(
             "limit": m["rate_limit_max"],
             "period": m["rate_limit_period_sec"],
         }
+    partition_limiter: Optional["QueueRateLimit"] = None
+    if m["partition_rate_limit_max"] is not None:
+        partition_limiter = {
+            "limit": m["partition_rate_limit_max"],
+            "period": m["partition_rate_limit_period_sec"],
+        }
     return Queue(
         m["name"],
         m["concurrency"],
@@ -96,6 +102,8 @@ def queue_from_db_row(
         priority_enabled=bool(m["priority_enabled"]),
         partition_queue=bool(m["partition_queue"]),
         partition_concurrency=m["partition_concurrency"],
+        partition_worker_concurrency=m["partition_worker_concurrency"],
+        partition_limiter=partition_limiter,
         polling_interval_sec=m["polling_interval_sec"],
         application_name=m["application_name"],
         database_backed_queue=True,
@@ -6280,6 +6288,9 @@ class SystemDatabase(ABC):
         update_existing: bool,
         application_name: Optional[str] = None,
         partition_concurrency: Optional[int] = None,
+        partition_worker_concurrency: Optional[int] = None,
+        partition_rate_limit_max: Optional[int] = None,
+        partition_rate_limit_period_sec: Optional[float] = None,
     ) -> bool:
         """Upsert a queue row. Returns True iff a new row was inserted (i.e.
         the queue did not previously exist). False if the row already existed,
@@ -6292,9 +6303,15 @@ class SystemDatabase(ABC):
             "rate_limit_max": rate_limit_max,
             "rate_limit_period_sec": rate_limit_period_sec,
             "priority_enabled": priority_enabled,
-            # A partition_concurrency limit implies partitioning, whichever spelling was used.
-            "partition_queue": partition_queue or partition_concurrency is not None,
+            # Any per-partition limit implies partitioning, whichever spelling was used.
+            "partition_queue": partition_queue
+            or partition_concurrency is not None
+            or partition_worker_concurrency is not None
+            or partition_rate_limit_max is not None,
             "partition_concurrency": partition_concurrency,
+            "partition_worker_concurrency": partition_worker_concurrency,
+            "partition_rate_limit_max": partition_rate_limit_max,
+            "partition_rate_limit_period_sec": partition_rate_limit_period_sec,
             "polling_interval_sec": polling_interval_sec,
             "updated_at": int(time.time() * 1000),
             "application_name": owner,

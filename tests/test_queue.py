@@ -369,6 +369,102 @@ def test_legacy_partition_queue_limits_stay_per_partition(dbos: DBOS) -> None:
         queue.set_partition_concurrency(1)
 
 
+def test_partition_worker_concurrency_and_limiter_config(dbos: DBOS) -> None:
+    """Every per-partition limit partitions the queue and round-trips independently
+    of its queue-wide counterpart."""
+    queue_name = f"test_partition_limits_{uuid.uuid4()}"
+
+    registered = DBOS.register_queue(
+        queue_name,
+        worker_concurrency=6,
+        limiter={"limit": 10, "period": 2.0},
+        partition_worker_concurrency=2,
+        partition_limiter={"limit": 3, "period": 1.5},
+    )
+    listed = [q for q in DBOS.list_queues() if q.name == queue_name]
+    for q in [registered, DBOS.retrieve_queue(queue_name), *listed]:
+        assert q is not None
+        # Partitioning is inferred from the partition limits, with no partition_concurrency.
+        assert q.partition_queue is True
+        assert q.partition_concurrency is None
+        assert q.partition_worker_concurrency == 2
+        assert q.partition_limiter == {"limit": 3, "period": 1.5}
+        assert q.worker_concurrency == 6
+        assert q.limiter == {"limit": 10, "period": 2.0}
+        limits = q._resolve_limits()
+        assert limits.partition_worker_concurrency == 2
+        assert limits.partition_limiter == {"limit": 3, "period": 1.5}
+        assert limits.worker_concurrency == 6
+        assert limits.limiter == {"limit": 10, "period": 2.0}
+
+    # Setters round-trip, and clearing every partition limit un-partitions the queue.
+    registered.set_partition_worker_concurrency(1)
+    registered.set_partition_limiter({"limit": 5, "period": 4.0})
+    fresh = DBOS.retrieve_queue(queue_name)
+    assert fresh is not None
+    assert fresh.partition_worker_concurrency == 1
+    assert fresh.partition_limiter == {"limit": 5, "period": 4.0}
+    assert fresh.partition_queue is True
+
+    registered.set_partition_limiter(None)
+    assert registered.partition_queue is True  # still partitioned by the worker limit
+    registered.set_partition_worker_concurrency(None)
+    cleared = DBOS.retrieve_queue(queue_name)
+    assert cleared is not None
+    assert cleared.partition_queue is False
+    assert cleared.partition_worker_concurrency is None
+    assert cleared.partition_limiter is None
+
+
+@pytest.mark.asyncio
+async def test_partition_worker_concurrency_and_limiter_config_async(
+    dbos: DBOS,
+) -> None:
+    queue_name = f"test_partition_limits_async_{uuid.uuid4()}"
+    queue = await DBOS.register_queue_async(
+        queue_name,
+        partition_worker_concurrency=2,
+        partition_limiter={"limit": 3, "period": 1.5},
+    )
+    assert await queue.get_partition_worker_concurrency_async() == 2
+    assert await queue.get_partition_limiter_async() == {"limit": 3, "period": 1.5}
+    assert await queue.get_partition_queue_async() is True
+
+    await queue.set_partition_worker_concurrency_async(1)
+    await queue.set_partition_limiter_async(None)
+    fresh = await DBOS.retrieve_queue_async(queue_name)
+    assert fresh is not None
+    assert await fresh.get_partition_worker_concurrency_async() == 1
+    assert await fresh.get_partition_limiter_async() is None
+    assert await fresh.get_partition_queue_async() is True
+
+
+def test_partition_worker_concurrency_validation(dbos: DBOS) -> None:
+    suffix = uuid.uuid4()
+    # The deprecated flag cannot be combined with any partition limit.
+    with pytest.raises(ValueError, match="only one of them"):
+        Queue(f"pw1_{suffix}", partition_queue=True, partition_worker_concurrency=1)
+    with pytest.raises(ValueError, match="only one of them"):
+        Queue(
+            f"pw2_{suffix}",
+            partition_queue=True,
+            partition_limiter={"limit": 1, "period": 1.0},
+        )
+    # A per-partition limit above its queue-wide counterpart could never bind.
+    with pytest.raises(ValueError, match="greater than or equal to"):
+        Queue(f"pw3_{suffix}", worker_concurrency=1, partition_worker_concurrency=2)
+    with pytest.raises(ValueError, match="greater than or equal to"):
+        Queue(f"pw4_{suffix}", partition_concurrency=1, partition_worker_concurrency=2)
+    with pytest.raises(ValueError, match="both 'limit' and 'period'"):
+        Queue(f"pw5_{suffix}", partition_limiter={"limit": 1})  # type: ignore
+
+    # A partition limiter alone partitions the queue.
+    queue = Queue(f"pw6_{suffix}", partition_limiter={"limit": 1, "period": 1.0})
+    assert queue.partition_queue is True
+    with pytest.raises(Exception, match="without a partition key"):
+        queue._validate_enqueue(None)
+
+
 def test_partition_concurrency_validation(dbos: DBOS) -> None:
     suffix = uuid.uuid4()
     # The deprecated arguments cannot be combined with the ones replacing them.
@@ -3195,6 +3291,118 @@ def test_partition_concurrency_with_global_concurrency(dbos: DBOS) -> None:
         assert max_total_running == global_concurrency
         assert all(max_running[p] <= partition_concurrency for p in partitions)
     assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_partition_worker_concurrency_with_worker_concurrency(dbos: DBOS) -> None:
+    """Both worker limits bind at once: each partition runs at most
+    partition_worker_concurrency here, and the queue at most worker_concurrency."""
+
+    worker_concurrency = 3
+    partition_worker_concurrency = 2
+    partitions = [f"partition-{i}" for i in range(3)]
+
+    unblock_event = threading.Event()
+    lock = threading.Lock()
+    running: dict[str, int] = {p: 0 for p in partitions}
+    max_running: dict[str, int] = {p: 0 for p in partitions}
+    total_running = 0
+    max_total_running = 0
+
+    @DBOS.workflow()
+    def blocking_workflow(partition: str) -> str:
+        nonlocal total_running, max_total_running
+        with lock:
+            running[partition] += 1
+            total_running += 1
+            max_running[partition] = max(max_running[partition], running[partition])
+            max_total_running = max(max_total_running, total_running)
+        unblock_event.wait()
+        with lock:
+            running[partition] -= 1
+            total_running -= 1
+        assert DBOS.workflow_id is not None
+        return DBOS.workflow_id
+
+    queue = DBOS.register_queue(
+        "partition_worker_queue",
+        worker_concurrency=worker_concurrency,
+        partition_worker_concurrency=partition_worker_concurrency,
+        polling_interval_sec=0.5,
+    )
+
+    handles: list[WorkflowHandle[str]] = []
+    for partition in partitions:
+        with SetEnqueueOptions(queue_partition_key=partition):
+            for _ in range(3):
+                handles.append(
+                    DBOS.enqueue_workflow(queue.name, blocking_workflow, partition)
+                )
+
+    def worker_saturated() -> None:
+        with lock:
+            assert total_running == worker_concurrency
+
+    retry_until_success(worker_saturated)
+
+    time.sleep(2)
+    with lock:
+        assert max_total_running == worker_concurrency
+        assert all(max_running[p] <= partition_worker_concurrency for p in partitions)
+
+    unblock_event.set()
+    for handle in handles:
+        assert handle.get_result() is not None
+
+    with lock:
+        assert max_total_running == worker_concurrency
+        assert all(max_running[p] <= partition_worker_concurrency for p in partitions)
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_partition_limiter_with_queue_wide_limiter(dbos: DBOS) -> None:
+    """Both rate limits bind at once: each partition spends its own window, and the
+    queue-wide window caps the total across partitions."""
+
+    @DBOS.workflow()
+    def noop(tag: str) -> str:
+        return tag
+
+    queue_limit, partition_limit = 3, 1
+    partitions = [f"p{i}" for i in range(4)]
+    queue = DBOS.register_queue(
+        "partition_and_queue_limiter",
+        limiter={"limit": queue_limit, "period": 60},
+        partition_limiter={"limit": partition_limit, "period": 60},
+        polling_interval_sec=0.25,
+    )
+
+    ids = []
+    for partition in partitions:
+        with SetEnqueueOptions(queue_partition_key=partition):
+            for _ in range(2):
+                ids.append(
+                    DBOS.enqueue_workflow(queue.name, noop, partition).workflow_id
+                )
+
+    def statuses() -> List[str]:
+        return [dbos._sys_db.get_workflow_status(id)["status"] for id in ids]  # type: ignore
+
+    # The queue-wide window caps the total at three, one from each of three partitions:
+    # the per-partition window admits only one apiece.
+    def limiter_budget_spent() -> None:
+        assert statuses().count(WorkflowStatusString.SUCCESS.value) == queue_limit
+
+    retry_until_success(limiter_budget_spent)
+
+    time.sleep(1)
+    final = statuses()
+    assert final.count(WorkflowStatusString.SUCCESS.value) == queue_limit
+    started_partitions = [
+        dbos._sys_db.get_workflow_status(id)["queue_partition_key"]  # type: ignore
+        for id, status in zip(ids, final)
+        if status != WorkflowStatusString.ENQUEUED.value
+    ]
+    assert len(set(started_partitions)) == queue_limit
 
 
 def test_partition_concurrency_with_queue_wide_limiter(dbos: DBOS) -> None:

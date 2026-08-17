@@ -339,8 +339,11 @@ class SystemSchema:
         Column("rate_limit_period_sec", Float, nullable=True),
         Column("priority_enabled", Boolean, nullable=False, server_default="false"),
         Column("partition_queue", Boolean, nullable=False, server_default="false"),
-        # Set means the queue is partitioned and this limit applies per partition.
+        # Any of these being set means the queue is partitioned; each applies per partition.
         Column("partition_concurrency", Integer, nullable=True),
+        Column("partition_worker_concurrency", Integer, nullable=True),
+        Column("partition_rate_limit_max", Integer, nullable=True),
+        Column("partition_rate_limit_period_sec", Float, nullable=True),
         Column("polling_interval_sec", Float, nullable=False, server_default="1.0"),
         Column("created_at", BigInteger, nullable=False),
         Column("updated_at", BigInteger, nullable=False),

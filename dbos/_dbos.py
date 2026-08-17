@@ -936,6 +936,8 @@ class DBOS:
         worker_concurrency: Optional[int] = None,
         global_concurrency: Optional[int] = None,
         partition_concurrency: Optional[int] = None,
+        partition_worker_concurrency: Optional[int] = None,
+        partition_limiter: Optional[QueueRateLimit] = None,
         limiter: Optional[QueueRateLimit] = None,
         polling_interval_sec: float = 1.0,
         on_conflict: QueueConflictResolution = "update_if_latest_version",
@@ -956,7 +958,14 @@ class DBOS:
             default) means no global limit.
         :param partition_concurrency: Maximum number of workflows from any one
             partition of this queue that may be running globally (across all
-            executors) at once. Setting it makes the queue partitioned, so every
+            executors) at once.
+        :param partition_worker_concurrency: Maximum number of workflows from any
+            one partition of this queue that may be running on a single executor at
+            once.
+        :param partition_limiter: Rate limit applied to each partition separately,
+            of the form ``{"limit": int, "period": float}``.
+
+            Setting any ``partition_*`` limit makes the queue partitioned, so every
             enqueue must specify a ``queue_partition_key``, while
             ``global_concurrency``, ``worker_concurrency``, and ``limiter`` continue
             to apply to the queue as a whole. Deduplication is not supported on
@@ -992,6 +1001,8 @@ class DBOS:
             worker_concurrency=worker_concurrency,
             global_concurrency=global_concurrency,
             partition_concurrency=partition_concurrency,
+            partition_worker_concurrency=partition_worker_concurrency,
+            partition_limiter=partition_limiter,
             partition_queue=partition_queue,
             polling_interval_sec=polling_interval_sec,
             limiter=limiter,
@@ -1017,6 +1028,13 @@ class DBOS:
             priority_enabled=priority_enabled,
             partition_queue=partition_queue,
             partition_concurrency=partition_concurrency,
+            partition_worker_concurrency=partition_worker_concurrency,
+            partition_rate_limit_max=(
+                partition_limiter["limit"] if partition_limiter else None
+            ),
+            partition_rate_limit_period_sec=(
+                partition_limiter["period"] if partition_limiter else None
+            ),
             polling_interval_sec=polling_interval_sec,
             update_existing=update_existing,
         )
@@ -1039,6 +1057,8 @@ class DBOS:
         worker_concurrency: Optional[int] = None,
         global_concurrency: Optional[int] = None,
         partition_concurrency: Optional[int] = None,
+        partition_worker_concurrency: Optional[int] = None,
+        partition_limiter: Optional[QueueRateLimit] = None,
         limiter: Optional[QueueRateLimit] = None,
         polling_interval_sec: float = 1.0,
         on_conflict: QueueConflictResolution = "update_if_latest_version",
@@ -1055,6 +1075,8 @@ class DBOS:
                 worker_concurrency=worker_concurrency,
                 global_concurrency=global_concurrency,
                 partition_concurrency=partition_concurrency,
+                partition_worker_concurrency=partition_worker_concurrency,
+                partition_limiter=partition_limiter,
                 limiter=limiter,
                 polling_interval_sec=polling_interval_sec,
                 on_conflict=on_conflict,
