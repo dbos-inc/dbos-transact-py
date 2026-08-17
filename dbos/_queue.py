@@ -96,12 +96,14 @@ class Queue:
         worker_concurrency: Optional[int] = None,
         global_concurrency: Optional[int] = None,
         partition_concurrency: Optional[int] = None,
-        priority_enabled: bool = False,
-        partition_queue: bool = False,
         polling_interval_sec: float = DEFAULT_QUEUE_POLLING_INTERVAL_SEC,
         database_backed_queue: bool = False,
         client_system_database: Optional["SystemDatabase"] = None,
         application_name: Optional[str] = None,
+        # Deprecated, retained for backwards compatibility. concurrency and limiter
+        # keep their positional slots above: moving them would rebind Queue("q", 5).
+        priority_enabled: bool = False,
+        partition_queue: bool = False,
     ) -> None:
         # Rows are validated when written, and a row legitimately carries both
         # partition_queue and partition_concurrency, which no caller may combine.
@@ -476,7 +478,7 @@ class Queue:
 
     @property
     def priority_enabled(self) -> bool:
-        """Deprecated and ignored: every queue dequeues in priority order."""
+        """Deprecated."""
         if self.database_backed_queue:
             _warn_sync_db_call_in_async_context(
                 "Queue.priority_enabled", "Queue.get_priority_enabled_async"

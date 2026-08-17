@@ -934,14 +934,15 @@ class DBOS:
         name: str,
         *,
         worker_concurrency: Optional[int] = None,
-        concurrency: Optional[int] = None,
         global_concurrency: Optional[int] = None,
         partition_concurrency: Optional[int] = None,
         limiter: Optional[QueueRateLimit] = None,
-        priority_enabled: bool = False,
-        partition_queue: bool = False,
         polling_interval_sec: float = 1.0,
         on_conflict: QueueConflictResolution = "update_if_latest_version",
+        # Deprecated, retained for backwards compatibility
+        concurrency: Optional[int] = None,
+        priority_enabled: bool = False,
+        partition_queue: bool = False,
     ) -> Queue:
         """
         Register a queue and persist its configuration to the system database.
@@ -950,8 +951,6 @@ class DBOS:
         :param worker_concurrency: Maximum number of workflows from this queue
             that may be running on a single executor at once. ``None`` means no
             per-executor limit. May be combined with ``concurrency``.
-        :param concurrency: Deprecated in favor of ``global_concurrency``, or of
-            ``partition_concurrency`` when combined with ``partition_queue``.
         :param global_concurrency: Maximum number of workflows from this queue that
             may be running globally (across all executors) at once. ``None`` (the
             default) means no global limit.
@@ -966,14 +965,6 @@ class DBOS:
             ``{"limit": int, "period": float}``. At most ``limit`` workflows
             from the queue will start within any rolling window of ``period``
             seconds. ``None`` disables rate limiting.
-        :param priority_enabled: Deprecated and ignored. Every queue dequeues in
-            priority order, so ``SetEnqueueOptions(priority=...)`` takes effect
-            whatever this is set to.
-        :param partition_queue: Deprecated in favor of ``partition_concurrency``.
-            When ``True``, every enqueue must specify a ``queue_partition_key`` and
-            the concurrency, worker_concurrency, and limiter limits are all applied
-            per partition rather than to the queue as a whole. Deduplication is not
-            supported on partitioned queues.
         :param polling_interval_sec: How often (in seconds) the worker thread
             wakes up to look for runnable workflows on this queue.
         :param on_conflict: Behavior when a queue with the same name already
@@ -988,6 +979,10 @@ class DBOS:
 
             A queue already registered by a different application raises in every
             mode: the name is its address, so a collision is not ours to resolve.
+
+        :param concurrency: Deprecated.
+        :param priority_enabled: Deprecated.
+        :param partition_queue: Deprecated.
 
         :returns: A :class:`Queue` reflecting the persisted configuration.
         """
@@ -1042,14 +1037,15 @@ class DBOS:
         name: str,
         *,
         worker_concurrency: Optional[int] = None,
-        concurrency: Optional[int] = None,
         global_concurrency: Optional[int] = None,
         partition_concurrency: Optional[int] = None,
         limiter: Optional[QueueRateLimit] = None,
-        priority_enabled: bool = False,
-        partition_queue: bool = False,
         polling_interval_sec: float = 1.0,
         on_conflict: QueueConflictResolution = "update_if_latest_version",
+        # Deprecated, retained for backwards compatibility
+        concurrency: Optional[int] = None,
+        priority_enabled: bool = False,
+        partition_queue: bool = False,
     ) -> Queue:
         """Async version of :meth:`register_queue`."""
         await cls._configure_asyncio_thread_pool()
@@ -1057,14 +1053,14 @@ class DBOS:
             lambda: cls.register_queue(
                 name,
                 worker_concurrency=worker_concurrency,
-                concurrency=concurrency,
                 global_concurrency=global_concurrency,
                 partition_concurrency=partition_concurrency,
                 limiter=limiter,
-                priority_enabled=priority_enabled,
-                partition_queue=partition_queue,
                 polling_interval_sec=polling_interval_sec,
                 on_conflict=on_conflict,
+                concurrency=concurrency,
+                priority_enabled=priority_enabled,
+                partition_queue=partition_queue,
             )
         )
 
