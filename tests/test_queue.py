@@ -2759,6 +2759,59 @@ def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
     assert client_handle.get_result()
 
 
+def test_partitioned_queue_does_not_starve_partitions(dbos: DBOS) -> None:
+    """A partition with a little work is not starved by partitions with a lot, even
+    when the queue-wide limit is too small to serve every partition at once.
+
+    Measured in units of work rather than time so the assertion does not depend on
+    machine speed: the small partitions must be served while the busy ones still
+    have a backlog. Serving partitions in a fixed order would drain the busy ones
+    first, since they hold every slot and reclaim it the moment one frees up.
+    """
+
+    busy_backlog = 60
+    # The busy partitions sort first, so a fixed order would always prefer them.
+    busy_partitions = ["aaa-busy-1", "aaa-busy-2"]
+    small_partitions = [f"zzz-small-{i}" for i in range(4)]
+
+    lock = threading.Lock()
+    completed: dict[str, int] = {p: 0 for p in busy_partitions + small_partitions}
+
+    @DBOS.workflow()
+    def quick_workflow(partition: str) -> str:
+        with lock:
+            completed[partition] += 1
+        return partition
+
+    queue = DBOS.register_queue(
+        f"starvation_{uuid.uuid4().hex[:8]}",
+        partition_concurrency=1,
+        worker_concurrency=2,
+        polling_interval_sec=0.1,
+    )
+
+    for partition in busy_partitions:
+        with SetEnqueueOptions(queue_partition_key=partition):
+            for _ in range(busy_backlog):
+                DBOS.enqueue_workflow(queue.name, quick_workflow, partition)
+    for partition in small_partitions:
+        with SetEnqueueOptions(queue_partition_key=partition):
+            DBOS.enqueue_workflow(queue.name, quick_workflow, partition)
+
+    def every_small_partition_served() -> int:
+        with lock:
+            assert all(completed[p] > 0 for p in small_partitions)
+            return sum(completed[p] for p in busy_partitions)
+
+    busy_done = retry_until_success(
+        every_small_partition_served, interval=0.2, max_attempts=100
+    )
+    # The busy partitions drain at roughly the queue-wide limit per poll, so serving
+    # the small ones promptly leaves most of that backlog outstanding. A fixed order
+    # would leave none of it.
+    assert busy_done < busy_backlog * len(busy_partitions) // 2
+
+
 def test_partition_serialization_failure_skips_key(
     dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
