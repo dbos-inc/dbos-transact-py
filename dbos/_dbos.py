@@ -966,10 +966,9 @@ class DBOS:
             ``{"limit": int, "period": float}``. At most ``limit`` workflows
             from the queue will start within any rolling window of ``period``
             seconds. ``None`` disables rate limiting.
-        :param priority_enabled: When ``True``, callers may set a workflow
-            priority via ``SetEnqueueOptions(priority=...)`` and lower numbers
-            are dequeued first. When ``False``, supplying a priority raises an
-            error at enqueue time.
+        :param priority_enabled: Deprecated and ignored. Every queue dequeues in
+            priority order, so ``SetEnqueueOptions(priority=...)`` takes effect
+            whatever this is set to.
         :param partition_queue: Deprecated in favor of ``partition_concurrency``.
             When ``True``, every enqueue must specify a ``queue_partition_key`` and
             the concurrency, worker_concurrency, and limiter limits are all applied

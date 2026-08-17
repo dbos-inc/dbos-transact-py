@@ -995,7 +995,6 @@ def test_limiter_dequeue_blocks_on_peer_claim(
     queue = DBOS.register_queue(
         "limiter_lock_queue",
         limiter={"limit": limit, "period": 60},
-        priority_enabled=True,
     )
     # Distinct priorities so the head of the queue is deterministic.
     ids = []
@@ -2318,8 +2317,9 @@ async def test_queue_deduplication_async(dbos: DBOS) -> None:
 
 
 def test_priority_queue(dbos: DBOS) -> None:
-    # Make sure that we can enqueue workflows with different priorities correctly
-    DBOS.register_queue("test_queue_priority", concurrency=1, priority_enabled=True)
+    # Make sure that we can enqueue workflows with different priorities correctly.
+    # priority_enabled is deprecated and ignored: priority needs no opt-in.
+    DBOS.register_queue("test_queue_priority", concurrency=1)
     DBOS.register_queue("test_queue_child")
 
     workflow_event = threading.Event()
@@ -2376,9 +2376,7 @@ def test_priority_queue(dbos: DBOS) -> None:
 @pytest.mark.asyncio
 async def test_priority_queue_async(dbos: DBOS) -> None:
     # Make sure that we can enqueue workflows with different priorities correctly
-    await DBOS.register_queue_async(
-        "test_queue_priority_async", concurrency=1, priority_enabled=True
-    )
+    await DBOS.register_queue_async("test_queue_priority_async", concurrency=1)
     await DBOS.register_queue_async("test_queue_child_async")
 
     workflow_event = asyncio.Event()
@@ -2452,18 +2450,10 @@ async def test_enqueue_async_validation(dbos: DBOS) -> None:
         return
 
     no_priority_q = Queue(f"async_validation_no_priority_{uuid.uuid4()}")
-    priority_q = Queue(
-        f"async_validation_priority_{uuid.uuid4()}", priority_enabled=True
-    )
     partition_q = Queue(
         f"async_validation_partition_{uuid.uuid4()}", partition_queue=True
     )
     no_partition_q = Queue(f"async_validation_no_partition_{uuid.uuid4()}")
-
-    # Priority on a non-priority queue
-    with pytest.raises(Exception, match="Priority is not enabled for queue"):
-        with SetEnqueueOptions(priority=1):
-            await no_priority_q.enqueue_async(noop_workflow)
 
     # Partition queue requires a partition key
     with pytest.raises(Exception, match="without a partition key"):
@@ -2483,9 +2473,9 @@ async def test_enqueue_async_validation(dbos: DBOS) -> None:
         with SetEnqueueOptions(queue_partition_key="key", deduplication_id="dedupe"):
             await partition_q.enqueue_async(noop_workflow)
 
-    # Sanity check: priority on a priority-enabled in-memory queue works.
+    # priority_enabled is deprecated and ignored: priority needs no opt-in.
     with SetEnqueueOptions(priority=1):
-        await priority_q.enqueue_async(noop_workflow)
+        await no_priority_q.enqueue_async(noop_workflow)
 
 
 def test_worker_concurrency_across_versions(dbos: DBOS, client: DBOSClient) -> None:

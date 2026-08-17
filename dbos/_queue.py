@@ -476,6 +476,7 @@ class Queue:
 
     @property
     def priority_enabled(self) -> bool:
+        """Deprecated and ignored: every queue dequeues in priority order."""
         if self.database_backed_queue:
             _warn_sync_db_call_in_async_context(
                 "Queue.priority_enabled", "Queue.get_priority_enabled_async"
@@ -580,10 +581,6 @@ class Queue:
         # Skip validation for database-backed queues to avoid a roundtrip fetching the queue
         if self.database_backed_queue:
             return
-        if ctx is not None and ctx.priority is not None and not self._priority_enabled:
-            raise Exception(
-                f"Priority is not enabled for queue {self.name}. Setting priority will not have any effect."
-            )
         if self._partition_queue and (ctx is None or ctx.queue_partition_key is None):
             raise Exception(
                 f"A workflow cannot be enqueued on partitioned queue {self.name} without a partition key"
