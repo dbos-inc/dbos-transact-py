@@ -419,9 +419,9 @@ class DBOSClient:
         :param application_name: The application that owns this queue and polls
             it. Defaults to the client's own application. Registering a queue
             already owned by a different application raises.
-        :param concurrency: Deprecated.
-        :param priority_enabled: Deprecated.
-        :param partition_queue: Deprecated.
+        :param concurrency: Deprecated. Use ``global_concurrency``.
+        :param priority_enabled: Deprecated. Priority is always enabled.
+        :param partition_queue: Deprecated. Use the ``partition_*`` limits.
 
         :returns: A :class:`Queue` bound to this client's system database.
         """

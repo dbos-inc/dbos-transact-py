@@ -355,6 +355,7 @@ class Queue:
 
     @property
     def concurrency(self) -> Optional[int]:
+        """Deprecated. Use global_concurrency."""
         if self.database_backed_queue:
             _warn_sync_db_call_in_async_context(
                 "Queue.concurrency", "Queue.get_concurrency_async"
@@ -363,12 +364,14 @@ class Queue:
         return self._concurrency
 
     async def get_concurrency_async(self) -> Optional[int]:
+        """Deprecated. Use get_global_concurrency_async."""
         if self.database_backed_queue:
             await self._configure_thread_pool()
             self._refresh_fields(await asyncio.to_thread(self._read_from_db))
         return self._concurrency
 
     def set_concurrency(self, value: Optional[int]) -> None:
+        """Deprecated. Use set_global_concurrency."""
         self._require_database_backed()
         _warn_sync_db_call_in_async_context(
             "Queue.set_concurrency", "Queue.set_concurrency_async"
@@ -381,6 +384,7 @@ class Queue:
         self._concurrency = value
 
     async def set_concurrency_async(self, value: Optional[int]) -> None:
+        """Deprecated. Use set_global_concurrency_async."""
         await self._configure_thread_pool()
         await asyncio.to_thread(self.set_concurrency, value)
 
@@ -635,7 +639,7 @@ class Queue:
 
     @property
     def priority_enabled(self) -> bool:
-        """Deprecated."""
+        """Deprecated. Priority is always enabled."""
         if self.database_backed_queue:
             _warn_sync_db_call_in_async_context(
                 "Queue.priority_enabled", "Queue.get_priority_enabled_async"
@@ -644,12 +648,14 @@ class Queue:
         return self._priority_enabled
 
     async def get_priority_enabled_async(self) -> bool:
+        """Deprecated. Priority is always enabled."""
         if self.database_backed_queue:
             await self._configure_thread_pool()
             self._refresh_fields(await asyncio.to_thread(self._read_from_db))
         return self._priority_enabled
 
     def set_priority_enabled(self, value: bool) -> None:
+        """Deprecated. Priority is always enabled."""
         self._require_database_backed()
         _warn_sync_db_call_in_async_context(
             "Queue.set_priority_enabled", "Queue.set_priority_enabled_async"
@@ -658,11 +664,13 @@ class Queue:
         self._priority_enabled = value
 
     async def set_priority_enabled_async(self, value: bool) -> None:
+        """Deprecated. Priority is always enabled."""
         await self._configure_thread_pool()
         await asyncio.to_thread(self.set_priority_enabled, value)
 
     @property
     def partition_queue(self) -> bool:
+        """Deprecated. Use the partition_* limits."""
         if self.database_backed_queue:
             _warn_sync_db_call_in_async_context(
                 "Queue.partition_queue", "Queue.get_partition_queue_async"
@@ -671,12 +679,14 @@ class Queue:
         return self._partition_queue
 
     async def get_partition_queue_async(self) -> bool:
+        """Deprecated. Use the partition_* limits."""
         if self.database_backed_queue:
             await self._configure_thread_pool()
             self._refresh_fields(await asyncio.to_thread(self._read_from_db))
         return self._partition_queue
 
     def set_partition_queue(self, value: bool) -> None:
+        """Deprecated. Use the set_partition_* setters."""
         self._require_database_backed()
         _warn_sync_db_call_in_async_context(
             "Queue.set_partition_queue", "Queue.set_partition_queue_async"
@@ -692,6 +702,7 @@ class Queue:
         self._partition_queue = value
 
     async def set_partition_queue_async(self, value: bool) -> None:
+        """Deprecated. Use the set_partition_*_async setters."""
         await self._configure_thread_pool()
         await asyncio.to_thread(self.set_partition_queue, value)
 

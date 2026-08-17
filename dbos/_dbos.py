@@ -989,9 +989,9 @@ class DBOS:
             A queue already registered by a different application raises in every
             mode: the name is its address, so a collision is not ours to resolve.
 
-        :param concurrency: Deprecated.
-        :param priority_enabled: Deprecated.
-        :param partition_queue: Deprecated.
+        :param concurrency: Deprecated. Use ``global_concurrency``.
+        :param priority_enabled: Deprecated. Priority is always enabled.
+        :param partition_queue: Deprecated. Use the ``partition_*`` limits.
 
         :returns: A :class:`Queue` reflecting the persisted configuration.
         """
