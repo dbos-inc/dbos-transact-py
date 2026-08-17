@@ -734,9 +734,13 @@ def queue_worker_thread(
                     )
                     start_dequeued_workflows(dequeued_workflows)
             else:
-                # Every other partitioned config sweeps one partition at a time.
+                # Every other partitioned config sweeps one partition at a time, in
+                # random order: a budget that runs out partway through would otherwise
+                # strand the same keys every sweep.
+                partition_keys = dbos._sys_db.get_queue_partitions(queue.name)
+                random.shuffle(partition_keys)
                 claimed = 0
-                for key in dbos._sys_db.get_queue_partitions(queue.name):
+                for key in partition_keys:
                     if worker_budget(limits, claimed) <= 0:
                         break
                     try:

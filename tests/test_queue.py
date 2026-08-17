@@ -3079,9 +3079,9 @@ def _enqueue_partition_rows(
 def test_partitioned_batch_dequeue_sweep_cap(
     dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A sweep admits at most PARTITIONED_DEQUEUE_SWEEP_CAP heads in partition
-    order; admitted partitions are PENDING-gated, so the next sweep rotates
-    onward to the remaining partitions."""
+    """A sweep admits at most PARTITIONED_DEQUEUE_SWEEP_CAP heads, chosen in random
+    partition order; admitted partitions are PENDING-gated, so the next sweep picks
+    up the remaining partitions."""
 
     @DBOS.workflow()
     def batch_wf(value: str) -> None:
@@ -3101,13 +3101,16 @@ def test_partitioned_batch_dequeue_sweep_cap(
             queue, GlobalParams.executor_id, GlobalParams.app_version
         )
 
-    assert start() == [ids[p][0] for p in partitions[:5]]
-    assert start() == [ids[p][0] for p in partitions[5:]]
+    capped, remainder = start(), start()
+    assert len(capped) == 5
+    assert len(remainder) == 3
+    # Which five come first varies with the random order; together they are every head.
+    assert set(capped) | set(remainder) == {ids[p][0] for p in partitions}
     assert start() == []
 
 
 def test_partitioned_batch_dequeue_worker_budget(dbos: DBOS) -> None:
-    """max_tasks bounds a sweep to this worker's remaining room, in partition order."""
+    """max_tasks bounds a sweep to this worker's remaining room."""
 
     @DBOS.workflow()
     def batch_wf(value: str) -> None:
@@ -3125,11 +3128,48 @@ def test_partitioned_batch_dequeue_worker_budget(dbos: DBOS) -> None:
             queue, GlobalParams.executor_id, GlobalParams.app_version, max_tasks
         )
 
-    # An exhausted budget claims nothing, a partial one only the first partitions.
+    # An exhausted budget claims nothing, a partial one only as many as it allows.
     assert start(0) == []
-    assert start(2) == [ids[p][0] for p in partitions[:2]]
+    budgeted = start(2)
+    assert len(budgeted) == 2
     # Those partitions are now PENDING-gated, so the rest follow.
-    assert start(10) == [ids[p][0] for p in partitions[2:]]
+    remainder = start(10)
+    assert len(remainder) == 2
+    assert set(budgeted) | set(remainder) == {ids[p][0] for p in partitions}
+
+
+def test_partitioned_batch_dequeue_varies_partitions(dbos: DBOS) -> None:
+    """A budget below the partition count draws partitions at random, so no key is
+    starved for sorting late. A fixed order would pick the same partition every time."""
+
+    @DBOS.workflow()
+    def batch_wf(value: str) -> None:
+        pass
+
+    queue_name = f"unpolled-fair-{uuid.uuid4().hex[:8]}"
+    queue = Queue(
+        queue_name, concurrency=1, partition_queue=True, database_backed_queue=True
+    )
+    draws = 20
+    partitions = [f"p{i}" for i in range(5)]
+    ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "fair", partitions, draws)
+    owner = {wfid: p for p in partitions for wfid in ids[p]}
+
+    chosen = set()
+    for _ in range(draws):
+        claimed = dbos._sys_db.start_queued_partitioned_workflows(
+            queue, GlobalParams.executor_id, GlobalParams.app_version, 1
+        )
+        assert len(claimed) == 1
+        chosen.add(owner[claimed[0]])
+        # Finish it, so its partition is eligible again for the next draw.
+        set_workflow_status(
+            dbos._sys_db, claimed[0], WorkflowStatusString.SUCCESS.value
+        )
+
+    # Twenty draws over five always-eligible partitions: fewer than three distinct
+    # winners has probability ~1e-7, while a fixed order would yield exactly one.
+    assert len(chosen) >= 3
 
 
 def test_partitioned_batch_dequeue_exclusive_direct(dbos: DBOS) -> None:
@@ -3153,7 +3193,7 @@ def test_partitioned_batch_dequeue_exclusive_direct(dbos: DBOS) -> None:
         )
 
     # Heads only, one per partition
-    assert start() == [ids[p][0] for p in partitions]
+    assert set(start()) == {ids[p][0] for p in partitions}
     # Every partition has a PENDING head, so nothing else is admitted
     assert start() == []
     # Completing one partition's head opens that partition alone
