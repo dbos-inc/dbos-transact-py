@@ -3042,6 +3042,211 @@ def test_partition_concurrency_with_worker_concurrency(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
+def test_partition_and_global_concurrency_across_executors(dbos: DBOS) -> None:
+    """global_concurrency caps the queue across executors while partition_concurrency
+    caps each partition: a second executor may take a different partition, but neither
+    a partition already running one nor anything once the queue-wide budget is spent."""
+
+    @DBOS.workflow()
+    def noop() -> str:
+        return "done"
+
+    # A version this executor never runs, so the live queue worker leaves these rows alone.
+    parked_version = "parked-version"
+    queue = DBOS.register_queue(
+        "partition_global_queue", global_concurrency=3, partition_concurrency=1
+    )
+    ids: dict[str, List[str]] = {}
+    for partition, rows in [("p0", 2), ("p1", 1), ("p2", 1), ("p3", 1)]:
+        ids[partition] = []
+        for priority in range(1, rows + 1):
+            # Distinct priorities so a partition's head is deterministic.
+            with SetEnqueueOptions(
+                queue_partition_key=partition,
+                app_version=parked_version,
+                priority=priority,
+            ):
+                ids[partition].append(
+                    DBOS.enqueue_workflow(queue.name, noop).workflow_id
+                )
+
+    def claim(executor: str, partition: str) -> List[str]:
+        return dbos._sys_db.start_queued_workflows(
+            queue, executor, parked_version, partition
+        )
+
+    assert claim("executor-a", "p0") == [ids["p0"][0]]
+    # p0's follower is held back by partition_concurrency, though the queue has room.
+    assert claim("executor-b", "p0") == []
+    # Other partitions are free until the queue-wide budget runs out.
+    assert claim("executor-b", "p1") == [ids["p1"][0]]
+    assert claim("executor-a", "p2") == [ids["p2"][0]]
+    assert claim("executor-b", "p3") == []
+    # Freeing a queue-wide slot admits the idle partition.
+    set_workflow_status(dbos._sys_db, ids["p1"][0], WorkflowStatusString.SUCCESS.value)
+    assert claim("executor-b", "p3") == [ids["p3"][0]]
+
+
+def test_partition_concurrency_dequeue_blocks_on_peer_claim(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    """A per-partition budget is shared across workers just as a queue-wide one is, so
+    a peer mid-claim must block the dequeue rather than be skipped past."""
+
+    @DBOS.workflow()
+    def noop() -> str:
+        return "done"
+
+    parked_version = "parked-version"
+    queue = DBOS.register_queue("partition_lock_queue", partition_concurrency=1)
+    ids = []
+    for priority in (1, 2):
+        with SetEnqueueOptions(
+            queue_partition_key="p0", app_version=parked_version, priority=priority
+        ):
+            ids.append(DBOS.enqueue_workflow(queue.name, noop).workflow_id)
+
+    ws = SystemSchema.workflow_status
+    head = (
+        sa.select(ws.c.workflow_uuid)
+        .where(ws.c.queue_name == queue.name)
+        .where(ws.c.status == WorkflowStatusString.ENQUEUED.value)
+        .order_by(ws.c.priority.asc(), ws.c.created_at.asc())
+        .limit(1)
+        .with_for_update()
+    )
+    with dbos._sys_db.engine.begin() as peer:
+        # A peer dequeuer holding an open claim on the partition's only free slot.
+        assert [row[0] for row in peer.execute(head)] == ids[:1]
+        with pytest.raises(OperationalError) as exc_info:
+            dbos._sys_db.start_queued_workflows(
+                queue, "test-executor", parked_version, "p0"
+            )
+    assert isinstance(exc_info.value.orig, errors.LockNotAvailable)
+
+    for id in ids:
+        status = dbos._sys_db.get_workflow_status(id)
+        assert status is not None
+        assert status["status"] == WorkflowStatusString.ENQUEUED.value
+
+
+def test_partition_concurrency_with_global_concurrency(dbos: DBOS) -> None:
+    """partition_concurrency above one routes to the per-partition sweep, where the
+    queue-wide global_concurrency still bounds every partition together."""
+
+    global_concurrency = 3
+    partition_concurrency = 2
+    partitions = [f"partition-{i}" for i in range(4)]
+
+    unblock_event = threading.Event()
+    lock = threading.Lock()
+    running: dict[str, int] = {p: 0 for p in partitions}
+    max_running: dict[str, int] = {p: 0 for p in partitions}
+    total_running = 0
+    max_total_running = 0
+
+    @DBOS.workflow()
+    def blocking_workflow(partition: str) -> str:
+        nonlocal total_running, max_total_running
+        with lock:
+            running[partition] += 1
+            total_running += 1
+            max_running[partition] = max(max_running[partition], running[partition])
+            max_total_running = max(max_total_running, total_running)
+        unblock_event.wait()
+        with lock:
+            running[partition] -= 1
+            total_running -= 1
+        assert DBOS.workflow_id is not None
+        return DBOS.workflow_id
+
+    queue = DBOS.register_queue(
+        "partition_and_global_queue",
+        global_concurrency=global_concurrency,
+        partition_concurrency=partition_concurrency,
+        polling_interval_sec=0.5,
+    )
+
+    handles: list[WorkflowHandle[str]] = []
+    for partition in partitions:
+        with SetEnqueueOptions(queue_partition_key=partition):
+            for _ in range(3):
+                handles.append(
+                    DBOS.enqueue_workflow(queue.name, blocking_workflow, partition)
+                )
+
+    def queue_saturated() -> None:
+        with lock:
+            assert total_running == global_concurrency
+
+    retry_until_success(queue_saturated)
+
+    # Let several polling intervals pass: neither limit is ever exceeded.
+    time.sleep(2)
+    with lock:
+        assert max_total_running == global_concurrency
+        assert all(max_running[p] <= partition_concurrency for p in partitions)
+
+    unblock_event.set()
+    for handle in handles:
+        assert handle.get_result() is not None
+
+    with lock:
+        assert max_total_running == global_concurrency
+        assert all(max_running[p] <= partition_concurrency for p in partitions)
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_partition_concurrency_with_queue_wide_limiter(dbos: DBOS) -> None:
+    """A limiter alongside partition_concurrency is queue-wide: it spends its budget
+    across all partitions, not once per partition."""
+
+    @DBOS.workflow()
+    def noop(tag: str) -> str:
+        return tag
+
+    limit = 3
+    partitions = [f"p{i}" for i in range(5)]
+    queue = DBOS.register_queue(
+        "partition_limiter_queue",
+        partition_concurrency=1,
+        limiter={"limit": limit, "period": 60},
+        polling_interval_sec=0.25,
+    )
+
+    ids = []
+    for partition in partitions:
+        with SetEnqueueOptions(queue_partition_key=partition):
+            ids.append(DBOS.enqueue_workflow(queue.name, noop, partition).workflow_id)
+
+    def statuses() -> List[str]:
+        return [dbos._sys_db.get_workflow_status(id)["status"] for id in ids]  # type: ignore
+
+    # Were the limiter per partition, every partition would start its own workflow.
+    def limiter_budget_spent() -> None:
+        assert statuses().count(WorkflowStatusString.SUCCESS.value) == limit
+
+    retry_until_success(limiter_budget_spent)
+
+    # Several polling intervals later the rest are still waiting on the rolling window.
+    time.sleep(1)
+    final = statuses()
+    assert final.count(WorkflowStatusString.SUCCESS.value) == limit
+    assert final.count(WorkflowStatusString.ENQUEUED.value) == len(partitions) - limit
+
+    # Claims made under a limiter are stamped so the window can count them.
+    ws = SystemSchema.workflow_status
+    with dbos._sys_db.engine.begin() as c:
+        rows = c.execute(
+            sa.select(ws.c.status, ws.c.rate_limited).where(
+                ws.c.queue_name == queue.name
+            )
+        ).fetchall()
+    started = [rate_limited for status, rate_limited in rows if status != "ENQUEUED"]
+    assert len(started) == limit
+    assert all(started)
+
+
 def _enqueue_partition_rows(
     dbos: DBOS,
     func: Any,
