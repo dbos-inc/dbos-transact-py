@@ -455,13 +455,12 @@ def kafka_consumer(
                 else _get_or_create_queue(dbosreg, KAFKA_QUEUE_NAME).name
             )
         else:
-            # One shared partitioned queue: concurrency=1 is enforced per partition
-            # key, so execution is serial per key and parallel across keys.
+            # One shared partitioned queue: a per-partition concurrency of 1 makes
+            # execution serial per partition key and parallel across keys.
             consumer_queue_name = _get_or_create_queue(
                 dbosreg,
                 KAFKA_ORDERED_QUEUE_NAME,
-                partition_queue=True,
-                concurrency=1,
+                partition_concurrency=1,
             ).name
 
         # This process runs the poller and enqueues onto the consumer's queue, so it must poll it even under a listen_queues filter.
