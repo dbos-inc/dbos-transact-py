@@ -151,9 +151,12 @@ def test_queue_crud(dbos: DBOS) -> None:
     # register_queue persists a fully configured queue.
     registered = DBOS.register_queue(
         queue_name,
-        concurrency=10,
+        global_concurrency=10,
         limiter={"limit": 5, "period": 1.5},
         worker_concurrency=2,
+        partition_concurrency=4,
+        partition_worker_concurrency=2,
+        partition_limiter={"limit": 3, "period": 1.0},
         priority_enabled=True,
         polling_interval_sec=2.5,
     )
@@ -165,27 +168,24 @@ def test_queue_crud(dbos: DBOS) -> None:
     # retrieve_queue reconstructs the queue from the database.
     retrieved = DBOS.retrieve_queue(queue_name)
     assert retrieved is not None
-    assert retrieved.name == queue_name
-    assert retrieved.concurrency == 10
-    assert retrieved.worker_concurrency == 2
-    assert retrieved.limiter == {"limit": 5, "period": 1.5}
-    assert retrieved.priority_enabled is True
-    assert retrieved.partition_queue is False
-    assert retrieved.polling_interval_sec == 2.5
-    assert retrieved.database_backed_queue is True
-    assert queue_name not in dbos._registry.queue_info_map
-
-    # list_queues includes the registered queue with the same configuration.
+    # list_queues reports the same configuration as retrieve_queue.
     listed = DBOS.list_queues()
     assert [q.name for q in listed] == [queue_name]
-    only = listed[0]
-    assert only.database_backed_queue is True
-    assert only.concurrency == 10
-    assert only.worker_concurrency == 2
-    assert only.limiter == {"limit": 5, "period": 1.5}
-    assert only.priority_enabled is True
-    assert only.partition_queue is False
-    assert only.polling_interval_sec == 2.5
+    for q in [retrieved, listed[0]]:
+        assert q is not None
+        assert q.name == queue_name
+        assert q.global_concurrency == 10
+        assert q.worker_concurrency == 2
+        assert q.limiter == {"limit": 5, "period": 1.5}
+        assert q.partition_concurrency == 4
+        assert q.partition_worker_concurrency == 2
+        assert q.partition_limiter == {"limit": 3, "period": 1.0}
+        # Setting any per-partition limit partitions the queue.
+        assert q.partition_queue is True
+        assert q.priority_enabled is True
+        assert q.polling_interval_sec == 2.5
+        assert q.database_backed_queue is True
+    assert queue_name not in dbos._registry.queue_info_map
 
     # on_conflict="never_update" leaves the existing row alone.
     DBOS.register_queue(queue_name, concurrency=99, on_conflict="never_update")
@@ -203,6 +203,11 @@ def test_queue_crud(dbos: DBOS) -> None:
     assert retrieved.limiter is None
     assert retrieved.priority_enabled is False
     assert retrieved.polling_interval_sec == 1.0
+    # Clearing every per-partition limit un-partitions the queue.
+    assert retrieved.partition_concurrency is None
+    assert retrieved.partition_worker_concurrency is None
+    assert retrieved.partition_limiter is None
+    assert retrieved.partition_queue is False
 
     # on_conflict="update_if_latest_version" updates when the running version
     # is the latest registered version.
@@ -238,29 +243,61 @@ def test_queue_dynamic_config(dbos: DBOS) -> None:
     )
 
     # Setters write to the database; getters read from it.
-    queue.set_concurrency(8)
+    queue.set_global_concurrency(8)
     queue.set_worker_concurrency(3)
     queue.set_limiter({"limit": 7, "period": 2.0})
     queue.set_priority_enabled(True)
-    queue.set_partition_queue(True)
+    queue.set_partition_concurrency(6)
+    queue.set_partition_worker_concurrency(2)
+    queue.set_partition_limiter({"limit": 4, "period": 3.0})
     queue.set_polling_interval_sec(0.5)
 
     fresh = DBOS.retrieve_queue(queue_name)
     for q in [queue, fresh]:
         assert q is not None
-        assert q.concurrency == 8
+        assert q.global_concurrency == 8
         assert q.worker_concurrency == 3
         assert q.limiter == {"limit": 7, "period": 2.0}
         assert q.priority_enabled is True
+        assert q.partition_concurrency == 6
+        assert q.partition_worker_concurrency == 2
+        assert q.partition_limiter == {"limit": 4, "period": 3.0}
         assert q.partition_queue is True
         assert q.polling_interval_sec == 0.5
 
     # Setters validate. worker_concurrency cannot exceed concurrency.
     with pytest.raises(ValueError):
         queue.set_worker_concurrency(100)
+    # A per-partition limit cannot exceed its queue-wide counterpart either.
+    with pytest.raises(ValueError):
+        queue.set_partition_concurrency(100)
+    with pytest.raises(ValueError):
+        queue.set_partition_worker_concurrency(100)
     # polling_interval must be positive.
     with pytest.raises(ValueError):
         queue.set_polling_interval_sec(0.0)
+
+    # Clearing the last per-partition limit un-partitions the queue.
+    queue.set_partition_concurrency(None)
+    queue.set_partition_limiter(None)
+    assert queue.partition_queue is True
+    queue.set_partition_worker_concurrency(None)
+    assert queue.partition_queue is False
+
+    # A queue registered the deprecated way keeps applying every limit per
+    # partition, so the new getters report them at that scope and the queue-wide
+    # ones read as unset. Re-scoping it would silently change what it enforces.
+    legacy_name = f"test_legacy_queue_{uuid.uuid4()}"
+    legacy_queue = DBOS.register_queue(
+        legacy_name, partition_queue=True, concurrency=2, worker_concurrency=1
+    )
+    assert legacy_queue.partition_concurrency == 2
+    assert legacy_queue.partition_worker_concurrency == 1
+    assert legacy_queue.global_concurrency is None
+    with pytest.raises(DBOSException):
+        legacy_queue.set_global_concurrency(5)
+    with pytest.raises(DBOSException):
+        legacy_queue.set_partition_concurrency(1)
 
     # Limiter can be cleared.
     queue.set_limiter(None)
@@ -291,258 +328,35 @@ def test_queue_dynamic_config(dbos: DBOS) -> None:
         legacy.set_concurrency(5)
 
 
-def test_partition_concurrency_config(dbos: DBOS, client: DBOSClient) -> None:
-    queue_name = f"test_partition_concurrency_{uuid.uuid4()}"
-
-    # partition_concurrency partitions the queue; every other limit stays queue-wide.
-    registered = DBOS.register_queue(
-        queue_name, worker_concurrency=10, partition_concurrency=1
-    )
-    listed = [q for q in DBOS.list_queues() if q.name == queue_name]
-    for q in [registered, DBOS.retrieve_queue(queue_name), *listed]:
-        assert q is not None
-        assert q.partition_queue is True
-        assert q.partition_concurrency == 1
-        assert q.global_concurrency is None
-        assert q.worker_concurrency == 10
-        limits = q._resolve_limits()
-        assert limits.partition_concurrency == 1
-        assert limits.worker_concurrency == 10
-        assert limits.partition_worker_concurrency is None
-
-    # global_concurrency and partition_concurrency coexist.
-    DBOS.register_queue(
-        queue_name,
-        global_concurrency=5,
-        partition_concurrency=2,
-        on_conflict="always_update",
-    )
-    retrieved = DBOS.retrieve_queue(queue_name)
-    assert retrieved is not None
-    assert retrieved.global_concurrency == 5
-    assert retrieved.partition_concurrency == 2
-    # The deprecated getter reports the stored column, which is now queue-wide.
-    assert retrieved.concurrency == 5
-
-    # Clients register the same configuration.
-    client_queue_name = f"test_client_partition_concurrency_{uuid.uuid4()}"
-    client.register_queue(
-        client_queue_name, worker_concurrency=10, partition_concurrency=1
-    )
-    client_queue = client.retrieve_queue(client_queue_name)
-    assert client_queue is not None
-    assert client_queue.partition_concurrency == 1
-    assert client_queue.worker_concurrency == 10
-    assert client_queue.partition_queue is True
-
-
-def test_legacy_partition_queue_limits_stay_per_partition(dbos: DBOS) -> None:
-    queue_name = f"test_legacy_partition_{uuid.uuid4()}"
-    DBOS.register_queue(
-        queue_name,
-        partition_queue=True,
-        concurrency=2,
-        worker_concurrency=1,
-        limiter={"limit": 5, "period": 1.5},
-    )
-    queue = DBOS.retrieve_queue(queue_name)
-    assert queue is not None
-    # Deprecated getters report the stored columns verbatim.
-    assert queue.concurrency == 2
-    assert queue.worker_concurrency == 1
-    assert queue.partition_queue is True
-    # Under the legacy spelling every limit resolves to per-partition scope.
-    limits = queue._resolve_limits()
-    assert limits.partition_concurrency == 2
-    assert limits.partition_worker_concurrency == 1
-    assert limits.partition_limiter == {"limit": 5, "period": 1.5}
-    assert limits.global_concurrency is None
-    assert limits.worker_concurrency is None
-    assert limits.limiter is None
-    assert queue.global_concurrency is None
-    assert queue.partition_concurrency == 2
-
-    # Setting a queue-wide limit would silently re-scope the others: reject it.
-    with pytest.raises(DBOSException):
-        queue.set_global_concurrency(5)
-    with pytest.raises(DBOSException):
-        queue.set_partition_concurrency(1)
-
-
-def test_partition_worker_concurrency_and_limiter_config(dbos: DBOS) -> None:
-    """Every per-partition limit partitions the queue and round-trips independently
-    of its queue-wide counterpart."""
-    queue_name = f"test_partition_limits_{uuid.uuid4()}"
-
-    registered = DBOS.register_queue(
-        queue_name,
-        worker_concurrency=6,
-        limiter={"limit": 10, "period": 2.0},
-        partition_worker_concurrency=2,
-        partition_limiter={"limit": 3, "period": 1.5},
-    )
-    listed = [q for q in DBOS.list_queues() if q.name == queue_name]
-    for q in [registered, DBOS.retrieve_queue(queue_name), *listed]:
-        assert q is not None
-        # Partitioning is inferred from the partition limits, with no partition_concurrency.
-        assert q.partition_queue is True
-        assert q.partition_concurrency is None
-        assert q.partition_worker_concurrency == 2
-        assert q.partition_limiter == {"limit": 3, "period": 1.5}
-        assert q.worker_concurrency == 6
-        assert q.limiter == {"limit": 10, "period": 2.0}
-        limits = q._resolve_limits()
-        assert limits.partition_worker_concurrency == 2
-        assert limits.partition_limiter == {"limit": 3, "period": 1.5}
-        assert limits.worker_concurrency == 6
-        assert limits.limiter == {"limit": 10, "period": 2.0}
-
-    # Setters round-trip, and clearing every partition limit un-partitions the queue.
-    registered.set_partition_worker_concurrency(1)
-    registered.set_partition_limiter({"limit": 5, "period": 4.0})
-    fresh = DBOS.retrieve_queue(queue_name)
-    assert fresh is not None
-    assert fresh.partition_worker_concurrency == 1
-    assert fresh.partition_limiter == {"limit": 5, "period": 4.0}
-    assert fresh.partition_queue is True
-
-    registered.set_partition_limiter(None)
-    assert registered.partition_queue is True  # still partitioned by the worker limit
-    registered.set_partition_worker_concurrency(None)
-    cleared = DBOS.retrieve_queue(queue_name)
-    assert cleared is not None
-    assert cleared.partition_queue is False
-    assert cleared.partition_worker_concurrency is None
-    assert cleared.partition_limiter is None
-
-
-@pytest.mark.asyncio
-async def test_partition_worker_concurrency_and_limiter_config_async(
-    dbos: DBOS,
-) -> None:
-    queue_name = f"test_partition_limits_async_{uuid.uuid4()}"
-    queue = await DBOS.register_queue_async(
-        queue_name,
-        partition_worker_concurrency=2,
-        partition_limiter={"limit": 3, "period": 1.5},
-    )
-    assert await queue.get_partition_worker_concurrency_async() == 2
-    assert await queue.get_partition_limiter_async() == {"limit": 3, "period": 1.5}
-    assert await queue.get_partition_queue_async() is True
-
-    await queue.set_partition_worker_concurrency_async(1)
-    await queue.set_partition_limiter_async(None)
-    fresh = await DBOS.retrieve_queue_async(queue_name)
-    assert fresh is not None
-    assert await fresh.get_partition_worker_concurrency_async() == 1
-    assert await fresh.get_partition_limiter_async() is None
-    assert await fresh.get_partition_queue_async() is True
-
-
-def test_partition_worker_concurrency_validation(dbos: DBOS) -> None:
+def test_partition_limit_validation(dbos: DBOS) -> None:
+    """Configurations whose limits could never bind, or that mix a deprecated option
+    with the one replacing it, are rejected before the queue exists."""
     suffix = uuid.uuid4()
-    # The deprecated flag cannot be combined with any partition limit.
+    # A deprecated argument cannot be combined with the one replacing it.
     with pytest.raises(ValueError, match="only one of them"):
-        Queue(f"pw1_{suffix}", partition_queue=True, partition_worker_concurrency=1)
+        Queue(f"v1_{suffix}", concurrency=1, global_concurrency=1)
+    with pytest.raises(ValueError, match="only one of them"):
+        Queue(f"v2_{suffix}", partition_queue=True, partition_concurrency=1)
+    with pytest.raises(ValueError, match="only one of them"):
+        Queue(f"v3_{suffix}", partition_queue=True, partition_worker_concurrency=1)
     with pytest.raises(ValueError, match="only one of them"):
         Queue(
-            f"pw2_{suffix}",
+            f"v4_{suffix}",
             partition_queue=True,
             partition_limiter={"limit": 1, "period": 1.0},
         )
     # A per-partition limit above its queue-wide counterpart could never bind.
     with pytest.raises(ValueError, match="greater than or equal to"):
-        Queue(f"pw3_{suffix}", worker_concurrency=1, partition_worker_concurrency=2)
+        Queue(f"v5_{suffix}", global_concurrency=1, partition_concurrency=2)
     with pytest.raises(ValueError, match="greater than or equal to"):
-        Queue(f"pw4_{suffix}", partition_concurrency=1, partition_worker_concurrency=2)
+        Queue(f"v6_{suffix}", worker_concurrency=1, partition_worker_concurrency=2)
+    with pytest.raises(ValueError, match="greater than or equal to"):
+        Queue(f"v7_{suffix}", partition_concurrency=1, partition_worker_concurrency=2)
+    # Malformed limits are rejected the same way their queue-wide counterparts are.
+    with pytest.raises(ValueError, match="at least 1"):
+        Queue(f"v8_{suffix}", partition_concurrency=0)
     with pytest.raises(ValueError, match="both 'limit' and 'period'"):
-        Queue(f"pw5_{suffix}", partition_limiter={"limit": 1})  # type: ignore
-
-    # A partition limiter alone partitions the queue.
-    queue = Queue(f"pw6_{suffix}", partition_limiter={"limit": 1, "period": 1.0})
-    assert queue.partition_queue is True
-    with pytest.raises(Exception, match="without a partition key"):
-        queue._validate_enqueue(None)
-
-
-def test_partition_concurrency_validation(dbos: DBOS) -> None:
-    suffix = uuid.uuid4()
-    # The deprecated arguments cannot be combined with the ones replacing them.
-    with pytest.raises(ValueError, match="only one of them"):
-        Queue(f"v1_{suffix}", concurrency=1, global_concurrency=1)
-    with pytest.raises(ValueError, match="only one of them"):
-        Queue(f"v2_{suffix}", partition_queue=True, partition_concurrency=1)
-    with pytest.raises(ValueError, match="at least 1"):
-        Queue(f"v3_{suffix}", partition_concurrency=0)
-    # A per-partition limit above the queue-wide one could never bind.
-    with pytest.raises(ValueError, match="greater than or equal to"):
-        Queue(f"v4_{suffix}", global_concurrency=1, partition_concurrency=2)
-    with pytest.raises(ValueError, match="greater than or equal to"):
-        Queue(f"v5_{suffix}", global_concurrency=1, worker_concurrency=2)
-
-    # Partitioning is inferred from partition_concurrency.
-    queue = Queue(f"v6_{suffix}", worker_concurrency=10, partition_concurrency=1)
-    assert queue.partition_queue is True
-    assert queue.partition_concurrency == 1
-    assert queue.global_concurrency is None
-    # A partition key is required, as it is under the deprecated spelling.
-    with pytest.raises(Exception, match="without a partition key"):
-        queue._validate_enqueue(None)
-
-
-def test_partition_concurrency_setters(dbos: DBOS) -> None:
-    queue_name = f"test_partition_setters_{uuid.uuid4()}"
-    queue = DBOS.register_queue(queue_name, partition_concurrency=1)
-
-    queue.set_global_concurrency(5)
-    queue.set_partition_concurrency(3)
-    fresh = DBOS.retrieve_queue(queue_name)
-    for q in [queue, fresh]:
-        assert q is not None
-        assert q.global_concurrency == 5
-        assert q.partition_concurrency == 3
-        assert q.partition_queue is True
-
-    # Cross-field validation runs against the database, not the local cache.
-    with pytest.raises(ValueError, match="less than or equal to"):
-        queue.set_partition_concurrency(6)
-    with pytest.raises(ValueError, match="less than or equal to"):
-        queue.set_concurrency(2)
-    with pytest.raises(ValueError, match="at least 1"):
-        queue.set_partition_concurrency(0)
-
-    # The deprecated flag cannot be toggled on a queue partitioned the new way.
-    with pytest.raises(DBOSException):
-        queue.set_partition_queue(False)
-
-    # Clearing partition_concurrency un-partitions the queue.
-    queue.set_partition_concurrency(None)
-    cleared = DBOS.retrieve_queue(queue_name)
-    assert cleared is not None
-    assert cleared.partition_queue is False
-    assert cleared.partition_concurrency is None
-    assert cleared.global_concurrency == 5
-
-
-@pytest.mark.asyncio
-async def test_partition_concurrency_config_async(dbos: DBOS) -> None:
-    queue_name = f"test_partition_concurrency_async_{uuid.uuid4()}"
-    queue = await DBOS.register_queue_async(
-        queue_name, worker_concurrency=10, partition_concurrency=1
-    )
-    assert await queue.get_partition_concurrency_async() == 1
-    assert await queue.get_global_concurrency_async() is None
-
-    # A queue-wide global limit must leave room for the per-worker limit.
-    with pytest.raises(ValueError, match="less than or equal to concurrency"):
-        await queue.set_global_concurrency_async(5)
-    await queue.set_global_concurrency_async(10)
-    await queue.set_partition_concurrency_async(2)
-    fresh = await DBOS.retrieve_queue_async(queue_name)
-    assert fresh is not None
-    assert await fresh.get_global_concurrency_async() == 10
-    assert await fresh.get_partition_concurrency_async() == 2
-    assert await fresh.get_partition_queue_async() is True
+        Queue(f"v9_{suffix}", partition_limiter={"limit": 1})  # type: ignore
 
 
 def test_client_queue_crud(dbos: DBOS, client: DBOSClient) -> None:
@@ -557,7 +371,7 @@ def test_client_queue_crud(dbos: DBOS, client: DBOSClient) -> None:
     # singleton's _sys_db.
     queue = client.register_queue(
         queue_name,
-        concurrency=4,
+        global_concurrency=4,
         limiter={"limit": 5, "period": 1.5},
         worker_concurrency=2,
         priority_enabled=True,
@@ -630,6 +444,22 @@ def test_client_queue_crud(dbos: DBOS, client: DBOSClient) -> None:
     assert DBOS.retrieve_queue(queue_name) is None
     client.delete_queue(queue_name)
 
+    # Clients register per-partition limits too, on their own queue: the one above is
+    # enqueued to, and a partitioned queue would reject those keyless enqueues.
+    partitioned_name = f"test_client_partitioned_{uuid.uuid4()}"
+    partitioned = client.register_queue(
+        partitioned_name,
+        partition_concurrency=2,
+        partition_worker_concurrency=1,
+        partition_limiter={"limit": 2, "period": 1.0},
+    )
+    for q in [partitioned, client.retrieve_queue(partitioned_name)]:
+        assert q is not None
+        assert q.partition_concurrency == 2
+        assert q.partition_worker_concurrency == 1
+        assert q.partition_limiter == {"limit": 2, "period": 1.0}
+        assert q.partition_queue is True
+
 
 @pytest.mark.asyncio
 async def test_queue_crud_async(dbos: DBOS) -> None:
@@ -643,9 +473,12 @@ async def test_queue_crud_async(dbos: DBOS) -> None:
     # register_queue_async persists a fully configured queue.
     registered = await DBOS.register_queue_async(
         queue_name,
-        concurrency=10,
+        global_concurrency=10,
         limiter={"limit": 5, "period": 1.5},
         worker_concurrency=2,
+        partition_concurrency=4,
+        partition_worker_concurrency=2,
+        partition_limiter={"limit": 3, "period": 1.0},
         priority_enabled=True,
         polling_interval_sec=2.5,
     )
@@ -653,38 +486,41 @@ async def test_queue_crud_async(dbos: DBOS) -> None:
     assert registered.database_backed_queue is True
 
     retrieved = await DBOS.retrieve_queue_async(queue_name)
-    assert retrieved is not None
-    assert await retrieved.get_concurrency_async() == 10
-    assert await retrieved.get_worker_concurrency_async() == 2
-    assert await retrieved.get_limiter_async() == {"limit": 5, "period": 1.5}
-    assert await retrieved.get_priority_enabled_async() is True
-    assert await retrieved.get_polling_interval_sec_async() == 2.5
-
-    # list_queues_async includes the registered queue.
     listed = await DBOS.list_queues_async()
     assert [q.name for q in listed] == [queue_name]
-    only = listed[0]
-    assert only.database_backed_queue is True
-    assert await only.get_concurrency_async() == 10
-    assert await only.get_worker_concurrency_async() == 2
-    assert await only.get_limiter_async() == {"limit": 5, "period": 1.5}
-    assert await only.get_priority_enabled_async() is True
-    assert await only.get_polling_interval_sec_async() == 2.5
+    for q in [retrieved, listed[0]]:
+        assert q is not None
+        assert await q.get_global_concurrency_async() == 10
+        assert await q.get_worker_concurrency_async() == 2
+        assert await q.get_limiter_async() == {"limit": 5, "period": 1.5}
+        assert await q.get_partition_concurrency_async() == 4
+        assert await q.get_partition_worker_concurrency_async() == 2
+        assert await q.get_partition_limiter_async() == {"limit": 3, "period": 1.0}
+        assert await q.get_partition_queue_async() is True
+        assert await q.get_priority_enabled_async() is True
+        assert await q.get_polling_interval_sec_async() == 2.5
+        assert q.database_backed_queue is True
 
     # Async setters write to the database; async getters see the change.
-    await retrieved.set_concurrency_async(8)
+    assert retrieved is not None
+    await retrieved.set_global_concurrency_async(8)
     await retrieved.set_worker_concurrency_async(3)
     await retrieved.set_limiter_async({"limit": 7, "period": 2.0})
     await retrieved.set_priority_enabled_async(True)
-    await retrieved.set_partition_queue_async(True)
+    await retrieved.set_partition_concurrency_async(6)
+    await retrieved.set_partition_worker_concurrency_async(2)
+    await retrieved.set_partition_limiter_async({"limit": 4, "period": 3.0})
     await retrieved.set_polling_interval_sec_async(0.5)
 
     fresh = await DBOS.retrieve_queue_async(queue_name)
     assert fresh is not None
-    assert await fresh.get_concurrency_async() == 8
+    assert await fresh.get_global_concurrency_async() == 8
     assert await fresh.get_worker_concurrency_async() == 3
     assert await fresh.get_limiter_async() == {"limit": 7, "period": 2.0}
     assert await fresh.get_priority_enabled_async() is True
+    assert await fresh.get_partition_concurrency_async() == 6
+    assert await fresh.get_partition_worker_concurrency_async() == 2
+    assert await fresh.get_partition_limiter_async() == {"limit": 4, "period": 3.0}
     assert await fresh.get_partition_queue_async() is True
     assert await fresh.get_polling_interval_sec_async() == 0.5
 
@@ -3065,173 +2901,26 @@ async def test_partition_queue_worker_concurrency_async(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_partition_concurrency_with_worker_concurrency(dbos: DBOS) -> None:
-    """partition_concurrency caps each partition across all executors while
-    worker_concurrency caps the whole queue on this one: at most one workflow per
-    partition, and at most worker_concurrency of them running here."""
-
-    worker_concurrency = 3
-    partitions = [f"partition-{i}" for i in range(5)]
-    wfs_per_partition = 3
-
-    unblock_event = threading.Event()
-    lock = threading.Lock()
-    running: dict[str, int] = {p: 0 for p in partitions}
-    max_running: dict[str, int] = {p: 0 for p in partitions}
-    total_running = 0
-    max_total_running = 0
-
-    @DBOS.workflow()
-    def blocking_workflow(partition: str) -> str:
-        nonlocal total_running, max_total_running
-        with lock:
-            running[partition] += 1
-            total_running += 1
-            max_running[partition] = max(max_running[partition], running[partition])
-            max_total_running = max(max_total_running, total_running)
-        unblock_event.wait()
-        with lock:
-            running[partition] -= 1
-            total_running -= 1
-        assert DBOS.workflow_id is not None
-        return DBOS.workflow_id
-
-    queue = DBOS.register_queue(
-        "partition_and_worker_queue",
-        partition_concurrency=1,
-        worker_concurrency=worker_concurrency,
-        polling_interval_sec=0.5,
-    )
-
-    handles: list[WorkflowHandle[str]] = []
-    for partition in partitions:
-        with SetEnqueueOptions(queue_partition_key=partition):
-            for _ in range(wfs_per_partition):
-                handles.append(
-                    DBOS.enqueue_workflow(queue.name, blocking_workflow, partition)
-                )
-
-    # The worker saturates its queue-wide limit, drawing from distinct partitions.
-    def worker_saturated() -> None:
-        with lock:
-            assert total_running == worker_concurrency
-
-    retry_until_success(worker_saturated)
-
-    # Let several polling intervals pass: neither limit is ever exceeded, and the two partitions with no room stay blocked rather than sharing the worker's.
-    time.sleep(2)
-    with lock:
-        assert max_total_running == worker_concurrency
-        assert all(max_running[p] <= 1 for p in partitions)
-
-    unblock_event.set()
-    for handle in handles:
-        assert handle.get_result() is not None
-
-    # Every partition ran, and none ever ran two at once, through the drain as well.
-    with lock:
-        assert max_total_running == worker_concurrency
-        assert all(max_running[p] == 1 for p in partitions)
-
-    assert queue_entries_are_cleaned_up(dbos)
-
-
-def test_partition_and_global_concurrency_across_executors(dbos: DBOS) -> None:
-    """global_concurrency caps the queue across executors while partition_concurrency
-    caps each partition: a second executor may take a different partition, but neither
-    a partition already running one nor anything once the queue-wide budget is spent."""
-
-    @DBOS.workflow()
-    def noop() -> str:
-        return "done"
-
-    # A version this executor never runs, so the live queue worker leaves these rows alone.
-    parked_version = "parked-version"
-    queue = DBOS.register_queue(
-        "partition_global_queue", global_concurrency=3, partition_concurrency=1
-    )
-    ids: dict[str, List[str]] = {}
-    for partition, rows in [("p0", 2), ("p1", 1), ("p2", 1), ("p3", 1)]:
-        ids[partition] = []
-        for priority in range(1, rows + 1):
-            # Distinct priorities so a partition's head is deterministic.
-            with SetEnqueueOptions(
-                queue_partition_key=partition,
-                app_version=parked_version,
-                priority=priority,
-            ):
-                ids[partition].append(
-                    DBOS.enqueue_workflow(queue.name, noop).workflow_id
-                )
-
-    def claim(executor: str, partition: str) -> List[str]:
-        return dbos._sys_db.start_queued_workflows(
-            queue, executor, parked_version, partition
-        )
-
-    assert claim("executor-a", "p0") == [ids["p0"][0]]
-    # p0's follower is held back by partition_concurrency, though the queue has room.
-    assert claim("executor-b", "p0") == []
-    # Other partitions are free until the queue-wide budget runs out.
-    assert claim("executor-b", "p1") == [ids["p1"][0]]
-    assert claim("executor-a", "p2") == [ids["p2"][0]]
-    assert claim("executor-b", "p3") == []
-    # Freeing a queue-wide slot admits the idle partition.
-    set_workflow_status(dbos._sys_db, ids["p1"][0], WorkflowStatusString.SUCCESS.value)
-    assert claim("executor-b", "p3") == [ids["p3"][0]]
-
-
-def test_partition_concurrency_dequeue_blocks_on_peer_claim(
-    dbos: DBOS, skip_with_sqlite: None
+@pytest.mark.parametrize(
+    "limits,per_partition,queue_wide",
+    [
+        # Per-partition concurrency with a queue-wide per-worker limit: the batched sweep.
+        ({"partition_concurrency": 1, "worker_concurrency": 3}, 1, 3),
+        # Per-partition concurrency above one, with a queue-wide global limit: the sweep loop.
+        ({"partition_concurrency": 2, "global_concurrency": 3}, 2, 3),
+        # Both limits on the per-worker axis at once.
+        ({"partition_worker_concurrency": 2, "worker_concurrency": 3}, 2, 3),
+    ],
+    ids=["partition-and-worker", "partition-and-global", "partition-and-worker-axis"],
+)
+def test_partition_limits_bound_both_scopes(
+    dbos: DBOS, limits: dict[str, Any], per_partition: int, queue_wide: int
 ) -> None:
-    """A per-partition budget is shared across workers just as a queue-wide one is, so
-    a peer mid-claim must block the dequeue rather than be skipped past."""
+    """A per-partition limit caps each partition while the queue-wide limit caps them
+    together: the queue saturates at the queue-wide limit, no partition ever exceeds
+    its own, and every workflow still completes."""
 
-    @DBOS.workflow()
-    def noop() -> str:
-        return "done"
-
-    parked_version = "parked-version"
-    queue = DBOS.register_queue("partition_lock_queue", partition_concurrency=1)
-    ids = []
-    for priority in (1, 2):
-        with SetEnqueueOptions(
-            queue_partition_key="p0", app_version=parked_version, priority=priority
-        ):
-            ids.append(DBOS.enqueue_workflow(queue.name, noop).workflow_id)
-
-    ws = SystemSchema.workflow_status
-    head = (
-        sa.select(ws.c.workflow_uuid)
-        .where(ws.c.queue_name == queue.name)
-        .where(ws.c.status == WorkflowStatusString.ENQUEUED.value)
-        .order_by(ws.c.priority.asc(), ws.c.created_at.asc())
-        .limit(1)
-        .with_for_update()
-    )
-    with dbos._sys_db.engine.begin() as peer:
-        # A peer dequeuer holding an open claim on the partition's only free slot.
-        assert [row[0] for row in peer.execute(head)] == ids[:1]
-        with pytest.raises(OperationalError) as exc_info:
-            dbos._sys_db.start_queued_workflows(
-                queue, "test-executor", parked_version, "p0"
-            )
-    assert isinstance(exc_info.value.orig, errors.LockNotAvailable)
-
-    for id in ids:
-        status = dbos._sys_db.get_workflow_status(id)
-        assert status is not None
-        assert status["status"] == WorkflowStatusString.ENQUEUED.value
-
-
-def test_partition_concurrency_with_global_concurrency(dbos: DBOS) -> None:
-    """partition_concurrency above one routes to the per-partition sweep, where the
-    queue-wide global_concurrency still bounds every partition together."""
-
-    global_concurrency = 3
-    partition_concurrency = 2
     partitions = [f"partition-{i}" for i in range(4)]
-
     unblock_event = threading.Event()
     lock = threading.Lock()
     running: dict[str, int] = {p: 0 for p in partitions}
@@ -3255,10 +2944,9 @@ def test_partition_concurrency_with_global_concurrency(dbos: DBOS) -> None:
         return DBOS.workflow_id
 
     queue = DBOS.register_queue(
-        "partition_and_global_queue",
-        global_concurrency=global_concurrency,
-        partition_concurrency=partition_concurrency,
+        f"partition_limits_{uuid.uuid4().hex[:8]}",
         polling_interval_sec=0.5,
+        **limits,
     )
 
     handles: list[WorkflowHandle[str]] = []
@@ -3271,89 +2959,23 @@ def test_partition_concurrency_with_global_concurrency(dbos: DBOS) -> None:
 
     def queue_saturated() -> None:
         with lock:
-            assert total_running == global_concurrency
+            assert total_running == queue_wide
 
     retry_until_success(queue_saturated)
 
-    # Let several polling intervals pass: neither limit is ever exceeded.
+    # Let several polling intervals pass: neither limit is ever exceeded, and the partitions with no room stay blocked rather than borrowing another's.
     time.sleep(2)
     with lock:
-        assert max_total_running == global_concurrency
-        assert all(max_running[p] <= partition_concurrency for p in partitions)
+        assert max_total_running == queue_wide
+        assert all(max_running[p] <= per_partition for p in partitions)
 
     unblock_event.set()
     for handle in handles:
         assert handle.get_result() is not None
 
     with lock:
-        assert max_total_running == global_concurrency
-        assert all(max_running[p] <= partition_concurrency for p in partitions)
-    assert queue_entries_are_cleaned_up(dbos)
-
-
-def test_partition_worker_concurrency_with_worker_concurrency(dbos: DBOS) -> None:
-    """Both worker limits bind at once: each partition runs at most
-    partition_worker_concurrency here, and the queue at most worker_concurrency."""
-
-    worker_concurrency = 3
-    partition_worker_concurrency = 2
-    partitions = [f"partition-{i}" for i in range(3)]
-
-    unblock_event = threading.Event()
-    lock = threading.Lock()
-    running: dict[str, int] = {p: 0 for p in partitions}
-    max_running: dict[str, int] = {p: 0 for p in partitions}
-    total_running = 0
-    max_total_running = 0
-
-    @DBOS.workflow()
-    def blocking_workflow(partition: str) -> str:
-        nonlocal total_running, max_total_running
-        with lock:
-            running[partition] += 1
-            total_running += 1
-            max_running[partition] = max(max_running[partition], running[partition])
-            max_total_running = max(max_total_running, total_running)
-        unblock_event.wait()
-        with lock:
-            running[partition] -= 1
-            total_running -= 1
-        assert DBOS.workflow_id is not None
-        return DBOS.workflow_id
-
-    queue = DBOS.register_queue(
-        "partition_worker_queue",
-        worker_concurrency=worker_concurrency,
-        partition_worker_concurrency=partition_worker_concurrency,
-        polling_interval_sec=0.5,
-    )
-
-    handles: list[WorkflowHandle[str]] = []
-    for partition in partitions:
-        with SetEnqueueOptions(queue_partition_key=partition):
-            for _ in range(3):
-                handles.append(
-                    DBOS.enqueue_workflow(queue.name, blocking_workflow, partition)
-                )
-
-    def worker_saturated() -> None:
-        with lock:
-            assert total_running == worker_concurrency
-
-    retry_until_success(worker_saturated)
-
-    time.sleep(2)
-    with lock:
-        assert max_total_running == worker_concurrency
-        assert all(max_running[p] <= partition_worker_concurrency for p in partitions)
-
-    unblock_event.set()
-    for handle in handles:
-        assert handle.get_result() is not None
-
-    with lock:
-        assert max_total_running == worker_concurrency
-        assert all(max_running[p] <= partition_worker_concurrency for p in partitions)
+        assert max_total_running == queue_wide
+        assert all(max_running[p] <= per_partition for p in partitions)
     assert queue_entries_are_cleaned_up(dbos)
 
 
@@ -3400,56 +3022,6 @@ def test_partition_limiter_with_queue_wide_limiter(dbos: DBOS) -> None:
         if status != WorkflowStatusString.ENQUEUED.value
     ]
     assert len(set(started_partitions)) == queue_limit
-
-
-def test_partition_concurrency_with_queue_wide_limiter(dbos: DBOS) -> None:
-    """A limiter alongside partition_concurrency is queue-wide: it spends its budget
-    across all partitions, not once per partition."""
-
-    @DBOS.workflow()
-    def noop(tag: str) -> str:
-        return tag
-
-    limit = 3
-    partitions = [f"p{i}" for i in range(5)]
-    queue = DBOS.register_queue(
-        "partition_limiter_queue",
-        partition_concurrency=1,
-        limiter={"limit": limit, "period": 60},
-        polling_interval_sec=0.25,
-    )
-
-    ids = []
-    for partition in partitions:
-        with SetEnqueueOptions(queue_partition_key=partition):
-            ids.append(DBOS.enqueue_workflow(queue.name, noop, partition).workflow_id)
-
-    def statuses() -> List[str]:
-        return [dbos._sys_db.get_workflow_status(id)["status"] for id in ids]  # type: ignore
-
-    # Were the limiter per partition, every partition would start its own workflow.
-    def limiter_budget_spent() -> None:
-        assert statuses().count(WorkflowStatusString.SUCCESS.value) == limit
-
-    retry_until_success(limiter_budget_spent)
-
-    # Several polling intervals later the rest are still waiting on the rolling window.
-    time.sleep(1)
-    final = statuses()
-    assert final.count(WorkflowStatusString.SUCCESS.value) == limit
-    assert final.count(WorkflowStatusString.ENQUEUED.value) == len(partitions) - limit
-
-    # Claims made under a limiter are stamped so the window can count them.
-    ws = SystemSchema.workflow_status
-    with dbos._sys_db.engine.begin() as c:
-        rows = c.execute(
-            sa.select(ws.c.status, ws.c.rate_limited).where(
-                ws.c.queue_name == queue.name
-            )
-        ).fetchall()
-    started = [rate_limited for status, rate_limited in rows if status != "ENQUEUED"]
-    assert len(started) == limit
-    assert all(started)
 
 
 def _enqueue_partition_rows(
@@ -3514,69 +3086,6 @@ def test_partitioned_batch_dequeue_sweep_cap(
     assert start() == [ids[p][0] for p in partitions[:5]]
     assert start() == [ids[p][0] for p in partitions[5:]]
     assert start() == []
-
-
-def test_partitioned_batch_dequeue_worker_budget(dbos: DBOS) -> None:
-    """max_tasks bounds a sweep to this worker's remaining room."""
-
-    @DBOS.workflow()
-    def batch_wf(value: str) -> None:
-        pass
-
-    queue_name = f"unpolled-budget-{uuid.uuid4().hex[:8]}"
-    queue = Queue(
-        queue_name, concurrency=1, partition_queue=True, database_backed_queue=True
-    )
-    partitions = [f"p{i}" for i in range(4)]
-    ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "budget", partitions, 1)
-
-    def start(max_tasks: int) -> List[str]:
-        return dbos._sys_db.start_queued_partitioned_workflows(
-            queue, GlobalParams.executor_id, GlobalParams.app_version, max_tasks
-        )
-
-    # An exhausted budget claims nothing, a partial one only as many as it allows.
-    assert start(0) == []
-    budgeted = start(2)
-    assert len(budgeted) == 2
-    # Those partitions are now PENDING-gated, so the rest follow.
-    remainder = start(10)
-    assert len(remainder) == 2
-    assert set(budgeted) | set(remainder) == {ids[p][0] for p in partitions}
-
-
-def test_partitioned_batch_dequeue_varies_partitions(dbos: DBOS) -> None:
-    """A caller budget below the partition count draws partitions at random, so no key
-    is starved for sorting late. A fixed order would pick the same partition every time.
-    """
-
-    @DBOS.workflow()
-    def batch_wf(value: str) -> None:
-        pass
-
-    queue_name = f"unpolled-fair-{uuid.uuid4().hex[:8]}"
-    queue = Queue(
-        queue_name, concurrency=1, partition_queue=True, database_backed_queue=True
-    )
-    draws = 20
-    partitions = [f"p{i}" for i in range(5)]
-    ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "fair", partitions, draws)
-    owner = {wfid: p for p in partitions for wfid in ids[p]}
-
-    chosen = set()
-    for _ in range(draws):
-        claimed = dbos._sys_db.start_queued_partitioned_workflows(
-            queue, GlobalParams.executor_id, GlobalParams.app_version, 1
-        )
-        assert len(claimed) == 1
-        chosen.add(owner[claimed[0]])
-        # Finish it, so its partition is eligible again for the next draw.
-        set_workflow_status(
-            dbos._sys_db, claimed[0], WorkflowStatusString.SUCCESS.value
-        )
-
-    # Twenty draws over five always-eligible partitions: fewer than three distinct winners has probability ~1e-7, while a fixed order would yield exactly one.
-    assert len(chosen) >= 3
 
 
 def test_partitioned_batch_dequeue_exclusive_direct(dbos: DBOS) -> None:
