@@ -4467,12 +4467,9 @@ class SystemDatabase(ABC):
         app_version: str,
         max_tasks: int = sys.maxsize,
     ) -> List[str]:
-        """Dequeue every partition's head-of-line workflow in one transaction, at most
-        min(max_tasks, PARTITIONED_DEQUEUE_SWEEP_CAP) per sweep and in random partition
-        order so a bounded sweep does not always favor the same keys. Valid only when per-partition
-        concurrency is 1 and worker concurrency is the sole other limit: all workers rank the
-        same head, so guarded flips admit at most one row per partition, and a per-worker
-        budget binds nothing peers must also see. Callers pass that budget as max_tasks.
+        """Batch dequeue from a partitioned queue, optimized for the specific
+        case where partition_concurrency=1. All other cases iterate and dequeue
+        from each active partition successively.
         """
         limits = queue._resolve_limits()
         assert queue._partition_queue
@@ -4556,8 +4553,6 @@ class SystemDatabase(ABC):
             )
             # This worker's own budget bounds the sweep alongside the bind-param cap.
             sweep_limit = min(self.PARTITIONED_DEQUEUE_SWEEP_CAP, max_tasks)
-            # Randomize partition order to avoid starvation
-            sweep_order = sa.func.random()
             if self.engine.dialect.name == "postgresql":
                 # LATERAL joins plan as tight nested loops; correlated scalar subqueries run as slower per-row SubPlans on Postgres.
                 head = head_query.lateral("head")
@@ -4566,7 +4561,7 @@ class SystemDatabase(ABC):
                     .select_from(partitions.join(head, sa.true()))
                     .where(partitions.c.pk.isnot(None))
                     .where(~pending_probe)
-                    .order_by(sweep_order)
+                    .order_by(partitions.c.pk.asc())
                     .limit(sweep_limit)
                 )
             else:
@@ -4583,7 +4578,7 @@ class SystemDatabase(ABC):
                 cand_query = (
                     sa.select(heads.c.workflow_uuid)
                     .where(heads.c.workflow_uuid.isnot(None))
-                    .order_by(sweep_order)
+                    .order_by(heads.c.pk.asc())
                     .limit(sweep_limit)
                 )
             candidate_ids = [row[0] for row in c.execute(cand_query).fetchall()]
