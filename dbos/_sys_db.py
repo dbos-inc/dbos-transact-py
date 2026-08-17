@@ -4528,19 +4528,6 @@ class SystemDatabase(ABC):
             partitions = partitions.union_all(
                 sa.select(next_pk).where(partitions.c.pk.isnot(None))
             )
-            # A partition's head is its first version-eligible row; workflow_uuid totalizes the order (same head for every worker under created_at ties), and the index's trailing workflow_uuid makes this a pure top-1 probe.
-            head_query = (
-                sa.select(ws.c.workflow_uuid)
-                .where(enq)
-                .where(ws.c.queue_partition_key == partitions.c.pk)
-                .where(version_predicate)
-                .order_by(
-                    ws.c.priority.asc(),
-                    ws.c.created_at.asc(),
-                    ws.c.workflow_uuid.asc(),
-                )
-                .limit(1)
-            )
             # Unscoped by design: a mutual-exclusion probe must block on any owner's row.
             pending_probe = (
                 sa.select(sa.literal(1))
@@ -4553,33 +4540,43 @@ class SystemDatabase(ABC):
             )
             # This worker's own budget bounds the sweep alongside the bind-param cap.
             sweep_limit = min(self.PARTITIONED_DEQUEUE_SWEEP_CAP, max_tasks)
+            # Probe partitions in random order to prevent starvation
+            chosen = (
+                sa.select(partitions.c.pk)
+                .where(partitions.c.pk.isnot(None))
+                .where(~pending_probe)
+                .order_by(sa.func.random())
+                .limit(sweep_limit)
+                .subquery("chosen")
+            )
+            # A partition's head is its first version-eligible row; workflow_uuid totalizes the order (same head for every worker under created_at ties), and the index's trailing workflow_uuid makes this a pure top-1 probe.
+            head_query = (
+                sa.select(ws.c.workflow_uuid)
+                .where(enq)
+                .where(ws.c.queue_partition_key == chosen.c.pk)
+                .where(version_predicate)
+                .order_by(
+                    ws.c.priority.asc(),
+                    ws.c.created_at.asc(),
+                    ws.c.workflow_uuid.asc(),
+                )
+                .limit(1)
+            )
             if self.engine.dialect.name == "postgresql":
                 # LATERAL joins plan as tight nested loops; correlated scalar subqueries run as slower per-row SubPlans on Postgres.
                 head = head_query.lateral("head")
-                cand_query = (
-                    sa.select(head.c.workflow_uuid)
-                    .select_from(partitions.join(head, sa.true()))
-                    .where(partitions.c.pk.isnot(None))
-                    .where(~pending_probe)
-                    .order_by(partitions.c.pk.asc())
-                    .limit(sweep_limit)
+                cand_query = sa.select(head.c.workflow_uuid).select_from(
+                    chosen.join(head, sa.true())
                 )
             else:
                 # SQLite has no LATERAL; a correlated scalar subquery probes each head, with version-ineligible (NULL-head) partitions filtered in the outer select.
                 heads = (
-                    sa.select(
-                        head_query.scalar_subquery().label("workflow_uuid"),
-                        partitions.c.pk,
-                    )
-                    .where(partitions.c.pk.isnot(None))
-                    .where(~pending_probe)
+                    sa.select(head_query.scalar_subquery().label("workflow_uuid"))
+                    .select_from(chosen)
                     .subquery("heads")
                 )
-                cand_query = (
-                    sa.select(heads.c.workflow_uuid)
-                    .where(heads.c.workflow_uuid.isnot(None))
-                    .order_by(heads.c.pk.asc())
-                    .limit(sweep_limit)
+                cand_query = sa.select(heads.c.workflow_uuid).where(
+                    heads.c.workflow_uuid.isnot(None)
                 )
             candidate_ids = [row[0] for row in c.execute(cand_query).fetchall()]
             if not candidate_ids:
