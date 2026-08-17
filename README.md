@@ -85,9 +85,10 @@ You can add queues to your workflows in just a couple lines of code.
 They don't require a separate queueing service or message broker&mdash;just Postgres.
 
 ```python
-from dbos import DBOS, Queue
+from dbos import DBOS
 
-queue = Queue("example_queue")
+# Register your queues after calling DBOS.launch()
+DBOS.register_queue("example_queue")
 
 @DBOS.step()
 def process_task(task):
@@ -98,7 +99,7 @@ def process_tasks(tasks):
   task_handles = []
   # Enqueue each task so all tasks are processed concurrently.
   for task in tasks:
-    handle = queue.enqueue(process_task, task)
+    handle = DBOS.enqueue_workflow("example_queue", process_task, task)
     task_handles.append(handle)
   # Wait for each task to complete and retrieve its result.
   # Return the results of all tasks.
