@@ -367,6 +367,8 @@ class DBOSClient:
         name: str,
         *,
         concurrency: Optional[int] = None,
+        global_concurrency: Optional[int] = None,
+        partition_concurrency: Optional[int] = None,
         limiter: Optional[QueueRateLimit] = None,
         worker_concurrency: Optional[int] = None,
         priority_enabled: bool = False,
@@ -379,9 +381,18 @@ class DBOSClient:
 
         :param name: Unique name of the queue. Used as the lookup key in the
             ``queues`` table and on every ``enqueue`` call.
-        :param concurrency: Maximum number of workflows from this queue that may
-            be running globally (across all executors) at once. ``None`` (the
+        :param concurrency: Deprecated in favor of ``global_concurrency``, or of
+            ``partition_concurrency`` when combined with ``partition_queue``.
+        :param global_concurrency: Maximum number of workflows from this queue that
+            may be running globally (across all executors) at once. ``None`` (the
             default) means no global limit.
+        :param partition_concurrency: Maximum number of workflows from any one
+            partition of this queue that may be running globally (across all
+            executors) at once. Setting it makes the queue partitioned, so every
+            enqueue must specify a ``queue_partition_key``, while
+            ``global_concurrency``, ``worker_concurrency``, and ``limiter`` continue
+            to apply to the queue as a whole. Deduplication is not supported on
+            partitioned queues.
         :param limiter: Rate limit configuration of the form
             ``{"limit": int, "period": float}``. At most ``limit`` workflows
             from the queue will start within any rolling window of ``period``
@@ -393,10 +404,11 @@ class DBOSClient:
             priority via ``SetEnqueueOptions(priority=...)`` and lower numbers
             are dequeued first. When ``False``, supplying a priority raises an
             error at enqueue time.
-        :param partition_queue: When ``True``, every enqueue must specify a
-            ``queue_partition_key`` and concurrency / worker_concurrency limits
-            are applied per partition rather than to the queue as a whole.
-            Deduplication is not supported on partitioned queues.
+        :param partition_queue: Deprecated in favor of ``partition_concurrency``.
+            When ``True``, every enqueue must specify a ``queue_partition_key`` and
+            the concurrency, worker_concurrency, and limiter limits are all applied
+            per partition rather than to the queue as a whole. Deduplication is not
+            supported on partitioned queues.
         :param polling_interval_sec: How often (in seconds) the worker thread
             wakes up to look for runnable workflows on this queue. Smaller
             values reduce dequeue latency at the cost of more database load.
@@ -417,6 +429,9 @@ class DBOSClient:
         Queue._validate_queue(
             concurrency=concurrency,
             worker_concurrency=worker_concurrency,
+            global_concurrency=global_concurrency,
+            partition_concurrency=partition_concurrency,
+            partition_queue=partition_queue,
             polling_interval_sec=polling_interval_sec,
             limiter=limiter,
         )
@@ -434,12 +449,15 @@ class DBOSClient:
 
         inserted = self._sys_db.upsert_queue(
             name=name,
-            concurrency=concurrency,
+            concurrency=(
+                concurrency if global_concurrency is None else global_concurrency
+            ),
             worker_concurrency=worker_concurrency,
             rate_limit_max=limiter["limit"] if limiter else None,
             rate_limit_period_sec=limiter["period"] if limiter else None,
             priority_enabled=priority_enabled,
             partition_queue=partition_queue,
+            partition_concurrency=partition_concurrency,
             polling_interval_sec=polling_interval_sec,
             update_existing=update_existing,
             application_name=application_name,
@@ -455,6 +473,8 @@ class DBOSClient:
         name: str,
         *,
         concurrency: Optional[int] = None,
+        global_concurrency: Optional[int] = None,
+        partition_concurrency: Optional[int] = None,
         limiter: Optional[QueueRateLimit] = None,
         worker_concurrency: Optional[int] = None,
         priority_enabled: bool = False,
@@ -468,6 +488,8 @@ class DBOSClient:
             lambda: self.register_queue(
                 name,
                 concurrency=concurrency,
+                global_concurrency=global_concurrency,
+                partition_concurrency=partition_concurrency,
                 limiter=limiter,
                 worker_concurrency=worker_concurrency,
                 priority_enabled=priority_enabled,

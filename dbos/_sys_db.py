@@ -95,6 +95,7 @@ def queue_from_db_row(
         worker_concurrency=m["worker_concurrency"],
         priority_enabled=bool(m["priority_enabled"]),
         partition_queue=bool(m["partition_queue"]),
+        partition_concurrency=m["partition_concurrency"],
         polling_interval_sec=m["polling_interval_sec"],
         application_name=m["application_name"],
         database_backed_queue=True,
@@ -6236,6 +6237,7 @@ class SystemDatabase(ABC):
         polling_interval_sec: float,
         update_existing: bool,
         application_name: Optional[str] = None,
+        partition_concurrency: Optional[int] = None,
     ) -> bool:
         """Upsert a queue row. Returns True iff a new row was inserted (i.e.
         the queue did not previously exist). False if the row already existed,
@@ -6248,7 +6250,9 @@ class SystemDatabase(ABC):
             "rate_limit_max": rate_limit_max,
             "rate_limit_period_sec": rate_limit_period_sec,
             "priority_enabled": priority_enabled,
-            "partition_queue": partition_queue,
+            # A partition_concurrency limit implies partitioning, whichever spelling was used.
+            "partition_queue": partition_queue or partition_concurrency is not None,
+            "partition_concurrency": partition_concurrency,
             "polling_interval_sec": polling_interval_sec,
             "updated_at": int(time.time() * 1000),
             "application_name": owner,

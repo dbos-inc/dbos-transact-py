@@ -2,6 +2,7 @@ import asyncio
 import copy
 import random
 import threading
+from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -66,6 +67,18 @@ class QueueRateLimit(TypedDict):
     period: float
 
 
+@dataclass
+class ResolvedQueueLimits:
+    """A queue's limits, each resolved to the scope it is enforced at."""
+
+    global_concurrency: Optional[int]
+    worker_concurrency: Optional[int]
+    limiter: Optional[QueueRateLimit]
+    partition_concurrency: Optional[int]
+    partition_worker_concurrency: Optional[int]
+    partition_limiter: Optional[QueueRateLimit]
+
+
 class Queue:
     """
     Workflow queue.
@@ -81,6 +94,8 @@ class Queue:
         limiter: Optional[QueueRateLimit] = None,
         *,  # Disable positional arguments from here on
         worker_concurrency: Optional[int] = None,
+        global_concurrency: Optional[int] = None,
+        partition_concurrency: Optional[int] = None,
         priority_enabled: bool = False,
         partition_queue: bool = False,
         polling_interval_sec: float = DEFAULT_QUEUE_POLLING_INTERVAL_SEC,
@@ -88,12 +103,18 @@ class Queue:
         client_system_database: Optional["SystemDatabase"] = None,
         application_name: Optional[str] = None,
     ) -> None:
-        Queue._validate_queue(
-            concurrency=concurrency,
-            worker_concurrency=worker_concurrency,
-            polling_interval_sec=polling_interval_sec,
-            limiter=limiter,
-        )
+        # Rows are validated when written, and a row legitimately carries both
+        # partition_queue and partition_concurrency, which no caller may combine.
+        if not database_backed_queue:
+            Queue._validate_queue(
+                concurrency=concurrency,
+                worker_concurrency=worker_concurrency,
+                global_concurrency=global_concurrency,
+                partition_concurrency=partition_concurrency,
+                partition_queue=partition_queue,
+                polling_interval_sec=polling_interval_sec,
+                limiter=limiter,
+            )
         self.name = name
         self.database_backed_queue = database_backed_queue
         # Owner from the queues table; None for in-memory and pre-upgrade queues.
@@ -102,13 +123,18 @@ class Queue:
         # DBOS singleton's. This allows a DBOSClient to manipulate queues
         # without depending on a launched DBOS process.
         self._client_system_database = client_system_database
-        # Local cache of configurable params. Property getters consult this
-        # for in-memory queues and the database for database-backed queues.
-        self._concurrency = concurrency
+        # Local cache of configurable params, mirroring the queues-table columns.
+        # Property getters consult this for in-memory queues and the database for
+        # database-backed queues.
+        self._concurrency = (
+            concurrency if global_concurrency is None else global_concurrency
+        )
         self._worker_concurrency = worker_concurrency
         self._limiter = limiter
         self._priority_enabled = priority_enabled
-        self._partition_queue = partition_queue
+        # Partitioning is inferred from partition_concurrency; the deprecated flag tracks it.
+        self._partition_queue = partition_queue or partition_concurrency is not None
+        self._partition_concurrency = partition_concurrency
         self._polling_interval_sec = polling_interval_sec
 
         # Database-backed queues skip the in-memory global registry; their
@@ -130,15 +156,41 @@ class Queue:
         worker_concurrency: Optional[int],
         polling_interval_sec: float,
         limiter: Optional[QueueRateLimit],
+        global_concurrency: Optional[int] = None,
+        partition_concurrency: Optional[int] = None,
+        partition_queue: bool = False,
     ) -> None:
         """Validate queue configuration parameters, raising ValueError on bad input."""
+        if concurrency is not None and global_concurrency is not None:
+            raise ValueError(
+                "concurrency is deprecated in favor of global_concurrency; set only one of them"
+            )
+        if partition_queue and partition_concurrency is not None:
+            raise ValueError(
+                "partition_queue is deprecated in favor of partition_concurrency; set only one of them"
+            )
+        if partition_concurrency is not None and partition_concurrency < 1:
+            raise ValueError("partition_concurrency must be at least 1")
+        # Under the deprecated partition_queue spelling, concurrency is itself a
+        # per-partition limit, so the worker_concurrency check below compares like with like.
+        queue_concurrency = (
+            concurrency if global_concurrency is None else global_concurrency
+        )
         if (
             worker_concurrency is not None
-            and concurrency is not None
-            and worker_concurrency > concurrency
+            and queue_concurrency is not None
+            and worker_concurrency > queue_concurrency
         ):
             raise ValueError(
                 "concurrency must be greater than or equal to worker_concurrency"
+            )
+        if (
+            partition_concurrency is not None
+            and queue_concurrency is not None
+            and partition_concurrency > queue_concurrency
+        ):
+            raise ValueError(
+                "global_concurrency must be greater than or equal to partition_concurrency"
             )
         if polling_interval_sec <= 0.0:
             raise ValueError("polling_interval_sec must be positive")
@@ -146,6 +198,57 @@ class Queue:
             limiter.get("limit") is None or limiter.get("period") is None
         ):
             raise ValueError("limiter must specify both 'limit' and 'period'")
+
+    def _is_legacy_partitioned(self) -> bool:
+        """True when the queue uses the deprecated partition_queue spelling, under
+        which concurrency, worker_concurrency, and limiter all apply per partition."""
+        return self._partition_queue and self._partition_concurrency is None
+
+    def _resolve_limits(self) -> ResolvedQueueLimits:
+        """Resolve every limit to the scope it is enforced at."""
+        if self._is_legacy_partitioned():
+            return ResolvedQueueLimits(
+                global_concurrency=None,
+                worker_concurrency=None,
+                limiter=None,
+                partition_concurrency=self._concurrency,
+                partition_worker_concurrency=self._worker_concurrency,
+                partition_limiter=self._limiter,
+            )
+        return ResolvedQueueLimits(
+            global_concurrency=self._concurrency,
+            worker_concurrency=self._worker_concurrency,
+            limiter=self._limiter,
+            partition_concurrency=self._partition_concurrency,
+            partition_worker_concurrency=None,
+            partition_limiter=None,
+        )
+
+    def _require_not_legacy_partitioned(self, field: str) -> None:
+        """Reject a write that would re-scope the other limits on a legacy queue."""
+        if self._is_legacy_partitioned():
+            raise DBOSException(
+                f"Cannot set {field} on queue {self.name}: it is registered with the "
+                "deprecated partition_queue option, under which concurrency, "
+                "worker_concurrency, and limiter apply per partition. Re-register the "
+                "queue with partition_concurrency instead."
+            )
+
+    def _check_concurrency_bounds(self, value: Optional[int]) -> None:
+        """Validate a new concurrency against the cached sibling limits."""
+        if value is None:
+            return
+        if self._worker_concurrency is not None and self._worker_concurrency > value:
+            raise ValueError(
+                "worker_concurrency must be less than or equal to concurrency"
+            )
+        if (
+            self._partition_concurrency is not None
+            and self._partition_concurrency > value
+        ):
+            raise ValueError(
+                "partition_concurrency must be less than or equal to global_concurrency"
+            )
 
     def _require_database_backed(self) -> None:
         if not self.database_backed_queue:
@@ -179,6 +282,7 @@ class Queue:
         self._limiter = latest._limiter
         self._priority_enabled = latest._priority_enabled
         self._partition_queue = latest._partition_queue
+        self._partition_concurrency = latest._partition_concurrency
         self._polling_interval_sec = latest._polling_interval_sec
         self.application_name = latest.application_name
 
@@ -213,20 +317,88 @@ class Queue:
         # Refresh the local cache so the cross-field check below validates
         # against the latest worker_concurrency stored in the database.
         self._refresh_fields(self._read_from_db())
-        if (
-            value is not None
-            and self._worker_concurrency is not None
-            and self._worker_concurrency > value
-        ):
-            raise ValueError(
-                "worker_concurrency must be less than or equal to concurrency"
-            )
+        self._check_concurrency_bounds(value)
         self._write_to_db({"concurrency": value})
         self._concurrency = value
 
     async def set_concurrency_async(self, value: Optional[int]) -> None:
         await self._configure_thread_pool()
         await asyncio.to_thread(self.set_concurrency, value)
+
+    @property
+    def global_concurrency(self) -> Optional[int]:
+        if self.database_backed_queue:
+            _warn_sync_db_call_in_async_context(
+                "Queue.global_concurrency", "Queue.get_global_concurrency_async"
+            )
+            self._refresh_fields(self._read_from_db())
+        return self._resolve_limits().global_concurrency
+
+    async def get_global_concurrency_async(self) -> Optional[int]:
+        if self.database_backed_queue:
+            await self._configure_thread_pool()
+            self._refresh_fields(await asyncio.to_thread(self._read_from_db))
+        return self._resolve_limits().global_concurrency
+
+    def set_global_concurrency(self, value: Optional[int]) -> None:
+        self._require_database_backed()
+        _warn_sync_db_call_in_async_context(
+            "Queue.set_global_concurrency", "Queue.set_global_concurrency_async"
+        )
+        # Refresh the local cache so the mode and cross-field checks below see
+        # the latest configuration stored in the database.
+        self._refresh_fields(self._read_from_db())
+        self._require_not_legacy_partitioned("global_concurrency")
+        self._check_concurrency_bounds(value)
+        self._write_to_db({"concurrency": value})
+        self._concurrency = value
+
+    async def set_global_concurrency_async(self, value: Optional[int]) -> None:
+        await self._configure_thread_pool()
+        await asyncio.to_thread(self.set_global_concurrency, value)
+
+    @property
+    def partition_concurrency(self) -> Optional[int]:
+        if self.database_backed_queue:
+            _warn_sync_db_call_in_async_context(
+                "Queue.partition_concurrency", "Queue.get_partition_concurrency_async"
+            )
+            self._refresh_fields(self._read_from_db())
+        return self._resolve_limits().partition_concurrency
+
+    async def get_partition_concurrency_async(self) -> Optional[int]:
+        if self.database_backed_queue:
+            await self._configure_thread_pool()
+            self._refresh_fields(await asyncio.to_thread(self._read_from_db))
+        return self._resolve_limits().partition_concurrency
+
+    def set_partition_concurrency(self, value: Optional[int]) -> None:
+        self._require_database_backed()
+        _warn_sync_db_call_in_async_context(
+            "Queue.set_partition_concurrency", "Queue.set_partition_concurrency_async"
+        )
+        if value is not None and value < 1:
+            raise ValueError("partition_concurrency must be at least 1")
+        self._refresh_fields(self._read_from_db())
+        self._require_not_legacy_partitioned("partition_concurrency")
+        if (
+            value is not None
+            and self._concurrency is not None
+            and value > self._concurrency
+        ):
+            raise ValueError(
+                "partition_concurrency must be less than or equal to global_concurrency"
+            )
+        # Partitioning is inferred from the limit, so the deprecated flag follows it.
+        self._write_to_db(
+            {"partition_concurrency": value, "partition_queue": value is not None}
+        )
+        self._partition_concurrency = value
+        self._partition_queue = value is not None
+
+    async def set_partition_concurrency_async(self, value: Optional[int]) -> None:
+        await self._configure_thread_pool()
+        await asyncio.to_thread(self.set_partition_concurrency, value)
 
     @property
     def worker_concurrency(self) -> Optional[int]:
@@ -349,6 +521,13 @@ class Queue:
         _warn_sync_db_call_in_async_context(
             "Queue.set_partition_queue", "Queue.set_partition_queue_async"
         )
+        # Refresh so the check below sees the latest partition_concurrency.
+        self._refresh_fields(self._read_from_db())
+        if self._partition_concurrency is not None:
+            raise DBOSException(
+                f"Cannot set partition_queue on queue {self.name}: it is partitioned "
+                "via partition_concurrency. Use set_partition_concurrency instead."
+            )
         self._write_to_db({"partition_queue": value})
         self._partition_queue = value
 
@@ -704,7 +883,11 @@ def log_queue(q: Queue) -> None:
     are omitted, matching ``Queue: <name> (concurrency=…, worker_concurrency=…,
     limit=N/Ts, priority, partitioned)``."""
     opts = []
-    if q._concurrency is not None:
+    if q._partition_concurrency is not None:
+        if q._concurrency is not None:
+            opts.append(f"global_concurrency={q._concurrency}")
+        opts.append(f"partition_concurrency={q._partition_concurrency}")
+    elif q._concurrency is not None:
         opts.append(f"concurrency={q._concurrency}")
     if q._worker_concurrency is not None:
         opts.append(f"worker_concurrency={q._worker_concurrency}")

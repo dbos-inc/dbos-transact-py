@@ -894,6 +894,7 @@ class QueueOutput:
     partition_queue: bool
     polling_interval_sec: float
     application_name: Optional[str]
+    partition_concurrency: Optional[int] = None
 
     @classmethod
     def from_queue(cls, q: "Queue") -> "QueueOutput":
@@ -907,6 +908,7 @@ class QueueOutput:
             partition_queue=q._partition_queue,
             polling_interval_sec=q._polling_interval_sec,
             application_name=q.application_name,
+            partition_concurrency=q._partition_concurrency,
         )
 
 

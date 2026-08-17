@@ -291,6 +291,164 @@ def test_queue_dynamic_config(dbos: DBOS) -> None:
         legacy.set_concurrency(5)
 
 
+def test_partition_concurrency_config(dbos: DBOS, client: DBOSClient) -> None:
+    queue_name = f"test_partition_concurrency_{uuid.uuid4()}"
+
+    # partition_concurrency partitions the queue; every other limit stays queue-wide.
+    registered = DBOS.register_queue(
+        queue_name, worker_concurrency=10, partition_concurrency=1
+    )
+    listed = [q for q in DBOS.list_queues() if q.name == queue_name]
+    for q in [registered, DBOS.retrieve_queue(queue_name), *listed]:
+        assert q is not None
+        assert q.partition_queue is True
+        assert q.partition_concurrency == 1
+        assert q.global_concurrency is None
+        assert q.worker_concurrency == 10
+        limits = q._resolve_limits()
+        assert limits.partition_concurrency == 1
+        assert limits.worker_concurrency == 10
+        assert limits.partition_worker_concurrency is None
+
+    # global_concurrency and partition_concurrency coexist.
+    DBOS.register_queue(
+        queue_name,
+        global_concurrency=5,
+        partition_concurrency=2,
+        on_conflict="always_update",
+    )
+    retrieved = DBOS.retrieve_queue(queue_name)
+    assert retrieved is not None
+    assert retrieved.global_concurrency == 5
+    assert retrieved.partition_concurrency == 2
+    # The deprecated getter reports the stored column, which is now queue-wide.
+    assert retrieved.concurrency == 5
+
+    # Clients register the same configuration.
+    client_queue_name = f"test_client_partition_concurrency_{uuid.uuid4()}"
+    client.register_queue(
+        client_queue_name, worker_concurrency=10, partition_concurrency=1
+    )
+    client_queue = client.retrieve_queue(client_queue_name)
+    assert client_queue is not None
+    assert client_queue.partition_concurrency == 1
+    assert client_queue.worker_concurrency == 10
+    assert client_queue.partition_queue is True
+
+
+def test_legacy_partition_queue_limits_stay_per_partition(dbos: DBOS) -> None:
+    queue_name = f"test_legacy_partition_{uuid.uuid4()}"
+    DBOS.register_queue(
+        queue_name,
+        partition_queue=True,
+        concurrency=2,
+        worker_concurrency=1,
+        limiter={"limit": 5, "period": 1.5},
+    )
+    queue = DBOS.retrieve_queue(queue_name)
+    assert queue is not None
+    # Deprecated getters report the stored columns verbatim.
+    assert queue.concurrency == 2
+    assert queue.worker_concurrency == 1
+    assert queue.partition_queue is True
+    # Under the legacy spelling every limit resolves to per-partition scope.
+    limits = queue._resolve_limits()
+    assert limits.partition_concurrency == 2
+    assert limits.partition_worker_concurrency == 1
+    assert limits.partition_limiter == {"limit": 5, "period": 1.5}
+    assert limits.global_concurrency is None
+    assert limits.worker_concurrency is None
+    assert limits.limiter is None
+    assert queue.global_concurrency is None
+    assert queue.partition_concurrency == 2
+
+    # Setting a queue-wide limit would silently re-scope the others: reject it.
+    with pytest.raises(DBOSException):
+        queue.set_global_concurrency(5)
+    with pytest.raises(DBOSException):
+        queue.set_partition_concurrency(1)
+
+
+def test_partition_concurrency_validation(dbos: DBOS) -> None:
+    suffix = uuid.uuid4()
+    # The deprecated arguments cannot be combined with the ones replacing them.
+    with pytest.raises(ValueError, match="only one of them"):
+        Queue(f"v1_{suffix}", concurrency=1, global_concurrency=1)
+    with pytest.raises(ValueError, match="only one of them"):
+        Queue(f"v2_{suffix}", partition_queue=True, partition_concurrency=1)
+    with pytest.raises(ValueError, match="at least 1"):
+        Queue(f"v3_{suffix}", partition_concurrency=0)
+    # A per-partition limit above the queue-wide one could never bind.
+    with pytest.raises(ValueError, match="greater than or equal to"):
+        Queue(f"v4_{suffix}", global_concurrency=1, partition_concurrency=2)
+    with pytest.raises(ValueError, match="greater than or equal to"):
+        Queue(f"v5_{suffix}", global_concurrency=1, worker_concurrency=2)
+
+    # Partitioning is inferred from partition_concurrency.
+    queue = Queue(f"v6_{suffix}", worker_concurrency=10, partition_concurrency=1)
+    assert queue.partition_queue is True
+    assert queue.partition_concurrency == 1
+    assert queue.global_concurrency is None
+    # A partition key is required, as it is under the deprecated spelling.
+    with pytest.raises(Exception, match="without a partition key"):
+        queue._validate_enqueue(None)
+
+
+def test_partition_concurrency_setters(dbos: DBOS) -> None:
+    queue_name = f"test_partition_setters_{uuid.uuid4()}"
+    queue = DBOS.register_queue(queue_name, partition_concurrency=1)
+
+    queue.set_global_concurrency(5)
+    queue.set_partition_concurrency(3)
+    fresh = DBOS.retrieve_queue(queue_name)
+    for q in [queue, fresh]:
+        assert q is not None
+        assert q.global_concurrency == 5
+        assert q.partition_concurrency == 3
+        assert q.partition_queue is True
+
+    # Cross-field validation runs against the database, not the local cache.
+    with pytest.raises(ValueError, match="less than or equal to"):
+        queue.set_partition_concurrency(6)
+    with pytest.raises(ValueError, match="less than or equal to"):
+        queue.set_concurrency(2)
+    with pytest.raises(ValueError, match="at least 1"):
+        queue.set_partition_concurrency(0)
+
+    # The deprecated flag cannot be toggled on a queue partitioned the new way.
+    with pytest.raises(DBOSException):
+        queue.set_partition_queue(False)
+
+    # Clearing partition_concurrency un-partitions the queue.
+    queue.set_partition_concurrency(None)
+    cleared = DBOS.retrieve_queue(queue_name)
+    assert cleared is not None
+    assert cleared.partition_queue is False
+    assert cleared.partition_concurrency is None
+    assert cleared.global_concurrency == 5
+
+
+@pytest.mark.asyncio
+async def test_partition_concurrency_config_async(dbos: DBOS) -> None:
+    queue_name = f"test_partition_concurrency_async_{uuid.uuid4()}"
+    queue = await DBOS.register_queue_async(
+        queue_name, worker_concurrency=10, partition_concurrency=1
+    )
+    assert await queue.get_partition_concurrency_async() == 1
+    assert await queue.get_global_concurrency_async() is None
+
+    # A queue-wide global limit must leave room for the per-worker limit.
+    with pytest.raises(ValueError, match="less than or equal to concurrency"):
+        await queue.set_global_concurrency_async(5)
+    await queue.set_global_concurrency_async(10)
+    await queue.set_partition_concurrency_async(2)
+    fresh = await DBOS.retrieve_queue_async(queue_name)
+    assert fresh is not None
+    assert await fresh.get_global_concurrency_async() == 10
+    assert await fresh.get_partition_concurrency_async() == 2
+    assert await fresh.get_partition_queue_async() is True
+
+
 def test_client_queue_crud(dbos: DBOS, client: DBOSClient) -> None:
     queue_name = f"test_client_queue_{uuid.uuid4()}"
 

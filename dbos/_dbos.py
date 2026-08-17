@@ -935,6 +935,8 @@ class DBOS:
         *,
         worker_concurrency: Optional[int] = None,
         concurrency: Optional[int] = None,
+        global_concurrency: Optional[int] = None,
+        partition_concurrency: Optional[int] = None,
         limiter: Optional[QueueRateLimit] = None,
         priority_enabled: bool = False,
         partition_queue: bool = False,
@@ -948,9 +950,18 @@ class DBOS:
         :param worker_concurrency: Maximum number of workflows from this queue
             that may be running on a single executor at once. ``None`` means no
             per-executor limit. May be combined with ``concurrency``.
-        :param concurrency: Maximum number of workflows from this queue that may
-            be running globally (across all executors) at once. ``None`` (the
+        :param concurrency: Deprecated in favor of ``global_concurrency``, or of
+            ``partition_concurrency`` when combined with ``partition_queue``.
+        :param global_concurrency: Maximum number of workflows from this queue that
+            may be running globally (across all executors) at once. ``None`` (the
             default) means no global limit.
+        :param partition_concurrency: Maximum number of workflows from any one
+            partition of this queue that may be running globally (across all
+            executors) at once. Setting it makes the queue partitioned, so every
+            enqueue must specify a ``queue_partition_key``, while
+            ``global_concurrency``, ``worker_concurrency``, and ``limiter`` continue
+            to apply to the queue as a whole. Deduplication is not supported on
+            partitioned queues.
         :param limiter: Rate limit configuration of the form
             ``{"limit": int, "period": float}``. At most ``limit`` workflows
             from the queue will start within any rolling window of ``period``
@@ -959,10 +970,11 @@ class DBOS:
             priority via ``SetEnqueueOptions(priority=...)`` and lower numbers
             are dequeued first. When ``False``, supplying a priority raises an
             error at enqueue time.
-        :param partition_queue: When ``True``, every enqueue must specify a
-            ``queue_partition_key`` and concurrency / worker_concurrency limits
-            are applied per partition rather than to the queue as a whole.
-            Deduplication is not supported on partitioned queues.
+        :param partition_queue: Deprecated in favor of ``partition_concurrency``.
+            When ``True``, every enqueue must specify a ``queue_partition_key`` and
+            the concurrency, worker_concurrency, and limiter limits are all applied
+            per partition rather than to the queue as a whole. Deduplication is not
+            supported on partitioned queues.
         :param polling_interval_sec: How often (in seconds) the worker thread
             wakes up to look for runnable workflows on this queue.
         :param on_conflict: Behavior when a queue with the same name already
@@ -984,6 +996,9 @@ class DBOS:
         Queue._validate_queue(
             concurrency=concurrency,
             worker_concurrency=worker_concurrency,
+            global_concurrency=global_concurrency,
+            partition_concurrency=partition_concurrency,
+            partition_queue=partition_queue,
             polling_interval_sec=polling_interval_sec,
             limiter=limiter,
         )
@@ -999,12 +1014,15 @@ class DBOS:
 
         inserted = dbos._sys_db.upsert_queue(
             name=name,
-            concurrency=concurrency,
+            concurrency=(
+                concurrency if global_concurrency is None else global_concurrency
+            ),
             worker_concurrency=worker_concurrency,
             rate_limit_max=limiter["limit"] if limiter else None,
             rate_limit_period_sec=limiter["period"] if limiter else None,
             priority_enabled=priority_enabled,
             partition_queue=partition_queue,
+            partition_concurrency=partition_concurrency,
             polling_interval_sec=polling_interval_sec,
             update_existing=update_existing,
         )
@@ -1026,6 +1044,8 @@ class DBOS:
         *,
         worker_concurrency: Optional[int] = None,
         concurrency: Optional[int] = None,
+        global_concurrency: Optional[int] = None,
+        partition_concurrency: Optional[int] = None,
         limiter: Optional[QueueRateLimit] = None,
         priority_enabled: bool = False,
         partition_queue: bool = False,
@@ -1039,6 +1059,8 @@ class DBOS:
                 name,
                 worker_concurrency=worker_concurrency,
                 concurrency=concurrency,
+                global_concurrency=global_concurrency,
+                partition_concurrency=partition_concurrency,
                 limiter=limiter,
                 priority_enabled=priority_enabled,
                 partition_queue=partition_queue,

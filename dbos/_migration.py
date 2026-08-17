@@ -1132,6 +1132,12 @@ def get_dbos_migration_hundredseven(schema: str, is_cockroach: bool) -> str:
     WHERE "application_name" IS NULL"""
 
 
+def get_dbos_migration_hundredeight(schema: str) -> str:
+    return f"""
+ALTER TABLE "{schema}"."queues" ADD COLUMN IF NOT EXISTS "partition_concurrency" INT4 DEFAULT NULL;
+"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -1194,6 +1200,7 @@ def get_dbos_migrations(
         get_dbos_migration_hundredfive(schema, is_cockroach),
         get_dbos_migration_hundredsix(schema),
         get_dbos_migration_hundredseven(schema, is_cockroach),
+        get_dbos_migration_hundredeight(schema),
     ]
 
 
@@ -1495,6 +1502,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS "uq_application_versions_unclaimed_version"
     WHERE "application_name" IS NULL;
 """
 
+sqlite_migration_hundredeight = (
+    'ALTER TABLE queues ADD COLUMN "partition_concurrency" INTEGER DEFAULT NULL'
+)
+
 _sqlite_history = [
     sqlite_migration_one,
     sqlite_migration_two,
@@ -1554,4 +1565,5 @@ sqlite_migrations = [
     "",
     sqlite_migration_hundredsix,
     sqlite_migration_hundredseven,
+    sqlite_migration_hundredeight,
 ]
