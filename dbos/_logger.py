@@ -1,6 +1,7 @@
 import logging
 import os
-from typing import TYPE_CHECKING, Any
+import warnings
+from typing import TYPE_CHECKING, Any, Optional
 
 from dbos._utils import GlobalParams
 
@@ -8,7 +9,8 @@ if TYPE_CHECKING:
     from ._dbos_config import ConfigFile
 
 dbos_logger = logging.getLogger("dbos")
-_otlp_handler, _dbos_log_transformer = None, None
+_otlp_handler: Optional[logging.Handler] = None
+_dbos_log_transformer: Optional["DBOSLogTransformer"] = None
 
 
 class DBOSLogTransformer(logging.Filter):
@@ -81,7 +83,7 @@ def config_logger(config: "ConfigFile") -> None:
         from opentelemetry._logs import get_logger_provider, set_logger_provider
         from opentelemetry._logs._internal import ProxyLoggerProvider
         from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-        from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+        from opentelemetry.sdk._logs import LoggerProvider
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.semconv.attributes.service_attributes import SERVICE_NAME
@@ -116,7 +118,25 @@ def config_logger(config: "ConfigFile") -> None:
                     "OTLP is enabled but logger provider not set, skipping log exporter setup."
                 )
             else:
-                _otlp_handler = LoggingHandler(logger_provider=log_provider)
+                try:
+                    # Preferred handler: the SDK deprecated its own in 1.40
+                    from opentelemetry.instrumentation.logging.handler import (
+                        LoggingHandler,
+                    )
+
+                    # Code attributes are opt-in here, but the SDK handler always sent them
+                    _otlp_handler = LoggingHandler(
+                        logger_provider=log_provider, log_code_attributes=True
+                    )
+                except ImportError:
+                    from opentelemetry.sdk._logs import (
+                        LoggingHandler as SDKLoggingHandler,
+                    )
+
+                    with warnings.catch_warnings():
+                        # Deprecated, but the only handler available without the instrumentation package
+                        warnings.simplefilter("ignore", DeprecationWarning)
+                        _otlp_handler = SDKLoggingHandler(logger_provider=log_provider)
                 otlp_log_level = config.get("telemetry", {}).get("logs", {}).get("otlpLogLevel")  # type: ignore
                 if otlp_log_level is not None:
                     _otlp_handler.setLevel(otlp_log_level)
