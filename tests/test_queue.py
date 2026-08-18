@@ -273,6 +273,14 @@ def test_queue_dynamic_config(dbos: DBOS) -> None:
         queue.set_partition_concurrency(100)
     with pytest.raises(ValueError):
         queue.set_partition_worker_concurrency(100)
+    # Nor can partition_concurrency drop below the per-worker limit it bounds.
+    with pytest.raises(ValueError, match="greater than or equal to"):
+        queue.set_partition_concurrency(1)
+    # Both per-partition limits are floored at 1.
+    with pytest.raises(ValueError, match="at least 1"):
+        queue.set_partition_worker_concurrency(0)
+    with pytest.raises(ValueError, match="at least 1"):
+        queue.set_partition_concurrency(0)
     # polling_interval must be positive.
     with pytest.raises(ValueError):
         queue.set_polling_interval_sec(0.0)
@@ -289,11 +297,19 @@ def test_queue_dynamic_config(dbos: DBOS) -> None:
     # ones read as unset. Re-scoping it would silently change what it enforces.
     legacy_name = f"test_legacy_queue_{uuid.uuid4()}"
     legacy_queue = DBOS.register_queue(
-        legacy_name, partition_queue=True, concurrency=2, worker_concurrency=1
+        legacy_name,
+        partition_queue=True,
+        concurrency=2,
+        worker_concurrency=1,
+        limiter={"limit": 7, "period": 2.0},
     )
     assert legacy_queue.partition_concurrency == 2
     assert legacy_queue.partition_worker_concurrency == 1
+    assert legacy_queue.partition_limiter == {"limit": 7, "period": 2.0}
+    # Every queue-wide getter reads as unset, so no limit is reported at both scopes.
     assert legacy_queue.global_concurrency is None
+    assert legacy_queue.worker_concurrency is None
+    assert legacy_queue.limiter is None
     with pytest.raises(DBOSException):
         legacy_queue.set_global_concurrency(5)
     with pytest.raises(DBOSException):
@@ -359,6 +375,8 @@ def test_partition_limit_validation(dbos: DBOS) -> None:
     # Malformed limits are rejected the same way their queue-wide counterparts are.
     with pytest.raises(ValueError, match="at least 1"):
         Queue(f"v8_{suffix}", partition_concurrency=0)
+    with pytest.raises(ValueError, match="at least 1"):
+        Queue(f"v12_{suffix}", partition_worker_concurrency=0)
     with pytest.raises(ValueError, match="both 'limit' and 'period'"):
         Queue(f"v9_{suffix}", partition_limiter={"limit": 1})  # type: ignore
 
@@ -3091,7 +3109,9 @@ def test_partition_sweep_fills_worker_concurrency_in_one_pass(dbos: DBOS) -> Non
         retry_until_success(
             all_partitions_started,
             interval=0.05,
-            max_attempts=int(polling_interval / 0.05),
+            # Half a polling interval: the next poll is at least 0.95x one away, so a
+            # second sweep cannot land inside the window and pass off two passes as one.
+            max_attempts=int(polling_interval * 0.5 / 0.05),
         )
     finally:
         # Always release the blocked workflows: leaving them parked would stall shutdown.
@@ -3173,13 +3193,28 @@ def test_queue_wide_limit_holds_across_executors(
             f"trial {trial}: two executors each spent the queue-wide budget, "
             f"claiming {claimed}"
         )
-        claimed_total += sum(len(c) for c in claimed)
-        # Retire this trial's claims so the next trial starts from a free budget.
+        trial_claims = sum(len(c) for c in claimed)
+        # Losing the race admits nothing, but one executor always wins: a trial that
+        # admits nothing at all tested the race with an already-spent budget.
+        assert trial_claims >= 1, (
+            f"trial {trial}: neither executor admitted anything, so the budget was "
+            f"not free at the start of this trial"
+        )
+        claimed_total += trial_claims
+        # Retire this trial's claims so the next trial starts from a free budget. A
+        # rate-limit slot is retired by its window, not by status -- rate_limit_remaining
+        # counts any non-ENQUEUED row inside the period -- so clear the flag too.
         for ids in claimed:
             for workflow_id in ids:
-                set_workflow_status(
-                    dbos._sys_db, workflow_id, WorkflowStatusString.SUCCESS.value
-                )
+                with dbos._sys_db.engine.begin() as c:
+                    c.execute(
+                        sa.update(ws)
+                        .where(ws.c.workflow_uuid == workflow_id)
+                        .values(
+                            status=WorkflowStatusString.SUCCESS.value,
+                            rate_limited=False,
+                        )
+                    )
 
     # The limit must bind by admitting work, not by admitting nothing at all.
     assert claimed_total > 0
@@ -3470,8 +3505,9 @@ def test_partitioned_queue_fallback_routing(
     dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A partitioned config the batched path does not support -- a rate limiter --
-    routes to the per-partition sweep and drains. A zero worker limit at either scope
-    (the pause-dequeue idiom) exhausts this worker's budget before either path runs.
+    routes to the per-partition sweep and drains. A zero worker limit (the pause-dequeue
+    idiom, which a legacy queue resolves to the per-partition scope) exhausts this
+    worker's budget before either path runs.
     """
 
     @DBOS.workflow()
@@ -3491,16 +3527,6 @@ def test_partitioned_queue_fallback_routing(
         concurrency=1,
         worker_concurrency=0,
         partition_queue=True,
-        polling_interval_sec=0.25,
-    )
-
-    # Paused per partition, not queue-wide: the batched path enforces no per-partition
-    # worker limit itself, so the budget must stop it before it runs.
-    partition_paused_queue = Queue(
-        f"partition_paused_{uuid.uuid4().hex[:8]}",
-        partition_concurrency=1,
-        partition_worker_concurrency=0,
-        worker_concurrency=5,
         polling_interval_sec=0.25,
     )
 
@@ -3528,8 +3554,6 @@ def test_partitioned_queue_fallback_routing(
             handles.append(limiter_queue.enqueue(routed_wf, f"limited-{partition}"))
     with SetEnqueueOptions(queue_partition_key="p0"):
         paused_handle = paused_queue.enqueue(routed_wf, "paused")
-    with SetEnqueueOptions(queue_partition_key="p0"):
-        partition_paused_handle = partition_paused_queue.enqueue(routed_wf, "pp")
 
     for handle in handles:
         assert handle.get_result()
@@ -3543,12 +3567,6 @@ def test_partitioned_queue_fallback_routing(
     assert paused_queue.name not in batched_queues
     assert paused_queue.name not in swept_queues
     assert paused_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
-    assert partition_paused_queue.name not in batched_queues
-    assert partition_paused_queue.name not in swept_queues
-    assert (
-        partition_paused_handle.get_status().status
-        == WorkflowStatusString.ENQUEUED.value
-    )
 
 
 def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
