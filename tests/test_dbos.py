@@ -579,6 +579,9 @@ def test_duplicate_recovery_does_not_rerun_running_workflow(dbos: DBOS) -> None:
 
             retry_until_success(dequeued)
             assert start_count == 1
+
+        time.sleep(2)
+        assert start_count == 1
     finally:
         blocker.set()
 
