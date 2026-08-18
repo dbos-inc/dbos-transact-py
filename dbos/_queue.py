@@ -103,11 +103,10 @@ class Queue:
         database_backed_queue: bool = False,
         client_system_database: Optional["SystemDatabase"] = None,
         application_name: Optional[str] = None,
-        # Deprecated, retained for backwards compatibility. concurrency and limiter keep their positional slots above: moving them would rebind Queue("q", 5).
+        # Deprecated, retained for backwards compatibility
         priority_enabled: bool = False,
         partition_queue: bool = False,
     ) -> None:
-        # Rows are validated when written, and a row legitimately carries both partition_queue and the partition limits, which no caller may combine.
         if not database_backed_queue:
             Queue._validate_queue(
                 concurrency=concurrency,
@@ -128,7 +127,6 @@ class Queue:
         # DBOS singleton's. This allows a DBOSClient to manipulate queues
         # without depending on a launched DBOS process.
         self._client_system_database = client_system_database
-        # Local cache of the queues-table columns; getters consult it for in-memory queues and the database for database-backed ones.
         self._concurrency = (
             concurrency if global_concurrency is None else global_concurrency
         )
@@ -138,7 +136,7 @@ class Queue:
         self._partition_concurrency = partition_concurrency
         self._partition_worker_concurrency = partition_worker_concurrency
         self._partition_limiter = partition_limiter
-        # Partitioning is inferred from any per-partition limit; the deprecated flag tracks it.
+        # Partitioning is inferred from any per-partition limit
         self._partition_queue = partition_queue or self._has_partition_limits()
         self._polling_interval_sec = polling_interval_sec
 
@@ -212,7 +210,7 @@ class Queue:
             raise ValueError(
                 "worker_concurrency must be greater than or equal to partition_worker_concurrency"
             )
-        # Under the deprecated partition_queue spelling concurrency is itself a per-partition limit, so the worker_concurrency check below compares like with like.
+        # In the deprecated partition_queue mode concurrency is itself a per-partition limit, so the worker_concurrency check below compares like with like.
         queue_concurrency = (
             concurrency if global_concurrency is None else global_concurrency
         )
@@ -262,7 +260,7 @@ class Queue:
         return any(value is not None for value in values.values())
 
     def _is_legacy_partitioned(self) -> bool:
-        """True when the queue uses the deprecated partition_queue spelling, under
+        """True when the queue uses the deprecated partition_queue mode, under
         which concurrency, worker_concurrency, and limiter all apply per partition."""
         return self._partition_queue and not self._has_partition_limits()
 
@@ -856,10 +854,8 @@ def queue_worker_thread(
             limits.partition_worker_concurrency is not None
             and limits.partition_worker_concurrency <= 0
         ):
-            # Zero per partition pauses this worker: no partition may run anything here, and the batched sweep enforces no per-partition worker limit of its own.
             return 0
         if limits.worker_concurrency is None:
-            # A non-zero per-partition worker limit is enforced per partition instead.
             return sys.maxsize
         return max(0, limits.worker_concurrency - running)
 

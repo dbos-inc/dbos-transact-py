@@ -6308,7 +6308,7 @@ class SystemDatabase(ABC):
             "rate_limit_max": rate_limit_max,
             "rate_limit_period_sec": rate_limit_period_sec,
             "priority_enabled": priority_enabled,
-            # Any per-partition limit implies partitioning, whichever spelling was used.
+            # Any per-partition limit implies partitioning, whichever mode was used.
             "partition_queue": partition_queue
             or partition_concurrency is not None
             or partition_worker_concurrency is not None
