@@ -4216,22 +4216,22 @@ class SystemDatabase(ABC):
         ws = SystemSchema.workflow_status
         # Resolve from the queue's locally cached private state to avoid recursive DB reads
         limits = queue._resolve_limits()
-        # Budgets peer workers also spend, at either scope: those need a consistent snapshot.
+        # Shares a concurrency or limiter budget with other executors
         has_shared_budget = (
             limits.global_concurrency is not None
             or limits.partition_concurrency is not None
             or limits.limiter is not None
             or limits.partition_limiter is not None
         )
-        # A queue-wide budget spent while claiming one partition is measured over rows this transaction does not lock, so peers sweeping other partitions never collide: only serializable isolation catches that write skew.
-        budget_wider_than_lock = queue_partition_key is not None and (
+        # Shares a concurrency or limiter budget with other executors and other partitions
+        has_write_skew = queue_partition_key is not None and (
             limits.global_concurrency is not None or limits.limiter is not None
         )
         with self.engine.begin() as c:
-            # Default to READ COMMITTED except with global concurrency limits or rate limits
+            # Otherwise READ COMMITTED
             if self.engine.dialect.name == "postgresql" and has_shared_budget:
-                level = "SERIALIZABLE" if budget_wider_than_lock else "REPEATABLE READ"
-                c.execute(sa.text(f"SET TRANSACTION ISOLATION LEVEL {level}"))
+                isolation = "SERIALIZABLE" if has_write_skew else "REPEATABLE READ"
+                c.execute(sa.text(f"SET TRANSACTION ISOLATION LEVEL {isolation}"))
 
             def rate_limit_remaining(
                 limiter: "QueueRateLimit", partition_scoped: bool
