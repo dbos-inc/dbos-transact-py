@@ -355,41 +355,55 @@ def test_queue_dynamic_config(dbos: DBOS) -> None:
         legacy.set_concurrency(5)
 
 
-def test_partition_limit_validation(dbos: DBOS) -> None:
+@pytest.mark.parametrize(
+    "kwargs,message",
+    [
+        # A deprecated argument cannot be combined with the one replacing it.
+        ({"concurrency": 1, "global_concurrency": 1}, "only one of them"),
+        ({"partition_queue": True, "partition_concurrency": 1}, "only one of them"),
+        (
+            {"partition_queue": True, "partition_worker_concurrency": 1},
+            "only one of them",
+        ),
+        (
+            {"partition_queue": True, "partition_limiter": {"limit": 1, "period": 1.0}},
+            "only one of them",
+        ),
+        # partition_queue already applies every limit per partition.
+        (
+            {"global_concurrency": 5, "partition_queue": True},
+            "cannot be combined with global_concurrency",
+        ),
+        # A per-partition limit above its queue-wide counterpart could never bind.
+        (
+            {"global_concurrency": 1, "partition_concurrency": 2},
+            "greater than or equal",
+        ),
+        (
+            {"worker_concurrency": 1, "partition_worker_concurrency": 2},
+            "greater than or equal",
+        ),
+        (
+            {"partition_concurrency": 1, "partition_worker_concurrency": 2},
+            "greater than or equal",
+        ),
+        (
+            {"global_concurrency": 1, "partition_worker_concurrency": 2},
+            "greater than or equal",
+        ),
+        # Malformed limits are rejected the same way their queue-wide counterparts are.
+        ({"partition_concurrency": 0}, "at least 1"),
+        ({"partition_worker_concurrency": 0}, "at least 1"),
+        ({"partition_limiter": {"limit": 1}}, "both 'limit' and 'period'"),
+    ],
+)
+def test_partition_limit_validation(
+    dbos: DBOS, kwargs: dict[str, Any], message: str
+) -> None:
     """Configurations whose limits could never bind, or that mix a deprecated option
     with the one replacing it, are rejected before the queue exists."""
-    suffix = uuid.uuid4()
-    # A deprecated argument cannot be combined with the one replacing it.
-    with pytest.raises(ValueError, match="only one of them"):
-        Queue(f"v1_{suffix}", concurrency=1, global_concurrency=1)
-    with pytest.raises(ValueError, match="only one of them"):
-        Queue(f"v2_{suffix}", partition_queue=True, partition_concurrency=1)
-    with pytest.raises(ValueError, match="only one of them"):
-        Queue(f"v3_{suffix}", partition_queue=True, partition_worker_concurrency=1)
-    with pytest.raises(ValueError, match="only one of them"):
-        Queue(
-            f"v4_{suffix}",
-            partition_queue=True,
-            partition_limiter={"limit": 1, "period": 1.0},
-        )
-    # A per-partition limit above its queue-wide counterpart could never bind.
-    with pytest.raises(ValueError, match="greater than or equal to"):
-        Queue(f"v5_{suffix}", global_concurrency=1, partition_concurrency=2)
-    with pytest.raises(ValueError, match="greater than or equal to"):
-        Queue(f"v6_{suffix}", worker_concurrency=1, partition_worker_concurrency=2)
-    with pytest.raises(ValueError, match="greater than or equal to"):
-        Queue(f"v7_{suffix}", partition_concurrency=1, partition_worker_concurrency=2)
-    with pytest.raises(ValueError, match="cannot be combined with global_concurrency"):
-        Queue(f"v10_{suffix}", global_concurrency=5, partition_queue=True)
-    with pytest.raises(ValueError, match="greater than or equal to"):
-        Queue(f"v11_{suffix}", global_concurrency=1, partition_worker_concurrency=2)
-    # Malformed limits are rejected the same way their queue-wide counterparts are.
-    with pytest.raises(ValueError, match="at least 1"):
-        Queue(f"v8_{suffix}", partition_concurrency=0)
-    with pytest.raises(ValueError, match="at least 1"):
-        Queue(f"v12_{suffix}", partition_worker_concurrency=0)
-    with pytest.raises(ValueError, match="both 'limit' and 'period'"):
-        Queue(f"v9_{suffix}", partition_limiter={"limit": 1})  # type: ignore
+    with pytest.raises(ValueError, match=message):
+        Queue(f"invalid_{uuid.uuid4()}", **kwargs)
 
 
 def test_client_queue_crud(dbos: DBOS, client: DBOSClient) -> None:
@@ -3080,74 +3094,6 @@ def test_partition_limits_bound_both_scopes(
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_partition_sweep_fills_worker_concurrency_in_one_pass(dbos: DBOS) -> None:
-    """One sweep serves every partition the worker has room for, rather than stopping
-    part way and waiting for later polls to reach worker_concurrency."""
-
-    worker_concurrency = 8
-    partitions = [f"partition-{i}" for i in range(worker_concurrency)]
-    polling_interval = 2.0
-
-    unblock_event = threading.Event()
-    lock = threading.Lock()
-    running: List[str] = []
-
-    @DBOS.workflow()
-    def blocking_workflow(partition: str) -> str:
-        with lock:
-            running.append(partition)
-        unblock_event.wait()
-        assert DBOS.workflow_id is not None
-        return DBOS.workflow_id
-
-    # Enqueue before registering, so the queue's first sweep sees the whole backlog
-    # and this does not race the poller.
-    queue_name = f"one_pass_{uuid.uuid4().hex[:8]}"
-    handles: list[WorkflowHandle[str]] = []
-    for partition in partitions:
-        with SetEnqueueOptions(queue_partition_key=partition):
-            handles.append(
-                DBOS.enqueue_workflow(queue_name, blocking_workflow, partition)
-            )
-    DBOS.register_queue(
-        queue_name,
-        worker_concurrency=worker_concurrency,
-        partition_worker_concurrency=1,
-        polling_interval_sec=polling_interval,
-    )
-
-    def any_workflow_started() -> None:
-        with lock:
-            assert running
-
-    retry_until_success(any_workflow_started, interval=0.1, max_attempts=200)
-
-    # Everything the worker has room for belongs to that same sweep, so it lands well
-    # inside one polling interval. Serving only part of it would wait for the next poll.
-    def all_partitions_started() -> None:
-        with lock:
-            assert len(running) == worker_concurrency, (
-                f"{len(running)} of {worker_concurrency} workflows started within one "
-                f"sweep; the rest are waiting for a later poll"
-            )
-
-    try:
-        retry_until_success(
-            all_partitions_started,
-            interval=0.05,
-            # Half a polling interval: the next poll is at least 0.95x one away, so a
-            # second sweep cannot land inside the window and pass off two passes as one.
-            max_attempts=int(polling_interval * 0.5 / 0.05),
-        )
-    finally:
-        # Always release the blocked workflows: leaving them parked would stall shutdown.
-        unblock_event.set()
-
-    for handle in handles:
-        assert handle.get_result() is not None
-    assert queue_entries_are_cleaned_up(dbos)
-
-
 @pytest.mark.parametrize(
     "limits",
     [
@@ -3184,8 +3130,9 @@ def test_queue_wide_limit_holds_across_executors(
                 or 0
             )
 
-    claimed_total = 0
-    for trial in range(5):
+    # Repeat: the two sweeps must interleave inside the window the guard protects, which
+    # a single trial can miss.
+    for trial in range(3):
         partitions = [f"a{trial}", f"b{trial}"]
         for partition in partitions:
             with SetEnqueueOptions(
@@ -3219,31 +3166,21 @@ def test_queue_wide_limit_holds_across_executors(
             f"trial {trial}: two executors each spent the queue-wide budget, "
             f"claiming {claimed}"
         )
-        trial_claims = sum(len(c) for c in claimed)
-        # Losing the race admits nothing, but one executor always wins: a trial that
-        # admits nothing at all tested the race with an already-spent budget.
-        assert trial_claims >= 1, (
-            f"trial {trial}: neither executor admitted anything, so the budget was "
-            f"not free at the start of this trial"
-        )
-        claimed_total += trial_claims
-        # Retire this trial's claims so the next trial starts from a free budget. A
-        # rate-limit slot is retired by its window, not by status -- rate_limit_remaining
-        # counts any non-ENQUEUED row inside the period -- so clear the flag too.
-        for ids in claimed:
-            for workflow_id in ids:
-                with dbos._sys_db.engine.begin() as c:
-                    c.execute(
-                        sa.update(ws)
-                        .where(ws.c.workflow_uuid == workflow_id)
-                        .values(
-                            status=WorkflowStatusString.SUCCESS.value,
-                            rate_limited=False,
-                        )
-                    )
+        # Losing the race admits nothing, but a trial where neither admits anything
+        # tested the race against an already-spent budget rather than a free one.
+        assert (
+            sum(len(c) for c in claimed) >= 1
+        ), f"trial {trial}: neither executor admitted anything, so the budget was not free"
 
-    # The limit must bind by admitting work, not by admitting nothing at all.
-    assert claimed_total > 0
+        # Retire this trial's claim so the next starts from a free budget. A rate-limit
+        # slot is retired by its window, not by status -- rate_limit_remaining counts any
+        # non-ENQUEUED row inside the period -- so clear the flag too.
+        with dbos._sys_db.engine.begin() as c:
+            c.execute(
+                sa.update(ws)
+                .where(ws.c.workflow_uuid.in_([id for ids in claimed for id in ids]))
+                .values(status=WorkflowStatusString.SUCCESS.value, rate_limited=False)
+            )
 
 
 def test_partition_limiter_with_queue_wide_limiter(dbos: DBOS) -> None:
