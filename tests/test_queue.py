@@ -3056,9 +3056,10 @@ def test_partition_limits_bound_both_scopes(
         assert DBOS.workflow_id is not None
         return DBOS.workflow_id
 
+    polling_interval = 0.5
     queue = DBOS.register_queue(
         f"partition_limits_{uuid.uuid4().hex[:8]}",
-        polling_interval_sec=0.5,
+        polling_interval_sec=polling_interval,
         **limits,
     )
 
@@ -3078,7 +3079,7 @@ def test_partition_limits_bound_both_scopes(
         retry_until_success(queue_saturated)
 
         # Let several polling intervals pass: neither limit is ever exceeded, and the partitions with no room stay blocked rather than borrowing another's.
-        time.sleep(2)
+        time.sleep(4 * polling_interval)
         with lock:
             assert max_total_running == queue_wide
             assert all(max_running[p] <= per_partition for p in partitions)
@@ -3115,7 +3116,13 @@ def test_queue_wide_limit_holds_across_executors(
 
     # A version this executor never runs, so the live queue worker leaves these rows alone.
     parked_version = "parked-version"
-    queue = DBOS.register_queue(f"cross_executor_{uuid.uuid4().hex[:8]}", **limits)
+    # Park the live worker as well: its own serializable sweeps read the same predicate
+    # these threads write, so it can join their conflict graph and abort one of them.
+    queue = DBOS.register_queue(
+        f"cross_executor_{uuid.uuid4().hex[:8]}",
+        polling_interval_sec=3600.0,
+        **limits,
+    )
     ws = SystemSchema.workflow_status
 
     def pending_count() -> int:
@@ -3153,24 +3160,33 @@ def test_queue_wide_limit_holds_across_executors(
                 # Losing the race is the correct outcome; admitting is not.
                 pass
 
-        threads = [
-            threading.Thread(target=sweep, args=(i, p))
-            for i, p in enumerate(partitions)
-        ]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
+        # Losing the race admits nothing, but an attempt where neither admits anything
+        # raced an already-spent budget rather than a free one, so it tested nothing.
+        # Serializable isolation can abort both sweeps, so re-race until one wins. The
+        # guard below is checked on every attempt regardless of who won.
+        for _ in range(10):
+            barrier = threading.Barrier(len(partitions))
+            claimed = [[] for _ in partitions]
+            threads = [
+                threading.Thread(target=sweep, args=(i, p))
+                for i, p in enumerate(partitions)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
 
-        assert pending_count() <= 1, (
-            f"trial {trial}: two executors each spent the queue-wide budget, "
-            f"claiming {claimed}"
-        )
-        # Losing the race admits nothing, but a trial where neither admits anything
-        # tested the race against an already-spent budget rather than a free one.
-        assert (
-            sum(len(c) for c in claimed) >= 1
-        ), f"trial {trial}: neither executor admitted anything, so the budget was not free"
+            assert pending_count() <= 1, (
+                f"trial {trial}: two executors each spent the queue-wide budget, "
+                f"claiming {claimed}"
+            )
+            if sum(len(c) for c in claimed) >= 1:
+                break
+        else:
+            pytest.fail(
+                f"trial {trial}: no sweep ever admitted a workflow, so every attempt "
+                "raced an already-spent budget"
+            )
 
         # Retire this trial's claim so the next starts from a free budget. A rate-limit
         # slot is retired by its window, not by status -- rate_limit_remaining counts any
@@ -3193,11 +3209,12 @@ def test_partition_limiter_with_queue_wide_limiter(dbos: DBOS) -> None:
 
     queue_limit, partition_limit = 3, 1
     partitions = [f"p{i}" for i in range(4)]
+    polling_interval = 0.25
     queue = DBOS.register_queue(
         "partition_and_queue_limiter",
         limiter={"limit": queue_limit, "period": 60},
         partition_limiter={"limit": partition_limit, "period": 60},
-        polling_interval_sec=0.25,
+        polling_interval_sec=polling_interval,
     )
 
     ids = []
@@ -3217,7 +3234,8 @@ def test_partition_limiter_with_queue_wide_limiter(dbos: DBOS) -> None:
 
     retry_until_success(limiter_budget_spent)
 
-    time.sleep(1)
+    # Several polling intervals with no further admission: both windows stay spent.
+    time.sleep(4 * polling_interval)
     final = statuses()
     assert final.count(WorkflowStatusString.SUCCESS.value) == queue_limit
     started_partitions = [
@@ -3495,8 +3513,10 @@ def test_partitioned_queue_fallback_routing(
 
     batched_queues: List[str] = []
     swept_queues: List[str] = []
+    polled_queues: List[str] = []
     real_batched = dbos._sys_db.start_queued_partitioned_workflows
     real_single = dbos._sys_db.start_queued_workflows
+    real_count = dbos._active_workflows_set.count_for_queue
 
     def spying_batched(queue_arg: Queue, *args: Any, **kwargs: Any) -> List[str]:
         batched_queues.append(queue_arg.name)
@@ -3506,10 +3526,17 @@ def test_partitioned_queue_fallback_routing(
         swept_queues.append(queue_arg.name)
         return real_single(queue_arg, *args, **kwargs)
 
+    # Every dequeue branch counts this worker's running workflows before deciding what
+    # to claim, so this records that a queue's worker reached the branch at all.
+    def spying_count(queue_name: str) -> int:
+        polled_queues.append(queue_name)
+        return real_count(queue_name)
+
     monkeypatch.setattr(
         dbos._sys_db, "start_queued_partitioned_workflows", spying_batched
     )
     monkeypatch.setattr(dbos._sys_db, "start_queued_workflows", spying_single)
+    monkeypatch.setattr(dbos._active_workflows_set, "count_for_queue", spying_count)
 
     handles = []
     for partition in ["p0", "p1"]:
@@ -3526,7 +3553,13 @@ def test_partitioned_queue_fallback_routing(
 
     retry_until_success(limiter_queue_swept, interval=0.1, max_attempts=100)
     assert limiter_queue.name not in batched_queues
-    # The paused queue polls on the same interval, so it has had its turn by now.
+
+    # Wait for proof the paused queue's worker actually polled, so the assertions below
+    # record that its zero budget stopped it rather than that it never got a turn.
+    def paused_queue_polled() -> None:
+        assert paused_queue.name in polled_queues
+
+    retry_until_success(paused_queue_polled, interval=0.1, max_attempts=100)
     assert paused_queue.name not in batched_queues
     assert paused_queue.name not in swept_queues
     assert paused_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
