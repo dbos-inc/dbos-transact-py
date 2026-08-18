@@ -4567,21 +4567,29 @@ class SystemDatabase(ABC):
                 )
                 .limit(1)
             )
+            # Order the (already limited) result by partition so the claim below, and the dispatch order it feeds, are deterministic; which partitions were chosen is settled above.
             if self.engine.dialect.name == "postgresql":
                 # LATERAL joins plan as tight nested loops; correlated scalar subqueries run as slower per-row SubPlans on Postgres.
                 head = head_query.lateral("head")
-                cand_query = sa.select(head.c.workflow_uuid).select_from(
-                    chosen.join(head, sa.true())
+                cand_query = (
+                    sa.select(head.c.workflow_uuid)
+                    .select_from(chosen.join(head, sa.true()))
+                    .order_by(chosen.c.pk.asc())
                 )
             else:
                 # SQLite has no LATERAL; a correlated scalar subquery probes each head, with version-ineligible (NULL-head) partitions filtered in the outer select.
                 heads = (
-                    sa.select(head_query.scalar_subquery().label("workflow_uuid"))
+                    sa.select(
+                        head_query.scalar_subquery().label("workflow_uuid"),
+                        chosen.c.pk,
+                    )
                     .select_from(chosen)
                     .subquery("heads")
                 )
-                cand_query = sa.select(heads.c.workflow_uuid).where(
-                    heads.c.workflow_uuid.isnot(None)
+                cand_query = (
+                    sa.select(heads.c.workflow_uuid)
+                    .where(heads.c.workflow_uuid.isnot(None))
+                    .order_by(heads.c.pk.asc())
                 )
             candidate_ids = [row[0] for row in c.execute(cand_query).fetchall()]
             if not candidate_ids:

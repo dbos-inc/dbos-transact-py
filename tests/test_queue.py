@@ -352,6 +352,10 @@ def test_partition_limit_validation(dbos: DBOS) -> None:
         Queue(f"v6_{suffix}", worker_concurrency=1, partition_worker_concurrency=2)
     with pytest.raises(ValueError, match="greater than or equal to"):
         Queue(f"v7_{suffix}", partition_concurrency=1, partition_worker_concurrency=2)
+    with pytest.raises(ValueError, match="cannot be combined with global_concurrency"):
+        Queue(f"v10_{suffix}", global_concurrency=5, partition_queue=True)
+    with pytest.raises(ValueError, match="greater than or equal to"):
+        Queue(f"v11_{suffix}", global_concurrency=1, partition_worker_concurrency=2)
     # Malformed limits are rejected the same way their queue-wide counterparts are.
     with pytest.raises(ValueError, match="at least 1"):
         Queue(f"v8_{suffix}", partition_concurrency=0)
@@ -3032,6 +3036,72 @@ def test_partition_limits_bound_both_scopes(
     assert queue_entries_are_cleaned_up(dbos)
 
 
+def test_partition_sweep_fills_worker_concurrency_in_one_pass(dbos: DBOS) -> None:
+    """One sweep serves every partition the worker has room for, rather than stopping
+    part way and waiting for later polls to reach worker_concurrency."""
+
+    worker_concurrency = 8
+    partitions = [f"partition-{i}" for i in range(worker_concurrency)]
+    polling_interval = 2.0
+
+    unblock_event = threading.Event()
+    lock = threading.Lock()
+    running: List[str] = []
+
+    @DBOS.workflow()
+    def blocking_workflow(partition: str) -> str:
+        with lock:
+            running.append(partition)
+        unblock_event.wait()
+        assert DBOS.workflow_id is not None
+        return DBOS.workflow_id
+
+    # Enqueue before registering, so the queue's first sweep sees the whole backlog
+    # and this does not race the poller.
+    queue_name = f"one_pass_{uuid.uuid4().hex[:8]}"
+    handles: list[WorkflowHandle[str]] = []
+    for partition in partitions:
+        with SetEnqueueOptions(queue_partition_key=partition):
+            handles.append(
+                DBOS.enqueue_workflow(queue_name, blocking_workflow, partition)
+            )
+    DBOS.register_queue(
+        queue_name,
+        worker_concurrency=worker_concurrency,
+        partition_worker_concurrency=1,
+        polling_interval_sec=polling_interval,
+    )
+
+    def any_workflow_started() -> None:
+        with lock:
+            assert running
+
+    retry_until_success(any_workflow_started, interval=0.1, max_attempts=200)
+
+    # Everything the worker has room for belongs to that same sweep, so it lands well
+    # inside one polling interval. Serving only part of it would wait for the next poll.
+    def all_partitions_started() -> None:
+        with lock:
+            assert len(running) == worker_concurrency, (
+                f"{len(running)} of {worker_concurrency} workflows started within one "
+                f"sweep; the rest are waiting for a later poll"
+            )
+
+    try:
+        retry_until_success(
+            all_partitions_started,
+            interval=0.05,
+            max_attempts=int(polling_interval / 0.05),
+        )
+    finally:
+        # Always release the blocked workflows: leaving them parked would stall shutdown.
+        unblock_event.set()
+
+    for handle in handles:
+        assert handle.get_result() is not None
+    assert queue_entries_are_cleaned_up(dbos)
+
+
 def test_partition_limiter_with_queue_wide_limiter(dbos: DBOS) -> None:
     """Both rate limits bind at once: each partition spends its own window, and the
     queue-wide window caps the total across partitions."""
@@ -3317,8 +3387,8 @@ def test_partitioned_queue_fallback_routing(
     dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A partitioned config the batched path does not support -- a rate limiter --
-    routes to the per-partition sweep and drains. worker_concurrency=0 (the
-    pause-dequeue idiom) exhausts this worker's budget before either path runs.
+    routes to the per-partition sweep and drains. A zero worker limit at either scope
+    (the pause-dequeue idiom) exhausts this worker's budget before either path runs.
     """
 
     @DBOS.workflow()
@@ -3338,6 +3408,16 @@ def test_partitioned_queue_fallback_routing(
         concurrency=1,
         worker_concurrency=0,
         partition_queue=True,
+        polling_interval_sec=0.25,
+    )
+
+    # Paused per partition, not queue-wide: the batched path enforces no per-partition
+    # worker limit itself, so the budget must stop it before it runs.
+    partition_paused_queue = Queue(
+        f"partition_paused_{uuid.uuid4().hex[:8]}",
+        partition_concurrency=1,
+        partition_worker_concurrency=0,
+        worker_concurrency=5,
         polling_interval_sec=0.25,
     )
 
@@ -3365,6 +3445,8 @@ def test_partitioned_queue_fallback_routing(
             handles.append(limiter_queue.enqueue(routed_wf, f"limited-{partition}"))
     with SetEnqueueOptions(queue_partition_key="p0"):
         paused_handle = paused_queue.enqueue(routed_wf, "paused")
+    with SetEnqueueOptions(queue_partition_key="p0"):
+        partition_paused_handle = partition_paused_queue.enqueue(routed_wf, "pp")
 
     for handle in handles:
         assert handle.get_result()
@@ -3378,6 +3460,12 @@ def test_partitioned_queue_fallback_routing(
     assert paused_queue.name not in batched_queues
     assert paused_queue.name not in swept_queues
     assert paused_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
+    assert partition_paused_queue.name not in batched_queues
+    assert partition_paused_queue.name not in swept_queues
+    assert (
+        partition_paused_handle.get_status().status
+        == WorkflowStatusString.ENQUEUED.value
+    )
 
 
 def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:

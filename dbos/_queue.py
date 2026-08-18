@@ -180,6 +180,10 @@ class Queue:
             raise ValueError(
                 "partition_queue is deprecated in favor of the partition_* limits; set only one of them"
             )
+        if partition_queue and global_concurrency is not None:
+            raise ValueError(
+                "partition_queue applies every limit per partition, so it cannot be combined with global_concurrency; use partition_concurrency instead"
+            )
         if partition_concurrency is not None and partition_concurrency < 1:
             raise ValueError("partition_concurrency must be at least 1")
         if partition_limiter is not None and (
@@ -222,6 +226,14 @@ class Queue:
         ):
             raise ValueError(
                 "global_concurrency must be greater than or equal to partition_concurrency"
+            )
+        if (
+            partition_worker_concurrency is not None
+            and queue_concurrency is not None
+            and partition_worker_concurrency > queue_concurrency
+        ):
+            raise ValueError(
+                "concurrency must be greater than or equal to partition_worker_concurrency"
             )
         if polling_interval_sec <= 0.0:
             raise ValueError("polling_interval_sec must be positive")
@@ -495,6 +507,10 @@ class Queue:
             ):
                 raise ValueError(
                     "partition_worker_concurrency must be less than or equal to worker_concurrency"
+                )
+            if self._concurrency is not None and value > self._concurrency:
+                raise ValueError(
+                    "partition_worker_concurrency must be less than or equal to concurrency"
                 )
         partitioned = self._partitioned_after(_partition_worker_concurrency=value)
         self._write_to_db(
@@ -818,19 +834,16 @@ def queue_worker_thread(
             except Exception as e:
                 dbos.logger.error(f"Error executing workflow {id}: {e}")
 
-    def worker_budget(limits: ResolvedQueueLimits, claimed: int = 0) -> int:
-        """Room left under this worker's queue-wide concurrency limit, counting rows
-        already claimed this sweep: dispatch is asynchronous, so the active set does
-        not count them yet."""
+    def worker_budget(limits: ResolvedQueueLimits, running: int) -> int:
+        """Room left under this worker's queue-wide concurrency limit, given how many of
+        its workflows are already running or claimed."""
+        if limits.partition_worker_concurrency == 0:
+            # Zero per partition pauses this worker: no partition may run anything here, and the batched sweep enforces no per-partition worker limit of its own.
+            return 0
         if limits.worker_concurrency is None:
-            # A legacy per-partition worker limit is enforced per partition instead, except for zero, which stops this worker dequeueing at all.
-            return 0 if limits.partition_worker_concurrency == 0 else sys.maxsize
-        return max(
-            0,
-            limits.worker_concurrency
-            - dbos._active_workflows_set.count_for_queue(queue.name)
-            - claimed,
-        )
+            # A non-zero per-partition worker limit is enforced per partition instead.
+            return sys.maxsize
+        return max(0, limits.worker_concurrency - running)
 
     while not stop_event.is_set():
         # Reload database-backed queue config once per iteration so dynamic
@@ -879,7 +892,9 @@ def queue_worker_thread(
                 and limits.partition_limiter is None
             ):
                 # Optimization: Batch dequeue if partition concurrency is 1
-                max_tasks = worker_budget(limits)
+                max_tasks = worker_budget(
+                    limits, dbos._active_workflows_set.count_for_queue(queue.name)
+                )
                 if max_tasks > 0:
                     dequeued_workflows = (
                         dbos._sys_db.start_queued_partitioned_workflows(
@@ -894,9 +909,11 @@ def queue_worker_thread(
                 # Iterate through partitions one at a time in random order to prevent starvation.
                 partition_keys = dbos._sys_db.get_queue_partitions(queue.name)
                 random.shuffle(partition_keys)
+                # Snapshot once: re-reading would count this sweep's own claims twice, since dispatch is asynchronous and `claimed` already accounts for them.
+                running = dbos._active_workflows_set.count_for_queue(queue.name)
                 claimed = 0
                 for key in partition_keys:
-                    if worker_budget(limits, claimed) <= 0:
+                    if worker_budget(limits, running + claimed) <= 0:
                         break
                     try:
                         dequeued_workflows = dbos._sys_db.start_queued_workflows(
@@ -904,8 +921,7 @@ def queue_worker_thread(
                             GlobalParams.executor_id,
                             GlobalParams.app_version,
                             key,
-                            dbos._active_workflows_set.count_for_queue(queue.name)
-                            + claimed,
+                            running + claimed,
                             dbos._active_workflows_set.count_for_partition(
                                 queue.name, key
                             ),
