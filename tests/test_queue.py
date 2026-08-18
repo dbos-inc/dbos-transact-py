@@ -1022,6 +1022,9 @@ def test_multiple_queues(dbos: DBOS) -> None:
     for i in range(len(dequeued_at) - limit):
         assert dequeued_at[i + limit] - dequeued_at[i] >= period_ms - 10
 
+    # ...and it spends that whole budget rather than trickling one workflow at a time.
+    assert sum(1 for t in dequeued_at if t < dequeued_at[0] + period_ms) == limit
+
     # Verify all workflows get the SUCCESS status eventually
     for h in handles:
         assert h.get_status().status == WorkflowStatusString.SUCCESS.value
