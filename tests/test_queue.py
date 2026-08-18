@@ -3,6 +3,7 @@ import gc
 import multiprocessing
 import multiprocessing.synchronize
 import os
+import random
 import subprocess
 import threading
 import time
@@ -2805,20 +2806,24 @@ def test_partitioned_queue_does_not_starve_partitions(dbos: DBOS) -> None:
             completed[partition] += 1
         return partition
 
-    queue = DBOS.register_queue(
-        f"starvation_{uuid.uuid4().hex[:8]}",
+    # Enqueue before registering, so the first sweep sees every partition at once.
+    # Registering first lets the worker drain the busy backlog while the small
+    # partitions are still being enqueued, which eats into the margin asserted below.
+    queue_name = f"starvation_{uuid.uuid4().hex[:8]}"
+    for partition in busy_partitions:
+        with SetEnqueueOptions(queue_partition_key=partition):
+            for _ in range(busy_backlog):
+                DBOS.enqueue_workflow(queue_name, quick_workflow, partition)
+    for partition in small_partitions:
+        with SetEnqueueOptions(queue_partition_key=partition):
+            DBOS.enqueue_workflow(queue_name, quick_workflow, partition)
+
+    DBOS.register_queue(
+        queue_name,
         partition_concurrency=1,
         worker_concurrency=2,
         polling_interval_sec=0.1,
     )
-
-    for partition in busy_partitions:
-        with SetEnqueueOptions(queue_partition_key=partition):
-            for _ in range(busy_backlog):
-                DBOS.enqueue_workflow(queue.name, quick_workflow, partition)
-    for partition in small_partitions:
-        with SetEnqueueOptions(queue_partition_key=partition):
-            DBOS.enqueue_workflow(queue.name, quick_workflow, partition)
 
     def every_small_partition_served() -> int:
         with lock:
@@ -2852,6 +2857,9 @@ def test_partition_serialization_failure_skips_key(
     # Sorts before the healthy key, so an escaping error would abort the sweep first.
     poisoned_key = "a_poisoned"
     healthy_key = "z_healthy"
+    # The sweep shuffles partitions to prevent starvation, which would visit the healthy
+    # key first half the time and let it drain even with the skip removed. Pin the order.
+    monkeypatch.setattr(random, "shuffle", lambda seq: None)
     poison_active = threading.Event()
     poison_active.set()
 
@@ -2893,6 +2901,12 @@ def test_partition_serialization_failure_skips_key(
         healthy_handle = queue.enqueue(wf)
 
     # The healthy partition drains even though the poisoned one fails every sweep.
+    # Bounded: without the per-partition skip the error aborts the sweep before the
+    # healthy key is reached, and a bare get_result() would block forever instead of failing.
+    def healthy_finished() -> None:
+        assert healthy_handle.get_status().status == WorkflowStatusString.SUCCESS.value
+
+    retry_until_success(healthy_finished, interval=0.1, max_attempts=100)
     assert healthy_handle.get_result()
     assert poisoned_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
 
@@ -3036,15 +3050,17 @@ def test_partition_limits_bound_both_scopes(
         with lock:
             assert total_running == queue_wide
 
-    retry_until_success(queue_saturated)
+    try:
+        retry_until_success(queue_saturated)
 
-    # Let several polling intervals pass: neither limit is ever exceeded, and the partitions with no room stay blocked rather than borrowing another's.
-    time.sleep(2)
-    with lock:
-        assert max_total_running == queue_wide
-        assert all(max_running[p] <= per_partition for p in partitions)
-
-    unblock_event.set()
+        # Let several polling intervals pass: neither limit is ever exceeded, and the partitions with no room stay blocked rather than borrowing another's.
+        time.sleep(2)
+        with lock:
+            assert max_total_running == queue_wide
+            assert all(max_running[p] <= per_partition for p in partitions)
+    finally:
+        # Always release the blocked workflows: leaving them parked would stall shutdown.
+        unblock_event.set()
     for handle in handles:
         assert handle.get_result() is not None
 
