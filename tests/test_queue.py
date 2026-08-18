@@ -988,16 +988,15 @@ def test_multiple_queues(dbos: DBOS) -> None:
     handle2 = DBOS.enqueue_workflow("test_concurrency_queue", workflow_two)
 
     @DBOS.workflow()
-    def limited_workflow(var1: str, var2: str) -> float:
+    def limited_workflow(var1: str, var2: str) -> None:
         assert var1 == "abc" and var2 == "123"
-        return time.time()
 
     limit = 5
     period = 1.8
+    period_ms = int(period * 1000)
     DBOS.register_queue("test_limit_queue", limiter={"limit": limit, "period": period})
 
-    handles: list[WorkflowHandle[float]] = []
-    times: list[float] = []
+    handles: list[WorkflowHandle[None]] = []
 
     # Launch a number of tasks equal to three times the limit.
     # This should lead to three "waves" of the limit tasks being
@@ -1008,22 +1007,20 @@ def test_multiple_queues(dbos: DBOS) -> None:
         h = DBOS.enqueue_workflow("test_limit_queue", limited_workflow, "abc", "123")
         handles.append(h)
     for h in handles:
-        times.append(h.get_result())
+        h.get_result()
 
-    # Verify that each "wave" of tasks started at the ~same time. Use a
-    # generous tolerance: under CI load tasks within a wave can be spread
-    # out by hundreds of ms even though the limiter released them together.
-    for wave in range(num_waves):
-        for i in range(wave * limit, (wave + 1) * limit - 1):
-            assert times[i + 1] - times[i] < 1.0
+    # Time the limiter by dequeued_at, the database-side timestamp it actually gates
+    # on, as test_limiter does: a wall clock read inside the workflow body also
+    # measures executor pickup and how a wave splits across polls.
+    dequeued_at: list[int] = []
+    for h in handles:
+        status = h.get_status()
+        assert status.dequeued_at is not None
+        dequeued_at.append(status.dequeued_at)
+    dequeued_at.sort()
 
-    # Verify that the gap between "waves" is ~equal to the period. The
-    # tolerance has to cover the same intra-wave skew (since we're
-    # comparing the first task of each wave, not the wave start times),
-    # so use a window wider than the worst-case intra-wave spread.
-    for wave in range(num_waves - 1):
-        assert times[limit * (wave + 1)] - times[limit * wave] > period - 1.0
-        assert times[limit * (wave + 1)] - times[limit * wave] < period + 1.0
+    for i in range(len(dequeued_at) - limit):
+        assert dequeued_at[i + limit] - dequeued_at[i] >= period_ms - 10
 
     # Verify all workflows get the SUCCESS status eventually
     for h in handles:
