@@ -4223,10 +4223,15 @@ class SystemDatabase(ABC):
             or limits.limiter is not None
             or limits.partition_limiter is not None
         )
+        # A queue-wide budget spent while claiming one partition is measured over rows this transaction does not lock, so peers sweeping other partitions never collide: only serializable isolation catches that write skew.
+        budget_wider_than_lock = queue_partition_key is not None and (
+            limits.global_concurrency is not None or limits.limiter is not None
+        )
         with self.engine.begin() as c:
             # Default to READ COMMITTED except with global concurrency limits or rate limits
             if self.engine.dialect.name == "postgresql" and has_shared_budget:
-                c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
+                level = "SERIALIZABLE" if budget_wider_than_lock else "REPEATABLE READ"
+                c.execute(sa.text(f"SET TRANSACTION ISOLATION LEVEL {level}"))
 
             def rate_limit_remaining(
                 limiter: "QueueRateLimit", partition_scoped: bool

@@ -3102,6 +3102,89 @@ def test_partition_sweep_fills_worker_concurrency_in_one_pass(dbos: DBOS) -> Non
     assert queue_entries_are_cleaned_up(dbos)
 
 
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {"global_concurrency": 1, "partition_concurrency": 1},
+        {"limiter": {"limit": 1, "period": 60}, "partition_concurrency": 1},
+    ],
+    ids=["global-concurrency", "limiter"],
+)
+def test_queue_wide_limit_holds_across_executors(
+    dbos: DBOS, limits: dict[str, Any], skip_with_sqlite: None
+) -> None:
+    """A queue-wide limit on a partitioned queue binds the whole queue, so two executors
+    sweeping different partitions cannot each spend it."""
+    from sqlalchemy.exc import OperationalError
+
+    @DBOS.workflow()
+    def noop() -> str:
+        return "done"
+
+    # A version this executor never runs, so the live queue worker leaves these rows alone.
+    parked_version = "parked-version"
+    queue = DBOS.register_queue(f"cross_executor_{uuid.uuid4().hex[:8]}", **limits)
+    ws = SystemSchema.workflow_status
+
+    def pending_count() -> int:
+        with dbos._sys_db.engine.begin() as c:
+            return (
+                c.execute(
+                    sa.select(sa.func.count())
+                    .select_from(ws)
+                    .where(ws.c.queue_name == queue.name)
+                    .where(ws.c.status == WorkflowStatusString.PENDING.value)
+                ).scalar()
+                or 0
+            )
+
+    claimed_total = 0
+    for trial in range(5):
+        partitions = [f"a{trial}", f"b{trial}"]
+        for partition in partitions:
+            with SetEnqueueOptions(
+                queue_partition_key=partition, app_version=parked_version
+            ):
+                DBOS.enqueue_workflow(queue.name, noop)
+
+        barrier = threading.Barrier(len(partitions))
+        claimed: List[List[str]] = [[] for _ in partitions]
+
+        def sweep(index: int, partition: str) -> None:
+            barrier.wait()
+            try:
+                claimed[index] = dbos._sys_db.start_queued_workflows(
+                    queue, f"executor-{index}", parked_version, partition, 0, 0
+                )
+            except OperationalError:
+                # Losing the race is the correct outcome; admitting is not.
+                pass
+
+        threads = [
+            threading.Thread(target=sweep, args=(i, p))
+            for i, p in enumerate(partitions)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert pending_count() <= 1, (
+            f"trial {trial}: two executors each spent the queue-wide budget, "
+            f"claiming {claimed}"
+        )
+        claimed_total += sum(len(c) for c in claimed)
+        # Retire this trial's claims so the next trial starts from a free budget.
+        for ids in claimed:
+            for workflow_id in ids:
+                set_workflow_status(
+                    dbos._sys_db, workflow_id, WorkflowStatusString.SUCCESS.value
+                )
+
+    # The limit must bind by admitting work, not by admitting nothing at all.
+    assert claimed_total > 0
+
+
 def test_partition_limiter_with_queue_wide_limiter(dbos: DBOS) -> None:
     """Both rate limits bind at once: each partition spends its own window, and the
     queue-wide window caps the total across partitions."""
