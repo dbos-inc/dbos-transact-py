@@ -602,6 +602,7 @@ class Queue:
         # Refresh the local cache so the cross-field check below validates
         # against the latest concurrency stored in the database.
         self._refresh_fields(self._read_from_db())
+        self._require_not_legacy_partitioned("worker_concurrency")
         if value is not None:
             if self._concurrency is not None and value > self._concurrency:
                 raise ValueError(
@@ -645,6 +646,9 @@ class Queue:
         _warn_sync_db_call_in_async_context(
             "Queue.set_limiter", "Queue.set_limiter_async"
         )
+        # Refresh so the check below sees the latest partition limits.
+        self._refresh_fields(self._read_from_db())
+        self._require_not_legacy_partitioned("limiter")
         self._write_to_db(
             {
                 "rate_limit_max": value["limit"] if value else None,

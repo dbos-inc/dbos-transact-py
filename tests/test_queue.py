@@ -315,6 +315,16 @@ def test_queue_dynamic_config(dbos: DBOS) -> None:
         legacy_queue.set_global_concurrency(5)
     with pytest.raises(DBOSException):
         legacy_queue.set_partition_concurrency(1)
+    # Every queue-wide setter is blocked too, not just the renamed ones: their getters
+    # read as None here, so a read-modify-write would otherwise clear the per-partition
+    # limit the queue actually enforces.
+    with pytest.raises(DBOSException):
+        legacy_queue.set_worker_concurrency(legacy_queue.worker_concurrency)
+    with pytest.raises(DBOSException):
+        legacy_queue.set_limiter(legacy_queue.limiter)
+    # The limits it actually enforces are untouched by the rejected writes.
+    assert legacy_queue.partition_worker_concurrency == 1
+    assert legacy_queue.partition_limiter == {"limit": 7, "period": 2.0}
 
     # Limiter can be cleared.
     queue.set_limiter(None)
