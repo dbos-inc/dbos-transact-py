@@ -48,6 +48,10 @@ from ._logger import dbos_logger
 _INITIAL_RETRY_WAIT_SECONDS = 0.001
 _RETRY_BACKOFF_FACTOR = 1.5
 _MAX_RETRY_WAIT_SECONDS = 2.0
+# How long a step that lost the race waits for the winner's checkpoint before
+# concluding the winner is gone and finishing the workflow itself.
+_DUPLICATE_CHECKPOINT_WAIT_SECONDS = 1.0
+_DUPLICATE_CHECKPOINT_POLL_SECONDS = 0.01
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -79,6 +83,46 @@ def _parse_ds_options(
         ds_options.get("isolation_level") if ds_options else None
     ) or "SERIALIZABLE"
     return name, isolation_level
+
+
+def _duplicate_took_ownership(workflow_id: str, step_id: int, step_name: str) -> bool:
+    """Wait for a duplicate execution's step checkpoint, which moves workflow ownership to
+    it in the same transaction and so makes parking recoverable instead of a dead end.
+    """
+    from dbos._dbos import _get_dbos_instance
+
+    sys_db = _get_dbos_instance()._sys_db
+    deadline = time.monotonic() + _DUPLICATE_CHECKPOINT_WAIT_SECONDS
+    while True:
+        if (
+            sys_db.check_operation_execution(workflow_id, step_id, step_name)
+            is not None
+        ):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(_DUPLICATE_CHECKPOINT_POLL_SECONDS)
+
+
+async def _duplicate_took_ownership_async(
+    workflow_id: str, step_id: int, step_name: str
+) -> bool:
+    """Async twin of _duplicate_took_ownership; the system database client is sync."""
+    from dbos._dbos import _get_dbos_instance
+
+    sys_db = _get_dbos_instance()._sys_db
+    deadline = time.monotonic() + _DUPLICATE_CHECKPOINT_WAIT_SECONDS
+    while True:
+        if (
+            await asyncio.to_thread(
+                sys_db.check_operation_execution, workflow_id, step_id, step_name
+            )
+            is not None
+        ):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(_DUPLICATE_CHECKPOINT_POLL_SECONDS)
 
 
 def _replay_recorded(recorded: "RecordedResult", serializer: "Serializer") -> Any:
@@ -410,9 +454,12 @@ class AsyncSQLAlchemyDatasource(ABC):
 
             # Outside the except block, so the internal signal stays out of the traceback chain.
             if conflicted:
-                if not commit_possible:
-                    # A duplicate execution recorded this step first: stop, as an ordinary step's loser does.
+                if not commit_possible and await _duplicate_took_ownership_async(
+                    workflow_id, step_id, name
+                ):
+                    # A live duplicate recorded this step: stop, as an ordinary step's loser does.
                     raise DBOSWorkflowConflictIDError(workflow_id)
+                # Nobody owns the workflow now, so this execution is the one that can finish it.
                 return cast(
                     R, await self._replay_conflicting_step(workflow_id, step_id)
                 )
@@ -763,9 +810,12 @@ class SQLAlchemyDatasource(ABC):
 
             # Outside the except block, so the internal signal stays out of the traceback chain.
             if conflicted:
-                if not commit_possible:
-                    # A duplicate execution recorded this step first: stop, as an ordinary step's loser does.
+                if not commit_possible and _duplicate_took_ownership(
+                    workflow_id, step_id, name
+                ):
+                    # A live duplicate recorded this step: stop, as an ordinary step's loser does.
                     raise DBOSWorkflowConflictIDError(workflow_id)
+                # Nobody owns the workflow now, so this execution is the one that can finish it.
                 return cast(R, self._replay_conflicting_step(workflow_id, step_id))
 
             return output

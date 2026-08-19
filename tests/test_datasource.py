@@ -37,6 +37,35 @@ from tests.conftest import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+# A winner that checkpoints its step keeps the workflow; one that vanishes before
+# checkpointing leaves nobody to finish it, so the loser must not park.
+_LOST_RACE_CASES = [
+    pytest.param(True, 1, id="winner-alive"),
+    pytest.param(False, 2, id="winner-gone"),
+]
+
+
+def _winner_step_row(conn: Any, wfid: str, step_name: str) -> dict[str, Any]:
+    """The winner's checkpoint for one step, to replant mid-race after the rewind."""
+    row = conn.execute(
+        sa.select(SystemSchema.operation_outputs).where(
+            SystemSchema.operation_outputs.c.workflow_uuid == wfid,
+            SystemSchema.operation_outputs.c.function_name == step_name,
+        )
+    ).mappings()
+    return dict(row.one())
+
+
+def _checkpointed_steps(conn: Any, wfid: str) -> list[str]:
+    return list(
+        conn.execute(
+            sa.select(SystemSchema.operation_outputs.c.function_name)
+            .where(SystemSchema.operation_outputs.c.workflow_uuid == wfid)
+            .order_by(SystemSchema.operation_outputs.c.function_id)
+        ).scalars()
+    )
+
+
 # Application table used to prove a losing duplicate execution's writes are rolled back.
 _race_side_effects = sa.Table(
     "race_side_effects",
@@ -595,9 +624,17 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
     _race_side_effects.create(sync_ds.engine, checkfirst=True)
     call_count = {"n": 0}
     should_fail = {"v": False}
+    winner_step: dict[str, Any] = {}
 
     def step_fn() -> str:
         call_count["n"] += 1
+        # Populated after the winning run: the live duplicate's step checkpoint, planted
+        # mid-transaction because that is what tells a loser someone else owns the workflow.
+        if winner_step:
+            with dbos._sys_db.engine.begin() as conn:
+                conn.execute(
+                    sa.insert(SystemSchema.operation_outputs).values(**winner_step)
+                )
         sync_ds.sql_session().execute(
             _race_side_effects.insert().values(tag=f"run-{call_count['n']}")
         )
@@ -653,6 +690,8 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
     with SetWorkflowID(wfid):
         assert my_workflow() == "result-1"
     assert call_count["n"] == 1
+    with dbos._sys_db.engine.connect() as conn:
+        winner_step.update(_winner_step_row(conn, wfid, step_fn.__qualname__))
 
     # A loser whose body succeeds: the collision happens on the result-recording insert.
     forget_workflow()
@@ -785,17 +824,31 @@ def test_sync_ds_replays_its_own_lost_commit(
     )
 
 
+@pytest.mark.parametrize("winner_checkpoints, expected_emails", _LOST_RACE_CASES)
 def test_sync_ds_duplicate_execution_stops_at_the_lost_race(
-    dbos: DBOS, sync_ds: SQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
+    dbos: DBOS,
+    sync_ds: SQLAlchemyDatasource,
+    monkeypatch: pytest.MonkeyPatch,
+    winner_checkpoints: bool,
+    expected_emails: int,
 ) -> None:
     """A duplicate execution that loses the datasource race parks where an ordinary
     step's loser parks, instead of replaying the winner's result and going on to run
-    the workflow's next step with it (#818)."""
+    the workflow's next step with it (#818) -- but only while a winner is still there
+    to finish the workflow, which its step checkpoint is the evidence of."""
     reserve_calls = {"n": 0}
     emails_sent = {"n": 0}
+    winner_step: dict[str, Any] = {}
 
     def reserve() -> str:
         reserve_calls["n"] += 1
+        # The winner checkpoints while the loser's transaction is open: the instant that
+        # hands it the workflow, so recovery reaches the loser's park.
+        if reserve_calls["n"] > 1 and winner_checkpoints:
+            with dbos._sys_db.engine.begin() as conn:
+                conn.execute(
+                    sa.insert(SystemSchema.operation_outputs).values(**winner_step)
+                )
         sync_ds.sql_session().execute(text("SELECT 1"))
         return "reserved"
 
@@ -824,6 +877,7 @@ def test_sync_ds_duplicate_execution_stops_at_the_lost_race(
                 SystemSchema.workflow_status.c.workflow_uuid == wfid
             )
         ).scalar_one()
+        winner_step.update(_winner_step_row(conn, wfid, reserve.__qualname__))
         conn.execute(
             sa.delete(SystemSchema.operation_outputs).where(
                 SystemSchema.operation_outputs.c.workflow_uuid == wfid
@@ -862,19 +916,20 @@ def test_sync_ds_duplicate_execution_stops_at_the_lost_race(
         retry_until_success(loser_transaction_ran, interval=0.1, max_attempts=300)
         retry_until_success(duplicate_left_the_workflow, interval=0.1, max_attempts=300)
 
-        assert (
-            emails_sent["n"] == 1
-        ), "the duplicate execution ran the workflow's next step"
+        assert emails_sent["n"] == expected_emails
         with dbos._sys_db.engine.connect() as conn:
-            steps = conn.execute(
-                sa.select(SystemSchema.operation_outputs.c.function_id).where(
-                    SystemSchema.operation_outputs.c.workflow_uuid == wfid
-                )
-            ).all()
-        assert steps == [], "the parked duplicate checkpointed a step"
+            steps = _checkpointed_steps(conn, wfid)
+        if winner_checkpoints:
+            # Only the winner's row: the parked duplicate checkpointed nothing.
+            assert steps == [reserve.__qualname__], "the parked duplicate checkpointed"
+        else:
+            # No winner left to park behind, so the duplicate ran the workflow out.
+            assert len(steps) == 2, "the duplicate did not finish the workflow"
     finally:
         # Publish the winner's outcome, which is what a parked duplicate waits for.
         # In a finally: an assertion above must not strand a thread polling forever.
+        # Unconditional: in the winner-gone case the duplicate has already written this
+        # same outcome, and a failed assertion above must not leave a thread parked.
         with dbos._sys_db.engine.begin() as conn:
             conn.execute(
                 sa.update(SystemSchema.workflow_status)
@@ -882,7 +937,7 @@ def test_sync_ds_duplicate_execution_stops_at_the_lost_race(
                 .values(status=WorkflowStatusString.SUCCESS.value, output=winner_output)
             )
 
-    assert handle.get_result() == "reserved"  # the winner's outcome, adopted
+    assert handle.get_result() == "reserved"
 
 
 # ---------------------------------------------------------------------------
@@ -1374,9 +1429,17 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
         await conn.run_sync(_race_side_effects.create, checkfirst=True)
     call_count = {"n": 0}
     should_fail = {"v": False}
+    winner_step: dict[str, Any] = {}
 
     async def step_fn() -> str:
         call_count["n"] += 1
+        # Populated after the winning run: the live duplicate's step checkpoint, planted
+        # mid-transaction because that is what tells a loser someone else owns the workflow.
+        if winner_step:
+            with dbos._sys_db.engine.begin() as conn:
+                conn.execute(
+                    sa.insert(SystemSchema.operation_outputs).values(**winner_step)
+                )
         await async_ds.sql_session().execute(
             _race_side_effects.insert().values(tag=f"run-{call_count['n']}")
         )
@@ -1434,6 +1497,8 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
     with SetWorkflowID(wfid):
         assert await my_workflow() == "result-1"
     assert call_count["n"] == 1
+    with dbos._sys_db.engine.connect() as sys_conn:
+        winner_step.update(_winner_step_row(sys_conn, wfid, step_fn.__qualname__))
 
     # A loser whose body succeeds: the collision happens on the result-recording insert.
     forget_workflow()
@@ -1478,15 +1543,28 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("winner_checkpoints, expected_emails", _LOST_RACE_CASES)
 async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
-    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
+    dbos: DBOS,
+    async_ds: AsyncSQLAlchemyDatasource,
+    monkeypatch: pytest.MonkeyPatch,
+    winner_checkpoints: bool,
+    expected_emails: int,
 ) -> None:
     """Async sibling of test_sync_ds_duplicate_execution_stops_at_the_lost_race (#818)."""
     reserve_calls = {"n": 0}
     emails_sent = {"n": 0}
+    winner_step: dict[str, Any] = {}
 
     async def reserve() -> str:
         reserve_calls["n"] += 1
+        # The winner checkpoints while the loser's transaction is open: the instant that
+        # hands it the workflow, so recovery reaches the loser's park.
+        if reserve_calls["n"] > 1 and winner_checkpoints:
+            with dbos._sys_db.engine.begin() as conn:
+                conn.execute(
+                    sa.insert(SystemSchema.operation_outputs).values(**winner_step)
+                )
         await async_ds.sql_session().execute(text("SELECT 1"))
         return "reserved"
 
@@ -1515,6 +1593,7 @@ async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
                 SystemSchema.workflow_status.c.workflow_uuid == wfid
             )
         ).scalar_one()
+        winner_step.update(_winner_step_row(conn, wfid, reserve.__qualname__))
         conn.execute(
             sa.delete(SystemSchema.operation_outputs).where(
                 SystemSchema.operation_outputs.c.workflow_uuid == wfid
@@ -1560,19 +1639,20 @@ async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
             duplicate_left_the_workflow, interval=0.1, max_attempts=300
         )
 
-        assert (
-            emails_sent["n"] == 1
-        ), "the duplicate execution ran the workflow's next step"
+        assert emails_sent["n"] == expected_emails
         with dbos._sys_db.engine.connect() as conn:
-            steps = conn.execute(
-                sa.select(SystemSchema.operation_outputs.c.function_id).where(
-                    SystemSchema.operation_outputs.c.workflow_uuid == wfid
-                )
-            ).all()
-        assert steps == [], "the parked duplicate checkpointed a step"
+            steps = _checkpointed_steps(conn, wfid)
+        if winner_checkpoints:
+            # Only the winner's row: the parked duplicate checkpointed nothing.
+            assert steps == [reserve.__qualname__], "the parked duplicate checkpointed"
+        else:
+            # No winner left to park behind, so the duplicate ran the workflow out.
+            assert len(steps) == 2, "the duplicate did not finish the workflow"
     finally:
         # Publish the winner's outcome, which is what a parked duplicate waits for.
         # In a finally: an assertion above must not strand a thread polling forever.
+        # Unconditional: in the winner-gone case the duplicate has already written this
+        # same outcome, and a failed assertion above must not leave a thread parked.
         with dbos._sys_db.engine.begin() as conn:
             conn.execute(
                 sa.update(SystemSchema.workflow_status)
@@ -1580,7 +1660,6 @@ async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
                 .values(status=WorkflowStatusString.SUCCESS.value, output=winner_output)
             )
 
-    # The winner's outcome, adopted.
     assert await asyncio.to_thread(handle.get_result) == "reserved"
 
 
