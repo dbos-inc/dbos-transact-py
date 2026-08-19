@@ -1,33 +1,23 @@
-"""
-Regression test for the conductor websocket reconnect deadlock.
+"""Conductor websocket lifecycle: staying connected, and disconnecting on time.
 
-Bug: when the websockets library's built-in keepalive fires (websockets >= 15.0)
-and the close handshake also times out (network is wedged so the kernel never
-sees a FIN/RST, and the library's forced socket close fails to unblock the
-recv_events thread), the user-level `websocket.recv()` in
-`ConductorWebsocket.run()` stays blocked indefinitely and the reconnect loop
-never iterates.
+Two regressions live here, at opposite ends of the connection's life.
 
-The test reproduces this deterministically by:
-  1. Standing up a raw-TCP server on localhost that performs the WebSocket
-     upgrade handshake by hand, sends an EXECUTOR_INFO request, reads the
-     response, and then black-holes — never reads or writes again, never
-     replies to pings, never sends a close frame.
-  2. Neutralising `websockets.sync.connection.Connection.close_socket` so
-     that, after the keepalive ping timeout fires and the close handshake
-     times out, the library's forced socket teardown is a no-op. This
-     simulates the wedged-TCP condition the production incident hit, where
-     `socket.shutdown(SHUT_RDWR)` + `socket.close()` do not propagate as
-     a clean close to the recv_events thread.
-  3. Driving `ConductorWebsocket.run()` against that server with a stub
-     `dbos` and small `ping_interval`/`ping_timeout`/`close_timeout` so the
-     keepalive sequence completes well within the test window.
-  4. Asserting that the conductor logs the "Connection to conductor lost.
-     Reconnecting" warning within a generous window. On main the assertion
-     fails because `websocket.recv()` at conductor.py:108 stays blocked.
-     Once the bug is fixed (e.g. DBOS runs its own keepalive thread, or
-     uses `recv(timeout=…)` so it can poll `websocket.close_code`), the
-     warning fires and the test passes.
+Reconnect (test_conductor_reconnects_after_keepalive_timeout): when the
+websockets library's built-in keepalive fires (websockets >= 15.0) and the close
+handshake also times out - the network is wedged so the kernel never sees a
+FIN/RST, and the library's forced socket close fails to unblock the recv_events
+thread - the user-level `websocket.recv()` in `ConductorWebsocket.run()` stays
+blocked indefinitely and the reconnect loop never iterates. Reproduced against a
+hand-rolled black-hole server with `Connection.close_socket` neutralised, and
+asserted via the "Reconnecting" warning that a healthy run loop emits.
+
+Shutdown (test_conductor_connection_outlives_shutdown_drain):
+`DBOS.destroy(workflow_completion_timeout_sec=N)` drains - it stops queue polling
+and waits for locally running workflows to finish. Conductor treats the websocket
+as the executor's liveness signal, so dropping it at the start of the wait lets
+Conductor declare this executor dead mid-drain and have a peer re-enqueue
+workflows that are still running here. The connection must stay up for the whole
+wait and only be torn down just before the system database is.
 """
 
 import base64
@@ -37,25 +27,20 @@ import socket
 import struct
 import threading
 from importlib.metadata import version
-from typing import Any, List, Optional
+from typing import Any, Generator, List, Optional
 
 import pytest
 from websockets.sync import connection as ws_connection
 from websockets.sync.client import connect as _real_connect
+from websockets.sync.server import ServerConnection, serve
 
+from dbos import DBOS, DBOSConfig
 from dbos._conductor import conductor as conductor_module
 from dbos._conductor import protocol as p
 
+from .conftest import retry_until_success
+
 WS_VERSION = version("websockets")
-
-pytestmark = pytest.mark.skipif(
-    WS_VERSION < "15.0",
-    reason=(
-        "The deadlock is only reachable on websockets>=15.0, where DBOS "
-        "relies on the library's built-in keepalive (use_keepalive=False)."
-    ),
-)
-
 
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -210,6 +195,13 @@ class _ReconnectLogProbe(logging.Handler):
             self.reconnecting.set()
 
 
+@pytest.mark.skipif(
+    WS_VERSION < "15.0",
+    reason=(
+        "The deadlock is only reachable on websockets>=15.0, where DBOS "
+        "relies on the library's built-in keepalive (use_keepalive=False)."
+    ),
+)
 def test_conductor_reconnects_after_keepalive_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -302,3 +294,112 @@ def test_conductor_reconnects_after_keepalive_timeout(
         # cw.run() may still be parked in recv(); it's a daemon thread so we
         # don't block test teardown on it. Best-effort join.
         cw.join(timeout=2)
+
+
+class _ConductorStandIn:
+    """A loopback stand-in for Conductor that only tracks connection liveness."""
+
+    def __init__(self) -> None:
+        self.connected = threading.Event()
+        self._lock = threading.Lock()
+        self._open = 0
+        self._server = serve(self._handle, "127.0.0.1", 0)
+        self.port: int = self._server.socket.getsockname()[1]
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+
+    @property
+    def open_connections(self) -> int:
+        with self._lock:
+            return self._open
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._server.shutdown()
+
+    def _handle(self, websocket: ServerConnection) -> None:
+        with self._lock:
+            self._open += 1
+        self.connected.set()
+        try:
+            # Send nothing; hold the connection open until the client closes it.
+            for _ in websocket:
+                pass
+        except Exception:
+            pass
+        finally:
+            with self._lock:
+                self._open -= 1
+
+
+@pytest.fixture()
+def conductor_stand_in() -> Generator[_ConductorStandIn, Any, None]:
+    server = _ConductorStandIn()
+    server.start()
+    yield server
+    server.stop()
+
+
+def test_conductor_connection_outlives_shutdown_drain(
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+    conductor_stand_in: _ConductorStandIn,
+) -> None:
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(
+        config=config,
+        conductor_key="test-key",
+        conductor_url=f"ws://127.0.0.1:{conductor_stand_in.port}",
+    )
+
+    workflow_started = threading.Event()
+    blocking_event = threading.Event()
+
+    @DBOS.workflow()
+    def blocked_workflow() -> None:
+        workflow_started.set()
+        blocking_event.wait()
+
+    DBOS.launch()
+    try:
+        assert conductor_stand_in.connected.wait(timeout=10)
+        conductor = dbos.conductor_websocket
+        assert conductor is not None
+
+        DBOS.start_workflow(blocked_workflow)
+        assert workflow_started.wait(timeout=10)
+
+        destroy_thread = threading.Thread(
+            target=lambda: DBOS.destroy(workflow_completion_timeout_sec=30)
+        )
+        destroy_thread.start()
+
+        # The background stop events are set immediately before the completion
+        # wait begins, so all of them being set means the drain is underway.
+        def drain_started() -> None:
+            assert dbos.background_thread_stop_events
+            assert all(e.is_set() for e in dbos.background_thread_stop_events)
+
+        retry_until_success(drain_started, interval=0.1, max_attempts=100)
+
+        # Mid-drain: Conductor must still see us as a live executor.
+        assert not conductor.evt.is_set()
+        assert conductor.is_alive()
+        assert conductor_stand_in.open_connections == 1
+
+        blocking_event.set()
+        destroy_thread.join(timeout=30)
+        assert not destroy_thread.is_alive()
+
+        # Only now, with the drain finished, does the connection go away.
+        assert conductor.evt.is_set()
+        assert not conductor.is_alive()
+
+        def connection_closed() -> None:
+            assert conductor_stand_in.open_connections == 0
+
+        retry_until_success(connection_closed, interval=0.1, max_attempts=100)
+    finally:
+        blocking_event.set()
+        DBOS.destroy(destroy_registry=True)
