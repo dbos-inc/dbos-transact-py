@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import inspect
 import pickle
 import sqlite3
 import uuid
@@ -37,12 +38,36 @@ from tests.conftest import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-# A winner that checkpoints its step keeps the workflow; one that vanishes before
-# checkpointing leaves nobody to finish it, so the loser must not park.
+# A winner that checkpoints its step keeps the workflow, so the loser parks at the lost
+# race without ever adopting its result; one that vanishes before checkpointing leaves
+# nobody to finish it, so the loser must replay and carry on instead.
 _LOST_RACE_CASES = [
-    pytest.param(True, 1, id="winner-alive"),
-    pytest.param(False, 2, id="winner-gone"),
+    pytest.param(True, 1, 0, id="winner-alive"),
+    pytest.param(False, 2, 1, id="winner-gone"),
 ]
+
+
+def _count_replays(
+    ds: Any, replays: dict[str, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Count adoptions of a conflicting row: the fork #818 is about, where replaying
+    turns the lost race into a value and the workflow body resumes."""
+    real_replay = ds._replay_conflicting_step
+
+    if inspect.iscoroutinefunction(real_replay):
+
+        async def counting_replay_async(workflow_id: str, step_id: int) -> Any:
+            replays["n"] += 1
+            return await real_replay(workflow_id, step_id)
+
+        monkeypatch.setattr(ds, "_replay_conflicting_step", counting_replay_async)
+        return
+
+    def counting_replay(workflow_id: str, step_id: int) -> Any:
+        replays["n"] += 1
+        return real_replay(workflow_id, step_id)
+
+    monkeypatch.setattr(ds, "_replay_conflicting_step", counting_replay)
 
 
 def _winner_step_row(conn: Any, wfid: str, step_name: str) -> dict[str, Any]:
@@ -686,6 +711,9 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
 
     monkeypatch.setattr(sync_ds, "_record_error", counting_record_error)
 
+    replays = {"n": 0}
+    _count_replays(sync_ds, replays, monkeypatch)
+
     # The winning execution: commits its app writes and its datasource_outputs row.
     with SetWorkflowID(wfid):
         assert my_workflow() == "result-1"
@@ -702,6 +730,8 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
     assert (
         record_error_calls["n"] == 0
     )  # the recorded result won without an error write
+    # Stopped at the lost race, not one statement later at the step checkpoint (#818).
+    assert replays["n"] == 0, "the loser adopted the winner's result"
 
     # A loser whose body fails: the collision moves to the error-recording insert.
     forget_workflow()
@@ -711,6 +741,7 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
         assert my_workflow() == "conflicted"
     assert call_count["n"] == 3
     assert record_error_calls["n"] == 1
+    assert replays["n"] == 0, "the loser adopted the winner's result"
 
     # The succeeding loser's writes were discarded and the winner's record still stands.
     with sync_ds.engine.connect() as conn:
@@ -824,13 +855,16 @@ def test_sync_ds_replays_its_own_lost_commit(
     )
 
 
-@pytest.mark.parametrize("winner_checkpoints, expected_emails", _LOST_RACE_CASES)
+@pytest.mark.parametrize(
+    "winner_checkpoints, expected_emails, expected_replays", _LOST_RACE_CASES
+)
 def test_sync_ds_duplicate_execution_stops_at_the_lost_race(
     dbos: DBOS,
     sync_ds: SQLAlchemyDatasource,
     monkeypatch: pytest.MonkeyPatch,
     winner_checkpoints: bool,
     expected_emails: int,
+    expected_replays: int,
 ) -> None:
     """A duplicate execution that loses the datasource race parks where an ordinary
     step's loser parks, instead of replaying the winner's result and going on to run
@@ -901,6 +935,9 @@ def test_sync_ds_duplicate_execution_stops_at_the_lost_race(
 
     monkeypatch.setattr(sync_ds, "_check_execution", blind_next_check)
 
+    replays = {"n": 0}
+    _count_replays(sync_ds, replays, monkeypatch)
+
     # Dispatch the duplicate off the persisted row, exactly as recovery does.
     handle = reexecute_workflow_by_id(dbos, wfid)
 
@@ -917,6 +954,9 @@ def test_sync_ds_duplicate_execution_stops_at_the_lost_race(
         retry_until_success(duplicate_left_the_workflow, interval=0.1, max_attempts=300)
 
         assert emails_sent["n"] == expected_emails
+        # Parking at the step checkpoint one statement later is not parking at the lost
+        # race: with a live winner the duplicate must never adopt its result at all.
+        assert replays["n"] == expected_replays, "the duplicate replayed the winner"
         with dbos._sys_db.engine.connect() as conn:
             steps = _checkpointed_steps(conn, wfid)
         if winner_checkpoints:
@@ -1493,6 +1533,9 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
 
     monkeypatch.setattr(async_ds, "_record_error", counting_record_error)
 
+    replays = {"n": 0}
+    _count_replays(async_ds, replays, monkeypatch)
+
     # The winning execution: commits its app writes and its datasource_outputs row.
     with SetWorkflowID(wfid):
         assert await my_workflow() == "result-1"
@@ -1509,6 +1552,8 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
     assert (
         record_error_calls["n"] == 0
     )  # the recorded result won without an error write
+    # Stopped at the lost race, not one statement later at the step checkpoint (#818).
+    assert replays["n"] == 0, "the loser adopted the winner's result"
 
     # A loser whose body fails: the collision moves to the error-recording insert.
     forget_workflow()
@@ -1518,6 +1563,7 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
         assert await my_workflow() == "conflicted"
     assert call_count["n"] == 3
     assert record_error_calls["n"] == 1
+    assert replays["n"] == 0, "the loser adopted the winner's result"
 
     # The succeeding loser's writes were discarded and the winner's record still stands.
     async with async_ds.engine.connect() as conn:
@@ -1543,13 +1589,16 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("winner_checkpoints, expected_emails", _LOST_RACE_CASES)
+@pytest.mark.parametrize(
+    "winner_checkpoints, expected_emails, expected_replays", _LOST_RACE_CASES
+)
 async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
     dbos: DBOS,
     async_ds: AsyncSQLAlchemyDatasource,
     monkeypatch: pytest.MonkeyPatch,
     winner_checkpoints: bool,
     expected_emails: int,
+    expected_replays: int,
 ) -> None:
     """Async sibling of test_sync_ds_duplicate_execution_stops_at_the_lost_race (#818)."""
     reserve_calls = {"n": 0}
@@ -1619,6 +1668,9 @@ async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
 
     monkeypatch.setattr(async_ds, "_check_execution", blind_next_check)
 
+    replays = {"n": 0}
+    _count_replays(async_ds, replays, monkeypatch)
+
     # Dispatch the duplicate off the persisted row, exactly as recovery does.
     handle = reexecute_workflow_by_id(dbos, wfid)
 
@@ -1640,6 +1692,9 @@ async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
         )
 
         assert emails_sent["n"] == expected_emails
+        # Parking at the step checkpoint one statement later is not parking at the lost
+        # race: with a live winner the duplicate must never adopt its result at all.
+        assert replays["n"] == expected_replays, "the duplicate replayed the winner"
         with dbos._sys_db.engine.connect() as conn:
             steps = _checkpointed_steps(conn, wfid)
         if winner_checkpoints:
