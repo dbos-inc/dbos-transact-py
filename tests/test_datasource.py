@@ -1,11 +1,14 @@
 """Tests for SyncDatasource and AsyncDatasource."""
 
+import asyncio
 import base64
+import inspect
 import pickle
 import sqlite3
 import uuid
 from typing import Any, AsyncGenerator, Generator, Optional
 
+import psycopg
 import pytest
 import pytest_asyncio
 import sqlalchemy as sa
@@ -17,16 +20,76 @@ from dbos import DBOS, AsyncSQLAlchemyDatasource, SetWorkflowID, SQLAlchemyDatas
 from dbos._app_db import RecordedResult
 from dbos._datasource_postgres import PostgresAsyncDatasource, PostgresSyncDatasource
 from dbos._datasource_sqlite import SqliteAsyncDatasource, SqliteSyncDatasource
-from dbos._error import DBOSException
+from dbos._error import DBOSException, DBOSWorkflowConflictIDError
 from dbos._schemas import SCHEMA_PLACEHOLDER
 from dbos._schemas.datasource_database import DatasourceSchema
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import deserialize_value
-from tests.conftest import ensure_application_database, postgres_urls
+from dbos._sys_db import WorkflowStatusString
+from tests.conftest import (
+    ensure_application_database,
+    postgres_urls,
+    reexecute_workflow_by_id,
+    retry_until_success,
+    retry_until_success_async,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+# A winner that checkpoints its step keeps the workflow, so the loser parks at the lost
+# race without ever adopting its result; one that vanishes before checkpointing leaves
+# nobody to finish it, so the loser must replay and carry on instead.
+_LOST_RACE_CASES = [
+    pytest.param(True, 1, 0, id="winner-alive"),
+    pytest.param(False, 2, 1, id="winner-gone"),
+]
+
+
+def _count_replays(
+    ds: Any, replays: dict[str, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Count adoptions of a conflicting row: the fork #818 is about, where replaying
+    turns the lost race into a value and the workflow body resumes."""
+    real_replay = ds._replay_conflicting_step
+
+    if inspect.iscoroutinefunction(real_replay):
+
+        async def counting_replay_async(workflow_id: str, step_id: int) -> Any:
+            replays["n"] += 1
+            return await real_replay(workflow_id, step_id)
+
+        monkeypatch.setattr(ds, "_replay_conflicting_step", counting_replay_async)
+        return
+
+    def counting_replay(workflow_id: str, step_id: int) -> Any:
+        replays["n"] += 1
+        return real_replay(workflow_id, step_id)
+
+    monkeypatch.setattr(ds, "_replay_conflicting_step", counting_replay)
+
+
+def _winner_step_row(conn: Any, wfid: str, step_name: str) -> dict[str, Any]:
+    """The winner's checkpoint for one step, to replant mid-race after the rewind."""
+    row = conn.execute(
+        sa.select(SystemSchema.operation_outputs).where(
+            SystemSchema.operation_outputs.c.workflow_uuid == wfid,
+            SystemSchema.operation_outputs.c.function_name == step_name,
+        )
+    ).mappings()
+    return dict(row.one())
+
+
+def _checkpointed_steps(conn: Any, wfid: str) -> list[str]:
+    return list(
+        conn.execute(
+            sa.select(SystemSchema.operation_outputs.c.function_name)
+            .where(SystemSchema.operation_outputs.c.workflow_uuid == wfid)
+            .order_by(SystemSchema.operation_outputs.c.function_id)
+        ).scalars()
+    )
+
 
 # Application table used to prove a losing duplicate execution's writes are rolled back.
 _race_side_effects = sa.Table(
@@ -576,17 +639,27 @@ def test_sync_ds_recovers_from_sysdb_loss(
     assert call_count["n"] == 1
 
 
-def test_sync_ds_replays_when_duplicate_execution_wins(
+def test_sync_ds_conflicts_when_duplicate_execution_wins(
     dbos: DBOS, sync_ds: SQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A duplicate execution that loses the witness-row race replays the winner's
-    recorded result instead of surfacing the primary-key IntegrityError (#812)."""
+    """A duplicate execution that loses the witness-row race stops with a workflow
+    conflict instead of surfacing the primary-key IntegrityError (#812) or carrying on
+    with the winner's result (#818). It replays only when the conflicting row may be
+    its own, from an attempt whose commit was ambiguously lost."""
     _race_side_effects.create(sync_ds.engine, checkfirst=True)
     call_count = {"n": 0}
     should_fail = {"v": False}
+    winner_step: dict[str, Any] = {}
 
     def step_fn() -> str:
         call_count["n"] += 1
+        # Populated after the winning run: the live duplicate's step checkpoint, planted
+        # mid-transaction because that is what tells a loser someone else owns the workflow.
+        if winner_step:
+            with dbos._sys_db.engine.begin() as conn:
+                conn.execute(
+                    sa.insert(SystemSchema.operation_outputs).values(**winner_step)
+                )
         sync_ds.sql_session().execute(
             _race_side_effects.insert().values(tag=f"run-{call_count['n']}")
         )
@@ -596,7 +669,11 @@ def test_sync_ds_replays_when_duplicate_execution_wins(
 
     @DBOS.workflow()
     def my_workflow() -> str:
-        return sync_ds.run_tx_step(None, step_fn)
+        try:
+            return sync_ds.run_tx_step(None, step_fn)
+        except DBOSWorkflowConflictIDError:
+            # A real duplicate parks here instead; caught to keep the assertion local.
+            return "conflicted"
 
     wfid = str(uuid.uuid4())
 
@@ -634,29 +711,37 @@ def test_sync_ds_replays_when_duplicate_execution_wins(
 
     monkeypatch.setattr(sync_ds, "_record_error", counting_record_error)
 
+    replays = {"n": 0}
+    _count_replays(sync_ds, replays, monkeypatch)
+
     # The winning execution: commits its app writes and its datasource_outputs row.
     with SetWorkflowID(wfid):
         assert my_workflow() == "result-1"
     assert call_count["n"] == 1
+    with dbos._sys_db.engine.connect() as conn:
+        winner_step.update(_winner_step_row(conn, wfid, step_fn.__qualname__))
 
     # A loser whose body succeeds: the collision happens on the result-recording insert.
     forget_workflow()
     blind["next"] = True
     with SetWorkflowID(wfid):
-        assert my_workflow() == "result-1"
+        assert my_workflow() == "conflicted"
     assert call_count["n"] == 2  # the loser did run its body
     assert (
         record_error_calls["n"] == 0
     )  # the recorded result won without an error write
+    # Stopped at the lost race, not one statement later at the step checkpoint (#818).
+    assert replays["n"] == 0, "the loser adopted the winner's result"
 
     # A loser whose body fails: the collision moves to the error-recording insert.
     forget_workflow()
     blind["next"] = True
     should_fail["v"] = True
     with SetWorkflowID(wfid):
-        assert my_workflow() == "result-1"
+        assert my_workflow() == "conflicted"
     assert call_count["n"] == 3
     assert record_error_calls["n"] == 1
+    assert replays["n"] == 0, "the loser adopted the winner's result"
 
     # The succeeding loser's writes were discarded and the winner's record still stands.
     with sync_ds.engine.connect() as conn:
@@ -675,6 +760,224 @@ def test_sync_ds_replays_when_duplicate_execution_wins(
         deserialize_value(ds_row.output, ds_row.serialization, sync_ds.serializer)
         == "result-1"
     )
+
+
+# Whether a lost acknowledgement is retriable decides how the row is met, not whose it is.
+_LOST_ACK_ERRORS = [
+    pytest.param("server closed the connection unexpectedly", 2, id="retriable"),
+    pytest.param("consuming input failed: EOF detected", 1, id="non-retriable"),
+]
+
+
+@pytest.mark.parametrize("lost_ack_message, expected_attempts", _LOST_ACK_ERRORS)
+def test_sync_ds_replays_its_own_lost_commit(
+    dbos: DBOS,
+    sync_ds: SQLAlchemyDatasource,
+    monkeypatch: pytest.MonkeyPatch,
+    lost_ack_message: str,
+    expected_attempts: int,
+) -> None:
+    """A commit that lands and then loses its acknowledgement leaves a row this very
+    execution wrote, so it replays that row instead of parking as a duplicate.
+
+    A retriable error meets the row on the retry's result insert; a non-retriable one
+    meets it on the error insert. Neither is a duplicate, so both replay."""
+    if sync_ds.engine.dialect.name != "postgresql":
+        pytest.skip("only a Postgres-style connection error makes a commit ambiguous")
+    _race_side_effects.create(sync_ds.engine, checkfirst=True)
+    call_count = {"n": 0}
+
+    def step_fn() -> str:
+        call_count["n"] += 1
+        sync_ds.sql_session().execute(
+            _race_side_effects.insert().values(tag=f"run-{call_count['n']}")
+        )
+        return f"result-{call_count['n']}"
+
+    lose_ack = {"next": True}
+    real_sessionmaker = sync_ds.sessionmaker
+
+    class _LostAck:
+        """Commits, then reports the connection dropped, as a lost ack does."""
+
+        def __init__(self, transaction: Any) -> None:
+            self._transaction = transaction
+
+        def __enter__(self) -> Any:
+            return self._transaction.__enter__()
+
+        def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+            handled = self._transaction.__exit__(exc_type, exc, tb)
+            if exc is None and lose_ack["next"]:
+                lose_ack["next"] = False
+                raise OperationalError(
+                    "COMMIT", {}, psycopg.OperationalError(lost_ack_message)
+                )
+            return handled
+
+    def flaky_sessionmaker() -> Any:
+        session = real_sessionmaker()
+        real_begin = session.begin
+        # setattr: the proxy only has to satisfy the `with` protocol, not the type.
+        setattr(session, "begin", lambda: _LostAck(real_begin()))
+        return session
+
+    monkeypatch.setattr(sync_ds, "sessionmaker", flaky_sessionmaker)
+
+    @DBOS.workflow()
+    def my_workflow() -> str:
+        try:
+            return sync_ds.run_tx_step(None, step_fn)
+        except DBOSWorkflowConflictIDError:
+            # Caught so a spurious park fails the assertion instead of hanging.
+            return "conflicted"
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        # The committed attempt's own output, not a later attempt's.
+        assert my_workflow() == "result-1"
+    assert call_count["n"] == expected_attempts
+
+    with sync_ds.engine.connect() as conn:
+        tags = [row.tag for row in conn.execute(sa.select(_race_side_effects.c.tag))]
+        ds_row = conn.execute(
+            sa.select(
+                DatasourceSchema.datasource_outputs.c.output,
+                DatasourceSchema.datasource_outputs.c.error,
+                DatasourceSchema.datasource_outputs.c.serialization,
+            ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+        ).one()
+    assert tags == ["run-1"]  # only the committed attempt's write survives
+    assert ds_row.error is None
+    assert (
+        deserialize_value(ds_row.output, ds_row.serialization, sync_ds.serializer)
+        == "result-1"
+    )
+
+
+@pytest.mark.parametrize(
+    "winner_checkpoints, expected_emails, expected_replays", _LOST_RACE_CASES
+)
+def test_sync_ds_duplicate_execution_stops_at_the_lost_race(
+    dbos: DBOS,
+    sync_ds: SQLAlchemyDatasource,
+    monkeypatch: pytest.MonkeyPatch,
+    winner_checkpoints: bool,
+    expected_emails: int,
+    expected_replays: int,
+) -> None:
+    """A duplicate execution that loses the datasource race parks where an ordinary
+    step's loser parks, instead of replaying the winner's result and going on to run
+    the workflow's next step with it (#818) -- but only while a winner is still there
+    to finish the workflow, which its step checkpoint is the evidence of."""
+    reserve_calls = {"n": 0}
+    emails_sent = {"n": 0}
+    winner_step: dict[str, Any] = {}
+
+    def reserve() -> str:
+        reserve_calls["n"] += 1
+        # The winner checkpoints while the loser's transaction is open: the instant that
+        # hands it the workflow, so recovery reaches the loser's park.
+        if reserve_calls["n"] > 1 and winner_checkpoints:
+            with dbos._sys_db.engine.begin() as conn:
+                conn.execute(
+                    sa.insert(SystemSchema.operation_outputs).values(**winner_step)
+                )
+        sync_ds.sql_session().execute(text("SELECT 1"))
+        return "reserved"
+
+    @DBOS.step()
+    def send_email() -> None:
+        emails_sent["n"] += 1
+
+    @DBOS.workflow()
+    def my_workflow() -> str:
+        reserved = sync_ds.run_tx_step(None, reserve)
+        send_email()
+        return reserved
+
+    wfid = str(uuid.uuid4())
+
+    # The winning execution, run to completion.
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "reserved"
+    assert (reserve_calls["n"], emails_sent["n"]) == (1, 1)
+
+    # Rewind to the instant the winner had committed its datasource_outputs row but no
+    # step checkpoint yet: nothing to replay, and no outcome for a waiter to adopt.
+    with dbos._sys_db.engine.begin() as conn:
+        winner_output = conn.execute(
+            sa.select(SystemSchema.workflow_status.c.output).where(
+                SystemSchema.workflow_status.c.workflow_uuid == wfid
+            )
+        ).scalar_one()
+        winner_step.update(_winner_step_row(conn, wfid, reserve.__qualname__))
+        conn.execute(
+            sa.delete(SystemSchema.operation_outputs).where(
+                SystemSchema.operation_outputs.c.workflow_uuid == wfid
+            )
+        )
+        conn.execute(
+            sa.update(SystemSchema.workflow_status)
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+            .values(output=None)
+        )
+
+    # Blind one pre-check, so the loser misses the winner's row as it does in the real race.
+    real_check = sync_ds._check_execution
+    blind = {"next": True}
+
+    def blind_next_check(workflow_id: str, step_id: int) -> Optional[RecordedResult]:
+        if blind["next"]:
+            blind["next"] = False
+            return None
+        return real_check(workflow_id, step_id)
+
+    monkeypatch.setattr(sync_ds, "_check_execution", blind_next_check)
+
+    replays = {"n": 0}
+    _count_replays(sync_ds, replays, monkeypatch)
+
+    # Dispatch the duplicate off the persisted row, exactly as recovery does.
+    handle = reexecute_workflow_by_id(dbos, wfid)
+
+    def loser_transaction_ran() -> None:
+        assert reserve_calls["n"] >= 2
+
+    def duplicate_left_the_workflow() -> None:
+        # Released either at the park or after the whole body: reached only once the
+        # duplicate can no longer run send_email, whichever way it went.
+        assert wfid not in dbos._active_workflows_set.activeList()
+
+    try:
+        retry_until_success(loser_transaction_ran, interval=0.1, max_attempts=300)
+        retry_until_success(duplicate_left_the_workflow, interval=0.1, max_attempts=300)
+
+        assert emails_sent["n"] == expected_emails
+        # Parking at the step checkpoint one statement later is not parking at the lost
+        # race: with a live winner the duplicate must never adopt its result at all.
+        assert replays["n"] == expected_replays, "the duplicate replayed the winner"
+        with dbos._sys_db.engine.connect() as conn:
+            steps = _checkpointed_steps(conn, wfid)
+        if winner_checkpoints:
+            # Only the winner's row: the parked duplicate checkpointed nothing.
+            assert steps == [reserve.__qualname__], "the parked duplicate checkpointed"
+        else:
+            # No winner left to park behind, so the duplicate ran the workflow out.
+            assert len(steps) == 2, "the duplicate did not finish the workflow"
+    finally:
+        # Publish the winner's outcome, which is what a parked duplicate waits for.
+        # In a finally: an assertion above must not strand a thread polling forever.
+        # Unconditional: in the winner-gone case the duplicate has already written this
+        # same outcome, and a failed assertion above must not leave a thread parked.
+        with dbos._sys_db.engine.begin() as conn:
+            conn.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+                .values(status=WorkflowStatusString.SUCCESS.value, output=winner_output)
+            )
+
+    assert handle.get_result() == "reserved"
 
 
 # ---------------------------------------------------------------------------
@@ -1155,18 +1458,28 @@ async def test_async_ds_recovers_from_sysdb_loss(
 
 
 @pytest.mark.asyncio
-async def test_async_ds_replays_when_duplicate_execution_wins(
+async def test_async_ds_conflicts_when_duplicate_execution_wins(
     dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A duplicate execution that loses the witness-row race replays the winner's
-    recorded result instead of surfacing the primary-key IntegrityError (#812)."""
+    """A duplicate execution that loses the witness-row race stops with a workflow
+    conflict instead of surfacing the primary-key IntegrityError (#812) or carrying on
+    with the winner's result (#818). It replays only when the conflicting row may be
+    its own, from an attempt whose commit was ambiguously lost."""
     async with async_ds.engine.begin() as conn:
         await conn.run_sync(_race_side_effects.create, checkfirst=True)
     call_count = {"n": 0}
     should_fail = {"v": False}
+    winner_step: dict[str, Any] = {}
 
     async def step_fn() -> str:
         call_count["n"] += 1
+        # Populated after the winning run: the live duplicate's step checkpoint, planted
+        # mid-transaction because that is what tells a loser someone else owns the workflow.
+        if winner_step:
+            with dbos._sys_db.engine.begin() as conn:
+                conn.execute(
+                    sa.insert(SystemSchema.operation_outputs).values(**winner_step)
+                )
         await async_ds.sql_session().execute(
             _race_side_effects.insert().values(tag=f"run-{call_count['n']}")
         )
@@ -1176,7 +1489,11 @@ async def test_async_ds_replays_when_duplicate_execution_wins(
 
     @DBOS.workflow()
     async def my_workflow() -> str:
-        return await async_ds.run_tx_step_async(None, step_fn)
+        try:
+            return await async_ds.run_tx_step_async(None, step_fn)
+        except DBOSWorkflowConflictIDError:
+            # A real duplicate parks here instead; caught to keep the assertion local.
+            return "conflicted"
 
     wfid = str(uuid.uuid4())
 
@@ -1216,29 +1533,37 @@ async def test_async_ds_replays_when_duplicate_execution_wins(
 
     monkeypatch.setattr(async_ds, "_record_error", counting_record_error)
 
+    replays = {"n": 0}
+    _count_replays(async_ds, replays, monkeypatch)
+
     # The winning execution: commits its app writes and its datasource_outputs row.
     with SetWorkflowID(wfid):
         assert await my_workflow() == "result-1"
     assert call_count["n"] == 1
+    with dbos._sys_db.engine.connect() as sys_conn:
+        winner_step.update(_winner_step_row(sys_conn, wfid, step_fn.__qualname__))
 
     # A loser whose body succeeds: the collision happens on the result-recording insert.
     forget_workflow()
     blind["next"] = True
     with SetWorkflowID(wfid):
-        assert await my_workflow() == "result-1"
+        assert await my_workflow() == "conflicted"
     assert call_count["n"] == 2  # the loser did run its body
     assert (
         record_error_calls["n"] == 0
     )  # the recorded result won without an error write
+    # Stopped at the lost race, not one statement later at the step checkpoint (#818).
+    assert replays["n"] == 0, "the loser adopted the winner's result"
 
     # A loser whose body fails: the collision moves to the error-recording insert.
     forget_workflow()
     blind["next"] = True
     should_fail["v"] = True
     with SetWorkflowID(wfid):
-        assert await my_workflow() == "result-1"
+        assert await my_workflow() == "conflicted"
     assert call_count["n"] == 3
     assert record_error_calls["n"] == 1
+    assert replays["n"] == 0, "the loser adopted the winner's result"
 
     # The succeeding loser's writes were discarded and the winner's record still stands.
     async with async_ds.engine.connect() as conn:
@@ -1257,6 +1582,224 @@ async def test_async_ds_replays_when_duplicate_execution_wins(
     assert tags == ["run-1"]
     assert ds_row.error is None  # no loser error was ever recorded
     # The winner's output is still the one on record, unmodified by either loser.
+    assert (
+        deserialize_value(ds_row.output, ds_row.serialization, async_ds.serializer)
+        == "result-1"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "winner_checkpoints, expected_emails, expected_replays", _LOST_RACE_CASES
+)
+async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
+    dbos: DBOS,
+    async_ds: AsyncSQLAlchemyDatasource,
+    monkeypatch: pytest.MonkeyPatch,
+    winner_checkpoints: bool,
+    expected_emails: int,
+    expected_replays: int,
+) -> None:
+    """Async sibling of test_sync_ds_duplicate_execution_stops_at_the_lost_race (#818)."""
+    reserve_calls = {"n": 0}
+    emails_sent = {"n": 0}
+    winner_step: dict[str, Any] = {}
+
+    async def reserve() -> str:
+        reserve_calls["n"] += 1
+        # The winner checkpoints while the loser's transaction is open: the instant that
+        # hands it the workflow, so recovery reaches the loser's park.
+        if reserve_calls["n"] > 1 and winner_checkpoints:
+            with dbos._sys_db.engine.begin() as conn:
+                conn.execute(
+                    sa.insert(SystemSchema.operation_outputs).values(**winner_step)
+                )
+        await async_ds.sql_session().execute(text("SELECT 1"))
+        return "reserved"
+
+    @DBOS.step()
+    async def send_email() -> None:
+        emails_sent["n"] += 1
+
+    @DBOS.workflow()
+    async def my_workflow() -> str:
+        reserved = await async_ds.run_tx_step_async(None, reserve)
+        await send_email()
+        return reserved
+
+    wfid = str(uuid.uuid4())
+
+    # The winning execution, run to completion.
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "reserved"
+    assert (reserve_calls["n"], emails_sent["n"]) == (1, 1)
+
+    # Rewind to the instant the winner had committed its datasource_outputs row but no
+    # step checkpoint yet: nothing to replay, and no outcome for a waiter to adopt.
+    with dbos._sys_db.engine.begin() as conn:
+        winner_output = conn.execute(
+            sa.select(SystemSchema.workflow_status.c.output).where(
+                SystemSchema.workflow_status.c.workflow_uuid == wfid
+            )
+        ).scalar_one()
+        winner_step.update(_winner_step_row(conn, wfid, reserve.__qualname__))
+        conn.execute(
+            sa.delete(SystemSchema.operation_outputs).where(
+                SystemSchema.operation_outputs.c.workflow_uuid == wfid
+            )
+        )
+        conn.execute(
+            sa.update(SystemSchema.workflow_status)
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+            .values(output=None)
+        )
+
+    # Blind one pre-check, so the loser misses the winner's row as it does in the real race.
+    real_check = async_ds._check_execution
+    blind = {"next": True}
+
+    async def blind_next_check(
+        workflow_id: str, step_id: int
+    ) -> Optional[RecordedResult]:
+        if blind["next"]:
+            blind["next"] = False
+            return None
+        return await real_check(workflow_id, step_id)
+
+    monkeypatch.setattr(async_ds, "_check_execution", blind_next_check)
+
+    replays = {"n": 0}
+    _count_replays(async_ds, replays, monkeypatch)
+
+    # Dispatch the duplicate off the persisted row, exactly as recovery does.
+    handle = reexecute_workflow_by_id(dbos, wfid)
+
+    def loser_transaction_ran() -> None:
+        assert reserve_calls["n"] >= 2
+
+    def duplicate_left_the_workflow() -> None:
+        # An async duplicate is dispatched onto the background loop and handed back a
+        # polling handle, so its result says nothing about it: wait on the active set,
+        # released either at the park or after the whole body.
+        assert wfid not in dbos._active_workflows_set.activeList()
+
+    try:
+        await retry_until_success_async(
+            loser_transaction_ran, interval=0.1, max_attempts=300
+        )
+        await retry_until_success_async(
+            duplicate_left_the_workflow, interval=0.1, max_attempts=300
+        )
+
+        assert emails_sent["n"] == expected_emails
+        # Parking at the step checkpoint one statement later is not parking at the lost
+        # race: with a live winner the duplicate must never adopt its result at all.
+        assert replays["n"] == expected_replays, "the duplicate replayed the winner"
+        with dbos._sys_db.engine.connect() as conn:
+            steps = _checkpointed_steps(conn, wfid)
+        if winner_checkpoints:
+            # Only the winner's row: the parked duplicate checkpointed nothing.
+            assert steps == [reserve.__qualname__], "the parked duplicate checkpointed"
+        else:
+            # No winner left to park behind, so the duplicate ran the workflow out.
+            assert len(steps) == 2, "the duplicate did not finish the workflow"
+    finally:
+        # Publish the winner's outcome, which is what a parked duplicate waits for.
+        # In a finally: an assertion above must not strand a thread polling forever.
+        # Unconditional: in the winner-gone case the duplicate has already written this
+        # same outcome, and a failed assertion above must not leave a thread parked.
+        with dbos._sys_db.engine.begin() as conn:
+            conn.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+                .values(status=WorkflowStatusString.SUCCESS.value, output=winner_output)
+            )
+
+    assert await asyncio.to_thread(handle.get_result) == "reserved"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lost_ack_message, expected_attempts", _LOST_ACK_ERRORS)
+async def test_async_ds_replays_its_own_lost_commit(
+    dbos: DBOS,
+    async_ds: AsyncSQLAlchemyDatasource,
+    monkeypatch: pytest.MonkeyPatch,
+    lost_ack_message: str,
+    expected_attempts: int,
+) -> None:
+    """Async sibling of test_sync_ds_replays_its_own_lost_commit."""
+    if async_ds.engine.dialect.name != "postgresql":
+        pytest.skip("only a Postgres-style connection error makes a commit ambiguous")
+    async with async_ds.engine.begin() as conn:
+        await conn.run_sync(_race_side_effects.create, checkfirst=True)
+    call_count = {"n": 0}
+
+    async def step_fn() -> str:
+        call_count["n"] += 1
+        await async_ds.sql_session().execute(
+            _race_side_effects.insert().values(tag=f"run-{call_count['n']}")
+        )
+        return f"result-{call_count['n']}"
+
+    lose_ack = {"next": True}
+    real_sessionmaker = async_ds.sessionmaker
+
+    class _LostAck:
+        """Commits, then reports the connection dropped, as a lost ack does."""
+
+        def __init__(self, transaction: Any) -> None:
+            self._transaction = transaction
+
+        async def __aenter__(self) -> Any:
+            return await self._transaction.__aenter__()
+
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+            handled = await self._transaction.__aexit__(exc_type, exc, tb)
+            if exc is None and lose_ack["next"]:
+                lose_ack["next"] = False
+                raise OperationalError(
+                    "COMMIT", {}, psycopg.OperationalError(lost_ack_message)
+                )
+            return handled
+
+    def flaky_sessionmaker() -> Any:
+        session = real_sessionmaker()
+        real_begin = session.begin
+        # setattr: the proxy only has to satisfy the `with` protocol, not the type.
+        setattr(session, "begin", lambda: _LostAck(real_begin()))
+        return session
+
+    monkeypatch.setattr(async_ds, "sessionmaker", flaky_sessionmaker)
+
+    @DBOS.workflow()
+    async def my_workflow() -> str:
+        try:
+            return await async_ds.run_tx_step_async(None, step_fn)
+        except DBOSWorkflowConflictIDError:
+            # Caught so a spurious park fails the assertion instead of hanging.
+            return "conflicted"
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        # The committed attempt's own output, not a later attempt's.
+        assert await my_workflow() == "result-1"
+    assert call_count["n"] == expected_attempts
+
+    async with async_ds.engine.connect() as conn:
+        tags = [
+            row.tag for row in (await conn.execute(sa.select(_race_side_effects.c.tag)))
+        ]
+        ds_row = (
+            await conn.execute(
+                sa.select(
+                    DatasourceSchema.datasource_outputs.c.output,
+                    DatasourceSchema.datasource_outputs.c.error,
+                    DatasourceSchema.datasource_outputs.c.serialization,
+                ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+            )
+        ).one()
+    assert tags == ["run-1"]  # only the committed attempt's write survives
+    assert ds_row.error is None
     assert (
         deserialize_value(ds_row.output, ds_row.serialization, async_ds.serializer)
         == "result-1"

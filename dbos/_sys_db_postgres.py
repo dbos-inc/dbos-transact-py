@@ -21,6 +21,7 @@ from ._sys_db import (
     _dbos_streams_channel,
     _dbos_workflow_events_channel,
 )
+from ._utils import quote_identifier
 
 
 class PostgresSystemDatabase(SystemDatabase):
@@ -37,7 +38,7 @@ class PostgresSystemDatabase(SystemDatabase):
     def run_migrations(self) -> None:
         """Run PostgreSQL-specific migrations."""
         system_db_url = self.engine.url
-        sysdb_name = system_db_url.database
+        sysdb_name = str(system_db_url.database)
         # Unless we were provided an engine, if the system database does not already exist, create it
         if self.created_engine:
             try:
@@ -51,7 +52,9 @@ class PostgresSystemDatabase(SystemDatabase):
                         parameters={"db_name": sysdb_name},
                     ).scalar():
                         dbos_logger.info(f"Creating system database {sysdb_name}")
-                        conn.execute(sa.text(f'CREATE DATABASE "{sysdb_name}"'))
+                        conn.execute(
+                            sa.text(f"CREATE DATABASE {quote_identifier(sysdb_name)}")
+                        )
             except Exception:
                 dbos_logger.warning(
                     f"Could not connect to postgres database to verify existence of {sysdb_name}. Continuing..."
@@ -187,7 +190,11 @@ class PostgresSystemDatabase(SystemDatabase):
                     )
                 # For small test tables, DELETE is far faster than TRUNCATE
                 for table in tables:
-                    conn.execute(sa.text(f'DELETE FROM "{schema}"."{table}"'))
+                    conn.execute(
+                        sa.text(
+                            f"DELETE FROM {quote_identifier(schema)}.{quote_identifier(table)}"
+                        )
+                    )
         except Exception as e:
             # Best effort: an absent or unreachable database must not fail the caller.
             dbos_logger.warning(f"Could not empty system database {url.database}: {e}")
@@ -224,7 +231,9 @@ class PostgresSystemDatabase(SystemDatabase):
 
                 # Drop the database
                 conn.execute(
-                    sa.text(f"DROP DATABASE IF EXISTS {sysdb_name} WITH (FORCE)")
+                    sa.text(
+                        f"DROP DATABASE IF EXISTS {quote_identifier(sysdb_name)} WITH (FORCE)"
+                    )
                 )
             engine.dispose()
         except Exception as e:
