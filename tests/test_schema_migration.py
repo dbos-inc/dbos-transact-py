@@ -1132,6 +1132,8 @@ def test_migrate_print_migrations_all(
     # Printing needs no reachable database; stdout is pure SQL and comments
     print_dbos_migrations(db_url_string, schema="dbos", migration="all")
     sql = capsys.readouterr().out
+    # The header names no database: a newline in one would end the comment (#819).
+    assert sql.startswith("-- DBOS system database migrations\n")
     assert 'CREATE SCHEMA IF NOT EXISTS "dbos";' in sql
     assert "DO $$" not in sql
     assert "-- Migration 10 skipped: not applicable on fresh databases" in sql
@@ -1259,6 +1261,13 @@ def test_migrate_print_custom_schema(
     assert (
         f'GRANT USAGE ON SCHEMA "{schema}" TO "bad""role";' in capsys.readouterr().out
     )
+
+    # Quoting cannot escape a newline, so the header names neither: otherwise the
+    # comment would end there and the rest of the name would run as SQL (#819).
+    print_dbos_user_role_sql(schema="ev\nDROP DATABASE prod; --", role_name="ap\np")
+    role_out = capsys.readouterr().out
+    assert role_out.splitlines()[0] == "-- Permissions on the DBOS system schema"
+    assert not role_out.startswith("-- Permissions on DBOS schema")
 
     # --print-user-role cannot be combined with --print-migrations
     result = subprocess.run(
@@ -1436,8 +1445,7 @@ def test_migrate_print_migrations_without_database_url(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """--print-migrations never connects, so a missing database URL is not an
-    error: it only leaves the URL out of the header comment."""
+    """--print-migrations never connects, so a missing database URL is not an error."""
     print_dbos_migrations(None, schema="dbos", migration="all")
     out = capsys.readouterr().out
     assert out.startswith("-- DBOS system database migrations\n")

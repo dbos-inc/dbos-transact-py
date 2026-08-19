@@ -141,7 +141,7 @@ def print_dbos_migrations(
     them (migration is "all") or starting from a number (migration is N),
     without touching any database. Stdout is pure SQL and comments.
 
-    system_database_url may be None: it is only reported in a header comment."""
+    system_database_url may be None: it is only read to reject SQLite."""
     if system_database_url is not None and system_database_url.startswith("sqlite"):
         click.echo(
             "--print-migrations is only supported for Postgres databases", err=True
@@ -169,10 +169,7 @@ def print_dbos_migrations(
             )
             raise click.exceptions.Exit(code=1)
 
-    header = "-- DBOS system database migrations"
-    if system_database_url is not None:
-        header += f" for {sa.make_url(system_database_url)}"
-    click.echo(header)
+    click.echo("-- DBOS system database migrations")
     click.echo(
         "-- Contains CREATE/DROP INDEX CONCURRENTLY: run outside a transaction block (e.g. plain psql, not psql --single-transaction)."
     )
@@ -221,11 +218,6 @@ def print_dbos_migrations(
 def print_dbos_user_role_sql(*, schema: str = "dbos", role_name: str) -> None:
     """Print to stdout the SQL granting an application role access to the DBOS
     system schema, without touching any database."""
-    # Rendered as quoted identifiers: a newline in a name would otherwise end the
-    # comment and leave the rest of it as a statement in a script an operator runs.
-    click.echo(
-        f"-- Permissions on DBOS schema {quote_identifier(schema)}"
-        f" for role {quote_identifier(role_name)}"
-    )
+    click.echo("-- Permissions on the DBOS system schema")
     for sql in get_dbos_schema_permissions_sql(schema, role_name):
         _emit_sql(sql)
