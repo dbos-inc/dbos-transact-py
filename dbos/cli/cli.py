@@ -331,8 +331,7 @@ def migrate(
             click.echo("--print-user-role requires --app-role", err=True)
             raise click.exceptions.Exit(code=1)
         if print_migrations is not None:
-            # Print modes never connect, so a missing database URL is fine: it
-            # only leaves the URL out of the header comment.
+            # Print modes never connect, so a missing database URL is fine.
             urls = _resolve_db_urls(
                 system_database_url=system_database_url,
                 application_database_url=application_database_url,

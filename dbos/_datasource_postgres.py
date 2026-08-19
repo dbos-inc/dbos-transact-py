@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 
 from ._logger import dbos_logger
+from ._utils import quote_identifier
 
 
 def _is_postgres_serialization_error(error: Exception) -> bool:
@@ -32,13 +33,13 @@ def _make_url(database_url: str) -> URL:
 
 
 def _schema_sql(schema: str) -> sa.TextClause:
-    return sa.text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+    return sa.text(f"CREATE SCHEMA IF NOT EXISTS {quote_identifier(schema)}")
 
 
 def _table_sql(schema: str) -> sa.TextClause:
     return sa.text(
         f"""
-        CREATE TABLE IF NOT EXISTS "{schema}".datasource_outputs (
+        CREATE TABLE IF NOT EXISTS {quote_identifier(schema)}.datasource_outputs (
             workflow_id TEXT NOT NULL,
             step_id INT NOT NULL,
             output TEXT,

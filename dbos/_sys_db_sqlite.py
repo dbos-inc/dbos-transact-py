@@ -11,6 +11,7 @@ from dbos._migration import get_sqlite_migration_versions, sqlite_migrations
 from ._error import DBOSException, DBOSInitializationError
 from ._logger import dbos_logger
 from ._sys_db import SystemDatabase
+from ._utils import quote_identifier
 
 
 class SQLiteSystemDatabase(SystemDatabase):
@@ -183,7 +184,7 @@ class SQLiteSystemDatabase(SystemDatabase):
                 ]
                 # SQLite has no TRUNCATE; foreign keys are off here, so order is free.
                 for table in tables:
-                    conn.execute(sa.text(f'DELETE FROM "{table}"'))
+                    conn.execute(sa.text(f"DELETE FROM {quote_identifier(table)}"))
         except Exception as e:
             # Best effort, as the Postgres path is: a locked file must not fail the caller.
             dbos_logger.warning(f"Could not empty system database {db_path}: {e}")

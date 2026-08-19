@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from dbos._app_db import RecordedResult
 from dbos._context import DBOSContextEnsure, get_local_dbos_context
 from dbos._dbos import IsolationLevel
-from dbos._error import DBOSException
+from dbos._error import DBOSException, DBOSWorkflowConflictIDError
 from dbos._schemas import SCHEMA_PLACEHOLDER
 from dbos._schemas.datasource_database import DatasourceSchema
 from dbos._serialization import (
@@ -48,6 +48,10 @@ from ._logger import dbos_logger
 _INITIAL_RETRY_WAIT_SECONDS = 0.001
 _RETRY_BACKOFF_FACTOR = 1.5
 _MAX_RETRY_WAIT_SECONDS = 2.0
+# How long a step that lost the race waits for the winner's checkpoint before
+# concluding the winner is gone and finishing the workflow itself.
+_DUPLICATE_CHECKPOINT_WAIT_SECONDS = 1.0
+_DUPLICATE_CHECKPOINT_POLL_SECONDS = 0.01
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -79,6 +83,46 @@ def _parse_ds_options(
         ds_options.get("isolation_level") if ds_options else None
     ) or "SERIALIZABLE"
     return name, isolation_level
+
+
+def _duplicate_took_ownership(workflow_id: str, step_id: int, step_name: str) -> bool:
+    """Wait for a duplicate execution's step checkpoint, which moves workflow ownership to
+    it in the same transaction and so makes parking recoverable instead of a dead end.
+    """
+    from dbos._dbos import _get_dbos_instance
+
+    sys_db = _get_dbos_instance()._sys_db
+    deadline = time.monotonic() + _DUPLICATE_CHECKPOINT_WAIT_SECONDS
+    while True:
+        if (
+            sys_db.check_operation_execution(workflow_id, step_id, step_name)
+            is not None
+        ):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(_DUPLICATE_CHECKPOINT_POLL_SECONDS)
+
+
+async def _duplicate_took_ownership_async(
+    workflow_id: str, step_id: int, step_name: str
+) -> bool:
+    """Async twin of _duplicate_took_ownership; the system database client is sync."""
+    from dbos._dbos import _get_dbos_instance
+
+    sys_db = _get_dbos_instance()._sys_db
+    deadline = time.monotonic() + _DUPLICATE_CHECKPOINT_WAIT_SECONDS
+    while True:
+        if (
+            await asyncio.to_thread(
+                sys_db.check_operation_execution, workflow_id, step_id, step_name
+            )
+            is not None
+        ):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(_DUPLICATE_CHECKPOINT_POLL_SECONDS)
 
 
 def _replay_recorded(recorded: "RecordedResult", serializer: "Serializer") -> Any:
@@ -297,7 +341,7 @@ class AsyncSQLAlchemyDatasource(ABC):
             raise _StepAlreadyRecorded()
 
     async def _replay_conflicting_step(self, workflow_id: str, step_id: int) -> Any:
-        # A duplicate execution of this workflow won the race, so its recorded result is the durable one.
+        # An earlier attempt's commit may have landed and recorded this row, so it is the durable one.
         recorded = await self._check_execution_with_retry(workflow_id, step_id)
         if recorded is None:
             raise DBOSException(
@@ -338,6 +382,8 @@ class AsyncSQLAlchemyDatasource(ABC):
 
             output: R
             conflicted = False
+            # True once an insert may have committed, so a conflict may be our own row.
+            commit_possible = False
             retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
             try:
                 with DBOSContextEnsure() as exec_ctx:
@@ -364,6 +410,8 @@ class AsyncSQLAlchemyDatasource(ABC):
                                             None,
                                             serialization,
                                         )
+                                        # From here the commit may land.
+                                        commit_possible = True
                                 break
                             except _StepAlreadyRecorded:
                                 raise  # the recorded result wins; don't record an error over it
@@ -404,9 +452,14 @@ class AsyncSQLAlchemyDatasource(ABC):
             except _StepAlreadyRecorded:
                 conflicted = True
 
-            # Replayed outside the handler, so the internal signal stays out of the
-            # traceback chain of whatever the recorded result raises.
+            # Outside the except block, so the internal signal stays out of the traceback chain.
             if conflicted:
+                if not commit_possible and await _duplicate_took_ownership_async(
+                    workflow_id, step_id, name
+                ):
+                    # A live duplicate recorded this step: stop, as an ordinary step's loser does.
+                    raise DBOSWorkflowConflictIDError(workflow_id)
+                # Nobody owns the workflow now, so this execution is the one that can finish it.
                 return cast(
                     R, await self._replay_conflicting_step(workflow_id, step_id)
                 )
@@ -644,7 +697,7 @@ class SQLAlchemyDatasource(ABC):
             raise _StepAlreadyRecorded()
 
     def _replay_conflicting_step(self, workflow_id: str, step_id: int) -> Any:
-        # A duplicate execution of this workflow won the race, so its recorded result is the durable one.
+        # An earlier attempt's commit may have landed and recorded this row, so it is the durable one.
         recorded = self._check_execution_with_retry(workflow_id, step_id)
         if recorded is None:
             raise DBOSException(
@@ -685,6 +738,8 @@ class SQLAlchemyDatasource(ABC):
 
             output: R
             conflicted = False
+            # True once an insert may have committed, so a conflict may be our own row.
+            commit_possible = False
             retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
             try:
                 with DBOSContextEnsure() as exec_ctx:
@@ -711,6 +766,8 @@ class SQLAlchemyDatasource(ABC):
                                             None,
                                             serialization,
                                         )
+                                        # From here the commit may land.
+                                        commit_possible = True
                                 break
                             except _StepAlreadyRecorded:
                                 raise  # the recorded result wins; don't record an error over it
@@ -751,9 +808,14 @@ class SQLAlchemyDatasource(ABC):
             except _StepAlreadyRecorded:
                 conflicted = True
 
-            # Replayed outside the handler, so the internal signal stays out of the
-            # traceback chain of whatever the recorded result raises.
+            # Outside the except block, so the internal signal stays out of the traceback chain.
             if conflicted:
+                if not commit_possible and _duplicate_took_ownership(
+                    workflow_id, step_id, name
+                ):
+                    # A live duplicate recorded this step: stop, as an ordinary step's loser does.
+                    raise DBOSWorkflowConflictIDError(workflow_id)
+                # Nobody owns the workflow now, so this execution is the one that can finish it.
                 return cast(R, self._replay_conflicting_step(workflow_id, step_id))
 
             return output

@@ -15,6 +15,7 @@ from ._logger import dbos_logger
 from ._schemas import SCHEMA_PLACEHOLDER
 from ._schemas.application_database import ApplicationSchema
 from ._sys_db import StepInfo
+from ._utils import quote_identifier
 
 
 class TransactionResultInternal(TypedDict):
@@ -284,6 +285,8 @@ class PostgresApplicationDatabase(ApplicationDatabase):
         )
 
     def run_migrations(self) -> None:
+        assert self.schema is not None, "A Postgres application database has a schema"
+        quoted_schema = quote_identifier(self.schema)
         # Check if the database exists
         app_db_url = self.engine.url
         try:
@@ -297,7 +300,11 @@ class PostgresApplicationDatabase(ApplicationDatabase):
                     sa.text("SELECT 1 FROM pg_database WHERE datname=:db_name"),
                     parameters={"db_name": app_db_url.database},
                 ).scalar():
-                    conn.execute(sa.text(f"CREATE DATABASE {app_db_url.database}"))
+                    conn.execute(
+                        sa.text(
+                            f"CREATE DATABASE {quote_identifier(str(app_db_url.database))}"
+                        )
+                    )
         except Exception:
             dbos_logger.warning(
                 f"Could not connect to postgres database to verify existence of {app_db_url.database}. Continuing..."
@@ -316,7 +323,7 @@ class PostgresApplicationDatabase(ApplicationDatabase):
             ).scalar()
 
             if not schema_exists:
-                schema_creation_query = sa.text(f'CREATE SCHEMA "{self.schema}"')
+                schema_creation_query = sa.text(f"CREATE SCHEMA {quoted_schema}")
                 conn.execute(schema_creation_query)
 
         inspector = inspect(self.engine)
@@ -332,7 +339,7 @@ class PostgresApplicationDatabase(ApplicationDatabase):
                     conn.execute(
                         text(
                             f"""
-                        ALTER TABLE \"{self.schema}\".transaction_outputs
+                        ALTER TABLE {quoted_schema}.transaction_outputs
                         ADD COLUMN function_name TEXT NOT NULL DEFAULT '';
                         """
                         )
