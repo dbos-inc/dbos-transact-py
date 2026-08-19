@@ -297,7 +297,7 @@ class AsyncSQLAlchemyDatasource(ABC):
             raise _StepAlreadyRecorded()
 
     async def _replay_conflicting_step(self, workflow_id: str, step_id: int) -> Any:
-        # The recorded row is this execution's own, from an attempt whose commit was ambiguously lost.
+        # An earlier attempt's commit may have landed and recorded this row, so it is the durable one.
         recorded = await self._check_execution_with_retry(workflow_id, step_id)
         if recorded is None:
             raise DBOSException(
@@ -344,6 +344,7 @@ class AsyncSQLAlchemyDatasource(ABC):
             try:
                 with DBOSContextEnsure() as exec_ctx:
                     while True:
+                        recorded_in_attempt = False
                         async with self.sessionmaker() as session:
                             exec_ctx.start_async_ds_transaction(session)
                             try:
@@ -366,6 +367,7 @@ class AsyncSQLAlchemyDatasource(ABC):
                                             None,
                                             serialization,
                                         )
+                                        recorded_in_attempt = True
                                 break
                             except _StepAlreadyRecorded:
                                 raise  # the recorded result wins; don't record an error over it
@@ -373,8 +375,12 @@ class AsyncSQLAlchemyDatasource(ABC):
                                 if _is_retriable_db_error(
                                     e, self._is_serialization_error
                                 ):
-                                    # A serialization failure aborted the attempt; any other retriable error may have committed.
-                                    if not self._is_serialization_error(e):
+                                    # Only a failure once the insert was in the transaction can be a
+                                    # commit that landed; a serialization failure aborted it regardless.
+                                    if (
+                                        recorded_in_attempt
+                                        and not self._is_serialization_error(e)
+                                    ):
                                         commit_ambiguous = True
                                     inner_ctx = get_local_dbos_context()
                                     span = (
@@ -651,7 +657,7 @@ class SQLAlchemyDatasource(ABC):
             raise _StepAlreadyRecorded()
 
     def _replay_conflicting_step(self, workflow_id: str, step_id: int) -> Any:
-        # The recorded row is this execution's own, from an attempt whose commit was ambiguously lost.
+        # An earlier attempt's commit may have landed and recorded this row, so it is the durable one.
         recorded = self._check_execution_with_retry(workflow_id, step_id)
         if recorded is None:
             raise DBOSException(
@@ -698,6 +704,7 @@ class SQLAlchemyDatasource(ABC):
             try:
                 with DBOSContextEnsure() as exec_ctx:
                     while True:
+                        recorded_in_attempt = False
                         with self.sessionmaker() as session:
                             exec_ctx.start_sync_ds_transaction(session)
                             try:
@@ -720,6 +727,7 @@ class SQLAlchemyDatasource(ABC):
                                             None,
                                             serialization,
                                         )
+                                        recorded_in_attempt = True
                                 break
                             except _StepAlreadyRecorded:
                                 raise  # the recorded result wins; don't record an error over it
@@ -727,8 +735,12 @@ class SQLAlchemyDatasource(ABC):
                                 if _is_retriable_db_error(
                                     e, self._is_serialization_error
                                 ):
-                                    # A serialization failure aborted the attempt; any other retriable error may have committed.
-                                    if not self._is_serialization_error(e):
+                                    # Only a failure once the insert was in the transaction can be a
+                                    # commit that landed; a serialization failure aborted it regardless.
+                                    if (
+                                        recorded_in_attempt
+                                        and not self._is_serialization_error(e)
+                                    ):
                                         commit_ambiguous = True
                                     inner_ctx = get_local_dbos_context()
                                     span = (

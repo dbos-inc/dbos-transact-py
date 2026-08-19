@@ -136,8 +136,12 @@ class GlobalParams:
         dbos_version = "unknown"
 
 
+# A "named" paramstyle keeps the preparer from doubling % in identifiers: these names go
+# into sa.text(), whose own compilation doubles them for the pyformat driver.
 # PGDialect's constructor is untyped in SQLAlchemy's annotations.
-_identifier_preparer = PGDialect().identifier_preparer  # type: ignore[no-untyped-call]
+_identifier_preparer = PGDialect(  # type: ignore[no-untyped-call]
+    paramstyle="named"
+).identifier_preparer
 
 
 def quote_identifier(name: str) -> str:

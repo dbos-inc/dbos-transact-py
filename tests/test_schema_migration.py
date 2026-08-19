@@ -99,9 +99,10 @@ def test_systemdb_migration_schema_with_quote(
     drop_test_databases: None,
 ) -> None:
     """A double quote in a schema name is escaped, not left to close the identifier
-    early and turn the rest of the name into SQL of its own (#819)."""
+    early and turn the rest of the name into SQL of its own (#819). The percent guards
+    the other direction: it must reach the server intact, not doubled."""
     config["application_database_url"] = None
-    schema = 'we"ird'
+    schema = 'we"ird%1'
     config["dbos_system_schema"] = schema
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
@@ -115,7 +116,7 @@ def test_systemdb_migration_schema_with_quote(
     with dbos._sys_db.engine.connect() as connection:
         # Doubled inside the identifier: the name is one schema, not a truncated one.
         rows = connection.execute(
-            sa.text('SELECT version FROM "we""ird".dbos_migrations')
+            sa.text('SELECT version FROM "we""ird%1".dbos_migrations')
         ).fetchall()
         assert len(rows) == 1
         assert rows[0][0] == len(get_dbos_migrations(schema, True))
@@ -1216,7 +1217,10 @@ def test_migrate_print_custom_schema(
     print_dbos_migrations(db_url_string, schema='bad"schema', migration="all")
     quoted_sql = capsys.readouterr().out
     assert 'CREATE SCHEMA IF NOT EXISTS "bad""schema";' in quoted_sql
-    assert 'CREATE SCHEMA IF NOT EXISTS "bad"schema";' not in quoted_sql
+
+    # A percent is passed through, not doubled by the identifier preparer.
+    print_dbos_migrations(db_url_string, schema="ten%1", migration="all")
+    assert 'CREATE SCHEMA IF NOT EXISTS "ten%1";' in capsys.readouterr().out
 
     # --print-user-role requires --app-role
     result = subprocess.run(

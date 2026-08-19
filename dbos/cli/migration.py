@@ -221,6 +221,11 @@ def print_dbos_migrations(
 def print_dbos_user_role_sql(*, schema: str = "dbos", role_name: str) -> None:
     """Print to stdout the SQL granting an application role access to the DBOS
     system schema, without touching any database."""
-    click.echo(f"-- Permissions on DBOS schema {schema} for role {role_name}")
+    # Rendered as quoted identifiers: a newline in a name would otherwise end the
+    # comment and leave the rest of it as a statement in a script an operator runs.
+    click.echo(
+        f"-- Permissions on DBOS schema {quote_identifier(schema)}"
+        f" for role {quote_identifier(role_name)}"
+    )
     for sql in get_dbos_schema_permissions_sql(schema, role_name):
         _emit_sql(sql)

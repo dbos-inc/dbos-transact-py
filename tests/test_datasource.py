@@ -649,29 +649,6 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
 
     monkeypatch.setattr(sync_ds, "_record_error", counting_record_error)
 
-    # Raise once from the result-recording insert, as a lost commit acknowledgement does.
-    lose_ack = {"next": False}
-    real_record_result = sync_ds._record_result
-
-    def maybe_lose_ack(
-        conn: Any,
-        workflow_id: str,
-        step_id: int,
-        output: Optional[str],
-        error: Optional[str],
-        serialization: Optional[str],
-    ) -> None:
-        if lose_ack["next"]:
-            lose_ack["next"] = False
-            raise OperationalError(
-                "INSERT",
-                {},
-                psycopg.OperationalError("server closed the connection unexpectedly"),
-            )
-        real_record_result(conn, workflow_id, step_id, output, error, serialization)
-
-    monkeypatch.setattr(sync_ds, "_record_result", maybe_lose_ack)
-
     # The winning execution: commits its app writes and its datasource_outputs row.
     with SetWorkflowID(wfid):
         assert my_workflow() == "result-1"
@@ -696,15 +673,6 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
     assert call_count["n"] == 3
     assert record_error_calls["n"] == 1
 
-    # A retry after a possibly-committed attempt: the row may be its own, so it replays.
-    forget_workflow()
-    blind["next"] = True
-    should_fail["v"] = False
-    lose_ack["next"] = True
-    with SetWorkflowID(wfid):
-        assert my_workflow() == "result-1"
-    assert call_count["n"] == 5  # the lost acknowledgement cost one extra attempt
-
     # The succeeding loser's writes were discarded and the winner's record still stands.
     with sync_ds.engine.connect() as conn:
         tags = [row.tag for row in conn.execute(sa.select(_race_side_effects.c.tag))]
@@ -718,6 +686,84 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
     assert tags == ["run-1"]
     assert ds_row.error is None  # no loser error was ever recorded
     # The winner's output is still the one on record, unmodified by either loser.
+    assert (
+        deserialize_value(ds_row.output, ds_row.serialization, sync_ds.serializer)
+        == "result-1"
+    )
+
+
+def test_sync_ds_replays_its_own_lost_commit(
+    dbos: DBOS, sync_ds: SQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A commit that lands and then loses its acknowledgement leaves a row this very
+    execution wrote, so the retry replays it instead of parking as a duplicate."""
+    if sync_ds.engine.dialect.name != "postgresql":
+        pytest.skip("only a Postgres-style connection error makes a commit ambiguous")
+    _race_side_effects.create(sync_ds.engine, checkfirst=True)
+    call_count = {"n": 0}
+
+    def step_fn() -> str:
+        call_count["n"] += 1
+        sync_ds.sql_session().execute(
+            _race_side_effects.insert().values(tag=f"run-{call_count['n']}")
+        )
+        return f"result-{call_count['n']}"
+
+    lose_ack = {"next": True}
+    real_sessionmaker = sync_ds.sessionmaker
+
+    class _LostAck:
+        """Commits, then reports the connection dropped, as a lost ack does."""
+
+        def __init__(self, transaction: Any) -> None:
+            self._transaction = transaction
+
+        def __enter__(self) -> Any:
+            return self._transaction.__enter__()
+
+        def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+            handled = self._transaction.__exit__(exc_type, exc, tb)
+            if exc is None and lose_ack["next"]:
+                lose_ack["next"] = False
+                raise OperationalError(
+                    "COMMIT",
+                    {},
+                    psycopg.OperationalError(
+                        "server closed the connection unexpectedly"
+                    ),
+                )
+            return handled
+
+    def flaky_sessionmaker() -> Any:
+        session = real_sessionmaker()
+        real_begin = session.begin
+        # setattr: the proxy only has to satisfy the `with` protocol, not the type.
+        setattr(session, "begin", lambda: _LostAck(real_begin()))
+        return session
+
+    monkeypatch.setattr(sync_ds, "sessionmaker", flaky_sessionmaker)
+
+    @DBOS.workflow()
+    def my_workflow() -> str:
+        return sync_ds.run_tx_step(None, step_fn)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        # The first attempt's own output, not the second attempt's.
+        assert my_workflow() == "result-1"
+    assert call_count["n"] == 2  # the lost acknowledgement cost one extra attempt
+
+    with sync_ds.engine.connect() as conn:
+        tags = [row.tag for row in conn.execute(sa.select(_race_side_effects.c.tag))]
+        ds_row = conn.execute(
+            sa.select(
+                DatasourceSchema.datasource_outputs.c.output,
+                DatasourceSchema.datasource_outputs.c.error,
+                DatasourceSchema.datasource_outputs.c.serialization,
+            ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+        ).one()
+    assert tags == ["run-1"]  # the retry's writes rolled back against the committed row
+    assert ds_row.error is None
     assert (
         deserialize_value(ds_row.output, ds_row.serialization, sync_ds.serializer)
         == "result-1"
@@ -792,18 +838,36 @@ def test_sync_ds_duplicate_execution_stops_at_the_lost_race(
     def loser_transaction_ran() -> None:
         assert reserve_calls["n"] >= 2
 
-    retry_until_success(loser_transaction_ran, interval=0.1, max_attempts=100)
+    def duplicate_left_the_workflow() -> None:
+        # Released either at the park or after the whole body: reached only once the
+        # duplicate can no longer run send_email, whichever way it went.
+        assert wfid not in dbos._active_workflows_set.activeList()
 
-    # Publish the winner's outcome, which is what a parked duplicate waits for.
-    with dbos._sys_db.engine.begin() as conn:
-        conn.execute(
-            sa.update(SystemSchema.workflow_status)
-            .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
-            .values(status=WorkflowStatusString.SUCCESS.value, output=winner_output)
-        )
+    try:
+        retry_until_success(loser_transaction_ran, interval=0.1, max_attempts=300)
+        retry_until_success(duplicate_left_the_workflow, interval=0.1, max_attempts=300)
+
+        assert (
+            emails_sent["n"] == 1
+        ), "the duplicate execution ran the workflow's next step"
+        with dbos._sys_db.engine.connect() as conn:
+            steps = conn.execute(
+                sa.select(SystemSchema.operation_outputs.c.function_id).where(
+                    SystemSchema.operation_outputs.c.workflow_uuid == wfid
+                )
+            ).all()
+        assert steps == [], "the parked duplicate checkpointed a step"
+    finally:
+        # Publish the winner's outcome, which is what a parked duplicate waits for.
+        # In a finally: an assertion above must not strand a thread polling forever.
+        with dbos._sys_db.engine.begin() as conn:
+            conn.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+                .values(status=WorkflowStatusString.SUCCESS.value, output=winner_output)
+            )
 
     assert handle.get_result() == "reserved"  # the winner's outcome, adopted
-    assert emails_sent["n"] == 1, "the duplicate execution ran the workflow's next step"
 
 
 # ---------------------------------------------------------------------------
@@ -1351,31 +1415,6 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
 
     monkeypatch.setattr(async_ds, "_record_error", counting_record_error)
 
-    # Raise once from the result-recording insert, as a lost commit acknowledgement does.
-    lose_ack = {"next": False}
-    real_record_result = async_ds._record_result
-
-    async def maybe_lose_ack(
-        conn: Any,
-        workflow_id: str,
-        step_id: int,
-        output: Optional[str],
-        error: Optional[str],
-        serialization: Optional[str],
-    ) -> None:
-        if lose_ack["next"]:
-            lose_ack["next"] = False
-            raise OperationalError(
-                "INSERT",
-                {},
-                psycopg.OperationalError("server closed the connection unexpectedly"),
-            )
-        await real_record_result(
-            conn, workflow_id, step_id, output, error, serialization
-        )
-
-    monkeypatch.setattr(async_ds, "_record_result", maybe_lose_ack)
-
     # The winning execution: commits its app writes and its datasource_outputs row.
     with SetWorkflowID(wfid):
         assert await my_workflow() == "result-1"
@@ -1399,15 +1438,6 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
         assert await my_workflow() == "conflicted"
     assert call_count["n"] == 3
     assert record_error_calls["n"] == 1
-
-    # A retry after a possibly-committed attempt: the row may be its own, so it replays.
-    forget_workflow()
-    blind["next"] = True
-    should_fail["v"] = False
-    lose_ack["next"] = True
-    with SetWorkflowID(wfid):
-        assert await my_workflow() == "result-1"
-    assert call_count["n"] == 5  # the lost acknowledgement cost one extra attempt
 
     # The succeeding loser's writes were discarded and the winner's record still stands.
     async with async_ds.engine.connect() as conn:
@@ -1501,18 +1531,122 @@ async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
     def loser_transaction_ran() -> None:
         assert reserve_calls["n"] >= 2
 
-    await retry_until_success_async(
-        loser_transaction_ran, interval=0.1, max_attempts=100
-    )
+    def duplicate_left_the_workflow() -> None:
+        # An async duplicate is dispatched onto the background loop and handed back a
+        # polling handle, so its result says nothing about it: wait on the active set,
+        # released either at the park or after the whole body.
+        assert wfid not in dbos._active_workflows_set.activeList()
 
-    # Publish the winner's outcome, which is what a parked duplicate waits for.
-    with dbos._sys_db.engine.begin() as conn:
-        conn.execute(
-            sa.update(SystemSchema.workflow_status)
-            .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
-            .values(status=WorkflowStatusString.SUCCESS.value, output=winner_output)
+    try:
+        await retry_until_success_async(
+            loser_transaction_ran, interval=0.1, max_attempts=300
         )
+        await retry_until_success_async(
+            duplicate_left_the_workflow, interval=0.1, max_attempts=300
+        )
+
+        assert (
+            emails_sent["n"] == 1
+        ), "the duplicate execution ran the workflow's next step"
+        with dbos._sys_db.engine.connect() as conn:
+            steps = conn.execute(
+                sa.select(SystemSchema.operation_outputs.c.function_id).where(
+                    SystemSchema.operation_outputs.c.workflow_uuid == wfid
+                )
+            ).all()
+        assert steps == [], "the parked duplicate checkpointed a step"
+    finally:
+        # Publish the winner's outcome, which is what a parked duplicate waits for.
+        # In a finally: an assertion above must not strand a thread polling forever.
+        with dbos._sys_db.engine.begin() as conn:
+            conn.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+                .values(status=WorkflowStatusString.SUCCESS.value, output=winner_output)
+            )
 
     # The winner's outcome, adopted.
     assert await asyncio.to_thread(handle.get_result) == "reserved"
-    assert emails_sent["n"] == 1, "the duplicate execution ran the workflow's next step"
+
+
+@pytest.mark.asyncio
+async def test_async_ds_replays_its_own_lost_commit(
+    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Async sibling of test_sync_ds_replays_its_own_lost_commit."""
+    if async_ds.engine.dialect.name != "postgresql":
+        pytest.skip("only a Postgres-style connection error makes a commit ambiguous")
+    async with async_ds.engine.begin() as conn:
+        await conn.run_sync(_race_side_effects.create, checkfirst=True)
+    call_count = {"n": 0}
+
+    async def step_fn() -> str:
+        call_count["n"] += 1
+        await async_ds.sql_session().execute(
+            _race_side_effects.insert().values(tag=f"run-{call_count['n']}")
+        )
+        return f"result-{call_count['n']}"
+
+    lose_ack = {"next": True}
+    real_sessionmaker = async_ds.sessionmaker
+
+    class _LostAck:
+        """Commits, then reports the connection dropped, as a lost ack does."""
+
+        def __init__(self, transaction: Any) -> None:
+            self._transaction = transaction
+
+        async def __aenter__(self) -> Any:
+            return await self._transaction.__aenter__()
+
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+            handled = await self._transaction.__aexit__(exc_type, exc, tb)
+            if exc is None and lose_ack["next"]:
+                lose_ack["next"] = False
+                raise OperationalError(
+                    "COMMIT",
+                    {},
+                    psycopg.OperationalError(
+                        "server closed the connection unexpectedly"
+                    ),
+                )
+            return handled
+
+    def flaky_sessionmaker() -> Any:
+        session = real_sessionmaker()
+        real_begin = session.begin
+        # setattr: the proxy only has to satisfy the `with` protocol, not the type.
+        setattr(session, "begin", lambda: _LostAck(real_begin()))
+        return session
+
+    monkeypatch.setattr(async_ds, "sessionmaker", flaky_sessionmaker)
+
+    @DBOS.workflow()
+    async def my_workflow() -> str:
+        return await async_ds.run_tx_step_async(None, step_fn)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        # The first attempt's own output, not the second attempt's.
+        assert await my_workflow() == "result-1"
+    assert call_count["n"] == 2  # the lost acknowledgement cost one extra attempt
+
+    async with async_ds.engine.connect() as conn:
+        tags = [
+            row.tag for row in (await conn.execute(sa.select(_race_side_effects.c.tag)))
+        ]
+        ds_row = (
+            await conn.execute(
+                sa.select(
+                    DatasourceSchema.datasource_outputs.c.output,
+                    DatasourceSchema.datasource_outputs.c.error,
+                    DatasourceSchema.datasource_outputs.c.serialization,
+                ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+            )
+        ).one()
+    assert tags == ["run-1"]  # the retry's writes rolled back against the committed row
+    assert ds_row.error is None
+    assert (
+        deserialize_value(ds_row.output, ds_row.serialization, async_ds.serializer)
+        == "result-1"
+    )
