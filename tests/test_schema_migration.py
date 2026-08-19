@@ -93,6 +93,36 @@ def test_systemdb_migration_custom_schema(
     DBOS.destroy()
 
 
+def test_systemdb_migration_schema_with_quote(
+    config: DBOSConfig,
+    skip_with_sqlite: None,
+    drop_test_databases: None,
+) -> None:
+    """A double quote in a schema name is escaped, not left to close the identifier
+    early and turn the rest of the name into SQL of its own (#819)."""
+    config["application_database_url"] = None
+    schema = 'we"ird'
+    config["dbos_system_schema"] = schema
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    @DBOS.workflow()
+    def workflow() -> str:
+        return "done"
+
+    assert workflow() == "done"
+    with dbos._sys_db.engine.connect() as connection:
+        # Doubled inside the identifier: the name is one schema, not a truncated one.
+        rows = connection.execute(
+            sa.text('SELECT version FROM "we""ird".dbos_migrations')
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == len(get_dbos_migrations(schema, True))
+
+    DBOS.destroy()
+
+
 def test_two_schemas_isolated_in_one_process(
     config: DBOSConfig,
     skip_with_sqlite: None,
@@ -1182,10 +1212,11 @@ def test_migrate_print_custom_schema(
     # The unquoted schema name must never appear outside quotes or literals
     assert f"CREATE TABLE {schema}." not in sql
 
-    # Schema names containing quotes are rejected
-    with pytest.raises(Exception):
-        print_dbos_migrations(db_url_string, schema='bad"schema', migration="all")
-    capsys.readouterr()
+    # A quote inside a schema name is escaped, not left to close the identifier early
+    print_dbos_migrations(db_url_string, schema='bad"schema', migration="all")
+    quoted_sql = capsys.readouterr().out
+    assert 'CREATE SCHEMA IF NOT EXISTS "bad""schema";' in quoted_sql
+    assert 'CREATE SCHEMA IF NOT EXISTS "bad"schema";' not in quoted_sql
 
     # --print-user-role requires --app-role
     result = subprocess.run(
@@ -1219,10 +1250,11 @@ def test_migrate_print_custom_schema(
         assert line.startswith(("--", "GRANT", "ALTER"))
     role_sql = result.stdout
 
-    # Role names containing quotes are rejected
-    with pytest.raises(click.exceptions.Exit):
-        print_dbos_user_role_sql(schema=schema, role_name='bad"role')
-    capsys.readouterr()
+    # A quote inside a role name is escaped the same way
+    print_dbos_user_role_sql(schema=schema, role_name='bad"role')
+    assert (
+        f'GRANT USAGE ON SCHEMA "{schema}" TO "bad""role";' in capsys.readouterr().out
+    )
 
     # --print-user-role cannot be combined with --print-migrations
     result = subprocess.run(

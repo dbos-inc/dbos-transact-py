@@ -3,6 +3,7 @@ import sys
 import sqlalchemy as sa
 
 from ._logger import dbos_logger
+from ._utils import quote_identifier
 
 # Migration versions that contain CONCURRENTLY index DDL and must run with
 # autocommit (CREATE/DROP INDEX CONCURRENTLY cannot run inside a transaction
@@ -69,7 +70,9 @@ def _cleanup_invalid_indexes(engine: sa.Engine, schema: str) -> None:
                 f"Dropping invalid index {schema}.{idx_name} left by a prior failed migration"
             )
             conn.execute(
-                sa.text(f'DROP INDEX CONCURRENTLY IF EXISTS "{schema}"."{idx_name}"')
+                sa.text(
+                    f"DROP INDEX CONCURRENTLY IF EXISTS {quote_identifier(schema)}.{quote_identifier(idx_name)}"
+                )
             )
 
 
@@ -77,17 +80,20 @@ def _bump_migration_version(
     engine: sa.Engine, schema: str, version: int, last_applied: int
 ) -> None:
     """Update the dbos_migrations version row in its own transaction."""
+    quoted_schema = quote_identifier(schema)
     with engine.begin() as conn:
         if last_applied == 0:
             conn.execute(
                 sa.text(
-                    f'INSERT INTO "{schema}".dbos_migrations (version) VALUES (:version)'
+                    f"INSERT INTO {quoted_schema}.dbos_migrations (version) VALUES (:version)"
                 ),
                 {"version": version},
             )
         else:
             conn.execute(
-                sa.text(f'UPDATE "{schema}".dbos_migrations SET version = :version'),
+                sa.text(
+                    f"UPDATE {quoted_schema}.dbos_migrations SET version = :version"
+                ),
                 {"version": version},
             )
 
@@ -117,7 +123,7 @@ def get_migration_versions(
             return 0, latest_version
 
         current_version_row = conn.execute(
-            sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+            sa.text(f"SELECT version FROM {quote_identifier(schema)}.dbos_migrations")
         ).fetchone()
         current_version = current_version_row[0] if current_version_row else 0
         return current_version, latest_version
@@ -159,6 +165,7 @@ def ensure_dbos_schema(engine: sa.Engine, schema: str) -> None:
     True if using DBOS migrations (DBOS schema and migrations table already exist or were created)
     False if using Alembic migrations (DBOS schema exists, but dbos_migrations table doesn't)
     """
+    quoted_schema = quote_identifier(schema)
     with engine.begin() as conn:
         # Check if dbos schema exists
         schema_result = conn.execute(
@@ -171,7 +178,7 @@ def ensure_dbos_schema(engine: sa.Engine, schema: str) -> None:
 
         # Create schema if it doesn't exist
         if not schema_exists:
-            conn.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
+            conn.execute(sa.text(f"CREATE SCHEMA {quoted_schema}"))
 
         # Check if dbos_migrations table exists
         table_result = conn.execute(
@@ -185,7 +192,7 @@ def ensure_dbos_schema(engine: sa.Engine, schema: str) -> None:
         if not table_exists:
             conn.execute(
                 sa.text(
-                    f'CREATE TABLE "{schema}".dbos_migrations (version BIGINT NOT NULL PRIMARY KEY)'
+                    f"CREATE TABLE {quoted_schema}.dbos_migrations (version BIGINT NOT NULL PRIMARY KEY)"
                 )
             )
 
@@ -194,10 +201,11 @@ def run_dbos_migrations(
     engine: sa.Engine, schema: str, use_listen_notify: bool
 ) -> None:
     """Run DBOS-managed migrations by executing each SQL command in dbos_migrations."""
+    quoted_schema = quote_identifier(schema)
     # Get current migration version and detect CockroachDB via server version string
     with engine.begin() as conn:
         result = conn.execute(
-            sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+            sa.text(f"SELECT version FROM {quoted_schema}.dbos_migrations")
         )
         current_version = result.fetchone()
         last_applied = current_version[0] if current_version else 0
@@ -240,11 +248,12 @@ def run_dbos_migrations(
                 i == 10
                 and conn.execute(
                     sa.text(
-                        f"SELECT 1 FROM information_schema.table_constraints "
-                        f"WHERE table_schema = '{schema}' "
-                        f"AND table_name = 'notifications' "
-                        f"AND constraint_type = 'PRIMARY KEY'"
-                    )
+                        "SELECT 1 FROM information_schema.table_constraints "
+                        "WHERE table_schema = :schema "
+                        "AND table_name = 'notifications' "
+                        "AND constraint_type = 'PRIMARY KEY'"
+                    ),
+                    {"schema": schema},
                 ).scalar()
             ):
                 dbos_logger.info("Migration 10 skipped, primary key already exists")
@@ -255,14 +264,14 @@ def run_dbos_migrations(
             if last_applied == 0:
                 conn.execute(
                     sa.text(
-                        f'INSERT INTO "{schema}".dbos_migrations (version) VALUES (:version)'
+                        f"INSERT INTO {quoted_schema}.dbos_migrations (version) VALUES (:version)"
                     ),
                     {"version": i},
                 )
             else:
                 conn.execute(
                     sa.text(
-                        f'UPDATE "{schema}".dbos_migrations SET version = :version'
+                        f"UPDATE {quoted_schema}.dbos_migrations SET version = :version"
                     ),
                     {"version": i},
                 )
@@ -273,12 +282,12 @@ def run_dbos_migrations(
         _bump_migration_version(engine, schema, len(migrations), last_applied)
 
 
-def get_dbos_migration_one(schema: str, use_listen_notify: bool) -> str:
+def get_dbos_migration_one(quoted_schema: str, use_listen_notify: bool) -> str:
     migration = f"""
 -- Enable uuid extension for generating UUIDs
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
-CREATE TABLE \"{schema}\".workflow_status (
+CREATE TABLE {quoted_schema}.workflow_status (
     workflow_uuid TEXT PRIMARY KEY,
     status TEXT,
     name TEXT,
@@ -305,15 +314,15 @@ CREATE TABLE \"{schema}\".workflow_status (
     priority INT4 NOT NULL DEFAULT 0
 );
 
-CREATE INDEX workflow_status_created_at_index ON \"{schema}\".workflow_status (created_at);
-CREATE INDEX workflow_status_executor_id_index ON \"{schema}\".workflow_status (executor_id);
-CREATE INDEX workflow_status_status_index ON \"{schema}\".workflow_status (status);
+CREATE INDEX workflow_status_created_at_index ON {quoted_schema}.workflow_status (created_at);
+CREATE INDEX workflow_status_executor_id_index ON {quoted_schema}.workflow_status (executor_id);
+CREATE INDEX workflow_status_status_index ON {quoted_schema}.workflow_status (status);
 
-ALTER TABLE \"{schema}\".workflow_status 
+ALTER TABLE {quoted_schema}.workflow_status 
 ADD CONSTRAINT uq_workflow_status_queue_name_dedup_id 
 UNIQUE (queue_name, deduplication_id);
 
-CREATE TABLE \"{schema}\".operation_outputs (
+CREATE TABLE {quoted_schema}.operation_outputs (
     workflow_uuid TEXT NOT NULL,
     function_id INT4 NOT NULL,
     function_name TEXT NOT NULL DEFAULT '',
@@ -321,41 +330,41 @@ CREATE TABLE \"{schema}\".operation_outputs (
     error TEXT,
     child_workflow_id TEXT,
     PRIMARY KEY (workflow_uuid, function_id),
-    FOREIGN KEY (workflow_uuid) REFERENCES \"{schema}\".workflow_status(workflow_uuid) 
+    FOREIGN KEY (workflow_uuid) REFERENCES {quoted_schema}.workflow_status(workflow_uuid) 
         ON UPDATE CASCADE ON DELETE CASCADE
 );
 
-CREATE TABLE \"{schema}\".notifications (
+CREATE TABLE {quoted_schema}.notifications (
     message_uuid TEXT NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY, -- Built-in function
     destination_uuid TEXT NOT NULL,
     topic TEXT,
     message TEXT NOT NULL,
     created_at_epoch_ms BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint,
-    FOREIGN KEY (destination_uuid) REFERENCES \"{schema}\".workflow_status(workflow_uuid) 
+    FOREIGN KEY (destination_uuid) REFERENCES {quoted_schema}.workflow_status(workflow_uuid) 
         ON UPDATE CASCADE ON DELETE CASCADE
 );
-CREATE INDEX idx_workflow_topic ON \"{schema}\".notifications (destination_uuid, topic);
+CREATE INDEX idx_workflow_topic ON {quoted_schema}.notifications (destination_uuid, topic);
 
-CREATE TABLE \"{schema}\".workflow_events (
+CREATE TABLE {quoted_schema}.workflow_events (
     workflow_uuid TEXT NOT NULL,
     key TEXT NOT NULL,
     value TEXT NOT NULL,
     PRIMARY KEY (workflow_uuid, key),
-    FOREIGN KEY (workflow_uuid) REFERENCES \"{schema}\".workflow_status(workflow_uuid) 
+    FOREIGN KEY (workflow_uuid) REFERENCES {quoted_schema}.workflow_status(workflow_uuid) 
         ON UPDATE CASCADE ON DELETE CASCADE
 );
 
-CREATE TABLE \"{schema}\".streams (
+CREATE TABLE {quoted_schema}.streams (
     workflow_uuid TEXT NOT NULL,
     key TEXT NOT NULL,
     value TEXT NOT NULL,
     "offset" INT4 NOT NULL,
     PRIMARY KEY (workflow_uuid, key, "offset"),
-    FOREIGN KEY (workflow_uuid) REFERENCES \"{schema}\".workflow_status(workflow_uuid) 
+    FOREIGN KEY (workflow_uuid) REFERENCES {quoted_schema}.workflow_status(workflow_uuid) 
         ON UPDATE CASCADE ON DELETE CASCADE
 );
 
-CREATE TABLE \"{schema}\".event_dispatch_kv (
+CREATE TABLE {quoted_schema}.event_dispatch_kv (
     service_name TEXT NOT NULL,
     workflow_fn_name TEXT NOT NULL,
     key TEXT NOT NULL,
@@ -368,7 +377,7 @@ CREATE TABLE \"{schema}\".event_dispatch_kv (
     if use_listen_notify:
         migration += f"""
 -- Create notification function
-CREATE OR REPLACE FUNCTION \"{schema}\".notifications_function() RETURNS TRIGGER AS $$
+CREATE OR REPLACE FUNCTION {quoted_schema}.notifications_function() RETURNS TRIGGER AS $$
 DECLARE
     payload text := NEW.destination_uuid || '::' || NEW.topic;
 BEGIN
@@ -379,11 +388,11 @@ $$ LANGUAGE plpgsql;
 
 -- Create notification trigger
 CREATE TRIGGER dbos_notifications_trigger
-AFTER INSERT ON \"{schema}\".notifications
-FOR EACH ROW EXECUTE FUNCTION \"{schema}\".notifications_function();
+AFTER INSERT ON {quoted_schema}.notifications
+FOR EACH ROW EXECUTE FUNCTION {quoted_schema}.notifications_function();
 
 -- Create events function
-CREATE OR REPLACE FUNCTION \"{schema}\".workflow_events_function() RETURNS TRIGGER AS $$
+CREATE OR REPLACE FUNCTION {quoted_schema}.workflow_events_function() RETURNS TRIGGER AS $$
 DECLARE
     payload text := NEW.workflow_uuid || '::' || NEW.key;
 BEGIN
@@ -394,66 +403,66 @@ $$ LANGUAGE plpgsql;
 
 -- Create events trigger
 CREATE TRIGGER dbos_workflow_events_trigger
-AFTER INSERT ON \"{schema}\".workflow_events
-FOR EACH ROW EXECUTE FUNCTION \"{schema}\".workflow_events_function();
+AFTER INSERT ON {quoted_schema}.workflow_events
+FOR EACH ROW EXECUTE FUNCTION {quoted_schema}.workflow_events_function();
 """
     return migration
 
 
-def get_dbos_migration_two(schema: str) -> str:
+def get_dbos_migration_two(quoted_schema: str) -> str:
     return f"""
-ALTER TABLE \"{schema}\".workflow_status ADD COLUMN queue_partition_key TEXT;
+ALTER TABLE {quoted_schema}.workflow_status ADD COLUMN queue_partition_key TEXT;
 """
 
 
-def get_dbos_migration_three(schema: str) -> str:
+def get_dbos_migration_three(quoted_schema: str) -> str:
     return f"""
-create index "idx_workflow_status_queue_status_started" on \"{schema}\"."workflow_status" ("queue_name", "status", "started_at_epoch_ms")
+create index "idx_workflow_status_queue_status_started" on {quoted_schema}."workflow_status" ("queue_name", "status", "started_at_epoch_ms")
 """
 
 
-def get_dbos_migration_four(schema: str) -> str:
+def get_dbos_migration_four(quoted_schema: str) -> str:
     return f"""
-ALTER TABLE \"{schema}\".workflow_status ADD COLUMN forked_from TEXT;
-CREATE INDEX "idx_workflow_status_forked_from" ON \"{schema}\"."workflow_status" ("forked_from")
+ALTER TABLE {quoted_schema}.workflow_status ADD COLUMN forked_from TEXT;
+CREATE INDEX "idx_workflow_status_forked_from" ON {quoted_schema}."workflow_status" ("forked_from")
 """
 
 
-def get_dbos_migration_five(schema: str) -> str:
+def get_dbos_migration_five(quoted_schema: str) -> str:
     return f"""
-ALTER TABLE \"{schema}\".operation_outputs ADD COLUMN started_at_epoch_ms BIGINT, ADD COLUMN completed_at_epoch_ms BIGINT;
+ALTER TABLE {quoted_schema}.operation_outputs ADD COLUMN started_at_epoch_ms BIGINT, ADD COLUMN completed_at_epoch_ms BIGINT;
 """
 
 
-def get_dbos_migration_six(schema: str) -> str:
+def get_dbos_migration_six(quoted_schema: str) -> str:
     return f"""
-CREATE TABLE \"{schema}\".workflow_events_history (
+CREATE TABLE {quoted_schema}.workflow_events_history (
     workflow_uuid TEXT NOT NULL,
     function_id INT4 NOT NULL,
     key TEXT NOT NULL,
     value TEXT NOT NULL,
     PRIMARY KEY (workflow_uuid, function_id, key),
-    FOREIGN KEY (workflow_uuid) REFERENCES \"{schema}\".workflow_status(workflow_uuid)
+    FOREIGN KEY (workflow_uuid) REFERENCES {quoted_schema}.workflow_status(workflow_uuid)
         ON UPDATE CASCADE ON DELETE CASCADE
 );
-ALTER TABLE \"{schema}\".streams ADD COLUMN function_id INT4 NOT NULL DEFAULT 0;
+ALTER TABLE {quoted_schema}.streams ADD COLUMN function_id INT4 NOT NULL DEFAULT 0;
 """
 
 
-def get_dbos_migration_seven(schema: str) -> str:
-    return f"""ALTER TABLE "{schema}"."workflow_status" ADD COLUMN "owner_xid" TEXT DEFAULT NULL;"""
+def get_dbos_migration_seven(quoted_schema: str) -> str:
+    return f"""ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN "owner_xid" TEXT DEFAULT NULL;"""
 
 
-def get_dbos_migration_eight(schema: str) -> str:
+def get_dbos_migration_eight(quoted_schema: str) -> str:
     return f"""
-ALTER TABLE "{schema}"."workflow_status" ADD COLUMN "parent_workflow_id" TEXT DEFAULT NULL;
-CREATE INDEX "idx_workflow_status_parent_workflow_id" ON "{schema}"."workflow_status" ("parent_workflow_id");
+ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN "parent_workflow_id" TEXT DEFAULT NULL;
+CREATE INDEX "idx_workflow_status_parent_workflow_id" ON {quoted_schema}."workflow_status" ("parent_workflow_id");
 """
 
 
-def get_dbos_migration_nine(schema: str) -> str:
+def get_dbos_migration_nine(quoted_schema: str) -> str:
     return f"""
-CREATE TABLE "{schema}".workflow_schedules (
+CREATE TABLE {quoted_schema}.workflow_schedules (
     schedule_id TEXT PRIMARY KEY,
     schedule_name TEXT NOT NULL UNIQUE,
     workflow_name TEXT NOT NULL,
@@ -468,33 +477,33 @@ CREATE TABLE "{schema}".workflow_schedules (
 # An earlier version of DBOS had a bug where this table was created without a primary key.
 # The initial migration has been changed to create a key, and this migration creates the key
 # for existing applications.
-def get_dbos_migration_ten(schema: str) -> str:
+def get_dbos_migration_ten(quoted_schema: str) -> str:
     return f"""
-ALTER TABLE "{schema}".notifications ADD PRIMARY KEY (message_uuid);
+ALTER TABLE {quoted_schema}.notifications ADD PRIMARY KEY (message_uuid);
 """
 
 
-def get_dbos_migration_eleven(schema: str) -> str:
+def get_dbos_migration_eleven(quoted_schema: str) -> str:
     return f"""
-ALTER TABLE "{schema}"."workflow_status" ADD COLUMN "serialization" TEXT DEFAULT NULL;
-ALTER TABLE "{schema}"."notifications" ADD COLUMN "serialization" TEXT DEFAULT NULL;
-ALTER TABLE "{schema}"."workflow_events" ADD COLUMN "serialization" TEXT DEFAULT NULL;
-ALTER TABLE "{schema}"."workflow_events_history" ADD COLUMN "serialization" TEXT DEFAULT NULL;
-ALTER TABLE "{schema}"."operation_outputs" ADD COLUMN "serialization" TEXT DEFAULT NULL;
-ALTER TABLE "{schema}"."streams" ADD COLUMN "serialization" TEXT DEFAULT NULL;
+ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN "serialization" TEXT DEFAULT NULL;
+ALTER TABLE {quoted_schema}."notifications" ADD COLUMN "serialization" TEXT DEFAULT NULL;
+ALTER TABLE {quoted_schema}."workflow_events" ADD COLUMN "serialization" TEXT DEFAULT NULL;
+ALTER TABLE {quoted_schema}."workflow_events_history" ADD COLUMN "serialization" TEXT DEFAULT NULL;
+ALTER TABLE {quoted_schema}."operation_outputs" ADD COLUMN "serialization" TEXT DEFAULT NULL;
+ALTER TABLE {quoted_schema}."streams" ADD COLUMN "serialization" TEXT DEFAULT NULL;
 """
 
 
-def get_dbos_migration_twelve(schema: str) -> str:
+def get_dbos_migration_twelve(quoted_schema: str) -> str:
     return f"""
-ALTER TABLE "{schema}"."notifications" ADD COLUMN "consumed" BOOLEAN NOT NULL DEFAULT FALSE;
-CREATE INDEX "idx_notifications" ON "{schema}"."notifications" ("destination_uuid", "topic");
+ALTER TABLE {quoted_schema}."notifications" ADD COLUMN "consumed" BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE INDEX "idx_notifications" ON {quoted_schema}."notifications" ("destination_uuid", "topic");
 """
 
 
-def get_dbos_migration_thirteen(schema: str) -> str:
+def get_dbos_migration_thirteen(quoted_schema: str) -> str:
     return f"""
-CREATE TABLE "{schema}".application_versions (
+CREATE TABLE {quoted_schema}.application_versions (
     version_id TEXT NOT NULL PRIMARY KEY,
     version_name TEXT NOT NULL UNIQUE,
     version_timestamp BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint,
@@ -503,9 +512,9 @@ CREATE TABLE "{schema}".application_versions (
 """
 
 
-def get_dbos_migration_fourteen(schema: str) -> str:
+def get_dbos_migration_fourteen(quoted_schema: str) -> str:
     return f"""
-CREATE FUNCTION "{schema}".enqueue_workflow(
+CREATE FUNCTION {quoted_schema}.enqueue_workflow(
     workflow_name TEXT,
     queue_name TEXT,
     positional_args JSON[] DEFAULT ARRAY[]::JSON[],
@@ -552,7 +561,7 @@ BEGIN
     )::TEXT;
     v_now := EXTRACT(epoch FROM now()) * 1000;
 
-    INSERT INTO "{schema}".workflow_status (
+    INSERT INTO {quoted_schema}.workflow_status (
         workflow_uuid, status, inputs,
         name, class_name, config_name,
         queue_name, deduplication_id, priority, queue_partition_key,
@@ -583,7 +592,7 @@ EXCEPTION
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE FUNCTION "{schema}".send_message(
+CREATE FUNCTION {quoted_schema}.send_message(
     destination_id TEXT,
     message JSON,
     topic TEXT DEFAULT NULL,
@@ -593,7 +602,7 @@ DECLARE
     v_topic TEXT := COALESCE(topic, '__null__topic__');
     v_message_id TEXT := COALESCE(message_id, gen_random_uuid()::TEXT);
 BEGIN
-    INSERT INTO "{schema}".notifications (
+    INSERT INTO {quoted_schema}.notifications (
         destination_uuid, topic, message, message_uuid, serialization
     ) VALUES (
         destination_id, v_topic, message, v_message_id, 'portable_json'
@@ -609,64 +618,64 @@ $$ LANGUAGE plpgsql;
 """
 
 
-def get_dbos_migration_fifteen(schema: str) -> str:
+def get_dbos_migration_fifteen(quoted_schema: str) -> str:
     return f"""
-ALTER TABLE "{schema}".workflow_schedules ADD COLUMN "last_fired_at" TEXT DEFAULT NULL;
-ALTER TABLE "{schema}".workflow_schedules ADD COLUMN "automatic_backfill" BOOLEAN NOT NULL DEFAULT FALSE;
-ALTER TABLE "{schema}".workflow_schedules ADD COLUMN "cron_timezone" TEXT DEFAULT NULL;
+ALTER TABLE {quoted_schema}.workflow_schedules ADD COLUMN "last_fired_at" TEXT DEFAULT NULL;
+ALTER TABLE {quoted_schema}.workflow_schedules ADD COLUMN "automatic_backfill" BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE {quoted_schema}.workflow_schedules ADD COLUMN "cron_timezone" TEXT DEFAULT NULL;
 """
 
 
-def get_dbos_migration_sixteen(schema: str) -> str:
+def get_dbos_migration_sixteen(quoted_schema: str) -> str:
     return f"""
-ALTER TABLE "{schema}"."workflow_status" ADD COLUMN "delay_until_epoch_ms" BIGINT DEFAULT NULL;
-CREATE INDEX "idx_workflow_status_delayed" ON "{schema}"."workflow_status" ("delay_until_epoch_ms") WHERE status = 'DELAYED';
+ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN "delay_until_epoch_ms" BIGINT DEFAULT NULL;
+CREATE INDEX "idx_workflow_status_delayed" ON {quoted_schema}."workflow_status" ("delay_until_epoch_ms") WHERE status = 'DELAYED';
 """
 
 
-def get_dbos_migration_seventeen(schema: str) -> str:
+def get_dbos_migration_seventeen(quoted_schema: str) -> str:
     return f"""
-ALTER TABLE "{schema}".workflow_schedules ADD COLUMN "queue_name" TEXT DEFAULT NULL;
+ALTER TABLE {quoted_schema}.workflow_schedules ADD COLUMN "queue_name" TEXT DEFAULT NULL;
 """
 
 
-def get_dbos_migration_eighteen(schema: str) -> str:
+def get_dbos_migration_eighteen(quoted_schema: str) -> str:
     return f"""
-ALTER TABLE "{schema}"."workflow_status" ADD COLUMN "was_forked_from" BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN "was_forked_from" BOOLEAN NOT NULL DEFAULT FALSE;
 """
 
 
-def get_dbos_migration_nineteen(schema: str) -> str:
+def get_dbos_migration_nineteen(quoted_schema: str) -> str:
     return f"""
-CREATE INDEX "idx_operation_outputs_completed_at_function_name" ON "{schema}"."operation_outputs" ("completed_at_epoch_ms", "function_name");
+CREATE INDEX "idx_operation_outputs_completed_at_function_name" ON {quoted_schema}."operation_outputs" ("completed_at_epoch_ms", "function_name");
 """
 
 
 def get_dbos_migration_twenty(
-    schema: str, use_listen_notify: bool, is_cockroach: bool
+    quoted_schema: str, use_listen_notify: bool, is_cockroach: bool
 ) -> str:
     if is_cockroach:
         return ""
     migration = f"""
-ALTER FUNCTION "{schema}".enqueue_workflow(
+ALTER FUNCTION {quoted_schema}.enqueue_workflow(
     TEXT, TEXT, JSON[], JSON, TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, INTEGER, TEXT
 ) SET search_path = pg_catalog, pg_temp;
 
-ALTER FUNCTION "{schema}".send_message(
+ALTER FUNCTION {quoted_schema}.send_message(
     TEXT, JSON, TEXT, TEXT
 ) SET search_path = pg_catalog, pg_temp;
 """
     if use_listen_notify:
         migration += f"""
-ALTER FUNCTION "{schema}".notifications_function() SET search_path = pg_catalog, pg_temp;
-ALTER FUNCTION "{schema}".workflow_events_function() SET search_path = pg_catalog, pg_temp;
+ALTER FUNCTION {quoted_schema}.notifications_function() SET search_path = pg_catalog, pg_temp;
+ALTER FUNCTION {quoted_schema}.workflow_events_function() SET search_path = pg_catalog, pg_temp;
 """
     return migration
 
 
-def get_dbos_migration_twentyone(schema: str) -> str:
+def get_dbos_migration_twentyone(quoted_schema: str) -> str:
     return f"""
-CREATE TABLE "{schema}".queues (
+CREATE TABLE {quoted_schema}.queues (
     queue_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
     name TEXT NOT NULL UNIQUE,
     concurrency INT4,
@@ -682,106 +691,106 @@ CREATE TABLE "{schema}".queues (
 """
 
 
-def get_dbos_migration_twentytwo(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_twentytwo(quoted_schema: str, is_cockroach: bool) -> str:
     c = _concurrently(is_cockroach)
-    return f'DROP INDEX {c} IF EXISTS "{schema}"."idx_workflow_status_forked_from"'
+    return f'DROP INDEX {c} IF EXISTS {quoted_schema}."idx_workflow_status_forked_from"'
 
 
-def get_dbos_migration_twentythree(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_twentythree(quoted_schema: str, is_cockroach: bool) -> str:
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_forked_from" ON "{schema}"."workflow_status" ("forked_from") WHERE "forked_from" IS NOT NULL'
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_forked_from" ON {quoted_schema}."workflow_status" ("forked_from") WHERE "forked_from" IS NOT NULL'
 
 
-def get_dbos_migration_twentyfour(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_twentyfour(quoted_schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f'DROP INDEX {c} IF EXISTS {quoted_schema}."idx_workflow_status_parent_workflow_id"'
+
+
+def get_dbos_migration_twentyfive(quoted_schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_parent_workflow_id" ON {quoted_schema}."workflow_status" ("parent_workflow_id") WHERE "parent_workflow_id" IS NOT NULL'
+
+
+def get_dbos_migration_twentysix(quoted_schema: str, is_cockroach: bool) -> str:
     c = _concurrently(is_cockroach)
     return (
-        f'DROP INDEX {c} IF EXISTS "{schema}"."idx_workflow_status_parent_workflow_id"'
+        f'DROP INDEX {c} IF EXISTS {quoted_schema}."workflow_status_executor_id_index"'
     )
 
 
-def get_dbos_migration_twentyfive(schema: str, is_cockroach: bool) -> str:
-    c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_parent_workflow_id" ON "{schema}"."workflow_status" ("parent_workflow_id") WHERE "parent_workflow_id" IS NOT NULL'
-
-
-def get_dbos_migration_twentysix(schema: str, is_cockroach: bool) -> str:
-    c = _concurrently(is_cockroach)
-    return f'DROP INDEX {c} IF EXISTS "{schema}"."workflow_status_executor_id_index"'
-
-
-def get_dbos_migration_twentyseven(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_twentyseven(quoted_schema: str, is_cockroach: bool) -> str:
     # The new partial unique index uses a different name from the original
     # constraint to avoid a naming collision
     c = _concurrently(is_cockroach)
-    return f'CREATE UNIQUE INDEX {c} IF NOT EXISTS "uq_workflow_status_dedup_id" ON "{schema}"."workflow_status" ("queue_name", "deduplication_id") WHERE "deduplication_id" IS NOT NULL'
+    return f'CREATE UNIQUE INDEX {c} IF NOT EXISTS "uq_workflow_status_dedup_id" ON {quoted_schema}."workflow_status" ("queue_name", "deduplication_id") WHERE "deduplication_id" IS NOT NULL'
 
 
-def get_dbos_migration_twentyeight(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_twentyeight(quoted_schema: str, is_cockroach: bool) -> str:
     # CockroachDB implements unique constraints as indexes and rejects
     # ALTER TABLE DROP CONSTRAINT for them; Postgres rejects DROP INDEX on a
     # constraint-backed index. Both paths are fast catalog operations, no
     # CONCURRENTLY needed.
     if is_cockroach:
-        return f'DROP INDEX IF EXISTS "{schema}"."uq_workflow_status_queue_name_dedup_id" CASCADE'
-    return f'ALTER TABLE "{schema}".workflow_status DROP CONSTRAINT IF EXISTS uq_workflow_status_queue_name_dedup_id'
+        return f'DROP INDEX IF EXISTS {quoted_schema}."uq_workflow_status_queue_name_dedup_id" CASCADE'
+    return f"ALTER TABLE {quoted_schema}.workflow_status DROP CONSTRAINT IF EXISTS uq_workflow_status_queue_name_dedup_id"
 
 
-def get_dbos_migration_twentynine(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_twentynine(quoted_schema: str, is_cockroach: bool) -> str:
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_pending" ON "{schema}"."workflow_status" ("created_at") WHERE "status" = \'PENDING\''
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_pending" ON {quoted_schema}."workflow_status" ("created_at") WHERE "status" = \'PENDING\''
 
 
-def get_dbos_migration_thirty(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_thirty(quoted_schema: str, is_cockroach: bool) -> str:
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_failed" ON "{schema}"."workflow_status" ("status", "created_at") WHERE "status" IN (\'ERROR\', \'CANCELLED\', \'MAX_RECOVERY_ATTEMPTS_EXCEEDED\')'
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_failed" ON {quoted_schema}."workflow_status" ("status", "created_at") WHERE "status" IN (\'ERROR\', \'CANCELLED\', \'MAX_RECOVERY_ATTEMPTS_EXCEEDED\')'
 
 
-def get_dbos_migration_thirtyone(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_thirtyone(quoted_schema: str, is_cockroach: bool) -> str:
     c = _concurrently(is_cockroach)
-    return f'DROP INDEX {c} IF EXISTS "{schema}"."workflow_status_status_index"'
+    return f'DROP INDEX {c} IF EXISTS {quoted_schema}."workflow_status_status_index"'
 
 
-def get_dbos_migration_thirtytwo(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_thirtytwo(quoted_schema: str, is_cockroach: bool) -> str:
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_in_flight" ON "{schema}"."workflow_status" ("queue_name", "status", "priority", "created_at") WHERE "status" IN (\'ENQUEUED\', \'PENDING\')'
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_in_flight" ON {quoted_schema}."workflow_status" ("queue_name", "status", "priority", "created_at") WHERE "status" IN (\'ENQUEUED\', \'PENDING\')'
 
 
-def get_dbos_migration_thirtythree(schema: str) -> str:
+def get_dbos_migration_thirtythree(quoted_schema: str) -> str:
     # ALTER TABLE ADD COLUMN with constant default is fast (catalog-only update via attmissingval).
-    return f'ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "rate_limited" BOOLEAN NOT NULL DEFAULT FALSE'
+    return f'ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN IF NOT EXISTS "rate_limited" BOOLEAN NOT NULL DEFAULT FALSE'
 
 
-def get_dbos_migration_thirtyfour(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_thirtyfour(quoted_schema: str, is_cockroach: bool) -> str:
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_rate_limited" ON "{schema}"."workflow_status" ("queue_name", "started_at_epoch_ms") WHERE "rate_limited" = TRUE'
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_rate_limited" ON {quoted_schema}."workflow_status" ("queue_name", "started_at_epoch_ms") WHERE "rate_limited" = TRUE'
 
 
-def get_dbos_migration_thirtyfive(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_thirtyfive(quoted_schema: str, is_cockroach: bool) -> str:
     c = _concurrently(is_cockroach)
-    return f'DROP INDEX {c} IF EXISTS "{schema}"."idx_workflow_status_queue_status_started"'
+    return f'DROP INDEX {c} IF EXISTS {quoted_schema}."idx_workflow_status_queue_status_started"'
 
 
-def get_dbos_migration_thirtysix(schema: str) -> str:
+def get_dbos_migration_thirtysix(quoted_schema: str) -> str:
     # ADD COLUMN with no default is catalog-only; the partial index built in
     # the same transaction covers zero rows, so no CONCURRENTLY is needed.
     return f"""
-ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "completed_at" BIGINT;
-CREATE INDEX IF NOT EXISTS "idx_workflow_status_completed_at" ON "{schema}"."workflow_status" ("completed_at") WHERE "completed_at" IS NOT NULL;
+ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN IF NOT EXISTS "completed_at" BIGINT;
+CREATE INDEX IF NOT EXISTS "idx_workflow_status_completed_at" ON {quoted_schema}."workflow_status" ("completed_at") WHERE "completed_at" IS NOT NULL;
 """
 
 
-def get_dbos_migration_thirtyseven(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_thirtyseven(quoted_schema: str, is_cockroach: bool) -> str:
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_started_at" ON "{schema}"."workflow_status" ("started_at_epoch_ms") WHERE "started_at_epoch_ms" IS NOT NULL'
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_started_at" ON {quoted_schema}."workflow_status" ("started_at_epoch_ms") WHERE "started_at_epoch_ms" IS NOT NULL'
 
 
-def get_dbos_migration_thirtyeight(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_thirtyeight(quoted_schema: str, is_cockroach: bool) -> str:
     migration = f"""
-DROP FUNCTION IF EXISTS "{schema}".enqueue_workflow(
+DROP FUNCTION IF EXISTS {quoted_schema}.enqueue_workflow(
     TEXT, TEXT, JSON[], JSON, TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, INTEGER, TEXT
 );
 
-CREATE OR REPLACE FUNCTION "{schema}".enqueue_workflow(
+CREATE OR REPLACE FUNCTION {quoted_schema}.enqueue_workflow(
     workflow_name TEXT,
     queue_name TEXT,
     positional_args JSON[] DEFAULT ARRAY[]::JSON[],
@@ -836,7 +845,7 @@ BEGIN
     v_now := EXTRACT(epoch FROM now()) * 1000;
     v_status := CASE WHEN delay_until_epoch_ms IS NULL THEN 'ENQUEUED' ELSE 'DELAYED' END;
 
-    INSERT INTO "{schema}".workflow_status (
+    INSERT INTO {quoted_schema}.workflow_status (
         workflow_uuid, status, inputs,
         name, class_name, config_name,
         queue_name, deduplication_id, priority, queue_partition_key,
@@ -873,14 +882,14 @@ $$ LANGUAGE plpgsql;
 """
     if not is_cockroach:
         migration += f"""
-ALTER FUNCTION "{schema}".enqueue_workflow(
+ALTER FUNCTION {quoted_schema}.enqueue_workflow(
     TEXT, TEXT, JSON[], JSON, TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, INT4, TEXT, TEXT, TEXT, BIGINT
 ) SET search_path = pg_catalog, pg_temp;
 """
     return migration
 
 
-def get_dbos_migration_thirtynine(schema: str, use_listen_notify: bool) -> str:
+def get_dbos_migration_thirtynine(quoted_schema: str, use_listen_notify: bool) -> str:
     # Gated on use_listen_notify only, matching the notifications/workflow_events
     # triggers in migration one. Deployments without LISTEN/NOTIFY (e.g.
     # CockroachDB) set use_listen_notify=False and use the polling fallback.
@@ -888,7 +897,7 @@ def get_dbos_migration_thirtynine(schema: str, use_listen_notify: bool) -> str:
         return ""
     return f"""
 -- Create streams notification function
-CREATE OR REPLACE FUNCTION "{schema}".streams_function() RETURNS TRIGGER AS $$
+CREATE OR REPLACE FUNCTION {quoted_schema}.streams_function() RETURNS TRIGGER AS $$
 DECLARE
     payload text := NEW.workflow_uuid || '::' || NEW.key;
 BEGIN
@@ -897,126 +906,124 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-ALTER FUNCTION "{schema}".streams_function() SET search_path = pg_catalog, pg_temp;
+ALTER FUNCTION {quoted_schema}.streams_function() SET search_path = pg_catalog, pg_temp;
 
 -- Create streams trigger
-DROP TRIGGER IF EXISTS dbos_streams_trigger ON "{schema}".streams;
+DROP TRIGGER IF EXISTS dbos_streams_trigger ON {quoted_schema}.streams;
 CREATE TRIGGER dbos_streams_trigger
-AFTER INSERT ON "{schema}".streams
-FOR EACH ROW EXECUTE FUNCTION "{schema}".streams_function();
+AFTER INSERT ON {quoted_schema}.streams
+FOR EACH ROW EXECUTE FUNCTION {quoted_schema}.streams_function();
 """
 
 
-def get_dbos_migration_forty(schema: str) -> str:
+def get_dbos_migration_forty(quoted_schema: str) -> str:
     # ADD COLUMN with no default is catalog-only; the partial index built in
     # the same transaction covers zero rows, so no CONCURRENTLY is needed.
     # The index supports containment (@>) filters on workflow attributes; on
     # CockroachDB, USING GIN creates an inverted index.
     return f"""
-ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "attributes" JSONB;
-CREATE INDEX IF NOT EXISTS "idx_workflow_status_attributes" ON "{schema}"."workflow_status" USING GIN ("attributes") WHERE "attributes" IS NOT NULL;
+ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN IF NOT EXISTS "attributes" JSONB;
+CREATE INDEX IF NOT EXISTS "idx_workflow_status_attributes" ON {quoted_schema}."workflow_status" USING GIN ("attributes") WHERE "attributes" IS NOT NULL;
 """
 
 
-def get_dbos_migration_fortyone(schema: str) -> str:
+def get_dbos_migration_fortyone(quoted_schema: str) -> str:
     # ADD COLUMN with no default is catalog-only; the partial index built in
     # the same transaction covers zero rows (no existing row has a non-NULL
     # schedule_name), so no CONCURRENTLY is needed. The index supports
     # filtering workflows by the named schedule that enqueued them.
     return f"""
-ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "schedule_name" TEXT;
-CREATE INDEX IF NOT EXISTS "idx_workflow_status_schedule_name" ON "{schema}"."workflow_status" ("schedule_name") WHERE "schedule_name" IS NOT NULL;
+ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN IF NOT EXISTS "schedule_name" TEXT;
+CREATE INDEX IF NOT EXISTS "idx_workflow_status_schedule_name" ON {quoted_schema}."workflow_status" ("schedule_name") WHERE "schedule_name" IS NOT NULL;
 """
 
 
-def get_dbos_migration_fortytwo(schema: str) -> str:
+def get_dbos_migration_fortytwo(quoted_schema: str) -> str:
     return f"""
-ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "debounce_deadline_epoch_ms" BIGINT DEFAULT NULL;
-ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "is_debounced" BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN IF NOT EXISTS "debounce_deadline_epoch_ms" BIGINT DEFAULT NULL;
+ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN IF NOT EXISTS "is_debounced" BOOLEAN NOT NULL DEFAULT FALSE;
 """
 
 
-def get_dbos_migration_fortythree(schema: str, use_listen_notify: bool) -> str:
+def get_dbos_migration_fortythree(quoted_schema: str, use_listen_notify: bool) -> str:
     # Drop the streams NOTIFY trigger; stream writes are pushed by run_notifier off the write path.
     if not use_listen_notify:
         return ""
     return f"""
-DROP TRIGGER IF EXISTS dbos_streams_trigger ON "{schema}".streams;
-DROP FUNCTION IF EXISTS "{schema}".streams_function();
+DROP TRIGGER IF EXISTS dbos_streams_trigger ON {quoted_schema}.streams;
+DROP FUNCTION IF EXISTS {quoted_schema}.streams_function();
 """
 
 
-def get_dbos_migration_fortyfour(schema: str, use_listen_notify: bool) -> str:
+def get_dbos_migration_fortyfour(quoted_schema: str, use_listen_notify: bool) -> str:
     # Drop the workflow_events NOTIFY trigger (events are pushed by run_notifier)
     if not use_listen_notify:
         return ""
     return f"""
-DROP TRIGGER IF EXISTS dbos_workflow_events_trigger ON "{schema}".workflow_events;
-DROP FUNCTION IF EXISTS "{schema}".workflow_events_function();
+DROP TRIGGER IF EXISTS dbos_workflow_events_trigger ON {quoted_schema}.workflow_events;
+DROP FUNCTION IF EXISTS {quoted_schema}.workflow_events_function();
 """
 
 
-def get_dbos_migration_fortyfive(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_fortyfive(quoted_schema: str, is_cockroach: bool) -> str:
     # Partitioned-queue dequeue index: extends idx_workflow_status_in_flight with
     # queue_partition_key so lookups scoped to one partition stay selective when
     # many partitions are active.
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_partition_dequeue" ON "{schema}"."workflow_status" ("queue_name", "status", "queue_partition_key", "priority", "created_at") WHERE "status" IN (\'ENQUEUED\', \'PENDING\') AND "queue_partition_key" IS NOT NULL'
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_partition_dequeue" ON {quoted_schema}."workflow_status" ("queue_name", "status", "queue_partition_key", "priority", "created_at") WHERE "status" IN (\'ENQUEUED\', \'PENDING\') AND "queue_partition_key" IS NOT NULL'
 
 
-def get_dbos_migration_fortysix(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_fortysix(quoted_schema: str, is_cockroach: bool) -> str:
     # Trailing workflow ID totalizes the dequeue order
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_partition_dequeue_v2" ON "{schema}"."workflow_status" ("queue_name", "status", "queue_partition_key", "priority", "created_at", "workflow_uuid") WHERE "status" IN (\'ENQUEUED\', \'PENDING\') AND "queue_partition_key" IS NOT NULL'
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_partition_dequeue_v2" ON {quoted_schema}."workflow_status" ("queue_name", "status", "queue_partition_key", "priority", "created_at", "workflow_uuid") WHERE "status" IN (\'ENQUEUED\', \'PENDING\') AND "queue_partition_key" IS NOT NULL'
 
 
-def get_dbos_migration_fortyseven(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_fortyseven(quoted_schema: str, is_cockroach: bool) -> str:
     # Superseded by idx_workflow_status_partition_dequeue_v2
     c = _concurrently(is_cockroach)
-    return (
-        f'DROP INDEX {c} IF EXISTS "{schema}"."idx_workflow_status_partition_dequeue"'
-    )
+    return f'DROP INDEX {c} IF EXISTS {quoted_schema}."idx_workflow_status_partition_dequeue"'
 
 
-def get_dbos_migration_hundred(schema: str) -> str:
+def get_dbos_migration_hundred(quoted_schema: str) -> str:
     # NULL means unclaimed: any application may read and claim the row. One table per migration, so a blocked table does not hold the others' locks.
     return f"""
-ALTER TABLE "{schema}"."workflow_status" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
+ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
 """
 
 
-def get_dbos_migration_hundredone(schema: str) -> str:
+def get_dbos_migration_hundredone(quoted_schema: str) -> str:
     return f"""
-ALTER TABLE "{schema}"."queues" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
+ALTER TABLE {quoted_schema}."queues" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
 """
 
 
-def get_dbos_migration_hundredtwo(schema: str) -> str:
+def get_dbos_migration_hundredtwo(quoted_schema: str) -> str:
     return f"""
-ALTER TABLE "{schema}"."workflow_schedules" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
+ALTER TABLE {quoted_schema}."workflow_schedules" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
 """
 
 
-def get_dbos_migration_hundredthree(schema: str) -> str:
+def get_dbos_migration_hundredthree(quoted_schema: str) -> str:
     return f"""
-ALTER TABLE "{schema}"."application_versions" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
+ALTER TABLE {quoted_schema}."application_versions" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
 """
 
 
-def get_dbos_migration_hundredfour(schema: str) -> str:
+def get_dbos_migration_hundredfour(quoted_schema: str) -> str:
     return f"""
-ALTER TABLE "{schema}"."operation_outputs" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
+ALTER TABLE {quoted_schema}."operation_outputs" ADD COLUMN IF NOT EXISTS "application_name" TEXT DEFAULT NULL;
 """
 
 
-def get_dbos_migration_hundredfive(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_hundredfive(quoted_schema: str, is_cockroach: bool) -> str:
     # Callers omitting the trailing application_name enqueue an unclaimed workflow.
     migration = f"""
-DROP FUNCTION IF EXISTS "{schema}".enqueue_workflow(
+DROP FUNCTION IF EXISTS {quoted_schema}.enqueue_workflow(
     TEXT, TEXT, JSON[], JSON, TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, INT4, TEXT, TEXT, TEXT, BIGINT
 );
 
-CREATE OR REPLACE FUNCTION "{schema}".enqueue_workflow(
+CREATE OR REPLACE FUNCTION {quoted_schema}.enqueue_workflow(
     workflow_name TEXT,
     queue_name TEXT,
     positional_args JSON[] DEFAULT ARRAY[]::JSON[],
@@ -1072,7 +1079,7 @@ BEGIN
     v_now := EXTRACT(epoch FROM now()) * 1000;
     v_status := CASE WHEN delay_until_epoch_ms IS NULL THEN 'ENQUEUED' ELSE 'DELAYED' END;
 
-    INSERT INTO "{schema}".workflow_status (
+    INSERT INTO {quoted_schema}.workflow_status (
         workflow_uuid, status, inputs,
         name, class_name, config_name,
         queue_name, deduplication_id, priority, queue_partition_key,
@@ -1109,102 +1116,104 @@ $$ LANGUAGE plpgsql;
 """
     if not is_cockroach:
         migration += f"""
-ALTER FUNCTION "{schema}".enqueue_workflow(
+ALTER FUNCTION {quoted_schema}.enqueue_workflow(
     TEXT, TEXT, JSON[], JSON, TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, INT4, TEXT, TEXT, TEXT, BIGINT, TEXT
 ) SET search_path = pg_catalog, pg_temp;
 """
     return migration
 
 
-def get_dbos_migration_hundredsix(schema: str) -> str:
+def get_dbos_migration_hundredsix(quoted_schema: str) -> str:
     # With 107, the key replacing version_name's retiring global uniqueness, unclaimed counting as its own owner. The constraint may not be dropped until every SDK reaching this database is past 107, which runs online because every unclaimed row matches its predicate.
     return f"""
 CREATE UNIQUE INDEX IF NOT EXISTS "uq_application_versions_owner_version"
-    ON "{schema}"."application_versions" ("application_name", "version_name")
+    ON {quoted_schema}."application_versions" ("application_name", "version_name")
     WHERE "application_name" IS NOT NULL;
 """
 
 
-def get_dbos_migration_hundredseven(schema: str, is_cockroach: bool) -> str:
+def get_dbos_migration_hundredseven(quoted_schema: str, is_cockroach: bool) -> str:
     c = _concurrently(is_cockroach)
     return f"""CREATE UNIQUE INDEX {c} IF NOT EXISTS "uq_application_versions_unclaimed_version"
-    ON "{schema}"."application_versions" ("version_name")
+    ON {quoted_schema}."application_versions" ("version_name")
     WHERE "application_name" IS NULL"""
 
 
-def get_dbos_migration_hundredeight(schema: str) -> str:
+def get_dbos_migration_hundredeight(quoted_schema: str) -> str:
     # Any of these being set partitions the queue; each applies per partition.
     return f"""
-ALTER TABLE "{schema}"."queues" ADD COLUMN IF NOT EXISTS "partition_concurrency" INT4 DEFAULT NULL;
-ALTER TABLE "{schema}"."queues" ADD COLUMN IF NOT EXISTS "partition_worker_concurrency" INT4 DEFAULT NULL;
-ALTER TABLE "{schema}"."queues" ADD COLUMN IF NOT EXISTS "partition_rate_limit_max" INT4 DEFAULT NULL;
-ALTER TABLE "{schema}"."queues" ADD COLUMN IF NOT EXISTS "partition_rate_limit_period_sec" DOUBLE PRECISION DEFAULT NULL;
+ALTER TABLE {quoted_schema}."queues" ADD COLUMN IF NOT EXISTS "partition_concurrency" INT4 DEFAULT NULL;
+ALTER TABLE {quoted_schema}."queues" ADD COLUMN IF NOT EXISTS "partition_worker_concurrency" INT4 DEFAULT NULL;
+ALTER TABLE {quoted_schema}."queues" ADD COLUMN IF NOT EXISTS "partition_rate_limit_max" INT4 DEFAULT NULL;
+ALTER TABLE {quoted_schema}."queues" ADD COLUMN IF NOT EXISTS "partition_rate_limit_period_sec" DOUBLE PRECISION DEFAULT NULL;
 """
 
 
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
+    # Every migration interpolates the schema straight into DDL, so quote it once here.
+    quoted_schema = quote_identifier(schema)
     history = [
-        get_dbos_migration_one(schema, use_listen_notify),
-        get_dbos_migration_two(schema),
-        get_dbos_migration_three(schema),
-        get_dbos_migration_four(schema),
-        get_dbos_migration_five(schema),
-        get_dbos_migration_six(schema),
-        get_dbos_migration_seven(schema),
-        get_dbos_migration_eight(schema),
-        get_dbos_migration_nine(schema),
-        get_dbos_migration_ten(schema),
-        get_dbos_migration_eleven(schema),
-        get_dbos_migration_twelve(schema),
-        get_dbos_migration_thirteen(schema),
-        get_dbos_migration_fourteen(schema),
-        get_dbos_migration_fifteen(schema),
-        get_dbos_migration_sixteen(schema),
-        get_dbos_migration_seventeen(schema),
-        get_dbos_migration_eighteen(schema),
-        get_dbos_migration_nineteen(schema),
-        get_dbos_migration_twenty(schema, use_listen_notify, is_cockroach),
-        get_dbos_migration_twentyone(schema),
-        get_dbos_migration_twentytwo(schema, is_cockroach),
-        get_dbos_migration_twentythree(schema, is_cockroach),
-        get_dbos_migration_twentyfour(schema, is_cockroach),
-        get_dbos_migration_twentyfive(schema, is_cockroach),
-        get_dbos_migration_twentysix(schema, is_cockroach),
-        get_dbos_migration_twentyseven(schema, is_cockroach),
-        get_dbos_migration_twentyeight(schema, is_cockroach),
-        get_dbos_migration_twentynine(schema, is_cockroach),
-        get_dbos_migration_thirty(schema, is_cockroach),
-        get_dbos_migration_thirtyone(schema, is_cockroach),
-        get_dbos_migration_thirtytwo(schema, is_cockroach),
-        get_dbos_migration_thirtythree(schema),
-        get_dbos_migration_thirtyfour(schema, is_cockroach),
-        get_dbos_migration_thirtyfive(schema, is_cockroach),
-        get_dbos_migration_thirtysix(schema),
-        get_dbos_migration_thirtyseven(schema, is_cockroach),
-        get_dbos_migration_thirtyeight(schema, is_cockroach),
-        get_dbos_migration_thirtynine(schema, use_listen_notify),
-        get_dbos_migration_forty(schema),
-        get_dbos_migration_fortyone(schema),
-        get_dbos_migration_fortytwo(schema),
-        get_dbos_migration_fortythree(schema, use_listen_notify),
-        get_dbos_migration_fortyfour(schema, use_listen_notify),
-        get_dbos_migration_fortyfive(schema, is_cockroach),
-        get_dbos_migration_fortysix(schema, is_cockroach),
-        get_dbos_migration_fortyseven(schema, is_cockroach),
+        get_dbos_migration_one(quoted_schema, use_listen_notify),
+        get_dbos_migration_two(quoted_schema),
+        get_dbos_migration_three(quoted_schema),
+        get_dbos_migration_four(quoted_schema),
+        get_dbos_migration_five(quoted_schema),
+        get_dbos_migration_six(quoted_schema),
+        get_dbos_migration_seven(quoted_schema),
+        get_dbos_migration_eight(quoted_schema),
+        get_dbos_migration_nine(quoted_schema),
+        get_dbos_migration_ten(quoted_schema),
+        get_dbos_migration_eleven(quoted_schema),
+        get_dbos_migration_twelve(quoted_schema),
+        get_dbos_migration_thirteen(quoted_schema),
+        get_dbos_migration_fourteen(quoted_schema),
+        get_dbos_migration_fifteen(quoted_schema),
+        get_dbos_migration_sixteen(quoted_schema),
+        get_dbos_migration_seventeen(quoted_schema),
+        get_dbos_migration_eighteen(quoted_schema),
+        get_dbos_migration_nineteen(quoted_schema),
+        get_dbos_migration_twenty(quoted_schema, use_listen_notify, is_cockroach),
+        get_dbos_migration_twentyone(quoted_schema),
+        get_dbos_migration_twentytwo(quoted_schema, is_cockroach),
+        get_dbos_migration_twentythree(quoted_schema, is_cockroach),
+        get_dbos_migration_twentyfour(quoted_schema, is_cockroach),
+        get_dbos_migration_twentyfive(quoted_schema, is_cockroach),
+        get_dbos_migration_twentysix(quoted_schema, is_cockroach),
+        get_dbos_migration_twentyseven(quoted_schema, is_cockroach),
+        get_dbos_migration_twentyeight(quoted_schema, is_cockroach),
+        get_dbos_migration_twentynine(quoted_schema, is_cockroach),
+        get_dbos_migration_thirty(quoted_schema, is_cockroach),
+        get_dbos_migration_thirtyone(quoted_schema, is_cockroach),
+        get_dbos_migration_thirtytwo(quoted_schema, is_cockroach),
+        get_dbos_migration_thirtythree(quoted_schema),
+        get_dbos_migration_thirtyfour(quoted_schema, is_cockroach),
+        get_dbos_migration_thirtyfive(quoted_schema, is_cockroach),
+        get_dbos_migration_thirtysix(quoted_schema),
+        get_dbos_migration_thirtyseven(quoted_schema, is_cockroach),
+        get_dbos_migration_thirtyeight(quoted_schema, is_cockroach),
+        get_dbos_migration_thirtynine(quoted_schema, use_listen_notify),
+        get_dbos_migration_forty(quoted_schema),
+        get_dbos_migration_fortyone(quoted_schema),
+        get_dbos_migration_fortytwo(quoted_schema),
+        get_dbos_migration_fortythree(quoted_schema, use_listen_notify),
+        get_dbos_migration_fortyfour(quoted_schema, use_listen_notify),
+        get_dbos_migration_fortyfive(quoted_schema, is_cockroach),
+        get_dbos_migration_fortysix(quoted_schema, is_cockroach),
+        get_dbos_migration_fortyseven(quoted_schema, is_cockroach),
     ]
     return [
         *_pad_to_shared_base(history),
-        get_dbos_migration_hundred(schema),
-        get_dbos_migration_hundredone(schema),
-        get_dbos_migration_hundredtwo(schema),
-        get_dbos_migration_hundredthree(schema),
-        get_dbos_migration_hundredfour(schema),
-        get_dbos_migration_hundredfive(schema, is_cockroach),
-        get_dbos_migration_hundredsix(schema),
-        get_dbos_migration_hundredseven(schema, is_cockroach),
-        get_dbos_migration_hundredeight(schema),
+        get_dbos_migration_hundred(quoted_schema),
+        get_dbos_migration_hundredone(quoted_schema),
+        get_dbos_migration_hundredtwo(quoted_schema),
+        get_dbos_migration_hundredthree(quoted_schema),
+        get_dbos_migration_hundredfour(quoted_schema),
+        get_dbos_migration_hundredfive(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredsix(quoted_schema),
+        get_dbos_migration_hundredseven(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredeight(quoted_schema),
     ]
 
 

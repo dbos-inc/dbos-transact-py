@@ -7,6 +7,7 @@ from dbos._app_db import ApplicationDatabase
 from dbos._migration import get_dbos_migrations
 from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
+from dbos._utils import quote_identifier
 
 
 def run_dbos_database_migrations(
@@ -79,19 +80,21 @@ def migrate_dbos_databases(
 
 def get_dbos_schema_permissions_sql(schema: str, role_name: str) -> List[str]:
     """The statements granting permissions on all entities in the system schema to a role."""
+    quoted_schema = quote_identifier(schema)
+    quoted_role = quote_identifier(role_name)
     return [
         # Grant usage on the system schema
-        f'GRANT USAGE ON SCHEMA "{schema}" TO "{role_name}"',
+        f"GRANT USAGE ON SCHEMA {quoted_schema} TO {quoted_role}",
         # Grant all privileges on all existing tables in the system schema (includes views)
-        f'GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA "{schema}" TO "{role_name}"',
+        f"GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA {quoted_schema} TO {quoted_role}",
         # Grant all privileges on all sequences in the system schema
-        f'GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA "{schema}" TO "{role_name}"',
+        f"GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA {quoted_schema} TO {quoted_role}",
         # Grant execute on all functions and procedures in the system schema
-        f'GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA "{schema}" TO "{role_name}"',
+        f"GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA {quoted_schema} TO {quoted_role}",
         # Grant default privileges for future objects in the system schema
-        f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" GRANT ALL ON TABLES TO "{role_name}"',
-        f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" GRANT ALL ON SEQUENCES TO "{role_name}"',
-        f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" GRANT EXECUTE ON FUNCTIONS TO "{role_name}"',
+        f"ALTER DEFAULT PRIVILEGES IN SCHEMA {quoted_schema} GRANT ALL ON TABLES TO {quoted_role}",
+        f"ALTER DEFAULT PRIVILEGES IN SCHEMA {quoted_schema} GRANT ALL ON SEQUENCES TO {quoted_role}",
+        f"ALTER DEFAULT PRIVILEGES IN SCHEMA {quoted_schema} GRANT EXECUTE ON FUNCTIONS TO {quoted_role}",
     ]
 
 
@@ -122,14 +125,6 @@ def grant_dbos_schema_permissions(
             engine.dispose()
 
 
-def _check_printable_identifier(name: str, kind: str) -> None:
-    # The execute path interpolates these names into quoted identifiers and
-    # string literals, so names containing quotes fail there too.
-    if '"' in name or "'" in name:
-        click.echo(f"{kind} names containing quotes are not supported", err=True)
-        raise click.exceptions.Exit(code=1)
-
-
 def _emit_sql(sql: str) -> None:
     sql = sql.strip()
     if sql:
@@ -152,8 +147,8 @@ def print_dbos_migrations(
             "--print-migrations is only supported for Postgres databases", err=True
         )
         raise click.exceptions.Exit(code=1)
-    _check_printable_identifier(schema, "Schema")
 
+    quoted_schema = quote_identifier(schema)
     migrations = get_dbos_migrations(schema, use_listen_notify=True)
     latest_version = len(migrations)
     if migration == "all":
@@ -183,9 +178,9 @@ def print_dbos_migrations(
     )
     if start == 1:
         click.echo("-- This script is for FRESH databases only.")
-        _emit_sql(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+        _emit_sql(f"CREATE SCHEMA IF NOT EXISTS {quoted_schema}")
         _emit_sql(
-            f'CREATE TABLE IF NOT EXISTS "{schema}".dbos_migrations (version BIGINT NOT NULL PRIMARY KEY)'
+            f"CREATE TABLE IF NOT EXISTS {quoted_schema}.dbos_migrations (version BIGINT NOT NULL PRIMARY KEY)"
         )
 
     version_row_exists = start > 1
@@ -194,10 +189,10 @@ def print_dbos_migrations(
     def _emit_version(version: int) -> None:
         nonlocal version_row_exists, last_emitted
         if version_row_exists:
-            _emit_sql(f'UPDATE "{schema}".dbos_migrations SET version = {version}')
+            _emit_sql(f"UPDATE {quoted_schema}.dbos_migrations SET version = {version}")
         else:
             _emit_sql(
-                f'INSERT INTO "{schema}".dbos_migrations (version) VALUES ({version})'
+                f"INSERT INTO {quoted_schema}.dbos_migrations (version) VALUES ({version})"
             )
             version_row_exists = True
         last_emitted = version
@@ -226,8 +221,6 @@ def print_dbos_migrations(
 def print_dbos_user_role_sql(*, schema: str = "dbos", role_name: str) -> None:
     """Print to stdout the SQL granting an application role access to the DBOS
     system schema, without touching any database."""
-    _check_printable_identifier(schema, "Schema")
-    _check_printable_identifier(role_name, "Role")
     click.echo(f"-- Permissions on DBOS schema {schema} for role {role_name}")
     for sql in get_dbos_schema_permissions_sql(schema, role_name):
         _emit_sql(sql)

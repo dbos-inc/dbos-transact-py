@@ -8,6 +8,7 @@ from types import TracebackType
 from typing import Optional, Set, Tuple, Type
 
 import psycopg
+from sqlalchemy.dialects.postgresql.base import PGDialect
 from sqlalchemy.exc import DBAPIError
 
 INTERNAL_QUEUE_NAME = "_dbos_internal_queue"
@@ -133,6 +134,17 @@ class GlobalParams:
     except importlib.metadata.PackageNotFoundError:
         # If package is not installed or during development
         dbos_version = "unknown"
+
+
+# PGDialect's constructor is untyped in SQLAlchemy's annotations.
+_identifier_preparer = PGDialect().identifier_preparer  # type: ignore[no-untyped-call]
+
+
+def quote_identifier(name: str) -> str:
+    """Quote a schema, table, or role name for interpolation into hand-built DDL.
+
+    Escapes embedded quotes, which hand-written quoting around an f-string does not."""
+    return _identifier_preparer.quote_identifier(name)
 
 
 def retriable_postgres_exception(e: Exception) -> bool:
