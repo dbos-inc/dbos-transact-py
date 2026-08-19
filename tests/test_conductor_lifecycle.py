@@ -26,6 +26,7 @@ import logging
 import socket
 import struct
 import threading
+import time
 from importlib.metadata import version
 from typing import Any, Generator, List, Optional
 
@@ -296,11 +297,17 @@ def test_conductor_reconnects_after_keepalive_timeout(
         cw.join(timeout=2)
 
 
+# Longer than the conductor run loop's 5s recv(timeout=...), which bounds how
+# long the old code kept the socket open after setting the stop event.
+LIVENESS_WINDOW_SEC = 7.0
+
+
 class _ConductorStandIn:
     """A loopback stand-in for Conductor that only tracks connection liveness."""
 
     def __init__(self) -> None:
         self.connected = threading.Event()
+        self.disconnected_at: Optional[float] = None
         self._lock = threading.Lock()
         self._open = 0
         self._server = serve(self._handle, "127.0.0.1", 0)
@@ -331,6 +338,7 @@ class _ConductorStandIn:
         finally:
             with self._lock:
                 self._open -= 1
+                self.disconnected_at = time.monotonic()
 
 
 @pytest.fixture()
@@ -362,6 +370,7 @@ def test_conductor_connection_outlives_shutdown_drain(
         blocking_event.wait()
 
     DBOS.launch()
+    destroy_thread: Optional[threading.Thread] = None
     try:
         assert conductor_stand_in.connected.wait(timeout=10)
         conductor = dbos.conductor_websocket
@@ -371,7 +380,7 @@ def test_conductor_connection_outlives_shutdown_drain(
         assert workflow_started.wait(timeout=10)
 
         destroy_thread = threading.Thread(
-            target=lambda: DBOS.destroy(workflow_completion_timeout_sec=30)
+            target=lambda: DBOS.destroy(workflow_completion_timeout_sec=60)
         )
         destroy_thread.start()
 
@@ -383,13 +392,21 @@ def test_conductor_connection_outlives_shutdown_drain(
 
         retry_until_success(drain_started, interval=0.1, max_attempts=100)
 
-        # Mid-drain: Conductor must still see us as a live executor.
-        assert not conductor.evt.is_set()
-        assert conductor.is_alive()
-        assert conductor_stand_in.open_connections == 1
+        # Sustain the check past the conductor run loop's 5s recv timeout: that
+        # is how long a stop event set at drain start takes to drop the socket,
+        # so a single sample here would pass against the bug this test guards.
+        deadline = time.monotonic() + LIVENESS_WINDOW_SEC
+        while time.monotonic() < deadline:
+            assert (
+                conductor_stand_in.open_connections >= 1
+            ), "Conductor was disconnected during the completion wait"
+            assert not conductor.evt.is_set()
+            assert conductor.is_alive()
+            time.sleep(0.2)
 
+        released_at = time.monotonic()
         blocking_event.set()
-        destroy_thread.join(timeout=30)
+        destroy_thread.join(timeout=60)
         assert not destroy_thread.is_alive()
 
         # Only now, with the drain finished, does the connection go away.
@@ -400,6 +417,12 @@ def test_conductor_connection_outlives_shutdown_drain(
             assert conductor_stand_in.open_connections == 0
 
         retry_until_success(connection_closed, interval=0.1, max_attempts=100)
+        assert conductor_stand_in.disconnected_at is not None
+        assert conductor_stand_in.disconnected_at > released_at
     finally:
         blocking_event.set()
+        # Join before re-entering destroy: _destroy is not safe to run twice
+        # concurrently, and this thread is non-daemon so it would outlive the test.
+        if destroy_thread is not None:
+            destroy_thread.join(timeout=60)
         DBOS.destroy(destroy_registry=True)

@@ -867,6 +867,19 @@ class DBOS:
                     )
                 else:
                     break
+        # Disconnect from Conductor only once the wait above is over, so the executor stays visibly alive to Conductor for its whole duration.
+        if self.conductor_websocket is not None:
+            self.conductor_websocket.evt.set()
+            if self.conductor_websocket.websocket is not None:
+                self.conductor_websocket.websocket.close()
+            # Best effort: an in-flight command handler is not interruptible, so a slow one can outlast this join.
+            if (
+                self.conductor_websocket.is_alive()
+                and self.conductor_websocket is not threading.current_thread()
+            ):
+                self.conductor_websocket.join(timeout=10.0)
+                if self.conductor_websocket.is_alive():
+                    dbos_logger.warning("Conductor thread did not exit within timeout")
         if self._timeout_tasks:
             target_loop = self._background_event_loop.target_loop()
             try:
@@ -901,16 +914,6 @@ class DBOS:
         if self._executor_field is not None:
             self._executor_field.shutdown(wait=False, cancel_futures=True)
             self._executor_field = None
-        # Disconnect from Conductor last, so the executor stays visibly alive to Conductor for the whole completion wait above.
-        if self.conductor_websocket is not None:
-            self.conductor_websocket.evt.set()
-            if self.conductor_websocket.websocket is not None:
-                self.conductor_websocket.websocket.close()
-            # Join before the system database goes away so no in-flight command handler outlives its connections.
-            if self.conductor_websocket.is_alive():
-                self.conductor_websocket.join(timeout=10.0)
-                if self.conductor_websocket.is_alive():
-                    dbos_logger.warning("Conductor thread did not exit within timeout")
         if self._sys_db_field is not None:
             self._sys_db_field._run_background_processes = False
             self._sys_db_field._cleanup_connections()
