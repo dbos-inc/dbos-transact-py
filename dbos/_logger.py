@@ -140,10 +140,15 @@ def add_otlp_to_all_loggers() -> None:
         root = logging.root
         root.addHandler(_otlp_handler)
         for logger_name in root.manager.loggerDict:
-            if logger_name != dbos_logger.name:
-                logger = logging.getLogger(logger_name)
-                if not logger.propagate:
-                    logger.addHandler(_otlp_handler)
+            if logger_name == dbos_logger.name:
+                continue
+            # OTel keeps its own loggers off the export path; adding the handler to
+            # them feeds the handler's recursion guard back into itself.
+            if logger_name.split(".")[0] == "opentelemetry":
+                continue
+            logger = logging.getLogger(logger_name)
+            if not logger.propagate:
+                logger.addHandler(_otlp_handler)
 
 
 def add_transformer_to_all_loggers() -> None:
