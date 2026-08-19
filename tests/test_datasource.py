@@ -692,11 +692,26 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
     )
 
 
+# Whether a lost acknowledgement is retriable decides how the row is met, not whose it is.
+_LOST_ACK_ERRORS = [
+    pytest.param("server closed the connection unexpectedly", 2, id="retriable"),
+    pytest.param("consuming input failed: EOF detected", 1, id="non-retriable"),
+]
+
+
+@pytest.mark.parametrize("lost_ack_message, expected_attempts", _LOST_ACK_ERRORS)
 def test_sync_ds_replays_its_own_lost_commit(
-    dbos: DBOS, sync_ds: SQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
+    dbos: DBOS,
+    sync_ds: SQLAlchemyDatasource,
+    monkeypatch: pytest.MonkeyPatch,
+    lost_ack_message: str,
+    expected_attempts: int,
 ) -> None:
     """A commit that lands and then loses its acknowledgement leaves a row this very
-    execution wrote, so the retry replays it instead of parking as a duplicate."""
+    execution wrote, so it replays that row instead of parking as a duplicate.
+
+    A retriable error meets the row on the retry's result insert; a non-retriable one
+    meets it on the error insert. Neither is a duplicate, so both replay."""
     if sync_ds.engine.dialect.name != "postgresql":
         pytest.skip("only a Postgres-style connection error makes a commit ambiguous")
     _race_side_effects.create(sync_ds.engine, checkfirst=True)
@@ -726,11 +741,7 @@ def test_sync_ds_replays_its_own_lost_commit(
             if exc is None and lose_ack["next"]:
                 lose_ack["next"] = False
                 raise OperationalError(
-                    "COMMIT",
-                    {},
-                    psycopg.OperationalError(
-                        "server closed the connection unexpectedly"
-                    ),
+                    "COMMIT", {}, psycopg.OperationalError(lost_ack_message)
                 )
             return handled
 
@@ -745,13 +756,17 @@ def test_sync_ds_replays_its_own_lost_commit(
 
     @DBOS.workflow()
     def my_workflow() -> str:
-        return sync_ds.run_tx_step(None, step_fn)
+        try:
+            return sync_ds.run_tx_step(None, step_fn)
+        except DBOSWorkflowConflictIDError:
+            # Caught so a spurious park fails the assertion instead of hanging.
+            return "conflicted"
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        # The first attempt's own output, not the second attempt's.
+        # The committed attempt's own output, not a later attempt's.
         assert my_workflow() == "result-1"
-    assert call_count["n"] == 2  # the lost acknowledgement cost one extra attempt
+    assert call_count["n"] == expected_attempts
 
     with sync_ds.engine.connect() as conn:
         tags = [row.tag for row in conn.execute(sa.select(_race_side_effects.c.tag))]
@@ -762,7 +777,7 @@ def test_sync_ds_replays_its_own_lost_commit(
                 DatasourceSchema.datasource_outputs.c.serialization,
             ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
         ).one()
-    assert tags == ["run-1"]  # the retry's writes rolled back against the committed row
+    assert tags == ["run-1"]  # only the committed attempt's write survives
     assert ds_row.error is None
     assert (
         deserialize_value(ds_row.output, ds_row.serialization, sync_ds.serializer)
@@ -1570,8 +1585,13 @@ async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("lost_ack_message, expected_attempts", _LOST_ACK_ERRORS)
 async def test_async_ds_replays_its_own_lost_commit(
-    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
+    dbos: DBOS,
+    async_ds: AsyncSQLAlchemyDatasource,
+    monkeypatch: pytest.MonkeyPatch,
+    lost_ack_message: str,
+    expected_attempts: int,
 ) -> None:
     """Async sibling of test_sync_ds_replays_its_own_lost_commit."""
     if async_ds.engine.dialect.name != "postgresql":
@@ -1604,11 +1624,7 @@ async def test_async_ds_replays_its_own_lost_commit(
             if exc is None and lose_ack["next"]:
                 lose_ack["next"] = False
                 raise OperationalError(
-                    "COMMIT",
-                    {},
-                    psycopg.OperationalError(
-                        "server closed the connection unexpectedly"
-                    ),
+                    "COMMIT", {}, psycopg.OperationalError(lost_ack_message)
                 )
             return handled
 
@@ -1623,13 +1639,17 @@ async def test_async_ds_replays_its_own_lost_commit(
 
     @DBOS.workflow()
     async def my_workflow() -> str:
-        return await async_ds.run_tx_step_async(None, step_fn)
+        try:
+            return await async_ds.run_tx_step_async(None, step_fn)
+        except DBOSWorkflowConflictIDError:
+            # Caught so a spurious park fails the assertion instead of hanging.
+            return "conflicted"
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        # The first attempt's own output, not the second attempt's.
+        # The committed attempt's own output, not a later attempt's.
         assert await my_workflow() == "result-1"
-    assert call_count["n"] == 2  # the lost acknowledgement cost one extra attempt
+    assert call_count["n"] == expected_attempts
 
     async with async_ds.engine.connect() as conn:
         tags = [
@@ -1644,7 +1664,7 @@ async def test_async_ds_replays_its_own_lost_commit(
                 ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
             )
         ).one()
-    assert tags == ["run-1"]  # the retry's writes rolled back against the committed row
+    assert tags == ["run-1"]  # only the committed attempt's write survives
     assert ds_row.error is None
     assert (
         deserialize_value(ds_row.output, ds_row.serialization, async_ds.serializer)

@@ -338,13 +338,12 @@ class AsyncSQLAlchemyDatasource(ABC):
 
             output: R
             conflicted = False
-            # Set when a retried attempt may itself have committed, so a later conflict may be our own row.
-            commit_ambiguous = False
+            # True once an insert may have committed, so a conflict may be our own row.
+            commit_possible = False
             retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
             try:
                 with DBOSContextEnsure() as exec_ctx:
                     while True:
-                        recorded_in_attempt = False
                         async with self.sessionmaker() as session:
                             exec_ctx.start_async_ds_transaction(session)
                             try:
@@ -367,7 +366,8 @@ class AsyncSQLAlchemyDatasource(ABC):
                                             None,
                                             serialization,
                                         )
-                                        recorded_in_attempt = True
+                                        # From here the commit may land.
+                                        commit_possible = True
                                 break
                             except _StepAlreadyRecorded:
                                 raise  # the recorded result wins; don't record an error over it
@@ -375,13 +375,6 @@ class AsyncSQLAlchemyDatasource(ABC):
                                 if _is_retriable_db_error(
                                     e, self._is_serialization_error
                                 ):
-                                    # Only a failure once the insert was in the transaction can be a
-                                    # commit that landed; a serialization failure aborted it regardless.
-                                    if (
-                                        recorded_in_attempt
-                                        and not self._is_serialization_error(e)
-                                    ):
-                                        commit_ambiguous = True
                                     inner_ctx = get_local_dbos_context()
                                     span = (
                                         inner_ctx.get_current_dbos_span()
@@ -417,7 +410,7 @@ class AsyncSQLAlchemyDatasource(ABC):
 
             # Outside the except block, so the internal signal stays out of the traceback chain.
             if conflicted:
-                if not commit_ambiguous:
+                if not commit_possible:
                     # A duplicate execution recorded this step first: stop, as an ordinary step's loser does.
                     raise DBOSWorkflowConflictIDError(workflow_id)
                 return cast(
@@ -698,13 +691,12 @@ class SQLAlchemyDatasource(ABC):
 
             output: R
             conflicted = False
-            # Set when a retried attempt may itself have committed, so a later conflict may be our own row.
-            commit_ambiguous = False
+            # True once an insert may have committed, so a conflict may be our own row.
+            commit_possible = False
             retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
             try:
                 with DBOSContextEnsure() as exec_ctx:
                     while True:
-                        recorded_in_attempt = False
                         with self.sessionmaker() as session:
                             exec_ctx.start_sync_ds_transaction(session)
                             try:
@@ -727,7 +719,8 @@ class SQLAlchemyDatasource(ABC):
                                             None,
                                             serialization,
                                         )
-                                        recorded_in_attempt = True
+                                        # From here the commit may land.
+                                        commit_possible = True
                                 break
                             except _StepAlreadyRecorded:
                                 raise  # the recorded result wins; don't record an error over it
@@ -735,13 +728,6 @@ class SQLAlchemyDatasource(ABC):
                                 if _is_retriable_db_error(
                                     e, self._is_serialization_error
                                 ):
-                                    # Only a failure once the insert was in the transaction can be a
-                                    # commit that landed; a serialization failure aborted it regardless.
-                                    if (
-                                        recorded_in_attempt
-                                        and not self._is_serialization_error(e)
-                                    ):
-                                        commit_ambiguous = True
                                     inner_ctx = get_local_dbos_context()
                                     span = (
                                         inner_ctx.get_current_dbos_span()
@@ -777,7 +763,7 @@ class SQLAlchemyDatasource(ABC):
 
             # Outside the except block, so the internal signal stays out of the traceback chain.
             if conflicted:
-                if not commit_ambiguous:
+                if not commit_possible:
                     # A duplicate execution recorded this step first: stop, as an ordinary step's loser does.
                     raise DBOSWorkflowConflictIDError(workflow_id)
                 return cast(R, self._replay_conflicting_step(workflow_id, step_id))
