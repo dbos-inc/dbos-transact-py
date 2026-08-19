@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from dbos._utils import GlobalParams
 
@@ -8,7 +8,8 @@ if TYPE_CHECKING:
     from ._dbos_config import ConfigFile
 
 dbos_logger = logging.getLogger("dbos")
-_otlp_handler, _dbos_log_transformer = None, None
+_otlp_handler: Optional[logging.Handler] = None
+_dbos_log_transformer: Optional["DBOSLogTransformer"] = None
 
 
 class DBOSLogTransformer(logging.Filter):
@@ -81,7 +82,7 @@ def config_logger(config: "ConfigFile") -> None:
         from opentelemetry._logs import get_logger_provider, set_logger_provider
         from opentelemetry._logs._internal import ProxyLoggerProvider
         from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-        from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+        from opentelemetry.sdk._logs import LoggerProvider
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.semconv.attributes.service_attributes import SERVICE_NAME
@@ -116,7 +117,11 @@ def config_logger(config: "ConfigFile") -> None:
                     "OTLP is enabled but logger provider not set, skipping log exporter setup."
                 )
             else:
-                _otlp_handler = LoggingHandler(logger_provider=log_provider)
+                from opentelemetry.instrumentation.logging.handler import LoggingHandler
+
+                _otlp_handler = LoggingHandler(
+                    logger_provider=log_provider, log_code_attributes=True
+                )
                 otlp_log_level = config.get("telemetry", {}).get("logs", {}).get("otlpLogLevel")  # type: ignore
                 if otlp_log_level is not None:
                     _otlp_handler.setLevel(otlp_log_level)
@@ -135,10 +140,15 @@ def add_otlp_to_all_loggers() -> None:
         root = logging.root
         root.addHandler(_otlp_handler)
         for logger_name in root.manager.loggerDict:
-            if logger_name != dbos_logger.name:
-                logger = logging.getLogger(logger_name)
-                if not logger.propagate:
-                    logger.addHandler(_otlp_handler)
+            if logger_name == dbos_logger.name:
+                continue
+            # OTel keeps its own loggers off the export path; adding the handler to
+            # them feeds the handler's recursion guard back into itself.
+            if logger_name.split(".")[0] == "opentelemetry":
+                continue
+            logger = logging.getLogger(logger_name)
+            if not logger.propagate:
+                logger.addHandler(_otlp_handler)
 
 
 def add_transformer_to_all_loggers() -> None:

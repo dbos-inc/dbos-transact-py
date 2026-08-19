@@ -30,7 +30,10 @@ from opentelemetry import trace
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.sdk import trace as tracesdk
 from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, InMemoryLogExporter
+from opentelemetry.sdk._logs.export import (
+    BatchLogRecordProcessor,
+    InMemoryLogRecordExporter,
+)
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
@@ -352,7 +355,7 @@ def dbos_flask(
 TestOtelType = Tuple[
     InMemorySpanExporter,
     BatchLogRecordProcessor,
-    InMemoryLogExporter,
+    InMemoryLogRecordExporter,
 ]
 
 
@@ -369,7 +372,7 @@ def setup_in_memory_otlp_collector() -> Generator[
     trace.set_tracer_provider(provider)
 
     # Set up in-memory log exporter
-    log_exporter = InMemoryLogExporter()  # type: ignore
+    log_exporter = InMemoryLogRecordExporter()  # type: ignore
     log_processor = BatchLogRecordProcessor(log_exporter)
     log_provider = LoggerProvider()
     log_provider.add_log_record_processor(log_processor)
