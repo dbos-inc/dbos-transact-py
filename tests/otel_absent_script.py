@@ -2,7 +2,7 @@
 
 opentelemetry is an optional extra (`dbos[otel]`) and OTLP is off by default, so the
 workflow execution path must never import it. Run as a subprocess by
-tests/test_spans.py::test_workflows_run_without_opentelemetry: the blocker has to be
+tests/test_telemetry.py::test_workflows_run_without_opentelemetry: the blocker has to be
 installed before dbos is imported, and the test suite itself needs the real package.
 
 Usage: python otel_absent_script.py <sqlite_path>
