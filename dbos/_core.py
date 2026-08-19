@@ -889,12 +889,24 @@ class ActiveWorkflowById:
         with self._lock:
             return list(self._m.keys())
 
-    def count_for_queue(
-        self, queue_name: str, queue_partition_key: Optional[str] = None
+    def count_for_queue(self, queue_name: str) -> int:
+        """
+        Count the number of active workflows associated with a given queue,
+        across every partition of it.
+        """
+        with self._lock:
+            return sum(
+                1
+                for bucket in self._m.values()
+                if bucket is not None and bucket[0] == queue_name
+            )
+
+    def count_for_partition(
+        self, queue_name: str, queue_partition_key: Optional[str]
     ) -> int:
         """
-        Count the number of active workflows associated with a given queue
-        (and partition key, if the queue is partitioned).
+        Count the number of active workflows associated with one partition of a
+        given queue.
         """
         target = (queue_name, queue_partition_key)
         with self._lock:

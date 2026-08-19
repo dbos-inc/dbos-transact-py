@@ -1762,12 +1762,18 @@ def test_get_event_timeout_registration_is_instantaneous(dbos: DBOS) -> None:
         time.sleep(1.0)
         DBOS.set_event("k", "v")
 
+    getter_started = threading.Event()
+
     @DBOS.workflow()
     def getter(target: str) -> Any:
+        getter_started.set()
         return DBOS.get_event(target, "k", timeout_seconds=60)
 
-    target = DBOS.start_workflow(setter)
-    handle = DBOS.start_workflow(getter, target.workflow_id)
+    target_id = str(uuid.uuid4())
+    handle = DBOS.start_workflow(getter, target_id)
+    assert getter_started.wait(timeout=10)
+    with SetWorkflowID(target_id):
+        DBOS.start_workflow(setter)
     assert handle.get_result() == "v"
 
     steps = DBOS.list_workflow_steps(handle.workflow_id)

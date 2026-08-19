@@ -894,6 +894,10 @@ class QueueOutput:
     partition_queue: bool
     polling_interval_sec: float
     application_name: Optional[str]
+    partition_concurrency: Optional[int] = None
+    partition_worker_concurrency: Optional[int] = None
+    partition_rate_limit_max: Optional[int] = None
+    partition_rate_limit_period_sec: Optional[float] = None
 
     @classmethod
     def from_queue(cls, q: "Queue") -> "QueueOutput":
@@ -907,6 +911,14 @@ class QueueOutput:
             partition_queue=q._partition_queue,
             polling_interval_sec=q._polling_interval_sec,
             application_name=q.application_name,
+            partition_concurrency=q._partition_concurrency,
+            partition_worker_concurrency=q._partition_worker_concurrency,
+            partition_rate_limit_max=(
+                q._partition_limiter["limit"] if q._partition_limiter else None
+            ),
+            partition_rate_limit_period_sec=(
+                q._partition_limiter["period"] if q._partition_limiter else None
+            ),
         )
 
 

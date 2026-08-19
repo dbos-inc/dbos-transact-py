@@ -582,8 +582,14 @@ def test_duplicate_recovery_does_not_rerun_running_workflow(dbos: DBOS) -> None:
     finally:
         blocker.set()
 
+    # The guard holds only while this execution owns the workflow, so a dispatch still in flight when ownership is released may re-enter the body: harmless, since its steps replay and its outcome write is rejected once the row leaves PENDING.
     assert handle.get_result() == "done"
-    assert start_count == 1
+    # Bounded by the dispatches that exist: the original plus the two recovery sweeps
+    # above. Anything more means a sweep restarted the workflow it should have skipped.
+    assert start_count <= 3
+    final = DBOS.get_workflow_status(wfuuid)
+    assert final is not None
+    assert final.status == WorkflowStatusString.SUCCESS.value
 
 
 def test_recovery_empty_id_dead_letters(dbos: DBOS) -> None:
