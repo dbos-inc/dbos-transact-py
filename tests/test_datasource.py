@@ -610,8 +610,7 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
         try:
             return sync_ds.run_tx_step(None, step_fn)
         except DBOSWorkflowConflictIDError:
-            # A real duplicate never returns from here: DBOS parks it and adopts the
-            # winner's outcome. Caught so the assertion stays local to the step.
+            # A real duplicate parks here instead; caught to keep the assertion local.
             return "conflicted"
 
     wfid = str(uuid.uuid4())
@@ -697,8 +696,7 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
     assert call_count["n"] == 3
     assert record_error_calls["n"] == 1
 
-    # A retry after a possibly-committed attempt: the row may be this execution's own,
-    # so the step replays it rather than stopping.
+    # A retry after a possibly-committed attempt: the row may be its own, so it replays.
     forget_workflow()
     blind["next"] = True
     should_fail["v"] = False
@@ -757,9 +755,8 @@ def test_sync_ds_duplicate_execution_stops_at_the_lost_race(
         assert my_workflow() == "reserved"
     assert (reserve_calls["n"], emails_sent["n"]) == (1, 1)
 
-    # Rewind the system database to the instant the winner had committed its
-    # datasource_outputs row but not yet any step checkpoint: nothing recorded to
-    # replay, and no outcome for a waiter to adopt. The datasource row itself stays.
+    # Rewind to the instant the winner had committed its datasource_outputs row but no
+    # step checkpoint yet: nothing to replay, and no outcome for a waiter to adopt.
     with dbos._sys_db.engine.begin() as conn:
         winner_output = conn.execute(
             sa.select(SystemSchema.workflow_status.c.output).where(
@@ -1313,8 +1310,7 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
         try:
             return await async_ds.run_tx_step_async(None, step_fn)
         except DBOSWorkflowConflictIDError:
-            # A real duplicate never returns from here: DBOS parks it and adopts the
-            # winner's outcome. Caught so the assertion stays local to the step.
+            # A real duplicate parks here instead; caught to keep the assertion local.
             return "conflicted"
 
     wfid = str(uuid.uuid4())
@@ -1404,8 +1400,7 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
     assert call_count["n"] == 3
     assert record_error_calls["n"] == 1
 
-    # A retry after a possibly-committed attempt: the row may be this execution's own,
-    # so the step replays it rather than stopping.
+    # A retry after a possibly-committed attempt: the row may be its own, so it replays.
     forget_workflow()
     blind["next"] = True
     should_fail["v"] = False
@@ -1467,9 +1462,8 @@ async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
         assert await my_workflow() == "reserved"
     assert (reserve_calls["n"], emails_sent["n"]) == (1, 1)
 
-    # Rewind the system database to the instant the winner had committed its
-    # datasource_outputs row but not yet any step checkpoint: nothing recorded to
-    # replay, and no outcome for a waiter to adopt. The datasource row itself stays.
+    # Rewind to the instant the winner had committed its datasource_outputs row but no
+    # step checkpoint yet: nothing to replay, and no outcome for a waiter to adopt.
     with dbos._sys_db.engine.begin() as conn:
         winner_output = conn.execute(
             sa.select(SystemSchema.workflow_status.c.output).where(

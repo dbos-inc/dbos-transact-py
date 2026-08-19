@@ -297,8 +297,7 @@ class AsyncSQLAlchemyDatasource(ABC):
             raise _StepAlreadyRecorded()
 
     async def _replay_conflicting_step(self, workflow_id: str, step_id: int) -> Any:
-        # The recorded row is this execution's own, from an attempt whose commit was
-        # only ambiguously lost, so its result is the durable one.
+        # The recorded row is this execution's own, from an attempt whose commit was ambiguously lost.
         recorded = await self._check_execution_with_retry(workflow_id, step_id)
         if recorded is None:
             raise DBOSException(
@@ -339,8 +338,7 @@ class AsyncSQLAlchemyDatasource(ABC):
 
             output: R
             conflicted = False
-            # Set when a retried attempt may itself have committed, which makes a later
-            # conflict ambiguous: the recorded row could be this execution's own.
+            # Set when a retried attempt may itself have committed, so a later conflict may be our own row.
             commit_ambiguous = False
             retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
             try:
@@ -375,9 +373,7 @@ class AsyncSQLAlchemyDatasource(ABC):
                                 if _is_retriable_db_error(
                                     e, self._is_serialization_error
                                 ):
-                                    # A serialization failure aborted the transaction, so
-                                    # nothing of this attempt landed. Any other retriable
-                                    # error can be a commit whose acknowledgement was lost.
+                                    # A serialization failure aborted the attempt; any other retriable error may have committed.
                                     if not self._is_serialization_error(e):
                                         commit_ambiguous = True
                                     inner_ctx = get_local_dbos_context()
@@ -413,13 +409,10 @@ class AsyncSQLAlchemyDatasource(ABC):
             except _StepAlreadyRecorded:
                 conflicted = True
 
-            # Raised and replayed outside the handler, so the internal signal stays out
-            # of the traceback chain of whatever leaves this step.
+            # Outside the except block, so the internal signal stays out of the traceback chain.
             if conflicted:
                 if not commit_ambiguous:
-                    # Another execution of this workflow recorded the step first. Stop
-                    # here, as an ordinary step's loser does, instead of carrying on with
-                    # its result and running the rest of the workflow a second time.
+                    # A duplicate execution recorded this step first: stop, as an ordinary step's loser does.
                     raise DBOSWorkflowConflictIDError(workflow_id)
                 return cast(
                     R, await self._replay_conflicting_step(workflow_id, step_id)
@@ -658,8 +651,7 @@ class SQLAlchemyDatasource(ABC):
             raise _StepAlreadyRecorded()
 
     def _replay_conflicting_step(self, workflow_id: str, step_id: int) -> Any:
-        # The recorded row is this execution's own, from an attempt whose commit was
-        # only ambiguously lost, so its result is the durable one.
+        # The recorded row is this execution's own, from an attempt whose commit was ambiguously lost.
         recorded = self._check_execution_with_retry(workflow_id, step_id)
         if recorded is None:
             raise DBOSException(
@@ -700,8 +692,7 @@ class SQLAlchemyDatasource(ABC):
 
             output: R
             conflicted = False
-            # Set when a retried attempt may itself have committed, which makes a later
-            # conflict ambiguous: the recorded row could be this execution's own.
+            # Set when a retried attempt may itself have committed, so a later conflict may be our own row.
             commit_ambiguous = False
             retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
             try:
@@ -736,9 +727,7 @@ class SQLAlchemyDatasource(ABC):
                                 if _is_retriable_db_error(
                                     e, self._is_serialization_error
                                 ):
-                                    # A serialization failure aborted the transaction, so
-                                    # nothing of this attempt landed. Any other retriable
-                                    # error can be a commit whose acknowledgement was lost.
+                                    # A serialization failure aborted the attempt; any other retriable error may have committed.
                                     if not self._is_serialization_error(e):
                                         commit_ambiguous = True
                                     inner_ctx = get_local_dbos_context()
@@ -774,13 +763,10 @@ class SQLAlchemyDatasource(ABC):
             except _StepAlreadyRecorded:
                 conflicted = True
 
-            # Raised and replayed outside the handler, so the internal signal stays out
-            # of the traceback chain of whatever leaves this step.
+            # Outside the except block, so the internal signal stays out of the traceback chain.
             if conflicted:
                 if not commit_ambiguous:
-                    # Another execution of this workflow recorded the step first. Stop
-                    # here, as an ordinary step's loser does, instead of carrying on with
-                    # its result and running the rest of the workflow a second time.
+                    # A duplicate execution recorded this step first: stop, as an ordinary step's loser does.
                     raise DBOSWorkflowConflictIDError(workflow_id)
                 return cast(R, self._replay_conflicting_step(workflow_id, step_id))
 
