@@ -7,6 +7,7 @@ import sqlite3
 import uuid
 from typing import Any, AsyncGenerator, Generator, Optional
 
+import psycopg
 import pytest
 import pytest_asyncio
 import sqlalchemy as sa
@@ -18,7 +19,7 @@ from dbos import DBOS, AsyncSQLAlchemyDatasource, SetWorkflowID, SQLAlchemyDatas
 from dbos._app_db import RecordedResult
 from dbos._datasource_postgres import PostgresAsyncDatasource, PostgresSyncDatasource
 from dbos._datasource_sqlite import SqliteAsyncDatasource, SqliteSyncDatasource
-from dbos._error import DBOSException
+from dbos._error import DBOSException, DBOSWorkflowConflictIDError
 from dbos._schemas import SCHEMA_PLACEHOLDER
 from dbos._schemas.datasource_database import DatasourceSchema
 from dbos._schemas.system_database import SystemSchema
@@ -584,11 +585,13 @@ def test_sync_ds_recovers_from_sysdb_loss(
     assert call_count["n"] == 1
 
 
-def test_sync_ds_replays_when_duplicate_execution_wins(
+def test_sync_ds_conflicts_when_duplicate_execution_wins(
     dbos: DBOS, sync_ds: SQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A duplicate execution that loses the witness-row race replays the winner's
-    recorded result instead of surfacing the primary-key IntegrityError (#812)."""
+    """A duplicate execution that loses the witness-row race stops with a workflow
+    conflict instead of surfacing the primary-key IntegrityError (#812) or carrying on
+    with the winner's result (#818). It replays only when the conflicting row may be
+    its own, from an attempt whose commit was ambiguously lost."""
     _race_side_effects.create(sync_ds.engine, checkfirst=True)
     call_count = {"n": 0}
     should_fail = {"v": False}
@@ -604,7 +607,12 @@ def test_sync_ds_replays_when_duplicate_execution_wins(
 
     @DBOS.workflow()
     def my_workflow() -> str:
-        return sync_ds.run_tx_step(None, step_fn)
+        try:
+            return sync_ds.run_tx_step(None, step_fn)
+        except DBOSWorkflowConflictIDError:
+            # A real duplicate never returns from here: DBOS parks it and adopts the
+            # winner's outcome. Caught so the assertion stays local to the step.
+            return "conflicted"
 
     wfid = str(uuid.uuid4())
 
@@ -642,6 +650,29 @@ def test_sync_ds_replays_when_duplicate_execution_wins(
 
     monkeypatch.setattr(sync_ds, "_record_error", counting_record_error)
 
+    # Raise once from the result-recording insert, as a lost commit acknowledgement does.
+    lose_ack = {"next": False}
+    real_record_result = sync_ds._record_result
+
+    def maybe_lose_ack(
+        conn: Any,
+        workflow_id: str,
+        step_id: int,
+        output: Optional[str],
+        error: Optional[str],
+        serialization: Optional[str],
+    ) -> None:
+        if lose_ack["next"]:
+            lose_ack["next"] = False
+            raise OperationalError(
+                "INSERT",
+                {},
+                psycopg.OperationalError("server closed the connection unexpectedly"),
+            )
+        real_record_result(conn, workflow_id, step_id, output, error, serialization)
+
+    monkeypatch.setattr(sync_ds, "_record_result", maybe_lose_ack)
+
     # The winning execution: commits its app writes and its datasource_outputs row.
     with SetWorkflowID(wfid):
         assert my_workflow() == "result-1"
@@ -651,7 +682,7 @@ def test_sync_ds_replays_when_duplicate_execution_wins(
     forget_workflow()
     blind["next"] = True
     with SetWorkflowID(wfid):
-        assert my_workflow() == "result-1"
+        assert my_workflow() == "conflicted"
     assert call_count["n"] == 2  # the loser did run its body
     assert (
         record_error_calls["n"] == 0
@@ -662,9 +693,19 @@ def test_sync_ds_replays_when_duplicate_execution_wins(
     blind["next"] = True
     should_fail["v"] = True
     with SetWorkflowID(wfid):
-        assert my_workflow() == "result-1"
+        assert my_workflow() == "conflicted"
     assert call_count["n"] == 3
     assert record_error_calls["n"] == 1
+
+    # A retry after a possibly-committed attempt: the row may be this execution's own,
+    # so the step replays it rather than stopping.
+    forget_workflow()
+    blind["next"] = True
+    should_fail["v"] = False
+    lose_ack["next"] = True
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "result-1"
+    assert call_count["n"] == 5  # the lost acknowledgement cost one extra attempt
 
     # The succeeding loser's writes were discarded and the winner's record still stands.
     with sync_ds.engine.connect() as conn:
@@ -1246,11 +1287,13 @@ async def test_async_ds_recovers_from_sysdb_loss(
 
 
 @pytest.mark.asyncio
-async def test_async_ds_replays_when_duplicate_execution_wins(
+async def test_async_ds_conflicts_when_duplicate_execution_wins(
     dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A duplicate execution that loses the witness-row race replays the winner's
-    recorded result instead of surfacing the primary-key IntegrityError (#812)."""
+    """A duplicate execution that loses the witness-row race stops with a workflow
+    conflict instead of surfacing the primary-key IntegrityError (#812) or carrying on
+    with the winner's result (#818). It replays only when the conflicting row may be
+    its own, from an attempt whose commit was ambiguously lost."""
     async with async_ds.engine.begin() as conn:
         await conn.run_sync(_race_side_effects.create, checkfirst=True)
     call_count = {"n": 0}
@@ -1267,7 +1310,12 @@ async def test_async_ds_replays_when_duplicate_execution_wins(
 
     @DBOS.workflow()
     async def my_workflow() -> str:
-        return await async_ds.run_tx_step_async(None, step_fn)
+        try:
+            return await async_ds.run_tx_step_async(None, step_fn)
+        except DBOSWorkflowConflictIDError:
+            # A real duplicate never returns from here: DBOS parks it and adopts the
+            # winner's outcome. Caught so the assertion stays local to the step.
+            return "conflicted"
 
     wfid = str(uuid.uuid4())
 
@@ -1307,6 +1355,31 @@ async def test_async_ds_replays_when_duplicate_execution_wins(
 
     monkeypatch.setattr(async_ds, "_record_error", counting_record_error)
 
+    # Raise once from the result-recording insert, as a lost commit acknowledgement does.
+    lose_ack = {"next": False}
+    real_record_result = async_ds._record_result
+
+    async def maybe_lose_ack(
+        conn: Any,
+        workflow_id: str,
+        step_id: int,
+        output: Optional[str],
+        error: Optional[str],
+        serialization: Optional[str],
+    ) -> None:
+        if lose_ack["next"]:
+            lose_ack["next"] = False
+            raise OperationalError(
+                "INSERT",
+                {},
+                psycopg.OperationalError("server closed the connection unexpectedly"),
+            )
+        await real_record_result(
+            conn, workflow_id, step_id, output, error, serialization
+        )
+
+    monkeypatch.setattr(async_ds, "_record_result", maybe_lose_ack)
+
     # The winning execution: commits its app writes and its datasource_outputs row.
     with SetWorkflowID(wfid):
         assert await my_workflow() == "result-1"
@@ -1316,7 +1389,7 @@ async def test_async_ds_replays_when_duplicate_execution_wins(
     forget_workflow()
     blind["next"] = True
     with SetWorkflowID(wfid):
-        assert await my_workflow() == "result-1"
+        assert await my_workflow() == "conflicted"
     assert call_count["n"] == 2  # the loser did run its body
     assert (
         record_error_calls["n"] == 0
@@ -1327,9 +1400,19 @@ async def test_async_ds_replays_when_duplicate_execution_wins(
     blind["next"] = True
     should_fail["v"] = True
     with SetWorkflowID(wfid):
-        assert await my_workflow() == "result-1"
+        assert await my_workflow() == "conflicted"
     assert call_count["n"] == 3
     assert record_error_calls["n"] == 1
+
+    # A retry after a possibly-committed attempt: the row may be this execution's own,
+    # so the step replays it rather than stopping.
+    forget_workflow()
+    blind["next"] = True
+    should_fail["v"] = False
+    lose_ack["next"] = True
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "result-1"
+    assert call_count["n"] == 5  # the lost acknowledgement cost one extra attempt
 
     # The succeeding loser's writes were discarded and the winner's record still stands.
     async with async_ds.engine.connect() as conn:

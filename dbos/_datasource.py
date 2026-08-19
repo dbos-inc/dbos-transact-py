@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from dbos._app_db import RecordedResult
 from dbos._context import DBOSContextEnsure, get_local_dbos_context
 from dbos._dbos import IsolationLevel
-from dbos._error import DBOSException
+from dbos._error import DBOSException, DBOSWorkflowConflictIDError
 from dbos._schemas import SCHEMA_PLACEHOLDER
 from dbos._schemas.datasource_database import DatasourceSchema
 from dbos._serialization import (
@@ -297,7 +297,8 @@ class AsyncSQLAlchemyDatasource(ABC):
             raise _StepAlreadyRecorded()
 
     async def _replay_conflicting_step(self, workflow_id: str, step_id: int) -> Any:
-        # A duplicate execution of this workflow won the race, so its recorded result is the durable one.
+        # The recorded row is this execution's own, from an attempt whose commit was
+        # only ambiguously lost, so its result is the durable one.
         recorded = await self._check_execution_with_retry(workflow_id, step_id)
         if recorded is None:
             raise DBOSException(
@@ -338,6 +339,9 @@ class AsyncSQLAlchemyDatasource(ABC):
 
             output: R
             conflicted = False
+            # Set when a retried attempt may itself have committed, which makes a later
+            # conflict ambiguous: the recorded row could be this execution's own.
+            commit_ambiguous = False
             retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
             try:
                 with DBOSContextEnsure() as exec_ctx:
@@ -371,6 +375,11 @@ class AsyncSQLAlchemyDatasource(ABC):
                                 if _is_retriable_db_error(
                                     e, self._is_serialization_error
                                 ):
+                                    # A serialization failure aborted the transaction, so
+                                    # nothing of this attempt landed. Any other retriable
+                                    # error can be a commit whose acknowledgement was lost.
+                                    if not self._is_serialization_error(e):
+                                        commit_ambiguous = True
                                     inner_ctx = get_local_dbos_context()
                                     span = (
                                         inner_ctx.get_current_dbos_span()
@@ -404,9 +413,14 @@ class AsyncSQLAlchemyDatasource(ABC):
             except _StepAlreadyRecorded:
                 conflicted = True
 
-            # Replayed outside the handler, so the internal signal stays out of the
-            # traceback chain of whatever the recorded result raises.
+            # Raised and replayed outside the handler, so the internal signal stays out
+            # of the traceback chain of whatever leaves this step.
             if conflicted:
+                if not commit_ambiguous:
+                    # Another execution of this workflow recorded the step first. Stop
+                    # here, as an ordinary step's loser does, instead of carrying on with
+                    # its result and running the rest of the workflow a second time.
+                    raise DBOSWorkflowConflictIDError(workflow_id)
                 return cast(
                     R, await self._replay_conflicting_step(workflow_id, step_id)
                 )
@@ -644,7 +658,8 @@ class SQLAlchemyDatasource(ABC):
             raise _StepAlreadyRecorded()
 
     def _replay_conflicting_step(self, workflow_id: str, step_id: int) -> Any:
-        # A duplicate execution of this workflow won the race, so its recorded result is the durable one.
+        # The recorded row is this execution's own, from an attempt whose commit was
+        # only ambiguously lost, so its result is the durable one.
         recorded = self._check_execution_with_retry(workflow_id, step_id)
         if recorded is None:
             raise DBOSException(
@@ -685,6 +700,9 @@ class SQLAlchemyDatasource(ABC):
 
             output: R
             conflicted = False
+            # Set when a retried attempt may itself have committed, which makes a later
+            # conflict ambiguous: the recorded row could be this execution's own.
+            commit_ambiguous = False
             retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
             try:
                 with DBOSContextEnsure() as exec_ctx:
@@ -718,6 +736,11 @@ class SQLAlchemyDatasource(ABC):
                                 if _is_retriable_db_error(
                                     e, self._is_serialization_error
                                 ):
+                                    # A serialization failure aborted the transaction, so
+                                    # nothing of this attempt landed. Any other retriable
+                                    # error can be a commit whose acknowledgement was lost.
+                                    if not self._is_serialization_error(e):
+                                        commit_ambiguous = True
                                     inner_ctx = get_local_dbos_context()
                                     span = (
                                         inner_ctx.get_current_dbos_span()
@@ -751,9 +774,14 @@ class SQLAlchemyDatasource(ABC):
             except _StepAlreadyRecorded:
                 conflicted = True
 
-            # Replayed outside the handler, so the internal signal stays out of the
-            # traceback chain of whatever the recorded result raises.
+            # Raised and replayed outside the handler, so the internal signal stays out
+            # of the traceback chain of whatever leaves this step.
             if conflicted:
+                if not commit_ambiguous:
+                    # Another execution of this workflow recorded the step first. Stop
+                    # here, as an ordinary step's loser does, instead of carrying on with
+                    # its result and running the rest of the workflow a second time.
+                    raise DBOSWorkflowConflictIDError(workflow_id)
                 return cast(R, self._replay_conflicting_step(workflow_id, step_id))
 
             return output
