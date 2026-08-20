@@ -2962,8 +2962,7 @@ class _StreamReadCheckpoint:
         self._sys_db = sys_db
         self._key = key
         self._function_name = function_name
-        # A client reads through its own system database, which knows nothing of the workflow
-        # that happens to be calling, so it must never bind to the ambient context.
+        # A client reads its own system database, so it must never bind to the ambient workflow.
         self._enabled = enabled
         self._ctx: Optional[DBOSContext] = None
         self._bound = False
@@ -3013,8 +3012,7 @@ class _StreamReadCheckpoint:
     def check_cancelled(self) -> None:
         """Raise if the reading workflow has been cancelled, probing at most once an interval.
 
-        The replay probe stops querying once past the frontier, so without this neither a reader
-        awaiting a value nor one busy delivering them would ever observe its own cancellation.
+        The replay probe stops querying once past the frontier, so nothing else would notice.
         """
         if self._ctx is None:
             return

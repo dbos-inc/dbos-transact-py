@@ -5,6 +5,7 @@ import uuid
 from typing import Any, cast
 
 import pytest
+import sqlalchemy as sa
 from sqlalchemy import event as sa_event
 
 # Public API
@@ -1993,3 +1994,27 @@ def test_client_read_stream_from_workflow_is_not_checkpointed(
     with SetWorkflowID(reader_id):
         assert reader_workflow(wfid) == ["v0"]
     assert DBOS.list_workflow_steps(reader_id) == []
+
+
+def test_stream_write_to_deleted_workflow_raises(dbos: DBOS) -> None:
+    """A write whose workflow row is gone fails instead of retrying forever. The insert's retry
+    loop exists for offset conflicts; a foreign key violation never resolves."""
+    stream_key = "deleted_workflow_stream"
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        DBOS.write_stream(stream_key, "v0")
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        writer_workflow()
+    DBOS.delete_workflow(wfid)
+
+    with pytest.raises(sa.exc.IntegrityError):
+        dbos._sys_db.write_stream_from_step(
+            wfid,
+            0,
+            stream_key,
+            "v1",
+            serialization_type=WorkflowSerializationFormat.DEFAULT,
+        )

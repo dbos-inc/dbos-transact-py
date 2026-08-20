@@ -3918,8 +3918,7 @@ class SystemDatabase(ABC):
                 if key in closed:
                     continue
                 if is_stream_closed_sentinel(value):
-                    # End the stream where read_stream ends it, so the two never report
-                    # different contents for the same rows.
+                    # End the stream where read_stream does, so the two never disagree.
                     closed.add(key)
                     streams.setdefault(key, [])
                     continue
@@ -5068,7 +5067,10 @@ class SystemDatabase(ABC):
                     _dbos_streams_channel, f"{workflow_uuid}::{key}"
                 )
                 return
-            except sa.exc.IntegrityError:
+            except sa.exc.IntegrityError as e:
+                # Only an offset conflict resolves on retry; anything else would spin forever.
+                if not self._is_unique_constraint_violation(e):
+                    raise
                 dbos_logger.warning(
                     f"Stream offset conflict for workflow {workflow_uuid}, key {key}; retrying"
                 )
@@ -5117,7 +5119,10 @@ class SystemDatabase(ABC):
 
                 try:
                     c.execute(stmt)
-                except sa.exc.IntegrityError:
+                except sa.exc.IntegrityError as e:
+                    # Only an offset conflict is worth retrying; see write_stream_from_step.
+                    if not self._is_unique_constraint_violation(e):
+                        raise
                     dbos_logger.warning(
                         f"Stream offset conflict for workflow {workflow_uuid}, key {key}; retrying"
                     )
