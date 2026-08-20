@@ -1514,115 +1514,12 @@ def _insert_stream_value_without_notifying(
         c.execute(stmt)
 
 
-def test_read_stream_polling_interval(dbos: DBOS, client: DBOSClient) -> None:
-    """Every reader takes a per-call polling interval, so a caller can override a configured
-    fallback too slow for it. Each value lands without a notification, leaving the fallback
-    re-read as the only way to deliver it, and the configured one is longer than the test can wait.
-    """
-    stream_key = "polling_interval_stream"
-    release = threading.Event()
-
-    @DBOS.workflow()
-    def writer_workflow() -> None:
-        # Stay active so a reader waits for the next value rather than draining to the end.
-        release.wait()
-
-    def insert_once_reader_blocks(value: str) -> threading.Thread:
-        def run() -> None:
-            time.sleep(0.3)
-            _insert_stream_value_without_notifying(dbos, wfid, stream_key, value)
-
-        thread = threading.Thread(target=run)
-        thread.start()
-        return thread
-
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        handle = DBOS.start_workflow(writer_workflow)
-
-    sys_dbs = [dbos._sys_db, client._sys_db]
-    originals = [db._notification_listener_polling_interval_sec for db in sys_dbs]
-    for db in sys_dbs:
-        db._notification_listener_polling_interval_sec = 30.0
-    try:
-        thread = insert_once_reader_blocks("v0")
-        start = time.time()
-        reader = DBOS.read_stream(wfid, stream_key, polling_interval_sec=0.05)
-        assert next(reader) == "v0"
-        # Far below the 30s configured fallback, which is what an ignored override would use.
-        assert time.time() - start < 10.0
-        thread.join()
-
-        thread = insert_once_reader_blocks("v1")
-        start = time.time()
-        client_reader = client.read_stream(
-            wfid, stream_key, offset=1, polling_interval_sec=0.05
-        )
-        assert next(client_reader) == "v1"
-        assert time.time() - start < 10.0
-        thread.join()
-    finally:
-        for db, original in zip(sys_dbs, originals):
-            db._notification_listener_polling_interval_sec = original
-        release.set()
-        handle.get_result()
-
-
-@pytest.mark.asyncio
-async def test_read_stream_async_polling_interval(
-    dbos: DBOS, client: DBOSClient
-) -> None:
-    """Async sibling of test_read_stream_polling_interval."""
-    stream_key = "async_polling_interval_stream"
-    release = asyncio.Event()
-
-    @DBOS.workflow()
-    async def async_writer_workflow() -> None:
-        # Stay active so a reader waits for the next value rather than draining to the end.
-        await release.wait()
-
-    async def insert_once_reader_blocks(value: str) -> None:
-        await asyncio.sleep(0.3)
-        await asyncio.to_thread(
-            _insert_stream_value_without_notifying, dbos, wfid, stream_key, value
-        )
-
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        handle = await DBOS.start_workflow_async(async_writer_workflow)
-
-    sys_dbs = [dbos._sys_db, client._sys_db]
-    originals = [db._notification_listener_polling_interval_sec for db in sys_dbs]
-    for db in sys_dbs:
-        db._notification_listener_polling_interval_sec = 30.0
-    try:
-        inserter = asyncio.create_task(insert_once_reader_blocks("v0"))
-        start = time.time()
-        reader = DBOS.read_stream_async(wfid, stream_key, polling_interval_sec=0.05)
-        assert await reader.__anext__() == "v0"
-        # Far below the 30s configured fallback, which is what an ignored override would use.
-        assert time.time() - start < 10.0
-        await inserter
-
-        inserter = asyncio.create_task(insert_once_reader_blocks("v1"))
-        start = time.time()
-        client_reader = client.read_stream_async(
-            wfid, stream_key, offset=1, polling_interval_sec=0.05
-        )
-        assert await client_reader.__anext__() == "v1"
-        assert time.time() - start < 10.0
-        await inserter
-    finally:
-        for db, original in zip(sys_dbs, originals):
-            db._notification_listener_polling_interval_sec = original
-        release.set()
-        await handle.get_result()
-
-
 def test_read_stream_timeout(dbos: DBOS, client: DBOSClient) -> None:
-    """Every reader takes a per-value timeout. The writer stays active and silent, so only the
-    timeout can end the wait; a value delivered in between restarts the clock rather than
-    counting against a single overall deadline."""
+    """Every reader takes a per-value timeout and a per-call polling interval. The writer stays
+    active and silent, so only the timeout can end the wait, and a value delivered in between
+    restarts the clock rather than counting against a single overall deadline. Values land
+    without a notification and the configured fallback is set far longer than the test can wait,
+    so nothing is delivered unless the per-call interval is honored."""
     stream_key = "timeout_stream"
     release = threading.Event()
 
@@ -1643,6 +1540,11 @@ def test_read_stream_timeout(dbos: DBOS, client: DBOSClient) -> None:
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         handle = DBOS.start_workflow(writer_workflow)
+
+    sys_dbs = [dbos._sys_db, client._sys_db]
+    originals = [db._notification_listener_polling_interval_sec for db in sys_dbs]
+    for db in sys_dbs:
+        db._notification_listener_polling_interval_sec = 30.0
     try:
         with pytest.raises(DBOSStreamTimeoutError):
             next(DBOS.read_stream(wfid, stream_key, timeout_seconds=0.3))
@@ -1656,7 +1558,9 @@ def test_read_stream_timeout(dbos: DBOS, client: DBOSClient) -> None:
             insert_once_reader_blocks("v0", 1.0),
             insert_once_reader_blocks("v1", 2.0),
         ]
-        reader = DBOS.read_stream(wfid, stream_key, timeout_seconds=1.5)
+        reader = DBOS.read_stream(
+            wfid, stream_key, timeout_seconds=1.5, polling_interval_sec=0.05
+        )
         assert [next(reader), next(reader)] == ["v0", "v1"]
         for thread in threads:
             thread.join()
@@ -1664,14 +1568,17 @@ def test_read_stream_timeout(dbos: DBOS, client: DBOSClient) -> None:
         # A terminal writer drains to the end of the stream rather than timing out.
         release.set()
         handle.get_result()
-        assert list(DBOS.read_stream(wfid, stream_key, timeout_seconds=0.3)) == [
-            "v0",
-            "v1",
-        ]
+        assert list(
+            client.read_stream(
+                wfid, stream_key, timeout_seconds=0.3, polling_interval_sec=0.05
+            )
+        ) == ["v0", "v1"]
 
         with pytest.raises(ValueError, match="must not be negative"):
             next(DBOS.read_stream(wfid, stream_key, timeout_seconds=-1))
     finally:
+        for db, original in zip(sys_dbs, originals):
+            db._notification_listener_polling_interval_sec = original
         release.set()
         handle.get_result()
 
@@ -1687,9 +1594,20 @@ async def test_read_stream_async_timeout(dbos: DBOS, client: DBOSClient) -> None
         # Stay active and silent so a reader waits rather than draining to the end.
         await release.wait()
 
+    async def insert_once_reader_blocks(value: str) -> None:
+        await asyncio.sleep(0.2)
+        await asyncio.to_thread(
+            _insert_stream_value_without_notifying, dbos, wfid, stream_key, value
+        )
+
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         handle = await DBOS.start_workflow_async(async_writer_workflow)
+
+    sys_dbs = [dbos._sys_db, client._sys_db]
+    originals = [db._notification_listener_polling_interval_sec for db in sys_dbs]
+    for db in sys_dbs:
+        db._notification_listener_polling_interval_sec = 30.0
     try:
         with pytest.raises(DBOSStreamTimeoutError):
             await DBOS.read_stream_async(
@@ -1699,7 +1617,19 @@ async def test_read_stream_async_timeout(dbos: DBOS, client: DBOSClient) -> None
             await client.read_stream_async(
                 wfid, stream_key, timeout_seconds=0.3
             ).__anext__()
+
+        # Delivered only if the per-call interval is honored: the fallback is 30s.
+        inserter = asyncio.create_task(insert_once_reader_blocks("v0"))
+        assert (
+            await DBOS.read_stream_async(
+                wfid, stream_key, timeout_seconds=1.5, polling_interval_sec=0.05
+            ).__anext__()
+            == "v0"
+        )
+        await inserter
     finally:
+        for db, original in zip(sys_dbs, originals):
+            db._notification_listener_polling_interval_sec = original
         release.set()
         await handle.get_result()
 
@@ -1779,3 +1709,112 @@ def test_workflow_read_stream_timeout_is_checkpointed(dbos: DBOS) -> None:
     finally:
         release.set()
         handle.get_result()
+
+
+def test_read_stream_offset(dbos: DBOS, client: DBOSClient) -> None:
+    """read_stream_offset returns the one value at an offset, waiting for it and raising if it
+    never arrives -- because the timeout passed or because the stream ended short of it. From a
+    workflow it is one checkpointed step, so a replay returns the recorded value or re-raises.
+    """
+    stream_key = "offset_stream"
+    release = threading.Event()
+    reader_calls = 0
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        DBOS.write_stream(stream_key, "v0")
+        DBOS.write_stream(stream_key, "v1")
+        # Stay active so a read past the end waits rather than giving up immediately.
+        release.wait()
+        DBOS.close_stream(stream_key)
+
+    @DBOS.workflow()
+    def reader_workflow(target_id: str) -> list[Any]:
+        nonlocal reader_calls
+        reader_calls += 1
+        seen: list[Any] = [DBOS.read_stream_offset(target_id, stream_key, 1)]
+        try:
+            DBOS.read_stream_offset(target_id, stream_key, 5, timeout_seconds=0.3)
+        except DBOSStreamTimeoutError:
+            seen.append("timed out")
+        return seen
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(writer_workflow)
+    try:
+        # A value already written comes back without waiting, in process and from a client.
+        assert DBOS.read_stream_offset(wfid, stream_key, 0) == "v0"
+        assert client.read_stream_offset(wfid, stream_key, 1) == "v1"
+
+        # An offset the stream has not reached waits, then raises.
+        with pytest.raises(DBOSStreamTimeoutError):
+            DBOS.read_stream_offset(wfid, stream_key, 5, timeout_seconds=0.3)
+
+        with pytest.raises(ValueError, match="must not be negative"):
+            DBOS.read_stream_offset(wfid, stream_key, 0, timeout_seconds=-1)
+
+        # One step per read, the timed-out one recorded as an error, and a replay repeats both
+        # without waiting out the timeout again.
+        reader_id = str(uuid.uuid4())
+        with SetWorkflowID(reader_id):
+            assert reader_workflow(wfid) == ["v1", "timed out"]
+        steps = DBOS.list_workflow_steps(reader_id)
+        assert [s["function_name"] for s in steps] == ["DBOS.readStreamOffset"] * 2
+        assert steps[0]["output"] == "v1" and steps[1]["output"] is None
+        assert isinstance(steps[1]["error"], DBOSStreamTimeoutError)
+
+        start = time.time()
+        assert reexecute_workflow_by_id(dbos, reader_id).get_result() == [
+            "v1",
+            "timed out",
+        ]
+        assert reader_calls == 2
+        assert time.time() - start < 0.3
+    finally:
+        release.set()
+        handle.get_result()
+
+    # A closed stream gives up on an offset it never reached, rather than waiting out a timeout.
+    start = time.time()
+    with pytest.raises(DBOSStreamTimeoutError):
+        DBOS.read_stream_offset(wfid, stream_key, 5, timeout_seconds=30.0)
+    assert time.time() - start < 1.0
+
+
+@pytest.mark.asyncio
+async def test_read_stream_offset_async(dbos: DBOS, client: DBOSClient) -> None:
+    """Async sibling of test_read_stream_offset."""
+    stream_key = "async_offset_stream"
+    release = asyncio.Event()
+
+    @DBOS.workflow()
+    async def async_writer_workflow() -> None:
+        await DBOS.write_stream_async(stream_key, "v0")
+        # Stay active so a read past the end waits rather than giving up immediately.
+        await release.wait()
+
+    @DBOS.workflow()
+    async def async_reader_workflow(target_id: str) -> Any:
+        return await DBOS.read_stream_offset_async(target_id, stream_key, 0)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(async_writer_workflow)
+    try:
+        assert await DBOS.read_stream_offset_async(wfid, stream_key, 0) == "v0"
+        assert await client.read_stream_offset_async(wfid, stream_key, 0) == "v0"
+
+        with pytest.raises(DBOSStreamTimeoutError):
+            await DBOS.read_stream_offset_async(
+                wfid, stream_key, 5, timeout_seconds=0.3
+            )
+
+        reader_id = str(uuid.uuid4())
+        with SetWorkflowID(reader_id):
+            assert await async_reader_workflow(wfid) == "v0"
+        steps = await DBOS.list_workflow_steps_async(reader_id)
+        assert [s["function_name"] for s in steps] == ["DBOS.readStreamOffset"]
+    finally:
+        release.set()
+        await handle.get_result()

@@ -20,7 +20,13 @@ from zoneinfo import ZoneInfo
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from dbos._core import DEFAULT_POLLING_INTERVAL, read_stream, read_stream_async
+from dbos._core import (
+    DEFAULT_POLLING_INTERVAL,
+    read_stream,
+    read_stream_async,
+    read_stream_offset,
+    read_stream_offset_async,
+)
 
 # Re-exported: EnqueueOptions is public as dbos.EnqueueOptions but is shared with _core.
 from dbos._enqueue_options import EnqueueOptions as EnqueueOptions
@@ -1295,6 +1301,78 @@ class DBOSClient:
             timeout_seconds=timeout_seconds,
         ):
             yield value
+
+    def read_stream_offset(
+        self,
+        workflow_id: str,
+        key: str,
+        offset: int,
+        *,
+        polling_interval_sec: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
+    ) -> Any:
+        """
+        Read the single value at one offset of a stream, waiting for it to be written.
+
+        Args:
+            workflow_id: The ID of the workflow that wrote to the stream
+            key: The stream key to read from
+            offset: The offset to read
+            polling_interval_sec: Polling interval in seconds when waiting for the value when not using LISTEN/NOTIFY.
+                Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
+            timeout_seconds: How long to wait for the value before raising DBOSStreamTimeoutError.
+                Defaults to None, waiting indefinitely.
+
+        Returns:
+            The value at the offset
+
+        Raises:
+            DBOSStreamTimeoutError: If the timeout passes, or the stream ends before reaching the offset
+        """
+        return read_stream_offset(
+            self._sys_db,
+            workflow_id,
+            key,
+            offset,
+            polling_interval=polling_interval_sec,
+            timeout_seconds=timeout_seconds,
+        )
+
+    async def read_stream_offset_async(
+        self,
+        workflow_id: str,
+        key: str,
+        offset: int,
+        *,
+        polling_interval_sec: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
+    ) -> Any:
+        """
+        Read the single value at one offset of a stream, waiting for it to be written.
+
+        Args:
+            workflow_id: The ID of the workflow that wrote to the stream
+            key: The stream key to read from
+            offset: The offset to read
+            polling_interval_sec: Polling interval in seconds when waiting for the value when not using LISTEN/NOTIFY.
+                Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
+            timeout_seconds: How long to wait for the value before raising DBOSStreamTimeoutError.
+                Defaults to None, waiting indefinitely.
+
+        Returns:
+            The value at the offset
+
+        Raises:
+            DBOSStreamTimeoutError: If the timeout passes, or the stream ends before reaching the offset
+        """
+        return await read_stream_offset_async(
+            self._sys_db,
+            workflow_id,
+            key,
+            offset,
+            polling_interval=polling_interval_sec,
+            timeout_seconds=timeout_seconds,
+        )
 
     # ── Schedule API ──────────────────────────────────────────────
 

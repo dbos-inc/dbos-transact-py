@@ -2925,6 +2925,7 @@ def close_stream(dbos: "DBOS", step_ctx: Optional["DBOSContext"], key: str) -> N
 
 
 _READ_STREAM_FUNCTION_NAME = "DBOS.readStream"
+_READ_STREAM_OFFSET_FUNCTION_NAME = "DBOS.readStreamOffset"
 
 # Returned by _StreamReadCheckpoint.replay when a step has no recorded result and must be read live.
 _no_recorded_value = object()
@@ -2938,9 +2939,10 @@ class _StreamReadCheckpoint:
     Reads from a step, from a client, or from outside a workflow are not recorded.
     """
 
-    def __init__(self, sys_db: "SystemDatabase", key: str) -> None:
+    def __init__(self, sys_db: "SystemDatabase", key: str, function_name: str) -> None:
         self._sys_db = sys_db
         self._key = key
+        self._function_name = function_name
         self._ctx: Optional[DBOSContext] = None
         self._bound = False
         # Function ids are allocated in order, so the first miss proves every later one misses too.
@@ -2966,7 +2968,7 @@ class _StreamReadCheckpoint:
         if step_ctx is None or not self._replaying:
             return _no_recorded_value
         recorded = self._sys_db.check_operation_execution(
-            step_ctx.workflow_id, step_ctx.function_id, _READ_STREAM_FUNCTION_NAME
+            step_ctx.workflow_id, step_ctx.function_id, self._function_name
         )
         if recorded is None:
             self._replaying = False
@@ -2995,7 +2997,7 @@ class _StreamReadCheckpoint:
         result: OperationResultInternal = {
             "workflow_uuid": step_ctx.workflow_id,
             "function_id": step_ctx.function_id,
-            "function_name": _READ_STREAM_FUNCTION_NAME,
+            "function_name": self._function_name,
             "started_at_epoch_ms": self._started_at_epoch_ms,
             "output": output,
             "serialization": serialization,
@@ -3017,13 +3019,129 @@ class _StreamReadCheckpoint:
         result: OperationResultInternal = {
             "workflow_uuid": step_ctx.workflow_id,
             "function_id": step_ctx.function_id,
-            "function_name": _READ_STREAM_FUNCTION_NAME,
+            "function_name": self._function_name,
             "started_at_epoch_ms": self._started_at_epoch_ms,
             "output": None,
             "serialization": serialization,
             "error": serialized,
         }
         self._sys_db.record_operation_result(result)
+
+
+def read_stream_offset(
+    sys_db: "SystemDatabase",
+    workflow_id: str,
+    key: str,
+    offset: int,
+    *,
+    polling_interval: Optional[float] = None,
+    timeout_seconds: Optional[float] = None,
+) -> Any:
+    """Return the single value at one offset of a stream, waiting for it to be written."""
+    if timeout_seconds is not None and timeout_seconds < 0:
+        raise ValueError(f"timeout_seconds must not be negative, got {timeout_seconds}")
+    if polling_interval is None:
+        polling_interval = sys_db._notification_listener_polling_interval_sec
+    checkpoint = _StreamReadCheckpoint(sys_db, key, _READ_STREAM_OFFSET_FUNCTION_NAME)
+    step_ctx = checkpoint.begin()
+    recorded = checkpoint.replay(step_ctx)
+    if recorded is not _no_recorded_value:
+        return recorded
+    deadline = time.time() + timeout_seconds if timeout_seconds is not None else None
+    event, payload = sys_db.register_stream_listener(workflow_id, key)
+    final_read = False
+    try:
+        while True:
+            # Clear before reading so a notification arriving after the read
+            # leaves the event set and the wait below returns immediately.
+            event.clear()
+            # One round trip for both the value and the workflow's status.
+            status, value = sys_db.read_stream_value(workflow_id, key, offset)
+            if status is None:
+                raise DBOSNonExistentWorkflowError("target", workflow_id)
+            if value is not _no_stream_value and value != _dbos_stream_closed_sentinel:
+                checkpoint.record(step_ctx, value)
+                return value
+            # A close sentinel here, or an empty offset the drain confirms, means the stream
+            # ended before this offset: no value will ever arrive, so stop rather than wait.
+            if value is not _no_stream_value or final_read:
+                error = DBOSStreamTimeoutError(workflow_id, key)
+                checkpoint.record_timeout(step_ctx, error)
+                raise error
+            if not workflow_is_active(status):
+                # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so read once more before stopping.
+                final_read = True
+                continue
+            wait_for = polling_interval
+            if deadline is not None:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    error = DBOSStreamTimeoutError(workflow_id, key, timeout_seconds)
+                    checkpoint.record_timeout(step_ctx, error)
+                    raise error
+                wait_for = min(remaining, polling_interval)
+            event.wait(timeout=wait_for)
+    finally:
+        sys_db.unregister_stream_listener(payload)
+
+
+async def read_stream_offset_async(
+    sys_db: "SystemDatabase",
+    workflow_id: str,
+    key: str,
+    offset: int,
+    *,
+    polling_interval: Optional[float] = None,
+    timeout_seconds: Optional[float] = None,
+) -> Any:
+    """Return the single value at one offset of a stream, waiting for it to be written."""
+    if timeout_seconds is not None and timeout_seconds < 0:
+        raise ValueError(f"timeout_seconds must not be negative, got {timeout_seconds}")
+    if polling_interval is None:
+        polling_interval = sys_db._notification_listener_polling_interval_sec
+    checkpoint = _StreamReadCheckpoint(sys_db, key, _READ_STREAM_OFFSET_FUNCTION_NAME)
+    step_ctx = checkpoint.begin()
+    recorded = await asyncio.to_thread(checkpoint.replay, step_ctx)
+    if recorded is not _no_recorded_value:
+        return recorded
+    deadline = time.time() + timeout_seconds if timeout_seconds is not None else None
+    event, payload = sys_db.register_stream_listener(workflow_id, key)
+    final_read = False
+    try:
+        while True:
+            # Clear before reading so a notification arriving after the read
+            # leaves the event set and the wait below returns immediately.
+            event.clear()
+            # One round trip for both the value and the workflow's status.
+            status, value = await asyncio.to_thread(
+                sys_db.read_stream_value, workflow_id, key, offset
+            )
+            if status is None:
+                raise DBOSNonExistentWorkflowError("target", workflow_id)
+            if value is not _no_stream_value and value != _dbos_stream_closed_sentinel:
+                await asyncio.to_thread(checkpoint.record, step_ctx, value)
+                return value
+            # A close sentinel here, or an empty offset the drain confirms, means the stream
+            # ended before this offset: no value will ever arrive, so stop rather than wait.
+            if value is not _no_stream_value or final_read:
+                error = DBOSStreamTimeoutError(workflow_id, key)
+                await asyncio.to_thread(checkpoint.record_timeout, step_ctx, error)
+                raise error
+            if not workflow_is_active(status):
+                # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so read once more before stopping.
+                final_read = True
+                continue
+            wait_for = polling_interval
+            if deadline is not None:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    error = DBOSStreamTimeoutError(workflow_id, key, timeout_seconds)
+                    await asyncio.to_thread(checkpoint.record_timeout, step_ctx, error)
+                    raise error
+                wait_for = min(remaining, polling_interval)
+            await event.wait_async(timeout=wait_for)
+    finally:
+        sys_db.unregister_stream_listener(payload)
 
 
 def read_stream(
@@ -3040,7 +3158,7 @@ def read_stream(
         raise ValueError(f"timeout_seconds must not be negative, got {timeout_seconds}")
     if polling_interval is None:
         polling_interval = sys_db._notification_listener_polling_interval_sec
-    checkpoint = _StreamReadCheckpoint(sys_db, key)
+    checkpoint = _StreamReadCheckpoint(sys_db, key, _READ_STREAM_FUNCTION_NAME)
     event, payload = sys_db.register_stream_listener(workflow_id, key)
     final_read = False
     try:
@@ -3081,7 +3199,7 @@ def read_stream(
                     remaining = deadline - time.time()
                     if remaining <= 0:
                         error = DBOSStreamTimeoutError(
-                            workflow_id, key, cast(float, timeout_seconds)
+                            workflow_id, key, timeout_seconds
                         )
                         checkpoint.record_timeout(step_ctx, error)
                         raise error
@@ -3113,7 +3231,7 @@ async def read_stream_async(
         raise ValueError(f"timeout_seconds must not be negative, got {timeout_seconds}")
     if polling_interval is None:
         polling_interval = sys_db._notification_listener_polling_interval_sec
-    checkpoint = _StreamReadCheckpoint(sys_db, key)
+    checkpoint = _StreamReadCheckpoint(sys_db, key, _READ_STREAM_FUNCTION_NAME)
     event, payload = sys_db.register_stream_listener(workflow_id, key)
     final_read = False
     try:
@@ -3156,7 +3274,7 @@ async def read_stream_async(
                     remaining = deadline - time.time()
                     if remaining <= 0:
                         error = DBOSStreamTimeoutError(
-                            workflow_id, key, cast(float, timeout_seconds)
+                            workflow_id, key, timeout_seconds
                         )
                         await asyncio.to_thread(
                             checkpoint.record_timeout, step_ctx, error

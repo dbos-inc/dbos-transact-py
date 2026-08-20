@@ -127,12 +127,18 @@ class DBOSNonExistentWorkflowError(DBOSException):
 class DBOSStreamTimeoutError(DBOSException):
     """Exception raised when no value arrives on a stream within its timeout."""
 
-    def __init__(self, workflow_id: str, key: str, timeout_seconds: float):
+    def __init__(
+        self, workflow_id: str, key: str, timeout_seconds: Optional[float] = None
+    ):
         self.workflow_id = workflow_id
         self.key = key
         self.timeout_seconds = timeout_seconds
+        # No timeout means the stream ended without reaching the value, so none ever will.
+        within = (
+            f" within {timeout_seconds} seconds" if timeout_seconds is not None else ""
+        )
         super().__init__(
-            f"No value arrived on stream {key} of workflow {workflow_id} within {timeout_seconds} seconds",
+            f"No value arrived on stream {key} of workflow {workflow_id}{within}",
             dbos_error_code=DBOSErrorCode.StreamTimeout.value,
         )
 
