@@ -7,6 +7,7 @@ from typing import Any, cast
 import pytest
 import sqlalchemy as sa
 from sqlalchemy import event as sa_event
+from sqlalchemy.exc import IntegrityError
 
 # Public API
 from dbos import DBOS, DBOSConfig, Queue, SetWorkflowID
@@ -2018,7 +2019,7 @@ def test_stream_write_to_deleted_workflow_raises(dbos: DBOS) -> None:
         writer_workflow()
     DBOS.delete_workflow(wfid)
 
-    with pytest.raises(sa.exc.IntegrityError):
+    with pytest.raises(IntegrityError):
         dbos._sys_db.write_stream_from_step(
             wfid,
             0,
