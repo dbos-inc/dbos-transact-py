@@ -64,6 +64,8 @@ from ._core import (
     decorate_workflow,
     enqueue_workflow_with_options,
     enqueue_workflow_with_options_async,
+    read_stream,
+    read_stream_async,
     record_sleep,
     run_step,
     run_step_async,
@@ -110,9 +112,6 @@ from ._sys_db import (
     VersionInfo,
     WorkflowSchedule,
     WorkflowStatus,
-    _dbos_stream_closed_sentinel,
-    _no_stream_value,
-    workflow_is_active,
 )
 from ._tracer import DBOSTracer, dbos_tracer
 
@@ -3460,38 +3459,13 @@ class DBOS:
 
         """
         check_async("read_stream")
-        sys_db = _get_dbos_instance()._sys_db
-
-        event, payload = sys_db.register_stream_listener(workflow_id, key)
-        final_read = False
-        try:
-            while True:
-                # Clear before reading so a notification arriving after the read
-                # leaves the event set and the wait below returns immediately.
-                event.clear()
-                # One round trip for both the value and the workflow's status.
-                status, value = sys_db.read_stream_value(workflow_id, key, offset)
-                if status is None:
-                    raise DBOSNonExistentWorkflowError("target", workflow_id)
-                if value is not _no_stream_value:
-                    if value == _dbos_stream_closed_sentinel:
-                        return
-                    yield value
-                    offset += 1
-                    # More may be buffered; read the next offset before waiting.
-                    continue
-                if final_read:
-                    break
-                # No value yet: stop if the workflow is done, else wait for a
-                # notification. Workflow completion fires none, so the wait
-                # is bounded by the polling interval to notice termination.
-                if not workflow_is_active(status):
-                    # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
-                    final_read = True
-                    continue
-                event.wait(timeout=sys_db._notification_listener_polling_interval_sec)
-        finally:
-            sys_db.unregister_stream_listener(payload)
+        yield from read_stream(
+            _get_dbos_instance()._sys_db,
+            workflow_id,
+            key,
+            offset=offset,
+            raise_if_missing=True,
+        )
 
     @classmethod
     async def write_stream_async(
@@ -3561,46 +3535,15 @@ class DBOS:
 
         """
         await cls._configure_asyncio_thread_pool()
-        dbos_instance = _get_dbos_instance()
-        sys_db = dbos_instance._sys_db
-        polling_interval = (
-            polling_interval_sec
-            if polling_interval_sec is not None
-            else sys_db._notification_listener_polling_interval_sec
-        )
-
-        event, payload = sys_db.register_stream_listener(workflow_id, key)
-        final_read = False
-        try:
-            while True:
-                # Clear before reading so a notification arriving after the read
-                # leaves the event set and the wait below returns immediately.
-                event.clear()
-                # One round trip for both the value and the workflow's status.
-                status, value = await asyncio.to_thread(
-                    sys_db.read_stream_value, workflow_id, key, offset
-                )
-                if status is None:
-                    raise DBOSNonExistentWorkflowError("target", workflow_id)
-                if value is not _no_stream_value:
-                    if value == _dbos_stream_closed_sentinel:
-                        return
-                    yield value
-                    offset += 1
-                    # More may be buffered; read the next offset before waiting.
-                    continue
-                if final_read:
-                    break
-                # No value yet: stop if the workflow is done, else await a
-                # notification, re-reading at the fallback interval in case one
-                # was dropped.
-                if not workflow_is_active(status):
-                    # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
-                    final_read = True
-                    continue
-                await event.wait_async(timeout=polling_interval)
-        finally:
-            sys_db.unregister_stream_listener(payload)
+        async for value in read_stream_async(
+            _get_dbos_instance()._sys_db,
+            workflow_id,
+            key,
+            offset=offset,
+            polling_interval=polling_interval_sec,
+            raise_if_missing=True,
+        ):
+            yield value
 
     @classmethod
     def patch(cls, patch_name: str) -> bool:

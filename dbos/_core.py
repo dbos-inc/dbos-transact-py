@@ -14,9 +14,11 @@ from types import TracebackType
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncGenerator,
     Awaitable,
     Callable,
     Coroutine,
+    Generator,
     Generic,
     List,
     Literal,
@@ -73,6 +75,7 @@ from ._error import (
     MaxRecoveryAttemptsExceededError,
 )
 from ._event_loop import retrieve_future_exception
+from ._logger import dbos_logger
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSFuncInfo,
@@ -107,9 +110,13 @@ from ._sys_db import (
     EnqueueOptionsInternal,
     OperationResultInternal,
     SendMessage,
+    SystemDatabase,
     WorkflowStatus,
     WorkflowStatusInternal,
     WorkflowStatusString,
+    _dbos_stream_closed_sentinel,
+    _no_stream_value,
+    workflow_is_active,
 )
 from ._tracer import dbos_tracer
 
@@ -2904,6 +2911,215 @@ def close_stream(dbos: "DBOS", step_ctx: Optional["DBOSContext"], key: str) -> N
     else:
         # Cannot call it from outside of a workflow
         raise DBOSException("close_stream() must be called from within a workflow")
+
+
+_READ_STREAM_FUNCTION_NAME = "DBOS.readStream"
+
+# Returned by _StreamReadCheckpoint.replay when a step has no recorded result and must be read live.
+_no_recorded_value = object()
+
+
+class _StreamReadCheckpoint:
+    """Checkpoints the values a workflow reads from a stream, one step per value.
+
+    A replayed reader re-yields its recorded values instead of re-reading a stream
+    that may have advanced since, so it observes the sequence it originally did.
+    Reads from a step, from a client, or from outside a workflow are not recorded.
+    """
+
+    def __init__(self, sys_db: "SystemDatabase", key: str) -> None:
+        self._sys_db = sys_db
+        self._key = key
+        self._ctx: Optional[DBOSContext] = None
+        self._bound = False
+        # Function ids are allocated in order, so the first miss proves every later one misses too.
+        self._replaying = True
+        self._started_at_epoch_ms = 0
+
+    def begin(self) -> Optional[DBOSContext]:
+        """Reserve the step that records the next value, or None if this read is not checkpointed."""
+        if not self._bound:
+            self._bound = True
+            ctx = get_local_dbos_context()
+            # Bind once and hold the context: a nested step call swaps the contextvar out from under us.
+            if ctx is not None and ctx.is_workflow():
+                self._ctx = ctx
+        if self._ctx is None:
+            return None
+        # Started when the read began, so the recorded step spans the wait for the value.
+        self._started_at_epoch_ms = int(time.time() * 1000)
+        return self._ctx.snapshot_step_ctx()
+
+    def replay(self, step_ctx: Optional[DBOSContext]) -> Any:
+        """Return the value recorded for this step, or _no_recorded_value to read it live."""
+        if step_ctx is None or not self._replaying:
+            return _no_recorded_value
+        recorded = self._sys_db.check_operation_execution(
+            step_ctx.workflow_id, step_ctx.function_id, _READ_STREAM_FUNCTION_NAME
+        )
+        if recorded is None:
+            self._replaying = False
+            return _no_recorded_value
+        dbos_logger.debug(
+            f"Replaying readStream, id: {step_ctx.function_id}, key: {self._key}"
+        )
+        return deserialize_value(
+            recorded["output"], recorded["serialization"], self._sys_db.serializer
+        )
+
+    def record(self, step_ctx: Optional[DBOSContext], value: Any) -> None:
+        """Record a value delivered to the workflow, in the reader's own serialization."""
+        self._record(
+            step_ctx,
+            value,
+            step_ctx.serialization_type if step_ctx is not None else None,
+        )
+
+    def record_end(self, step_ctx: Optional[DBOSContext]) -> None:
+        """Record that the stream ended here, so a replay stops where this read did."""
+        self._record(
+            step_ctx, _dbos_stream_closed_sentinel, WorkflowSerializationFormat.PORTABLE
+        )
+
+    def _record(
+        self,
+        step_ctx: Optional[DBOSContext],
+        value: Any,
+        serialization_type: Optional[WorkflowSerializationFormat],
+    ) -> None:
+        if step_ctx is None:
+            return
+        output, serialization = serialize_value(
+            value, serialization_type, self._sys_db.serializer
+        )
+        result: OperationResultInternal = {
+            "workflow_uuid": step_ctx.workflow_id,
+            "function_id": step_ctx.function_id,
+            "function_name": _READ_STREAM_FUNCTION_NAME,
+            "started_at_epoch_ms": self._started_at_epoch_ms,
+            "output": output,
+            "serialization": serialization,
+            "error": None,
+        }
+        self._sys_db.record_operation_result(result)
+
+
+def read_stream(
+    sys_db: "SystemDatabase",
+    workflow_id: str,
+    key: str,
+    *,
+    offset: int,
+    polling_interval: Optional[float] = None,
+    raise_if_missing: bool,
+) -> Generator[Any, Any, None]:
+    """Yield a stream's values in order, checkpointing each one when read from a workflow."""
+    if polling_interval is None:
+        polling_interval = sys_db._notification_listener_polling_interval_sec
+    checkpoint = _StreamReadCheckpoint(sys_db, key)
+    event, payload = sys_db.register_stream_listener(workflow_id, key)
+    final_read = False
+    try:
+        while True:
+            # One step per delivered value, reserved before the read so it spans the wait.
+            step_ctx = checkpoint.begin()
+            recorded = checkpoint.replay(step_ctx)
+            if recorded is not _no_recorded_value:
+                if recorded == _dbos_stream_closed_sentinel:
+                    return
+                yield recorded
+                offset += 1
+                continue
+            value: Any = _no_stream_value
+            while True:
+                # Clear before reading so a notification arriving after the read
+                # leaves the event set and the wait below returns immediately.
+                event.clear()
+                # One round trip for both the value and the workflow's status.
+                status, value = sys_db.read_stream_value(workflow_id, key, offset)
+                if status is None:
+                    if raise_if_missing:
+                        raise DBOSNonExistentWorkflowError("target", workflow_id)
+                    return
+                if value is not _no_stream_value or final_read:
+                    break
+                # No value yet: stop if the workflow is done, else wait for a
+                # notification. Workflow completion fires none, so the wait
+                # is bounded by the polling interval to notice termination.
+                if not workflow_is_active(status):
+                    # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
+                    final_read = True
+                    continue
+                event.wait(timeout=polling_interval)
+            if value is _no_stream_value or value == _dbos_stream_closed_sentinel:
+                checkpoint.record_end(step_ctx)
+                return
+            # Recorded before the yield, so a crash after the workflow acts on the value still replays it.
+            checkpoint.record(step_ctx, value)
+            yield value
+            offset += 1
+    finally:
+        sys_db.unregister_stream_listener(payload)
+
+
+async def read_stream_async(
+    sys_db: "SystemDatabase",
+    workflow_id: str,
+    key: str,
+    *,
+    offset: int,
+    polling_interval: Optional[float] = None,
+    raise_if_missing: bool,
+) -> AsyncGenerator[Any, None]:
+    """Yield a stream's values in order, checkpointing each one when read from a workflow."""
+    if polling_interval is None:
+        polling_interval = sys_db._notification_listener_polling_interval_sec
+    checkpoint = _StreamReadCheckpoint(sys_db, key)
+    event, payload = sys_db.register_stream_listener(workflow_id, key)
+    final_read = False
+    try:
+        while True:
+            # One step per delivered value, reserved before the read so it spans the wait.
+            step_ctx = checkpoint.begin()
+            recorded = await asyncio.to_thread(checkpoint.replay, step_ctx)
+            if recorded is not _no_recorded_value:
+                if recorded == _dbos_stream_closed_sentinel:
+                    return
+                yield recorded
+                offset += 1
+                continue
+            value: Any = _no_stream_value
+            while True:
+                # Clear before reading so a notification arriving after the read
+                # leaves the event set and the wait below returns immediately.
+                event.clear()
+                # One round trip for both the value and the workflow's status.
+                status, value = await asyncio.to_thread(
+                    sys_db.read_stream_value, workflow_id, key, offset
+                )
+                if status is None:
+                    if raise_if_missing:
+                        raise DBOSNonExistentWorkflowError("target", workflow_id)
+                    return
+                if value is not _no_stream_value or final_read:
+                    break
+                # No value yet: stop if the workflow is done, else await a
+                # notification, re-reading at the fallback interval in case one
+                # was dropped.
+                if not workflow_is_active(status):
+                    # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
+                    final_read = True
+                    continue
+                await event.wait_async(timeout=polling_interval)
+            if value is _no_stream_value or value == _dbos_stream_closed_sentinel:
+                await asyncio.to_thread(checkpoint.record_end, step_ctx)
+                return
+            # Recorded before the yield, so a crash after the workflow acts on the value still replays it.
+            await asyncio.to_thread(checkpoint.record, step_ctx, value)
+            yield value
+            offset += 1
+    finally:
+        sys_db.unregister_stream_listener(payload)
 
 
 def _validate_enqueue_only_options(

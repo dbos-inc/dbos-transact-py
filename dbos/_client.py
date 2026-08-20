@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from dbos._core import DEFAULT_POLLING_INTERVAL
+from dbos._core import DEFAULT_POLLING_INTERVAL, read_stream, read_stream_async
 
 # Re-exported: EnqueueOptions is public as dbos.EnqueueOptions but is shared with _core.
 from dbos._enqueue_options import EnqueueOptions as EnqueueOptions
@@ -64,9 +64,6 @@ from dbos._sys_db import (
     WorkflowSchedule,
     WorkflowStatus,
     WorkflowStatusInternal,
-    _dbos_stream_closed_sentinel,
-    _no_stream_value,
-    workflow_is_active,
 )
 from dbos._workflow_commands import fork_workflow, get_workflow
 
@@ -1246,38 +1243,9 @@ class DBOSClient:
         Yields:
             The values written to the stream in order
         """
-        event, payload = self._sys_db.register_stream_listener(workflow_id, key)
-        final_read = False
-        try:
-            while True:
-                # Clear before reading so a notification arriving after the read
-                # leaves the event set and the wait below returns immediately.
-                event.clear()
-                # One round trip for both the value and the workflow's status.
-                status, value = self._sys_db.read_stream_value(workflow_id, key, offset)
-                if status is None:
-                    break
-                if value is not _no_stream_value:
-                    if value == _dbos_stream_closed_sentinel:
-                        return
-                    yield value
-                    offset += 1
-                    # More may be buffered; read the next offset before waiting.
-                    continue
-                if final_read:
-                    break
-                # No value yet: stop if the workflow is done, else wait for a
-                # notification. Workflow completion fires none, so the wait
-                # is bounded by the polling interval to notice termination.
-                if not workflow_is_active(status):
-                    # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
-                    final_read = True
-                    continue
-                event.wait(
-                    timeout=self._sys_db._notification_listener_polling_interval_sec
-                )
-        finally:
-            self._sys_db.unregister_stream_listener(payload)
+        yield from read_stream(
+            self._sys_db, workflow_id, key, offset=offset, raise_if_missing=False
+        )
 
     async def read_stream_async(
         self, workflow_id: str, key: str, *, offset: int = 0
@@ -1295,40 +1263,10 @@ class DBOSClient:
         Yields:
             The values written to the stream in order
         """
-        event, payload = self._sys_db.register_stream_listener(workflow_id, key)
-        final_read = False
-        try:
-            while True:
-                # Clear before reading so a notification arriving after the read
-                # leaves the event set and the wait below returns immediately.
-                event.clear()
-                # One round trip for both the value and the workflow's status.
-                status, value = await asyncio.to_thread(
-                    self._sys_db.read_stream_value, workflow_id, key, offset
-                )
-                if status is None:
-                    break
-                if value is not _no_stream_value:
-                    if value == _dbos_stream_closed_sentinel:
-                        return
-                    yield value
-                    offset += 1
-                    # More may be buffered; read the next offset before waiting.
-                    continue
-                if final_read:
-                    break
-                # No value yet: stop if the workflow is done, else await a
-                # notification, re-reading at the fallback interval in case one
-                # was dropped.
-                if not workflow_is_active(status):
-                    # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
-                    final_read = True
-                    continue
-                await event.wait_async(
-                    timeout=self._sys_db._notification_listener_polling_interval_sec
-                )
-        finally:
-            self._sys_db.unregister_stream_listener(payload)
+        async for value in read_stream_async(
+            self._sys_db, workflow_id, key, offset=offset, raise_if_missing=False
+        ):
+            yield value
 
     # ── Schedule API ──────────────────────────────────────────────
 

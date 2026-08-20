@@ -1,3 +1,4 @@
+import asyncio
 import time
 import uuid
 from typing import Any, cast
@@ -8,9 +9,11 @@ from sqlalchemy import event as sa_event
 # Public API
 from dbos import DBOS, DBOSConfig, SetWorkflowID
 from dbos._client import DBOSClient
+from dbos._serialization import WorkflowSerializationFormat
 from dbos._sys_db import _dbos_streams_channel, _no_stream_value
 from dbos._sys_db_postgres import PostgresSystemDatabase
 from tests.conftest import (
+    reexecute_workflow_by_id,
     retry_until_success,
     set_workflow_status,
     wait_for_client_listener,
@@ -1296,3 +1299,189 @@ async def test_client_read_stream_async_workflow_termination(
         assert read_values == test_values
     finally:
         client.destroy()
+
+
+def test_workflow_read_stream_checkpointing(dbos: DBOS) -> None:
+    """A workflow reading a stream records one step per value, so a replay re-yields what it
+    read rather than re-reading a stream that has moved on. Reads from a step are not recorded.
+    """
+    stream_key = "checkpointed_stream"
+    test_values: list[Any] = ["a", None, {"k": "v"}]
+    reader_calls = 0
+    crashing_reader_attempts = 0
+    step_calls = 0
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for value in test_values:
+            DBOS.write_stream(stream_key, value)
+        # Left unclosed: a reader stops once the writer goes terminal.
+
+    @DBOS.workflow()
+    def reader_workflow(target_id: str) -> list[Any]:
+        nonlocal reader_calls
+        reader_calls += 1
+        return list(DBOS.read_stream(target_id, stream_key))
+
+    @DBOS.workflow()
+    def crashing_reader_workflow(target_id: str) -> list[Any]:
+        nonlocal crashing_reader_attempts
+        crashing_reader_attempts += 1
+        seen: list[Any] = []
+        for value in DBOS.read_stream(target_id, stream_key):
+            seen.append(value)
+            if crashing_reader_attempts == 1 and len(seen) == 2:
+                raise Exception("reader crashed")
+        return seen
+
+    @DBOS.step()
+    def counting_step() -> int:
+        nonlocal step_calls
+        step_calls += 1
+        return step_calls
+
+    @DBOS.workflow()
+    def partial_reader_workflow(target_id: str) -> list[Any]:
+        seen: list[Any] = []
+        for value in DBOS.read_stream(target_id, stream_key):
+            seen.append(value)
+            if len(seen) == 2:
+                break
+        return [seen, counting_step()]
+
+    @DBOS.step()
+    def read_in_step(target_id: str) -> list[Any]:
+        return list(DBOS.read_stream(target_id, stream_key))
+
+    @DBOS.workflow()
+    def step_reader_workflow(target_id: str) -> list[Any]:
+        return read_in_step(target_id)
+
+    writer_id = str(uuid.uuid4())
+    with SetWorkflowID(writer_id):
+        writer_workflow()
+
+    # One step per value, including the None, plus one recording that the stream ended.
+    reader_id = str(uuid.uuid4())
+    with SetWorkflowID(reader_id):
+        assert reader_workflow(writer_id) == test_values
+    assert [s["function_name"] for s in DBOS.list_workflow_steps(reader_id)] == [
+        "DBOS.readStream"
+    ] * (len(test_values) + 1)
+
+    # A reader that failed partway records only what it delivered, then reads on from there.
+    crashing_reader_id = str(uuid.uuid4())
+    with SetWorkflowID(crashing_reader_id):
+        with pytest.raises(Exception, match="reader crashed"):
+            crashing_reader_workflow(writer_id)
+    assert len(DBOS.list_workflow_steps(crashing_reader_id)) == 2
+    assert (
+        reexecute_workflow_by_id(dbos, crashing_reader_id).get_result() == test_values
+    )
+    assert crashing_reader_attempts == 2
+
+    # Each value consumes a function id, so a step after a half-read stream still replays.
+    partial_reader_id = str(uuid.uuid4())
+    with SetWorkflowID(partial_reader_id):
+        assert partial_reader_workflow(writer_id) == [test_values[:2], 1]
+    assert reexecute_workflow_by_id(dbos, partial_reader_id).get_result() == [
+        test_values[:2],
+        1,
+    ]
+    assert step_calls == 1
+
+    # A read inside a step is covered by that step's own checkpoint.
+    step_reader_id = str(uuid.uuid4())
+    with SetWorkflowID(step_reader_id):
+        assert step_reader_workflow(writer_id) == test_values
+    step_reader_steps = DBOS.list_workflow_steps(step_reader_id)
+    assert len(step_reader_steps) == 1
+    assert step_reader_steps[0]["function_name"] != "DBOS.readStream"
+
+    # Extend the stream now the readers are done, so a live re-read would see more than they did.
+    for value in ["d", "e"]:
+        dbos._sys_db.write_stream_from_step(
+            writer_id,
+            100,
+            stream_key,
+            value,
+            serialization_type=WorkflowSerializationFormat.DEFAULT,
+        )
+    assert list(DBOS.read_stream(writer_id, stream_key)) == test_values + ["d", "e"]
+
+    assert reexecute_workflow_by_id(dbos, reader_id).get_result() == test_values
+    assert reader_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_workflow_read_stream_async_checkpointing(dbos: DBOS) -> None:
+    """read_stream_async checkpoints its values too, so a replayed reader resumes where it
+    stopped and re-yields what it read rather than what the stream holds now."""
+    stream_key = "async_checkpointed_stream"
+    test_values: list[Any] = ["a", None, {"k": "v"}]
+    reader_calls = 0
+    crashing_reader_attempts = 0
+
+    @DBOS.workflow()
+    async def async_writer_workflow() -> None:
+        for value in test_values:
+            await DBOS.write_stream_async(stream_key, value)
+        # Left unclosed: a reader stops once the writer goes terminal.
+
+    @DBOS.workflow()
+    async def async_reader_workflow(target_id: str) -> list[Any]:
+        nonlocal reader_calls
+        reader_calls += 1
+        return [v async for v in DBOS.read_stream_async(target_id, stream_key)]
+
+    @DBOS.workflow()
+    async def async_crashing_reader_workflow(target_id: str) -> list[Any]:
+        nonlocal crashing_reader_attempts
+        crashing_reader_attempts += 1
+        seen: list[Any] = []
+        async for value in DBOS.read_stream_async(target_id, stream_key):
+            seen.append(value)
+            if crashing_reader_attempts == 1 and len(seen) == 2:
+                raise Exception("reader crashed")
+        return seen
+
+    async def replay(workflow_id: str) -> Any:
+        # Recovery is fundamentally sync, so run it off the event loop.
+        return await asyncio.to_thread(
+            lambda: reexecute_workflow_by_id(dbos, workflow_id).get_result()
+        )
+
+    writer_id = str(uuid.uuid4())
+    with SetWorkflowID(writer_id):
+        await async_writer_workflow()
+
+    # One step per value, including the None, plus one recording that the stream ended.
+    reader_id = str(uuid.uuid4())
+    with SetWorkflowID(reader_id):
+        assert await async_reader_workflow(writer_id) == test_values
+    steps = await DBOS.list_workflow_steps_async(reader_id)
+    assert [s["function_name"] for s in steps] == ["DBOS.readStream"] * (
+        len(test_values) + 1
+    )
+
+    # A reader that failed partway records only what it delivered, then reads on from there.
+    crashing_reader_id = str(uuid.uuid4())
+    with SetWorkflowID(crashing_reader_id):
+        with pytest.raises(Exception, match="reader crashed"):
+            await async_crashing_reader_workflow(writer_id)
+    assert len(await DBOS.list_workflow_steps_async(crashing_reader_id)) == 2
+    assert await replay(crashing_reader_id) == test_values
+    assert crashing_reader_attempts == 2
+
+    # Extend the stream now the readers are done, so a live re-read would see more than they did.
+    for value in ["d", "e"]:
+        dbos._sys_db.write_stream_from_step(
+            writer_id,
+            100,
+            stream_key,
+            value,
+            serialization_type=WorkflowSerializationFormat.DEFAULT,
+        )
+
+    assert await replay(reader_id) == test_values
+    assert reader_calls == 2
