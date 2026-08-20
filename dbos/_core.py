@@ -102,7 +102,6 @@ from ._serialization import (
     deserialize_args,
     deserialize_exception,
     deserialize_value,
-    serialization_for_type,
     serialize_args,
     serialize_exception,
     serialize_value,
@@ -2985,16 +2984,14 @@ class _StreamReadCheckpoint:
         )
 
     def record(self, step_ctx: Optional[DBOSContext], value: Any) -> None:
-        """Record a value delivered to the workflow, in the workflow's own serialization.
+        """Record a value delivered to the workflow, in the app's serializer as step outputs are.
 
-        A workflow that declares a format persists everything in it, so a portable one reading a
-        value with no portable form fails here, as it would returning that value or writing it.
+        Checkpoints are read back only by this runtime replaying this workflow, never across
+        languages, so they do not follow the workflow's declared interop format.
         """
         if step_ctx is None:
             return
-        output, serialization = serialize_value(
-            value, step_ctx.serialization_type, self._sys_db.serializer
-        )
+        output, serialization = serialize_value(value, None, self._sys_db.serializer)
         result: OperationResultInternal = {
             "workflow_uuid": step_ctx.workflow_id,
             "function_id": step_ctx.function_id,
@@ -3015,11 +3012,7 @@ class _StreamReadCheckpoint:
         if step_ctx is None:
             return
         serialized, serialization = serialize_exception(
-            error,
-            serialization_for_type(
-                step_ctx.serialization_type, self._sys_db.serializer
-            ),
-            self._sys_db.serializer,
+            error, None, self._sys_db.serializer
         )
         result: OperationResultInternal = {
             "workflow_uuid": step_ctx.workflow_id,

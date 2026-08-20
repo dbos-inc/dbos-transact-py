@@ -11,11 +11,7 @@ from sqlalchemy import event as sa_event
 from dbos import DBOS, DBOSConfig, Queue, SetWorkflowID
 from dbos._client import DBOSClient
 from dbos._error import DBOSNonExistentWorkflowError, DBOSStreamTimeoutError
-from dbos._serialization import (
-    PortableWorkflowError,
-    WorkflowSerializationFormat,
-    serialize_value,
-)
+from dbos._serialization import WorkflowSerializationFormat, serialize_value
 from dbos._sys_db import _dbos_streams_channel, _no_stream_value
 from dbos._sys_db_postgres import PostgresSystemDatabase
 from tests.conftest import (
@@ -1310,7 +1306,7 @@ def test_workflow_read_stream_checkpointing(dbos: DBOS) -> None:
     read rather than re-reading a stream that has moved on. Reads from a step are not recorded.
     """
     stream_key = "checkpointed_stream"
-    # The bytes pickle but have no portable JSON form, so a portable reader cannot checkpoint them.
+    # The bytes have no portable JSON form, so they only checkpoint under the app's serializer.
     test_values: list[Any] = ["a", None, {"k": "v"}, b"bytes"]
     reader_calls = 0
     crashing_reader_attempts = 0
@@ -1399,15 +1395,14 @@ def test_workflow_read_stream_checkpointing(dbos: DBOS) -> None:
     ]
     assert step_calls == 1
 
-    # Checkpoints go in the workflow's own serialization, so a portable workflow reading a value
-    # with no portable form fails on it, as it would returning that value or writing it itself.
+    # Checkpoints use the app's serializer, not the workflow's declared interop format, so a
+    # portable workflow reads a value with no portable form just as any other workflow does.
     portable_reader_id = str(uuid.uuid4())
     with SetWorkflowID(portable_reader_id):
         handle = Queue("portable_reader_queue").enqueue(
             portable_reader_workflow, writer_id
         )
-    with pytest.raises(Exception, match="not portable JSON serializable"):
-        handle.get_result()
+    assert handle.get_result() == len(test_values)
 
     # A read inside a step is covered by that step's own checkpoint.
     step_reader_id = str(uuid.uuid4())
@@ -1743,8 +1738,6 @@ def test_workflow_read_stream_timeout_is_checkpointed(dbos: DBOS) -> None:
                 seen.append(value)
         except DBOSStreamTimeoutError:
             seen.append("timed out")
-        except PortableWorkflowError as e:
-            seen.append(f"timed out as {e.name}")
         return seen
 
     wfid = str(uuid.uuid4())
@@ -1773,15 +1766,15 @@ def test_workflow_read_stream_timeout_is_checkpointed(dbos: DBOS) -> None:
         assert attempts == 2
         assert time.time() - start < 0.5
 
-        # A portable workflow records the timeout in portable form, and portable serialization
-        # rebuilds every exception as PortableWorkflowError -- so its replay identifies the
-        # timeout by name rather than by class, exactly as it would any other error it raises.
+        # A portable workflow records the timeout under the app's serializer too, so its replay
+        # rebuilds the exact exception type rather than the PortableWorkflowError that portable
+        # serialization would have flattened it into.
         portable_id = str(uuid.uuid4())
         with SetWorkflowID(portable_id):
             assert portable_reader_workflow(wfid) == ["only", "timed out"]
         assert reexecute_workflow_by_id(dbos, portable_id).get_result() == [
             "only",
-            "timed out as DBOSStreamTimeoutError",
+            "timed out",
         ]
     finally:
         release.set()
