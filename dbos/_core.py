@@ -68,6 +68,7 @@ from ._error import (
     DBOSNotAuthorizedError,
     DBOSQueueDeduplicatedError,
     DBOSRecoveryError,
+    DBOSStreamTimeoutError,
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
@@ -101,6 +102,7 @@ from ._serialization import (
     deserialize_args,
     deserialize_exception,
     deserialize_value,
+    serialization_for_type,
     serialize_args,
     serialize_exception,
     serialize_value,
@@ -2973,6 +2975,11 @@ class _StreamReadCheckpoint:
         dbos_logger.debug(
             f"Replaying readStream, id: {step_ctx.function_id}, key: {self._key}"
         )
+        if recorded["error"] is not None:
+            # A timeout is the only failure recorded here; a replay re-raises it without waiting.
+            raise deserialize_exception(
+                recorded["error"], recorded["serialization"], self._sys_db.serializer
+            )
         return deserialize_value(
             recorded["output"], recorded["serialization"], self._sys_db.serializer
         )
@@ -2985,18 +2992,6 @@ class _StreamReadCheckpoint:
         Re-serializing under the reader's own format would fail on a value its format cannot
         represent, such as a pickled object read by a portable workflow.
         """
-        self._record(step_ctx, value, serialization)
-
-    def record_end(self, step_ctx: Optional[DBOSContext]) -> None:
-        """Record that the stream ended here, so a replay stops where this read did."""
-        self._record(step_ctx, _dbos_stream_closed_sentinel, DBOSPortableJSON.name())
-
-    def _record(
-        self,
-        step_ctx: Optional[DBOSContext],
-        value: Any,
-        serialization: Optional[str],
-    ) -> None:
         if step_ctx is None:
             return
         output, serialization = serialize_value_as(
@@ -3013,6 +3008,49 @@ class _StreamReadCheckpoint:
         }
         self._sys_db.record_operation_result(result)
 
+    def record_timeout(self, step_ctx: Optional[DBOSContext], error: Exception) -> None:
+        """Record that the wait for this value timed out, so a replay raises it rather than waiting.
+
+        A timeout is an outcome rather than a failure of the read, the same way get_event records
+        the None it returns, and it is the failure a workflow is most likely to catch and act on.
+        """
+        if step_ctx is None:
+            return
+        serialized, serialization = serialize_exception(
+            error,
+            serialization_for_type(
+                step_ctx.serialization_type, self._sys_db.serializer
+            ),
+            self._sys_db.serializer,
+        )
+        result: OperationResultInternal = {
+            "workflow_uuid": step_ctx.workflow_id,
+            "function_id": step_ctx.function_id,
+            "function_name": _READ_STREAM_FUNCTION_NAME,
+            "started_at_epoch_ms": self._started_at_epoch_ms,
+            "output": None,
+            "serialization": serialization,
+            "error": serialized,
+        }
+        self._sys_db.record_operation_result(result)
+
+
+def _validate_stream_timeout(timeout_seconds: Optional[float]) -> None:
+    if timeout_seconds is not None and timeout_seconds < 0:
+        raise ValueError(f"timeout_seconds must not be negative, got {timeout_seconds}")
+
+
+def _stream_wait_seconds(
+    deadline: Optional[float], polling_interval: float
+) -> Optional[float]:
+    """How long to wait for the next value, or None if the deadline has passed."""
+    if deadline is None:
+        return polling_interval
+    remaining = deadline - time.time()
+    if remaining <= 0:
+        return None
+    return min(remaining, polling_interval)
+
 
 def read_stream(
     sys_db: "SystemDatabase",
@@ -3021,8 +3059,10 @@ def read_stream(
     *,
     offset: int,
     polling_interval: Optional[float] = None,
+    timeout_seconds: Optional[float] = None,
 ) -> Generator[Any, Any, None]:
     """Yield a stream's values in order, checkpointing each one when read from a workflow."""
+    _validate_stream_timeout(timeout_seconds)
     if polling_interval is None:
         polling_interval = sys_db._notification_listener_polling_interval_sec
     checkpoint = _StreamReadCheckpoint(sys_db, key)
@@ -3032,6 +3072,10 @@ def read_stream(
         while True:
             # One step per delivered value, reserved before the read so it spans the wait.
             step_ctx = checkpoint.begin()
+            # The timeout is per value: the clock restarts every time one is delivered.
+            deadline = (
+                time.time() + timeout_seconds if timeout_seconds is not None else None
+            )
             recorded = checkpoint.replay(step_ctx)
             if recorded is not _no_recorded_value:
                 if recorded == _dbos_stream_closed_sentinel:
@@ -3060,9 +3104,19 @@ def read_stream(
                     # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
                     final_read = True
                     continue
-                event.wait(timeout=polling_interval)
+                remaining = _stream_wait_seconds(deadline, polling_interval)
+                if remaining is None:
+                    error = DBOSStreamTimeoutError(
+                        workflow_id, key, cast(float, timeout_seconds)
+                    )
+                    checkpoint.record_timeout(step_ctx, error)
+                    raise error
+                event.wait(timeout=remaining)
             if value is _no_stream_value or value == _dbos_stream_closed_sentinel:
-                checkpoint.record_end(step_ctx)
+                # The end is recorded too, so a replay stops exactly where this read did.
+                checkpoint.record(
+                    step_ctx, _dbos_stream_closed_sentinel, DBOSPortableJSON.name()
+                )
                 return
             # Recorded before the yield, so a crash after the workflow acts on the value still replays it.
             checkpoint.record(step_ctx, value, serialization)
@@ -3079,8 +3133,10 @@ async def read_stream_async(
     *,
     offset: int,
     polling_interval: Optional[float] = None,
+    timeout_seconds: Optional[float] = None,
 ) -> AsyncGenerator[Any, None]:
     """Yield a stream's values in order, checkpointing each one when read from a workflow."""
+    _validate_stream_timeout(timeout_seconds)
     if polling_interval is None:
         polling_interval = sys_db._notification_listener_polling_interval_sec
     checkpoint = _StreamReadCheckpoint(sys_db, key)
@@ -3090,6 +3146,10 @@ async def read_stream_async(
         while True:
             # One step per delivered value, reserved before the read so it spans the wait.
             step_ctx = checkpoint.begin()
+            # The timeout is per value: the clock restarts every time one is delivered.
+            deadline = (
+                time.time() + timeout_seconds if timeout_seconds is not None else None
+            )
             recorded = await asyncio.to_thread(checkpoint.replay, step_ctx)
             if recorded is not _no_recorded_value:
                 if recorded == _dbos_stream_closed_sentinel:
@@ -3118,9 +3178,22 @@ async def read_stream_async(
                     # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
                     final_read = True
                     continue
-                await event.wait_async(timeout=polling_interval)
+                remaining = _stream_wait_seconds(deadline, polling_interval)
+                if remaining is None:
+                    error = DBOSStreamTimeoutError(
+                        workflow_id, key, cast(float, timeout_seconds)
+                    )
+                    await asyncio.to_thread(checkpoint.record_timeout, step_ctx, error)
+                    raise error
+                await event.wait_async(timeout=remaining)
             if value is _no_stream_value or value == _dbos_stream_closed_sentinel:
-                await asyncio.to_thread(checkpoint.record_end, step_ctx)
+                # The end is recorded too, so a replay stops exactly where this read did.
+                await asyncio.to_thread(
+                    checkpoint.record,
+                    step_ctx,
+                    _dbos_stream_closed_sentinel,
+                    DBOSPortableJSON.name(),
+                )
                 return
             # Recorded before the yield, so a crash after the workflow acts on the value still replays it.
             await asyncio.to_thread(checkpoint.record, step_ctx, value, serialization)

@@ -3447,6 +3447,7 @@ class DBOS:
         *,
         offset: int = 0,
         polling_interval_sec: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> Generator[Any, Any, None]:
         """
         Read values from a stream as a generator.
@@ -3460,6 +3461,7 @@ class DBOS:
             offset(int): The offset to start reading from (defaults to 0, the start of the stream)
             polling_interval_sec(float, optional): Polling interval in seconds when waiting for new values when not using LISTEN/NOTIFY.
                 Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
+            timeout_seconds(float, optional): How long to wait for each value before raising DBOSStreamTimeoutError.
 
         Yields:
             Any: Each value in the stream until the stream is closed
@@ -3472,6 +3474,7 @@ class DBOS:
             key,
             offset=offset,
             polling_interval=polling_interval_sec,
+            timeout_seconds=timeout_seconds,
         )
 
     @classmethod
@@ -3523,6 +3526,7 @@ class DBOS:
         *,
         offset: int = 0,
         polling_interval_sec: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> AsyncGenerator[Any, None]:
         """
         Read values from a stream as an async generator.
@@ -3536,6 +3540,7 @@ class DBOS:
             offset(int): The offset to start reading from (defaults to 0, the start of the stream)
             polling_interval_sec(float, optional): Polling interval in seconds when waiting for new values when not using LISTEN/NOTIFY.
                 Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
+            timeout_seconds(float, optional): How long to wait for each value before raising DBOSStreamTimeoutError.
 
         Yields:
             Any: Each value in the stream until the stream is closed
@@ -3548,6 +3553,7 @@ class DBOS:
             key,
             offset=offset,
             polling_interval=polling_interval_sec,
+            timeout_seconds=timeout_seconds,
         ):
             yield value
 

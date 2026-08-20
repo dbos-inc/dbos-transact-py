@@ -1234,6 +1234,7 @@ class DBOSClient:
         *,
         offset: int = 0,
         polling_interval_sec: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> Generator[Any, Any, None]:
         """
         Read values from a stream as a generator.
@@ -1246,6 +1247,7 @@ class DBOSClient:
             offset: The offset to start reading from (defaults to 0, the start of the stream)
             polling_interval_sec: Polling interval in seconds when waiting for new values when not using LISTEN/NOTIFY.
                 Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
+            timeout_seconds: How long to wait for each value before raising DBOSStreamTimeoutError.
 
         Yields:
             The values written to the stream in order
@@ -1256,6 +1258,7 @@ class DBOSClient:
             key,
             offset=offset,
             polling_interval=polling_interval_sec,
+            timeout_seconds=timeout_seconds,
         )
 
     async def read_stream_async(
@@ -1265,6 +1268,7 @@ class DBOSClient:
         *,
         offset: int = 0,
         polling_interval_sec: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> AsyncGenerator[Any, None]:
         """
         Read values from a stream as an async generator.
@@ -1277,6 +1281,7 @@ class DBOSClient:
             offset: The offset to start reading from (defaults to 0, the start of the stream)
             polling_interval_sec: Polling interval in seconds when waiting for new values when not using LISTEN/NOTIFY.
                 Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
+            timeout_seconds: How long to wait for each value before raising DBOSStreamTimeoutError.
 
         Yields:
             The values written to the stream in order
@@ -1287,6 +1292,7 @@ class DBOSClient:
             key,
             offset=offset,
             polling_interval=polling_interval_sec,
+            timeout_seconds=timeout_seconds,
         ):
             yield value
 

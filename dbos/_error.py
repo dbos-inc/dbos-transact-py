@@ -65,6 +65,7 @@ class DBOSErrorCode(Enum):
     AwaitedWorkflowCancelled = 13
     AwaitedWorkflowMaxRecoveryAttemptsExceeded = 14
     PatchNondeterminism = 15
+    StreamTimeout = 16
     ConflictingRegistrationError = 25
 
 
@@ -121,6 +122,24 @@ class DBOSNonExistentWorkflowError(DBOSException):
             f"Non-existent {destination} workflow ID: {destination_id}",
             dbos_error_code=DBOSErrorCode.NonExistentWorkflowError.value,
         )
+
+
+class DBOSStreamTimeoutError(DBOSException):
+    """Exception raised when no value arrives on a stream within its timeout."""
+
+    def __init__(self, workflow_id: str, key: str, timeout_seconds: float):
+        self.workflow_id = workflow_id
+        self.key = key
+        self.timeout_seconds = timeout_seconds
+        super().__init__(
+            f"No value arrived on stream {key} of workflow {workflow_id} within {timeout_seconds} seconds",
+            dbos_error_code=DBOSErrorCode.StreamTimeout.value,
+        )
+
+    def __reduce__(self) -> Any:
+        # Pickle rebuilds an exception by calling cls(*args); without this it would pass the
+        # message alone to a three-argument constructor and fail to load.
+        return (self.__class__, (self.workflow_id, self.key, self.timeout_seconds))
 
 
 class MaxRecoveryAttemptsExceededError(DBOSException):
