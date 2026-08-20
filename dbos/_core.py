@@ -3,6 +3,7 @@ import copy
 import functools
 import inspect
 import json
+import math
 import sys
 import threading
 import time
@@ -2411,11 +2412,13 @@ async def _run_step_with_timeout(
         if step_task in done:
             return step_task.result()
         # Timed out: cancel the step and let its cleanup finish before the
-        # timeout is checkpointed. asyncio.wait, rather than awaiting the task
-        # directly, so an outer cancellation still propagates while the step's
-        # own outcome cannot displace the timeout — a body that suppresses
-        # CancelledError fails the step on every supported Python version
-        # (asyncio.wait_for would return its value on 3.10/3.11).
+        # timeout is checkpointed. asyncio.wait, rather than asyncio.wait_for:
+        # a body that catches CancelledError and returns normally makes
+        # wait_for hand back that value instead of raising (verified on 3.10
+        # through 3.13 — this is not version-specific), which would let a step
+        # silently outlive its deadline. asyncio.wait never yields the task's
+        # value, so the timeout always wins. Awaiting the task directly is not
+        # an option either: it would re-raise the step's own outcome here.
         step_task.cancel()
         await asyncio.wait({step_task})
         if not step_task.cancelled():
@@ -2470,10 +2473,13 @@ def invoke_step(
                 f"Step {step_name} is sync but timeout_seconds is set. "
                 f"Step timeouts are only supported for async steps."
             )
-        if timeout_seconds <= 0:
+        if not (timeout_seconds > 0 and math.isfinite(timeout_seconds)):
+            # `not > 0` rather than `<= 0` so NaN is rejected too: NaN passes
+            # every comparison, and asyncio.wait(timeout=nan) never fires,
+            # silently disabling the timeout. Matches SetWorkflowTimeout.
             raise DBOSException(
                 f"Step {step_name} has timeout_seconds={timeout_seconds}. "
-                f"Step timeouts must be positive."
+                f"Step timeouts must be positive and finite."
             )
 
     attributes: TracedAttributes = {
@@ -2732,10 +2738,10 @@ def decorate_step(
                     f"Step {name or func.__qualname__} is sync but timeout_seconds is set. "
                     f"Step timeouts are only supported for async steps."
                 )
-            if timeout_seconds <= 0:
+            if not (timeout_seconds > 0 and math.isfinite(timeout_seconds)):
                 raise DBOSException(
                     f"Step {name or func.__qualname__} has timeout_seconds={timeout_seconds}. "
-                    f"Step timeouts must be positive."
+                    f"Step timeouts must be positive and finite."
                 )
 
         step_name = name if name is not None else func.__qualname__

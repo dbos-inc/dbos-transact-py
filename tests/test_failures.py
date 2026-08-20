@@ -1249,8 +1249,11 @@ async def test_step_timeout_cancels_step(dbos: DBOS) -> None:
     async def timeout_wf() -> str:
         return await slow_step()
 
+    start = time.time()
     with pytest.raises(DBOSStepTimeoutError) as exc_info:
         await timeout_wf()
+    # The 60s body was cut short at ~0.2s, not run to completion.
+    assert time.time() - start < 2.0
     assert exc_info.value.timeout_seconds == 0.2
     assert "slow_step" in exc_info.value.step_name
     # The step observed the cancellation, and its cleanup ran before the
@@ -1341,9 +1344,10 @@ async def test_step_timeout_per_attempt_with_retries(dbos: DBOS) -> None:
     async def retry_wf() -> None:
         await slow_step()
 
-    with pytest.raises(DBOSMaxStepRetriesExceeded):
+    with pytest.raises(DBOSMaxStepRetriesExceeded) as exc_info:
         await retry_wf()
     assert invocations == max_attempts
+    assert all(isinstance(e, DBOSStepTimeoutError) for e in exc_info.value.errors)
 
 
 @pytest.mark.asyncio
@@ -1425,10 +1429,24 @@ def test_step_timeout_rejected_for_sync_step(dbos: DBOS) -> None:
         def sync_step() -> None:
             pass
 
-    with pytest.raises(DBOSException, match="must be positive"):
+    with pytest.raises(DBOSException, match="positive and finite"):
 
         @DBOS.step(timeout_seconds=0)
         async def zero_timeout_step() -> None:
+            pass
+
+    # NaN passes every comparison, so `<= 0` would let it through and silently
+    # disable the timeout; inf disables it outright.
+    with pytest.raises(DBOSException, match="positive and finite"):
+
+        @DBOS.step(timeout_seconds=float("nan"))
+        async def nan_timeout_step() -> None:
+            pass
+
+    with pytest.raises(DBOSException, match="positive and finite"):
+
+        @DBOS.step(timeout_seconds=float("inf"))
+        async def inf_timeout_step() -> None:
             pass
 
 
@@ -1504,7 +1522,7 @@ async def test_step_timeout_step_suppressing_cancellation(dbos: DBOS) -> None:
 @pytest.mark.asyncio
 async def test_step_timeout_with_preemptible(dbos: DBOS) -> None:
     """Timeout and preemption compose: the timeout fires and tears down the
-    preemption poller along with the step."""
+    preemption poller along with the step, leaving no lingering task."""
 
     @DBOS.step(preemptible=True, timeout_seconds=0.2)
     async def slow_step() -> None:
@@ -1516,6 +1534,15 @@ async def test_step_timeout_with_preemptible(dbos: DBOS) -> None:
 
     with pytest.raises(DBOSStepTimeoutError):
         await preemptible_timeout_wf()
+
+    # The poller re-reads the workflow status every second forever; if the
+    # timeout had not torn it down it would still be pending here.
+    lingering = [
+        t
+        for t in asyncio.all_tasks()
+        if "poller" in getattr(t.get_coro(), "__qualname__", "")
+    ]
+    assert not lingering, f"preemption poller leaked: {lingering}"
 
 
 @pytest.mark.asyncio
@@ -1552,3 +1579,121 @@ async def test_workflow_cancel_beats_step_timeout(dbos: DBOS) -> None:
     resumed = await DBOS.resume_workflow_async(wfid)
     assert (await resumed.get_result()) == "done"
     assert invocations == 2
+
+
+@pytest.mark.asyncio
+async def test_step_timeout_bounds_actual_duration(dbos: DBOS) -> None:
+    """timeout_seconds is used as the real deadline, not just as a label on the
+    error. The same 0.5s body times out under a 0.2s timeout and completes
+    under a 20s one, so scaling the timeout in either direction fails a half."""
+    invocations = 0
+
+    async def half_second_step() -> str:
+        nonlocal invocations
+        invocations += 1
+        await asyncio.sleep(0.5)
+        return "done"
+
+    @DBOS.workflow()
+    async def short_timeout_wf() -> str:
+        return await DBOS.run_step_async({"timeout_seconds": 0.2}, half_second_step)
+
+    @DBOS.workflow()
+    async def long_timeout_wf() -> str:
+        return await DBOS.run_step_async({"timeout_seconds": 20}, half_second_step)
+
+    start = time.time()
+    with pytest.raises(DBOSStepTimeoutError):
+        await short_timeout_wf()
+    assert time.time() - start < 2.0
+
+    assert await long_timeout_wf() == "done"
+    assert invocations == 2
+
+
+@pytest.mark.asyncio
+async def test_step_timeout_fresh_budget_per_attempt(dbos: DBOS) -> None:
+    """Each retry attempt gets its own timeout budget and the retry sleep is not
+    charged against it. Attempt 1 is cancelled at 0.2s; after a 0.3s retry sleep
+    attempt 2 succeeds. One deadline shared across attempts would leave attempt
+    2 with no budget and exhaust all retries instead."""
+    invocations = 0
+
+    @DBOS.step(
+        timeout_seconds=0.2,
+        retries_allowed=True,
+        max_attempts=3,
+        interval_seconds=0.3,
+    )
+    async def flaky_step() -> str:
+        nonlocal invocations
+        invocations += 1
+        if invocations == 1:
+            await asyncio.sleep(60)
+            return "should-not-reach"
+        await asyncio.sleep(0)
+        return "done"
+
+    @DBOS.workflow()
+    async def fresh_budget_wf() -> str:
+        return await flaky_step()
+
+    assert await fresh_budget_wf() == "done"
+    assert invocations == 2
+
+
+@pytest.mark.asyncio
+async def test_step_timeout_normal_exception_propagates(dbos: DBOS) -> None:
+    """A step that fails for an ordinary reason under a timeout propagates that
+    exception and checkpoints it as itself, not as a timeout."""
+
+    @DBOS.step(timeout_seconds=30)
+    async def boom_step() -> None:
+        raise ValueError("boom")
+
+    @DBOS.workflow()
+    async def boom_wf() -> None:
+        await boom_step()
+
+    wfid = str(uuid.uuid4())
+    with pytest.raises(ValueError, match="boom"):
+        with SetWorkflowID(wfid):
+            await boom_wf()
+
+    steps = await DBOS.list_workflow_steps_async(wfid)
+    entries = [s for s in steps if "boom_step" in s["function_name"]]
+    assert len(entries) == 1
+    assert entries[0]["output"] is None
+    assert isinstance(entries[0]["error"], ValueError)
+
+
+@pytest.mark.asyncio
+async def test_step_timeout_no_leak_on_outer_cancel(dbos: DBOS) -> None:
+    """If the coroutine running _run_step_with_timeout is itself cancelled, the
+    inner step task is cancelled too. asyncio.wait — unlike wait_for — does not
+    cancel what it awaits, so the finally block is the only thing standing
+    between an outer cancellation and a step that keeps running."""
+    from dbos._core import _run_step_with_timeout
+
+    step_started = asyncio.Event()
+    step_cancelled = asyncio.Event()
+
+    async def long_step() -> None:
+        step_started.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            step_cancelled.set()
+            raise
+
+    # A timeout long enough that it can never be what cancels the step.
+    outer = asyncio.create_task(
+        _run_step_with_timeout("long_step", 30, long_step, (), {})
+    )
+    await step_started.wait()
+    outer.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await outer
+
+    # If the step task leaked, this would time out.
+    await asyncio.wait_for(step_cancelled.wait(), timeout=5.0)
