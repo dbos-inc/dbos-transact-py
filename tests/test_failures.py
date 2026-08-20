@@ -1358,12 +1358,14 @@ async def test_step_timeout_preserves_step_outcomes(dbos: DBOS) -> None:
 @pytest.mark.asyncio
 async def test_step_timeout_with_retries(dbos: DBOS) -> None:
     """A timeout is a retryable failure and each attempt gets its own budget:
-    attempt 1 is cancelled at 0.2s and attempt 2 succeeds after a 0.3s retry
-    sleep. Exhausting the attempts raises, and should_retry can opt out."""
+    attempt 1 burns the whole 0.6s, and attempt 2 then sleeps 0.2s and still
+    succeeds — which it can only do against a fresh budget, since a budget
+    shared across attempts would already be spent. Exhausting the attempts
+    raises, and should_retry can opt out."""
     fresh_invocations = 0
 
     @DBOS.step(
-        timeout_seconds=0.2, retries_allowed=True, max_attempts=3, interval_seconds=0.3
+        timeout_seconds=0.6, retries_allowed=True, max_attempts=3, interval_seconds=0.3
     )
     async def flaky_step() -> str:
         nonlocal fresh_invocations
@@ -1371,7 +1373,9 @@ async def test_step_timeout_with_retries(dbos: DBOS) -> None:
         if fresh_invocations == 1:
             await asyncio.sleep(60)
             return "should-not-reach"
-        await asyncio.sleep(0)
+        # Must actually await real time: a bare `sleep(0)` completes even on a
+        # zero-length budget, so it would pass under a shared deadline too.
+        await asyncio.sleep(0.2)
         return "done"
 
     @DBOS.workflow()
@@ -1557,16 +1561,28 @@ async def test_step_timeout_with_workflow_cancellation(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
-async def test_step_timeout_does_not_claim_a_cancelled_step(dbos: DBOS) -> None:
+async def test_step_timeout_does_not_claim_a_cancelled_step(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A cancellation that reaches the step first keeps it even when the
     deadline elapses while the step is still cleaning up: no outcome is
-    recorded, so the step re-runs on resume rather than replaying a timeout."""
+    recorded, so the step re-runs on resume rather than replaying a timeout.
+
+    Guards the unbounded cleanup wait in the supervisor — refactoring it to
+    re-check the deadline would let the timeout reclaim the cancelled step."""
+    from dbos import _core as dbos_core
+
+    # At the 1s production interval the poller gets one chance to observe the
+    # cancellation before the deadline, so a single slow status query flips the
+    # outcome. Poll fast enough that the observation is not the thing under test.
+    monkeypatch.setattr(dbos_core, "_PREEMPTIBLE_POLL_INTERVAL_SEC", 0.05)
+
     invocations = 0
     step_started = asyncio.Event()
 
-    # The poller notices the cancellation ~1s in and the step then spends 3s
-    # cleaning up, so the 2.5s deadline lands squarely inside that window.
-    @DBOS.step(preemptible=True, timeout_seconds=2.5)
+    # The poller notices the cancellation well inside the 1.5s deadline; the
+    # step then spends 2s cleaning up, so the deadline elapses mid-cleanup.
+    @DBOS.step(preemptible=True, timeout_seconds=1.5)
     async def slow_cleanup_step() -> str:
         nonlocal invocations
         invocations += 1
@@ -1575,7 +1591,7 @@ async def test_step_timeout_does_not_claim_a_cancelled_step(dbos: DBOS) -> None:
             try:
                 await asyncio.sleep(60)
             except asyncio.CancelledError:
-                await asyncio.sleep(3)
+                await asyncio.sleep(2)
                 raise
             return "should-not-reach"
         return "done"
