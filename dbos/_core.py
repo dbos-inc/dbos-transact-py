@@ -3011,7 +3011,6 @@ def read_stream(
     *,
     offset: int,
     polling_interval: Optional[float] = None,
-    raise_if_missing: bool,
 ) -> Generator[Any, Any, None]:
     """Yield a stream's values in order, checkpointing each one when read from a workflow."""
     if polling_interval is None:
@@ -3038,9 +3037,7 @@ def read_stream(
                 # One round trip for both the value and the workflow's status.
                 status, value = sys_db.read_stream_value(workflow_id, key, offset)
                 if status is None:
-                    if raise_if_missing:
-                        raise DBOSNonExistentWorkflowError("target", workflow_id)
-                    return
+                    raise DBOSNonExistentWorkflowError("target", workflow_id)
                 if value is not _no_stream_value or final_read:
                     break
                 # No value yet: stop if the workflow is done, else wait for a
@@ -3069,7 +3066,6 @@ async def read_stream_async(
     *,
     offset: int,
     polling_interval: Optional[float] = None,
-    raise_if_missing: bool,
 ) -> AsyncGenerator[Any, None]:
     """Yield a stream's values in order, checkpointing each one when read from a workflow."""
     if polling_interval is None:
@@ -3098,9 +3094,7 @@ async def read_stream_async(
                     sys_db.read_stream_value, workflow_id, key, offset
                 )
                 if status is None:
-                    if raise_if_missing:
-                        raise DBOSNonExistentWorkflowError("target", workflow_id)
-                    return
+                    raise DBOSNonExistentWorkflowError("target", workflow_id)
                 if value is not _no_stream_value or final_read:
                     break
                 # No value yet: stop if the workflow is done, else await a

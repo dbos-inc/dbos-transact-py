@@ -1243,9 +1243,7 @@ class DBOSClient:
         Yields:
             The values written to the stream in order
         """
-        yield from read_stream(
-            self._sys_db, workflow_id, key, offset=offset, raise_if_missing=False
-        )
+        yield from read_stream(self._sys_db, workflow_id, key, offset=offset)
 
     async def read_stream_async(
         self, workflow_id: str, key: str, *, offset: int = 0
@@ -1264,7 +1262,7 @@ class DBOSClient:
             The values written to the stream in order
         """
         async for value in read_stream_async(
-            self._sys_db, workflow_id, key, offset=offset, raise_if_missing=False
+            self._sys_db, workflow_id, key, offset=offset
         ):
             yield value
 

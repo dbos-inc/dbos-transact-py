@@ -3464,7 +3464,6 @@ class DBOS:
             workflow_id,
             key,
             offset=offset,
-            raise_if_missing=True,
         )
 
     @classmethod
@@ -3541,7 +3540,6 @@ class DBOS:
             key,
             offset=offset,
             polling_interval=polling_interval_sec,
-            raise_if_missing=True,
         ):
             yield value
 

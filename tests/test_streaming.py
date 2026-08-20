@@ -9,6 +9,7 @@ from sqlalchemy import event as sa_event
 # Public API
 from dbos import DBOS, DBOSConfig, SetWorkflowID
 from dbos._client import DBOSClient
+from dbos._error import DBOSNonExistentWorkflowError
 from dbos._serialization import WorkflowSerializationFormat
 from dbos._sys_db import _dbos_streams_channel, _no_stream_value
 from dbos._sys_db_postgres import PostgresSystemDatabase
@@ -1235,11 +1236,12 @@ def test_client_read_stream_is_one_round_trip_per_value(
     ), f"expected {n + 1} reads for {n} values, got {len(reads)}"
 
 
-def test_client_read_stream_nonexistent_workflow(
-    dbos: DBOS, client: DBOSClient
-) -> None:
-    """A stream on an unknown workflow ends the client's generator quietly, where the in-process reader raises. Preserved deliberately: the batch read reports a missing workflow the same way as a workflow with nothing buffered."""
-    assert list(client.read_stream(str(uuid.uuid4()), "s")) == []
+def test_read_stream_nonexistent_workflow(dbos: DBOS, client: DBOSClient) -> None:
+    """A stream on an unknown workflow raises rather than reading as empty, from a client as well as in-process."""
+    with pytest.raises(DBOSNonExistentWorkflowError):
+        list(client.read_stream(str(uuid.uuid4()), "s"))
+    with pytest.raises(DBOSNonExistentWorkflowError):
+        list(DBOS.read_stream(str(uuid.uuid4()), "s"))
 
 
 def test_client_read_stream_workflow_termination(
