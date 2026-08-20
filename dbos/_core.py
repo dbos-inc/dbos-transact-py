@@ -3,6 +3,7 @@ import copy
 import functools
 import inspect
 import json
+import math
 import sys
 import threading
 import time
@@ -3148,6 +3149,13 @@ def read_stream(
     """Yield a stream's values in order, checkpointing each one when read from a workflow."""
     if timeout_seconds is not None and timeout_seconds < 0:
         raise ValueError(f"timeout_seconds must not be negative, got {timeout_seconds}")
+    # A zero or negative interval never waits, so the reader would spin on the database.
+    if polling_interval is not None and (
+        not math.isfinite(polling_interval) or polling_interval < 0.001
+    ):
+        raise ValueError(
+            f"polling_interval_sec must be a finite number at least 0.001 seconds, got {polling_interval}"
+        )
     if polling_interval is None:
         polling_interval = sys_db._notification_listener_polling_interval_sec
     recorder = _StreamReadCheckpoint(sys_db, key, function_name, checkpoint)
@@ -3225,6 +3233,13 @@ async def read_stream_async(
     """Yield a stream's values in order, checkpointing each one when read from a workflow."""
     if timeout_seconds is not None and timeout_seconds < 0:
         raise ValueError(f"timeout_seconds must not be negative, got {timeout_seconds}")
+    # A zero or negative interval never waits, so the reader would spin on the database.
+    if polling_interval is not None and (
+        not math.isfinite(polling_interval) or polling_interval < 0.001
+    ):
+        raise ValueError(
+            f"polling_interval_sec must be a finite number at least 0.001 seconds, got {polling_interval}"
+        )
     if polling_interval is None:
         polling_interval = sys_db._notification_listener_polling_interval_sec
     recorder = _StreamReadCheckpoint(sys_db, key, function_name, checkpoint)

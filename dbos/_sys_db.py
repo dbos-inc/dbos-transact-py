@@ -5036,6 +5036,7 @@ class SystemDatabase(ABC):
             ),
         )
 
+    @db_retry()
     def write_stream_from_step(
         self,
         workflow_uuid: str,

@@ -3462,7 +3462,7 @@ class DBOS:
             key(str): The stream key / name within the workflow
             offset(int): The offset to start reading from (defaults to 0, the start of the stream)
             polling_interval_sec(float, optional): Polling interval in seconds when waiting for new values when not using LISTEN/NOTIFY.
-                Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
+                Must be at least 0.001. Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
             timeout_seconds(float, optional): How long to wait for each value before raising DBOSStreamTimeoutError.
 
         Yields:
@@ -3497,7 +3497,7 @@ class DBOS:
             key(str): The stream key / name within the workflow
             offset(int): The offset to read
             polling_interval_sec(float, optional): Polling interval in seconds when waiting for the value when not using LISTEN/NOTIFY.
-                Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
+                Must be at least 0.001. Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
             timeout_seconds(float, optional): How long to wait for the value before raising DBOSStreamTimeoutError.
                 Defaults to None, waiting indefinitely.
 
@@ -3536,7 +3536,7 @@ class DBOS:
             key(str): The stream key / name within the workflow
             offset(int): The offset to read
             polling_interval_sec(float, optional): Polling interval in seconds when waiting for the value when not using LISTEN/NOTIFY.
-                Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
+                Must be at least 0.001. Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
             timeout_seconds(float, optional): How long to wait for the value before raising DBOSStreamTimeoutError.
                 Defaults to None, waiting indefinitely.
 
@@ -3619,7 +3619,7 @@ class DBOS:
             key(str): The stream key / name within the workflow
             offset(int): The offset to start reading from (defaults to 0, the start of the stream)
             polling_interval_sec(float, optional): Polling interval in seconds when waiting for new values when not using LISTEN/NOTIFY.
-                Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
+                Must be at least 0.001. Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
             timeout_seconds(float, optional): How long to wait for each value before raising DBOSStreamTimeoutError.
 
         Yields:
@@ -3627,15 +3627,20 @@ class DBOS:
 
         """
         await cls._configure_asyncio_thread_pool()
-        async for value in read_stream_async(
+        values = read_stream_async(
             _get_dbos_instance()._sys_db,
             workflow_id,
             key,
             offset=offset,
             polling_interval=polling_interval_sec,
             timeout_seconds=timeout_seconds,
-        ):
-            yield value
+        )
+        try:
+            async for value in values:
+                yield value
+        finally:
+            # Close rather than abandon, so the listener is unregistered here and not at collection.
+            await values.aclose()
 
     @classmethod
     def patch(cls, patch_name: str) -> bool:

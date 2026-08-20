@@ -1252,7 +1252,7 @@ class DBOSClient:
             key: The stream key to read from
             offset: The offset to start reading from (defaults to 0, the start of the stream)
             polling_interval_sec: Polling interval in seconds when waiting for new values when not using LISTEN/NOTIFY.
-                Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
+                Must be at least 0.001. Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
             timeout_seconds: How long to wait for each value before raising DBOSStreamTimeoutError.
 
         Yields:
@@ -1287,13 +1287,13 @@ class DBOSClient:
             key: The stream key to read from
             offset: The offset to start reading from (defaults to 0, the start of the stream)
             polling_interval_sec: Polling interval in seconds when waiting for new values when not using LISTEN/NOTIFY.
-                Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
+                Must be at least 0.001. Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
             timeout_seconds: How long to wait for each value before raising DBOSStreamTimeoutError.
 
         Yields:
             The values written to the stream in order
         """
-        async for value in read_stream_async(
+        values = read_stream_async(
             self._sys_db,
             workflow_id,
             key,
@@ -1301,8 +1301,13 @@ class DBOSClient:
             polling_interval=polling_interval_sec,
             timeout_seconds=timeout_seconds,
             checkpoint=False,
-        ):
-            yield value
+        )
+        try:
+            async for value in values:
+                yield value
+        finally:
+            # Close rather than abandon, so the listener is unregistered here and not at collection.
+            await values.aclose()
 
     def read_stream_offset(
         self,
@@ -1321,7 +1326,7 @@ class DBOSClient:
             key: The stream key to read from
             offset: The offset to read
             polling_interval_sec: Polling interval in seconds when waiting for the value when not using LISTEN/NOTIFY.
-                Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
+                Must be at least 0.001. Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
             timeout_seconds: How long to wait for the value before raising DBOSStreamTimeoutError.
                 Defaults to None, waiting indefinitely.
 
@@ -1358,7 +1363,7 @@ class DBOSClient:
             key: The stream key to read from
             offset: The offset to read
             polling_interval_sec: Polling interval in seconds when waiting for the value when not using LISTEN/NOTIFY.
-                Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
+                Must be at least 0.001. Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
             timeout_seconds: How long to wait for the value before raising DBOSStreamTimeoutError.
                 Defaults to None, waiting indefinitely.
 

@@ -1587,6 +1587,14 @@ def test_read_stream_timeout(dbos: DBOS, client: DBOSClient) -> None:
 
         with pytest.raises(ValueError, match="must not be negative"):
             next(DBOS.read_stream(wfid, stream_key, timeout_seconds=-1))
+        # A zero interval would never wait, so the reader would spin on the database.
+        for bad in (0, -1, float("inf")):
+            with pytest.raises(ValueError, match="at least 0.001"):
+                next(DBOS.read_stream(wfid, stream_key, polling_interval_sec=bad))
+            with pytest.raises(ValueError, match="at least 0.001"):
+                DBOS.read_stream_offset(wfid, stream_key, 0, polling_interval_sec=bad)
+            with pytest.raises(ValueError, match="at least 0.001"):
+                next(client.read_stream(wfid, stream_key, polling_interval_sec=bad))
     finally:
         for db, original in zip(sys_dbs, originals):
             db._notification_listener_polling_interval_sec = original
@@ -2018,3 +2026,35 @@ def test_stream_write_to_deleted_workflow_raises(dbos: DBOS) -> None:
             "v1",
             serialization_type=WorkflowSerializationFormat.DEFAULT,
         )
+
+
+@pytest.mark.asyncio
+async def test_read_stream_async_close_releases_listener(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    """Closing an async reader unregisters its listener there and then, rather than leaving it
+    for garbage collection to reclaim at some later point."""
+    stream_key = "aclose_stream"
+    release = asyncio.Event()
+
+    @DBOS.workflow()
+    async def async_writer_workflow() -> None:
+        await DBOS.write_stream_async(stream_key, "v0")
+        # Stay active so a reader is suspended mid-stream rather than exhausted.
+        await release.wait()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(async_writer_workflow)
+    try:
+        for sys_db, reader in (
+            (dbos._sys_db, DBOS.read_stream_async(wfid, stream_key)),
+            (client._sys_db, client.read_stream_async(wfid, stream_key)),
+        ):
+            assert await reader.__anext__() == "v0"
+            assert len(sys_db.streams_map.snapshot()) == 1
+            await reader.aclose()
+            assert sys_db.streams_map.snapshot() == []
+    finally:
+        release.set()
+        await handle.get_result()
