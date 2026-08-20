@@ -2910,18 +2910,28 @@ def write_stream(
 
 def close_stream(dbos: "DBOS", step_ctx: Optional["DBOSContext"], key: str) -> None:
     if step_ctx is not None:
-        # Must call it within a workflow
+        # Must call it within a workflow or step
         if step_ctx.is_workflow():
             attributes: TracedAttributes = {
                 "name": "close_stream",
             }
             with EnterDBOSStepCtx(attributes, step_ctx) as ctx:
-                dbos._sys_db.close_stream(ctx.workflow_id, ctx.function_id, key)
+                dbos._sys_db.close_stream_from_workflow(
+                    ctx.workflow_id, ctx.function_id, key
+                )
+        elif step_ctx.is_step():
+            dbos._sys_db.close_stream_from_step(
+                step_ctx.workflow_id, step_ctx.function_id, key
+            )
         else:
-            raise DBOSException("close_stream() must be called from within a workflow")
+            raise DBOSException(
+                "close_stream() must be called from within a workflow or step"
+            )
     else:
         # Cannot call it from outside of a workflow
-        raise DBOSException("close_stream() must be called from within a workflow")
+        raise DBOSException(
+            "close_stream() must be called from within a workflow or step"
+        )
 
 
 _READ_STREAM_FUNCTION_NAME = "DBOS.readStream"

@@ -5133,9 +5133,23 @@ class SystemDatabase(ABC):
             self._signal_notification(_dbos_streams_channel, f"{workflow_uuid}::{key}")
             return
 
-    def close_stream(self, workflow_uuid: str, function_id: int, key: str) -> None:
+    def close_stream_from_workflow(
+        self, workflow_uuid: str, function_id: int, key: str
+    ) -> None:
         """Write a sentinel value to the stream at the first unused offset to mark it as closed."""
         self.write_stream_from_workflow(
+            workflow_uuid,
+            function_id,
+            key,
+            _dbos_stream_closed_sentinel,
+            serialization_type=WorkflowSerializationFormat.PORTABLE,
+        )
+
+    def close_stream_from_step(
+        self, workflow_uuid: str, function_id: int, key: str
+    ) -> None:
+        """Write a sentinel value to the stream at the first unused offset to mark it as closed."""
+        self.write_stream_from_step(
             workflow_uuid,
             function_id,
             key,

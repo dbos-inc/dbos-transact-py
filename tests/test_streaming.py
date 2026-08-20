@@ -860,7 +860,9 @@ def test_stream_interleaved_operations(dbos: DBOS) -> None:
 
 
 def test_stream_write_from_step(dbos: DBOS) -> None:
-    """Test writing to a stream from inside a step function that retries and throws exceptions."""
+    """Test writing to a stream from inside a step function that retries and throws exceptions.
+
+    The stream is closed from a step too, which is allowed wherever writing is."""
 
     call_count = 0
 
@@ -880,6 +882,10 @@ def test_stream_write_from_step(dbos: DBOS) -> None:
         assert step_id is not None
         return step_id
 
+    @DBOS.step()
+    def step_that_closes(stream_key: str) -> None:
+        DBOS.close_stream(stream_key)
+
     @DBOS.workflow()
     def workflow_with_failing_step() -> None:
         # This step will fail 3 times, then succeed on the 4th attempt
@@ -890,8 +896,8 @@ def test_stream_write_from_step(dbos: DBOS) -> None:
         # Also write directly from workflow
         DBOS.write_stream("retry_stream", "from_workflow")
 
-        # Close the stream
-        DBOS.close_stream("retry_stream")
+        # Close the stream from a step, as a workflow may
+        step_that_closes("retry_stream")
 
     # Start the workflow
     wfid = str(uuid.uuid4())
