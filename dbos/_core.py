@@ -2340,93 +2340,100 @@ def decorate_transaction(
     return decorator
 
 
-async def _run_preemptible_step(
+_PREEMPTIBLE_POLL_INTERVAL_SEC = 1.0
+
+
+async def _poll_for_workflow_cancellation(dbos: "DBOS", workflow_id: str) -> bool:
+    """Return True once the workflow is observed CANCELLED. Never cancels
+    anything itself: the supervisor owns that decision."""
+    while True:
+        await asyncio.sleep(_PREEMPTIBLE_POLL_INTERVAL_SEC)
+        try:
+            status = await asyncio.to_thread(
+                dbos._sys_db.get_workflow_status, workflow_id
+            )
+        except Exception as e:
+            dbos.logger.warning(
+                f"Error polling status for preemptible step in workflow {workflow_id}: {e}"
+            )
+            continue
+        if (
+            status is not None
+            and status["status"] == WorkflowStatusString.CANCELLED.value
+        ):
+            return True
+
+
+async def _supervise_step(
     dbos: "DBOS",
     workflow_id: str,
     func: Callable[..., Coroutine[Any, Any, R]],
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
-) -> R:
-    PREEMPTIBLE_POLL_INTERVAL_SEC = 1.0
-    step_task: asyncio.Task[R] = asyncio.create_task(func(*args, **kwargs))
-    poller_cancelled_step = False
-
-    async def poller() -> None:
-        nonlocal poller_cancelled_step
-        while True:
-            await asyncio.sleep(PREEMPTIBLE_POLL_INTERVAL_SEC)
-            try:
-                status = await asyncio.to_thread(
-                    dbos._sys_db.get_workflow_status, workflow_id
-                )
-            except Exception as e:
-                dbos.logger.warning(
-                    f"Error polling status for preemptible step in workflow {workflow_id}: {e}"
-                )
-                continue
-            if (
-                status is not None
-                and status["status"] == WorkflowStatusString.CANCELLED.value
-            ):
-                poller_cancelled_step = True
-                step_task.cancel()
-                return
-
-    poller_task = asyncio.create_task(poller())
-    try:
-        try:
-            return await step_task
-        except asyncio.CancelledError:
-            if poller_cancelled_step:
-                raise DBOSWorkflowCancelledError(
-                    f"Workflow {workflow_id} is cancelled. Aborting preemptible step."
-                )
-            raise
-    finally:
-        # Cancel both tasks so neither leaks if the outer coroutine itself
-        # was cancelled (or the step task is somehow still running).
-        if not step_task.done():
-            step_task.cancel()
-            try:
-                await step_task
-            except BaseException:
-                pass
-        if not poller_task.done():
-            poller_task.cancel()
-            try:
-                await poller_task
-            except BaseException:
-                pass
-
-
-async def _run_step_with_timeout(
+    *,
     step_name: str,
-    timeout_seconds: float,
-    func: Callable[..., Coroutine[Any, Any, R]],
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
+    preemptible: bool,
+    timeout_seconds: Optional[float],
 ) -> R:
+    """Run an async step under the watchdogs its options ask for, deciding in
+    one place whether it completed, was preempted, or blew its deadline."""
+    loop = asyncio.get_running_loop()
     step_task: asyncio.Task[R] = asyncio.create_task(func(*args, **kwargs))
+    poller_task: Optional[asyncio.Task[bool]] = (
+        asyncio.create_task(_poll_for_workflow_cancellation(dbos, workflow_id))
+        if preemptible
+        else None
+    )
+    deadline = None if timeout_seconds is None else loop.time() + timeout_seconds
+    abort: Optional[BaseException] = None
     try:
-        done, _ = await asyncio.wait({step_task}, timeout=timeout_seconds)
-        if step_task in done:
-            return step_task.result()
-        # Cancel the step and let its cleanup finish before checkpointing.
+        watched: set[asyncio.Task[Any]] = {step_task}
+        if poller_task is not None:
+            watched.add(poller_task)
+        while abort is None:
+            remaining = None if deadline is None else max(0.0, deadline - loop.time())
+            done, _ = await asyncio.wait(
+                watched, timeout=remaining, return_when=asyncio.FIRST_COMPLETED
+            )
+            # A step that finished keeps its outcome, whatever else happened.
+            if step_task in done:
+                return step_task.result()
+            if poller_task is not None and poller_task in done:
+                watched.discard(poller_task)
+                observed = (
+                    not poller_task.cancelled() and poller_task.exception() is None
+                )
+                # A cancellation outranks a deadline reached at the same moment:
+                # not checkpointing a cancelled workflow's step is the safer error.
+                if observed and poller_task.result():
+                    abort = DBOSWorkflowCancelledError(
+                        f"Workflow {workflow_id} is cancelled. Aborting preemptible step."
+                    )
+                continue
+            assert timeout_seconds is not None
+            abort = DBOSStepTimeoutError(step_name, timeout_seconds)
+        # Stop the step and let its cleanup finish before surfacing the reason.
         # wait_for would hand back a suppressed-cancel body's value (3.10-3.13).
         step_task.cancel()
         await asyncio.wait({step_task})
-        if not step_task.cancelled():
-            # Consume it so asyncio doesn't log it as never retrieved.
-            step_task.exception()
-        raise DBOSStepTimeoutError(step_name, timeout_seconds)
+        outcome = None if step_task.cancelled() else step_task.exception()
+        if outcome is not None and not isinstance(outcome, Exception):
+            raise outcome
+        raise abort from outcome
     finally:
-        # Don't leak the step task if the outer coroutine was itself cancelled.
-        if not step_task.done():
-            step_task.cancel()
-            try:
-                await step_task
-            except BaseException:
-                pass
+        # Don't leak either task if the outer coroutine was itself cancelled,
+        # and retrieve any outcome so asyncio doesn't log it as unhandled.
+        for task in (step_task, poller_task):
+            if task is None:
+                continue
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except BaseException:
+                    pass
+            elif not task.cancelled():
+                task.exception()
 
 
 def invoke_step(
@@ -2568,31 +2575,25 @@ def invoke_step(
             )
             return NoResult()
 
-    if preemptible:
+    if preemptible or timeout_seconds is not None:
         async_func = cast(Callable[..., Coroutine[Any, Any, R]], func)
         step_partial: Callable[[], Union[R, Coroutine[Any, Any, R]]] = (
             functools.partial(
-                _run_preemptible_step,
+                _supervise_step,
                 dbos,
                 step_ctx.workflow_id,
                 async_func,
                 args,
                 kwargs,
+                step_name=step_name,
+                preemptible=preemptible,
+                timeout_seconds=timeout_seconds,
             )
         )
     else:
         step_partial = functools.partial(func, *args, **kwargs)
-    if timeout_seconds is not None:
-        # Inside retry, so each attempt gets a fresh timeout; outside
-        # preemption, so a timeout tears the poller down with the step.
-        step_partial = functools.partial(
-            _run_step_with_timeout,
-            step_name,
-            timeout_seconds,
-            cast(Callable[..., Coroutine[Any, Any, R]], step_partial),
-            (),
-            {},
-        )
+    # The supervisor sits inside the retry layer, so each attempt gets a fresh
+    # deadline and retry sleeps are not charged against it.
     stepOutcome = Outcome[R].make(step_partial)
     if retries_allowed:
         stepOutcome = stepOutcome.retry(

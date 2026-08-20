@@ -1554,3 +1554,47 @@ async def test_step_timeout_with_workflow_cancellation(dbos: DBOS) -> None:
     assert len(entries) == 1
     assert entries[0]["output"] == "done"
     assert entries[0]["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_step_timeout_does_not_claim_a_cancelled_step(dbos: DBOS) -> None:
+    """A cancellation that reaches the step first keeps it even when the
+    deadline elapses while the step is still cleaning up: no outcome is
+    recorded, so the step re-runs on resume rather than replaying a timeout."""
+    invocations = 0
+    step_started = asyncio.Event()
+
+    # The poller notices the cancellation ~1s in and the step then spends 3s
+    # cleaning up, so the 2.5s deadline lands squarely inside that window.
+    @DBOS.step(preemptible=True, timeout_seconds=2.5)
+    async def slow_cleanup_step() -> str:
+        nonlocal invocations
+        invocations += 1
+        if invocations == 1:
+            step_started.set()
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                await asyncio.sleep(3)
+                raise
+            return "should-not-reach"
+        return "done"
+
+    @DBOS.workflow()
+    async def slow_cleanup_wf() -> str:
+        return await slow_cleanup_step()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(slow_cleanup_wf)
+
+    await step_started.wait()
+    await DBOS.cancel_workflow_async(wfid)
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        await handle.get_result()
+
+    assert not await DBOS.list_workflow_steps_async(wfid)
+
+    resumed = await DBOS.resume_workflow_async(wfid)
+    assert (await resumed.get_result()) == "done"
+    assert invocations == 2
