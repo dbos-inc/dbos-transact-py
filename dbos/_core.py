@@ -2967,30 +2967,30 @@ class _StreamReadCheckpoint:
             recorded["output"], recorded["serialization"], self._sys_db.serializer
         )
 
-    def record(self, step_ctx: Optional[DBOSContext], value: Any) -> None:
-        """Record a value delivered to the workflow, in the reader's own serialization."""
-        self._record(
-            step_ctx,
-            value,
-            step_ctx.serialization_type if step_ctx is not None else None,
-        )
+    def record(
+        self, step_ctx: Optional[DBOSContext], value: Any, serialization: Optional[str]
+    ) -> None:
+        """Record a value delivered to the workflow, keeping the format it was written in.
+
+        Re-serializing under the reader's own format would fail on a value its format cannot
+        represent, such as a pickled object read by a portable workflow.
+        """
+        self._record(step_ctx, value, serialization)
 
     def record_end(self, step_ctx: Optional[DBOSContext]) -> None:
         """Record that the stream ended here, so a replay stops where this read did."""
-        self._record(
-            step_ctx, _dbos_stream_closed_sentinel, WorkflowSerializationFormat.PORTABLE
-        )
+        self._record(step_ctx, _dbos_stream_closed_sentinel, DBOSPortableJSON.name())
 
     def _record(
         self,
         step_ctx: Optional[DBOSContext],
         value: Any,
-        serialization_type: Optional[WorkflowSerializationFormat],
+        serialization: Optional[str],
     ) -> None:
         if step_ctx is None:
             return
-        output, serialization = serialize_value(
-            value, serialization_type, self._sys_db.serializer
+        output, serialization = serialize_value_as(
+            value, serialization, self._sys_db.serializer
         )
         result: OperationResultInternal = {
             "workflow_uuid": step_ctx.workflow_id,
@@ -3030,12 +3030,15 @@ def read_stream(
                 offset += 1
                 continue
             value: Any = _no_stream_value
+            serialization: Optional[str] = None
             while True:
                 # Clear before reading so a notification arriving after the read
                 # leaves the event set and the wait below returns immediately.
                 event.clear()
                 # One round trip for both the value and the workflow's status.
-                status, value = sys_db.read_stream_value(workflow_id, key, offset)
+                status, value, serialization = sys_db.read_stream_value(
+                    workflow_id, key, offset
+                )
                 if status is None:
                     raise DBOSNonExistentWorkflowError("target", workflow_id)
                 if value is not _no_stream_value or final_read:
@@ -3052,7 +3055,7 @@ def read_stream(
                 checkpoint.record_end(step_ctx)
                 return
             # Recorded before the yield, so a crash after the workflow acts on the value still replays it.
-            checkpoint.record(step_ctx, value)
+            checkpoint.record(step_ctx, value, serialization)
             yield value
             offset += 1
     finally:
@@ -3085,12 +3088,13 @@ async def read_stream_async(
                 offset += 1
                 continue
             value: Any = _no_stream_value
+            serialization: Optional[str] = None
             while True:
                 # Clear before reading so a notification arriving after the read
                 # leaves the event set and the wait below returns immediately.
                 event.clear()
                 # One round trip for both the value and the workflow's status.
-                status, value = await asyncio.to_thread(
+                status, value, serialization = await asyncio.to_thread(
                     sys_db.read_stream_value, workflow_id, key, offset
                 )
                 if status is None:
@@ -3109,7 +3113,7 @@ async def read_stream_async(
                 await asyncio.to_thread(checkpoint.record_end, step_ctx)
                 return
             # Recorded before the yield, so a crash after the workflow acts on the value still replays it.
-            await asyncio.to_thread(checkpoint.record, step_ctx, value)
+            await asyncio.to_thread(checkpoint.record, step_ctx, value, serialization)
             yield value
             offset += 1
     finally:

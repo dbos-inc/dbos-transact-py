@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import event as sa_event
 
 # Public API
-from dbos import DBOS, DBOSConfig, SetWorkflowID
+from dbos import DBOS, DBOSConfig, Queue, SetWorkflowID
 from dbos._client import DBOSClient
 from dbos._error import DBOSNonExistentWorkflowError
 from dbos._serialization import WorkflowSerializationFormat, serialize_value
@@ -114,22 +114,24 @@ def test_stream_read_value_returns_status_and_value(dbos: DBOS) -> None:
         DBOS.start_workflow(writer_workflow).get_result()
 
     # The value at the offset and the status, together.
-    status, value = sys_db.read_stream_value(wfid, "s", 0)
+    status, value, serialization = sys_db.read_stream_value(wfid, "s", 0)
     assert status == "SUCCESS"
     assert value == 0
+    # The format it was written in comes back too, so a reader can record it unchanged.
+    assert serialization == dbos._sys_db.serializer.name()
 
     # A written None is a value, not an absence -- which is why absence needs its own sentinel.
-    status, value = sys_db.read_stream_value(wfid, "s", 1)
+    status, value, _ = sys_db.read_stream_value(wfid, "s", 1)
     assert status == "SUCCESS"
     assert value is None
 
     # Past the end: still reports status, so the reader can tell "not yet" from "never".
-    status, value = sys_db.read_stream_value(wfid, "s", 99)
+    status, value, _ = sys_db.read_stream_value(wfid, "s", 99)
     assert status == "SUCCESS"
     assert value is _no_stream_value
 
     # A non-existent workflow is distinguishable from a workflow with no value at the offset.
-    status, value = sys_db.read_stream_value(str(uuid.uuid4()), "s", 0)
+    status, value, _ = sys_db.read_stream_value(str(uuid.uuid4()), "s", 0)
     assert status is None
     assert value is _no_stream_value
 
@@ -1306,7 +1308,9 @@ def test_workflow_read_stream_checkpointing(dbos: DBOS) -> None:
     read rather than re-reading a stream that has moved on. Reads from a step are not recorded.
     """
     stream_key = "checkpointed_stream"
-    test_values: list[Any] = ["a", None, {"k": "v"}]
+    # The bytes pickle but have no portable JSON form: a checkpoint that re-serialized under the
+    # reader's own format instead of the value's would fail on it.
+    test_values: list[Any] = ["a", None, {"k": "v"}, b"bytes"]
     reader_calls = 0
     crashing_reader_attempts = 0
     step_calls = 0
@@ -1349,6 +1353,11 @@ def test_workflow_read_stream_checkpointing(dbos: DBOS) -> None:
                 break
         return [seen, counting_step()]
 
+    @DBOS.workflow(serialization_type=WorkflowSerializationFormat.PORTABLE)
+    def portable_reader_workflow(target_id: str) -> int:
+        # Returns a count: the values themselves are not portable, only the checkpoints of them.
+        return len(list(DBOS.read_stream(target_id, stream_key)))
+
     @DBOS.step()
     def read_in_step(target_id: str) -> list[Any]:
         return list(DBOS.read_stream(target_id, stream_key))
@@ -1389,6 +1398,13 @@ def test_workflow_read_stream_checkpointing(dbos: DBOS) -> None:
         1,
     ]
     assert step_calls == 1
+
+    # A portable workflow records each value in the format it was written in, not its own.
+    portable_reader_id = str(uuid.uuid4())
+    with SetWorkflowID(portable_reader_id):
+        assert Queue("portable_reader_queue").enqueue(
+            portable_reader_workflow, writer_id
+        ).get_result() == len(test_values)
 
     # A read inside a step is covered by that step's own checkpoint.
     step_reader_id = str(uuid.uuid4())

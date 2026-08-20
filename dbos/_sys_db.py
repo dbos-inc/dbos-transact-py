@@ -5163,14 +5163,15 @@ class SystemDatabase(ABC):
     @db_retry()
     def read_stream_value(
         self, workflow_uuid: str, key: str, offset: int
-    ) -> Tuple[Optional[str], Any]:
+    ) -> Tuple[Optional[str], Any, Optional[str]]:
         """Read the stream value at offset and the owning workflow's status in one round trip.
 
-        Returns (status, value). status is None if the workflow does not exist; value is
-        _no_stream_value if nothing is written at offset. Both come from one statement, so they
-        share a snapshot. A terminal status does not imply the stream is complete: cancel and
-        timeout set it out-of-band while the workflow is still running, so a caller that stops
-        reading must first drain to the first empty offset.
+        Returns (status, value, serialization). status is None if the workflow does not exist;
+        value is _no_stream_value if nothing is written at offset, and serialization is the format
+        it was written in, so a caller recording the value keeps it as portable as it arrived.
+        Status and value come from one statement, so they share a snapshot. A terminal status does
+        not imply the stream is complete: cancel and timeout set it out-of-band while the workflow
+        is still running, so a caller that stops reading must first drain to the first empty offset.
         """
         # LEFT JOIN so a workflow with nothing at offset still reports its status. Matching offset
         # exactly keeps this a single index lookup on the (workflow_uuid, key, offset) primary key.
@@ -5197,11 +5198,11 @@ class SystemDatabase(ABC):
             ).fetchone()
 
         if row is None:
-            return None, _no_stream_value
+            return None, _no_stream_value, None
         # streams.offset is non-nullable, so a NULL here means the join matched nothing at offset.
         if row[3] is None:
-            return row[0], _no_stream_value
-        return row[0], deserialize_value(row[1], row[2], self.serializer)
+            return row[0], _no_stream_value, None
+        return row[0], deserialize_value(row[1], row[2], self.serializer), row[2]
 
     def garbage_collect(
         self,
