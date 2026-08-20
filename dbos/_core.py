@@ -1966,6 +1966,16 @@ def workflow_wrapper(
                 child_start_time_ms=child_start_time,
             )
 
+            # The body writes events, streams, and messages in this format; without it a directly
+            # invoked workflow would write them under the default while its own row says otherwise.
+            serialization_type = fi.serialization_type
+            if serialization_type is None:
+                serialization_type = WorkflowSerializationFormat.DEFAULT
+            # The row is authoritative: a workflow enqueued under another serializer must replay under it.
+            if status["serialization"] == DBOSPortableJSON.name():
+                serialization_type = WorkflowSerializationFormat.PORTABLE
+            newwfctx.serialization_type = serialization_type
+
             # TODO: maybe modify the parameters if they've been changed by `_init_workflow`
             dbos.logger.debug(
                 f"Running workflow, id: {child_wfid}, name: {get_dbos_func_name(func)}"
