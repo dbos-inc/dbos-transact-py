@@ -717,7 +717,6 @@ class DBOS:
                     and cloud_conductor_url is not None
                 ):
                     evt = threading.Event()
-                    self.background_thread_stop_events.append(evt)
                     dbos_logger.debug("Starting Conductor thread (DBOS Cloud)")
                     self.conductor_websocket = ConductorWebsocket(
                         self,
@@ -733,7 +732,6 @@ class DBOS:
                     dbos_domain = os.environ.get("DBOS_DOMAIN", "cloud.dbos.dev")
                     self.conductor_url = f"wss://{dbos_domain}/conductor/v1alpha1"
                 evt = threading.Event()
-                self.background_thread_stop_events.append(evt)
                 dbos_logger.debug("Starting Conductor thread")
                 self.conductor_websocket = ConductorWebsocket(
                     self,
@@ -869,6 +867,19 @@ class DBOS:
                     )
                 else:
                     break
+        # Disconnect from Conductor only once the wait above is over, so the executor stays visibly alive to Conductor for its whole duration.
+        if self.conductor_websocket is not None:
+            self.conductor_websocket.evt.set()
+            if self.conductor_websocket.websocket is not None:
+                self.conductor_websocket.websocket.close()
+            # Best effort: an in-flight command handler is not interruptible, so a slow one can outlast this join.
+            if (
+                self.conductor_websocket.is_alive()
+                and self.conductor_websocket is not threading.current_thread()
+            ):
+                self.conductor_websocket.join(timeout=10.0)
+                if self.conductor_websocket.is_alive():
+                    dbos_logger.warning("Conductor thread did not exit within timeout")
         if self._timeout_tasks:
             target_loop = self._background_event_loop.target_loop()
             try:
@@ -900,11 +911,6 @@ class DBOS:
         if self._admin_server_field is not None:
             self._admin_server_field.stop()
             self._admin_server_field = None
-        if (
-            self.conductor_websocket is not None
-            and self.conductor_websocket.websocket is not None
-        ):
-            self.conductor_websocket.websocket.close()
         if self._executor_field is not None:
             self._executor_field.shutdown(wait=False, cancel_futures=True)
             self._executor_field = None
