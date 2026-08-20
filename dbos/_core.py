@@ -69,6 +69,7 @@ from ._error import (
     DBOSNotAuthorizedError,
     DBOSQueueDeduplicatedError,
     DBOSRecoveryError,
+    DBOSStreamNondeterminismError,
     DBOSStreamTimeoutError,
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
@@ -2971,6 +2972,8 @@ class _StreamReadCheckpoint:
         # Function ids are allocated in order, so the first miss proves every later one misses too.
         self._replaying = True
         self._started_at_epoch_ms = 0
+        # Whether this reader currently holds a reserved step that is not yet recorded.
+        self._in_flight = False
 
     def begin(self) -> Optional[DBOSContext]:
         """Reserve the step that records the next value, or None if this read is not checkpointed."""
@@ -2984,9 +2987,22 @@ class _StreamReadCheckpoint:
                 self._ctx = ctx
         if self._ctx is None:
             return None
+        # Sequential reads record before they yield and so never overlap; an overlap means the reads are concurrent and their step ids depend on scheduling. Every read shares one function name, so the step-name guard would not catch the resulting swap on replay.
+        if self._ctx.active_stream_reads > 0:
+            raise DBOSStreamNondeterminismError(self._ctx.workflow_id, self._key)
+        self._ctx.active_stream_reads += 1
+        self._in_flight = True
         # Started when the read began, so the recorded step spans the wait for the value.
         self._started_at_epoch_ms = int(time.time() * 1000)
         return self._ctx.snapshot_step_ctx()
+
+    def end(self) -> None:
+        """Release the reserved step once its outcome is settled. Idempotent."""
+        if not self._in_flight:
+            return
+        self._in_flight = False
+        if self._ctx is not None:
+            self._ctx.active_stream_reads -= 1
 
     def replay(self, step_ctx: Optional[DBOSContext]) -> Any:
         """Return the value recorded for this step, or _no_recorded_value to read it live."""
@@ -3049,6 +3065,7 @@ class _StreamReadCheckpoint:
             "error": None,
         }
         self._sys_db.record_operation_result(result)
+        self.end()
 
     def record_timeout(self, step_ctx: Optional[DBOSContext], error: Exception) -> None:
         """Record that the wait for this value timed out, so a replay raises it rather than waiting.
@@ -3071,6 +3088,7 @@ class _StreamReadCheckpoint:
             "error": serialized,
         }
         self._sys_db.record_operation_result(result)
+        self.end()
 
 
 def read_stream_offset(
@@ -3172,6 +3190,8 @@ def read_stream(
             )
             recorded = recorder.replay(step_ctx)
             if recorded is not _no_recorded_value:
+                # Settled from history, so the step is no longer in flight.
+                recorder.end()
                 if is_stream_closed_sentinel(recorded):
                     return
                 yield recorded
@@ -3216,6 +3236,8 @@ def read_stream(
             yield value
             offset += 1
     finally:
+        # Release the reserved step if the read was abandoned or raised mid-flight.
+        recorder.end()
         sys_db.unregister_stream_listener(payload)
 
 
@@ -3256,6 +3278,8 @@ async def read_stream_async(
             )
             recorded = await asyncio.to_thread(recorder.replay, step_ctx)
             if recorded is not _no_recorded_value:
+                # Settled from history, so the step is no longer in flight.
+                recorder.end()
                 if is_stream_closed_sentinel(recorded):
                     return
                 yield recorded
@@ -3306,6 +3330,8 @@ async def read_stream_async(
             yield value
             offset += 1
     finally:
+        # Release the reserved step if the read was abandoned or raised mid-flight.
+        recorder.end()
         sys_db.unregister_stream_listener(payload)
 
 
