@@ -1197,6 +1197,7 @@ class DBOS:
             Callable[[BaseException], Union[bool, Awaitable[bool]]]
         ] = None,
         preemptible: bool = False,
+        timeout_seconds: Optional[float] = None,
     ) -> Callable[[Callable[P, R]], Callable[P, R]]:
         """
         Decorate and configure a function for use as a DBOS step.
@@ -1213,6 +1214,11 @@ class DBOS:
                 retries. Async validators are only supported for async steps.
             preemptible(bool): If True, cancel the (async) step if its workflow is cancelled.
                 Only supported for async steps.
+            timeout_seconds(Optional[float]): If set, cancel the (async) step and raise
+                DBOSStepTimeoutError if it runs for longer than this many seconds. Only
+                supported for async steps. Each retry attempt gets a fresh timeout. The
+                timeout is inert outside a workflow, where the step runs as a normal
+                function call.
 
         """
 
@@ -1225,6 +1231,7 @@ class DBOS:
             backoff_rate=backoff_rate,
             should_retry=should_retry,
             preemptible=preemptible,
+            timeout_seconds=timeout_seconds,
         )
 
     @classmethod

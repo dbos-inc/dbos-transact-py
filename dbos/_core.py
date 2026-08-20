@@ -66,6 +66,7 @@ from ._error import (
     DBOSNotAuthorizedError,
     DBOSQueueDeduplicatedError,
     DBOSRecoveryError,
+    DBOSStepTimeoutError,
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
@@ -384,6 +385,12 @@ class StepOptions(TypedDict, total=False):
         preemptible:
             If True, cancel the (async) step if its workflow is cancelled.
             Only supported for async steps.
+
+        timeout_seconds:
+            If set, cancel the (async) step and raise DBOSStepTimeoutError if it
+            runs for longer than this many seconds. Only supported for async
+            steps. Each retry attempt gets a fresh timeout. Inert outside a
+            workflow, where the step runs as a normal function call.
     """
 
     name: Optional[str]
@@ -393,6 +400,7 @@ class StepOptions(TypedDict, total=False):
     backoff_rate: float
     should_retry: Optional[Callable[[BaseException], Union[bool, Awaitable[bool]]]]
     preemptible: bool
+    timeout_seconds: Optional[float]
 
 
 DEFAULT_STEP_OPTIONS: StepOptions = {
@@ -403,6 +411,7 @@ DEFAULT_STEP_OPTIONS: StepOptions = {
     "backoff_rate": 2.0,
     "should_retry": None,
     "preemptible": False,
+    "timeout_seconds": None,
 }
 
 
@@ -2389,6 +2398,40 @@ async def _run_preemptible_step(
                 pass
 
 
+async def _run_step_with_timeout(
+    step_name: str,
+    timeout_seconds: float,
+    func: Callable[..., Coroutine[Any, Any, R]],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> R:
+    step_task: asyncio.Task[R] = asyncio.create_task(func(*args, **kwargs))
+    try:
+        done, _ = await asyncio.wait({step_task}, timeout=timeout_seconds)
+        if step_task in done:
+            return step_task.result()
+        # Timed out: cancel the step and let its cleanup finish before the
+        # timeout is checkpointed. asyncio.wait, rather than awaiting the task
+        # directly, so an outer cancellation still propagates while the step's
+        # own outcome cannot displace the timeout — a body that suppresses
+        # CancelledError fails the step on every supported Python version
+        # (asyncio.wait_for would return its value on 3.10/3.11).
+        step_task.cancel()
+        await asyncio.wait({step_task})
+        if not step_task.cancelled():
+            # Consume it so asyncio doesn't log it as never retrieved.
+            step_task.exception()
+        raise DBOSStepTimeoutError(step_name, timeout_seconds)
+    finally:
+        # Don't leak the step task if the outer coroutine was itself cancelled.
+        if not step_task.done():
+            step_task.cancel()
+            try:
+                await step_task
+            except BaseException:
+                pass
+
+
 def invoke_step(
     dbos: "DBOS",
     step_ctx: DBOSContext,
@@ -2405,6 +2448,7 @@ def invoke_step(
         Callable[[BaseException], Union[bool, Awaitable[bool]]]
     ] = None,
     preemptible: bool = False,
+    timeout_seconds: Optional[float] = None,
 ) -> R | Coroutine[Any, Any, R]:
     if (
         should_retry is not None
@@ -2420,6 +2464,17 @@ def invoke_step(
             f"Step {step_name} is sync but preemptible=True. "
             f"Preemption is only supported for async steps."
         )
+    if timeout_seconds is not None:
+        if not inspect.iscoroutinefunction(func):
+            raise DBOSException(
+                f"Step {step_name} is sync but timeout_seconds is set. "
+                f"Step timeouts are only supported for async steps."
+            )
+        if timeout_seconds <= 0:
+            raise DBOSException(
+                f"Step {step_name} has timeout_seconds={timeout_seconds}. "
+                f"Step timeouts must be positive."
+            )
 
     attributes: TracedAttributes = {
         "name": step_name,
@@ -2529,6 +2584,18 @@ def invoke_step(
         )
     else:
         step_partial = functools.partial(func, *args, **kwargs)
+    if timeout_seconds is not None:
+        # Wrap the innermost callable: inside the retry layer, so each attempt
+        # gets a fresh timeout and retry sleeps aren't charged against it, and
+        # outside preemption, so a timeout tears the poller down with the step.
+        step_partial = functools.partial(
+            _run_step_with_timeout,
+            step_name,
+            timeout_seconds,
+            cast(Callable[..., Coroutine[Any, Any, R]], step_partial),
+            (),
+            {},
+        )
     stepOutcome = Outcome[R].make(step_partial)
     if retries_allowed:
         stepOutcome = stepOutcome.retry(
@@ -2571,6 +2638,7 @@ def run_step(
             backoff_rate=options["backoff_rate"],
             should_retry=options["should_retry"],
             preemptible=options["preemptible"],
+            timeout_seconds=options["timeout_seconds"],
         )
         if inspect.iscoroutinefunction(func):
             return dbos._background_event_loop.submit_coroutine(
@@ -2618,6 +2686,7 @@ async def run_step_async(
                 backoff_rate=options["backoff_rate"],
                 should_retry=options["should_retry"],
                 preemptible=options["preemptible"],
+                timeout_seconds=options["timeout_seconds"],
             )
 
         if inspect.iscoroutinefunction(func):
@@ -2649,6 +2718,7 @@ def decorate_step(
         Callable[[BaseException], Union[bool, Awaitable[bool]]]
     ] = None,
     preemptible: bool = False,
+    timeout_seconds: Optional[float] = None,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     def decorator(func: Callable[P, R]) -> Callable[P, R]:
         if preemptible and not inspect.iscoroutinefunction(func):
@@ -2656,6 +2726,17 @@ def decorate_step(
                 f"Step {name or func.__qualname__} is sync but preemptible=True. "
                 f"Preemption is only supported for async steps."
             )
+        if timeout_seconds is not None:
+            if not inspect.iscoroutinefunction(func):
+                raise DBOSException(
+                    f"Step {name or func.__qualname__} is sync but timeout_seconds is set. "
+                    f"Step timeouts are only supported for async steps."
+                )
+            if timeout_seconds <= 0:
+                raise DBOSException(
+                    f"Step {name or func.__qualname__} has timeout_seconds={timeout_seconds}. "
+                    f"Step timeouts must be positive."
+                )
 
         step_name = name if name is not None else func.__qualname__
 
@@ -2686,6 +2767,7 @@ def decorate_step(
                         backoff_rate=backoff_rate,
                         should_retry=should_retry,
                         preemptible=preemptible,
+                        timeout_seconds=timeout_seconds,
                     )
             else:
                 return func(*args, **kwargs)

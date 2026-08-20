@@ -65,6 +65,7 @@ class DBOSErrorCode(Enum):
     AwaitedWorkflowCancelled = 13
     AwaitedWorkflowMaxRecoveryAttemptsExceeded = 14
     PatchNondeterminism = 15
+    StepTimeout = 16
     ConflictingRegistrationError = 25
 
 
@@ -169,6 +170,22 @@ class DBOSMaxStepRetriesExceeded(DBOSException):
     def __reduce__(self) -> Any:
         # Tell pickle how to reconstruct this object
         return (self.__class__, (self.step_name, self.max_retries, self.errors))
+
+
+class DBOSStepTimeoutError(DBOSException):
+    """Exception raised when a step was cancelled because it exceeded its timeout."""
+
+    def __init__(self, step_name: str, timeout_seconds: float) -> None:
+        self.step_name = step_name
+        self.timeout_seconds = timeout_seconds
+        super().__init__(
+            f"Step {step_name} was cancelled after exceeding its timeout of {timeout_seconds} seconds",
+            dbos_error_code=DBOSErrorCode.StepTimeout.value,
+        )
+
+    def __reduce__(self) -> Any:
+        # Tell pickle how to reconstruct this object
+        return (self.__class__, (self.step_name, self.timeout_seconds))
 
 
 class DBOSConflictingRegistrationError(DBOSException):
