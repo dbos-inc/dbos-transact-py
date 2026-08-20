@@ -10,7 +10,11 @@ from sqlalchemy import event as sa_event
 # Public API
 from dbos import DBOS, DBOSConfig, Queue, SetWorkflowID
 from dbos._client import DBOSClient
-from dbos._error import DBOSNonExistentWorkflowError, DBOSStreamTimeoutError
+from dbos._error import (
+    DBOSAwaitedWorkflowCancelledError,
+    DBOSNonExistentWorkflowError,
+    DBOSStreamTimeoutError,
+)
 from dbos._serialization import WorkflowSerializationFormat, serialize_value
 from dbos._sys_db import _dbos_streams_channel, _no_stream_value
 from dbos._sys_db_postgres import PostgresSystemDatabase
@@ -1900,3 +1904,92 @@ async def test_stream_array_like_values_async(dbos: DBOS, client: DBOSClient) ->
     assert [v.tag async for v in DBOS.read_stream_async(wfid, stream_key)] == ["a"]
     assert [v.tag async for v in client.read_stream_async(wfid, stream_key)] == ["a"]
     assert (await DBOS.read_stream_offset_async(wfid, stream_key, 0)).tag == "a"
+
+
+def test_get_all_stream_entries_stops_at_close(dbos: DBOS) -> None:
+    """The bulk fetch the conductor uses ends a stream where read_stream ends it, so the two
+    never report different contents for the same rows."""
+    stream_key = "conductor_view_stream"
+    empty_key = "closed_empty_stream"
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        DBOS.write_stream(stream_key, "v0")
+        DBOS.close_stream(stream_key)
+        # Writing past a close is still accepted; the two readers must agree on what it holds.
+        DBOS.write_stream(stream_key, "after")
+        DBOS.close_stream(empty_key)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        writer_workflow()
+
+    assert list(DBOS.read_stream(wfid, stream_key)) == ["v0"]
+    entries = dbos._sys_db.get_all_stream_entries(wfid)
+    assert entries[stream_key] == ["v0"]
+    # A stream that was opened and closed with nothing in it reads as empty, not as absent.
+    assert entries[empty_key] == []
+    assert list(DBOS.read_stream(wfid, empty_key)) == []
+
+
+def test_read_stream_notices_cancellation(dbos: DBOS) -> None:
+    """A reader waiting on a live producer observes its own cancellation, rather than blocking
+    until the producer finishes."""
+    stream_key = "cancel_stream"
+    release = threading.Event()
+    entered = threading.Event()
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        DBOS.write_stream(stream_key, "v0")
+        # Stay active and silent so the reader waits rather than draining to the end.
+        release.wait()
+
+    @DBOS.workflow()
+    def reader_workflow(target_id: str) -> list[Any]:
+        seen: list[Any] = []
+        for value in DBOS.read_stream(target_id, stream_key):
+            seen.append(value)
+            entered.set()
+        return seen
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        writer_handle = DBOS.start_workflow(writer_workflow)
+    try:
+        reader_id = str(uuid.uuid4())
+        with SetWorkflowID(reader_id):
+            reader_handle = DBOS.start_workflow(reader_workflow, wfid)
+        assert entered.wait(10)
+        DBOS.cancel_workflow(reader_id)
+        with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+            reader_handle.get_result()
+    finally:
+        release.set()
+        writer_handle.get_result()
+
+
+def test_client_read_stream_from_workflow_is_not_checkpointed(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    """A client reads through its own system database, which knows nothing of the workflow that
+    happens to be calling, so a client read from inside a workflow records no steps."""
+    stream_key = "client_in_workflow_stream"
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        DBOS.write_stream(stream_key, "v0")
+        DBOS.close_stream(stream_key)
+
+    @DBOS.workflow()
+    def reader_workflow(target_id: str) -> list[Any]:
+        return list(client.read_stream(target_id, stream_key))
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        writer_workflow()
+
+    reader_id = str(uuid.uuid4())
+    with SetWorkflowID(reader_id):
+        assert reader_workflow(wfid) == ["v0"]
+    assert DBOS.list_workflow_steps(reader_id) == []

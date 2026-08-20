@@ -2936,6 +2936,8 @@ def close_stream(dbos: "DBOS", step_ctx: Optional["DBOSContext"], key: str) -> N
 
 
 _READ_STREAM_FUNCTION_NAME = "DBOS.readStream"
+# How often a reader re-checks its own workflow for cancellation while it reads.
+_STREAM_CANCEL_CHECK_INTERVAL_SEC = 1.0
 _READ_STREAM_OFFSET_FUNCTION_NAME = "DBOS.readStreamOffset"
 
 # Returned by _StreamReadCheckpoint.replay when a step has no recorded result and must be read live.
@@ -2950,18 +2952,30 @@ class _StreamReadCheckpoint:
     Reads from a step, from a client, or from outside a workflow are not recorded.
     """
 
-    def __init__(self, sys_db: "SystemDatabase", key: str, function_name: str) -> None:
+    def __init__(
+        self,
+        sys_db: "SystemDatabase",
+        key: str,
+        function_name: str,
+        enabled: bool,
+    ) -> None:
         self._sys_db = sys_db
         self._key = key
         self._function_name = function_name
+        # A client reads through its own system database, which knows nothing of the workflow
+        # that happens to be calling, so it must never bind to the ambient context.
+        self._enabled = enabled
         self._ctx: Optional[DBOSContext] = None
         self._bound = False
+        self._last_cancel_check = time.time()
         # Function ids are allocated in order, so the first miss proves every later one misses too.
         self._replaying = True
         self._started_at_epoch_ms = 0
 
     def begin(self) -> Optional[DBOSContext]:
         """Reserve the step that records the next value, or None if this read is not checkpointed."""
+        if not self._enabled:
+            return None
         if not self._bound:
             self._bound = True
             ctx = get_local_dbos_context()
@@ -2995,6 +3009,27 @@ class _StreamReadCheckpoint:
         return deserialize_value(
             recorded["output"], recorded["serialization"], self._sys_db.serializer
         )
+
+    def check_cancelled(self) -> None:
+        """Raise if the reading workflow has been cancelled, probing at most once an interval.
+
+        The replay probe stops querying once past the frontier, so without this neither a reader
+        awaiting a value nor one busy delivering them would ever observe its own cancellation.
+        """
+        if self._ctx is None:
+            return
+        now = time.time()
+        if now - self._last_cancel_check < _STREAM_CANCEL_CHECK_INTERVAL_SEC:
+            return
+        self._last_cancel_check = now
+        status = self._sys_db.get_workflow_status(self._ctx.workflow_id)
+        if (
+            status is not None
+            and status["status"] == WorkflowStatusString.CANCELLED.value
+        ):
+            raise DBOSWorkflowCancelledError(
+                f"Workflow {self._ctx.workflow_id} is cancelled. Aborting read_stream."
+            )
 
     def record(self, step_ctx: Optional[DBOSContext], value: Any) -> None:
         """Record a value delivered to the workflow, in the app's serializer as step outputs are.
@@ -3047,6 +3082,7 @@ def read_stream_offset(
     *,
     polling_interval: Optional[float] = None,
     timeout_seconds: Optional[float] = None,
+    checkpoint: bool = True,
 ) -> Any:
     """Return the single value at one offset of a stream, waiting for it to be written."""
     values = read_stream(
@@ -3057,6 +3093,7 @@ def read_stream_offset(
         polling_interval=polling_interval,
         timeout_seconds=timeout_seconds,
         function_name=_READ_STREAM_OFFSET_FUNCTION_NAME,
+        checkpoint=checkpoint,
     )
     try:
         for value in values:
@@ -3076,6 +3113,7 @@ async def read_stream_offset_async(
     *,
     polling_interval: Optional[float] = None,
     timeout_seconds: Optional[float] = None,
+    checkpoint: bool = True,
 ) -> Any:
     """Return the single value at one offset of a stream, waiting for it to be written."""
     values = read_stream_async(
@@ -3086,6 +3124,7 @@ async def read_stream_offset_async(
         polling_interval=polling_interval,
         timeout_seconds=timeout_seconds,
         function_name=_READ_STREAM_OFFSET_FUNCTION_NAME,
+        checkpoint=checkpoint,
     )
     try:
         async for value in values:
@@ -3106,24 +3145,26 @@ def read_stream(
     polling_interval: Optional[float] = None,
     timeout_seconds: Optional[float] = None,
     function_name: str = _READ_STREAM_FUNCTION_NAME,
+    checkpoint: bool = True,
 ) -> Generator[Any, Any, None]:
     """Yield a stream's values in order, checkpointing each one when read from a workflow."""
     if timeout_seconds is not None and timeout_seconds < 0:
         raise ValueError(f"timeout_seconds must not be negative, got {timeout_seconds}")
     if polling_interval is None:
         polling_interval = sys_db._notification_listener_polling_interval_sec
-    checkpoint = _StreamReadCheckpoint(sys_db, key, function_name)
+    recorder = _StreamReadCheckpoint(sys_db, key, function_name, checkpoint)
     event, payload = sys_db.register_stream_listener(workflow_id, key)
     final_read = False
     try:
         while True:
             # One step per delivered value, reserved before the read so it spans the wait.
-            step_ctx = checkpoint.begin()
+            step_ctx = recorder.begin()
+            recorder.check_cancelled()
             # The timeout is per value: the clock restarts every time one is delivered.
             deadline = (
                 time.time() + timeout_seconds if timeout_seconds is not None else None
             )
-            recorded = checkpoint.replay(step_ctx)
+            recorded = recorder.replay(step_ctx)
             if recorded is not _no_recorded_value:
                 if is_stream_closed_sentinel(recorded):
                     return
@@ -3155,16 +3196,17 @@ def read_stream(
                         error = DBOSStreamTimeoutError(
                             workflow_id, key, timeout_seconds
                         )
-                        checkpoint.record_timeout(step_ctx, error)
+                        recorder.record_timeout(step_ctx, error)
                         raise error
                     wait_for = min(remaining, polling_interval)
+                recorder.check_cancelled()
                 event.wait(timeout=wait_for)
             if value is _no_stream_value or is_stream_closed_sentinel(value):
                 # The end is recorded too, so a replay stops exactly where this read did.
-                checkpoint.record(step_ctx, _dbos_stream_closed_sentinel)
+                recorder.record(step_ctx, _dbos_stream_closed_sentinel)
                 return
             # Recorded before the yield, so a crash after the workflow acts on the value still replays it.
-            checkpoint.record(step_ctx, value)
+            recorder.record(step_ctx, value)
             yield value
             offset += 1
     finally:
@@ -3180,24 +3222,26 @@ async def read_stream_async(
     polling_interval: Optional[float] = None,
     timeout_seconds: Optional[float] = None,
     function_name: str = _READ_STREAM_FUNCTION_NAME,
+    checkpoint: bool = True,
 ) -> AsyncGenerator[Any, None]:
     """Yield a stream's values in order, checkpointing each one when read from a workflow."""
     if timeout_seconds is not None and timeout_seconds < 0:
         raise ValueError(f"timeout_seconds must not be negative, got {timeout_seconds}")
     if polling_interval is None:
         polling_interval = sys_db._notification_listener_polling_interval_sec
-    checkpoint = _StreamReadCheckpoint(sys_db, key, function_name)
+    recorder = _StreamReadCheckpoint(sys_db, key, function_name, checkpoint)
     event, payload = sys_db.register_stream_listener(workflow_id, key)
     final_read = False
     try:
         while True:
             # One step per delivered value, reserved before the read so it spans the wait.
-            step_ctx = checkpoint.begin()
+            step_ctx = recorder.begin()
+            await asyncio.to_thread(recorder.check_cancelled)
             # The timeout is per value: the clock restarts every time one is delivered.
             deadline = (
                 time.time() + timeout_seconds if timeout_seconds is not None else None
             )
-            recorded = await asyncio.to_thread(checkpoint.replay, step_ctx)
+            recorded = await asyncio.to_thread(recorder.replay, step_ctx)
             if recorded is not _no_recorded_value:
                 if is_stream_closed_sentinel(recorded):
                     return
@@ -3232,19 +3276,20 @@ async def read_stream_async(
                             workflow_id, key, timeout_seconds
                         )
                         await asyncio.to_thread(
-                            checkpoint.record_timeout, step_ctx, error
+                            recorder.record_timeout, step_ctx, error
                         )
                         raise error
                     wait_for = min(remaining, polling_interval)
+                await asyncio.to_thread(recorder.check_cancelled)
                 await event.wait_async(timeout=wait_for)
             if value is _no_stream_value or is_stream_closed_sentinel(value):
                 # The end is recorded too, so a replay stops exactly where this read did.
                 await asyncio.to_thread(
-                    checkpoint.record, step_ctx, _dbos_stream_closed_sentinel
+                    recorder.record, step_ctx, _dbos_stream_closed_sentinel
                 )
                 return
             # Recorded before the yield, so a crash after the workflow acts on the value still replays it.
-            await asyncio.to_thread(checkpoint.record, step_ctx, value)
+            await asyncio.to_thread(recorder.record, step_ctx, value)
             yield value
             offset += 1
     finally:

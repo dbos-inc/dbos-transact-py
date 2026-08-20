@@ -3909,16 +3909,21 @@ class SystemDatabase(ABC):
                 )
             ).fetchall()
             streams: Dict[str, List[Any]] = {}
+            closed: Set[str] = set()
             for row in rows:
                 key = row[0]
                 value_str = row[1]
                 serialization = row[3]
                 value = deserialize_value(value_str, serialization, self.serializer)
-                if is_stream_closed_sentinel(value):
+                if key in closed:
                     continue
-                if key not in streams:
-                    streams[key] = []
-                streams[key].append(value)
+                if is_stream_closed_sentinel(value):
+                    # End the stream where read_stream ends it, so the two never report
+                    # different contents for the same rows.
+                    closed.add(key)
+                    streams.setdefault(key, [])
+                    continue
+                streams.setdefault(key, []).append(value)
             return streams
 
     @db_retry()

@@ -1265,6 +1265,7 @@ class DBOSClient:
             offset=offset,
             polling_interval=polling_interval_sec,
             timeout_seconds=timeout_seconds,
+            checkpoint=False,
         )
 
     async def read_stream_async(
@@ -1299,6 +1300,7 @@ class DBOSClient:
             offset=offset,
             polling_interval=polling_interval_sec,
             timeout_seconds=timeout_seconds,
+            checkpoint=False,
         ):
             yield value
 
@@ -1336,6 +1338,7 @@ class DBOSClient:
             offset,
             polling_interval=polling_interval_sec,
             timeout_seconds=timeout_seconds,
+            checkpoint=False,
         )
 
     async def read_stream_offset_async(
@@ -1372,6 +1375,7 @@ class DBOSClient:
             offset,
             polling_interval=polling_interval_sec,
             timeout_seconds=timeout_seconds,
+            checkpoint=False,
         )
 
     # ── Schedule API ──────────────────────────────────────────────
