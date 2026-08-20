@@ -1613,10 +1613,9 @@ async def test_step_timeout_bounds_actual_duration(dbos: DBOS) -> None:
 
 @pytest.mark.asyncio
 async def test_step_timeout_fresh_budget_per_attempt(dbos: DBOS) -> None:
-    """Each retry attempt gets its own timeout budget and the retry sleep is not
-    charged against it. Attempt 1 is cancelled at 0.2s; after a 0.3s retry sleep
-    attempt 2 succeeds. One deadline shared across attempts would leave attempt
-    2 with no budget and exhaust all retries instead."""
+    """Each attempt gets its own budget and retry sleeps aren't charged against
+    it: attempt 1 is cancelled at 0.2s, then attempt 2 succeeds after a 0.3s
+    retry sleep. A shared deadline would leave attempt 2 nothing and exhaust."""
     invocations = 0
 
     @DBOS.step(
@@ -1670,9 +1669,8 @@ async def test_step_timeout_normal_exception_propagates(dbos: DBOS) -> None:
 @pytest.mark.asyncio
 async def test_step_timeout_no_leak_on_outer_cancel(dbos: DBOS) -> None:
     """If the coroutine running _run_step_with_timeout is itself cancelled, the
-    inner step task is cancelled too. asyncio.wait — unlike wait_for — does not
-    cancel what it awaits, so the finally block is the only thing standing
-    between an outer cancellation and a step that keeps running."""
+    inner step task is cancelled too. asyncio.wait — unlike wait_for — doesn't
+    cancel what it awaits, so the finally block is all that prevents a leak."""
     from dbos._core import _run_step_with_timeout
 
     step_started = asyncio.Event()

@@ -2411,14 +2411,8 @@ async def _run_step_with_timeout(
         done, _ = await asyncio.wait({step_task}, timeout=timeout_seconds)
         if step_task in done:
             return step_task.result()
-        # Timed out: cancel the step and let its cleanup finish before the
-        # timeout is checkpointed. asyncio.wait, rather than asyncio.wait_for:
-        # a body that catches CancelledError and returns normally makes
-        # wait_for hand back that value instead of raising (verified on 3.10
-        # through 3.13 — this is not version-specific), which would let a step
-        # silently outlive its deadline. asyncio.wait never yields the task's
-        # value, so the timeout always wins. Awaiting the task directly is not
-        # an option either: it would re-raise the step's own outcome here.
+        # Cancel the step and let its cleanup finish before checkpointing.
+        # wait_for would hand back a suppressed-cancel body's value (3.10-3.13).
         step_task.cancel()
         await asyncio.wait({step_task})
         if not step_task.cancelled():
@@ -2474,9 +2468,7 @@ def invoke_step(
                 f"Step timeouts are only supported for async steps."
             )
         if not (timeout_seconds > 0 and math.isfinite(timeout_seconds)):
-            # `not > 0` rather than `<= 0` so NaN is rejected too: NaN passes
-            # every comparison, and asyncio.wait(timeout=nan) never fires,
-            # silently disabling the timeout. Matches SetWorkflowTimeout.
+            # `<= 0` would admit NaN, which silently disables the timeout.
             raise DBOSException(
                 f"Step {step_name} has timeout_seconds={timeout_seconds}. "
                 f"Step timeouts must be positive and finite."
@@ -2591,9 +2583,8 @@ def invoke_step(
     else:
         step_partial = functools.partial(func, *args, **kwargs)
     if timeout_seconds is not None:
-        # Wrap the innermost callable: inside the retry layer, so each attempt
-        # gets a fresh timeout and retry sleeps aren't charged against it, and
-        # outside preemption, so a timeout tears the poller down with the step.
+        # Inside retry, so each attempt gets a fresh timeout; outside
+        # preemption, so a timeout tears the poller down with the step.
         step_partial = functools.partial(
             _run_step_with_timeout,
             step_name,
