@@ -3441,7 +3441,12 @@ class DBOS:
 
     @classmethod
     def read_stream(
-        cls, workflow_id: str, key: str, *, offset: int = 0
+        cls,
+        workflow_id: str,
+        key: str,
+        *,
+        offset: int = 0,
+        polling_interval_sec: Optional[float] = None,
     ) -> Generator[Any, Any, None]:
         """
         Read values from a stream as a generator.
@@ -3453,6 +3458,8 @@ class DBOS:
             workflow_id(str): The workflow instance ID that owns the stream
             key(str): The stream key / name within the workflow
             offset(int): The offset to start reading from (defaults to 0, the start of the stream)
+            polling_interval_sec(float, optional): Polling interval in seconds when waiting for new values when not using LISTEN/NOTIFY.
+                Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
 
         Yields:
             Any: Each value in the stream until the stream is closed
@@ -3464,6 +3471,7 @@ class DBOS:
             workflow_id,
             key,
             offset=offset,
+            polling_interval=polling_interval_sec,
         )
 
     @classmethod

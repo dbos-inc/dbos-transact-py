@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import time
 import uuid
 from typing import Any, cast
@@ -10,7 +11,7 @@ from sqlalchemy import event as sa_event
 from dbos import DBOS, DBOSConfig, SetWorkflowID
 from dbos._client import DBOSClient
 from dbos._error import DBOSNonExistentWorkflowError
-from dbos._serialization import WorkflowSerializationFormat
+from dbos._serialization import WorkflowSerializationFormat, serialize_value
 from dbos._sys_db import _dbos_streams_channel, _no_stream_value
 from dbos._sys_db_postgres import PostgresSystemDatabase
 from tests.conftest import (
@@ -392,12 +393,9 @@ def test_stream_low_latency_delivery(
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         handle = DBOS.start_workflow(writer_workflow)
-    original_interval = dbos._sys_db._notification_listener_polling_interval_sec
-    dbos._sys_db._notification_listener_polling_interval_sec = 10.0
-    try:
-        count, max_latency = measure(DBOS.read_stream(wfid, stream_key))
-    finally:
-        dbos._sys_db._notification_listener_polling_interval_sec = original_interval
+    count, max_latency = measure(
+        DBOS.read_stream(wfid, stream_key, polling_interval_sec=10.0)
+    )
     handle.get_result()
     assert count == num_values
     assert max_latency < 2.0, f"DBOS delivery latency {max_latency:.3f}s too high"
@@ -1487,3 +1485,121 @@ async def test_workflow_read_stream_async_checkpointing(dbos: DBOS) -> None:
 
     assert await replay(reader_id) == test_values
     assert reader_calls == 2
+
+
+def _insert_stream_value_without_notifying(
+    dbos: DBOS, workflow_id: str, key: str, value: str
+) -> None:
+    """Append to a stream without signaling its channel, so only a re-read can find the value."""
+    sys_db = dbos._sys_db
+    serialized, serialization = serialize_value(
+        value, WorkflowSerializationFormat.DEFAULT, sys_db.serializer
+    )
+    stmt = sys_db._stream_insert_stmt(workflow_id, 0, key, serialized, serialization)
+    with sys_db.engine.begin() as c:
+        c.execute(stmt)
+
+
+def test_read_stream_polling_interval(dbos: DBOS, client: DBOSClient) -> None:
+    """Every reader takes a per-call polling interval, so a caller can override a configured
+    fallback too slow for it. Each value lands without a notification, leaving the fallback
+    re-read as the only way to deliver it, and the configured one is longer than the test can wait.
+    """
+    stream_key = "polling_interval_stream"
+    release = threading.Event()
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        # Stay active so a reader waits for the next value rather than draining to the end.
+        release.wait()
+
+    def insert_once_reader_blocks(value: str) -> threading.Thread:
+        def run() -> None:
+            time.sleep(0.3)
+            _insert_stream_value_without_notifying(dbos, wfid, stream_key, value)
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        return thread
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(writer_workflow)
+
+    sys_dbs = [dbos._sys_db, client._sys_db]
+    originals = [db._notification_listener_polling_interval_sec for db in sys_dbs]
+    for db in sys_dbs:
+        db._notification_listener_polling_interval_sec = 30.0
+    try:
+        thread = insert_once_reader_blocks("v0")
+        start = time.time()
+        reader = DBOS.read_stream(wfid, stream_key, polling_interval_sec=0.05)
+        assert next(reader) == "v0"
+        # Far below the 30s configured fallback, which is what an ignored override would use.
+        assert time.time() - start < 10.0
+        thread.join()
+
+        thread = insert_once_reader_blocks("v1")
+        start = time.time()
+        client_reader = client.read_stream(
+            wfid, stream_key, offset=1, polling_interval_sec=0.05
+        )
+        assert next(client_reader) == "v1"
+        assert time.time() - start < 10.0
+        thread.join()
+    finally:
+        for db, original in zip(sys_dbs, originals):
+            db._notification_listener_polling_interval_sec = original
+        release.set()
+        handle.get_result()
+
+
+@pytest.mark.asyncio
+async def test_read_stream_async_polling_interval(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    """Async sibling of test_read_stream_polling_interval."""
+    stream_key = "async_polling_interval_stream"
+    release = asyncio.Event()
+
+    @DBOS.workflow()
+    async def async_writer_workflow() -> None:
+        # Stay active so a reader waits for the next value rather than draining to the end.
+        await release.wait()
+
+    async def insert_once_reader_blocks(value: str) -> None:
+        await asyncio.sleep(0.3)
+        await asyncio.to_thread(
+            _insert_stream_value_without_notifying, dbos, wfid, stream_key, value
+        )
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(async_writer_workflow)
+
+    sys_dbs = [dbos._sys_db, client._sys_db]
+    originals = [db._notification_listener_polling_interval_sec for db in sys_dbs]
+    for db in sys_dbs:
+        db._notification_listener_polling_interval_sec = 30.0
+    try:
+        inserter = asyncio.create_task(insert_once_reader_blocks("v0"))
+        start = time.time()
+        reader = DBOS.read_stream_async(wfid, stream_key, polling_interval_sec=0.05)
+        assert await reader.__anext__() == "v0"
+        # Far below the 30s configured fallback, which is what an ignored override would use.
+        assert time.time() - start < 10.0
+        await inserter
+
+        inserter = asyncio.create_task(insert_once_reader_blocks("v1"))
+        start = time.time()
+        client_reader = client.read_stream_async(
+            wfid, stream_key, offset=1, polling_interval_sec=0.05
+        )
+        assert await client_reader.__anext__() == "v1"
+        assert time.time() - start < 10.0
+        await inserter
+    finally:
+        for db, original in zip(sys_dbs, originals):
+            db._notification_listener_polling_interval_sec = original
+        release.set()
+        await handle.get_result()

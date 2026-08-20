@@ -1228,7 +1228,12 @@ class DBOSClient:
         return WorkflowHandleClientAsyncPolling[Any](forked_workflow_id, self._sys_db)
 
     def read_stream(
-        self, workflow_id: str, key: str, *, offset: int = 0
+        self,
+        workflow_id: str,
+        key: str,
+        *,
+        offset: int = 0,
+        polling_interval_sec: Optional[float] = None,
     ) -> Generator[Any, Any, None]:
         """
         Read values from a stream as a generator.
@@ -1239,14 +1244,27 @@ class DBOSClient:
             workflow_id: The ID of the workflow that wrote to the stream
             key: The stream key to read from
             offset: The offset to start reading from (defaults to 0, the start of the stream)
+            polling_interval_sec: Polling interval in seconds when waiting for new values when not using LISTEN/NOTIFY.
+                Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
 
         Yields:
             The values written to the stream in order
         """
-        yield from read_stream(self._sys_db, workflow_id, key, offset=offset)
+        yield from read_stream(
+            self._sys_db,
+            workflow_id,
+            key,
+            offset=offset,
+            polling_interval=polling_interval_sec,
+        )
 
     async def read_stream_async(
-        self, workflow_id: str, key: str, *, offset: int = 0
+        self,
+        workflow_id: str,
+        key: str,
+        *,
+        offset: int = 0,
+        polling_interval_sec: Optional[float] = None,
     ) -> AsyncGenerator[Any, None]:
         """
         Read values from a stream as an async generator.
@@ -1257,12 +1275,18 @@ class DBOSClient:
             workflow_id: The ID of the workflow that wrote to the stream
             key: The stream key to read from
             offset: The offset to start reading from (defaults to 0, the start of the stream)
+            polling_interval_sec: Polling interval in seconds when waiting for new values when not using LISTEN/NOTIFY.
+                Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
 
         Yields:
             The values written to the stream in order
         """
         async for value in read_stream_async(
-            self._sys_db, workflow_id, key, offset=offset
+            self._sys_db,
+            workflow_id,
+            key,
+            offset=offset,
+            polling_interval=polling_interval_sec,
         ):
             yield value
 
