@@ -2343,27 +2343,6 @@ def decorate_transaction(
 _PREEMPTIBLE_POLL_INTERVAL_SEC = 1.0
 
 
-async def _poll_for_workflow_cancellation(dbos: "DBOS", workflow_id: str) -> bool:
-    """Return True once the workflow is observed CANCELLED. Never cancels
-    anything itself: the supervisor owns that decision."""
-    while True:
-        await asyncio.sleep(_PREEMPTIBLE_POLL_INTERVAL_SEC)
-        try:
-            status = await asyncio.to_thread(
-                dbos._sys_db.get_workflow_status, workflow_id
-            )
-        except Exception as e:
-            dbos.logger.warning(
-                f"Error polling status for preemptible step in workflow {workflow_id}: {e}"
-            )
-            continue
-        if (
-            status is not None
-            and status["status"] == WorkflowStatusString.CANCELLED.value
-        ):
-            return True
-
-
 async def _supervise_step(
     dbos: "DBOS",
     workflow_id: str,
@@ -2377,12 +2356,31 @@ async def _supervise_step(
 ) -> R:
     """Run an async step under the watchdogs its options ask for, deciding in
     one place whether it completed, was preempted, or blew its deadline."""
+
+    async def poll_for_cancellation() -> bool:
+        """Return True once the workflow is observed CANCELLED. Never cancels
+        anything itself: the supervisor owns that decision."""
+        while True:
+            await asyncio.sleep(_PREEMPTIBLE_POLL_INTERVAL_SEC)
+            try:
+                status = await asyncio.to_thread(
+                    dbos._sys_db.get_workflow_status, workflow_id
+                )
+            except Exception as e:
+                dbos.logger.warning(
+                    f"Error polling status for preemptible step in workflow {workflow_id}: {e}"
+                )
+                continue
+            if (
+                status is not None
+                and status["status"] == WorkflowStatusString.CANCELLED.value
+            ):
+                return True
+
     loop = asyncio.get_running_loop()
     step_task: asyncio.Task[R] = asyncio.create_task(func(*args, **kwargs))
     poller_task: Optional[asyncio.Task[bool]] = (
-        asyncio.create_task(_poll_for_workflow_cancellation(dbos, workflow_id))
-        if preemptible
-        else None
+        asyncio.create_task(poll_for_cancellation()) if preemptible else None
     )
     deadline = None if timeout_seconds is None else loop.time() + timeout_seconds
     abort: Optional[BaseException] = None
