@@ -3035,23 +3035,6 @@ class _StreamReadCheckpoint:
         self._sys_db.record_operation_result(result)
 
 
-def _validate_stream_timeout(timeout_seconds: Optional[float]) -> None:
-    if timeout_seconds is not None and timeout_seconds < 0:
-        raise ValueError(f"timeout_seconds must not be negative, got {timeout_seconds}")
-
-
-def _stream_wait_seconds(
-    deadline: Optional[float], polling_interval: float
-) -> Optional[float]:
-    """How long to wait for the next value, or None if the deadline has passed."""
-    if deadline is None:
-        return polling_interval
-    remaining = deadline - time.time()
-    if remaining <= 0:
-        return None
-    return min(remaining, polling_interval)
-
-
 def read_stream(
     sys_db: "SystemDatabase",
     workflow_id: str,
@@ -3062,7 +3045,8 @@ def read_stream(
     timeout_seconds: Optional[float] = None,
 ) -> Generator[Any, Any, None]:
     """Yield a stream's values in order, checkpointing each one when read from a workflow."""
-    _validate_stream_timeout(timeout_seconds)
+    if timeout_seconds is not None and timeout_seconds < 0:
+        raise ValueError(f"timeout_seconds must not be negative, got {timeout_seconds}")
     if polling_interval is None:
         polling_interval = sys_db._notification_listener_polling_interval_sec
     checkpoint = _StreamReadCheckpoint(sys_db, key)
@@ -3104,14 +3088,17 @@ def read_stream(
                     # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
                     final_read = True
                     continue
-                remaining = _stream_wait_seconds(deadline, polling_interval)
-                if remaining is None:
-                    error = DBOSStreamTimeoutError(
-                        workflow_id, key, cast(float, timeout_seconds)
-                    )
-                    checkpoint.record_timeout(step_ctx, error)
-                    raise error
-                event.wait(timeout=remaining)
+                wait_for = polling_interval
+                if deadline is not None:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        error = DBOSStreamTimeoutError(
+                            workflow_id, key, cast(float, timeout_seconds)
+                        )
+                        checkpoint.record_timeout(step_ctx, error)
+                        raise error
+                    wait_for = min(remaining, polling_interval)
+                event.wait(timeout=wait_for)
             if value is _no_stream_value or value == _dbos_stream_closed_sentinel:
                 # The end is recorded too, so a replay stops exactly where this read did.
                 checkpoint.record(
@@ -3136,7 +3123,8 @@ async def read_stream_async(
     timeout_seconds: Optional[float] = None,
 ) -> AsyncGenerator[Any, None]:
     """Yield a stream's values in order, checkpointing each one when read from a workflow."""
-    _validate_stream_timeout(timeout_seconds)
+    if timeout_seconds is not None and timeout_seconds < 0:
+        raise ValueError(f"timeout_seconds must not be negative, got {timeout_seconds}")
     if polling_interval is None:
         polling_interval = sys_db._notification_listener_polling_interval_sec
     checkpoint = _StreamReadCheckpoint(sys_db, key)
@@ -3178,14 +3166,19 @@ async def read_stream_async(
                     # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
                     final_read = True
                     continue
-                remaining = _stream_wait_seconds(deadline, polling_interval)
-                if remaining is None:
-                    error = DBOSStreamTimeoutError(
-                        workflow_id, key, cast(float, timeout_seconds)
-                    )
-                    await asyncio.to_thread(checkpoint.record_timeout, step_ctx, error)
-                    raise error
-                await event.wait_async(timeout=remaining)
+                wait_for = polling_interval
+                if deadline is not None:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        error = DBOSStreamTimeoutError(
+                            workflow_id, key, cast(float, timeout_seconds)
+                        )
+                        await asyncio.to_thread(
+                            checkpoint.record_timeout, step_ctx, error
+                        )
+                        raise error
+                    wait_for = min(remaining, polling_interval)
+                await event.wait_async(timeout=wait_for)
             if value is _no_stream_value or value == _dbos_stream_closed_sentinel:
                 # The end is recorded too, so a replay stops exactly where this read did.
                 await asyncio.to_thread(
