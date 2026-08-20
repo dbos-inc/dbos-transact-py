@@ -117,6 +117,7 @@ from ._sys_db import (
     WorkflowStatusString,
     _dbos_stream_closed_sentinel,
     _no_stream_value,
+    is_stream_closed_sentinel,
     workflow_is_active,
 )
 from ._tracer import dbos_tracer
@@ -3124,7 +3125,7 @@ def read_stream(
             )
             recorded = checkpoint.replay(step_ctx)
             if recorded is not _no_recorded_value:
-                if recorded == _dbos_stream_closed_sentinel:
+                if is_stream_closed_sentinel(recorded):
                     return
                 yield recorded
                 offset += 1
@@ -3158,7 +3159,7 @@ def read_stream(
                         raise error
                     wait_for = min(remaining, polling_interval)
                 event.wait(timeout=wait_for)
-            if value is _no_stream_value or value == _dbos_stream_closed_sentinel:
+            if value is _no_stream_value or is_stream_closed_sentinel(value):
                 # The end is recorded too, so a replay stops exactly where this read did.
                 checkpoint.record(step_ctx, _dbos_stream_closed_sentinel)
                 return
@@ -3198,7 +3199,7 @@ async def read_stream_async(
             )
             recorded = await asyncio.to_thread(checkpoint.replay, step_ctx)
             if recorded is not _no_recorded_value:
-                if recorded == _dbos_stream_closed_sentinel:
+                if is_stream_closed_sentinel(recorded):
                     return
                 yield recorded
                 offset += 1
@@ -3236,7 +3237,7 @@ async def read_stream_async(
                         raise error
                     wait_for = min(remaining, polling_interval)
                 await event.wait_async(timeout=wait_for)
-            if value is _no_stream_value or value == _dbos_stream_closed_sentinel:
+            if value is _no_stream_value or is_stream_closed_sentinel(value):
                 # The end is recorded too, so a replay stops exactly where this read did.
                 await asyncio.to_thread(
                     checkpoint.record, step_ctx, _dbos_stream_closed_sentinel

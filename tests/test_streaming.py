@@ -1824,3 +1824,79 @@ async def test_read_stream_offset_async(dbos: DBOS, client: DBOSClient) -> None:
     finally:
         release.set()
         await handle.get_result()
+
+
+class AmbiguousTruth:
+    """Stands in for a numpy array or pandas DataFrame: comparing one yields a value whose truth
+    cannot be tested, so a bare `value == sentinel` raises instead of returning False.
+    """
+
+    def __init__(self, tag: str) -> None:
+        self.tag = tag
+
+    def __eq__(self, other: Any) -> Any:
+        return AmbiguousTruth(f"{self.tag}=={other}")
+
+    def __bool__(self) -> bool:
+        raise ValueError("The truth value of AmbiguousTruth is ambiguous")
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+def test_stream_array_like_values(dbos: DBOS, client: DBOSClient) -> None:
+    """Values whose __eq__ returns a non-boolean -- a DataFrame, a string-dtype ndarray -- must
+    survive every leg that compares a value to the closed-stream marker: the write, all the read
+    paths, and the bulk fetch the conductor uses."""
+    stream_key = "array_like_stream"
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        DBOS.write_stream(stream_key, AmbiguousTruth("a"))
+        DBOS.write_stream(stream_key, AmbiguousTruth("b"))
+        DBOS.close_stream(stream_key)
+
+    @DBOS.workflow()
+    def reader_workflow(target_id: str) -> list[str]:
+        return [v.tag for v in DBOS.read_stream(target_id, stream_key)]
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        writer_workflow()
+
+    assert [v.tag for v in DBOS.read_stream(wfid, stream_key)] == ["a", "b"]
+    assert [v.tag for v in client.read_stream(wfid, stream_key)] == ["a", "b"]
+    assert DBOS.read_stream_offset(wfid, stream_key, 1).tag == "b"
+    # Checkpointed reads compare the replayed value to the marker too.
+    reader_id = str(uuid.uuid4())
+    with SetWorkflowID(reader_id):
+        assert reader_workflow(wfid) == ["a", "b"]
+    assert reexecute_workflow_by_id(dbos, reader_id).get_result() == ["a", "b"]
+
+    entries = dbos._sys_db.get_all_stream_entries(wfid)
+    assert [v.tag for v in entries[stream_key]] == ["a", "b"]
+
+    steps = DBOS.list_workflow_steps(wfid)
+    assert [s["function_name"] for s in steps] == [
+        "DBOS.writeStream",
+        "DBOS.writeStream",
+        "DBOS.closeStream",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_array_like_values_async(dbos: DBOS, client: DBOSClient) -> None:
+    """Async sibling of test_stream_array_like_values."""
+    stream_key = "async_array_like_stream"
+
+    @DBOS.workflow()
+    async def async_writer_workflow() -> None:
+        await DBOS.write_stream_async(stream_key, AmbiguousTruth("a"))
+        await DBOS.close_stream_async(stream_key)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        await async_writer_workflow()
+
+    assert [v.tag async for v in DBOS.read_stream_async(wfid, stream_key)] == ["a"]
+    assert [v.tag async for v in client.read_stream_async(wfid, stream_key)] == ["a"]
+    assert (await DBOS.read_stream_offset_async(wfid, stream_key, 0)).tag == "a"

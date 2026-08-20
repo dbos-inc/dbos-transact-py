@@ -434,6 +434,11 @@ _dbos_streams_channel = "dbos_streams_channel"
 _no_stream_value = object()
 
 
+def is_stream_closed_sentinel(value: Any) -> bool:
+    """Whether a stream value is the marker a closed stream ends with."""
+    return isinstance(value, str) and value == _dbos_stream_closed_sentinel
+
+
 @dataclass
 class SendMessage:
     """A single message to send as part of a bulk send operation."""
@@ -3909,7 +3914,7 @@ class SystemDatabase(ABC):
                 value_str = row[1]
                 serialization = row[3]
                 value = deserialize_value(value_str, serialization, self.serializer)
-                if value == _dbos_stream_closed_sentinel:
+                if is_stream_closed_sentinel(value):
                     continue
                 if key not in streams:
                     streams[key] = []
@@ -5074,21 +5079,17 @@ class SystemDatabase(ABC):
         value: Any,
         *,
         serialization_type: WorkflowSerializationFormat,
+        function_name: str = "DBOS.writeStream",
     ) -> None:
+        """
+        Write a key-value pair to the stream at the first unused offset.
+        """
         serialized_value, serialization = serialize_value(
             value,
             serialization_type,
             self.serializer,
         )
 
-        """
-        Write a key-value pair to the stream at the first unused offset.
-        """
-        function_name = (
-            "DBOS.closeStream"
-            if value == _dbos_stream_closed_sentinel
-            else "DBOS.writeStream"
-        )
         start_time = int(time.time() * 1000)
         stmt = self._stream_insert_stmt(
             workflow_uuid,
@@ -5143,6 +5144,7 @@ class SystemDatabase(ABC):
             key,
             _dbos_stream_closed_sentinel,
             serialization_type=WorkflowSerializationFormat.PORTABLE,
+            function_name="DBOS.closeStream",
         )
 
     def close_stream_from_step(
