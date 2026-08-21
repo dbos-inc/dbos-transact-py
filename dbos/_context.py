@@ -125,6 +125,8 @@ class DBOSContext:
         self.function_id: int = -1
 
         self.curr_step_function_id: int = -1
+        # Checkpointed stream reads that have reserved a step but not yet recorded it.
+        self.active_stream_reads: int = 0
         self.curr_tx_function_id: int = -1
         self.sql_session: Optional[Session] = None
         self.sync_ds_session: Optional[Session] = None
@@ -271,6 +273,7 @@ class DBOSContext:
             self.id_assigned_for_next_workflow = ""
         self.workflow_id = wfid
         self.function_id = 0
+        self.active_stream_reads = 0
         self._start_span(attributes)
 
     def end_workflow(self, exc_value: Optional[BaseException]) -> None:

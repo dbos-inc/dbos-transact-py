@@ -233,6 +233,18 @@ def test_portable_ser(dbos: DBOS, client: DBOSClient) -> None:
             DBOS.logger.info("defSerPortableCls was called...")
             return workflow_func(s, x, o, wfid)
 
+        @staticmethod
+        @DBOS.workflow(
+            name="workflowPortableDirect",
+            serialization_type=WorkflowSerializationFormat.PORTABLE,
+        )
+        def defSerPortableDirect() -> str:
+            # Sends to itself so the message stays unconsumed and its format can be snooped.
+            DBOS.set_event("defstat", {"status": "Happy"})
+            DBOS.write_stream("defstream", {"stream": "OhYeah"})
+            DBOS.send(DBOS.workflow_id or "", {"message": "Hello!"}, "default")
+            return "direct"
+
         @classmethod
         @DBOS.workflow(name="simpleRecv")
         def recv(cls, topic: str) -> Any:
@@ -410,6 +422,16 @@ def test_portable_ser(dbos: DBOS, client: DBOSClient) -> None:
         check_stream_ser(wfhd.workflow_id, "defstream", DBOSPortableJSON.name())
         check_stream_ser(wfhd.workflow_id, "nstream", DBOSDefaultSerializer.name())
         check_stream_ser(wfhd.workflow_id, "pstream", DBOSPortableJSON.name())
+
+    # Called directly rather than started or enqueued: the body must write in the declared format
+    # too, not just the workflow row. Only start_workflow and the dequeue path used to set it.
+    direct_id = str(uuid.uuid4())
+    with SetWorkflowID(direct_id):
+        assert WFTest.defSerPortableDirect() == "direct"
+    check_wf_ser(direct_id, DBOSPortableJSON.name())
+    check_evt_ser(direct_id, "defstat", DBOSPortableJSON.name())
+    check_stream_ser(direct_id, "defstream", DBOSPortableJSON.name())
+    check_msg_ser(direct_id, "default", DBOSPortableJSON.name())
 
     # Test copy+paste workflow
     # Export w/ children

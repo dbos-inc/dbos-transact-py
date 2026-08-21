@@ -184,7 +184,8 @@ def retriable_postgres_exception(e: Exception) -> bool:
 
 
 def retriable_sqlite_exception(e: Exception) -> bool:
-    if "database is locked" in str(e):
+    orig = getattr(e, "orig", None)
+    if "database is locked" in str(e if orig is None else orig):
         return True
     return False
 
