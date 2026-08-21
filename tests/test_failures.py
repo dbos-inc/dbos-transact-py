@@ -21,6 +21,7 @@ from dbos._error import (
     DBOSMaxStepRetriesExceeded,
     DBOSNotAuthorizedError,
     DBOSQueueDeduplicatedError,
+    DBOSStepTimeoutError,
     DBOSUnexpectedStepError,
     DBOSWorkflowConflictIDError,
 )
@@ -1236,3 +1237,394 @@ def test_record_get_result_increments_function_id_once_on_db_retry(
             )
         ).fetchall()
     assert [r[0] for r in rows] == [1]
+
+
+@pytest.mark.asyncio
+async def test_step_timeout_bounds_step_duration(dbos: DBOS) -> None:
+    """The same body is cancelled under a short timeout and completes under a
+    long one, so the value is the real deadline and not just a label on the
+    error. The cancelled step observes CancelledError and runs its cleanup."""
+    invocations = 0
+    step_cancelled = False
+    cleanup_ran = False
+
+    async def half_second_step() -> str:
+        nonlocal invocations, step_cancelled, cleanup_ran
+        invocations += 1
+        try:
+            await asyncio.sleep(0.5)
+            return "done"
+        except asyncio.CancelledError:
+            step_cancelled = True
+            raise
+        finally:
+            cleanup_ran = True
+
+    @DBOS.workflow()
+    async def short_timeout_wf() -> str:
+        return await DBOS.run_step_async({"timeout_seconds": 0.2}, half_second_step)
+
+    @DBOS.workflow()
+    async def long_timeout_wf() -> str:
+        return await DBOS.run_step_async({"timeout_seconds": 20}, half_second_step)
+
+    start = time.time()
+    with pytest.raises(DBOSStepTimeoutError) as exc_info:
+        await short_timeout_wf()
+    assert time.time() - start < 2.0
+    assert exc_info.value.timeout_seconds == 0.2
+    assert "half_second_step" in exc_info.value.step_name
+    assert step_cancelled
+    assert cleanup_ran
+
+    assert await long_timeout_wf() == "done"
+    assert invocations == 2
+
+
+@pytest.mark.asyncio
+async def test_step_timeout_is_checkpointed_and_replayed(dbos: DBOS) -> None:
+    """A timeout is a durable step failure: it is recorded as the step's error
+    and replayed from that record without re-running the body."""
+    invocations = 0
+
+    @DBOS.step(timeout_seconds=0.2)
+    async def slow_step() -> str:
+        nonlocal invocations
+        invocations += 1
+        await asyncio.sleep(60)
+        return "should-not-reach"
+
+    @DBOS.workflow()
+    async def catching_wf() -> str:
+        try:
+            return await slow_step()
+        except DBOSStepTimeoutError:
+            return "caught"
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert await catching_wf() == "caught"
+    assert invocations == 1
+
+    steps = await DBOS.list_workflow_steps_async(wfid)
+    entries = [s for s in steps if "slow_step" in s["function_name"]]
+    assert len(entries) == 1
+    assert entries[0]["output"] is None
+    recorded_error = entries[0]["error"]
+    assert isinstance(recorded_error, DBOSStepTimeoutError)
+    assert recorded_error.timeout_seconds == 0.2
+
+    # Forking past the step replays the recorded timeout instead of re-running.
+    forked = await DBOS.fork_workflow_async(wfid, entries[0]["function_id"] + 1)
+    assert (await forked.get_result()) == "caught"
+    assert invocations == 1
+
+
+@pytest.mark.asyncio
+async def test_step_timeout_preserves_step_outcomes(dbos: DBOS) -> None:
+    """A timeout doesn't distort ordinary outcomes: a step that fails for its
+    own reason is recorded as that failure, and one that swallows the
+    cancellation still fails with a timeout rather than returning a value."""
+
+    @DBOS.step(timeout_seconds=30)
+    async def boom_step() -> None:
+        raise ValueError("boom")
+
+    @DBOS.workflow()
+    async def boom_wf() -> None:
+        await boom_step()
+
+    boom_wfid = str(uuid.uuid4())
+    with pytest.raises(ValueError, match="boom"):
+        with SetWorkflowID(boom_wfid):
+            await boom_wf()
+
+    steps = await DBOS.list_workflow_steps_async(boom_wfid)
+    entries = [s for s in steps if "boom_step" in s["function_name"]]
+    assert len(entries) == 1
+    assert entries[0]["output"] is None
+    assert isinstance(entries[0]["error"], ValueError)
+
+    @DBOS.step(timeout_seconds=0.2)
+    async def stubborn_step() -> str:
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            pass
+        return "suppressed"
+
+    @DBOS.workflow()
+    async def stubborn_wf() -> str:
+        return await stubborn_step()
+
+    stubborn_wfid = str(uuid.uuid4())
+    with pytest.raises(DBOSStepTimeoutError):
+        with SetWorkflowID(stubborn_wfid):
+            await stubborn_wf()
+
+    steps = await DBOS.list_workflow_steps_async(stubborn_wfid)
+    entries = [s for s in steps if "stubborn_step" in s["function_name"]]
+    assert len(entries) == 1
+    assert entries[0]["output"] is None
+    assert isinstance(entries[0]["error"], DBOSStepTimeoutError)
+
+
+@pytest.mark.asyncio
+async def test_step_timeout_with_retries(dbos: DBOS) -> None:
+    """A timeout is a retryable failure and each attempt gets its own budget:
+    attempt 1 burns the whole 0.6s, and attempt 2 then sleeps 0.2s and still
+    succeeds — which it can only do against a fresh budget, since a budget
+    shared across attempts would already be spent. Exhausting the attempts
+    raises, and should_retry can opt out."""
+    fresh_invocations = 0
+
+    @DBOS.step(
+        timeout_seconds=0.6, retries_allowed=True, max_attempts=3, interval_seconds=0.3
+    )
+    async def flaky_step() -> str:
+        nonlocal fresh_invocations
+        fresh_invocations += 1
+        if fresh_invocations == 1:
+            await asyncio.sleep(60)
+            return "should-not-reach"
+        # Must actually await real time: a bare `sleep(0)` completes even on a
+        # zero-length budget, so it would pass under a shared deadline too.
+        await asyncio.sleep(0.2)
+        return "done"
+
+    @DBOS.workflow()
+    async def fresh_budget_wf() -> str:
+        return await flaky_step()
+
+    assert await fresh_budget_wf() == "done"
+    assert fresh_invocations == 2
+
+    exhausted_invocations = 0
+    max_attempts = 3
+
+    @DBOS.step(
+        timeout_seconds=0.2,
+        retries_allowed=True,
+        max_attempts=max_attempts,
+        interval_seconds=0,
+    )
+    async def always_slow_step() -> None:
+        nonlocal exhausted_invocations
+        exhausted_invocations += 1
+        await asyncio.sleep(60)
+
+    @DBOS.workflow()
+    async def exhausted_wf() -> None:
+        await always_slow_step()
+
+    with pytest.raises(DBOSMaxStepRetriesExceeded) as exc_info:
+        await exhausted_wf()
+    assert exhausted_invocations == max_attempts
+    assert all(isinstance(e, DBOSStepTimeoutError) for e in exc_info.value.errors)
+
+    opted_out_invocations = 0
+
+    @DBOS.step(
+        timeout_seconds=0.2,
+        retries_allowed=True,
+        max_attempts=3,
+        interval_seconds=0,
+        should_retry=lambda e: not isinstance(e, DBOSStepTimeoutError),
+    )
+    async def no_retry_step() -> None:
+        nonlocal opted_out_invocations
+        opted_out_invocations += 1
+        await asyncio.sleep(60)
+
+    @DBOS.workflow()
+    async def no_retry_wf() -> None:
+        await no_retry_step()
+
+    with pytest.raises(DBOSStepTimeoutError):
+        await no_retry_wf()
+    assert opted_out_invocations == 1
+
+
+def test_step_timeout_via_run_step(dbos: DBOS) -> None:
+    """An async step invoked through run_step from a sync workflow, where it
+    runs on the background event loop, still times out."""
+    step_cancelled = False
+
+    async def slow_step() -> None:
+        nonlocal step_cancelled
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            step_cancelled = True
+            raise
+
+    @DBOS.workflow()
+    def sync_timeout_wf() -> None:
+        DBOS.run_step({"timeout_seconds": 0.2}, slow_step)
+
+    with pytest.raises(DBOSStepTimeoutError):
+        sync_timeout_wf()
+    assert step_cancelled
+
+
+@pytest.mark.asyncio
+async def test_step_timeout_inert_outside_workflow(dbos: DBOS) -> None:
+    """Outside a workflow a step is a normal function call, so the timeout does
+    not apply."""
+    invocations = 0
+
+    @DBOS.step(timeout_seconds=0.1)
+    async def slow_step() -> str:
+        nonlocal invocations
+        invocations += 1
+        await asyncio.sleep(0.5)
+        return "done"
+
+    assert await slow_step() == "done"
+    assert invocations == 1
+
+    assert await DBOS.run_step_async({"timeout_seconds": 0.1}, slow_step) == "done"
+    assert invocations == 2
+
+
+def test_step_timeout_rejects_invalid_config(dbos: DBOS) -> None:
+    """A timeout on a sync step, or one that isn't a positive finite number, is
+    rejected — at decoration time, and at invocation time via StepOptions."""
+    with pytest.raises(DBOSException, match="only supported for async steps"):
+
+        @DBOS.step(timeout_seconds=1)
+        def sync_step() -> None:
+            pass
+
+    for bad in (0, float("nan"), float("inf")):
+        with pytest.raises(DBOSException, match="positive and finite"):
+
+            @DBOS.step(timeout_seconds=bad)
+            async def bad_timeout_step() -> None:
+                pass
+
+    def plain_sync_step() -> None:
+        pass
+
+    async def plain_async_step() -> None:
+        pass
+
+    @DBOS.workflow()
+    def run_step_wf() -> None:
+        with pytest.raises(DBOSException, match="only supported for async steps"):
+            DBOS.run_step({"timeout_seconds": 1}, plain_sync_step)
+        with pytest.raises(DBOSException, match="positive and finite"):
+            DBOS.run_step({"timeout_seconds": -1}, plain_async_step)
+
+    run_step_wf()
+
+
+@pytest.mark.asyncio
+async def test_step_timeout_with_workflow_cancellation(dbos: DBOS) -> None:
+    """Timeout and preemption compose. The timeout fires when it is reached
+    first; a cancellation reached first preempts the step instead, recording no
+    outcome so the step re-runs on resume."""
+
+    @DBOS.step(preemptible=True, timeout_seconds=0.2)
+    async def slow_step() -> None:
+        await asyncio.sleep(60)
+
+    @DBOS.workflow()
+    async def timeout_first_wf() -> None:
+        await slow_step()
+
+    with pytest.raises(DBOSStepTimeoutError):
+        await timeout_first_wf()
+
+    invocations = 0
+    step_started = asyncio.Event()
+
+    @DBOS.step(preemptible=True, timeout_seconds=30)
+    async def cancellable_step() -> str:
+        nonlocal invocations
+        invocations += 1
+        if invocations == 1:
+            step_started.set()
+            await asyncio.sleep(60)
+            return "should-not-reach"
+        return "done"
+
+    @DBOS.workflow()
+    async def cancel_first_wf() -> str:
+        return await cancellable_step()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(cancel_first_wf)
+
+    await step_started.wait()
+    await DBOS.cancel_workflow_async(wfid)
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        await handle.get_result()
+
+    resumed = await DBOS.resume_workflow_async(wfid)
+    assert (await resumed.get_result()) == "done"
+    assert invocations == 2
+
+    # The preempted attempt left no record, so only the successful run is kept.
+    steps = await DBOS.list_workflow_steps_async(wfid)
+    entries = [s for s in steps if "cancellable_step" in s["function_name"]]
+    assert len(entries) == 1
+    assert entries[0]["output"] == "done"
+    assert entries[0]["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_step_timeout_does_not_claim_a_cancelled_step(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cancellation that reaches the step first keeps it even when the
+    deadline elapses while the step is still cleaning up: no outcome is
+    recorded, so the step re-runs on resume rather than replaying a timeout.
+
+    Guards the unbounded cleanup wait in the supervisor — refactoring it to
+    re-check the deadline would let the timeout reclaim the cancelled step."""
+    from dbos import _core as dbos_core
+
+    # At the 1s production interval the poller gets one chance to observe the
+    # cancellation before the deadline, so a single slow status query flips the
+    # outcome. Poll fast enough that the observation is not the thing under test.
+    monkeypatch.setattr(dbos_core, "_PREEMPTIBLE_POLL_INTERVAL_SEC", 0.05)
+
+    invocations = 0
+    step_started = asyncio.Event()
+
+    # The poller notices the cancellation well inside the 1.5s deadline; the
+    # step then spends 2s cleaning up, so the deadline elapses mid-cleanup.
+    @DBOS.step(preemptible=True, timeout_seconds=1.5)
+    async def slow_cleanup_step() -> str:
+        nonlocal invocations
+        invocations += 1
+        if invocations == 1:
+            step_started.set()
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                await asyncio.sleep(2)
+                raise
+            return "should-not-reach"
+        return "done"
+
+    @DBOS.workflow()
+    async def slow_cleanup_wf() -> str:
+        return await slow_cleanup_step()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(slow_cleanup_wf)
+
+    await step_started.wait()
+    await DBOS.cancel_workflow_async(wfid)
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        await handle.get_result()
+
+    assert not await DBOS.list_workflow_steps_async(wfid)
+
+    resumed = await DBOS.resume_workflow_async(wfid)
+    assert (await resumed.get_result()) == "done"
+    assert invocations == 2

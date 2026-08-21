@@ -429,9 +429,9 @@ def test_preemptible_rejected_for_sync_step(dbos: DBOS) -> None:
 
 @pytest.mark.asyncio
 async def test_preemptible_step_no_leak_on_outer_cancel(dbos: DBOS) -> None:
-    """If the outer coroutine running _run_preemptible_step is cancelled,
-    the inner step task is also cancelled (no leak)."""
-    from dbos._core import _run_preemptible_step
+    """If the outer coroutine running the step supervisor is cancelled, the
+    inner step task is also cancelled (no leak)."""
+    from dbos._core import _supervise_step
 
     step_started = asyncio.Event()
     step_cancelled = asyncio.Event()
@@ -449,7 +449,16 @@ async def test_preemptible_step_no_leak_on_outer_cancel(dbos: DBOS) -> None:
     # task being cancelled.
     fake_wfid = "test-no-leak-" + str(uuid.uuid4())
     outer = asyncio.create_task(
-        _run_preemptible_step(dbos, fake_wfid, long_step, (), {})
+        _supervise_step(
+            dbos,
+            fake_wfid,
+            long_step,
+            (),
+            {},
+            step_name="long_step",
+            preemptible=True,
+            timeout_seconds=None,
+        )
     )
     await step_started.wait()
     outer.cancel()
