@@ -64,6 +64,10 @@ from ._core import (
     decorate_workflow,
     enqueue_workflow_with_options,
     enqueue_workflow_with_options_async,
+    read_stream,
+    read_stream_async,
+    read_stream_offset,
+    read_stream_offset_async,
     record_sleep,
     run_step,
     run_step_async,
@@ -110,9 +114,6 @@ from ._sys_db import (
     VersionInfo,
     WorkflowSchedule,
     WorkflowStatus,
-    _dbos_stream_closed_sentinel,
-    _no_stream_value,
-    workflow_is_active,
 )
 from ._tracer import DBOSTracer, dbos_tracer
 
@@ -3442,7 +3443,13 @@ class DBOS:
 
     @classmethod
     def read_stream(
-        cls, workflow_id: str, key: str, *, offset: int = 0
+        cls,
+        workflow_id: str,
+        key: str,
+        *,
+        offset: int = 0,
+        polling_interval_sec: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> Generator[Any, Any, None]:
         """
         Read values from a stream as a generator.
@@ -3454,44 +3461,101 @@ class DBOS:
             workflow_id(str): The workflow instance ID that owns the stream
             key(str): The stream key / name within the workflow
             offset(int): The offset to start reading from (defaults to 0, the start of the stream)
+            polling_interval_sec(float, optional): Polling interval in seconds when waiting for new values when not using LISTEN/NOTIFY.
+                Must be at least 0.001. Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
+            timeout_seconds(float, optional): How long to wait for each value before raising DBOSStreamTimeoutError.
 
         Yields:
             Any: Each value in the stream until the stream is closed
 
         """
         check_async("read_stream")
-        sys_db = _get_dbos_instance()._sys_db
+        yield from read_stream(
+            _get_dbos_instance()._sys_db,
+            workflow_id,
+            key,
+            offset=offset,
+            polling_interval=polling_interval_sec,
+            timeout_seconds=timeout_seconds,
+        )
 
-        event, payload = sys_db.register_stream_listener(workflow_id, key)
-        final_read = False
-        try:
-            while True:
-                # Clear before reading so a notification arriving after the read
-                # leaves the event set and the wait below returns immediately.
-                event.clear()
-                # One round trip for both the value and the workflow's status.
-                status, value = sys_db.read_stream_value(workflow_id, key, offset)
-                if status is None:
-                    raise DBOSNonExistentWorkflowError("target", workflow_id)
-                if value is not _no_stream_value:
-                    if value == _dbos_stream_closed_sentinel:
-                        return
-                    yield value
-                    offset += 1
-                    # More may be buffered; read the next offset before waiting.
-                    continue
-                if final_read:
-                    break
-                # No value yet: stop if the workflow is done, else wait for a
-                # notification. Workflow completion fires none, so the wait
-                # is bounded by the polling interval to notice termination.
-                if not workflow_is_active(status):
-                    # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
-                    final_read = True
-                    continue
-                event.wait(timeout=sys_db._notification_listener_polling_interval_sec)
-        finally:
-            sys_db.unregister_stream_listener(payload)
+    @classmethod
+    def read_stream_offset(
+        cls,
+        workflow_id: str,
+        key: str,
+        offset: int,
+        *,
+        polling_interval_sec: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
+    ) -> Any:
+        """
+        Read the single value at one offset of a stream, waiting for it to be written.
+
+        Args:
+            workflow_id(str): The workflow instance ID that owns the stream
+            key(str): The stream key / name within the workflow
+            offset(int): The offset to read
+            polling_interval_sec(float, optional): Polling interval in seconds when waiting for the value when not using LISTEN/NOTIFY.
+                Must be at least 0.001. Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
+            timeout_seconds(float, optional): How long to wait for the value before raising DBOSStreamTimeoutError.
+                Defaults to None, waiting indefinitely.
+
+        Returns:
+            Any: The value at the offset
+
+        Raises:
+            DBOSStreamTimeoutError: If the timeout passes, or the stream ends before reaching the offset
+
+        """
+        check_async("read_stream_offset")
+        return read_stream_offset(
+            _get_dbos_instance()._sys_db,
+            workflow_id,
+            key,
+            offset,
+            polling_interval=polling_interval_sec,
+            timeout_seconds=timeout_seconds,
+        )
+
+    @classmethod
+    async def read_stream_offset_async(
+        cls,
+        workflow_id: str,
+        key: str,
+        offset: int,
+        *,
+        polling_interval_sec: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
+    ) -> Any:
+        """
+        Read the single value at one offset of a stream, waiting for it to be written.
+
+        Args:
+            workflow_id(str): The workflow instance ID that owns the stream
+            key(str): The stream key / name within the workflow
+            offset(int): The offset to read
+            polling_interval_sec(float, optional): Polling interval in seconds when waiting for the value when not using LISTEN/NOTIFY.
+                Must be at least 0.001. Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
+            timeout_seconds(float, optional): How long to wait for the value before raising DBOSStreamTimeoutError.
+                Defaults to None, waiting indefinitely.
+
+        Returns:
+            Any: The value at the offset
+
+        Raises:
+            DBOSStreamTimeoutError: If the timeout passes, or the stream ends before reaching the offset
+
+        """
+        await cls._configure_asyncio_thread_pool()
+        return await read_stream_offset_async(
+            _get_dbos_instance()._sys_db,
+            workflow_id,
+            key,
+            offset,
+            polling_interval=polling_interval_sec,
+            timeout_seconds=timeout_seconds,
+        )
 
     @classmethod
     async def write_stream_async(
@@ -3542,6 +3606,7 @@ class DBOS:
         *,
         offset: int = 0,
         polling_interval_sec: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> AsyncGenerator[Any, None]:
         """
         Read values from a stream as an async generator.
@@ -3554,53 +3619,28 @@ class DBOS:
             key(str): The stream key / name within the workflow
             offset(int): The offset to start reading from (defaults to 0, the start of the stream)
             polling_interval_sec(float, optional): Polling interval in seconds when waiting for new values when not using LISTEN/NOTIFY.
-                Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
+                Must be at least 0.001. Defaults to the configured notification_listener_polling_interval_sec (1.0 if not configured).
+            timeout_seconds(float, optional): How long to wait for each value before raising DBOSStreamTimeoutError.
 
         Yields:
             Any: Each value in the stream until the stream is closed
 
         """
         await cls._configure_asyncio_thread_pool()
-        dbos_instance = _get_dbos_instance()
-        sys_db = dbos_instance._sys_db
-        polling_interval = (
-            polling_interval_sec
-            if polling_interval_sec is not None
-            else sys_db._notification_listener_polling_interval_sec
+        values = read_stream_async(
+            _get_dbos_instance()._sys_db,
+            workflow_id,
+            key,
+            offset=offset,
+            polling_interval=polling_interval_sec,
+            timeout_seconds=timeout_seconds,
         )
-
-        event, payload = sys_db.register_stream_listener(workflow_id, key)
-        final_read = False
         try:
-            while True:
-                # Clear before reading so a notification arriving after the read
-                # leaves the event set and the wait below returns immediately.
-                event.clear()
-                # One round trip for both the value and the workflow's status.
-                status, value = await asyncio.to_thread(
-                    sys_db.read_stream_value, workflow_id, key, offset
-                )
-                if status is None:
-                    raise DBOSNonExistentWorkflowError("target", workflow_id)
-                if value is not _no_stream_value:
-                    if value == _dbos_stream_closed_sentinel:
-                        return
-                    yield value
-                    offset += 1
-                    # More may be buffered; read the next offset before waiting.
-                    continue
-                if final_read:
-                    break
-                # No value yet: stop if the workflow is done, else await a
-                # notification, re-reading at the fallback interval in case one
-                # was dropped.
-                if not workflow_is_active(status):
-                    # Cancel and timeout set a terminal status out-of-band while the workflow is still writing, so drain to the first empty offset before stopping.
-                    final_read = True
-                    continue
-                await event.wait_async(timeout=polling_interval)
+            async for value in values:
+                yield value
         finally:
-            sys_db.unregister_stream_listener(payload)
+            # Close rather than abandon, so the listener is unregistered here and not at collection.
+            await values.aclose()
 
     @classmethod
     def patch(cls, patch_name: str) -> bool:

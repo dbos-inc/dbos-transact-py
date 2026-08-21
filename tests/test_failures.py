@@ -1015,12 +1015,26 @@ def test_get_result_no_hang_on_connection_invalidated_error(
 
 
 def test_retriable_sqlite_exception() -> None:
+    from sqlalchemy.exc import IntegrityError, OperationalError
+
     from dbos._utils import retriable_sqlite_exception
 
     # "database is locked" is retriable
     assert retriable_sqlite_exception(Exception("database is locked"))
     # Unrelated errors are not retriable
     assert not retriable_sqlite_exception(Exception("syntax error"))
+    # Real lock contention carries the message on the driver's own error
+    assert retriable_sqlite_exception(
+        OperationalError("SELECT 1", None, Exception("database is locked"))
+    )
+    # A bound parameter that merely looks like lock contention is not retriable
+    assert not retriable_sqlite_exception(
+        IntegrityError(
+            "INSERT INTO streams (value) VALUES (?)",
+            ("database is locked",),
+            Exception("FOREIGN KEY constraint failed"),
+        )
+    )
 
 
 def _make_status_row(dbos: DBOS, workflow_id: str) -> None:

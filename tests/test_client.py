@@ -15,7 +15,7 @@ import psycopg
 import pytest
 import sqlalchemy as sa
 from opentelemetry import context as otel_context
-from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import Session
 
@@ -630,16 +630,27 @@ def test_db_retry_connection_error_opt_out() -> None:
         flaky(FakeSystemDatabase(True, is_sqlite=False), locked)
     assert calls == 1
 
-    # A DBAPIError renders its parameters, so program data can read as lock contention.
+    # A DBAPIError renders its parameters, so program data must not read as lock contention.
     calls = 0
     lookalike = OperationalError(
         "INSERT INTO dbos.workflow_status (inputs) VALUES (%(inputs)s)",
         {"inputs": '{"args": ["database is locked"]}'},
         psycopg.OperationalError("connection failed"),
     )
-    assert retriable_sqlite_exception(lookalike)
+    assert not retriable_sqlite_exception(lookalike)
     with pytest.raises(DBAPIError):
         flaky(FakeSystemDatabase(False), lookalike)
+    assert calls == 1
+
+    # The same payload on SQLite, where no connection-error opt-out would stop the retry.
+    calls = 0
+    fatal = IntegrityError(
+        "INSERT INTO streams (value) VALUES (?)",
+        ("database is locked",),
+        Exception("FOREIGN KEY constraint failed"),
+    )
+    with pytest.raises(DBAPIError):
+        flaky(FakeSystemDatabase(True), fatal)
     assert calls == 1
 
 

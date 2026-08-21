@@ -1,16 +1,27 @@
+import asyncio
+import threading
 import time
 import uuid
 from typing import Any, cast
 
 import pytest
+import sqlalchemy as sa
 from sqlalchemy import event as sa_event
+from sqlalchemy.exc import IntegrityError
 
 # Public API
-from dbos import DBOS, DBOSConfig, SetWorkflowID
+from dbos import DBOS, DBOSConfig, Queue, SetWorkflowID
 from dbos._client import DBOSClient
+from dbos._error import (
+    DBOSAwaitedWorkflowCancelledError,
+    DBOSNonExistentWorkflowError,
+    DBOSStreamTimeoutError,
+)
+from dbos._serialization import WorkflowSerializationFormat, serialize_value
 from dbos._sys_db import _dbos_streams_channel, _no_stream_value
 from dbos._sys_db_postgres import PostgresSystemDatabase
 from tests.conftest import (
+    reexecute_workflow_by_id,
     retry_until_success,
     set_workflow_status,
     wait_for_client_listener,
@@ -388,12 +399,9 @@ def test_stream_low_latency_delivery(
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         handle = DBOS.start_workflow(writer_workflow)
-    original_interval = dbos._sys_db._notification_listener_polling_interval_sec
-    dbos._sys_db._notification_listener_polling_interval_sec = 10.0
-    try:
-        count, max_latency = measure(DBOS.read_stream(wfid, stream_key))
-    finally:
-        dbos._sys_db._notification_listener_polling_interval_sec = original_interval
+    count, max_latency = measure(
+        DBOS.read_stream(wfid, stream_key, polling_interval_sec=10.0)
+    )
     handle.get_result()
     assert count == num_values
     assert max_latency < 2.0, f"DBOS delivery latency {max_latency:.3f}s too high"
@@ -858,7 +866,9 @@ def test_stream_interleaved_operations(dbos: DBOS) -> None:
 
 
 def test_stream_write_from_step(dbos: DBOS) -> None:
-    """Test writing to a stream from inside a step function that retries and throws exceptions."""
+    """Test writing to a stream from inside a step function that retries and throws exceptions.
+
+    The stream is closed from a step too, which is allowed wherever writing is."""
 
     call_count = 0
 
@@ -878,6 +888,10 @@ def test_stream_write_from_step(dbos: DBOS) -> None:
         assert step_id is not None
         return step_id
 
+    @DBOS.step()
+    def step_that_closes(stream_key: str) -> None:
+        DBOS.close_stream(stream_key)
+
     @DBOS.workflow()
     def workflow_with_failing_step() -> None:
         # This step will fail 3 times, then succeed on the 4th attempt
@@ -888,8 +902,8 @@ def test_stream_write_from_step(dbos: DBOS) -> None:
         # Also write directly from workflow
         DBOS.write_stream("retry_stream", "from_workflow")
 
-        # Close the stream
-        DBOS.close_stream("retry_stream")
+        # Close the stream from a step, as a workflow may
+        step_that_closes("retry_stream")
 
     # Start the workflow
     wfid = str(uuid.uuid4())
@@ -1232,11 +1246,12 @@ def test_client_read_stream_is_one_round_trip_per_value(
     ), f"expected {n + 1} reads for {n} values, got {len(reads)}"
 
 
-def test_client_read_stream_nonexistent_workflow(
-    dbos: DBOS, client: DBOSClient
-) -> None:
-    """A stream on an unknown workflow ends the client's generator quietly, where the in-process reader raises. Preserved deliberately: the batch read reports a missing workflow the same way as a workflow with nothing buffered."""
-    assert list(client.read_stream(str(uuid.uuid4()), "s")) == []
+def test_read_stream_nonexistent_workflow(dbos: DBOS, client: DBOSClient) -> None:
+    """A stream on an unknown workflow raises rather than reading as empty, from a client as well as in-process."""
+    with pytest.raises(DBOSNonExistentWorkflowError):
+        list(client.read_stream(str(uuid.uuid4()), "s"))
+    with pytest.raises(DBOSNonExistentWorkflowError):
+        list(DBOS.read_stream(str(uuid.uuid4()), "s"))
 
 
 def test_client_read_stream_workflow_termination(
@@ -1296,3 +1311,751 @@ async def test_client_read_stream_async_workflow_termination(
         assert read_values == test_values
     finally:
         client.destroy()
+
+
+def test_workflow_read_stream_checkpointing(dbos: DBOS) -> None:
+    """A workflow reading a stream records one step per value, so a replay re-yields what it
+    read rather than re-reading a stream that has moved on. Reads from a step are not recorded.
+    """
+    stream_key = "checkpointed_stream"
+    # The bytes have no portable JSON form, so they only checkpoint under the app's serializer.
+    test_values: list[Any] = ["a", None, {"k": "v"}, b"bytes"]
+    reader_calls = 0
+    crashing_reader_attempts = 0
+    step_calls = 0
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for value in test_values:
+            DBOS.write_stream(stream_key, value)
+        # Left unclosed: a reader stops once the writer goes terminal.
+
+    @DBOS.workflow()
+    def reader_workflow(target_id: str) -> list[Any]:
+        nonlocal reader_calls
+        reader_calls += 1
+        return list(DBOS.read_stream(target_id, stream_key))
+
+    @DBOS.workflow()
+    def crashing_reader_workflow(target_id: str) -> list[Any]:
+        nonlocal crashing_reader_attempts
+        crashing_reader_attempts += 1
+        seen: list[Any] = []
+        for value in DBOS.read_stream(target_id, stream_key):
+            seen.append(value)
+            if crashing_reader_attempts == 1 and len(seen) == 2:
+                raise Exception("reader crashed")
+        return seen
+
+    @DBOS.step()
+    def counting_step() -> int:
+        nonlocal step_calls
+        step_calls += 1
+        return step_calls
+
+    @DBOS.workflow()
+    def partial_reader_workflow(target_id: str) -> list[Any]:
+        seen: list[Any] = []
+        for value in DBOS.read_stream(target_id, stream_key):
+            seen.append(value)
+            if len(seen) == 2:
+                break
+        return [seen, counting_step()]
+
+    @DBOS.workflow(serialization_type=WorkflowSerializationFormat.PORTABLE)
+    def portable_reader_workflow(target_id: str) -> int:
+        return len(list(DBOS.read_stream(target_id, stream_key)))
+
+    @DBOS.step()
+    def read_in_step(target_id: str) -> list[Any]:
+        return list(DBOS.read_stream(target_id, stream_key))
+
+    @DBOS.workflow()
+    def step_reader_workflow(target_id: str) -> list[Any]:
+        return read_in_step(target_id)
+
+    writer_id = str(uuid.uuid4())
+    with SetWorkflowID(writer_id):
+        writer_workflow()
+
+    # One step per value, including the None, plus one recording that the stream ended.
+    reader_id = str(uuid.uuid4())
+    with SetWorkflowID(reader_id):
+        assert reader_workflow(writer_id) == test_values
+    assert [s["function_name"] for s in DBOS.list_workflow_steps(reader_id)] == [
+        "DBOS.readStream"
+    ] * (len(test_values) + 1)
+
+    # A reader that failed partway records only what it delivered, then reads on from there.
+    crashing_reader_id = str(uuid.uuid4())
+    with SetWorkflowID(crashing_reader_id):
+        with pytest.raises(Exception, match="reader crashed"):
+            crashing_reader_workflow(writer_id)
+    assert len(DBOS.list_workflow_steps(crashing_reader_id)) == 2
+    assert (
+        reexecute_workflow_by_id(dbos, crashing_reader_id).get_result() == test_values
+    )
+    assert crashing_reader_attempts == 2
+
+    # Each value consumes a function id, so a step after a half-read stream still replays.
+    partial_reader_id = str(uuid.uuid4())
+    with SetWorkflowID(partial_reader_id):
+        assert partial_reader_workflow(writer_id) == [test_values[:2], 1]
+    assert reexecute_workflow_by_id(dbos, partial_reader_id).get_result() == [
+        test_values[:2],
+        1,
+    ]
+    assert step_calls == 1
+
+    # Checkpoints use the app's serializer, not the workflow's declared interop format, so a
+    # portable workflow reads a value with no portable form just as any other workflow does.
+    portable_reader_id = str(uuid.uuid4())
+    with SetWorkflowID(portable_reader_id):
+        handle = Queue("portable_reader_queue").enqueue(
+            portable_reader_workflow, writer_id
+        )
+    assert handle.get_result() == len(test_values)
+
+    # A read inside a step is covered by that step's own checkpoint.
+    step_reader_id = str(uuid.uuid4())
+    with SetWorkflowID(step_reader_id):
+        assert step_reader_workflow(writer_id) == test_values
+    step_reader_steps = DBOS.list_workflow_steps(step_reader_id)
+    assert len(step_reader_steps) == 1
+    assert step_reader_steps[0]["function_name"] != "DBOS.readStream"
+
+    # Extend the stream now the readers are done, so a live re-read would see more than they did.
+    for value in ["d", "e"]:
+        dbos._sys_db.write_stream_from_step(
+            writer_id,
+            100,
+            stream_key,
+            value,
+            serialization_type=WorkflowSerializationFormat.DEFAULT,
+        )
+    assert list(DBOS.read_stream(writer_id, stream_key)) == test_values + ["d", "e"]
+
+    assert reexecute_workflow_by_id(dbos, reader_id).get_result() == test_values
+    assert reader_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_workflow_read_stream_async_checkpointing(dbos: DBOS) -> None:
+    """read_stream_async checkpoints its values too, so a replayed reader resumes where it
+    stopped and re-yields what it read rather than what the stream holds now."""
+    stream_key = "async_checkpointed_stream"
+    test_values: list[Any] = ["a", None, {"k": "v"}]
+    reader_calls = 0
+    crashing_reader_attempts = 0
+
+    @DBOS.workflow()
+    async def async_writer_workflow() -> None:
+        for value in test_values:
+            await DBOS.write_stream_async(stream_key, value)
+        # Left unclosed: a reader stops once the writer goes terminal.
+
+    @DBOS.workflow()
+    async def async_reader_workflow(target_id: str) -> list[Any]:
+        nonlocal reader_calls
+        reader_calls += 1
+        return [v async for v in DBOS.read_stream_async(target_id, stream_key)]
+
+    @DBOS.workflow()
+    async def async_crashing_reader_workflow(target_id: str) -> list[Any]:
+        nonlocal crashing_reader_attempts
+        crashing_reader_attempts += 1
+        seen: list[Any] = []
+        async for value in DBOS.read_stream_async(target_id, stream_key):
+            seen.append(value)
+            if crashing_reader_attempts == 1 and len(seen) == 2:
+                raise Exception("reader crashed")
+        return seen
+
+    async def replay(workflow_id: str) -> Any:
+        # Recovery is fundamentally sync, so run it off the event loop.
+        return await asyncio.to_thread(
+            lambda: reexecute_workflow_by_id(dbos, workflow_id).get_result()
+        )
+
+    writer_id = str(uuid.uuid4())
+    with SetWorkflowID(writer_id):
+        await async_writer_workflow()
+
+    # One step per value, including the None, plus one recording that the stream ended.
+    reader_id = str(uuid.uuid4())
+    with SetWorkflowID(reader_id):
+        assert await async_reader_workflow(writer_id) == test_values
+    steps = await DBOS.list_workflow_steps_async(reader_id)
+    assert [s["function_name"] for s in steps] == ["DBOS.readStream"] * (
+        len(test_values) + 1
+    )
+
+    # A reader that failed partway records only what it delivered, then reads on from there.
+    crashing_reader_id = str(uuid.uuid4())
+    with SetWorkflowID(crashing_reader_id):
+        with pytest.raises(Exception, match="reader crashed"):
+            await async_crashing_reader_workflow(writer_id)
+    assert len(await DBOS.list_workflow_steps_async(crashing_reader_id)) == 2
+    assert await replay(crashing_reader_id) == test_values
+    assert crashing_reader_attempts == 2
+
+    # Extend the stream now the readers are done, so a live re-read would see more than they did.
+    for value in ["d", "e"]:
+        dbos._sys_db.write_stream_from_step(
+            writer_id,
+            100,
+            stream_key,
+            value,
+            serialization_type=WorkflowSerializationFormat.DEFAULT,
+        )
+
+    assert await replay(reader_id) == test_values
+    assert reader_calls == 2
+
+
+def _insert_stream_value_without_notifying(
+    dbos: DBOS, workflow_id: str, key: str, value: str
+) -> None:
+    """Append to a stream without signaling its channel, so only a re-read can find the value."""
+    sys_db = dbos._sys_db
+    serialized, serialization = serialize_value(
+        value, WorkflowSerializationFormat.DEFAULT, sys_db.serializer
+    )
+    stmt = sys_db._stream_insert_stmt(workflow_id, 0, key, serialized, serialization)
+    with sys_db.engine.begin() as c:
+        c.execute(stmt)
+
+
+def test_read_stream_timeout(dbos: DBOS, client: DBOSClient) -> None:
+    """Every reader takes a per-value timeout and a per-call polling interval. The writer stays
+    active and silent, so only the timeout can end the wait, and a value delivered in between
+    restarts the clock rather than counting against a single overall deadline. Values land
+    without a notification and the configured fallback is set far longer than the test can wait,
+    so nothing is delivered unless the per-call interval is honored."""
+    stream_key = "timeout_stream"
+    release = threading.Event()
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        # Stay active and silent so a reader waits rather than draining to the end.
+        release.wait()
+
+    def insert_once_reader_blocks(value: str, delay: float) -> threading.Thread:
+        def run() -> None:
+            time.sleep(delay)
+            _insert_stream_value_without_notifying(dbos, wfid, stream_key, value)
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        return thread
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(writer_workflow)
+
+    sys_dbs = [dbos._sys_db, client._sys_db]
+    originals = [db._notification_listener_polling_interval_sec for db in sys_dbs]
+    for db in sys_dbs:
+        db._notification_listener_polling_interval_sec = 30.0
+    try:
+        with pytest.raises(DBOSStreamTimeoutError):
+            next(DBOS.read_stream(wfid, stream_key, timeout_seconds=0.3))
+        with pytest.raises(DBOSStreamTimeoutError):
+            next(client.read_stream(wfid, stream_key, timeout_seconds=0.3))
+
+        # Two values, each arriving within the timeout but together exceeding it: a per-value
+        # clock delivers both, a single overall deadline would raise on the second. Every margin
+        # here is half the timeout -- the gaps and the timeout are chosen to maximize the smallest.
+        threads = [
+            insert_once_reader_blocks("v0", 1.0),
+            insert_once_reader_blocks("v1", 2.0),
+        ]
+        reader = DBOS.read_stream(
+            wfid, stream_key, timeout_seconds=1.5, polling_interval_sec=0.05
+        )
+        assert [next(reader), next(reader)] == ["v0", "v1"]
+        for thread in threads:
+            thread.join()
+
+        # A terminal writer drains to the end of the stream rather than timing out.
+        release.set()
+        handle.get_result()
+        assert list(
+            client.read_stream(
+                wfid, stream_key, timeout_seconds=0.3, polling_interval_sec=0.05
+            )
+        ) == ["v0", "v1"]
+
+        with pytest.raises(ValueError, match="must not be negative"):
+            next(DBOS.read_stream(wfid, stream_key, timeout_seconds=-1))
+        # A zero interval would never wait, so the reader would spin on the database.
+        for bad in (0, -1, float("inf")):
+            with pytest.raises(ValueError, match="at least 0.001"):
+                next(DBOS.read_stream(wfid, stream_key, polling_interval_sec=bad))
+            with pytest.raises(ValueError, match="at least 0.001"):
+                DBOS.read_stream_offset(wfid, stream_key, 0, polling_interval_sec=bad)
+            with pytest.raises(ValueError, match="at least 0.001"):
+                next(client.read_stream(wfid, stream_key, polling_interval_sec=bad))
+    finally:
+        for db, original in zip(sys_dbs, originals):
+            db._notification_listener_polling_interval_sec = original
+        release.set()
+        handle.get_result()
+
+
+@pytest.mark.asyncio
+async def test_read_stream_async_timeout(dbos: DBOS, client: DBOSClient) -> None:
+    """Async sibling of test_read_stream_timeout."""
+    stream_key = "async_timeout_stream"
+    release = asyncio.Event()
+
+    @DBOS.workflow()
+    async def async_writer_workflow() -> None:
+        # Stay active and silent so a reader waits rather than draining to the end.
+        await release.wait()
+
+    async def insert_once_reader_blocks(value: str) -> None:
+        await asyncio.sleep(0.2)
+        await asyncio.to_thread(
+            _insert_stream_value_without_notifying, dbos, wfid, stream_key, value
+        )
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(async_writer_workflow)
+
+    sys_dbs = [dbos._sys_db, client._sys_db]
+    originals = [db._notification_listener_polling_interval_sec for db in sys_dbs]
+    for db in sys_dbs:
+        db._notification_listener_polling_interval_sec = 30.0
+    try:
+        with pytest.raises(DBOSStreamTimeoutError):
+            await DBOS.read_stream_async(
+                wfid, stream_key, timeout_seconds=0.3
+            ).__anext__()
+        with pytest.raises(DBOSStreamTimeoutError):
+            await client.read_stream_async(
+                wfid, stream_key, timeout_seconds=0.3
+            ).__anext__()
+
+        # Delivered only if the per-call interval is honored: the fallback is 30s.
+        inserter = asyncio.create_task(insert_once_reader_blocks("v0"))
+        assert (
+            await DBOS.read_stream_async(
+                wfid, stream_key, timeout_seconds=1.5, polling_interval_sec=0.05
+            ).__anext__()
+            == "v0"
+        )
+        await inserter
+    finally:
+        for db, original in zip(sys_dbs, originals):
+            db._notification_listener_polling_interval_sec = original
+        release.set()
+        await handle.get_result()
+
+
+def test_workflow_read_stream_timeout_is_checkpointed(dbos: DBOS) -> None:
+    """A timeout is an outcome, not a failure of the read, so it is recorded: a replayed reader
+    raises it again straight from its checkpoint instead of waiting out the timeout a second time.
+    """
+    stream_key = "timeout_checkpoint_stream"
+    release = threading.Event()
+    attempts = 0
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        DBOS.write_stream(stream_key, "only")
+        # Stay active and silent so the reader times out waiting for a second value.
+        release.wait()
+
+    @DBOS.workflow()
+    def reader_workflow(target_id: str) -> list[Any]:
+        nonlocal attempts
+        attempts += 1
+        seen: list[Any] = []
+        try:
+            for value in DBOS.read_stream(target_id, stream_key, timeout_seconds=1.0):
+                seen.append(value)
+        except DBOSStreamTimeoutError:
+            seen.append("timed out")
+        return seen
+
+    @DBOS.workflow(serialization_type=WorkflowSerializationFormat.PORTABLE)
+    def portable_reader_workflow(target_id: str) -> list[Any]:
+        seen: list[Any] = []
+        try:
+            for value in DBOS.read_stream(target_id, stream_key, timeout_seconds=1.0):
+                seen.append(value)
+        except DBOSStreamTimeoutError:
+            seen.append("timed out")
+        return seen
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(writer_workflow)
+    try:
+        reader_id = str(uuid.uuid4())
+        with SetWorkflowID(reader_id):
+            assert reader_workflow(wfid) == ["only", "timed out"]
+
+        # The delivered value and the timeout that followed it, one step each, the timeout
+        # recorded as the step's error rather than as an output.
+        steps = DBOS.list_workflow_steps(reader_id)
+        assert [s["function_name"] for s in steps] == ["DBOS.readStream"] * 2
+        assert steps[0]["error"] is None and steps[0]["output"] == "only"
+        assert steps[1]["output"] is None
+        assert isinstance(steps[1]["error"], DBOSStreamTimeoutError)
+
+        # Replays from the checkpoint: the writer is still silent, so a live re-read would wait
+        # out the full timeout again before raising.
+        start = time.time()
+        assert reexecute_workflow_by_id(dbos, reader_id).get_result() == [
+            "only",
+            "timed out",
+        ]
+        assert attempts == 2
+        assert time.time() - start < 0.5
+
+        # A portable workflow records the timeout under the app's serializer too, so its replay
+        # rebuilds the exact exception type rather than the PortableWorkflowError that portable
+        # serialization would have flattened it into.
+        portable_id = str(uuid.uuid4())
+        with SetWorkflowID(portable_id):
+            assert portable_reader_workflow(wfid) == ["only", "timed out"]
+        assert reexecute_workflow_by_id(dbos, portable_id).get_result() == [
+            "only",
+            "timed out",
+        ]
+    finally:
+        release.set()
+        handle.get_result()
+
+
+def test_read_stream_offset(dbos: DBOS, client: DBOSClient) -> None:
+    """read_stream_offset returns the one value at an offset, waiting for it and raising if it
+    never arrives -- because the timeout passed or because the stream ended short of it. From a
+    workflow it is one checkpointed step, so a replay returns the recorded value or re-raises.
+    """
+    stream_key = "offset_stream"
+    release = threading.Event()
+    reader_calls = 0
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        DBOS.write_stream(stream_key, "v0")
+        DBOS.write_stream(stream_key, "v1")
+        # Stay active so a read past the end waits rather than giving up immediately.
+        release.wait()
+        DBOS.close_stream(stream_key)
+
+    @DBOS.workflow()
+    def reader_workflow(target_id: str) -> list[Any]:
+        nonlocal reader_calls
+        reader_calls += 1
+        seen: list[Any] = [DBOS.read_stream_offset(target_id, stream_key, 1)]
+        try:
+            DBOS.read_stream_offset(target_id, stream_key, 5, timeout_seconds=0.3)
+        except DBOSStreamTimeoutError:
+            seen.append("timed out")
+        return seen
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(writer_workflow)
+    try:
+        # A value already written comes back without waiting, in process and from a client.
+        assert DBOS.read_stream_offset(wfid, stream_key, 0) == "v0"
+        assert client.read_stream_offset(wfid, stream_key, 1) == "v1"
+
+        # An offset the stream has not reached waits, then raises.
+        with pytest.raises(DBOSStreamTimeoutError):
+            DBOS.read_stream_offset(wfid, stream_key, 5, timeout_seconds=0.3)
+
+        with pytest.raises(ValueError, match="must not be negative"):
+            DBOS.read_stream_offset(wfid, stream_key, 0, timeout_seconds=-1)
+
+        # One step per read, the timed-out one recorded as an error, and a replay repeats both
+        # without waiting out the timeout again.
+        reader_id = str(uuid.uuid4())
+        with SetWorkflowID(reader_id):
+            assert reader_workflow(wfid) == ["v1", "timed out"]
+        steps = DBOS.list_workflow_steps(reader_id)
+        assert [s["function_name"] for s in steps] == ["DBOS.readStreamOffset"] * 2
+        assert steps[0]["output"] == "v1" and steps[1]["output"] is None
+        assert isinstance(steps[1]["error"], DBOSStreamTimeoutError)
+
+        start = time.time()
+        assert reexecute_workflow_by_id(dbos, reader_id).get_result() == [
+            "v1",
+            "timed out",
+        ]
+        assert reader_calls == 2
+        assert time.time() - start < 0.3
+    finally:
+        release.set()
+        handle.get_result()
+
+    # A closed stream gives up on an offset it never reached, rather than waiting out a timeout.
+    start = time.time()
+    with pytest.raises(DBOSStreamTimeoutError):
+        DBOS.read_stream_offset(wfid, stream_key, 5, timeout_seconds=30.0)
+    assert time.time() - start < 1.0
+
+
+@pytest.mark.asyncio
+async def test_read_stream_offset_async(dbos: DBOS, client: DBOSClient) -> None:
+    """Async sibling of test_read_stream_offset."""
+    stream_key = "async_offset_stream"
+    release = asyncio.Event()
+
+    @DBOS.workflow()
+    async def async_writer_workflow() -> None:
+        await DBOS.write_stream_async(stream_key, "v0")
+        # Stay active so a read past the end waits rather than giving up immediately.
+        await release.wait()
+
+    @DBOS.workflow()
+    async def async_reader_workflow(target_id: str) -> Any:
+        return await DBOS.read_stream_offset_async(target_id, stream_key, 0)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(async_writer_workflow)
+    try:
+        assert await DBOS.read_stream_offset_async(wfid, stream_key, 0) == "v0"
+        assert await client.read_stream_offset_async(wfid, stream_key, 0) == "v0"
+
+        with pytest.raises(DBOSStreamTimeoutError):
+            await DBOS.read_stream_offset_async(
+                wfid, stream_key, 5, timeout_seconds=0.3
+            )
+
+        reader_id = str(uuid.uuid4())
+        with SetWorkflowID(reader_id):
+            assert await async_reader_workflow(wfid) == "v0"
+        steps = await DBOS.list_workflow_steps_async(reader_id)
+        assert [s["function_name"] for s in steps] == ["DBOS.readStreamOffset"]
+    finally:
+        release.set()
+        await handle.get_result()
+
+
+class AmbiguousTruth:
+    """Stands in for a numpy array or pandas DataFrame: comparing one yields a value whose truth
+    cannot be tested, so a bare `value == sentinel` raises instead of returning False.
+    """
+
+    def __init__(self, tag: str) -> None:
+        self.tag = tag
+
+    def __eq__(self, other: Any) -> Any:
+        return AmbiguousTruth(f"{self.tag}=={other}")
+
+    def __bool__(self) -> bool:
+        raise ValueError("The truth value of AmbiguousTruth is ambiguous")
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+def test_stream_array_like_values(dbos: DBOS, client: DBOSClient) -> None:
+    """Values whose __eq__ returns a non-boolean -- a DataFrame, a string-dtype ndarray -- must
+    survive every leg that compares a value to the closed-stream marker: the write, all the read
+    paths, and the bulk fetch the conductor uses."""
+    stream_key = "array_like_stream"
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        DBOS.write_stream(stream_key, AmbiguousTruth("a"))
+        DBOS.write_stream(stream_key, AmbiguousTruth("b"))
+        DBOS.close_stream(stream_key)
+
+    @DBOS.workflow()
+    def reader_workflow(target_id: str) -> list[str]:
+        return [v.tag for v in DBOS.read_stream(target_id, stream_key)]
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        writer_workflow()
+
+    assert [v.tag for v in DBOS.read_stream(wfid, stream_key)] == ["a", "b"]
+    assert [v.tag for v in client.read_stream(wfid, stream_key)] == ["a", "b"]
+    assert DBOS.read_stream_offset(wfid, stream_key, 1).tag == "b"
+    # Checkpointed reads compare the replayed value to the marker too.
+    reader_id = str(uuid.uuid4())
+    with SetWorkflowID(reader_id):
+        assert reader_workflow(wfid) == ["a", "b"]
+    assert reexecute_workflow_by_id(dbos, reader_id).get_result() == ["a", "b"]
+
+    entries = dbos._sys_db.get_all_stream_entries(wfid)
+    assert [v.tag for v in entries[stream_key]] == ["a", "b"]
+
+    steps = DBOS.list_workflow_steps(wfid)
+    assert [s["function_name"] for s in steps] == [
+        "DBOS.writeStream",
+        "DBOS.writeStream",
+        "DBOS.closeStream",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_array_like_values_async(dbos: DBOS, client: DBOSClient) -> None:
+    """Async sibling of test_stream_array_like_values."""
+    stream_key = "async_array_like_stream"
+
+    @DBOS.workflow()
+    async def async_writer_workflow() -> None:
+        await DBOS.write_stream_async(stream_key, AmbiguousTruth("a"))
+        await DBOS.close_stream_async(stream_key)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        await async_writer_workflow()
+
+    assert [v.tag async for v in DBOS.read_stream_async(wfid, stream_key)] == ["a"]
+    assert [v.tag async for v in client.read_stream_async(wfid, stream_key)] == ["a"]
+    assert (await DBOS.read_stream_offset_async(wfid, stream_key, 0)).tag == "a"
+
+
+def test_get_all_stream_entries_stops_at_close(dbos: DBOS) -> None:
+    """The bulk fetch the conductor uses ends a stream where read_stream ends it, so the two
+    never report different contents for the same rows."""
+    stream_key = "conductor_view_stream"
+    empty_key = "closed_empty_stream"
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        DBOS.write_stream(stream_key, "v0")
+        DBOS.close_stream(stream_key)
+        # Writing past a close is still accepted; the two readers must agree on what it holds.
+        DBOS.write_stream(stream_key, "after")
+        DBOS.close_stream(empty_key)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        writer_workflow()
+
+    assert list(DBOS.read_stream(wfid, stream_key)) == ["v0"]
+    entries = dbos._sys_db.get_all_stream_entries(wfid)
+    assert entries[stream_key] == ["v0"]
+    # A stream that was opened and closed with nothing in it reads as empty, not as absent.
+    assert entries[empty_key] == []
+    assert list(DBOS.read_stream(wfid, empty_key)) == []
+
+
+def test_read_stream_notices_cancellation(dbos: DBOS) -> None:
+    """A reader waiting on a live producer observes its own cancellation, rather than blocking
+    until the producer finishes."""
+    stream_key = "cancel_stream"
+    release = threading.Event()
+    entered = threading.Event()
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        DBOS.write_stream(stream_key, "v0")
+        # Stay active and silent so the reader waits rather than draining to the end.
+        release.wait()
+
+    @DBOS.workflow()
+    def reader_workflow(target_id: str) -> list[Any]:
+        seen: list[Any] = []
+        for value in DBOS.read_stream(target_id, stream_key):
+            seen.append(value)
+            entered.set()
+        return seen
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        writer_handle = DBOS.start_workflow(writer_workflow)
+    try:
+        reader_id = str(uuid.uuid4())
+        with SetWorkflowID(reader_id):
+            reader_handle = DBOS.start_workflow(reader_workflow, wfid)
+        assert entered.wait(10)
+        DBOS.cancel_workflow(reader_id)
+        with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+            reader_handle.get_result()
+    finally:
+        release.set()
+        writer_handle.get_result()
+
+
+def test_client_read_stream_from_workflow_is_not_checkpointed(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    """A client reads through its own system database, which knows nothing of the workflow that
+    happens to be calling, so a client read from inside a workflow records no steps."""
+    stream_key = "client_in_workflow_stream"
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        DBOS.write_stream(stream_key, "v0")
+        DBOS.close_stream(stream_key)
+
+    @DBOS.workflow()
+    def reader_workflow(target_id: str) -> list[Any]:
+        return list(client.read_stream(target_id, stream_key))
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        writer_workflow()
+
+    reader_id = str(uuid.uuid4())
+    with SetWorkflowID(reader_id):
+        assert reader_workflow(wfid) == ["v0"]
+    assert DBOS.list_workflow_steps(reader_id) == []
+
+
+def test_stream_write_to_deleted_workflow_raises(dbos: DBOS) -> None:
+    """A write whose workflow row is gone fails instead of retrying forever. The insert's retry
+    loop exists for offset conflicts; a foreign key violation never resolves."""
+    stream_key = "deleted_workflow_stream"
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        DBOS.write_stream(stream_key, "v0")
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        writer_workflow()
+    DBOS.delete_workflow(wfid)
+
+    with pytest.raises(IntegrityError):
+        dbos._sys_db.write_stream_from_step(
+            wfid,
+            0,
+            stream_key,
+            "v1",
+            serialization_type=WorkflowSerializationFormat.DEFAULT,
+        )
+
+
+@pytest.mark.asyncio
+async def test_read_stream_async_close_releases_listener(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    """Closing an async reader unregisters its listener there and then, rather than leaving it
+    for garbage collection to reclaim at some later point."""
+    stream_key = "aclose_stream"
+    release = asyncio.Event()
+
+    @DBOS.workflow()
+    async def async_writer_workflow() -> None:
+        await DBOS.write_stream_async(stream_key, "v0")
+        # Stay active so a reader is suspended mid-stream rather than exhausted.
+        await release.wait()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(async_writer_workflow)
+    try:
+        for sys_db, reader in (
+            (dbos._sys_db, DBOS.read_stream_async(wfid, stream_key)),
+            (client._sys_db, client.read_stream_async(wfid, stream_key)),
+        ):
+            assert await reader.__anext__() == "v0"
+            assert len(sys_db.streams_map.snapshot()) == 1
+            await reader.aclose()
+            assert sys_db.streams_map.snapshot() == []
+    finally:
+        release.set()
+        await handle.get_result()
