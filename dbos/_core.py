@@ -820,8 +820,6 @@ def _get_wf_invoke_func(
             dbos.logger.debug(
                 f"Workflow {status['workflow_uuid']} is already completed with status {status['status']}"
             )
-            # Directly return the result if the workflow is already completed: the
-            # row holds it, so a missing one throws rather than polling.
             return cast(
                 R,
                 _deferred_workflow_result(
