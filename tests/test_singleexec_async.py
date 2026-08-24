@@ -436,7 +436,8 @@ async def test_parked_duplicate_does_not_hold_a_thread(
         def all_parked() -> None:
             assert parked_ids == lost_ids, f"parked so far: {parked_ids}"
 
-        await retry_until_success_async(all_parked, interval=0.1, max_attempts=300)
+        # Bounds sized so a hang fails on the assertion below, not at the 120s global timeout.
+        await retry_until_success_async(all_parked, interval=0.1, max_attempts=150)
 
         # The property under test: every park now waits on the event loop, so no executor
         # thread is inside the blocking await_workflow_result. A poll's brief to_thread hop
@@ -448,7 +449,7 @@ async def test_parked_duplicate_does_not_hold_a_thread(
         # And the consequence: unrelated async work still gets a worker.
         try:
             assert (
-                await asyncio.wait_for(unrelated_workflow(), timeout=20) == "unblocked"
+                await asyncio.wait_for(unrelated_workflow(), timeout=10) == "unblocked"
             )
         except asyncio.TimeoutError:
             pytest.fail(
@@ -466,4 +467,4 @@ async def test_parked_duplicate_does_not_hold_a_thread(
             )
 
     for run in runs:
-        assert await asyncio.wait_for(run, timeout=30) == "owner outcome"
+        assert await asyncio.wait_for(run, timeout=15) == "owner outcome"
