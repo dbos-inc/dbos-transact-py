@@ -333,17 +333,16 @@ async def test_parked_duplicate_does_not_hold_a_thread(
     dbos: DBOS, config: DBOSConfig, park_entry: str, dispatch: str
 ) -> None:
     """A duplicate async execution that cannot own its workflow's outcome parks on the
-    execution that does. That wait must happen on the event loop: the park runs inside
-    asyncio.to_thread, so a blocking poll there pins one of DBOS's executor threads for
-    as long as the owner takes to finish, and enough parked duplicates leave no thread
-    for any other async work in the process."""
+    execution that does. That park runs inside asyncio.to_thread, so waiting there
+    blocking pins an executor thread until the owner finishes -- enough parked
+    duplicates and no other async work in the process can run."""
     workers = 2
     config["max_executor_threads"] = workers
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
     DBOS.launch()
 
-    # The IDs of the duplicates: the executions that lose their workflow to another run.
+    # The duplicates: executions that lose their workflow to another run.
     lost_ids: set[str] = set()
     parked_ids: set[str] = set()
 
@@ -414,7 +413,7 @@ async def test_parked_duplicate_does_not_hold_a_thread(
         return "unblocked"
 
     async def start_duplicate() -> "asyncio.Future[str]":
-        """Start a duplicate the way the parametrization asks, started either way."""
+        """Start a duplicate however this parametrization dispatches it."""
         wfid = str(uuid.uuid4())
         lost_ids.add(wfid)
         if dispatch == "start_workflow_async":
@@ -435,8 +434,8 @@ async def test_parked_duplicate_does_not_hold_a_thread(
 
         await retry_until_success_async(all_parked, interval=0.1, max_attempts=300)
 
-        # Every duplicate now waits for an outcome only the owning execution can write.
-        # Unrelated async work must still be able to run.
+        # Every duplicate now waits for an outcome only the owner can write, so
+        # unrelated async work is what proves the pool is still usable.
         try:
             assert (
                 await asyncio.wait_for(unrelated_workflow(), timeout=20) == "unblocked"
@@ -446,8 +445,8 @@ async def test_parked_duplicate_does_not_hold_a_thread(
                 f"parked duplicates hold every executor thread: {blocked_executor_threads()}"
             )
     finally:
-        # Publish the outcome the parked duplicates wait for, as the owner would.
-        # In a finally: a failed assertion must not strand them polling forever.
+        # Publish the outcome the parked duplicates wait for, as the owner would. In
+        # a finally: a failed assertion must not strand them polling forever.
         serval, _ = serialize_value_as("owner outcome", None, dbos._serializer)
         with dbos._sys_db.engine.begin() as c:
             c.execute(

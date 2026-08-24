@@ -155,12 +155,11 @@ def _deferred_workflow_result(
     a sync (Immediate) caller blocks in-thread, but an async (Pending) workflow
     awaits on the event loop instead of pinning a thread-pool worker in a blocking
     poll. Pinning could otherwise starve the shared executor and deadlock recovery
-    when many async parents wait on directly-invoked children, or when many async
-    duplicates park on the executions that own their outcomes.
+    when many async runs wait on other executions: directly-invoked children, or the
+    runs that own their outcomes.
 
-    fail_if_missing is for callers that know the row exists (a run parking on an
-    outcome it could not write): a missing row means it was deleted, so fail fast
-    instead of polling for a row that will never reappear."""
+    fail_if_missing fails fast for callers that know the row exists, so one that was
+    deleted is not polled for forever."""
     return DeferredResult(
         lambda: dbos._sys_db.await_workflow_result(
             workflow_id,
@@ -800,15 +799,11 @@ def _get_wf_invoke_func(
 ) -> Callable[[Callable[[], R]], R]:
     def persist(func: Callable[[], R]) -> R:
         def adopt_recorded_outcome(warning: str) -> R:
-            # Deferred, not waited for here: persist runs on a thread pool worker
-            # (asyncio.to_thread) for an async workflow, and the owning execution
-            # may take arbitrarily long to record its outcome. The Outcome layer
-            # awaits this on the event loop instead of pinning that worker.
-            # This run inserted or read the workflow's row, so it is known to
-            # have existed: a missing row here means it was deleted. Fail fast
-            # with DBOSNonExistentWorkflowError (which propagates to the
-            # handle/caller) rather than polling for a row that will never
-            # reappear.
+            # Deferred, not waited for here: persist runs on a to_thread worker for
+            # an async workflow, and the owning execution may take arbitrarily long
+            # to record its outcome. fail_if_missing: this run inserted or read the
+            # row, so a missing one was deleted -- fail fast with
+            # DBOSNonExistentWorkflowError instead of polling forever.
             dbos.logger.warning(warning)
             return cast(
                 R,
@@ -827,9 +822,8 @@ def _get_wf_invoke_func(
             dbos.logger.debug(
                 f"Workflow {status['workflow_uuid']} is already completed with status {status['status']}"
             )
-            # Directly return the result if the workflow is already completed.
-            # fail_if_missing: we expect the workflow to be present (success/error
-            # come from init wf status), throw if the row is not found.
+            # Directly return the result if the workflow is already completed: the
+            # row holds it, so a missing one throws rather than polling.
             return cast(
                 R,
                 _deferred_workflow_result(
@@ -1096,9 +1090,8 @@ def _execute_workflow_wthread(
 
             try:
                 if owned:
-                    # Resolved here, not by the Outcome layer: this path invokes
-                    # persist directly. A parked run blocks this thread, which it
-                    # owns for the workflow's duration either way.
+                    # Resolved here: this path invokes persist outside the Outcome
+                    # layer, and a park blocks the thread it already owns.
                     return resolve_deferred(
                         _get_wf_invoke_func(dbos, status, release_active)(
                             functools.partial(func, *args, **kwargs)
