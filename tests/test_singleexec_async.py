@@ -1,14 +1,27 @@
 import asyncio
+import sys
+import threading
+import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from time import sleep
+from typing import Any, Optional
 
 import pytest
+import sqlalchemy as sa
 from sqlalchemy.exc import OperationalError
 
-from dbos import DBOS, SetWorkflowID
+from dbos import DBOS, DBOSConfig, SetWorkflowID, WorkflowHandleAsync
 from dbos._debug_trigger import DebugAction, DebugTriggers
-from tests.conftest import reexecute_workflow_by_id, set_workflow_status
+from dbos._error import DBOSWorkflowConflictIDError
+from dbos._schemas.system_database import SystemSchema
+from dbos._serialization import serialize_value_as
+from dbos._sys_db import OperationResultInternal, WorkflowStatusString
+from tests.conftest import (
+    reexecute_workflow_by_id,
+    retry_until_success_async,
+    set_workflow_status,
+)
 
 
 @pytest.mark.asyncio
@@ -311,3 +324,111 @@ async def test_commit_hiccup(dbos: DBOS) -> None:
     )
 
     assert await TryDbGlitch.testWorkflow() == "Yay!"
+
+
+@pytest.mark.asyncio
+async def test_parked_duplicate_does_not_hold_a_thread(
+    dbos: DBOS, config: DBOSConfig
+) -> None:
+    """A duplicate async execution that loses the checkpoint race parks on the owning
+    execution's outcome. That wait must happen on the event loop: the park runs inside
+    asyncio.to_thread, so a blocking poll there pins one of DBOS's executor threads for
+    as long as the owner takes to finish, and enough parked duplicates leave no thread
+    for any other async work in the process."""
+    workers = 2
+    config["max_executor_threads"] = workers
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    # The IDs whose step checkpoint loses the race to a concurrent execution.
+    lost_ids: set[str] = set()
+    parked_ids: set[str] = set()
+
+    original_record = dbos._sys_db.record_operation_result
+
+    def losing_record(
+        result: OperationResultInternal,
+        *,
+        completed_at_epoch_ms: Optional[int] = None,
+    ) -> None:
+        # What the loser of a checkpoint race sees: the owner's row is already there.
+        if result["workflow_uuid"] in lost_ids:
+            raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
+        original_record(result, completed_at_epoch_ms=completed_at_epoch_ms)
+
+    original_check = dbos._sys_db.check_workflow_result
+
+    def tracking_check(workflow_id: str, *, fail_if_missing: bool = False) -> Any:
+        # Every park polls this, blocking or not: a check is proof the run reached it.
+        if workflow_id in lost_ids:
+            parked_ids.add(workflow_id)
+        return original_check(workflow_id, fail_if_missing=fail_if_missing)
+
+    dbos._sys_db.record_operation_result = losing_record  # type: ignore[method-assign]
+    dbos._sys_db.check_workflow_result = tracking_check  # type: ignore[method-assign]
+
+    def blocked_executor_threads() -> list[str]:
+        """Executor threads sitting inside the blocking park, for the failure message."""
+        frames = sys._current_frames()
+        return [
+            thread.name
+            for thread in threading.enumerate()
+            if thread.name.startswith("dbos-executor-")
+            and thread.ident in frames
+            and any(
+                frame.name == "await_workflow_result"
+                for frame in traceback.extract_stack(frames[thread.ident])
+            )
+        ]
+
+    @DBOS.step()
+    async def duplicated_step() -> str:
+        return "step output"
+
+    @DBOS.workflow()
+    async def duplicate_workflow() -> str:
+        return await duplicated_step()
+
+    @DBOS.workflow()
+    async def unrelated_workflow() -> str:
+        return "unblocked"
+
+    handles: list[WorkflowHandleAsync[str]] = []
+    try:
+        for _ in range(workers):
+            wfid = str(uuid.uuid4())
+            lost_ids.add(wfid)
+            with SetWorkflowID(wfid):
+                handles.append(await DBOS.start_workflow_async(duplicate_workflow))
+
+        def all_parked() -> None:
+            assert parked_ids == lost_ids, f"parked so far: {parked_ids}"
+
+        await retry_until_success_async(all_parked, interval=0.1, max_attempts=300)
+
+        # Every duplicate now waits for an outcome only the owning execution can write.
+        # Unrelated async work must still be able to run.
+        try:
+            assert (
+                await asyncio.wait_for(unrelated_workflow(), timeout=20) == "unblocked"
+            )
+        except asyncio.TimeoutError:
+            pytest.fail(
+                f"parked duplicates hold every executor thread: {blocked_executor_threads()}"
+            )
+    finally:
+        # Publish the outcome the parked duplicates wait for, as the owner would.
+        # In a finally: a failed assertion must not strand them polling forever.
+        serval, _ = serialize_value_as("owner outcome", None, dbos._serializer)
+        with dbos._sys_db.engine.begin() as c:
+            c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .values(status=WorkflowStatusString.SUCCESS.value, output=serval)
+                .where(SystemSchema.workflow_status.c.workflow_uuid.in_(lost_ids))
+            )
+
+    for handle in handles:
+        assert (
+            await asyncio.wait_for(handle.get_result(), timeout=30) == "owner outcome"
+        )
