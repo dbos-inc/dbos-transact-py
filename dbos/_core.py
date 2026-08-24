@@ -799,11 +799,9 @@ def _get_wf_invoke_func(
 ) -> Callable[[Callable[[], R]], R]:
     def persist(func: Callable[[], R]) -> R:
         def adopt_recorded_outcome(warning: str) -> R:
-            # Deferred, not waited for here: persist runs on a to_thread worker for
-            # an async workflow, and the owning execution may take arbitrarily long
-            # to record its outcome. fail_if_missing: this run inserted or read the
-            # row, so a missing one was deleted -- fail fast with
-            # DBOSNonExistentWorkflowError instead of polling forever.
+            # If a duplicate workflow execution was detected, "park"
+            # this execution and poll for the outcome of the winning
+            # execution.
             dbos.logger.warning(warning)
             return cast(
                 R,
