@@ -16,7 +16,7 @@ from dbos._debug_trigger import DebugAction, DebugTriggers
 from dbos._error import DBOSWorkflowConflictIDError
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import serialize_value_as
-from dbos._sys_db import OperationResultInternal, WorkflowStatusString
+from dbos._sys_db import OperationResultInternal, WorkflowStatuses, WorkflowStatusString
 from tests.conftest import (
     reexecute_workflow_by_id,
     retry_until_success_async,
@@ -327,11 +327,13 @@ async def test_commit_hiccup(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("dispatch", ["start_workflow_async", "direct_invocation"])
+@pytest.mark.parametrize("park_entry", ["checkpoint_conflict", "outcome_not_recorded"])
 async def test_parked_duplicate_does_not_hold_a_thread(
-    dbos: DBOS, config: DBOSConfig
+    dbos: DBOS, config: DBOSConfig, park_entry: str, dispatch: str
 ) -> None:
-    """A duplicate async execution that loses the checkpoint race parks on the owning
-    execution's outcome. That wait must happen on the event loop: the park runs inside
+    """A duplicate async execution that cannot own its workflow's outcome parks on the
+    execution that does. That wait must happen on the event loop: the park runs inside
     asyncio.to_thread, so a blocking poll there pins one of DBOS's executor threads for
     as long as the owner takes to finish, and enough parked duplicates leave no thread
     for any other async work in the process."""
@@ -341,7 +343,7 @@ async def test_parked_duplicate_does_not_hold_a_thread(
     dbos = DBOS(config=config)
     DBOS.launch()
 
-    # The IDs whose step checkpoint loses the race to a concurrent execution.
+    # The IDs of the duplicates: the executions that lose their workflow to another run.
     lost_ids: set[str] = set()
     parked_ids: set[str] = set()
 
@@ -357,6 +359,20 @@ async def test_parked_duplicate_does_not_hold_a_thread(
             raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
         original_record(result, completed_at_epoch_ms=completed_at_epoch_ms)
 
+    original_update = dbos._sys_db.update_workflow_outcome
+
+    def losing_update(
+        workflow_id: str,
+        status: WorkflowStatuses,
+        *,
+        output: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> bool:
+        # What a run whose row moved on sees: its terminal write does not land.
+        if workflow_id in lost_ids:
+            return False
+        return original_update(workflow_id, status, output=output, error=error)
+
     original_check = dbos._sys_db.check_workflow_result
 
     def tracking_check(workflow_id: str, *, fail_if_missing: bool = False) -> Any:
@@ -365,7 +381,10 @@ async def test_parked_duplicate_does_not_hold_a_thread(
             parked_ids.add(workflow_id)
         return original_check(workflow_id, fail_if_missing=fail_if_missing)
 
-    dbos._sys_db.record_operation_result = losing_record  # type: ignore[method-assign]
+    if park_entry == "checkpoint_conflict":
+        dbos._sys_db.record_operation_result = losing_record  # type: ignore[method-assign]
+    else:
+        dbos._sys_db.update_workflow_outcome = losing_update  # type: ignore[method-assign]
     dbos._sys_db.check_workflow_result = tracking_check  # type: ignore[method-assign]
 
     def blocked_executor_threads() -> list[str]:
@@ -394,13 +413,22 @@ async def test_parked_duplicate_does_not_hold_a_thread(
     async def unrelated_workflow() -> str:
         return "unblocked"
 
-    handles: list[WorkflowHandleAsync[str]] = []
+    async def start_duplicate() -> "asyncio.Future[str]":
+        """Start a duplicate the way the parametrization asks, started either way."""
+        wfid = str(uuid.uuid4())
+        lost_ids.add(wfid)
+        if dispatch == "start_workflow_async":
+            with SetWorkflowID(wfid):
+                handle = await DBOS.start_workflow_async(duplicate_workflow)
+            return asyncio.ensure_future(handle.get_result())
+        with SetWorkflowID(wfid):
+            # create_task copies the context, so the run adopts this ID when it starts.
+            return asyncio.create_task(duplicate_workflow())
+
+    runs: list["asyncio.Future[str]"] = []
     try:
         for _ in range(workers):
-            wfid = str(uuid.uuid4())
-            lost_ids.add(wfid)
-            with SetWorkflowID(wfid):
-                handles.append(await DBOS.start_workflow_async(duplicate_workflow))
+            runs.append(await start_duplicate())
 
         def all_parked() -> None:
             assert parked_ids == lost_ids, f"parked so far: {parked_ids}"
@@ -428,7 +456,5 @@ async def test_parked_duplicate_does_not_hold_a_thread(
                 .where(SystemSchema.workflow_status.c.workflow_uuid.in_(lost_ids))
             )
 
-    for handle in handles:
-        assert (
-            await asyncio.wait_for(handle.get_result(), timeout=30) == "owner outcome"
-        )
+    for run in runs:
+        assert await asyncio.wait_for(run, timeout=30) == "owner outcome"
