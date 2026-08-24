@@ -330,7 +330,11 @@ async def test_commit_hiccup(dbos: DBOS) -> None:
 @pytest.mark.parametrize("dispatch", ["start_workflow_async", "direct_invocation"])
 @pytest.mark.parametrize("park_entry", ["checkpoint_conflict", "outcome_not_recorded"])
 async def test_parked_duplicate_does_not_hold_a_thread(
-    dbos: DBOS, config: DBOSConfig, park_entry: str, dispatch: str
+    dbos: DBOS,
+    config: DBOSConfig,
+    park_entry: str,
+    dispatch: str,
+    skip_with_sqlite: None,
 ) -> None:
     """A duplicate async execution that cannot own its workflow's outcome parks on the
     execution that does. That park runs inside asyncio.to_thread, so waiting there
@@ -434,8 +438,14 @@ async def test_parked_duplicate_does_not_hold_a_thread(
 
         await retry_until_success_async(all_parked, interval=0.1, max_attempts=300)
 
-        # Every duplicate now waits for an outcome only the owner can write, so
-        # unrelated async work is what proves the pool is still usable.
+        # The property under test: every park now waits on the event loop, so no executor
+        # thread is inside the blocking await_workflow_result. A poll's brief to_thread hop
+        # runs check_workflow_result, which this does not match.
+        assert (
+            blocked_executor_threads() == []
+        ), f"parked duplicates hold executor threads: {blocked_executor_threads()}"
+
+        # And the consequence: unrelated async work still gets a worker.
         try:
             assert (
                 await asyncio.wait_for(unrelated_workflow(), timeout=20) == "unblocked"

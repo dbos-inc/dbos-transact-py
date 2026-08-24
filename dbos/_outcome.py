@@ -63,9 +63,9 @@ class DeferredResult(Generic[T]):
         return await self._async_resolve()
 
 
-def resolve_deferred(value: Union[R, "DeferredResult[R]"]) -> R:
-    """Resolve a stage that returned a wait, blocking this thread for it: for
-    callers outside the Outcome layer, which have no event loop to await on."""
+def resolve_deferred(value: R) -> R:
+    """Resolve a stage result that is a wait, blocking this thread for it; pass any
+    other value straight through."""
     if isinstance(value, DeferredResult):
         return cast(R, value.resolve())
     return value

@@ -33,7 +33,7 @@ from typing import (
     cast,
 )
 
-from dbos._outcome import DeferredResult, NoResult, Outcome, Pending, resolve_deferred
+from dbos._outcome import DeferredResult, Immediate, NoResult, Outcome, Pending
 from dbos._utils import GlobalParams, retriable_postgres_exception
 
 from ._app_db import ApplicationDatabase, TransactionResultInternal
@@ -1086,13 +1086,9 @@ def _execute_workflow_wthread(
 
             try:
                 if owned:
-                    # Resolved here: this path invokes persist outside the Outcome
-                    # layer, and a park blocks the thread it already owns.
-                    return resolve_deferred(
-                        _get_wf_invoke_func(dbos, status, release_active)(
-                            functools.partial(func, *args, **kwargs)
-                        )
-                    )
+                    return Immediate[R](functools.partial(func, *args, **kwargs)).then(
+                        _get_wf_invoke_func(dbos, status, release_active)
+                    )()
                 else:
                     # Parked on the concurrent execution that owns the active
                     # entry. The row is known to exist (this dispatch inserted
