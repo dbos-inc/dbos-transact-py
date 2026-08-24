@@ -37,14 +37,14 @@ class NoResult:
 
 
 class DeferredResult(Generic[T]):
-    """An interceptor return value that short-circuits the body with a result
-    that must be *waited* for (e.g. another workflow's output).
+    """An interceptor or ``then``/``wrap`` stage return value that stands in for a
+    result which must be *waited* for (e.g. another workflow's output).
 
-    The Outcome layer resolves it: ``Immediate`` blocks in-thread, while
-    ``Pending`` awaits it on the event loop. This lets an async workflow that
-    directly invokes a child await the child's result without pinning a
-    thread-pool worker in a blocking poll (which can starve the shared executor
-    during recovery)."""
+    The Outcome layer resolves it: ``Immediate`` blocks in-thread, while ``Pending``
+    awaits it on the event loop. This lets an async workflow that waits on another
+    execution -- a directly invoked child, or the run that owns a duplicate's
+    outcome -- do so without pinning a thread-pool worker in a blocking poll (which
+    can starve the shared executor during recovery)."""
 
     __slots__ = ("_sync_resolve", "_async_resolve")
 
@@ -61,6 +61,14 @@ class DeferredResult(Generic[T]):
 
     async def resolve_async(self) -> T:
         return await self._async_resolve()
+
+
+def resolve_deferred(value: R) -> R:
+    """Resolve a stage result that is a wait, blocking this thread for it; pass any
+    other value straight through."""
+    if isinstance(value, DeferredResult):
+        return cast(R, value.resolve())
+    return value
 
 
 # define Outcome protocol w/ common composition methods
@@ -122,14 +130,14 @@ class Immediate(Outcome[T]):
         next: Callable[[Callable[[], T]], R],
         dbos: Optional["DBOS"] = None,
     ) -> "Immediate[R]":
-        return Immediate(lambda: next(self._func))
+        return Immediate(lambda: resolve_deferred(next(self._func)))
 
     def wrap(
         self,
         before: Callable[[], Callable[[Callable[[], T]], R]],
         dbos: Optional["DBOS"] = None,
     ) -> "Immediate[R]":
-        return Immediate(lambda: before()(self._func))
+        return Immediate(lambda: resolve_deferred(before()(self._func)))
 
     @staticmethod
     def _intercept(
@@ -229,7 +237,7 @@ class Pending(Outcome[T]):
         after = await asyncio.to_thread(before)
         try:
             value = await func()
-            return await asyncio.to_thread(after, lambda: value)
+            result = await asyncio.to_thread(after, lambda: value)
         except asyncio.CancelledError:
             dbos_logger.warning(f"Asyncio task cancelled for workflow or step {func}")
             raise
@@ -241,7 +249,13 @@ class Pending(Outcome[T]):
             # "cannot access free variable 'exp'" when it runs later on
             # the asyncio thread pool.
             saved_exp = exp
-            return await asyncio.to_thread(after, lambda: Pending._raise(saved_exp))
+            result = await asyncio.to_thread(after, lambda: Pending._raise(saved_exp))
+        # Resolve on the event loop, so the wait does not pin a to_thread worker.
+        # Outside the try: a wait that ends in an exception propagates, rather than
+        # re-entering the stage the way an exception from the stage itself does.
+        if isinstance(result, DeferredResult):
+            return cast(R, await result.resolve_async())
+        return result
 
     def wrap(
         self,
