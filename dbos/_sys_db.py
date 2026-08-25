@@ -5296,12 +5296,17 @@ class SystemDatabase(ABC):
                 try:
                     return operation()
                 except DBAPIError as e:
-                    if attempt == max_attempts or not self._is_serialization_error(e):
+                    if not self._is_serialization_error(e):
+                        raise
+                    if attempt == max_attempts:
+                        dbos_logger.warning(
+                            f"Garbage collection failed after {max_attempts} attempts: {str(e.orig)}"
+                        )
                         raise
                     # Jittered backoff, so peers that collided do not collide again
                     actual_backoff = backoff * (0.5 + random.random())
-                    dbos_logger.debug(
-                        f"Garbage collection lost a concurrency race: {str(e.orig)}. "
+                    dbos_logger.warning(
+                        f"Contention or deadlock detected in workflow garbage collection: {str(e.orig)}. "
                         f"Retrying in {actual_backoff:.2f}s (attempt {attempt})"
                     )
                     time.sleep(actual_backoff)
