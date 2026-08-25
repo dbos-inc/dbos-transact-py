@@ -4251,7 +4251,6 @@ class SystemDatabase(ABC):
                     sa.select(sa.func.count())
                     .select_from(ws)
                     .where(ws.c.queue_name == queue.name)
-                    # Literal TRUE mirroring idx_workflow_status_rate_limited's predicate: SQLite's partial-index prover can't derive it from the `= 1` a bound boolean renders as.
                     .where(ws.c.rate_limited == sa.literal_column("TRUE"))
                     .where(
                         ws.c.status.notin_(
