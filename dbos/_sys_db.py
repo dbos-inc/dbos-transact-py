@@ -2077,34 +2077,42 @@ class SystemDatabase(ABC):
         if start_time:
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
-                >= datetime.datetime.fromisoformat(start_time).timestamp() * 1000
+                >= int(datetime.datetime.fromisoformat(start_time).timestamp() * 1000)
             )
         if end_time:
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
-                <= datetime.datetime.fromisoformat(end_time).timestamp() * 1000
+                <= int(datetime.datetime.fromisoformat(end_time).timestamp() * 1000)
             )
         if completed_after:
             query = query.where(
                 SystemSchema.workflow_status.c.completed_at
-                >= datetime.datetime.fromisoformat(completed_after).timestamp() * 1000
+                >= int(
+                    datetime.datetime.fromisoformat(completed_after).timestamp() * 1000
+                )
             )
         if completed_before:
             query = query.where(
                 SystemSchema.workflow_status.c.completed_at
-                <= datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
+                <= int(
+                    datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
+                )
             )
         # dequeued_after/before filter on started_at_epoch_ms: that column is
         # populated on dequeue and surfaced as WorkflowStatus.dequeued_at.
         if dequeued_after:
             query = query.where(
                 SystemSchema.workflow_status.c.started_at_epoch_ms
-                >= datetime.datetime.fromisoformat(dequeued_after).timestamp() * 1000
+                >= int(
+                    datetime.datetime.fromisoformat(dequeued_after).timestamp() * 1000
+                )
             )
         if dequeued_before:
             query = query.where(
                 SystemSchema.workflow_status.c.started_at_epoch_ms
-                <= datetime.datetime.fromisoformat(dequeued_before).timestamp() * 1000
+                <= int(
+                    datetime.datetime.fromisoformat(dequeued_before).timestamp() * 1000
+                )
             )
         if status_list:
             query = query.where(SystemSchema.workflow_status.c.status.in_(status_list))
@@ -2433,34 +2441,42 @@ class SystemDatabase(ABC):
         if start_time:
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
-                >= datetime.datetime.fromisoformat(start_time).timestamp() * 1000
+                >= int(datetime.datetime.fromisoformat(start_time).timestamp() * 1000)
             )
         if end_time:
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
-                <= datetime.datetime.fromisoformat(end_time).timestamp() * 1000
+                <= int(datetime.datetime.fromisoformat(end_time).timestamp() * 1000)
             )
         if completed_after:
             query = query.where(
                 SystemSchema.workflow_status.c.completed_at
-                >= datetime.datetime.fromisoformat(completed_after).timestamp() * 1000
+                >= int(
+                    datetime.datetime.fromisoformat(completed_after).timestamp() * 1000
+                )
             )
         if completed_before:
             query = query.where(
                 SystemSchema.workflow_status.c.completed_at
-                <= datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
+                <= int(
+                    datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
+                )
             )
         # dequeued_after/before filter on started_at_epoch_ms: that column is
         # populated on dequeue and surfaced as WorkflowStatus.dequeued_at.
         if dequeued_after:
             query = query.where(
                 SystemSchema.workflow_status.c.started_at_epoch_ms
-                >= datetime.datetime.fromisoformat(dequeued_after).timestamp() * 1000
+                >= int(
+                    datetime.datetime.fromisoformat(dequeued_after).timestamp() * 1000
+                )
             )
         if dequeued_before:
             query = query.where(
                 SystemSchema.workflow_status.c.started_at_epoch_ms
-                <= datetime.datetime.fromisoformat(dequeued_before).timestamp() * 1000
+                <= int(
+                    datetime.datetime.fromisoformat(dequeued_before).timestamp() * 1000
+                )
             )
         if name:
             query = query.where(SystemSchema.workflow_status.c.name.in_(name))
@@ -2676,12 +2692,16 @@ class SystemDatabase(ABC):
         if completed_after:
             query = query.where(
                 SystemSchema.operation_outputs.c.completed_at_epoch_ms
-                >= datetime.datetime.fromisoformat(completed_after).timestamp() * 1000
+                >= int(
+                    datetime.datetime.fromisoformat(completed_after).timestamp() * 1000
+                )
             )
         if completed_before:
             query = query.where(
                 SystemSchema.operation_outputs.c.completed_at_epoch_ms
-                <= datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
+                <= int(
+                    datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
+                )
             )
         query = query.where(
             self._observability_filter(

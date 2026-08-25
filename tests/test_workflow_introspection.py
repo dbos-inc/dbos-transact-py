@@ -3,7 +3,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable, List, Tuple
 
 import pytest
 import sqlalchemy as sa
@@ -2564,3 +2564,89 @@ def test_get_step_aggregates_completed_window_and_max(
     assert by_fn[quick_step.__qualname__]["max_duration_ms"] is not None
     assert by_fn[slow_step.__qualname__]["count"] is None
     assert by_fn[slow_step.__qualname__]["max_duration_ms"] is not None
+
+
+def _bound_values(parameters: Any) -> List[Any]:
+    """Flatten a driver parameter set: psycopg passes a dict, sqlite3 a tuple."""
+    if isinstance(parameters, dict):
+        return list(parameters.values())
+    if isinstance(parameters, (list, tuple)):
+        values: List[Any] = []
+        for parameter in parameters:
+            values.extend(_bound_values(parameter))
+        return values
+    return [parameters]
+
+
+def test_time_filters_bind_as_integers(dbos: DBOS) -> None:
+    """Every epoch-ms time filter must bind as an int, not a float: a float bind has
+    Postgres cast the BIGINT column to double precision, costing the query its index."""
+
+    ts = "2026-01-01T00:00:00+00:00"
+    epoch_ms = int(datetime.fromisoformat(ts).timestamp() * 1000)
+    sys_db = dbos._sys_db
+
+    def list_workflows() -> Any:
+        return sys_db.list_workflows(
+            start_time=ts,
+            end_time=ts,
+            completed_after=ts,
+            completed_before=ts,
+            dequeued_after=ts,
+            dequeued_before=ts,
+        )
+
+    def workflow_aggregates() -> Any:
+        return sys_db.get_workflow_aggregates(
+            group_by_status=True,
+            select_count=True,
+            start_time=ts,
+            end_time=ts,
+            completed_after=ts,
+            completed_before=ts,
+            dequeued_after=ts,
+            dequeued_before=ts,
+        )
+
+    def step_aggregates() -> Any:
+        return sys_db.get_step_aggregates(
+            group_by_status=True,
+            select_count=True,
+            completed_after=ts,
+            completed_before=ts,
+        )
+
+    # Each filter, and the number of epoch-ms bounds it emits.
+    cases: List[Tuple[str, Callable[[], Any], int]] = [
+        ("list_workflows", list_workflows, 6),
+        ("get_workflow_aggregates", workflow_aggregates, 6),
+        ("get_step_aggregates", step_aggregates, 2),
+    ]
+
+    captured: List[Any] = []
+    test_thread = threading.get_ident()
+
+    def before_cursor_execute(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        # Queue pollers share this engine; only this thread's statements are ours.
+        if threading.get_ident() == test_thread:
+            captured.append(parameters)
+
+    for name, call, expected_bounds in cases:
+        captured.clear()
+        sa.event.listen(sys_db.engine, "before_cursor_execute", before_cursor_execute)
+        try:
+            call()
+        finally:
+            sa.event.remove(
+                sys_db.engine, "before_cursor_execute", before_cursor_execute
+            )
+        values = [v for parameters in captured for v in _bound_values(parameters)]
+        assert not [v for v in values if isinstance(v, float)], name
+        assert values.count(epoch_ms) == expected_bounds, name
