@@ -808,12 +808,13 @@ class SystemDatabase(ABC):
         pass
 
     def _now_ms_sql(self) -> Any:
+        # Cast to BIGINT: EXTRACT yields numeric, which casts any bigint column compared against it, costing that column its index.
         # SQLite's CURRENT_TIMESTAMP is second-precision; use unixepoch('subsec') for ms.
         if self.engine.dialect.name == "sqlite":
             if sys.version_info >= (3, 12):
-                return sa.func.unixepoch("subsec") * 1000
-            return sa.func.strftime("%s", "now") * 1000
-        return sa.func.extract("epoch", sa.func.now()) * 1000
+                return sa.cast(sa.func.unixepoch("subsec") * 1000, sa.BigInteger)
+            return sa.cast(sa.func.strftime("%s", "now") * 1000, sa.BigInteger)
+        return sa.cast(sa.func.extract("epoch", sa.func.now()) * 1000, sa.BigInteger)
 
     @staticmethod
     def _name_filter(
@@ -4250,7 +4251,8 @@ class SystemDatabase(ABC):
                     sa.select(sa.func.count())
                     .select_from(ws)
                     .where(ws.c.queue_name == queue.name)
-                    .where(ws.c.rate_limited == True)
+                    # Literal TRUE mirroring idx_workflow_status_rate_limited's predicate: SQLite's partial-index prover can't derive it from the `= 1` a bound boolean renders as.
+                    .where(ws.c.rate_limited == sa.literal_column("TRUE"))
                     .where(
                         ws.c.status.notin_(
                             [
