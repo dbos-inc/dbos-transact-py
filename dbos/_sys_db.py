@@ -1458,7 +1458,7 @@ class SystemDatabase(ABC):
                         sa.select(
                             sa.literal(orig_id).label("orig_id"),
                             sa.literal(fork_id).label("fork_id"),
-                            sa.literal(step).label("start_step"),
+                            sa.literal(step, sa.Integer).label("start_step"),
                             # Cast, since an unclaimed fork makes this a bare NULL the union cannot type.
                             sa.cast(sa.literal(fork_owners[fork_id]), sa.Text).label(
                                 "owner"
@@ -2386,10 +2386,9 @@ class SystemDatabase(ABC):
 
         if time_bucket_size_ms is not None:
             created_at = SystemSchema.workflow_status.c.created_at
-            bucket = sa.literal(time_bucket_size_ms)
-            time_bucket_col = (
-                sa.cast(func.floor(created_at / bucket), sa.BigInteger) * bucket
-            ).label("time_bucket")
+            # BigInteger literal + floor division: true division would cast the column to numeric.
+            bucket = sa.literal(time_bucket_size_ms, sa.BigInteger)
+            time_bucket_col = ((created_at // bucket) * bucket).label("time_bucket")
             group_names.append("time_bucket")
             group_columns.append(time_bucket_col)
 
@@ -2636,10 +2635,9 @@ class SystemDatabase(ABC):
             # Bucket on completed_at_epoch_ms — it's the indexed timestamp on
             # this table.
             completed_at = SystemSchema.operation_outputs.c.completed_at_epoch_ms
-            bucket = sa.literal(time_bucket_size_ms)
-            time_bucket_col = (
-                sa.cast(func.floor(completed_at / bucket), sa.BigInteger) * bucket
-            ).label("time_bucket")
+            # BigInteger literal + floor division: true division would cast the column to numeric.
+            bucket = sa.literal(time_bucket_size_ms, sa.BigInteger)
+            time_bucket_col = ((completed_at // bucket) * bucket).label("time_bucket")
             group_names.append("time_bucket")
             group_columns.append(time_bucket_col)
 
@@ -5289,7 +5287,8 @@ class SystemDatabase(ABC):
 
         # Delete all workflows older than cutoff that are NOT PENDING, ENQUEUED, or DELAYED
         gc_filter = sa.and_(
-            SystemSchema.workflow_status.c.created_at < cutoff_epoch_timestamp_ms,
+            SystemSchema.workflow_status.c.created_at
+            < sa.literal(cutoff_epoch_timestamp_ms, sa.BigInteger),
             ~SystemSchema.workflow_status.c.status.in_(
                 [
                     WorkflowStatusString.PENDING.value,
@@ -5343,7 +5342,7 @@ class SystemDatabase(ABC):
             pending_enqueued_result = c.execute(
                 sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
                     SystemSchema.workflow_status.c.created_at
-                    < cutoff_epoch_timestamp_ms,
+                    < sa.literal(cutoff_epoch_timestamp_ms, sa.BigInteger),
                     self._name_filter(
                         SystemSchema.workflow_status.c.application_name, self.app_name
                     ),
@@ -5369,7 +5368,7 @@ class SystemDatabase(ABC):
                         ]
                     ),
                     SystemSchema.workflow_status.c.created_at
-                    <= cutoff_epoch_timestamp_ms,
+                    <= sa.literal(cutoff_epoch_timestamp_ms, sa.BigInteger),
                     self._name_filter(
                         SystemSchema.workflow_status.c.application_name, self.app_name
                     ),
