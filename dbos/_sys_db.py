@@ -1458,7 +1458,7 @@ class SystemDatabase(ABC):
                         sa.select(
                             sa.literal(orig_id).label("orig_id"),
                             sa.literal(fork_id).label("fork_id"),
-                            sa.literal(step, sa.Integer).label("start_step"),
+                            sa.literal(step, sa.BigInteger).label("start_step"),
                             # Cast, since an unclaimed fork makes this a bare NULL the union cannot type.
                             sa.cast(sa.literal(fork_owners[fork_id]), sa.Text).label(
                                 "owner"
@@ -2386,7 +2386,6 @@ class SystemDatabase(ABC):
 
         if time_bucket_size_ms is not None:
             created_at = SystemSchema.workflow_status.c.created_at
-            # BigInteger literal + floor division: true division would cast the column to numeric.
             bucket = sa.literal(time_bucket_size_ms, sa.BigInteger)
             time_bucket_col = ((created_at // bucket) * bucket).label("time_bucket")
             group_names.append("time_bucket")
@@ -2635,7 +2634,6 @@ class SystemDatabase(ABC):
             # Bucket on completed_at_epoch_ms — it's the indexed timestamp on
             # this table.
             completed_at = SystemSchema.operation_outputs.c.completed_at_epoch_ms
-            # BigInteger literal + floor division: true division would cast the column to numeric.
             bucket = sa.literal(time_bucket_size_ms, sa.BigInteger)
             time_bucket_col = ((completed_at // bucket) * bucket).label("time_bucket")
             group_names.append("time_bucket")
