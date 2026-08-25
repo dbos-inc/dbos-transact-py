@@ -7,6 +7,7 @@ from typing import Any, Callable, List, Tuple
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy import event
 
 # Public API
 from dbos import DBOS, Queue, SetWorkflowAttributes, SetWorkflowID, WorkflowStatusString
@@ -2640,13 +2641,11 @@ def test_time_filters_bind_as_integers(dbos: DBOS) -> None:
 
     for name, call, expected_bounds in cases:
         captured.clear()
-        sa.event.listen(sys_db.engine, "before_cursor_execute", before_cursor_execute)
+        event.listen(sys_db.engine, "before_cursor_execute", before_cursor_execute)
         try:
             call()
         finally:
-            sa.event.remove(
-                sys_db.engine, "before_cursor_execute", before_cursor_execute
-            )
+            event.remove(sys_db.engine, "before_cursor_execute", before_cursor_execute)
         values = [v for parameters in captured for v in _bound_values(parameters)]
         assert not [v for v in values if isinstance(v, float)], name
         assert values.count(epoch_ms) == expected_bounds, name
