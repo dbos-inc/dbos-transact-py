@@ -509,6 +509,7 @@ EventSetupResult = Union[
 
 
 F = TypeVar("F", bound=Callable[..., Any])
+T = TypeVar("T")
 
 
 def db_retry(
@@ -2914,6 +2915,11 @@ class SystemDatabase(ABC):
         pass
 
     @abstractmethod
+    def _is_serialization_error(self, dbapi_error: DBAPIError) -> bool:
+        """Check if the error is a serialization/concurrency error."""
+        pass
+
+    @abstractmethod
     def _attributes_contains_clause(
         self, attributes: Dict[str, Any]
     ) -> sa.ColumnElement[bool]:
@@ -5282,16 +5288,40 @@ class SystemDatabase(ABC):
             ),
         )
 
+        def retry_on_serialization_error(operation: Callable[[], T]) -> T:
+            """Re-run a batch that lost a deadlock or serialization race. The database
+            already rolled it back, so replaying it is safe."""
+            max_attempts, backoff, max_backoff = 10, 0.05, 2.0
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    return operation()
+                except DBAPIError as e:
+                    if attempt == max_attempts or not self._is_serialization_error(e):
+                        raise
+                    # Jittered backoff, so peers that collided do not collide again
+                    actual_backoff = backoff * (0.5 + random.random())
+                    dbos_logger.debug(
+                        f"Garbage collection lost a concurrency race: {str(e.orig)}. "
+                        f"Retrying in {actual_backoff:.2f}s (attempt {attempt})"
+                    )
+                    time.sleep(actual_backoff)
+                    backoff = min(backoff * 2, max_backoff)
+            raise AssertionError("unreachable")
+
         if batch_size is None:
-            with self.engine.begin() as c:
-                c.execute(sa.delete(SystemSchema.workflow_status).where(gc_filter))
+
+            def delete_all() -> None:
+                with self.engine.begin() as c:
+                    c.execute(sa.delete(SystemSchema.workflow_status).where(gc_filter))
+
+            retry_on_serialization_error(delete_all)
         else:
             # Batch-delete by advancing a created_at watermark, one committed transaction per batch
-            watermark = 0
-            while True:
+            def delete_batch(watermark: int) -> Optional[int]:
+                """Delete one batch, returning the watermark to resume from, or None when done."""
                 with self.engine.begin() as c:
                     # Find the created_at of the batch_size-th oldest eligible row above the watermark
-                    step = c.execute(
+                    step: Optional[int] = c.execute(
                         sa.select(SystemSchema.workflow_status.c.created_at)
                         .where(
                             gc_filter,
@@ -5306,7 +5336,7 @@ class SystemDatabase(ABC):
                         c.execute(
                             sa.delete(SystemSchema.workflow_status).where(gc_filter)
                         )
-                        break
+                        return None
                     # Delete the batch; created_at ties may push it slightly over batch_size
                     c.execute(
                         sa.delete(SystemSchema.workflow_status).where(
@@ -5315,7 +5345,16 @@ class SystemDatabase(ABC):
                             SystemSchema.workflow_status.c.created_at <= step,
                         )
                     )
-                watermark = step
+                    return step
+
+            watermark = 0
+            while True:
+                next_watermark = retry_on_serialization_error(
+                    functools.partial(delete_batch, watermark)
+                )
+                if next_watermark is None:
+                    break
+                watermark = next_watermark
 
         with self.engine.begin() as c:
             # Then, get the IDs of all remaining old workflows
