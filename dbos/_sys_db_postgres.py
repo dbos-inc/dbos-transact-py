@@ -130,6 +130,17 @@ class PostgresSystemDatabase(SystemDatabase):
         """Check if the error is a unique constraint violation in PostgreSQL."""
         return dbapi_error.orig.sqlstate == "23505"  # type: ignore
 
+    def _is_serialization_error(self, dbapi_error: DBAPIError) -> bool:
+        """Check if the error is a serialization/concurrency error in PostgreSQL."""
+        # 40001: serialization_failure (MVCC conflict)
+        # 40P01: deadlock_detected
+        driver_error = dbapi_error.orig
+        return (
+            driver_error is not None
+            and isinstance(driver_error, psycopg.OperationalError)
+            and driver_error.sqlstate in ("40001", "40P01")
+        )
+
     def _attributes_contains_clause(
         self, attributes: Dict[str, Any]
     ) -> sa.ColumnElement[bool]:
