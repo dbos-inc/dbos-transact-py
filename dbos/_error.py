@@ -69,11 +69,24 @@ class DBOSErrorCode(Enum):
     StreamNondeterminism = 17
     StepTimeout = 18
     ConflictingRegistrationError = 25
+    QueryTimeout = 26
 
 
 #######################################
 ## Exception
 #######################################
+
+
+class DBOSQueryTimeoutError(DBOSException):
+    """Exception raised when an observability query exceeds its statement timeout."""
+
+    def __init__(self, timeout_seconds: float):
+        super().__init__(
+            f"This query was cancelled after exceeding its {timeout_seconds:g}s statement timeout. "
+            "Narrow the query (a shorter time range, more selective filters, a smaller limit) "
+            "or raise observability_query_timeout_sec.",
+            dbos_error_code=DBOSErrorCode.QueryTimeout.value,
+        )
 
 
 class DBOSConflictingWorkflowError(DBOSException):

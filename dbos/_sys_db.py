@@ -2,11 +2,13 @@ import asyncio
 import datetime
 import functools
 import json
+import math
 import random
 import sys
 import threading
 import time
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from typing import (
@@ -15,6 +17,7 @@ from typing import (
     Awaitable,
     Callable,
     Dict,
+    Iterator,
     List,
     Literal,
     Optional,
@@ -49,6 +52,7 @@ from ._error import (
     DBOSException,
     DBOSInitializationError,
     DBOSNonExistentWorkflowError,
+    DBOSQueryTimeoutError,
     DBOSQueueDeduplicatedError,
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
@@ -579,6 +583,10 @@ DEFAULT_SYS_DB_POOL_SIZE = 20
 # Interval for coalescing LISTEN/NOTIFY notifications off the write path; caps the rate of notifying commits regardless of write throughput.
 DEFAULT_NOTIFICATION_COALESCE_SEC = 0.01
 
+# Statement timeout for read-only introspection queries (workflow listings, aggregates, metrics).
+# One of those scanning a huge table for minutes holds back xmin, which stalls autovacuum database-wide.
+DEFAULT_OBSERVABILITY_QUERY_TIMEOUT_SEC = 30.0
+
 
 class SystemDatabase(ABC):
 
@@ -596,6 +604,7 @@ class SystemDatabase(ABC):
         polling_concurrency: Optional[int] = None,
         app_name: Optional[str] = None,
         retry_connection_errors: bool = True,
+        observability_query_timeout_sec: Optional[float] = None,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
         if system_database_url.startswith("sqlite"):
@@ -614,6 +623,7 @@ class SystemDatabase(ABC):
                 polling_concurrency=polling_concurrency,
                 app_name=app_name,
                 retry_connection_errors=retry_connection_errors,
+                observability_query_timeout_sec=observability_query_timeout_sec,
             )
         else:
             from ._sys_db_postgres import PostgresSystemDatabase
@@ -631,6 +641,7 @@ class SystemDatabase(ABC):
                 polling_concurrency=polling_concurrency,
                 app_name=app_name,
                 retry_connection_errors=retry_connection_errors,
+                observability_query_timeout_sec=observability_query_timeout_sec,
             )
 
     def __init__(
@@ -648,6 +659,7 @@ class SystemDatabase(ABC):
         polling_concurrency: Optional[int] = None,
         app_name: Optional[str] = None,
         retry_connection_errors: bool = True,
+        observability_query_timeout_sec: Optional[float] = None,
     ):
         import sqlalchemy.dialects.postgresql as pg
         import sqlalchemy.dialects.sqlite as sq
@@ -682,6 +694,17 @@ class SystemDatabase(ABC):
         self._retry_connection_errors = retry_connection_errors
         # db_retry trusts the text-based SQLite retriability heuristic only on SQLite.
         self._is_sqlite = system_database_url.startswith("sqlite")
+        # Statement timeout for observability reads, in ms. Unset takes the default; non-positive disables the cap.
+        timeout_sec = (
+            observability_query_timeout_sec
+            if observability_query_timeout_sec is not None
+            else DEFAULT_OBSERVABILITY_QUERY_TIMEOUT_SEC
+        )
+        self._observability_query_timeout_ms: Optional[int] = (
+            int(timeout_sec * 1000)
+            if math.isfinite(timeout_sec) and timeout_sec > 0
+            else None
+        )
 
         if system_database_url.startswith("sqlite"):
             self.schema = None
@@ -827,6 +850,30 @@ class SystemDatabase(ABC):
             return sa.true()
         names = [value] if isinstance(value, str) else value
         return sa.or_(col.in_(names), col.is_(None))
+
+    @contextmanager
+    def _observability_query(self) -> Iterator[sa.Connection]:
+        """A transaction for read-only introspection reads: workflow and step listings,
+        aggregates, and metrics. Capped by a statement timeout, so one scanning a huge
+        table cannot hold back xmin for minutes and stall autovacuum database-wide."""
+        timeout_ms = self._observability_query_timeout_ms
+        with self.engine.begin() as c:
+            if timeout_ms is not None:
+                self._set_statement_timeout(c, timeout_ms)
+            try:
+                yield c
+            except DBAPIError as e:
+                if timeout_ms is not None and self._is_statement_timeout(e):
+                    raise DBOSQueryTimeoutError(timeout_ms / 1000) from e
+                raise
+
+    def _set_statement_timeout(self, conn: sa.Connection, timeout_ms: int) -> None:
+        """Cap how long each statement in this transaction may run. A database with no
+        equivalent (SQLite) runs its observability queries uncapped."""
+
+    def _is_statement_timeout(self, error: DBAPIError) -> bool:
+        """Whether this error is the statement timeout firing rather than a real failure."""
+        return False
 
     def _observability_filter(
         self, col: sa.ColumnElement[Any], value: Optional[Union[str, List[str]]]
@@ -2172,7 +2219,7 @@ class SystemDatabase(ABC):
         if offset:
             query = query.offset(offset)
 
-        with self.engine.begin() as c:
+        with self._observability_query() as c:
             rows = c.execute(query).fetchall()
 
         infos: List[WorkflowStatus] = []
@@ -2268,7 +2315,7 @@ class SystemDatabase(ABC):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
     ) -> List[StepInfo]:
-        with self.engine.begin() as c:
+        with self._observability_query() as c:
             query = (
                 sa.select(
                     SystemSchema.operation_outputs.c.function_id,
@@ -2547,7 +2594,7 @@ class SystemDatabase(ABC):
 
         query = query.group_by(*group_columns)
 
-        with self.engine.begin() as c:
+        with self._observability_query() as c:
             rows = c.execute(query).fetchall()
 
         results: List[WorkflowAggregateRow] = []
@@ -2708,7 +2755,7 @@ class SystemDatabase(ABC):
 
         query = query.group_by(*group_columns)
 
-        with self.engine.begin() as c:
+        with self._observability_query() as c:
             rows = c.execute(query).fetchall()
 
         results: List[StepAggregateRow] = []
@@ -3867,7 +3914,7 @@ class SystemDatabase(ABC):
         Returns:
             A dictionary mapping event keys to their deserialized values
         """
-        with self.engine.begin() as c:
+        with self._observability_query() as c:
             rows = c.execute(
                 sa.select(
                     SystemSchema.workflow_events.c.key,
@@ -3885,7 +3932,7 @@ class SystemDatabase(ABC):
 
     def get_all_notifications(self, workflow_id: str) -> List[NotificationInfo]:
         """Get all notifications sent to a workflow."""
-        with self.engine.begin() as c:
+        with self._observability_query() as c:
             rows = c.execute(
                 sa.select(
                     SystemSchema.notifications.c.topic,
@@ -3917,7 +3964,7 @@ class SystemDatabase(ABC):
 
         Returns a dict mapping stream keys to lists of deserialized values (ordered by offset).
         """
-        with self.engine.begin() as c:
+        with self._observability_query() as c:
             rows = c.execute(
                 sa.select(
                     SystemSchema.streams.c.key,
@@ -5441,7 +5488,7 @@ class SystemDatabase(ABC):
 
         metrics: List[MetricData] = []
 
-        with self.engine.begin() as c:
+        with self._observability_query() as c:
             # Query workflow metrics
             workflow_query = (
                 sa.select(
@@ -6283,7 +6330,7 @@ class SystemDatabase(ABC):
             )
 
     def list_application_versions(self) -> List[VersionInfo]:
-        with self.engine.begin() as c:
+        with self._observability_query() as c:
             rows = c.execute(
                 sa.select(
                     SystemSchema.application_versions.c.version_id,

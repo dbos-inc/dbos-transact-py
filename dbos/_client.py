@@ -145,6 +145,7 @@ class DBOSClient:
         application_name: Optional[str] = None,
         lazy: bool = False,
         retry_connection_errors: bool = True,
+        observability_query_timeout_sec: Optional[float] = None,
     ):
         """Create a client for interacting with a DBOS application from outside it.
 
@@ -170,6 +171,7 @@ class DBOSClient:
             application_name (str): The application this client acts on behalf of. Always set this when several applications share this system database, so workflows, schedules, and queues created by this client are owned by that application.
             lazy (bool): Whether to defer connecting until the client is first used. Defaults to False, meaning the connection is checked on construction. Call check_connection() or check_connection_async() to check it explicitly. Cannot be combined with use_listen_notify, whose listener connects immediately.
             retry_connection_errors (bool): Whether an operation that loses its database connection blocks and retries until the connection recovers. Defaults to True. Set to False to raise instead, so an unreachable database surfaces as an error rather than a wait.
+            observability_query_timeout_sec (float): Statement timeout, in seconds, for read-only observability queries: workflow and step listings, aggregates, and metrics. Defaults to 30.0. A query that runs for minutes over a large system database holds back xmin, which stalls autovacuum, so these are cancelled rather than left to run. Set to a non-positive value to run them uncapped.
 
         Raises:
             Exception: If the system database cannot be reached, unless lazy is True.
@@ -218,6 +220,7 @@ class DBOSClient:
             polling_concurrency=system_database_polling_concurrency,
             app_name=application_name,
             retry_connection_errors=retry_connection_errors,
+            observability_query_timeout_sec=observability_query_timeout_sec,
         )
         self._notification_listener_thread: Optional[threading.Thread] = None
         if not lazy:

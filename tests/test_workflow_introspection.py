@@ -10,13 +10,22 @@ import sqlalchemy as sa
 from sqlalchemy import event
 
 # Public API
-from dbos import DBOS, Queue, SetWorkflowAttributes, SetWorkflowID, WorkflowStatusString
-from dbos._error import DBOSWorkflowConflictIDError
+from dbos import (
+    DBOS,
+    DBOSClient,
+    DBOSConfig,
+    Queue,
+    SetWorkflowAttributes,
+    SetWorkflowID,
+    WorkflowStatusString,
+)
+from dbos._error import DBOSQueryTimeoutError, DBOSWorkflowConflictIDError
 from dbos._schemas.system_database import SystemSchema
-from dbos._sys_db import OperationResultInternal
+from dbos._serialization import DefaultSerializer
+from dbos._sys_db import OperationResultInternal, SystemDatabase
 from dbos._utils import GlobalParams
 
-from .conftest import retry_until_success, set_workflow_status
+from .conftest import postgres_urls, retry_until_success, set_workflow_status
 
 
 def test_list_workflow(dbos: DBOS) -> None:
@@ -2649,3 +2658,98 @@ def test_time_filters_bind_as_integers(dbos: DBOS) -> None:
         values = [v for parameters in captured for v in _bound_values(parameters)]
         assert not [v for v in values if isinstance(v, float)], name
         assert values.count(epoch_ms) == expected_bounds, name
+
+
+def _make_sysdb(**kwargs: Any) -> SystemDatabase:
+    """A second handle on the test system database, so a test can pick its timeout."""
+    return SystemDatabase.create(
+        system_database_url=postgres_urls()[1],
+        engine_kwargs={"pool_size": 2},
+        engine=None,
+        schema="dbos",
+        serializer=DefaultSerializer(),
+        executor_id=None,
+        **kwargs,
+    )
+
+
+def test_observability_queries_carry_a_statement_timeout(
+    skip_with_sqlite: None, dbos: DBOS
+) -> None:
+    with dbos._sys_db._observability_query() as c:
+        assert c.execute(sa.text("SHOW statement_timeout")).scalar() == "30s"
+
+    # SET LOCAL, so the cap does not ride the pooled connection into other queries.
+    with dbos._sys_db.engine.begin() as c:
+        assert c.execute(sa.text("SHOW statement_timeout")).scalar() == "0"
+
+
+def test_observability_query_timeout_cancels_a_slow_query(
+    skip_with_sqlite: None, dbos: DBOS
+) -> None:
+    sys_db = _make_sysdb(observability_query_timeout_sec=0.3)
+    try:
+        with pytest.raises(DBOSQueryTimeoutError):
+            with sys_db._observability_query() as c:
+                c.execute(sa.text("SELECT pg_sleep(30)"))
+
+        # The cancelled query leaves its connection usable.
+        with sys_db.engine.begin() as c:
+            assert c.execute(sa.text("SELECT 1")).scalar() == 1
+    finally:
+        sys_db.destroy()
+
+
+def test_observability_query_timeout_can_be_disabled(
+    skip_with_sqlite: None, dbos: DBOS
+) -> None:
+    sys_db = _make_sysdb(observability_query_timeout_sec=0)
+    try:
+        assert sys_db._observability_query_timeout_ms is None
+        with sys_db._observability_query() as c:
+            assert c.execute(sa.text("SHOW statement_timeout")).scalar() == "0"
+    finally:
+        sys_db.destroy()
+
+
+def test_configured_observability_query_timeout(
+    skip_with_sqlite: None, config: DBOSConfig
+) -> None:
+    config["observability_query_timeout_sec"] = 5
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+    DBOS.launch()
+    try:
+        assert dbos._sys_db._observability_query_timeout_ms == 5000
+        with dbos._sys_db._observability_query() as c:
+            assert c.execute(sa.text("SHOW statement_timeout")).scalar() == "5s"
+    finally:
+        DBOS.destroy(destroy_registry=True)
+
+
+def test_client_observability_query_timeout(
+    skip_with_sqlite: None, config: DBOSConfig, dbos: DBOS
+) -> None:
+    system_database_url = config["system_database_url"]
+    assert system_database_url is not None
+    client = DBOSClient(
+        system_database_url=system_database_url,
+        observability_query_timeout_sec=5,
+    )
+    try:
+        assert client._sys_db._observability_query_timeout_ms == 5000
+    finally:
+        client.destroy()
+
+
+def test_observability_queries_still_return_rows(dbos: DBOS) -> None:
+    """The timeout must not disturb a query that finishes inside it."""
+
+    @DBOS.workflow()
+    def simple_workflow() -> int:
+        return 1
+
+    assert simple_workflow() == 1
+    workflows = DBOS.list_workflows()
+    assert len(workflows) == 1
+    assert DBOS.list_workflow_steps(workflows[0].workflow_id) is not None
