@@ -142,6 +142,14 @@ class SQLiteSystemDatabase(SystemDatabase):
         """Check if the error is a unique constraint violation in SQLite."""
         return "UNIQUE constraint failed" in str(dbapi_error.orig)
 
+    def _is_serialization_error(self, dbapi_error: DBAPIError) -> bool:
+        """Check if the error is a serialization/concurrency error in SQLite."""
+        # SQLite database is locked or busy errors
+        error_msg = str(dbapi_error.orig).lower()
+        return (
+            "database is locked" in error_msg or "database table is locked" in error_msg
+        )
+
     def _attributes_contains_clause(
         self, attributes: Dict[str, Any]
     ) -> sa.ColumnElement[bool]:
