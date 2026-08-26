@@ -81,10 +81,14 @@ class DBOSQueryTimeoutError(DBOSException):
     """Exception raised when an observability query exceeds its statement timeout."""
 
     def __init__(self, timeout_seconds: float):
+        self.timeout_seconds = timeout_seconds
         super().__init__(
             f"This query was cancelled after exceeding its {timeout_seconds:g}s statement timeout.",
             dbos_error_code=DBOSErrorCode.QueryTimeout.value,
         )
+
+    def __reduce__(self) -> Any:
+        return (self.__class__, (self.timeout_seconds,))
 
 
 class DBOSConflictingWorkflowError(DBOSException):

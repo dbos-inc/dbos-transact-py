@@ -2,7 +2,6 @@ import asyncio
 import datetime
 import functools
 import json
-import math
 import random
 import sys
 import threading
@@ -45,6 +44,7 @@ from dbos._utils import (
 )
 
 from ._context import DBOSContext, get_local_dbos_context, validate_workflow_attributes
+from ._dbos_config import _validate_observability_query_timeout_sec
 from ._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
@@ -695,6 +695,7 @@ class SystemDatabase(ABC):
         # db_retry trusts the text-based SQLite retriability heuristic only on SQLite.
         self._is_sqlite = system_database_url.startswith("sqlite")
         # Statement timeout for observability reads, in ms. Unset takes the default; non-positive disables the cap.
+        _validate_observability_query_timeout_sec(observability_query_timeout_sec)
         timeout_sec = (
             observability_query_timeout_sec
             if observability_query_timeout_sec is not None
@@ -704,7 +705,7 @@ class SystemDatabase(ABC):
             # Floor at 1ms: PostgreSQL reads 0 as "no timeout", so truncating a
             # sub-millisecond request to 0 would hand back the loosest cap, not the tightest.
             max(1, int(timeout_sec * 1000))
-            if math.isfinite(timeout_sec) and timeout_sec > 0
+            if timeout_sec > 0
             else None
         )
 

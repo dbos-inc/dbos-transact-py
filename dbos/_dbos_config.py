@@ -161,6 +161,14 @@ def _default_run_admin_server() -> bool:
     return GlobalParams.dbos_cloud
 
 
+def _validate_observability_query_timeout_sec(value: Optional[float]) -> None:
+    # Reject NaN/inf: the timeout becomes an integer number of milliseconds.
+    if value is not None and not math.isfinite(value):
+        raise DBOSInitializationError(
+            f"observability_query_timeout_sec must be a finite number, got {value}"
+        )
+
+
 def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     if "name" not in config:
         raise DBOSInitializationError(f"Configuration must specify an application name")
@@ -228,11 +236,7 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         translated_config["runtimeConfig"]["notification_coalesce_sec"] = coalesce
     if "observability_query_timeout_sec" in config:
         query_timeout = config["observability_query_timeout_sec"]
-        # Reject NaN/inf too: the timeout becomes an integer number of milliseconds.
-        if query_timeout is not None and not math.isfinite(query_timeout):
-            raise DBOSInitializationError(
-                f"observability_query_timeout_sec must be a finite number, got {query_timeout}"
-            )
+        _validate_observability_query_timeout_sec(query_timeout)
         translated_config["runtimeConfig"][
             "observability_query_timeout_sec"
         ] = query_timeout

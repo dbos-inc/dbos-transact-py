@@ -19,6 +19,8 @@ from dbos import (
     pydantic_args_validator,
 )
 from dbos._client import DBOSClient
+from dbos._core import _serialize_exception_for_persistence
+from dbos._error import DBOSQueryTimeoutError
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import (
     DBOSDefaultSerializer,
@@ -570,6 +572,18 @@ def test_serialize_exception_for_persistence_broken_str() -> None:
     # And it round-trips to a readable, generic error naming the original class.
     restored = deserialize_exception(out, None, DBOSDefaultSerializer)
     assert "_BrokenStrUnpicklable" in repr(restored)
+
+
+def test_query_timeout_error_round_trips() -> None:
+    """Regression: without __reduce__, pickle rebuilt this as cls(message) and the
+    {:g} format raised, leaving an error row get_result() could never deserialize."""
+    for timeout_seconds in (30.0, 0.5):
+        err = DBOSQueryTimeoutError(timeout_seconds)
+        out = _serialize_exception_for_persistence(err, None, DBOSDefaultSerializer)
+        restored = deserialize_exception(out, None, DBOSDefaultSerializer)
+        assert isinstance(restored, DBOSQueryTimeoutError)
+        assert restored.timeout_seconds == timeout_seconds
+        assert str(restored) == str(err)
 
 
 @pytest.mark.asyncio
