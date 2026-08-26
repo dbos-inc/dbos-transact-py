@@ -2343,31 +2343,32 @@ class SystemDatabase(ABC):
             if offset is not None:
                 query = query.offset(offset)
             rows = c.execute(query).fetchall()
-            steps = []
-            for row in rows:
-                if load_output:
-                    _, output, exception = safe_deserialize(
-                        self.serializer,
-                        row[7],
-                        workflow_id,
-                        serialized_input=None,
-                        serialized_output=row[2],
-                        serialized_exception=row[3],
-                    )
-                else:
-                    output = None
-                    exception = None
-                step = StepInfo(
-                    function_id=row[0],
-                    function_name=row[1],
-                    output=output,
-                    error=exception,
-                    child_workflow_id=row[4],
-                    started_at_epoch_ms=row[5],
-                    completed_at_epoch_ms=row[6],
+
+        steps = []
+        for row in rows:
+            if load_output:
+                _, output, exception = safe_deserialize(
+                    self.serializer,
+                    row[7],
+                    workflow_id,
+                    serialized_input=None,
+                    serialized_output=row[2],
+                    serialized_exception=row[3],
                 )
-                steps.append(step)
-            return steps
+            else:
+                output = None
+                exception = None
+            step = StepInfo(
+                function_id=row[0],
+                function_name=row[1],
+                output=output,
+                error=exception,
+                child_workflow_id=row[4],
+                started_at_epoch_ms=row[5],
+                completed_at_epoch_ms=row[6],
+            )
+            steps.append(step)
+        return steps
 
     def get_workflow_aggregates(
         self,
@@ -3930,13 +3931,14 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_events.c.serialization,
                 ).where(SystemSchema.workflow_events.c.workflow_uuid == workflow_id)
             ).fetchall()
-            events: Dict[str, Any] = {}
-            for row in rows:
-                key = row[0]
-                value = deserialize_value(row[1], row[2], self.serializer)
-                events[key] = value
 
-            return events
+        events: Dict[str, Any] = {}
+        for row in rows:
+            key = row[0]
+            value = deserialize_value(row[1], row[2], self.serializer)
+            events[key] = value
+
+        return events
 
     def get_all_notifications(self, workflow_id: str) -> List[NotificationInfo]:
         """Get all notifications sent to a workflow."""
@@ -3952,20 +3954,21 @@ class SystemDatabase(ABC):
                 .where(SystemSchema.notifications.c.destination_uuid == workflow_id)
                 .order_by(SystemSchema.notifications.c.created_at_epoch_ms)
             ).fetchall()
-            results: List[NotificationInfo] = []
-            for row in rows:
-                topic = row[0]
-                if topic == _dbos_null_topic:
-                    topic = None
-                results.append(
-                    {
-                        "topic": topic,
-                        "message": deserialize_value(row[1], row[2], self.serializer),
-                        "created_at_epoch_ms": row[3],
-                        "consumed": row[4],
-                    }
-                )
-            return results
+
+        results: List[NotificationInfo] = []
+        for row in rows:
+            topic = row[0]
+            if topic == _dbos_null_topic:
+                topic = None
+            results.append(
+                {
+                    "topic": topic,
+                    "message": deserialize_value(row[1], row[2], self.serializer),
+                    "created_at_epoch_ms": row[3],
+                    "consumed": row[4],
+                }
+            )
+        return results
 
     def get_all_stream_entries(self, workflow_id: str) -> Dict[str, List[Any]]:
         """Get all stream entries for a workflow.
@@ -3986,22 +3989,23 @@ class SystemDatabase(ABC):
                     SystemSchema.streams.c.offset,
                 )
             ).fetchall()
-            streams: Dict[str, List[Any]] = {}
-            closed: Set[str] = set()
-            for row in rows:
-                key = row[0]
-                value_str = row[1]
-                serialization = row[3]
-                value = deserialize_value(value_str, serialization, self.serializer)
-                if key in closed:
-                    continue
-                if is_stream_closed_sentinel(value):
-                    # End the stream where read_stream does, so the two never disagree.
-                    closed.add(key)
-                    streams.setdefault(key, [])
-                    continue
-                streams.setdefault(key, []).append(value)
-            return streams
+
+        streams: Dict[str, List[Any]] = {}
+        closed: Set[str] = set()
+        for row in rows:
+            key = row[0]
+            value_str = row[1]
+            serialization = row[3]
+            value = deserialize_value(value_str, serialization, self.serializer)
+            if key in closed:
+                continue
+            if is_stream_closed_sentinel(value):
+                # End the stream where read_stream does, so the two never disagree.
+                closed.add(key)
+                streams.setdefault(key, [])
+                continue
+            streams.setdefault(key, []).append(value)
+        return streams
 
     @db_retry()
     def get_event_setup(
@@ -5520,14 +5524,6 @@ class SystemDatabase(ABC):
             )
 
             workflow_results = c.execute(workflow_query).fetchall()
-            for row in workflow_results:
-                metrics.append(
-                    MetricData(
-                        metric_type="workflow_count",
-                        metric_name=row[0],
-                        value=row[1],
-                    )
-                )
 
             # Query step metrics
             step_query = (
@@ -5552,14 +5548,23 @@ class SystemDatabase(ABC):
             )
 
             step_results = c.execute(step_query).fetchall()
-            for row in step_results:
-                metrics.append(
-                    MetricData(
-                        metric_type="step_count",
-                        metric_name=row[0],
-                        value=row[1],
-                    )
+
+        for row in workflow_results:
+            metrics.append(
+                MetricData(
+                    metric_type="workflow_count",
+                    metric_name=row[0],
+                    value=row[1],
                 )
+            )
+        for row in step_results:
+            metrics.append(
+                MetricData(
+                    metric_type="step_count",
+                    metric_name=row[0],
+                    value=row[1],
+                )
+            )
 
         return metrics
 
@@ -6355,16 +6360,17 @@ class SystemDatabase(ABC):
                 )
                 .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
             ).fetchall()
-            return [
-                VersionInfo(
-                    version_id=row[0],
-                    version_name=row[1],
-                    version_timestamp=row[2],
-                    created_at=row[3],
-                    application_name=row[4],
-                )
-                for row in rows
-            ]
+
+        return [
+            VersionInfo(
+                version_id=row[0],
+                version_name=row[1],
+                version_timestamp=row[2],
+                created_at=row[3],
+                application_name=row[4],
+            )
+            for row in rows
+        ]
 
     # ── Queue Registration ──────────────────────────────────────
 
