@@ -809,12 +809,13 @@ class SystemDatabase(ABC):
         pass
 
     def _now_ms_sql(self) -> Any:
+        # Cast to BIGINT: EXTRACT yields numeric, which casts any bigint column compared against it, costing that column its index.
         # SQLite's CURRENT_TIMESTAMP is second-precision; use unixepoch('subsec') for ms.
         if self.engine.dialect.name == "sqlite":
             if sys.version_info >= (3, 12):
-                return sa.func.unixepoch("subsec") * 1000
-            return sa.func.strftime("%s", "now") * 1000
-        return sa.func.extract("epoch", sa.func.now()) * 1000
+                return sa.cast(sa.func.unixepoch("subsec") * 1000, sa.BigInteger)
+            return sa.cast(sa.func.strftime("%s", "now") * 1000, sa.BigInteger)
+        return sa.cast(sa.func.extract("epoch", sa.func.now()) * 1000, sa.BigInteger)
 
     @staticmethod
     def _name_filter(
@@ -1458,7 +1459,7 @@ class SystemDatabase(ABC):
                         sa.select(
                             sa.literal(orig_id).label("orig_id"),
                             sa.literal(fork_id).label("fork_id"),
-                            sa.literal(step).label("start_step"),
+                            sa.literal(step, sa.BigInteger).label("start_step"),
                             # Cast, since an unclaimed fork makes this a bare NULL the union cannot type.
                             sa.cast(sa.literal(fork_owners[fork_id]), sa.Text).label(
                                 "owner"
@@ -2077,34 +2078,42 @@ class SystemDatabase(ABC):
         if start_time:
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
-                >= datetime.datetime.fromisoformat(start_time).timestamp() * 1000
+                >= int(datetime.datetime.fromisoformat(start_time).timestamp() * 1000)
             )
         if end_time:
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
-                <= datetime.datetime.fromisoformat(end_time).timestamp() * 1000
+                <= int(datetime.datetime.fromisoformat(end_time).timestamp() * 1000)
             )
         if completed_after:
             query = query.where(
                 SystemSchema.workflow_status.c.completed_at
-                >= datetime.datetime.fromisoformat(completed_after).timestamp() * 1000
+                >= int(
+                    datetime.datetime.fromisoformat(completed_after).timestamp() * 1000
+                )
             )
         if completed_before:
             query = query.where(
                 SystemSchema.workflow_status.c.completed_at
-                <= datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
+                <= int(
+                    datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
+                )
             )
         # dequeued_after/before filter on started_at_epoch_ms: that column is
         # populated on dequeue and surfaced as WorkflowStatus.dequeued_at.
         if dequeued_after:
             query = query.where(
                 SystemSchema.workflow_status.c.started_at_epoch_ms
-                >= datetime.datetime.fromisoformat(dequeued_after).timestamp() * 1000
+                >= int(
+                    datetime.datetime.fromisoformat(dequeued_after).timestamp() * 1000
+                )
             )
         if dequeued_before:
             query = query.where(
                 SystemSchema.workflow_status.c.started_at_epoch_ms
-                <= datetime.datetime.fromisoformat(dequeued_before).timestamp() * 1000
+                <= int(
+                    datetime.datetime.fromisoformat(dequeued_before).timestamp() * 1000
+                )
             )
         if status_list:
             query = query.where(SystemSchema.workflow_status.c.status.in_(status_list))
@@ -2378,10 +2387,8 @@ class SystemDatabase(ABC):
 
         if time_bucket_size_ms is not None:
             created_at = SystemSchema.workflow_status.c.created_at
-            bucket = sa.literal(time_bucket_size_ms)
-            time_bucket_col = (
-                sa.cast(func.floor(created_at / bucket), sa.BigInteger) * bucket
-            ).label("time_bucket")
+            bucket = sa.literal(time_bucket_size_ms, sa.BigInteger)
+            time_bucket_col = ((created_at // bucket) * bucket).label("time_bucket")
             group_names.append("time_bucket")
             group_columns.append(time_bucket_col)
 
@@ -2433,34 +2440,42 @@ class SystemDatabase(ABC):
         if start_time:
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
-                >= datetime.datetime.fromisoformat(start_time).timestamp() * 1000
+                >= int(datetime.datetime.fromisoformat(start_time).timestamp() * 1000)
             )
         if end_time:
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
-                <= datetime.datetime.fromisoformat(end_time).timestamp() * 1000
+                <= int(datetime.datetime.fromisoformat(end_time).timestamp() * 1000)
             )
         if completed_after:
             query = query.where(
                 SystemSchema.workflow_status.c.completed_at
-                >= datetime.datetime.fromisoformat(completed_after).timestamp() * 1000
+                >= int(
+                    datetime.datetime.fromisoformat(completed_after).timestamp() * 1000
+                )
             )
         if completed_before:
             query = query.where(
                 SystemSchema.workflow_status.c.completed_at
-                <= datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
+                <= int(
+                    datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
+                )
             )
         # dequeued_after/before filter on started_at_epoch_ms: that column is
         # populated on dequeue and surfaced as WorkflowStatus.dequeued_at.
         if dequeued_after:
             query = query.where(
                 SystemSchema.workflow_status.c.started_at_epoch_ms
-                >= datetime.datetime.fromisoformat(dequeued_after).timestamp() * 1000
+                >= int(
+                    datetime.datetime.fromisoformat(dequeued_after).timestamp() * 1000
+                )
             )
         if dequeued_before:
             query = query.where(
                 SystemSchema.workflow_status.c.started_at_epoch_ms
-                <= datetime.datetime.fromisoformat(dequeued_before).timestamp() * 1000
+                <= int(
+                    datetime.datetime.fromisoformat(dequeued_before).timestamp() * 1000
+                )
             )
         if name:
             query = query.where(SystemSchema.workflow_status.c.name.in_(name))
@@ -2620,10 +2635,8 @@ class SystemDatabase(ABC):
             # Bucket on completed_at_epoch_ms — it's the indexed timestamp on
             # this table.
             completed_at = SystemSchema.operation_outputs.c.completed_at_epoch_ms
-            bucket = sa.literal(time_bucket_size_ms)
-            time_bucket_col = (
-                sa.cast(func.floor(completed_at / bucket), sa.BigInteger) * bucket
-            ).label("time_bucket")
+            bucket = sa.literal(time_bucket_size_ms, sa.BigInteger)
+            time_bucket_col = ((completed_at // bucket) * bucket).label("time_bucket")
             group_names.append("time_bucket")
             group_columns.append(time_bucket_col)
 
@@ -2676,12 +2689,16 @@ class SystemDatabase(ABC):
         if completed_after:
             query = query.where(
                 SystemSchema.operation_outputs.c.completed_at_epoch_ms
-                >= datetime.datetime.fromisoformat(completed_after).timestamp() * 1000
+                >= int(
+                    datetime.datetime.fromisoformat(completed_after).timestamp() * 1000
+                )
             )
         if completed_before:
             query = query.where(
                 SystemSchema.operation_outputs.c.completed_at_epoch_ms
-                <= datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
+                <= int(
+                    datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
+                )
             )
         query = query.where(
             self._observability_filter(
@@ -4256,7 +4273,7 @@ class SystemDatabase(ABC):
                     sa.select(sa.func.count())
                     .select_from(ws)
                     .where(ws.c.queue_name == queue.name)
-                    .where(ws.c.rate_limited == True)
+                    .where(ws.c.rate_limited == sa.literal_column("TRUE"))
                     .where(
                         ws.c.status.notin_(
                             [
@@ -5274,7 +5291,8 @@ class SystemDatabase(ABC):
 
         # Delete all workflows older than cutoff that are NOT PENDING, ENQUEUED, or DELAYED
         gc_filter = sa.and_(
-            SystemSchema.workflow_status.c.created_at < cutoff_epoch_timestamp_ms,
+            SystemSchema.workflow_status.c.created_at
+            < sa.literal(cutoff_epoch_timestamp_ms, sa.BigInteger),
             ~SystemSchema.workflow_status.c.status.in_(
                 [
                     WorkflowStatusString.PENDING.value,
@@ -5366,7 +5384,7 @@ class SystemDatabase(ABC):
             pending_enqueued_result = c.execute(
                 sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
                     SystemSchema.workflow_status.c.created_at
-                    < cutoff_epoch_timestamp_ms,
+                    < sa.literal(cutoff_epoch_timestamp_ms, sa.BigInteger),
                     self._name_filter(
                         SystemSchema.workflow_status.c.application_name, self.app_name
                     ),
@@ -5392,7 +5410,7 @@ class SystemDatabase(ABC):
                         ]
                     ),
                     SystemSchema.workflow_status.c.created_at
-                    <= cutoff_epoch_timestamp_ms,
+                    <= sa.literal(cutoff_epoch_timestamp_ms, sa.BigInteger),
                     self._name_filter(
                         SystemSchema.workflow_status.c.application_name, self.app_name
                     ),

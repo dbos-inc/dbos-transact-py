@@ -3678,6 +3678,67 @@ def test_partitioned_batch_dequeue_sqlite_plan(dbos: DBOS) -> None:
     assert not [d for d in details if d.startswith("SCAN") and "workflow_status" in d]
 
 
+def test_rate_limiter_query_plan(dbos: DBOS) -> None:
+    """The limiter's remaining-slots count must seek idx_workflow_status_rate_limited on
+    both of its columns, else it rescans every workflow the queue ever rate-limited."""
+
+    queue = Queue(
+        f"limiter-plan-{uuid.uuid4().hex[:8]}", limiter={"limit": 5, "period": 60}
+    )
+
+    captured: List[Any] = []
+
+    def before_cursor_execute(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        # The remaining-slots count is the only rate_limited read the sweep emits.
+        if (
+            statement.strip().startswith("SELECT count(*)")
+            and "rate_limited" in statement
+        ):
+            captured.append((statement, parameters))
+
+    from sqlalchemy import event
+
+    event.listen(dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute)
+    try:
+        assert (
+            dbos._sys_db.start_queued_workflows(
+                queue, GlobalParams.executor_id, GlobalParams.app_version, None
+            )
+            == []
+        )
+    finally:
+        event.remove(
+            dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute
+        )
+    assert captured
+    statement, parameters = captured[0]
+    with dbos._sys_db.engine.begin() as conn:
+        if using_sqlite():
+            plan = conn.exec_driver_sql(
+                f"EXPLAIN QUERY PLAN {statement}", parameters
+            ).fetchall()
+        else:
+            # A near-empty table plans as a seq scan whatever the query shape, so price that out.
+            conn.exec_driver_sql("SET LOCAL enable_seqscan = off")
+            plan = conn.exec_driver_sql(f"EXPLAIN {statement}", parameters).fetchall()
+    details = [str(row[-1]) for row in plan]
+    assert any("idx_workflow_status_rate_limited" in d for d in details)
+    # The window bound must ride the index too: as an index condition, not a filter applied after every rate-limited row is fetched.
+    assert any(
+        "started_at_epoch_ms" in d
+        for d in details
+        if "Index Cond" in d or "USING INDEX" in d
+    )
+    assert not [d for d in details if d.startswith("SCAN") or "Seq Scan" in d]
+
+
 def test_partitioned_queue_global_exclusivity(
     dbos: DBOS,
     monkeypatch: pytest.MonkeyPatch,
