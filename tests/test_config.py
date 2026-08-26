@@ -20,6 +20,8 @@ from dbos._dbos_config import (
     translate_dbos_config_to_config_file,
 )
 from dbos._error import DBOSException, DBOSInitializationError
+from dbos._serialization import DefaultSerializer
+from dbos._sys_db import SystemDatabase
 from dbos._utils import GlobalParams
 
 mock_filename = "dbos-config.yaml"
@@ -669,6 +671,39 @@ def test_translate_dbosconfig_notification_coalesce_sec():
                 {"name": "test-app", "notification_coalesce_sec": bad}
             )
         assert "notification_coalesce_sec" in str(exc_info.value)
+
+
+def test_translate_dbosconfig_observability_query_timeout_sec():
+    # A valid value is threaded into runtimeConfig, including a non-positive one, which disables the cap.
+    for ok_value in [5.0, 0]:
+        ok: DBOSConfig = {
+            "name": "test-app",
+            "observability_query_timeout_sec": ok_value,
+        }
+        translated = translate_dbos_config_to_config_file(ok)
+        assert (
+            translated["runtimeConfig"]["observability_query_timeout_sec"] == ok_value
+        )
+
+    # NaN/inf are rejected: the timeout becomes an integer number of milliseconds.
+    for bad in [float("nan"), float("inf")]:
+        with pytest.raises(DBOSInitializationError) as exc_info:
+            translate_dbos_config_to_config_file(
+                {"name": "test-app", "observability_query_timeout_sec": bad}
+            )
+        assert "observability_query_timeout_sec" in str(exc_info.value)
+
+        with pytest.raises(DBOSInitializationError) as exc_info:
+            SystemDatabase.create(
+                system_database_url="sqlite:///dbos.sqlite",
+                engine_kwargs={},
+                engine=None,
+                schema=None,
+                serializer=DefaultSerializer(),
+                executor_id=None,
+                observability_query_timeout_sec=bad,
+            )
+        assert "observability_query_timeout_sec" in str(exc_info.value)
 
 
 def test_translate_dbosconfig_run_migrations():

@@ -51,6 +51,7 @@ class DBOSConfig(TypedDict, total=False):
         run_migrations (bool): Whether to create and migrate the system database on launch. Defaults to True. Set to False for a process that must not alter the schema, such as one whose database role cannot run DDL, or a deployment that migrates out of band with `dbos migrate`. Launch then verifies the schema instead: a system database that is missing, or behind the version this build requires, fails launch rather than being created or migrated.
         notification_listener_polling_interval_sec (float): Polling interval in seconds for the notification listener background process. Defaults to 1.0. Minimum value is 0.001. Lower values can speed up test execution.
         notification_coalesce_sec (float): Interval in seconds for coalescing LISTEN/NOTIFY notifications (streams and events) pushed off the write path. Bounds read latency and caps the rate of notifying commits independent of write throughput. Defaults to 0.01. Minimum value is 0.001.
+        observability_query_timeout_sec (float): Statement timeout, in seconds, for read-only observability queries against the system database. Defaults to 30.0.
         scheduler_polling_interval_sec (float): Polling interval in seconds for the scheduler thread to detect new workflow schedules. Defaults to 30.0.
         kafka_queue_polling_interval_sec (float): Polling interval in seconds for the internal queues on which Kafka consumer workflows run (_dbos_kafka_queue and _dbos_kafka_ordered_queue). Defaults to 1.0. Minimum value is 0.001.
         otel_attribute_format (Literal["legacy", "semconv"]): How span attribute names are emitted to OTLP.
@@ -90,6 +91,7 @@ class DBOSConfig(TypedDict, total=False):
     max_executor_threads: Optional[int]
     notification_listener_polling_interval_sec: Optional[float]
     notification_coalesce_sec: Optional[float]
+    observability_query_timeout_sec: Optional[float]
     scheduler_polling_interval_sec: Optional[float]
     kafka_queue_polling_interval_sec: Optional[float]
     otel_attribute_format: Optional[Literal["legacy", "semconv"]]
@@ -103,6 +105,7 @@ class RuntimeConfig(TypedDict, total=False):
     max_executor_threads: Optional[int]
     notification_listener_polling_interval_sec: Optional[float]
     notification_coalesce_sec: Optional[float]
+    observability_query_timeout_sec: Optional[float]
     scheduler_polling_interval_sec: Optional[float]
     kafka_queue_polling_interval_sec: Optional[float]
 
@@ -156,6 +159,14 @@ class ConfigFile(TypedDict, total=False):
 def _default_run_admin_server() -> bool:
     # The admin server is deprecated and off by default, except in DBOS Cloud, which depends on it.
     return GlobalParams.dbos_cloud
+
+
+def _validate_observability_query_timeout_sec(value: Optional[float]) -> None:
+    # Reject NaN/inf: the timeout becomes an integer number of milliseconds.
+    if value is not None and not math.isfinite(value):
+        raise DBOSInitializationError(
+            f"observability_query_timeout_sec must be a finite number, got {value}"
+        )
 
 
 def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
@@ -223,6 +234,12 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
                 f"notification_coalesce_sec must be a finite number at least 0.001 seconds, got {coalesce}"
             )
         translated_config["runtimeConfig"]["notification_coalesce_sec"] = coalesce
+    if "observability_query_timeout_sec" in config:
+        query_timeout = config["observability_query_timeout_sec"]
+        _validate_observability_query_timeout_sec(query_timeout)
+        translated_config["runtimeConfig"][
+            "observability_query_timeout_sec"
+        ] = query_timeout
     if "scheduler_polling_interval_sec" in config:
         translated_config["runtimeConfig"]["scheduler_polling_interval_sec"] = config[
             "scheduler_polling_interval_sec"

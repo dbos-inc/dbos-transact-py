@@ -5,6 +5,9 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from dbos import DBOS, DBOSConfig
+from dbos._error import DBOSQueryTimeoutError
+from dbos._serialization import DefaultSerializer
+from dbos._sys_db import SystemDatabase
 
 
 def test_cockroachdb() -> None:
@@ -213,3 +216,42 @@ def test_cockroachdb_reset_truncate() -> None:
         with cleanup_engine.connect() as conn:
             conn.execute(text(f"DROP DATABASE IF EXISTS {db_name} CASCADE"))
         cleanup_engine.dispose()
+
+
+def test_cockroachdb_observability_query_timeout() -> None:
+    """CockroachDB honors the SET LOCAL statement_timeout that caps observability queries."""
+    database_url = os.environ.get("DBOS_COCKROACHDB_URL")
+    if database_url is None:
+        pytest.skip("No CockroachDB database URL provided")
+
+    # No tables are read, so this needs neither its own database nor migrations.
+    sys_db = SystemDatabase.create(
+        system_database_url=database_url,
+        engine_kwargs={},
+        engine=create_engine(database_url),
+        schema="dbos",
+        serializer=DefaultSerializer(),
+        executor_id=None,
+        observability_query_timeout_sec=0.5,
+    )
+    try:
+        with sys_db._observability_query() as conn:
+            # CockroachDB renders the setting in milliseconds, PostgreSQL as "500ms".
+            assert conn.execute(text("SHOW statement_timeout")).scalar() in (
+                "500",
+                "500ms",
+            )
+
+        # SET LOCAL, so the cap does not ride the pooled connection into other queries.
+        with sys_db.engine.begin() as conn:
+            assert conn.execute(text("SHOW statement_timeout")).scalar() == "0"
+
+        with pytest.raises(DBOSQueryTimeoutError):
+            with sys_db._observability_query() as conn:
+                conn.execute(text("SELECT pg_sleep(30)"))
+
+        # The cancelled query leaves its connection usable.
+        with sys_db.engine.begin() as conn:
+            assert conn.execute(text("SELECT 1")).scalar() == 1
+    finally:
+        sys_db.destroy()

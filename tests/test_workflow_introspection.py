@@ -10,13 +10,22 @@ import sqlalchemy as sa
 from sqlalchemy import event
 
 # Public API
-from dbos import DBOS, Queue, SetWorkflowAttributes, SetWorkflowID, WorkflowStatusString
-from dbos._error import DBOSWorkflowConflictIDError
+from dbos import (
+    DBOS,
+    DBOSClient,
+    DBOSConfig,
+    Queue,
+    SetWorkflowAttributes,
+    SetWorkflowID,
+    WorkflowStatusString,
+)
+from dbos._error import DBOSQueryTimeoutError, DBOSWorkflowConflictIDError
 from dbos._schemas.system_database import SystemSchema
-from dbos._sys_db import OperationResultInternal
+from dbos._serialization import DefaultSerializer
+from dbos._sys_db import OperationResultInternal, SystemDatabase
 from dbos._utils import GlobalParams
 
-from .conftest import retry_until_success, set_workflow_status
+from .conftest import postgres_urls, retry_until_success, set_workflow_status
 
 
 def test_list_workflow(dbos: DBOS) -> None:
@@ -2649,3 +2658,240 @@ def test_time_filters_bind_as_integers(dbos: DBOS) -> None:
         values = [v for parameters in captured for v in _bound_values(parameters)]
         assert not [v for v in values if isinstance(v, float)], name
         assert values.count(epoch_ms) == expected_bounds, name
+
+
+def _make_sysdb(pool_size: int = 2, **kwargs: Any) -> SystemDatabase:
+    """A second handle on the test system database, so a test can pick its timeout."""
+    return SystemDatabase.create(
+        system_database_url=postgres_urls()[1],
+        engine_kwargs={"pool_size": pool_size},
+        engine=None,
+        schema="dbos",
+        serializer=DefaultSerializer(),
+        executor_id=None,
+        **kwargs,
+    )
+
+
+def test_observability_queries_carry_a_statement_timeout(
+    skip_with_sqlite: None, dbos: DBOS
+) -> None:
+    with dbos._sys_db._observability_query() as c:
+        assert c.execute(sa.text("SHOW statement_timeout")).scalar() == "30s"
+
+
+def test_observability_statement_timeout_does_not_leak(
+    skip_with_sqlite: None, dbos: DBOS
+) -> None:
+    """SET LOCAL, so the cap dies with its transaction rather than riding the
+    pooled connection into unrelated queries."""
+    # A one-connection pool, so the next transaction is guaranteed the same session:
+    # against a larger pool this draws a different connection and proves nothing.
+    sys_db = _make_sysdb(pool_size=1)
+    try:
+        with sys_db._observability_query() as c:
+            assert c.execute(sa.text("SHOW statement_timeout")).scalar() == "30s"
+            session = id(c.connection.dbapi_connection)
+
+        with sys_db.engine.begin() as c:
+            assert id(c.connection.dbapi_connection) == session
+            assert c.execute(sa.text("SHOW statement_timeout")).scalar() == "0"
+    finally:
+        sys_db.destroy()
+
+
+def test_every_observability_query_sets_the_timeout(
+    skip_with_sqlite: None, dbos: DBOS
+) -> None:
+    """Each capped method must issue the cap on its own transaction. Reverting any
+    one of them to a plain engine.begin() has to fail here."""
+    sys_db = dbos._sys_db
+
+    @DBOS.workflow()
+    def simple_workflow() -> int:
+        return step()
+
+    @DBOS.step()
+    def step() -> int:
+        return 1
+
+    assert simple_workflow() == 1
+    wfid = DBOS.list_workflows()[0].workflow_id
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(hours=1)).isoformat()
+    end = (now + timedelta(hours=1)).isoformat()
+
+    cases: List[Tuple[str, Callable[[], Any]]] = [
+        ("list_workflows", lambda: sys_db.list_workflows()),
+        ("list_workflow_steps", lambda: sys_db.list_workflow_steps(wfid)),
+        (
+            "get_workflow_aggregates",
+            lambda: sys_db.get_workflow_aggregates(
+                group_by_status=True, select_count=True
+            ),
+        ),
+        (
+            "get_step_aggregates",
+            lambda: sys_db.get_step_aggregates(
+                group_by_function_name=True, select_count=True
+            ),
+        ),
+        ("get_metrics", lambda: sys_db.get_metrics(start, end)),
+        ("get_all_events", lambda: sys_db.get_all_events(wfid)),
+        ("get_all_notifications", lambda: sys_db.get_all_notifications(wfid)),
+        ("get_all_stream_entries", lambda: sys_db.get_all_stream_entries(wfid)),
+        ("list_application_versions", lambda: sys_db.list_application_versions()),
+    ]
+
+    captured: List[str] = []
+    test_thread = threading.get_ident()
+
+    def before_cursor_execute(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        # Queue pollers share this engine; only this thread's statements are ours.
+        if threading.get_ident() == test_thread:
+            captured.append(statement)
+
+    for name, call in cases:
+        captured.clear()
+        event.listen(sys_db.engine, "before_cursor_execute", before_cursor_execute)
+        try:
+            call()
+        finally:
+            event.remove(sys_db.engine, "before_cursor_execute", before_cursor_execute)
+        assert [s for s in captured if "statement_timeout" in s] == [
+            "SET LOCAL statement_timeout = 30000"
+        ], name
+
+
+def test_id_keyed_workflow_lookup_is_not_capped(
+    skip_with_sqlite: None, dbos: DBOS
+) -> None:
+    """A workflow_ids filter is a primary-key identity read, bounded by the ID list,
+    so it takes no cap: a status lookup must not fail the workflow that made it."""
+    sys_db = dbos._sys_db
+
+    @DBOS.workflow()
+    def simple_workflow() -> int:
+        return 1
+
+    assert simple_workflow() == 1
+    wfid = DBOS.list_workflows()[0].workflow_id
+
+    captured: List[str] = []
+    test_thread = threading.get_ident()
+
+    def before_cursor_execute(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        if threading.get_ident() == test_thread:
+            captured.append(statement)
+
+    cases: List[Tuple[str, Callable[[], Any]]] = [
+        ("list_workflows", lambda: sys_db.list_workflows(workflow_ids=[wfid])),
+        ("get_workflow_status", lambda: DBOS.get_workflow_status(wfid)),
+    ]
+
+    for name, call in cases:
+        captured.clear()
+        event.listen(sys_db.engine, "before_cursor_execute", before_cursor_execute)
+        try:
+            assert call() is not None, name
+        finally:
+            event.remove(sys_db.engine, "before_cursor_execute", before_cursor_execute)
+        assert [s for s in captured if "statement_timeout" in s] == [], name
+
+
+def test_observability_query_timeout_cancels_a_slow_query(
+    skip_with_sqlite: None, dbos: DBOS
+) -> None:
+    sys_db = _make_sysdb(observability_query_timeout_sec=0.3)
+    try:
+        with pytest.raises(DBOSQueryTimeoutError):
+            with sys_db._observability_query() as c:
+                c.execute(sa.text("SELECT pg_sleep(30)"))
+
+        # The cancelled query leaves its connection usable.
+        with sys_db.engine.begin() as c:
+            assert c.execute(sa.text("SELECT 1")).scalar() == 1
+    finally:
+        sys_db.destroy()
+
+
+def test_observability_query_timeout_can_be_disabled(
+    skip_with_sqlite: None, dbos: DBOS
+) -> None:
+    sys_db = _make_sysdb(observability_query_timeout_sec=0)
+    try:
+        assert sys_db._observability_query_timeout_ms is None
+        with sys_db._observability_query() as c:
+            assert c.execute(sa.text("SHOW statement_timeout")).scalar() == "0"
+    finally:
+        sys_db.destroy()
+
+
+def test_sub_millisecond_observability_query_timeout_still_caps(
+    skip_with_sqlite: None, dbos: DBOS
+) -> None:
+    """A sub-millisecond request must floor to 1ms, not truncate to 0, which PostgreSQL
+    reads as no timeout at all."""
+    sys_db = _make_sysdb(observability_query_timeout_sec=0.0005)
+    try:
+        assert sys_db._observability_query_timeout_ms == 1
+        with sys_db._observability_query() as c:
+            assert c.execute(sa.text("SHOW statement_timeout")).scalar() == "1ms"
+    finally:
+        sys_db.destroy()
+
+
+def test_configured_observability_query_timeout(
+    config: DBOSConfig, cleanup_test_databases: None, skip_with_sqlite: None
+) -> None:
+    config["observability_query_timeout_sec"] = 5
+    try:
+        dbos = DBOS(config=config)
+        DBOS.launch()
+        assert dbos._sys_db._observability_query_timeout_ms == 5000
+        with dbos._sys_db._observability_query() as c:
+            assert c.execute(sa.text("SHOW statement_timeout")).scalar() == "5s"
+    finally:
+        DBOS.destroy(destroy_registry=True)
+
+
+def test_client_observability_query_timeout(
+    skip_with_sqlite: None, config: DBOSConfig, dbos: DBOS
+) -> None:
+    system_database_url = config["system_database_url"]
+    assert system_database_url is not None
+    client = DBOSClient(
+        system_database_url=system_database_url,
+        observability_query_timeout_sec=5,
+    )
+    try:
+        assert client._sys_db._observability_query_timeout_ms == 5000
+    finally:
+        client.destroy()
+
+
+def test_observability_queries_still_return_rows(dbos: DBOS) -> None:
+    """The timeout must not disturb a query that finishes inside it."""
+
+    @DBOS.workflow()
+    def simple_workflow() -> int:
+        return 1
+
+    assert simple_workflow() == 1
+    workflows = DBOS.list_workflows()
+    assert len(workflows) == 1
+    assert DBOS.list_workflow_steps(workflows[0].workflow_id) is not None

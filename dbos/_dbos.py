@@ -607,6 +607,9 @@ class DBOS:
                     "sys_db_polling_concurrency"
                 ),
                 app_name=GlobalParams.app_name,
+                observability_query_timeout_sec=self._config.get(
+                    "runtimeConfig", {}
+                ).get("observability_query_timeout_sec"),
             )
             assert self._config["database"]["db_engine_kwargs"] is not None
             if self._config["database_url"]:

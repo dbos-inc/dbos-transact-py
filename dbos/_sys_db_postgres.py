@@ -126,6 +126,23 @@ class PostgresSystemDatabase(SystemDatabase):
                 self.notification_conn.dbapi_connection.close()
                 self.notification_conn.invalidate()
 
+    def _set_statement_timeout(self, conn: sa.Connection, timeout_ms: int) -> None:
+        """SET LOCAL, so the cap covers exactly this transaction and is reverted on
+        commit: a session-level SET would ride the pooled connection into unrelated
+        queries, or leak through a transaction-pooling proxy."""
+        # SET takes no bind parameters, so the value is interpolated; it is an int.
+        conn.execute(sa.text(f"SET LOCAL statement_timeout = {int(timeout_ms)}"))
+
+    def _is_statement_timeout(self, error: DBAPIError) -> bool:
+        """57014 is query_canceled, which is how statement_timeout cancels a query.
+        psycopg reports it as sqlstate, psycopg2 (which the CockroachDB dialect uses) as pgcode.
+        """
+        orig = error.orig
+        return "57014" in (
+            getattr(orig, "sqlstate", None),
+            getattr(orig, "pgcode", None),
+        )
+
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a unique constraint violation in PostgreSQL."""
         return dbapi_error.orig.sqlstate == "23505"  # type: ignore
