@@ -701,7 +701,9 @@ class SystemDatabase(ABC):
             else DEFAULT_OBSERVABILITY_QUERY_TIMEOUT_SEC
         )
         self._observability_query_timeout_ms: Optional[int] = (
-            int(timeout_sec * 1000)
+            # Floor at 1ms: PostgreSQL reads 0 as "no timeout", so truncating a
+            # sub-millisecond request to 0 would hand back the loosest cap, not the tightest.
+            max(1, int(timeout_sec * 1000))
             if math.isfinite(timeout_sec) and timeout_sec > 0
             else None
         )

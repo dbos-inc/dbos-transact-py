@@ -2660,11 +2660,11 @@ def test_time_filters_bind_as_integers(dbos: DBOS) -> None:
         assert values.count(epoch_ms) == expected_bounds, name
 
 
-def _make_sysdb(**kwargs: Any) -> SystemDatabase:
+def _make_sysdb(pool_size: int = 2, **kwargs: Any) -> SystemDatabase:
     """A second handle on the test system database, so a test can pick its timeout."""
     return SystemDatabase.create(
         system_database_url=postgres_urls()[1],
-        engine_kwargs={"pool_size": 2},
+        engine_kwargs={"pool_size": pool_size},
         engine=None,
         schema="dbos",
         serializer=DefaultSerializer(),
@@ -2679,9 +2679,95 @@ def test_observability_queries_carry_a_statement_timeout(
     with dbos._sys_db._observability_query() as c:
         assert c.execute(sa.text("SHOW statement_timeout")).scalar() == "30s"
 
-    # SET LOCAL, so the cap does not ride the pooled connection into other queries.
-    with dbos._sys_db.engine.begin() as c:
-        assert c.execute(sa.text("SHOW statement_timeout")).scalar() == "0"
+
+def test_observability_statement_timeout_does_not_leak(
+    skip_with_sqlite: None, dbos: DBOS
+) -> None:
+    """SET LOCAL, so the cap dies with its transaction rather than riding the
+    pooled connection into unrelated queries."""
+    # A one-connection pool, so the next transaction is guaranteed the same session:
+    # against a larger pool this draws a different connection and proves nothing.
+    sys_db = _make_sysdb(pool_size=1)
+    try:
+        with sys_db._observability_query() as c:
+            assert c.execute(sa.text("SHOW statement_timeout")).scalar() == "30s"
+            session = id(c.connection.dbapi_connection)
+
+        with sys_db.engine.begin() as c:
+            assert id(c.connection.dbapi_connection) == session
+            assert c.execute(sa.text("SHOW statement_timeout")).scalar() == "0"
+    finally:
+        sys_db.destroy()
+
+
+def test_every_observability_query_sets_the_timeout(
+    skip_with_sqlite: None, dbos: DBOS
+) -> None:
+    """Each capped method must issue the cap on its own transaction. Reverting any
+    one of them to a plain engine.begin() has to fail here."""
+    sys_db = dbos._sys_db
+
+    @DBOS.workflow()
+    def simple_workflow() -> int:
+        return step()
+
+    @DBOS.step()
+    def step() -> int:
+        return 1
+
+    assert simple_workflow() == 1
+    wfid = DBOS.list_workflows()[0].workflow_id
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(hours=1)).isoformat()
+    end = (now + timedelta(hours=1)).isoformat()
+
+    cases: List[Tuple[str, Callable[[], Any]]] = [
+        ("list_workflows", lambda: sys_db.list_workflows()),
+        ("list_workflow_steps", lambda: sys_db.list_workflow_steps(wfid)),
+        (
+            "get_workflow_aggregates",
+            lambda: sys_db.get_workflow_aggregates(
+                group_by_status=True, select_count=True
+            ),
+        ),
+        (
+            "get_step_aggregates",
+            lambda: sys_db.get_step_aggregates(
+                group_by_function_name=True, select_count=True
+            ),
+        ),
+        ("get_metrics", lambda: sys_db.get_metrics(start, end)),
+        ("get_all_events", lambda: sys_db.get_all_events(wfid)),
+        ("get_all_notifications", lambda: sys_db.get_all_notifications(wfid)),
+        ("get_all_stream_entries", lambda: sys_db.get_all_stream_entries(wfid)),
+        ("list_application_versions", lambda: sys_db.list_application_versions()),
+    ]
+
+    captured: List[str] = []
+    test_thread = threading.get_ident()
+
+    def before_cursor_execute(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        # Queue pollers share this engine; only this thread's statements are ours.
+        if threading.get_ident() == test_thread:
+            captured.append(statement)
+
+    for name, call in cases:
+        captured.clear()
+        event.listen(sys_db.engine, "before_cursor_execute", before_cursor_execute)
+        try:
+            call()
+        finally:
+            event.remove(sys_db.engine, "before_cursor_execute", before_cursor_execute)
+        assert [s for s in captured if "statement_timeout" in s] == [
+            "SET LOCAL statement_timeout = 30000"
+        ], name
 
 
 def test_observability_query_timeout_cancels_a_slow_query(
@@ -2712,14 +2798,27 @@ def test_observability_query_timeout_can_be_disabled(
         sys_db.destroy()
 
 
+def test_sub_millisecond_observability_query_timeout_still_caps(
+    skip_with_sqlite: None, dbos: DBOS
+) -> None:
+    """A sub-millisecond request must floor to 1ms, not truncate to 0, which PostgreSQL
+    reads as no timeout at all."""
+    sys_db = _make_sysdb(observability_query_timeout_sec=0.0005)
+    try:
+        assert sys_db._observability_query_timeout_ms == 1
+        with sys_db._observability_query() as c:
+            assert c.execute(sa.text("SHOW statement_timeout")).scalar() == "1ms"
+    finally:
+        sys_db.destroy()
+
+
 def test_configured_observability_query_timeout(
-    skip_with_sqlite: None, config: DBOSConfig
+    config: DBOSConfig, cleanup_test_databases: None, skip_with_sqlite: None
 ) -> None:
     config["observability_query_timeout_sec"] = 5
-    DBOS.destroy(destroy_registry=True)
-    dbos = DBOS(config=config)
-    DBOS.launch()
     try:
+        dbos = DBOS(config=config)
+        DBOS.launch()
         assert dbos._sys_db._observability_query_timeout_ms == 5000
         with dbos._sys_db._observability_query() as c:
             assert c.execute(sa.text("SHOW statement_timeout")).scalar() == "5s"
