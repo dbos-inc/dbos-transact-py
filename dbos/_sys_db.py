@@ -855,11 +855,12 @@ class SystemDatabase(ABC):
         return sa.or_(col.in_(names), col.is_(None))
 
     @contextmanager
-    def _observability_query(self) -> Iterator[sa.Connection]:
+    def _observability_query(self, *, capped: bool = True) -> Iterator[sa.Connection]:
         """A transaction for read-only introspection reads: workflow and step listings,
         aggregates, and metrics. Capped by a statement timeout, so one scanning a huge
-        table cannot hold back xmin for minutes and stall autovacuum database-wide."""
-        timeout_ms = self._observability_query_timeout_ms
+        table cannot hold back xmin for minutes and stall autovacuum database-wide.
+        capped=False for an identity read a primary key already bounds."""
+        timeout_ms = self._observability_query_timeout_ms if capped else None
         with self.engine.begin() as c:
             if timeout_ms is not None:
                 self._set_statement_timeout(c, timeout_ms)
@@ -2222,7 +2223,9 @@ class SystemDatabase(ABC):
         if offset:
             query = query.offset(offset)
 
-        with self._observability_query() as c:
+        # An ID-keyed read is an identity read, as for application_name above:
+        # workflow_uuid is the primary key, so the ID list already bounds it.
+        with self._observability_query(capped=not workflow_ids) as c:
             rows = c.execute(query).fetchall()
 
         infos: List[WorkflowStatus] = []

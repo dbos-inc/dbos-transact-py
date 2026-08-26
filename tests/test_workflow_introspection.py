@@ -2770,6 +2770,47 @@ def test_every_observability_query_sets_the_timeout(
         ], name
 
 
+def test_id_keyed_workflow_lookup_is_not_capped(
+    skip_with_sqlite: None, dbos: DBOS
+) -> None:
+    """A workflow_ids filter is a primary-key identity read, bounded by the ID list,
+    so it takes no cap: a status lookup must not fail the workflow that made it."""
+    sys_db = dbos._sys_db
+
+    @DBOS.workflow()
+    def simple_workflow() -> int:
+        return 1
+
+    assert simple_workflow() == 1
+    wfid = DBOS.list_workflows()[0].workflow_id
+
+    captured: List[str] = []
+    test_thread = threading.get_ident()
+
+    def before_cursor_execute(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        if threading.get_ident() == test_thread:
+            captured.append(statement)
+
+    for name, call in [
+        ("list_workflows", lambda: sys_db.list_workflows(workflow_ids=[wfid])),
+        ("get_workflow_status", lambda: DBOS.get_workflow_status(wfid)),
+    ]:
+        captured.clear()
+        event.listen(sys_db.engine, "before_cursor_execute", before_cursor_execute)
+        try:
+            assert call() is not None, name
+        finally:
+            event.remove(sys_db.engine, "before_cursor_execute", before_cursor_execute)
+        assert [s for s in captured if "statement_timeout" in s] == [], name
+
+
 def test_observability_query_timeout_cancels_a_slow_query(
     skip_with_sqlite: None, dbos: DBOS
 ) -> None:
