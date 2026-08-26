@@ -82,9 +82,7 @@ class DBOSQueryTimeoutError(DBOSException):
 
     def __init__(self, timeout_seconds: float):
         super().__init__(
-            f"This query was cancelled after exceeding its {timeout_seconds:g}s statement timeout. "
-            "Narrow the query (a shorter time range, more selective filters, a smaller limit) "
-            "or raise observability_query_timeout_sec.",
+            f"This query was cancelled after exceeding its {timeout_seconds:g}s statement timeout.",
             dbos_error_code=DBOSErrorCode.QueryTimeout.value,
         )
 
