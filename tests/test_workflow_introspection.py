@@ -2798,10 +2798,12 @@ def test_id_keyed_workflow_lookup_is_not_capped(
         if threading.get_ident() == test_thread:
             captured.append(statement)
 
-    for name, call in [
+    cases: List[Tuple[str, Callable[[], Any]]] = [
         ("list_workflows", lambda: sys_db.list_workflows(workflow_ids=[wfid])),
         ("get_workflow_status", lambda: DBOS.get_workflow_status(wfid)),
-    ]:
+    ]
+
+    for name, call in cases:
         captured.clear()
         event.listen(sys_db.engine, "before_cursor_execute", before_cursor_execute)
         try:

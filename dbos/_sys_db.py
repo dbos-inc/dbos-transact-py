@@ -16,7 +16,7 @@ from typing import (
     Awaitable,
     Callable,
     Dict,
-    Iterator,
+    Generator,
     List,
     Literal,
     Optional,
@@ -855,7 +855,9 @@ class SystemDatabase(ABC):
         return sa.or_(col.in_(names), col.is_(None))
 
     @contextmanager
-    def _observability_query(self, *, capped: bool = True) -> Iterator[sa.Connection]:
+    def _observability_query(
+        self, *, capped: bool = True
+    ) -> Generator[sa.Connection, None, None]:
         """A transaction for read-only introspection reads: workflow and step listings,
         aggregates, and metrics. Capped by a statement timeout, so one scanning a huge
         table cannot hold back xmin for minutes and stall autovacuum database-wide.
