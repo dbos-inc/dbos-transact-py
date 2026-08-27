@@ -1375,6 +1375,14 @@ def _status_timestamp(dbos: DBOS, workflow_id: str, column: str) -> Optional[int
     return None if value is None else int(value)
 
 
+def _cutoff_past_all_completions() -> int:
+    """A cutoff every completion so far falls strictly before. completed_at is stamped
+    by the database and rounded to the millisecond, while a wall-clock cutoff taken
+    right after a workflow finishes truncates, so the two can land on the same value
+    and spare the row. Only rows with no completed_at need to survive these cutoffs."""
+    return int(time.time() * 1000) + 1000
+
+
 def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> None:
     event = threading.Event()
     started = threading.Event()
@@ -1436,7 +1444,9 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
 
     # Garbage collect all previous workflows
     garbage_collect(
-        dbos, cutoff_epoch_timestamp_ms=int(time.time() * 1000), rows_threshold=None
+        dbos,
+        cutoff_epoch_timestamp_ms=_cutoff_past_all_completions(),
+        rows_threshold=None,
     )
     # Verify only the blocked workflow remains
     workflows = DBOS.list_workflows()
@@ -1606,7 +1616,7 @@ def test_garbage_collection_batched(
     try:
         garbage_collect(
             dbos,
-            cutoff_epoch_timestamp_ms=int(time.time() * 1000),
+            cutoff_epoch_timestamp_ms=_cutoff_past_all_completions(),
             rows_threshold=None,
             batch_size=batch_size,
         )
@@ -1645,7 +1655,7 @@ def test_garbage_collection_batched(
     assert handle.get_result() is not None
     garbage_collect(
         dbos,
-        cutoff_epoch_timestamp_ms=int(time.time() * 1000),
+        cutoff_epoch_timestamp_ms=_cutoff_past_all_completions(),
         rows_threshold=None,
         batch_size=1,
     )
@@ -1746,7 +1756,7 @@ def test_garbage_collection_batched_resumable(
     try:
         with pytest.raises(Exception, match="injected garbage collection failure"):
             dbos._sys_db.garbage_collect(
-                cutoff_epoch_timestamp_ms=int(time.time() * 1000),
+                cutoff_epoch_timestamp_ms=_cutoff_past_all_completions(),
                 rows_threshold=None,
                 batch_size=batch_size,
             )
@@ -1760,7 +1770,7 @@ def test_garbage_collection_batched_resumable(
 
     # rerunning GC completes deletion
     dbos._sys_db.garbage_collect(
-        cutoff_epoch_timestamp_ms=int(time.time() * 1000),
+        cutoff_epoch_timestamp_ms=_cutoff_past_all_completions(),
         rows_threshold=None,
         batch_size=batch_size,
     )

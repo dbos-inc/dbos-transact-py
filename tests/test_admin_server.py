@@ -744,7 +744,9 @@ def test_admin_garbage_collect(dbos: DBOS) -> None:
 
     response = requests.post(
         f"http://localhost:3001/dbos-garbage-collect",
-        json={"cutoff_epoch_timestamp_ms": int(time.time() * 1000)},
+        # +1s: completed_at is DB-stamped and rounded, so a bare wall-clock cutoff
+        # taken right after the workflow finishes can tie with it and spare the row.
+        json={"cutoff_epoch_timestamp_ms": int(time.time() * 1000) + 1000},
         timeout=5,
     )
     response.raise_for_status()
