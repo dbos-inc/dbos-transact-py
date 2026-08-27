@@ -84,6 +84,10 @@ def insert_foreign_workflow(
                 queue_name=queue_name,
                 created_at=1,
                 updated_at=1,
+                # Terminal rows carry completed_at, as ones written by DBOS itself do
+                completed_at=(
+                    None if status in ("PENDING", "ENQUEUED", "DELAYED") else 1
+                ),
                 priority=0,
                 application_name=application_name,
                 inputs='{"args": [], "kwargs": {}}',

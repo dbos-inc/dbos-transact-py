@@ -1493,6 +1493,35 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     assert len(workflows) == num_workflows
 
 
+def test_garbage_collection_keys_on_completion(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
+    """A workflow created before the cutoff but finished after it must survive."""
+    event = threading.Event()
+    started = threading.Event()
+
+    @DBOS.workflow()
+    def blocked_workflow() -> None:
+        started.set()
+        event.wait()
+
+    handle = DBOS.start_workflow(blocked_workflow)
+    # Capture the cutoff while the workflow is provably still running
+    assert started.wait(timeout=30)
+    cutoff = int(time.time() * 1000)
+    event.set()
+    handle.get_result()
+
+    garbage_collect(dbos, cutoff_epoch_timestamp_ms=cutoff, rows_threshold=None)
+    assert [w.workflow_id for w in DBOS.list_workflows()] == [handle.workflow_id]
+
+    # Once its completion falls before the cutoff, it is collected
+    garbage_collect(
+        dbos, cutoff_epoch_timestamp_ms=int(time.time() * 1000), rows_threshold=None
+    )
+    assert len(DBOS.list_workflows()) == 0
+
+
 # batch_size: 3 = short final batch, 5 = exact multiple, 20 = larger than all eligible rows
 @pytest.mark.parametrize("batch_size", [3, 5, 20])
 def test_garbage_collection_batched(
