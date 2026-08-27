@@ -1,7 +1,7 @@
 import threading
 import time
 import uuid
-from typing import Any
+from typing import Any, Optional
 
 import pytest
 import sqlalchemy as sa
@@ -1363,6 +1363,26 @@ def test_resume_and_fork_to_queue(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
+def _status_timestamp(dbos: DBOS, workflow_id: str, column: str) -> Optional[int]:
+    """Read a DB-stamped timestamp, so a test can derive its cutoff from the same
+    clock the rows were written with instead of racing the Python clock against it."""
+    with dbos._sys_db.engine.begin() as c:
+        value = c.execute(
+            sa.select(SystemSchema.workflow_status.c[column]).where(
+                SystemSchema.workflow_status.c.workflow_uuid == workflow_id
+            )
+        ).scalar()
+    return None if value is None else int(value)
+
+
+def _cutoff_past_all_completions() -> int:
+    """A cutoff every completion so far falls strictly before. completed_at is stamped
+    by the database and rounded to the millisecond, while a wall-clock cutoff taken
+    right after a workflow finishes truncates, so the two can land on the same value
+    and spare the row. Only rows with no completed_at need to survive these cutoffs."""
+    return int(time.time() * 1000) + 1000
+
+
 def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> None:
     event = threading.Event()
     started = threading.Event()
@@ -1396,6 +1416,11 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     handle = DBOS.start_workflow(blocked_workflow)
     # Wait for its txn output to commit so GC assertions can count on it
     assert started.wait(timeout=30)
+    # A cutoff taken from this row's own created_at while it is provably still
+    # running. +1 is the smallest value that puts its creation behind the cutoff.
+    blocked_created_at = _status_timestamp(dbos, handle.workflow_id, "created_at")
+    assert blocked_created_at is not None
+    blocked_cutoff = blocked_created_at + 1
     for i in range(num_workflows):
         assert workflow(i) == i
 
@@ -1419,7 +1444,9 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
 
     # Garbage collect all previous workflows
     garbage_collect(
-        dbos, cutoff_epoch_timestamp_ms=int(time.time() * 1000), rows_threshold=None
+        dbos,
+        cutoff_epoch_timestamp_ms=_cutoff_past_all_completions(),
+        rows_threshold=None,
     )
     # Verify only the blocked workflow remains
     workflows = DBOS.list_workflows()
@@ -1434,15 +1461,23 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
         ).all()
         assert len(rows) == 1
 
-    # Finish the blocked workflow, garbage collect everything
+    # Finish the blocked workflow
     event.set()
     assert handle.get_result() is not None
+    blocked_completed_at = _status_timestamp(dbos, handle.workflow_id, "completed_at")
+    assert blocked_completed_at is not None
+    # Retention keys on completion, not creation. Asserted rather than assumed: if
+    # these collapsed to one instant the survival check below would be vacuous.
+    assert blocked_created_at < blocked_cutoff <= blocked_completed_at
+    # So the cutoff from while it was running spares it, though it was created first
+    garbage_collect(dbos, cutoff_epoch_timestamp_ms=blocked_cutoff, rows_threshold=None)
+    assert [w.workflow_id for w in DBOS.list_workflows()] == [handle.workflow_id]
+
+    # Once the cutoff passes its completion, it is collected
     garbage_collect(
-        dbos, cutoff_epoch_timestamp_ms=int(time.time() * 1000), rows_threshold=None
+        dbos, cutoff_epoch_timestamp_ms=blocked_completed_at + 1, rows_threshold=None
     )
-    # Verify only the blocked workflow remains
-    workflows = DBOS.list_workflows()
-    assert len(workflows) == 0
+    assert len(DBOS.list_workflows()) == 0
 
     # ENQUEUED and DELAYED workflows must not be garbage collected
     # worker_concurrency=0 blocks dequeue so the workflow deterministically stays ENQUEUED
@@ -1464,9 +1499,23 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     assert enqueued_handle.workflow_id in wf_ids
     assert delayed_handle.workflow_id in wf_ids
 
-    # Clean up so they don't interfere with the rest of the test
+    # Cancelling stamps completed_at, making the row eligible for this cutoff
     DBOS.cancel_workflow(enqueued_handle.workflow_id)
     DBOS.cancel_workflow(delayed_handle.workflow_id)
+    cancelled_at = _status_timestamp(dbos, enqueued_handle.workflow_id, "completed_at")
+    assert cancelled_at is not None
+
+    # Resuming must clear completed_at: it is the only thing stopping GC from
+    # deleting a workflow that can run again. The queue still blocks dequeue.
+    DBOS.resume_workflow(enqueued_handle.workflow_id, queue_name="gc_test_queue")
+    assert _status_timestamp(dbos, enqueued_handle.workflow_id, "completed_at") is None
+    garbage_collect(
+        dbos, cutoff_epoch_timestamp_ms=cancelled_at + 1, rows_threshold=None
+    )
+    assert enqueued_handle.workflow_id in {w.workflow_id for w in DBOS.list_workflows()}
+
+    # Clean up so it doesn't interfere with the rest of the test
+    DBOS.cancel_workflow(enqueued_handle.workflow_id)
 
     # Verify GC runs without error on a blank table
     garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1)
@@ -1567,7 +1616,7 @@ def test_garbage_collection_batched(
     try:
         garbage_collect(
             dbos,
-            cutoff_epoch_timestamp_ms=int(time.time() * 1000),
+            cutoff_epoch_timestamp_ms=_cutoff_past_all_completions(),
             rows_threshold=None,
             batch_size=batch_size,
         )
@@ -1606,7 +1655,7 @@ def test_garbage_collection_batched(
     assert handle.get_result() is not None
     garbage_collect(
         dbos,
-        cutoff_epoch_timestamp_ms=int(time.time() * 1000),
+        cutoff_epoch_timestamp_ms=_cutoff_past_all_completions(),
         rows_threshold=None,
         batch_size=1,
     )
@@ -1646,6 +1695,13 @@ def test_garbage_collection_batched_rows_threshold(
         workflow_ids.append(handle.workflow_id)
         time.sleep(0.005)
 
+    # worker_concurrency=0 blocks dequeue, so these stay ENQUEUED with no completed_at
+    DBOS.register_queue("gc_threshold_queue", worker_concurrency=0)
+    enqueued_ids = [
+        DBOS.enqueue_workflow("gc_threshold_queue", workflow, i).workflow_id
+        for i in range(3)
+    ]
+
     garbage_collect(
         dbos,
         cutoff_epoch_timestamp_ms=None,
@@ -1653,9 +1709,13 @@ def test_garbage_collection_batched_rows_threshold(
         batch_size=3,
     )
 
-    # exactly newest rows_threshold workflows survive
+    # The threshold counts completions, not rows: exactly the newest rows_threshold
+    # completed workflows survive, and the in-flight rows all survive besides.
     surviving_ids = {w.workflow_id for w in DBOS.list_workflows()}
-    assert surviving_ids == set(workflow_ids[-rows_threshold:])
+    assert surviving_ids == set(workflow_ids[-rows_threshold:]) | set(enqueued_ids)
+
+    for workflow_id in enqueued_ids:
+        DBOS.cancel_workflow(workflow_id)
 
 
 def test_garbage_collection_batched_resumable(
@@ -1696,7 +1756,7 @@ def test_garbage_collection_batched_resumable(
     try:
         with pytest.raises(Exception, match="injected garbage collection failure"):
             dbos._sys_db.garbage_collect(
-                cutoff_epoch_timestamp_ms=int(time.time() * 1000),
+                cutoff_epoch_timestamp_ms=_cutoff_past_all_completions(),
                 rows_threshold=None,
                 batch_size=batch_size,
             )
@@ -1710,7 +1770,7 @@ def test_garbage_collection_batched_resumable(
 
     # rerunning GC completes deletion
     dbos._sys_db.garbage_collect(
-        cutoff_epoch_timestamp_ms=int(time.time() * 1000),
+        cutoff_epoch_timestamp_ms=_cutoff_past_all_completions(),
         rows_threshold=None,
         batch_size=batch_size,
     )

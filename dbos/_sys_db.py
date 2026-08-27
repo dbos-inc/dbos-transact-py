@@ -5317,21 +5317,24 @@ class SystemDatabase(ABC):
         cutoff_epoch_timestamp_ms: Optional[int],
         rows_threshold: Optional[int],
         batch_size: Optional[int],
-    ) -> Optional[tuple[int, list[str]]]:
+    ) -> Optional[int]:
+        """Delete this application's old terminal workflows, returning the cutoff
+        actually used, or None when there is nothing to collect."""
         if batch_size is not None and batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
         if rows_threshold is not None:
             with self.engine.begin() as c:
-                # Get the created_at timestamp of the rows_threshold newest row
+                # Get the completed_at timestamp of the rows_threshold newest completed row
                 result = c.execute(
-                    sa.select(SystemSchema.workflow_status.c.created_at)
+                    sa.select(SystemSchema.workflow_status.c.completed_at)
                     .where(
+                        SystemSchema.workflow_status.c.completed_at.isnot(None),
                         self._name_filter(
                             SystemSchema.workflow_status.c.application_name,
                             self.app_name,
-                        )
+                        ),
                     )
-                    .order_by(SystemSchema.workflow_status.c.created_at.desc())
+                    .order_by(SystemSchema.workflow_status.c.completed_at.desc())
                     .limit(1)
                     .offset(rows_threshold - 1)
                 ).fetchone()
@@ -5348,17 +5351,11 @@ class SystemDatabase(ABC):
         if cutoff_epoch_timestamp_ms is None:
             return None
 
-        # Delete all workflows older than cutoff that are NOT PENDING, ENQUEUED, or DELAYED
+        # completed_at is set on every terminal transition and cleared on resume, so one
+        # predicate covers eligibility: in-flight rows hold NULL and never compare true.
         gc_filter = sa.and_(
-            SystemSchema.workflow_status.c.created_at
+            SystemSchema.workflow_status.c.completed_at
             < sa.literal(cutoff_epoch_timestamp_ms, sa.BigInteger),
-            ~SystemSchema.workflow_status.c.status.in_(
-                [
-                    WorkflowStatusString.PENDING.value,
-                    WorkflowStatusString.ENQUEUED.value,
-                    WorkflowStatusString.DELAYED.value,
-                ]
-            ),
             # Unclaimed rows included: excluding them would leak pre-upgrade rows forever.
             self._name_filter(
                 SystemSchema.workflow_status.c.application_name, self.app_name
@@ -5398,35 +5395,33 @@ class SystemDatabase(ABC):
 
             retry_on_serialization_error(delete_all)
         else:
-            # Batch-delete by advancing a created_at watermark, one committed transaction per batch
+            # Batch-delete by advancing a completed_at watermark, one committed transaction per batch
             def delete_batch(watermark: int) -> Optional[int]:
                 """Delete one batch, returning the watermark to resume from, or None when done."""
                 with self.engine.begin() as c:
-                    # Find the created_at of the batch_size-th oldest eligible row above the watermark
+                    # Find the completed_at of the batch_size-th oldest eligible row above the watermark
                     step: Optional[int] = c.execute(
-                        sa.select(SystemSchema.workflow_status.c.created_at)
+                        sa.select(SystemSchema.workflow_status.c.completed_at)
                         .where(
                             gc_filter,
-                            SystemSchema.workflow_status.c.created_at > watermark,
+                            SystemSchema.workflow_status.c.completed_at > watermark,
                         )
-                        .order_by(SystemSchema.workflow_status.c.created_at)
+                        .order_by(SystemSchema.workflow_status.c.completed_at)
                         .limit(1)
                         .offset(batch_size - 1)
                     ).scalar()
-                    if step is None:
-                        # Final batch: delete every remaining eligible row, even below the watermark
-                        c.execute(
-                            sa.delete(SystemSchema.workflow_status).where(gc_filter)
+                    # A row that terminalizes mid-pass takes completed_at > cutoff, so it can
+                    # never fall below the watermark: the tail above it is all that remains.
+                    bounds: List[sa.ColumnElement[bool]] = [
+                        gc_filter,
+                        SystemSchema.workflow_status.c.completed_at > watermark,
+                    ]
+                    if step is not None:
+                        # completed_at ties may push the batch slightly over batch_size
+                        bounds.append(
+                            SystemSchema.workflow_status.c.completed_at <= step
                         )
-                        return None
-                    # Delete the batch; created_at ties may push it slightly over batch_size
-                    c.execute(
-                        sa.delete(SystemSchema.workflow_status).where(
-                            gc_filter,
-                            SystemSchema.workflow_status.c.created_at > watermark,
-                            SystemSchema.workflow_status.c.created_at <= step,
-                        )
-                    )
+                    c.execute(sa.delete(SystemSchema.workflow_status).where(*bounds))
                     return step
 
             watermark = 0
@@ -5438,22 +5433,25 @@ class SystemDatabase(ABC):
                     break
                 watermark = next_watermark
 
-        with self.engine.begin() as c:
-            # Then, get the IDs of all remaining old workflows
-            pending_enqueued_result = c.execute(
-                sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
-                    SystemSchema.workflow_status.c.created_at
-                    < sa.literal(cutoff_epoch_timestamp_ms, sa.BigInteger),
-                    self._name_filter(
-                        SystemSchema.workflow_status.c.application_name, self.app_name
-                    ),
-                )
-            ).fetchall()
+        return cutoff_epoch_timestamp_ms
 
-            # Return the final cutoff and workflow IDs
-            return cutoff_epoch_timestamp_ms, [
-                row[0] for row in pending_enqueued_result
-            ]
+    def list_retained_workflow_ids(self, cutoff_epoch_timestamp_ms: int) -> List[str]:
+        """IDs of this application's pre-cutoff workflows that garbage collection kept.
+        Only the deprecated application database needs them, to spare the transaction
+        outputs of workflows that may still run."""
+        with self.engine.begin() as c:
+            return list(
+                c.execute(
+                    sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
+                        SystemSchema.workflow_status.c.created_at
+                        < sa.literal(cutoff_epoch_timestamp_ms, sa.BigInteger),
+                        self._name_filter(
+                            SystemSchema.workflow_status.c.application_name,
+                            self.app_name,
+                        ),
+                    )
+                ).scalars()
+            )
 
     def list_timed_out_workflow_ids(self, cutoff_epoch_timestamp_ms: int) -> List[str]:
         """IDs of this application's in-flight workflows created before the cutoff.
