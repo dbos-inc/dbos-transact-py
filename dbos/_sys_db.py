@@ -5317,7 +5317,9 @@ class SystemDatabase(ABC):
         cutoff_epoch_timestamp_ms: Optional[int],
         rows_threshold: Optional[int],
         batch_size: Optional[int],
-    ) -> Optional[tuple[int, list[str]]]:
+    ) -> Optional[int]:
+        """Delete this application's old terminal workflows, returning the cutoff
+        actually used, or None when there is nothing to collect."""
         if batch_size is not None and batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
         if rows_threshold is not None:
@@ -5438,22 +5440,25 @@ class SystemDatabase(ABC):
                     break
                 watermark = next_watermark
 
-        with self.engine.begin() as c:
-            # Then, get the IDs of all remaining old workflows
-            pending_enqueued_result = c.execute(
-                sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
-                    SystemSchema.workflow_status.c.created_at
-                    < sa.literal(cutoff_epoch_timestamp_ms, sa.BigInteger),
-                    self._name_filter(
-                        SystemSchema.workflow_status.c.application_name, self.app_name
-                    ),
-                )
-            ).fetchall()
+        return cutoff_epoch_timestamp_ms
 
-            # Return the final cutoff and workflow IDs
-            return cutoff_epoch_timestamp_ms, [
-                row[0] for row in pending_enqueued_result
-            ]
+    def list_retained_workflow_ids(self, cutoff_epoch_timestamp_ms: int) -> List[str]:
+        """IDs of this application's pre-cutoff workflows that garbage collection kept.
+        Only the deprecated application database needs them, to spare the transaction
+        outputs of workflows that may still run."""
+        with self.engine.begin() as c:
+            return list(
+                c.execute(
+                    sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
+                        SystemSchema.workflow_status.c.created_at
+                        < sa.literal(cutoff_epoch_timestamp_ms, sa.BigInteger),
+                        self._name_filter(
+                            SystemSchema.workflow_status.c.application_name,
+                            self.app_name,
+                        ),
+                    )
+                ).scalars()
+            )
 
     def list_timed_out_workflow_ids(self, cutoff_epoch_timestamp_ms: int) -> List[str]:
         """IDs of this application's in-flight workflows created before the cutoff.

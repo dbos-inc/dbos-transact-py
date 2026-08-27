@@ -93,17 +93,15 @@ def garbage_collect(
 ) -> None:
     if cutoff_epoch_timestamp_ms is None and rows_threshold is None:
         return
-    result = dbos._sys_db.garbage_collect(
+    cutoff = dbos._sys_db.garbage_collect(
         cutoff_epoch_timestamp_ms=cutoff_epoch_timestamp_ms,
         rows_threshold=rows_threshold,
         batch_size=batch_size,
     )
-    if result is not None:
-        cutoff_epoch_timestamp_ms, pending_workflow_ids = result
-        if dbos._app_db:
-            dbos._app_db.garbage_collect(
-                cutoff_epoch_timestamp_ms, pending_workflow_ids, batch_size=batch_size
-            )
+    # The application database is deprecated: only pay for its cleanup when one exists.
+    if cutoff is not None and dbos._app_db is not None:
+        retained_ids = dbos._sys_db.list_retained_workflow_ids(cutoff)
+        dbos._app_db.garbage_collect(cutoff, retained_ids, batch_size=batch_size)
 
 
 def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:
