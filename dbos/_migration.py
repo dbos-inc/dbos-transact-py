@@ -1182,6 +1182,38 @@ ALTER TABLE {quoted_schema}."queues" ADD COLUMN IF NOT EXISTS "partition_rate_li
 """
 
 
+def get_dbos_migration_hundrednine(quoted_schema: str) -> str:
+    # BRIN, not btree: created_at is append-correlated, so the index is kilobytes
+    # and costs almost nothing on the enqueue path, while still pruning the
+    # retention sweep to the oldest page ranges.
+    # cost_delay 0 because the default throttles autovacuum to ~40 MB/s; a high
+    # scale_factor because each pass pays a full PK index scan regardless of how
+    # few rows it reclaims, so few large passes beat many small ones.
+    return f"""
+CREATE INDEX IF NOT EXISTS "idx_workflow_inputs_created_at"
+    ON {quoted_schema}."workflow_inputs" USING BRIN ("created_at")
+    WITH (pages_per_range = 32, autosummarize = on);
+
+CREATE INDEX IF NOT EXISTS "idx_workflow_outputs_created_at"
+    ON {quoted_schema}."workflow_outputs" USING BRIN ("created_at")
+    WITH (pages_per_range = 32, autosummarize = on);
+
+ALTER TABLE {quoted_schema}."workflow_inputs" SET (
+    autovacuum_vacuum_cost_delay = 0,
+    autovacuum_vacuum_scale_factor = 0.15,
+    autovacuum_vacuum_insert_threshold = 100000,
+    autovacuum_freeze_min_age = 0
+);
+
+ALTER TABLE {quoted_schema}."workflow_outputs" SET (
+    autovacuum_vacuum_cost_delay = 0,
+    autovacuum_vacuum_scale_factor = 0.15,
+    autovacuum_vacuum_insert_threshold = 100000,
+    autovacuum_freeze_min_age = 0
+);
+"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -1247,6 +1279,7 @@ def get_dbos_migrations(
         get_dbos_migration_hundredsix(quoted_schema),
         get_dbos_migration_hundredseven(quoted_schema, is_cockroach),
         get_dbos_migration_hundredeight(quoted_schema),
+        get_dbos_migration_hundrednine(quoted_schema),
     ]
 
 
@@ -1616,6 +1649,16 @@ _sqlite_history = [
     sqlite_migration_fortyseven,
 ]
 
+# SQLite has no BRIN and no autovacuum; a plain index keeps the sweep's
+# predicate indexed and the schema in parity.
+sqlite_migration_hundrednine = """
+CREATE INDEX IF NOT EXISTS idx_workflow_inputs_created_at
+    ON workflow_inputs (created_at);
+CREATE INDEX IF NOT EXISTS idx_workflow_outputs_created_at
+    ON workflow_outputs (created_at);
+"""
+
+
 sqlite_migrations = [
     *_pad_to_shared_base(_sqlite_history),
     sqlite_migration_hundred,
@@ -1628,4 +1671,5 @@ sqlite_migrations = [
     sqlite_migration_hundredsix,
     sqlite_migration_hundredseven,
     sqlite_migration_hundredeight,
+    sqlite_migration_hundrednine,
 ]

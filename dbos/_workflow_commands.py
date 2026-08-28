@@ -102,6 +102,17 @@ def garbage_collect(
     if cutoff is not None and dbos._app_db is not None:
         retained_ids = dbos._sys_db.list_retained_workflow_ids(cutoff)
         dbos._app_db.garbage_collect(cutoff, retained_ids, batch_size=batch_size)
+    # Payloads sweep on their own cutoff, after the status sweep so it cannot be
+    # stalled by a slow one. lag_ms is the health signal: a single old
+    # non-terminal workflow pins the cutoff and holds up all reclamation.
+    inputs_deleted, outputs_deleted, lag_ms = dbos._sys_db.garbage_collect_payloads(
+        batch_size=batch_size or DEFAULT_GC_BATCH_SIZE
+    )
+    if inputs_deleted or outputs_deleted:
+        dbos.logger.debug(
+            f"Payload GC deleted {inputs_deleted} inputs and {outputs_deleted} "
+            f"outputs, running {lag_ms}ms behind"
+        )
 
 
 def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:

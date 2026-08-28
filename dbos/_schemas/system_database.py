@@ -159,6 +159,12 @@ class SystemSchema:
         Column("inputs", Text, nullable=True),
         Column("serialization", Text, nullable=True),
         Column("created_at", BigInteger, nullable=False),
+        Index(
+            "idx_workflow_inputs_created_at",
+            "created_at",
+            postgresql_using="brin",
+            sqlite_where=None,
+        ),
     )
 
     workflow_outputs = Table(
@@ -169,6 +175,12 @@ class SystemSchema:
         Column("error", Text, nullable=True),
         Column("serialization", Text, nullable=True),
         Column("created_at", BigInteger, nullable=False),
+        Index(
+            "idx_workflow_outputs_created_at",
+            "created_at",
+            postgresql_using="brin",
+            sqlite_where=None,
+        ),
     )
 
     operation_outputs = Table(

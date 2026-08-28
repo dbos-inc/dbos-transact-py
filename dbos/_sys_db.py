@@ -1002,7 +1002,9 @@ class SystemDatabase(ABC):
                 workflow_uuid=status["workflow_uuid"],
                 inputs=status["inputs"],
                 serialization=status["serialization"],
-                created_at=int(time.time() * 1000),
+                # Server clock, matching workflow_status.created_at's default: now()
+                # is fixed at transaction start, so the pair is equal.
+                created_at=self._now_ms_sql(),
             )
             .on_conflict_do_nothing(index_elements=["workflow_uuid"])
         )
@@ -1137,7 +1139,7 @@ class SystemDatabase(ABC):
                     output=output,
                     error=error,
                     serialization=None,
-                    created_at=int(time.time() * 1000),
+                    created_at=now_ms,
                 )
                 .on_conflict_do_nothing(index_elements=["workflow_uuid"])
             )
@@ -1520,7 +1522,7 @@ class SystemDatabase(ABC):
                             workflow_uuid=forked_workflow_id,
                             inputs=status[8],
                             serialization=status[9],
-                            created_at=int(time.time() * 1000),
+                            created_at=self._now_ms_sql(),
                         )
                         for forked_workflow_id, status in zip(
                             forked_workflow_ids, statuses
@@ -5404,6 +5406,110 @@ class SystemDatabase(ABC):
             return row[0], _no_stream_value
         return row[0], deserialize_value(row[1], row[2], self.serializer)
 
+    def _retry_on_serialization_error(self, operation: Callable[[], T]) -> T:
+        """Re-run a batch that lost a deadlock or serialization race. The database
+        already rolled it back, so replaying it is safe."""
+        max_attempts, backoff, max_backoff = 10, 0.05, 2.0
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return operation()
+            except DBAPIError as e:
+                if not self._is_serialization_error(e):
+                    raise
+                if attempt == max_attempts:
+                    dbos_logger.warning(
+                        f"Garbage collection failed after {max_attempts} attempts: {str(e.orig)}"
+                    )
+                    raise
+                # Jittered backoff, so peers that collided do not collide again
+                actual_backoff = backoff * (0.5 + random.random())
+                dbos_logger.warning(
+                    f"Contention or deadlock detected in workflow garbage collection: {str(e.orig)}. "
+                    f"Retrying in {actual_backoff:.2f}s (attempt {attempt})"
+                )
+                time.sleep(actual_backoff)
+                backoff = min(backoff * 2, max_backoff)
+        raise AssertionError("unreachable")
+
+    def _payload_retention_cutoff(self) -> Optional[int]:
+        """The created_at below which every payload row is provably orphaned.
+
+        Any payload row older than the oldest surviving workflow_status row
+        belongs to a workflow that row-set no longer contains: a status row for
+        it would have created_at <= the payload's, contradicting the minimum.
+        So no reader can observe a status row whose payload this deletes --
+        which matters because a missing workflow_outputs row on a SUCCESS
+        workflow does not error, it deserializes to None.
+
+        Deliberately unfiltered by application_name: the payload tables carry no
+        owner column, so a per-application cutoff would delete a peer's live
+        payloads. A global minimum is conservative and correct.
+        """
+        with self.engine.begin() as c:
+            return c.execute(
+                sa.select(sa.func.min(SystemSchema.workflow_status.c.created_at))
+            ).scalar()
+
+    def garbage_collect_payloads(
+        self,
+        *,
+        batch_size: int = 10000,
+        time_budget_sec: Optional[float] = None,
+    ) -> tuple[int, int, Optional[int]]:
+        """Delete orphaned payload rows oldest-first. Returns (inputs, outputs, lag_ms).
+
+        Separate from garbage_collect so a slow sweep cannot stall status GC,
+        and so payload retention can run on its own cadence.
+        """
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
+        cutoff = self._payload_retention_cutoff()
+        if cutoff is None:
+            # No workflows at all: nothing anchors the cutoff, so sweep nothing.
+            return 0, 0, None
+        lag_ms = int(time.time() * 1000) - cutoff
+        deadline = (
+            time.monotonic() + time_budget_sec if time_budget_sec is not None else None
+        )
+
+        deleted = []
+        for table in (SystemSchema.workflow_inputs, SystemSchema.workflow_outputs):
+            total = 0
+            while True:
+                if deadline is not None and time.monotonic() >= deadline:
+                    break
+                # The inner scan is BRIN-driven, and a bitmap heap scan returns
+                # rows in physical order -- which on an append-only table is
+                # insertion order. Each batch therefore walks a contiguous run of
+                # the oldest pages instead of scattering across the heap.
+                # SQLite names the physical row identifier rowid, not ctid.
+                row_id = sa.column("rowid" if self._is_sqlite else "ctid")
+                victims = (
+                    sa.select(row_id)
+                    .select_from(table)
+                    .where(table.c.created_at < cutoff)
+                    .limit(batch_size)
+                    .scalar_subquery()
+                )
+                stmt = sa.delete(table).where(row_id.in_(victims))
+
+                def delete_batch() -> int:
+                    with self.engine.begin() as c:
+                        return c.execute(stmt).rowcount
+
+                rows = self._retry_on_serialization_error(delete_batch)
+                total += rows
+                if rows < batch_size:
+                    break
+            deleted.append(total)
+
+        if deleted[0] or deleted[1]:
+            self._vacuum_tables(["workflow_inputs", "workflow_outputs"])
+        return deleted[0], deleted[1], lag_ms
+
+    def _vacuum_tables(self, tables: List[str]) -> None:
+        """VACUUM the named tables at full speed. No-op where there is no autovacuum."""
+
     def garbage_collect(
         self,
         cutoff_epoch_timestamp_ms: Optional[int],
@@ -5454,38 +5560,13 @@ class SystemDatabase(ABC):
             ),
         )
 
-        def retry_on_serialization_error(operation: Callable[[], T]) -> T:
-            """Re-run a batch that lost a deadlock or serialization race. The database
-            already rolled it back, so replaying it is safe."""
-            max_attempts, backoff, max_backoff = 10, 0.05, 2.0
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    return operation()
-                except DBAPIError as e:
-                    if not self._is_serialization_error(e):
-                        raise
-                    if attempt == max_attempts:
-                        dbos_logger.warning(
-                            f"Garbage collection failed after {max_attempts} attempts: {str(e.orig)}"
-                        )
-                        raise
-                    # Jittered backoff, so peers that collided do not collide again
-                    actual_backoff = backoff * (0.5 + random.random())
-                    dbos_logger.warning(
-                        f"Contention or deadlock detected in workflow garbage collection: {str(e.orig)}. "
-                        f"Retrying in {actual_backoff:.2f}s (attempt {attempt})"
-                    )
-                    time.sleep(actual_backoff)
-                    backoff = min(backoff * 2, max_backoff)
-            raise AssertionError("unreachable")
-
         if batch_size is None:
 
             def delete_all() -> None:
                 with self.engine.begin() as c:
                     c.execute(sa.delete(SystemSchema.workflow_status).where(gc_filter))
 
-            retry_on_serialization_error(delete_all)
+            self._retry_on_serialization_error(delete_all)
         else:
             # Batch-delete by advancing a completed_at watermark, one committed transaction per batch
             def delete_batch(watermark: int) -> Optional[int]:
@@ -5518,7 +5599,7 @@ class SystemDatabase(ABC):
 
             watermark = 0
             while True:
-                next_watermark = retry_on_serialization_error(
+                next_watermark = self._retry_on_serialization_error(
                     functools.partial(delete_batch, watermark)
                 )
                 if next_watermark is None:

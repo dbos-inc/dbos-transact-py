@@ -2337,3 +2337,96 @@ def test_client_delete_workflow(client: DBOSClient, dbos: DBOS) -> None:
     assert len(client.list_workflows(workflow_ids=wfids)) == 3
     client.delete_workflows(wfids)
     assert len(client.list_workflows(workflow_ids=wfids)) == 0
+
+
+def _payload_counts(dbos: DBOS) -> tuple[int, int]:
+    with dbos._sys_db.engine.begin() as c:
+        return (
+            c.execute(
+                sa.select(sa.func.count()).select_from(SystemSchema.workflow_inputs)
+            ).scalar()
+            or 0,
+            c.execute(
+                sa.select(sa.func.count()).select_from(SystemSchema.workflow_outputs)
+            ).scalar()
+            or 0,
+        )
+
+
+def test_payload_garbage_collection(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
+    """Payloads are reclaimed only once their status row is gone."""
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    num_workflows = 5
+    for i in range(num_workflows):
+        assert workflow(i) == i
+    assert _payload_counts(dbos) == (num_workflows, num_workflows)
+
+    # Nothing collected yet, so the cutoff protects every payload.
+    assert dbos._sys_db.garbage_collect_payloads()[:2] == (0, 0)
+    assert _payload_counts(dbos) == (num_workflows, num_workflows)
+
+    # Collect all but the newest. garbage_collect sweeps payloads itself, so the
+    # status rows and their payloads go in one call.
+    garbage_collect(
+        dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
+    )
+    assert len(DBOS.list_workflows()) == 1
+    assert _payload_counts(dbos) == (1, 1)
+
+    # The survivor keeps a readable result and stays forkable.
+    workflow_id = DBOS.list_workflows()[0].workflow_id
+    handle: WorkflowHandle[int] = DBOS.retrieve_workflow(workflow_id)
+    assert handle.get_result() == num_workflows - 1
+    assert DBOS.list_workflows(workflow_ids=[workflow_id])[0].input is not None
+    forked: WorkflowHandle[int] = DBOS.fork_workflow(workflow_id, 1)
+    assert forked.get_result() == num_workflows - 1
+
+
+def test_payload_gc_spares_running_workflow(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
+    """A running workflow keeps its inputs: it may still recover or be forked."""
+    event = threading.Event()
+    started = threading.Event()
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    @DBOS.workflow()
+    def blocked_workflow() -> int:
+        started.set()
+        # Bounded, so a failing assertion below can never park this thread and
+        # hang shutdown on the join.
+        event.wait(timeout=60)
+        return 0
+
+    handle = DBOS.start_workflow(blocked_workflow)
+    assert started.wait(timeout=30)
+    try:
+        for i in range(3):
+            assert workflow(i) == i
+
+        # The blocked workflow is the oldest surviving row, so it anchors the
+        # cutoff and nothing older than it exists to collect.
+        garbage_collect(
+            dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
+        )
+        # Its inputs survive even though its own output row does not exist yet.
+        inputs, outputs = _payload_counts(dbos)
+        assert inputs >= 1
+        assert (
+            dbos._sys_db.list_workflows(
+                workflow_ids=[handle.workflow_id], load_input=True
+            )[0].input
+            is not None
+        )
+    finally:
+        event.set()
+    assert handle.get_result() == 0

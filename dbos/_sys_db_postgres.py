@@ -1,5 +1,5 @@
 import time
-from typing import Any, Dict, Optional, cast
+from typing import Any, Dict, List, Optional, cast
 
 import psycopg
 import sqlalchemy as sa
@@ -118,6 +118,30 @@ class PostgresSystemDatabase(SystemDatabase):
             self.engine, self.schema, self.use_listen_notify
         )
         self._assert_migration_version(current_version, latest_version)
+
+    def _vacuum_tables(self, tables: List[str]) -> None:
+        """VACUUM the named tables at full speed, right after the sweep that
+        dirtied them. A manual VACUUM uses vacuum_cost_delay, which defaults to
+        0, so it is unthrottled where autovacuum is not.
+
+        TRUNCATE OFF because the sweep deletes from the front of the heap and
+        truncation only reclaims at the end: it would take an ACCESS EXCLUSIVE
+        lock for nothing. Best effort -- VACUUM needs table ownership (or
+        MAINTAIN on PG16+), and CockroachDB has no VACUUM at all."""
+        assert self.schema
+        try:
+            with self.engine.connect().execution_options(
+                isolation_level="AUTOCOMMIT"
+            ) as conn:
+                for table in tables:
+                    conn.execute(
+                        sa.text(
+                            "VACUUM (INDEX_CLEANUP AUTO, TRUNCATE OFF) "
+                            f"{quote_identifier(self.schema)}.{quote_identifier(table)}"
+                        )
+                    )
+        except Exception as e:
+            dbos_logger.debug(f"Could not vacuum {', '.join(tables)}: {e}")
 
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""
