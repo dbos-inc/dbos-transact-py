@@ -7,7 +7,14 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import event as sa_event
 
-from dbos import DBOS, DBOSClient, SetEnqueueOptions, SetWorkflowID, WorkflowHandle
+from dbos import (
+    DBOS,
+    DBOSClient,
+    Queue,
+    SetEnqueueOptions,
+    SetWorkflowID,
+    WorkflowHandle,
+)
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
@@ -2393,6 +2400,80 @@ def test_payload_garbage_collection(
     assert DBOS.list_workflows(workflow_ids=[workflow_id])[0].input is not None
     forked: WorkflowHandle[int] = DBOS.fork_workflow(workflow_id, 1)
     assert forked.get_result() == num_workflows - 1
+
+
+def _orphaned_status_rows(dbos: DBOS) -> tuple[int, int]:
+    """Status rows whose payload the sweep should never have removed:
+    (any row missing its inputs, terminal rows missing their output)."""
+    ws, wi, wo = (
+        SystemSchema.workflow_status,
+        SystemSchema.workflow_inputs,
+        SystemSchema.workflow_outputs,
+    )
+    with dbos._sys_db.engine.begin() as c:
+        missing_inputs = c.execute(
+            sa.select(sa.func.count())
+            .select_from(ws.outerjoin(wi, ws.c.workflow_uuid == wi.c.workflow_uuid))
+            .where(wi.c.workflow_uuid.is_(None))
+        ).scalar()
+        missing_outputs = c.execute(
+            sa.select(sa.func.count())
+            .select_from(ws.outerjoin(wo, ws.c.workflow_uuid == wo.c.workflow_uuid))
+            .where(ws.c.status.in_(["SUCCESS", "ERROR"]), wo.c.workflow_uuid.is_(None))
+        ).scalar()
+    return missing_inputs or 0, missing_outputs or 0
+
+
+def test_payload_gc_never_orphans_a_status_row(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
+    """Across a mixed population and repeated sweeps, no surviving status row
+    ever loses the payload a reader could still ask for."""
+    event = threading.Event()
+    started = threading.Event()
+    queue = Queue("payload_gc_queue")
+
+    @DBOS.workflow()
+    def finished(x: int) -> int:
+        return x
+
+    @DBOS.workflow()
+    def blocked() -> int:
+        started.set()
+        event.wait(timeout=60)
+        return 0
+
+    try:
+        # A running workflow, enqueued work that never starts, and completed
+        # workflows interleaved so their created_at values straddle each other.
+        handle = DBOS.start_workflow(blocked)
+        assert started.wait(timeout=30)
+        for i in range(3):
+            assert finished(i) == i
+        with SetEnqueueOptions(deduplication_id=None):
+            enqueued = [queue.enqueue(finished, 100 + i) for i in range(2)]
+        for i in range(3, 6):
+            assert finished(i) == i
+
+        for _ in range(3):
+            garbage_collect(
+                dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=2, batch_size=None
+            )
+            assert _orphaned_status_rows(dbos) == (0, 0)
+
+        # The blocked workflow's inputs survived every sweep, so it still runs.
+        assert (
+            dbos._sys_db.list_workflows(
+                workflow_ids=[handle.workflow_id], load_input=True
+            )[0].input
+            is not None
+        )
+    finally:
+        event.set()
+    assert handle.get_result() == 0
+    for h in enqueued:
+        assert h.get_result() >= 100
+    assert _orphaned_status_rows(dbos) == (0, 0)
 
 
 def test_payload_gc_spares_running_workflow(
