@@ -36,8 +36,6 @@ class SystemSchema:
         Column("authenticated_user", Text, nullable=True),
         Column("assumed_role", Text, nullable=True),
         Column("authenticated_roles", Text, nullable=True),
-        Column("output", Text, nullable=True),
-        Column("error", Text, nullable=True),
         Column("executor_id", Text, nullable=True),
         Column(
             "created_at",
@@ -63,7 +61,6 @@ class SystemSchema:
         Column("workflow_deadline_epoch_ms", BigInteger, nullable=True),
         Column("started_at_epoch_ms", BigInteger(), nullable=True),
         Column("deduplication_id", Text(), nullable=True),
-        Column("inputs", Text()),
         Column("priority", Integer(), nullable=False),
         Column("queue_partition_key", Text()),
         Column("forked_from", Text()),
@@ -153,6 +150,25 @@ class SystemSchema:
             postgresql_where=text("deduplication_id IS NOT NULL"),
             sqlite_where=text("deduplication_id IS NOT NULL"),
         ),
+    )
+
+    workflow_inputs = Table(
+        "workflow_inputs",
+        metadata_obj,
+        Column("workflow_uuid", Text, primary_key=True),
+        Column("inputs", Text, nullable=True),
+        Column("serialization", Text, nullable=True),
+        Column("created_at", BigInteger, nullable=False),
+    )
+
+    workflow_outputs = Table(
+        "workflow_outputs",
+        metadata_obj,
+        Column("workflow_uuid", Text, primary_key=True),
+        Column("output", Text, nullable=True),
+        Column("error", Text, nullable=True),
+        Column("serialization", Text, nullable=True),
+        Column("created_at", BigInteger, nullable=False),
     )
 
     operation_outputs = Table(

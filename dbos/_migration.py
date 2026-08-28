@@ -295,8 +295,6 @@ CREATE TABLE {quoted_schema}.workflow_status (
     assumed_role TEXT,
     authenticated_roles TEXT,
     request TEXT,
-    output TEXT,
-    error TEXT,
     executor_id TEXT,
     created_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint,
     updated_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint,
@@ -308,7 +306,6 @@ CREATE TABLE {quoted_schema}.workflow_status (
     queue_name TEXT,
     workflow_timeout_ms BIGINT,
     workflow_deadline_epoch_ms BIGINT,
-    inputs TEXT,
     started_at_epoch_ms BIGINT,
     deduplication_id TEXT,
     priority INT4 NOT NULL DEFAULT 0
@@ -321,6 +318,21 @@ CREATE INDEX workflow_status_status_index ON {quoted_schema}.workflow_status (st
 ALTER TABLE {quoted_schema}.workflow_status 
 ADD CONSTRAINT uq_workflow_status_queue_name_dedup_id 
 UNIQUE (queue_name, deduplication_id);
+
+CREATE TABLE {quoted_schema}.workflow_inputs (
+    workflow_uuid TEXT NOT NULL PRIMARY KEY,
+    inputs TEXT,
+    serialization TEXT,
+    created_at BIGINT NOT NULL
+);
+
+CREATE TABLE {quoted_schema}.workflow_outputs (
+    workflow_uuid TEXT NOT NULL PRIMARY KEY,
+    output TEXT,
+    error TEXT,
+    serialization TEXT,
+    created_at BIGINT NOT NULL
+);
 
 CREATE TABLE {quoted_schema}.operation_outputs (
     workflow_uuid TEXT NOT NULL,
@@ -562,7 +574,7 @@ BEGIN
     v_now := EXTRACT(epoch FROM now()) * 1000;
 
     INSERT INTO {quoted_schema}.workflow_status (
-        workflow_uuid, status, inputs,
+        workflow_uuid, status,
         name, class_name, config_name,
         queue_name, deduplication_id, priority, queue_partition_key,
         application_version,
@@ -570,7 +582,7 @@ BEGIN
         workflow_timeout_ms, workflow_deadline_epoch_ms,
         parent_workflow_id, owner_xid, serialization
     ) VALUES (
-        v_workflow_id, 'ENQUEUED', v_serialized_inputs,
+        v_workflow_id, 'ENQUEUED',
         workflow_name, class_name, config_name,
         queue_name, deduplication_id, v_priority, queue_partition_key,
         app_version,
@@ -581,6 +593,13 @@ BEGIN
     ON CONFLICT (workflow_uuid)
     DO UPDATE SET
         updated_at = EXCLUDED.updated_at;
+
+    INSERT INTO {quoted_schema}.workflow_inputs (
+        workflow_uuid, inputs, serialization, created_at
+    ) VALUES (
+        v_workflow_id, v_serialized_inputs, 'portable_json', v_now
+    )
+    ON CONFLICT (workflow_uuid) DO NOTHING;
 
     RETURN v_workflow_id;
 
@@ -846,7 +865,7 @@ BEGIN
     v_status := CASE WHEN delay_until_epoch_ms IS NULL THEN 'ENQUEUED' ELSE 'DELAYED' END;
 
     INSERT INTO {quoted_schema}.workflow_status (
-        workflow_uuid, status, inputs,
+        workflow_uuid, status,
         name, class_name, config_name,
         queue_name, deduplication_id, priority, queue_partition_key,
         application_version,
@@ -856,7 +875,7 @@ BEGIN
         authenticated_user, authenticated_roles,
         delay_until_epoch_ms
     ) VALUES (
-        v_workflow_id, v_status, v_serialized_inputs,
+        v_workflow_id, v_status,
         workflow_name, class_name, config_name,
         queue_name, deduplication_id, v_priority, queue_partition_key,
         app_version,
@@ -869,6 +888,13 @@ BEGIN
     ON CONFLICT (workflow_uuid)
     DO UPDATE SET
         updated_at = EXCLUDED.updated_at;
+
+    INSERT INTO {quoted_schema}.workflow_inputs (
+        workflow_uuid, inputs, serialization, created_at
+    ) VALUES (
+        v_workflow_id, v_serialized_inputs, 'portable_json', v_now
+    )
+    ON CONFLICT (workflow_uuid) DO NOTHING;
 
     RETURN v_workflow_id;
 
@@ -1080,7 +1106,7 @@ BEGIN
     v_status := CASE WHEN delay_until_epoch_ms IS NULL THEN 'ENQUEUED' ELSE 'DELAYED' END;
 
     INSERT INTO {quoted_schema}.workflow_status (
-        workflow_uuid, status, inputs,
+        workflow_uuid, status,
         name, class_name, config_name,
         queue_name, deduplication_id, priority, queue_partition_key,
         application_version,
@@ -1090,7 +1116,7 @@ BEGIN
         authenticated_user, authenticated_roles,
         delay_until_epoch_ms, application_name
     ) VALUES (
-        v_workflow_id, v_status, v_serialized_inputs,
+        v_workflow_id, v_status,
         workflow_name, class_name, config_name,
         queue_name, deduplication_id, v_priority, queue_partition_key,
         app_version,
@@ -1103,6 +1129,13 @@ BEGIN
     ON CONFLICT (workflow_uuid)
     DO UPDATE SET
         updated_at = EXCLUDED.updated_at;
+
+    INSERT INTO {quoted_schema}.workflow_inputs (
+        workflow_uuid, inputs, serialization, created_at
+    ) VALUES (
+        v_workflow_id, v_serialized_inputs, 'portable_json', v_now
+    )
+    ON CONFLICT (workflow_uuid) DO NOTHING;
 
     RETURN v_workflow_id;
 
@@ -1234,8 +1267,6 @@ CREATE TABLE workflow_status (
     assumed_role TEXT,
     authenticated_roles TEXT,
     request TEXT,
-    output TEXT,
-    error TEXT,
     executor_id TEXT,
     created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
     updated_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
@@ -1247,7 +1278,6 @@ CREATE TABLE workflow_status (
     queue_name TEXT,
     workflow_timeout_ms INTEGER,
     workflow_deadline_epoch_ms INTEGER,
-    inputs TEXT,
     started_at_epoch_ms INTEGER,
     deduplication_id TEXT,
     priority INTEGER NOT NULL DEFAULT 0
@@ -1259,6 +1289,21 @@ CREATE INDEX workflow_status_status_index ON workflow_status (status);
 
 CREATE UNIQUE INDEX uq_workflow_status_queue_name_dedup_id 
 ON workflow_status (queue_name, deduplication_id);
+
+CREATE TABLE workflow_inputs (
+    workflow_uuid TEXT NOT NULL PRIMARY KEY,
+    inputs TEXT,
+    serialization TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE workflow_outputs (
+    workflow_uuid TEXT NOT NULL PRIMARY KEY,
+    output TEXT,
+    error TEXT,
+    serialization TEXT,
+    created_at INTEGER NOT NULL
+);
 
 CREATE TABLE operation_outputs (
     workflow_uuid TEXT NOT NULL,
