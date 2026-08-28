@@ -5434,6 +5434,13 @@ class SystemDatabase(ABC):
     def _payload_retention_cutoff(self) -> Optional[int]:
         """The created_at below which every payload row is provably orphaned.
 
+        Read this BEFORE the status sweep. An index-min run straight after a
+        multi-million-row delete has to walk the dead prefix those deletes left
+        at the left edge of workflow_status_created_at_index, and that cost grows
+        with every round. A pre-sweep cutoff is always <= the post-sweep one, so
+        reading it early is strictly conservative: it defers a little work to the
+        next round and never deletes something it should not.
+
         Any payload row older than the oldest surviving workflow_status row
         belongs to a workflow that row-set no longer contains: a status row for
         it would have created_at <= the payload's, contradicting the minimum.
@@ -5455,6 +5462,7 @@ class SystemDatabase(ABC):
         *,
         batch_size: int = 10000,
         time_budget_sec: Optional[float] = None,
+        cutoff: Optional[int] = None,
     ) -> tuple[int, int, Optional[int]]:
         """Delete orphaned payload rows oldest-first. Returns (inputs, outputs, lag_ms).
 
@@ -5465,7 +5473,8 @@ class SystemDatabase(ABC):
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
         # TEMPORARY [gc-timing]: phase timings for retention benchmarking. Remove.
         t_cutoff = time.monotonic()
-        cutoff = self._payload_retention_cutoff()
+        if cutoff is None:
+            cutoff = self._payload_retention_cutoff()
         dbos_logger.warning(
             f"[gc-timing] payload cutoff: {time.monotonic() - t_cutoff:.3f}s"
         )

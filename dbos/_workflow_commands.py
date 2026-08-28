@@ -96,6 +96,13 @@ def garbage_collect(
         return
     # TEMPORARY [gc-timing]: phase timings for retention benchmarking. Remove.
     t_total = time.monotonic()
+    # Before the status sweep: afterwards the index-min this reads has to walk
+    # the dead prefix the sweep just created, which grows every round.
+    t_cutoff = time.monotonic()
+    payload_cutoff = dbos._sys_db._payload_retention_cutoff()
+    dbos.logger.warning(
+        f"[gc-timing] payload cutoff (pre-sweep): {time.monotonic() - t_cutoff:.3f}s"
+    )
     t_status = time.monotonic()
     cutoff = dbos._sys_db.garbage_collect(
         cutoff_epoch_timestamp_ms=cutoff_epoch_timestamp_ms,
@@ -117,7 +124,7 @@ def garbage_collect(
     # non-terminal workflow pins the cutoff and holds up all reclamation.
     t_payload = time.monotonic()
     inputs_deleted, outputs_deleted, lag_ms = dbos._sys_db.garbage_collect_payloads(
-        batch_size=batch_size or DEFAULT_GC_BATCH_SIZE
+        batch_size=batch_size or DEFAULT_GC_BATCH_SIZE, cutoff=payload_cutoff
     )
     dbos.logger.warning(
         f"[gc-timing] payload total: {time.monotonic() - t_payload:.3f}s, "

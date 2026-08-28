@@ -2371,12 +2371,19 @@ def test_payload_garbage_collection(
     assert dbos._sys_db.garbage_collect_payloads()[:2] == (0, 0)
     assert _payload_counts(dbos) == (num_workflows, num_workflows)
 
-    # Collect all but the newest. garbage_collect sweeps payloads itself, so the
-    # status rows and their payloads go in one call.
+    # Collect all but the newest. The payload cutoff is read before the status
+    # sweep -- an index-min taken straight after it would have to walk the dead
+    # prefix the sweep just created -- so this round removes the status rows and
+    # the next one reclaims their payloads.
     garbage_collect(
         dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
     )
     assert len(DBOS.list_workflows()) == 1
+    assert _payload_counts(dbos) == (num_workflows, num_workflows)
+
+    garbage_collect(
+        dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
+    )
     assert _payload_counts(dbos) == (1, 1)
 
     # The survivor keeps a readable result and stays forkable.
