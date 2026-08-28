@@ -5483,7 +5483,9 @@ class SystemDatabase(ABC):
                 # insertion order. Each batch therefore walks a contiguous run of
                 # the oldest pages instead of scattering across the heap.
                 # SQLite names the physical row identifier rowid, not ctid.
-                row_id = sa.column("rowid" if self._is_sqlite else "ctid")
+                row_id: sa.ColumnClause[Any] = sa.column(
+                    "rowid" if self._is_sqlite else "ctid"
+                )
                 victims = (
                     sa.select(row_id)
                     .select_from(table)
