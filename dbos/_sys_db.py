@@ -5466,7 +5466,7 @@ class SystemDatabase(ABC):
         # TEMPORARY [gc-timing]: phase timings for retention benchmarking. Remove.
         t_cutoff = time.monotonic()
         cutoff = self._payload_retention_cutoff()
-        dbos_logger.info(
+        dbos_logger.warning(
             f"[gc-timing] payload cutoff: {time.monotonic() - t_cutoff:.3f}s"
         )
         if cutoff is None:
@@ -5482,36 +5482,49 @@ class SystemDatabase(ABC):
             total = 0
             batches = 0
             t_table = time.monotonic()
+
+            # Same shape as the status sweep: advance a created_at watermark and
+            # delete a bounded range per committed transaction. Both the probe
+            # and the delete are driven by idx_workflow_*_created_at, so no batch
+            # ever rescans the dead tuples an earlier one left behind -- which is
+            # what made a LIMIT-only sweep degrade quadratically. On an
+            # append-only table created_at order is also physical order, so each
+            # batch walks a contiguous run of the oldest pages.
+            def delete_batch(watermark: Optional[int]) -> Optional[int]:
+                """Delete one batch, returning the watermark to resume from, or
+                None when this table is done."""
+                nonlocal total
+                with self.engine.begin() as c:
+                    probe = sa.select(table.c.created_at).where(
+                        table.c.created_at < cutoff
+                    )
+                    if watermark is not None:
+                        probe = probe.where(table.c.created_at > watermark)
+                    step: Optional[int] = c.execute(
+                        probe.order_by(table.c.created_at)
+                        .limit(1)
+                        .offset(batch_size - 1)
+                    ).scalar()
+                    bounds: List[sa.ColumnElement[bool]] = [table.c.created_at < cutoff]
+                    if watermark is not None:
+                        bounds.append(table.c.created_at > watermark)
+                    if step is not None:
+                        # created_at ties may push the batch slightly over batch_size
+                        bounds.append(table.c.created_at <= step)
+                    total += c.execute(sa.delete(table).where(*bounds)).rowcount
+                    return step
+
+            watermark: Optional[int] = None
             while True:
                 if deadline is not None and time.monotonic() >= deadline:
                     break
-                # The inner scan is BRIN-driven, and a bitmap heap scan returns
-                # rows in physical order -- which on an append-only table is
-                # insertion order. Each batch therefore walks a contiguous run of
-                # the oldest pages instead of scattering across the heap.
-                # SQLite names the physical row identifier rowid, not ctid.
-                row_id: sa.ColumnClause[Any] = sa.column(
-                    "rowid" if self._is_sqlite else "ctid"
+                watermark = self._retry_on_serialization_error(
+                    functools.partial(delete_batch, watermark)
                 )
-                victims = (
-                    sa.select(row_id)
-                    .select_from(table)
-                    .where(table.c.created_at < cutoff)
-                    .limit(batch_size)
-                    .scalar_subquery()
-                )
-                stmt = sa.delete(table).where(row_id.in_(victims))
-
-                def delete_batch() -> int:
-                    with self.engine.begin() as c:
-                        return c.execute(stmt).rowcount
-
-                rows = self._retry_on_serialization_error(delete_batch)
-                total += rows
                 batches += 1
-                if rows < batch_size:
+                if watermark is None:
                     break
-            dbos_logger.info(
+            dbos_logger.warning(
                 f"[gc-timing] payload delete {table.name}: "
                 f"{time.monotonic() - t_table:.3f}s, {total} rows, {batches} batches"
             )
@@ -5520,10 +5533,10 @@ class SystemDatabase(ABC):
         if deleted[0] or deleted[1]:
             t_vacuum = time.monotonic()
             self._vacuum_tables(["workflow_inputs", "workflow_outputs"])
-            dbos_logger.info(
+            dbos_logger.warning(
                 f"[gc-timing] payload vacuum: {time.monotonic() - t_vacuum:.3f}s"
             )
-        dbos_logger.info(f"[gc-timing] payload lag: {lag_ms}ms")
+        dbos_logger.warning(f"[gc-timing] payload lag: {lag_ms}ms")
         return deleted[0], deleted[1], lag_ms
 
     def _vacuum_tables(self, tables: List[str]) -> None:
@@ -5567,7 +5580,7 @@ class SystemDatabase(ABC):
                     ):
                         cutoff_epoch_timestamp_ms = rows_based_cutoff
 
-        dbos_logger.info(
+        dbos_logger.warning(
             f"[gc-timing] status cutoff: {time.monotonic() - t_cutoff:.3f}s"
         )
         if cutoff_epoch_timestamp_ms is None:
@@ -5642,7 +5655,7 @@ class SystemDatabase(ABC):
                     break
                 watermark = next_watermark
 
-        dbos_logger.info(
+        dbos_logger.warning(
             f"[gc-timing] status delete: {time.monotonic() - t_delete:.3f}s, "
             f"{status_rows_deleted} rows, {status_batches} batches"
         )

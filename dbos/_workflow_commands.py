@@ -102,13 +102,13 @@ def garbage_collect(
         rows_threshold=rows_threshold,
         batch_size=batch_size,
     )
-    dbos.logger.info(f"[gc-timing] status total: {time.monotonic() - t_status:.3f}s")
+    dbos.logger.warning(f"[gc-timing] status total: {time.monotonic() - t_status:.3f}s")
     # The application database is deprecated: only pay for its cleanup when one exists.
     if cutoff is not None and dbos._app_db is not None:
         t_appdb = time.monotonic()
         retained_ids = dbos._sys_db.list_retained_workflow_ids(cutoff)
         dbos._app_db.garbage_collect(cutoff, retained_ids, batch_size=batch_size)
-        dbos.logger.info(
+        dbos.logger.warning(
             f"[gc-timing] appdb: {time.monotonic() - t_appdb:.3f}s, "
             f"{len(retained_ids)} retained ids"
         )
@@ -119,11 +119,11 @@ def garbage_collect(
     inputs_deleted, outputs_deleted, lag_ms = dbos._sys_db.garbage_collect_payloads(
         batch_size=batch_size or DEFAULT_GC_BATCH_SIZE
     )
-    dbos.logger.info(
+    dbos.logger.warning(
         f"[gc-timing] payload total: {time.monotonic() - t_payload:.3f}s, "
         f"{inputs_deleted} inputs, {outputs_deleted} outputs"
     )
-    dbos.logger.info(f"[gc-timing] GC TOTAL: {time.monotonic() - t_total:.3f}s")
+    dbos.logger.warning(f"[gc-timing] GC TOTAL: {time.monotonic() - t_total:.3f}s")
 
 
 def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:

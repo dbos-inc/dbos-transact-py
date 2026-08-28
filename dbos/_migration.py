@@ -1183,20 +1183,19 @@ ALTER TABLE {quoted_schema}."queues" ADD COLUMN IF NOT EXISTS "partition_rate_li
 
 
 def get_dbos_migration_hundrednine(quoted_schema: str) -> str:
-    # BRIN, not btree: created_at is append-correlated, so the index is kilobytes
-    # and costs almost nothing on the enqueue path, while still pruning the
-    # retention sweep to the oldest page ranges.
+    # Btree, not BRIN: the sweep seeds its watermark with an index-min and sizes
+    # each batch with an ordered LIMIT/OFFSET probe, neither of which BRIN can
+    # serve. created_at is monotonic, so inserts always land on the rightmost
+    # leaf -- far cheaper than the UUID primary key on the same row.
     # cost_delay 0 because the default throttles autovacuum to ~40 MB/s; a high
     # scale_factor because each pass pays a full PK index scan regardless of how
     # few rows it reclaims, so few large passes beat many small ones.
     return f"""
 CREATE INDEX IF NOT EXISTS "idx_workflow_inputs_created_at"
-    ON {quoted_schema}."workflow_inputs" USING BRIN ("created_at")
-    WITH (pages_per_range = 32, autosummarize = on);
+    ON {quoted_schema}."workflow_inputs" ("created_at");
 
 CREATE INDEX IF NOT EXISTS "idx_workflow_outputs_created_at"
-    ON {quoted_schema}."workflow_outputs" USING BRIN ("created_at")
-    WITH (pages_per_range = 32, autosummarize = on);
+    ON {quoted_schema}."workflow_outputs" ("created_at");
 
 ALTER TABLE {quoted_schema}."workflow_inputs" SET (
     autovacuum_vacuum_cost_delay = 0,
