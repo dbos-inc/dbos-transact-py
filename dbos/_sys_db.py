@@ -1006,17 +1006,11 @@ class SystemDatabase(ABC):
             )
             .on_conflict_do_nothing(index_elements=["workflow_uuid"])
         )
-        # On Postgres the inputs insert rides along as a data-modifying CTE, so the
-        # pair costs one round trip; such a CTE runs exactly once and to completion
-        # whether or not the primary statement reads its output. SQLite allows only
-        # SELECT inside a CTE, and its round trips are local anyway.
-        if not self._is_sqlite:
-            cmd = cmd.add_cte(inputs_insert.cte("workflow_inputs_insert"))
-
+        # Two statements, not a data-modifying CTE: at scale the CTE costs more
+        # than the round trip it saves.
         try:
             results = conn.execute(cmd)
-            if self._is_sqlite:
-                conn.execute(inputs_insert)
+            conn.execute(inputs_insert)
         except DBAPIError as dbapi_error:
             # Unique constraint violation for the deduplication ID
             if self._is_unique_constraint_violation(dbapi_error):
@@ -1118,13 +1112,7 @@ class SystemDatabase(ABC):
         """
         with self.engine.begin() as c:
             now_ms = self._now_ms_sql()
-            if self._is_sqlite:
-                return self._update_workflow_outcome_sqlite(
-                    c, workflow_id, status, output, error, now_ms
-                )
-            # One round trip: the payload insert selects from the update's RETURNING,
-            # so it writes only when the update landed and never orphans a payload.
-            outcome_update = (
+            result = c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .values(
                     status=status,
@@ -1138,72 +1126,22 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.status
                     == WorkflowStatusString.PENDING.value
                 )
-                .returning(SystemSchema.workflow_status.c.workflow_uuid)
-                .cte("outcome_update")
             )
-            outcome_insert = (
+            if result.rowcount == 0:
+                # The outcome was not ours to write, so leave no orphan payload.
+                return False
+            c.execute(
                 self.dialect.insert(SystemSchema.workflow_outputs)
-                .from_select(
-                    ["workflow_uuid", "output", "error", "serialization", "created_at"],
-                    sa.select(
-                        outcome_update.c.workflow_uuid,
-                        sa.literal(output, sa.Text()),
-                        sa.literal(error, sa.Text()),
-                        sa.literal(None, sa.Text()),
-                        sa.literal(int(time.time() * 1000), sa.BigInteger()),
-                    ),
+                .values(
+                    workflow_uuid=workflow_id,
+                    output=output,
+                    error=error,
+                    serialization=None,
+                    created_at=int(time.time() * 1000),
                 )
                 .on_conflict_do_nothing(index_elements=["workflow_uuid"])
-                .cte("outcome_insert")
             )
-            # Count from the update, not the insert: a conflicting payload would
-            # otherwise report an update that did land as one that did not.
-            landed = c.execute(
-                sa.select(sa.func.count())
-                .select_from(outcome_update)
-                .add_cte(outcome_insert)
-            ).scalar()
-            return bool(landed)
-
-    def _update_workflow_outcome_sqlite(
-        self,
-        c: sa.Connection,
-        workflow_id: str,
-        status: WorkflowStatuses,
-        output: Optional[str],
-        error: Optional[str],
-        now_ms: Any,
-    ) -> bool:
-        """Two statements, since SQLite allows only SELECT inside a CTE."""
-        result = c.execute(
-            sa.update(SystemSchema.workflow_status)
-            .values(
-                status=status,
-                deduplication_id=None,
-                updated_at=now_ms,
-                completed_at=now_ms,
-            )
-            .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
-            .where(
-                SystemSchema.workflow_status.c.status
-                == WorkflowStatusString.PENDING.value
-            )
-        )
-        if result.rowcount == 0:
-            # The outcome was not ours to write, so leave no orphan payload.
-            return False
-        c.execute(
-            self.dialect.insert(SystemSchema.workflow_outputs)
-            .values(
-                workflow_uuid=workflow_id,
-                output=output,
-                error=error,
-                serialization=None,
-                created_at=int(time.time() * 1000),
-            )
-            .on_conflict_do_nothing(index_elements=["workflow_uuid"])
-        )
-        return True
+            return True
 
     def cancel_workflows(
         self,
