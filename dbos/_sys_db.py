@@ -5463,7 +5463,12 @@ class SystemDatabase(ABC):
         """
         if batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
+        # TEMPORARY [gc-timing]: phase timings for retention benchmarking. Remove.
+        t_cutoff = time.monotonic()
         cutoff = self._payload_retention_cutoff()
+        dbos_logger.info(
+            f"[gc-timing] payload cutoff: {time.monotonic() - t_cutoff:.3f}s"
+        )
         if cutoff is None:
             # No workflows at all: nothing anchors the cutoff, so sweep nothing.
             return 0, 0, None
@@ -5475,6 +5480,8 @@ class SystemDatabase(ABC):
         deleted = []
         for table in (SystemSchema.workflow_inputs, SystemSchema.workflow_outputs):
             total = 0
+            batches = 0
+            t_table = time.monotonic()
             while True:
                 if deadline is not None and time.monotonic() >= deadline:
                     break
@@ -5501,12 +5508,22 @@ class SystemDatabase(ABC):
 
                 rows = self._retry_on_serialization_error(delete_batch)
                 total += rows
+                batches += 1
                 if rows < batch_size:
                     break
+            dbos_logger.info(
+                f"[gc-timing] payload delete {table.name}: "
+                f"{time.monotonic() - t_table:.3f}s, {total} rows, {batches} batches"
+            )
             deleted.append(total)
 
         if deleted[0] or deleted[1]:
+            t_vacuum = time.monotonic()
             self._vacuum_tables(["workflow_inputs", "workflow_outputs"])
+            dbos_logger.info(
+                f"[gc-timing] payload vacuum: {time.monotonic() - t_vacuum:.3f}s"
+            )
+        dbos_logger.info(f"[gc-timing] payload lag: {lag_ms}ms")
         return deleted[0], deleted[1], lag_ms
 
     def _vacuum_tables(self, tables: List[str]) -> None:
@@ -5522,6 +5539,8 @@ class SystemDatabase(ABC):
         actually used, or None when there is nothing to collect."""
         if batch_size is not None and batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
+        # TEMPORARY [gc-timing]: phase timings for retention benchmarking. Remove.
+        t_cutoff = time.monotonic()
         if rows_threshold is not None:
             with self.engine.begin() as c:
                 # Get the completed_at timestamp of the rows_threshold newest completed row
@@ -5548,6 +5567,9 @@ class SystemDatabase(ABC):
                     ):
                         cutoff_epoch_timestamp_ms = rows_based_cutoff
 
+        dbos_logger.info(
+            f"[gc-timing] status cutoff: {time.monotonic() - t_cutoff:.3f}s"
+        )
         if cutoff_epoch_timestamp_ms is None:
             return None
 
@@ -5562,11 +5584,19 @@ class SystemDatabase(ABC):
             ),
         )
 
+        # TEMPORARY [gc-timing]
+        t_delete = time.monotonic()
+        status_rows_deleted = 0
+        status_batches = 0
+
         if batch_size is None:
 
             def delete_all() -> None:
                 with self.engine.begin() as c:
-                    c.execute(sa.delete(SystemSchema.workflow_status).where(gc_filter))
+                    nonlocal status_rows_deleted
+                    status_rows_deleted += c.execute(
+                        sa.delete(SystemSchema.workflow_status).where(gc_filter)
+                    ).rowcount
 
             self._retry_on_serialization_error(delete_all)
         else:
@@ -5596,7 +5626,10 @@ class SystemDatabase(ABC):
                         bounds.append(
                             SystemSchema.workflow_status.c.completed_at <= step
                         )
-                    c.execute(sa.delete(SystemSchema.workflow_status).where(*bounds))
+                    nonlocal status_rows_deleted
+                    status_rows_deleted += c.execute(
+                        sa.delete(SystemSchema.workflow_status).where(*bounds)
+                    ).rowcount
                     return step
 
             watermark = 0
@@ -5604,10 +5637,15 @@ class SystemDatabase(ABC):
                 next_watermark = self._retry_on_serialization_error(
                     functools.partial(delete_batch, watermark)
                 )
+                status_batches += 1
                 if next_watermark is None:
                     break
                 watermark = next_watermark
 
+        dbos_logger.info(
+            f"[gc-timing] status delete: {time.monotonic() - t_delete:.3f}s, "
+            f"{status_rows_deleted} rows, {status_batches} batches"
+        )
         return cutoff_epoch_timestamp_ms
 
     def list_retained_workflow_ids(self, cutoff_epoch_timestamp_ms: int) -> List[str]:

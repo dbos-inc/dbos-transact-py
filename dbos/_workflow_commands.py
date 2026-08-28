@@ -1,3 +1,4 @@
+import time
 from typing import TYPE_CHECKING, Optional
 
 from dbos._context import get_local_dbos_context
@@ -93,26 +94,36 @@ def garbage_collect(
 ) -> None:
     if cutoff_epoch_timestamp_ms is None and rows_threshold is None:
         return
+    # TEMPORARY [gc-timing]: phase timings for retention benchmarking. Remove.
+    t_total = time.monotonic()
+    t_status = time.monotonic()
     cutoff = dbos._sys_db.garbage_collect(
         cutoff_epoch_timestamp_ms=cutoff_epoch_timestamp_ms,
         rows_threshold=rows_threshold,
         batch_size=batch_size,
     )
+    dbos.logger.info(f"[gc-timing] status total: {time.monotonic() - t_status:.3f}s")
     # The application database is deprecated: only pay for its cleanup when one exists.
     if cutoff is not None and dbos._app_db is not None:
+        t_appdb = time.monotonic()
         retained_ids = dbos._sys_db.list_retained_workflow_ids(cutoff)
         dbos._app_db.garbage_collect(cutoff, retained_ids, batch_size=batch_size)
+        dbos.logger.info(
+            f"[gc-timing] appdb: {time.monotonic() - t_appdb:.3f}s, "
+            f"{len(retained_ids)} retained ids"
+        )
     # Payloads sweep on their own cutoff, after the status sweep so it cannot be
     # stalled by a slow one. lag_ms is the health signal: a single old
     # non-terminal workflow pins the cutoff and holds up all reclamation.
+    t_payload = time.monotonic()
     inputs_deleted, outputs_deleted, lag_ms = dbos._sys_db.garbage_collect_payloads(
         batch_size=batch_size or DEFAULT_GC_BATCH_SIZE
     )
-    if inputs_deleted or outputs_deleted:
-        dbos.logger.debug(
-            f"Payload GC deleted {inputs_deleted} inputs and {outputs_deleted} "
-            f"outputs, running {lag_ms}ms behind"
-        )
+    dbos.logger.info(
+        f"[gc-timing] payload total: {time.monotonic() - t_payload:.3f}s, "
+        f"{inputs_deleted} inputs, {outputs_deleted} outputs"
+    )
+    dbos.logger.info(f"[gc-timing] GC TOTAL: {time.monotonic() - t_total:.3f}s")
 
 
 def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:
