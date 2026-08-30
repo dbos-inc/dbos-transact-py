@@ -152,6 +152,7 @@ from ._dbos_config import (
 )
 from ._error import (
     DBOSConflictingRegistrationError,
+    DBOSDuplicateWorkflowNameError,
     DBOSException,
     DBOSNonExistentWorkflowError,
     DBOSPatchNondeterminismError,
@@ -239,6 +240,21 @@ class DBOSRegistry:
         if name in self.function_type_map:
             if self.function_type_map[name] != functype:
                 raise DBOSConflictingRegistrationError(name)
+            # Two functions in *different* modules claiming one registered name is
+            # not a re-registration: the name is the durable identity recovery
+            # resolves, so only one of them could ever be resumed. Same-module
+            # re-registration (module reload, notebook cell re-run) keeps the
+            # existing warning.
+            previous_module = getattr(self.workflow_info_map.get(name), "__module__", None)
+            current_module = getattr(wrapped_func, "__module__", None)
+            if (
+                previous_module is not None
+                and current_module is not None
+                and previous_module != current_module
+            ):
+                raise DBOSDuplicateWorkflowNameError(
+                    name, previous_module, current_module
+                )
             if name != TEMP_SEND_WF_NAME:
                 # Remove the `<temp>` prefix from the function name to avoid confusion
                 truncated_name = name.replace("<temp>.", "")
