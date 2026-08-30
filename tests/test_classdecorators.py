@@ -13,6 +13,7 @@ from dbos import DBOS, DBOSConfiguredInstance, Queue, SetWorkflowID
 # Private API used because this is a test
 from dbos._context import DBOSContextEnsure, assert_current_dbos_context
 from dbos._dbos_config import DBOSConfig
+from dbos._error import DBOSDuplicateWorkflowNameError
 from tests.conftest import queue_entries_are_cleaned_up, set_workflow_status
 
 
@@ -1006,3 +1007,30 @@ def test_class_with_only_steps(dbos: DBOS) -> None:
     steps = DBOS.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 2
     assert steps[1]["output"] == steps[1]["output"] == input * 2
+
+
+def test_duplicate_workflow_name_across_modules(dbos: DBOS) -> None:
+    """A registered name is the durable identity recovery resolves, so two
+    modules cannot both claim one. Re-registration inside a single module
+    (module reload, notebook cell re-run) stays a warning."""
+    import tests.dupname_workflows1  # noqa: F401
+
+    with pytest.raises(DBOSDuplicateWorkflowNameError) as exc_info:
+        import tests.dupname_workflowsa  # noqa: F401
+
+    assert "duplicated_workflow_name" in str(exc_info.value)
+    assert "dupname_workflows1" in str(exc_info.value)
+    assert "dupname_workflowsa" in str(exc_info.value)
+
+
+def test_duplicate_workflow_name_same_module_still_allowed(dbos: DBOS) -> None:
+    """Registering the same name twice from one module is how a reloaded module
+    or a re-run notebook cell behaves; it must keep warning rather than raise."""
+
+    @DBOS.workflow()
+    def reregistered(x: int) -> str:
+        return "first"
+
+    @DBOS.workflow(name="reregistered")
+    def reregistered_again(x: int) -> str:
+        return "second"
