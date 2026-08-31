@@ -1,7 +1,11 @@
+import importlib
 import logging
+import os
+import sys
 import threading
 import time
 import uuid
+from types import ModuleType
 from typing import Callable, Optional
 
 import pytest
@@ -9,11 +13,11 @@ import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, DBOSConfiguredInstance, Queue, SetWorkflowID
-from dbos._error import DBOSException
 
 # Private API used because this is a test
 from dbos._context import DBOSContextEnsure, assert_current_dbos_context
 from dbos._dbos_config import DBOSConfig
+from dbos._error import DBOSException
 from tests.conftest import queue_entries_are_cleaned_up, set_workflow_status
 
 
@@ -1009,48 +1013,100 @@ def test_class_with_only_steps(dbos: DBOS) -> None:
     assert steps[1]["output"] == steps[1]["output"] == input * 2
 
 
+def _fresh_import(module_name: str) -> ModuleType:
+    """Import a module, re-running its decorators even if it is already cached."""
+    sys.modules.pop(module_name, None)
+    return importlib.import_module(module_name)
+
+
+def _capture_dbos_warnings(caplog: pytest.LogCaptureFixture) -> Callable[[], None]:
+    """Route dbos warnings into caplog; returns a restore callable."""
+    original_propagate = logging.getLogger("dbos").propagate
+    caplog.set_level(logging.WARNING, "dbos")
+    logging.getLogger("dbos").propagate = True
+
+    def restore() -> None:
+        logging.getLogger("dbos").propagate = original_propagate
+
+    return restore
+
+
 def test_duplicate_workflow_name_across_modules(dbos: DBOS) -> None:
     """A registered name is the durable identity recovery resolves, so two
     genuinely different functions cannot both claim one."""
-    import tests.dupname_workflows1  # noqa: F401
+    # Imported fresh so the decorators run against this test's registry
+    # regardless of what an earlier test already pulled into sys.modules.
+    _fresh_import("tests.dupname_workflows1")
 
     with pytest.raises(DBOSException) as exc_info:
-        import tests.dupname_workflowsa  # noqa: F401
+        _fresh_import("tests.dupname_workflowsa")
 
     assert "duplicated_workflow_name" in str(exc_info.value)
     assert "dupname_workflows1.py" in str(exc_info.value)
     assert "dupname_workflowsa.py" in str(exc_info.value)
 
 
-def test_same_file_imported_under_two_names_still_warns(dbos: DBOS) -> None:
-    """The case that must not raise: one file, imported twice under different
-    module names. The function objects differ but the code came from the same
-    place, so this is a re-registration and keeps warning."""
-    import importlib
-    import sys
+def test_same_file_imported_under_two_names_warns(
+    dbos: DBOS, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One file reached under two module names is a re-registration, not a
+    collision: the function objects differ but the code came from one place."""
+    restore = _capture_dbos_warnings(caplog)
+    try:
+        first = _fresh_import("tests.dupname_workflows1")
+        # The same file, reached again as a top-level module: a second, distinct
+        # sys.modules entry built from one source file.
+        monkeypatch.syspath_prepend(os.path.dirname(__file__))
+        second = _fresh_import("dupname_workflows1")
 
-    import tests.dupname_workflows1
+        assert second is not first
+        # Identity would wrongly reject this; the shared code origin is what makes
+        # it a re-registration.
+        assert second.duplicated_workflow_name is not first.duplicated_workflow_name
+        assert (
+            "Duplicate registration of function 'duplicated_workflow_name'"
+            in caplog.text
+        )
+    finally:
+        sys.modules.pop("dupname_workflows1", None)
+        restore()
 
-    first = tests.dupname_workflows1.duplicated_workflow_name
 
-    sys.modules.pop("tests.dupname_workflows1", None)
-    reimported = importlib.import_module("tests.dupname_workflows1")
-    second = reimported.duplicated_workflow_name
+def test_module_reload_warns(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
+    """Reloading a module re-runs its decorators against the same source. That is
+    a re-registration and must keep warning rather than raise."""
+    restore = _capture_dbos_warnings(caplog)
+    try:
+        module = _fresh_import("tests.dupname_workflows1")
+        importlib.reload(module)
 
-    # different objects, same origin -- which is exactly why identity is not
-    # the right test and the origin is
-    assert first is not second
-    assert first.__code__.co_filename == second.__code__.co_filename
+        assert (
+            "Duplicate registration of function 'duplicated_workflow_name'"
+            in caplog.text
+        )
+    finally:
+        restore()
 
 
-def test_duplicate_workflow_name_same_module_still_allowed(dbos: DBOS) -> None:
-    """Registering the same name twice from one module is how a reloaded module
-    or a re-run notebook cell behaves; it must keep warning rather than raise."""
+def test_duplicate_step_name_warns(
+    dbos: DBOS, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A step registers a `<temp>` name wrapping a library-local closure, so its
+    code origin is DBOS's own source and is never compared. A sync and an async
+    step are two such closures, and must not be reported as two user functions."""
+    restore = _capture_dbos_warnings(caplog)
+    try:
 
-    @DBOS.workflow()
-    def reregistered(x: int) -> str:
-        return "first"
+        @DBOS.step(name="duplicated_step_name")
+        def step_one() -> str:
+            return "one"
 
-    @DBOS.workflow(name="reregistered")
-    def reregistered_again(x: int) -> str:
-        return "second"
+        @DBOS.step(name="duplicated_step_name")
+        async def step_two() -> str:
+            return "two"
+
+        assert (
+            "Duplicate registration of function 'duplicated_step_name'" in caplog.text
+        )
+    finally:
+        restore()
