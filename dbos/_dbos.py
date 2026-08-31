@@ -254,28 +254,16 @@ class DBOSRegistry:
         if name in self.function_type_map:
             if self.function_type_map[name] != functype:
                 raise DBOSConflictingRegistrationError(name)
-            # A registered name is the durable identity recovery resolves, so two
-            # genuinely different functions cannot both claim one: only one of
-            # them could ever be resumed, and which one depends on import order.
-            #
-            # The same file imported under two names is a different thing and
-            # must keep working, so this compares where the code came from
-            # rather than the module it was imported as. `is` will not do here:
-            # a re-import builds a fresh function object from the same source,
-            # so the objects differ while the origin does not.
-            #
-            # This mirrors `register_class` below, which compares identity and
-            # raises only when the objects genuinely differ.
-            previous = _code_origin(self.workflow_info_map.get(name))
-            current = _code_origin(wrapped_func)
-            if previous is not None and current is not None and previous != current:
-                raise DBOSException(
-                    f"Operation (Name: {name}) is registered by two different "
-                    f"functions, at {previous[0]}:{previous[1]} and "
-                    f"{current[0]}:{current[1]}. A registered name is the durable "
-                    f"identity used to resume a workflow, so only one of these "
-                    f"could be recovered, and which one depends on import order."
-                )
+            # Error if a workflow is registered with the same name in different modules.
+            if not name.startswith("<temp>."):
+                previous = _code_origin(self.workflow_info_map.get(name))
+                current = _code_origin(wrapped_func)
+                if previous is not None and current is not None and previous != current:
+                    raise DBOSException(
+                        f"Operation (Name: {name}) is registered by two different "
+                        f"functions, at {previous[0]}:{previous[1]} and "
+                        f"{current[0]}:{current[1]}."
+                    )
             if name != TEMP_SEND_WF_NAME:
                 # Remove the `<temp>` prefix from the function name to avoid confusion
                 truncated_name = name.replace("<temp>.", "")

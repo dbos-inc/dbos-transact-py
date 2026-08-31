@@ -258,7 +258,6 @@ class DBOSConflictingRegistrationError(DBOSException):
         )
 
 
-
 class DBOSUnexpectedStepError(DBOSException):
     """Exception raised when a step has an unexpected recorded name."""
 
