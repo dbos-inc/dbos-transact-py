@@ -1190,6 +1190,14 @@ def get_dbos_migration_hundrednine(quoted_schema: str) -> str:
     # cost_delay 0 because the default throttles autovacuum to ~40 MB/s; a high
     # scale_factor because each pass pays a full PK index scan regardless of how
     # few rows it reclaims, so few large passes beat many small ones.
+    # toast_tuple_target keeps payloads up to ~4 KB inline instead of out-of-line,
+    # sparing every read a TOAST index lookup plus chunk fetches on the hot path.
+    # Raising it works where lowering it does nothing: TOASTing is *entered* at the
+    # fixed 2032-byte TOAST_TUPLE_THRESHOLD, but once inside, a row already under
+    # the target has nothing moved out. Anything larger still TOASTs normally, so
+    # there is no row-too-big failure. 4080 = 8160/2, the usable page space, so an
+    # inline row always leaves room for a second; 4096 would admit rows that fit
+    # only one per page and waste half of it.
     return f"""
 CREATE INDEX IF NOT EXISTS "idx_workflow_inputs_created_at"
     ON {quoted_schema}."workflow_inputs" ("created_at");
@@ -1201,14 +1209,16 @@ ALTER TABLE {quoted_schema}."workflow_inputs" SET (
     autovacuum_vacuum_cost_delay = 0,
     autovacuum_vacuum_scale_factor = 0.15,
     autovacuum_vacuum_insert_threshold = 100000,
-    autovacuum_freeze_min_age = 0
+    autovacuum_freeze_min_age = 0,
+    toast_tuple_target = 4080
 );
 
 ALTER TABLE {quoted_schema}."workflow_outputs" SET (
     autovacuum_vacuum_cost_delay = 0,
     autovacuum_vacuum_scale_factor = 0.15,
     autovacuum_vacuum_insert_threshold = 100000,
-    autovacuum_freeze_min_age = 0
+    autovacuum_freeze_min_age = 0,
+    toast_tuple_target = 4080
 );
 """
 
