@@ -9,11 +9,11 @@ import sqlalchemy as sa
 
 # Public API
 from dbos import DBOS, DBOSConfiguredInstance, Queue, SetWorkflowID
+from dbos._error import DBOSException
 
 # Private API used because this is a test
 from dbos._context import DBOSContextEnsure, assert_current_dbos_context
 from dbos._dbos_config import DBOSConfig
-from dbos._error import DBOSDuplicateWorkflowNameError
 from tests.conftest import queue_entries_are_cleaned_up, set_workflow_status
 
 
@@ -1011,16 +1011,36 @@ def test_class_with_only_steps(dbos: DBOS) -> None:
 
 def test_duplicate_workflow_name_across_modules(dbos: DBOS) -> None:
     """A registered name is the durable identity recovery resolves, so two
-    modules cannot both claim one. Re-registration inside a single module
-    (module reload, notebook cell re-run) stays a warning."""
+    genuinely different functions cannot both claim one."""
     import tests.dupname_workflows1  # noqa: F401
 
-    with pytest.raises(DBOSDuplicateWorkflowNameError) as exc_info:
+    with pytest.raises(DBOSException) as exc_info:
         import tests.dupname_workflowsa  # noqa: F401
 
     assert "duplicated_workflow_name" in str(exc_info.value)
-    assert "dupname_workflows1" in str(exc_info.value)
-    assert "dupname_workflowsa" in str(exc_info.value)
+    assert "dupname_workflows1.py" in str(exc_info.value)
+    assert "dupname_workflowsa.py" in str(exc_info.value)
+
+
+def test_same_file_imported_under_two_names_still_warns(dbos: DBOS) -> None:
+    """The case that must not raise: one file, imported twice under different
+    module names. The function objects differ but the code came from the same
+    place, so this is a re-registration and keeps warning."""
+    import importlib
+    import sys
+
+    import tests.dupname_workflows1
+
+    first = tests.dupname_workflows1.duplicated_workflow_name
+
+    sys.modules.pop("tests.dupname_workflows1", None)
+    reimported = importlib.import_module("tests.dupname_workflows1")
+    second = reimported.duplicated_workflow_name
+
+    # different objects, same origin -- which is exactly why identity is not
+    # the right test and the origin is
+    assert first is not second
+    assert first.__code__.co_filename == second.__code__.co_filename
 
 
 def test_duplicate_workflow_name_same_module_still_allowed(dbos: DBOS) -> None:

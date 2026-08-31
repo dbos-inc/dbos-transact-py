@@ -152,7 +152,6 @@ from ._dbos_config import (
 )
 from ._error import (
     DBOSConflictingRegistrationError,
-    DBOSDuplicateWorkflowNameError,
     DBOSException,
     DBOSNonExistentWorkflowError,
     DBOSPatchNondeterminismError,
@@ -220,6 +219,21 @@ RegisteredJob = Tuple[
 ]
 
 
+def _code_origin(fn: Any) -> Optional[Tuple[str, int]]:
+    """Where a function's code was defined, as (file, first line).
+
+    Two imports of one file yield different function objects sharing an origin;
+    two different functions never share one. Decorated callables are unwrapped
+    so the comparison sees the underlying definition.
+    """
+    while fn is not None and hasattr(fn, "__wrapped__"):
+        fn = fn.__wrapped__
+    code = getattr(fn, "__code__", None)
+    if code is None:
+        return None
+    return (code.co_filename, code.co_firstlineno)
+
+
 class DBOSRegistry:
     def __init__(self) -> None:
         self.workflow_info_map: dict[str, Callable[..., Any]] = {}
@@ -240,20 +254,27 @@ class DBOSRegistry:
         if name in self.function_type_map:
             if self.function_type_map[name] != functype:
                 raise DBOSConflictingRegistrationError(name)
-            # Two functions in *different* modules claiming one registered name is
-            # not a re-registration: the name is the durable identity recovery
-            # resolves, so only one of them could ever be resumed. Same-module
-            # re-registration (module reload, notebook cell re-run) keeps the
-            # existing warning.
-            previous_module = getattr(self.workflow_info_map.get(name), "__module__", None)
-            current_module = getattr(wrapped_func, "__module__", None)
-            if (
-                previous_module is not None
-                and current_module is not None
-                and previous_module != current_module
-            ):
-                raise DBOSDuplicateWorkflowNameError(
-                    name, previous_module, current_module
+            # A registered name is the durable identity recovery resolves, so two
+            # genuinely different functions cannot both claim one: only one of
+            # them could ever be resumed, and which one depends on import order.
+            #
+            # The same file imported under two names is a different thing and
+            # must keep working, so this compares where the code came from
+            # rather than the module it was imported as. `is` will not do here:
+            # a re-import builds a fresh function object from the same source,
+            # so the objects differ while the origin does not.
+            #
+            # This mirrors `register_class` below, which compares identity and
+            # raises only when the objects genuinely differ.
+            previous = _code_origin(self.workflow_info_map.get(name))
+            current = _code_origin(wrapped_func)
+            if previous is not None and current is not None and previous != current:
+                raise DBOSException(
+                    f"Operation (Name: {name}) is registered by two different "
+                    f"functions, at {previous[0]}:{previous[1]} and "
+                    f"{current[0]}:{current[1]}. A registered name is the durable "
+                    f"identity used to resume a workflow, so only one of these "
+                    f"could be recovered, and which one depends on import order."
                 )
             if name != TEMP_SEND_WF_NAME:
                 # Remove the `<temp>` prefix from the function name to avoid confusion

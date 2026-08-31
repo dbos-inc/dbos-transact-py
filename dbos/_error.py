@@ -70,7 +70,6 @@ class DBOSErrorCode(Enum):
     StepTimeout = 18
     ConflictingRegistrationError = 25
     QueryTimeout = 26
-    DuplicateWorkflowName = 27
 
 
 #######################################
@@ -258,17 +257,6 @@ class DBOSConflictingRegistrationError(DBOSException):
             dbos_error_code=DBOSErrorCode.ConflictingRegistrationError.value,
         )
 
-
-class DBOSDuplicateWorkflowNameError(DBOSException):
-    """Exception raised when two functions in different modules register the same name."""
-
-    def __init__(self, name: str, first_module: str, second_module: str) -> None:
-        super().__init__(
-            f"Operation (Name: {name}) is registered by both '{first_module}' and "
-            f"'{second_module}'. Registered names are the durable identity used to "
-            f"resume a workflow, so only one of these can be recovered.",
-            dbos_error_code=DBOSErrorCode.DuplicateWorkflowName.value,
-        )
 
 
 class DBOSUnexpectedStepError(DBOSException):
