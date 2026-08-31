@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -5457,6 +5458,62 @@ class SystemDatabase(ABC):
                 sa.select(sa.func.min(SystemSchema.workflow_status.c.created_at))
             ).scalar()
 
+    def _sweep_payload_table(
+        self,
+        table: sa.Table,
+        cutoff: int,
+        batch_size: int,
+        deadline: Optional[float],
+    ) -> int:
+        """Delete one payload table's orphaned rows oldest-first, returning the count.
+
+        Same shape as the status sweep: advance a created_at watermark and delete
+        a bounded range per committed transaction. Both the probe and the delete
+        are driven by idx_workflow_*_created_at, so no batch ever rescans the dead
+        tuples an earlier one left behind -- which is what made a LIMIT-only sweep
+        degrade quadratically. On an append-only table created_at order is also
+        physical order, so each batch walks a contiguous run of the oldest pages.
+        """
+        total = 0
+        batches = 0
+        t_table = time.monotonic()
+
+        def delete_batch(watermark: Optional[int]) -> Optional[int]:
+            """Delete one batch, returning the watermark to resume from, or None
+            when this table is done."""
+            nonlocal total
+            with self.engine.begin() as c:
+                probe = sa.select(table.c.created_at).where(table.c.created_at < cutoff)
+                if watermark is not None:
+                    probe = probe.where(table.c.created_at > watermark)
+                step: Optional[int] = c.execute(
+                    probe.order_by(table.c.created_at).limit(1).offset(batch_size - 1)
+                ).scalar()
+                bounds: List[sa.ColumnElement[bool]] = [table.c.created_at < cutoff]
+                if watermark is not None:
+                    bounds.append(table.c.created_at > watermark)
+                if step is not None:
+                    # created_at ties may push the batch slightly over batch_size
+                    bounds.append(table.c.created_at <= step)
+                total += c.execute(sa.delete(table).where(*bounds)).rowcount
+                return step
+
+        watermark: Optional[int] = None
+        while True:
+            if deadline is not None and time.monotonic() >= deadline:
+                break
+            watermark = self._retry_on_serialization_error(
+                functools.partial(delete_batch, watermark)
+            )
+            batches += 1
+            if watermark is None:
+                break
+        dbos_logger.warning(
+            f"[gc-timing] payload delete {table.name}: "
+            f"{time.monotonic() - t_table:.3f}s, {total} rows, {batches} batches"
+        )
+        return total
+
     def garbage_collect_payloads(
         self,
         *,
@@ -5486,58 +5543,26 @@ class SystemDatabase(ABC):
             time.monotonic() + time_budget_sec if time_budget_sec is not None else None
         )
 
-        deleted = []
-        for table in (SystemSchema.workflow_inputs, SystemSchema.workflow_outputs):
-            total = 0
-            batches = 0
-            t_table = time.monotonic()
-
-            # Same shape as the status sweep: advance a created_at watermark and
-            # delete a bounded range per committed transaction. Both the probe
-            # and the delete are driven by idx_workflow_*_created_at, so no batch
-            # ever rescans the dead tuples an earlier one left behind -- which is
-            # what made a LIMIT-only sweep degrade quadratically. On an
-            # append-only table created_at order is also physical order, so each
-            # batch walks a contiguous run of the oldest pages.
-            def delete_batch(watermark: Optional[int]) -> Optional[int]:
-                """Delete one batch, returning the watermark to resume from, or
-                None when this table is done."""
-                nonlocal total
-                with self.engine.begin() as c:
-                    probe = sa.select(table.c.created_at).where(
-                        table.c.created_at < cutoff
-                    )
-                    if watermark is not None:
-                        probe = probe.where(table.c.created_at > watermark)
-                    step: Optional[int] = c.execute(
-                        probe.order_by(table.c.created_at)
-                        .limit(1)
-                        .offset(batch_size - 1)
-                    ).scalar()
-                    bounds: List[sa.ColumnElement[bool]] = [table.c.created_at < cutoff]
-                    if watermark is not None:
-                        bounds.append(table.c.created_at > watermark)
-                    if step is not None:
-                        # created_at ties may push the batch slightly over batch_size
-                        bounds.append(table.c.created_at <= step)
-                    total += c.execute(sa.delete(table).where(*bounds)).rowcount
-                    return step
-
-            watermark: Optional[int] = None
-            while True:
-                if deadline is not None and time.monotonic() >= deadline:
-                    break
-                watermark = self._retry_on_serialization_error(
-                    functools.partial(delete_batch, watermark)
+        # The two payload tables are disjoint, so they sweep concurrently. Kept
+        # sequential they simply add, and at payload sizes where each sweep is
+        # substantial their sum alone can exceed the GC interval.
+        with ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="dbos-gc-payload"
+        ) as executor:
+            futures = [
+                executor.submit(
+                    self._sweep_payload_table, table, cutoff, batch_size, deadline
                 )
-                batches += 1
-                if watermark is None:
-                    break
-            dbos_logger.warning(
-                f"[gc-timing] payload delete {table.name}: "
-                f"{time.monotonic() - t_table:.3f}s, {total} rows, {batches} batches"
-            )
-            deleted.append(total)
+                for table in (
+                    SystemSchema.workflow_inputs,
+                    SystemSchema.workflow_outputs,
+                )
+            ]
+            outcomes = [(f.exception(), f) for f in futures]
+        for error, _ in outcomes:
+            if error is not None:
+                raise error
+        deleted = [f.result() for _, f in outcomes]
 
         if deleted[0] or deleted[1]:
             t_vacuum = time.monotonic()
