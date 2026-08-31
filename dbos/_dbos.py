@@ -219,21 +219,6 @@ RegisteredJob = Tuple[
 ]
 
 
-def _code_origin(fn: Any) -> Optional[Tuple[str, int]]:
-    """Where a function's code was defined, as (file, first line).
-
-    Two imports of one file yield different function objects sharing an origin;
-    two different functions never share one. Decorated callables are unwrapped
-    so the comparison sees the underlying definition.
-    """
-    while fn is not None and hasattr(fn, "__wrapped__"):
-        fn = fn.__wrapped__
-    code = getattr(fn, "__code__", None)
-    if code is None:
-        return None
-    return (code.co_filename, code.co_firstlineno)
-
-
 class DBOSRegistry:
     def __init__(self) -> None:
         self.workflow_info_map: dict[str, Callable[..., Any]] = {}
@@ -256,8 +241,18 @@ class DBOSRegistry:
                 raise DBOSConflictingRegistrationError(name)
             # Error if a workflow is registered with the same name in different modules.
             if not name.startswith("<temp>."):
-                previous = _code_origin(self.workflow_info_map.get(name))
-                current = _code_origin(wrapped_func)
+
+                def code_origin(fn: Any) -> Optional[Tuple[str, int]]:
+                    """Where a function's code was defined, as (file, first line)."""
+                    while fn is not None and hasattr(fn, "__wrapped__"):
+                        fn = fn.__wrapped__
+                    code = getattr(fn, "__code__", None)
+                    if code is None:
+                        return None
+                    return (code.co_filename, code.co_firstlineno)
+
+                previous = code_origin(self.workflow_info_map.get(name))
+                current = code_origin(wrapped_func)
                 if previous is not None and current is not None and previous != current:
                     raise DBOSException(
                         f"Operation (Name: {name}) is registered by two different "
