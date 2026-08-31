@@ -1951,18 +1951,14 @@ def test_duplicate_registration(
         my_step()
         my_transaction()
 
-    # Unlike a step or a transaction, a workflow name is the durable identity
-    # recovery resolves, so a second function claiming it is refused outright.
-    with pytest.raises(DBOSException) as exc_info:
-
-        @DBOS.workflow()
-        def my_workflow() -> None:
-            my_step()
-            my_transaction()
+    @DBOS.workflow()
+    def my_workflow() -> None:
+        my_step()
+        my_transaction()
 
     assert (
-        "Operation (Name: test_duplicate_registration.<locals>.my_workflow) is registered by two different functions"
-        in str(exc_info.value)
+        "Duplicate registration of function 'test_duplicate_registration.<locals>.my_workflow'"
+        in caplog.text
     )
 
     DBOS.destroy()

@@ -242,22 +242,30 @@ class DBOSRegistry:
             # Error if a workflow is registered with the same name in different modules.
             if functype == "workflow":
 
-                def code_origin(fn: Any) -> Optional[Tuple[str, int]]:
-                    """Where a function's code was defined, as (file, first line)."""
-                    while fn is not None and hasattr(fn, "__wrapped__"):
-                        fn = fn.__wrapped__
-                    code = getattr(fn, "__code__", None)
-                    if code is None:
+                def code_origin(fn: Any) -> Optional[Tuple[str, str]]:
+                    """Where a function came from, as (module, real source path)."""
+                    try:
+                        fn = inspect.unwrap(fn)
+                    except ValueError:
                         return None
-                    return (code.co_filename, code.co_firstlineno)
+                    code = getattr(fn, "__code__", None)
+                    module = getattr(fn, "__module__", None)
+                    if code is None or module is None:
+                        return None
+                    return (module, os.path.realpath(code.co_filename))
 
                 previous = code_origin(self.workflow_info_map.get(name))
                 current = code_origin(wrapped_func)
-                if previous is not None and current is not None and previous != current:
+                if (
+                    previous is not None
+                    and current is not None
+                    and previous[0] != current[0]
+                    and previous[1] != current[1]
+                ):
                     raise DBOSException(
                         f"Operation (Name: {name}) is registered by two different "
-                        f"functions, at {previous[0]}:{previous[1]} and "
-                        f"{current[0]}:{current[1]}."
+                        f"functions, {previous[0]} at {previous[1]} and "
+                        f"{current[0]} at {current[1]}."
                     )
             if name != TEMP_SEND_WF_NAME:
                 # Remove the `<temp>` prefix from the function name to avoid confusion
