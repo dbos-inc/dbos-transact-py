@@ -176,14 +176,13 @@ class SystemSchema:
     operation_outputs = Table(
         "operation_outputs",
         metadata_obj,
-        Column(
-            "workflow_uuid",
-            Text,
-            ForeignKey(
-                "workflow_status.workflow_uuid", onupdate="CASCADE", ondelete="CASCADE"
-            ),
-            nullable=False,
-        ),
+        # No foreign key: ON DELETE CASCADE fires a per-row trigger, so collecting
+        # 3M workflows meant 3M separate child deletes inside the status sweep.
+        # Retention sweeps this table on its own watermark instead. Dropping it
+        # also spares every step insert an RI check and a FOR KEY SHARE lock on a
+        # status row other transactions are concurrently updating -- the pattern
+        # that allocates multixacts.
+        Column("workflow_uuid", Text, nullable=False),
         Column("function_id", Integer, nullable=False),
         Column("function_name", Text, nullable=False),
         Column("output", Text, nullable=True),
@@ -194,7 +193,13 @@ class SystemSchema:
         Column("serialization", Text()),
         # Denormalized from the parent so step observability filters without a join.
         Column("application_name", Text, nullable=True),
+        # Server clock, and distinct from completed_at_epoch_ms, which is stamped
+        # from the client. The retention cutoff is a server-clock minimum over
+        # workflow_status, so mixing clocks here would let skew drop a live
+        # workflow's steps below the cutoff.
+        Column("created_at", BigInteger, nullable=False),
         PrimaryKeyConstraint("workflow_uuid", "function_id"),
+        Index("idx_operation_outputs_created_at", "created_at"),
         Index(
             "idx_operation_outputs_completed_at_function_name",
             "completed_at_epoch_ms",

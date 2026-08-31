@@ -323,7 +323,7 @@ CREATE TABLE {quoted_schema}.workflow_inputs (
     workflow_uuid TEXT NOT NULL PRIMARY KEY,
     inputs TEXT,
     serialization TEXT,
-    created_at BIGINT NOT NULL
+    created_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint
 );
 
 CREATE TABLE {quoted_schema}.workflow_outputs (
@@ -331,7 +331,7 @@ CREATE TABLE {quoted_schema}.workflow_outputs (
     output TEXT,
     error TEXT,
     serialization TEXT,
-    created_at BIGINT NOT NULL
+    created_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint
 );
 
 CREATE TABLE {quoted_schema}.operation_outputs (
@@ -341,9 +341,8 @@ CREATE TABLE {quoted_schema}.operation_outputs (
     output TEXT,
     error TEXT,
     child_workflow_id TEXT,
-    PRIMARY KEY (workflow_uuid, function_id),
-    FOREIGN KEY (workflow_uuid) REFERENCES {quoted_schema}.workflow_status(workflow_uuid) 
-        ON UPDATE CASCADE ON DELETE CASCADE
+    created_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint,
+    PRIMARY KEY (workflow_uuid, function_id)
 );
 
 CREATE TABLE {quoted_schema}.notifications (
@@ -1204,6 +1203,9 @@ CREATE INDEX IF NOT EXISTS "idx_workflow_inputs_created_at"
 CREATE INDEX IF NOT EXISTS "idx_workflow_outputs_created_at"
     ON {quoted_schema}."workflow_outputs" ("created_at");
 
+CREATE INDEX IF NOT EXISTS "idx_operation_outputs_created_at"
+    ON {quoted_schema}."operation_outputs" ("created_at");
+
 ALTER TABLE {quoted_schema}."workflow_inputs" SET (
     autovacuum_vacuum_cost_delay = 0,
     autovacuum_vacuum_scale_factor = 0.15,
@@ -1212,6 +1214,13 @@ ALTER TABLE {quoted_schema}."workflow_inputs" SET (
 );
 
 ALTER TABLE {quoted_schema}."workflow_outputs" SET (
+    autovacuum_vacuum_cost_delay = 0,
+    autovacuum_vacuum_scale_factor = 0.15,
+    autovacuum_vacuum_insert_threshold = 100000,
+    autovacuum_freeze_min_age = 0
+);
+
+ALTER TABLE {quoted_schema}."operation_outputs" SET (
     autovacuum_vacuum_cost_delay = 0,
     autovacuum_vacuum_scale_factor = 0.15,
     autovacuum_vacuum_insert_threshold = 100000,
@@ -1333,7 +1342,7 @@ CREATE TABLE workflow_inputs (
     workflow_uuid TEXT NOT NULL PRIMARY KEY,
     inputs TEXT,
     serialization TEXT,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()}
 );
 
 CREATE TABLE workflow_outputs (
@@ -1341,7 +1350,7 @@ CREATE TABLE workflow_outputs (
     output TEXT,
     error TEXT,
     serialization TEXT,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()}
 );
 
 CREATE TABLE operation_outputs (
@@ -1351,9 +1360,8 @@ CREATE TABLE operation_outputs (
     output TEXT,
     error TEXT,
     child_workflow_id TEXT,
-    PRIMARY KEY (workflow_uuid, function_id),
-    FOREIGN KEY (workflow_uuid) REFERENCES workflow_status(workflow_uuid) 
-        ON UPDATE CASCADE ON DELETE CASCADE
+    created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
+    PRIMARY KEY (workflow_uuid, function_id)
 );
 
 CREATE TABLE notifications (
@@ -1662,6 +1670,8 @@ CREATE INDEX IF NOT EXISTS idx_workflow_inputs_created_at
     ON workflow_inputs (created_at);
 CREATE INDEX IF NOT EXISTS idx_workflow_outputs_created_at
     ON workflow_outputs (created_at);
+CREATE INDEX IF NOT EXISTS idx_operation_outputs_created_at
+    ON operation_outputs (created_at);
 """
 
 

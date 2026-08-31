@@ -132,12 +132,15 @@ def garbage_collect(
 
     def payload_sweep() -> None:
         t_payload = time.monotonic()
-        inputs_deleted, outputs_deleted, lag_ms = dbos._sys_db.garbage_collect_payloads(
-            batch_size=batch_size or DEFAULT_GC_BATCH_SIZE, cutoff=payload_cutoff
+        inputs_deleted, outputs_deleted, steps_deleted, lag_ms = (
+            dbos._sys_db.garbage_collect_payloads(
+                batch_size=batch_size or DEFAULT_GC_BATCH_SIZE, cutoff=payload_cutoff
+            )
         )
         dbos.logger.warning(
             f"[gc-timing] payload total: {time.monotonic() - t_payload:.3f}s, "
-            f"{inputs_deleted} inputs, {outputs_deleted} outputs"
+            f"{inputs_deleted} inputs, {outputs_deleted} outputs, "
+            f"{steps_deleted} steps"
         )
 
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="dbos-gc") as executor:

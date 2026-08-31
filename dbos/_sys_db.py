@@ -1003,9 +1003,10 @@ class SystemDatabase(ABC):
                 workflow_uuid=status["workflow_uuid"],
                 inputs=status["inputs"],
                 serialization=status["serialization"],
-                # Server clock, matching workflow_status.created_at's default: now()
-                # is fixed at transaction start, so the pair is equal.
-                created_at=self._now_ms_sql(),
+                # created_at is left to the column default, which is the same
+                # now()-based expression workflow_status uses. now() is fixed at
+                # transaction start, so the pair is equal, and no caller can
+                # accidentally supply a client clock.
             )
             .on_conflict_do_nothing(index_elements=["workflow_uuid"])
         )
@@ -1140,7 +1141,6 @@ class SystemDatabase(ABC):
                     output=output,
                     error=error,
                     serialization=None,
-                    created_at=now_ms,
                 )
                 .on_conflict_do_nothing(index_elements=["workflow_uuid"])
             )
@@ -1523,7 +1523,6 @@ class SystemDatabase(ABC):
                             workflow_uuid=forked_workflow_id,
                             inputs=status[8],
                             serialization=status[9],
-                            created_at=self._now_ms_sql(),
                         )
                         for forked_workflow_id, status in zip(
                             forked_workflow_ids, statuses
@@ -1611,6 +1610,10 @@ class SystemDatabase(ABC):
                             oo.c.started_at_epoch_ms,
                             oo.c.completed_at_epoch_ms,
                             # Copied steps carry the owner the fork itself resolved to.
+                            # created_at is omitted so copied steps take the
+                            # column default. Carrying the original's value could
+                            # put a brand-new fork's steps below the retention
+                            # cutoff while it is still running.
                             mapping_subquery.c.owner,
                         ).select_from(
                             mapping_subquery.join(
@@ -5520,8 +5523,10 @@ class SystemDatabase(ABC):
         batch_size: int = 10000,
         time_budget_sec: Optional[float] = None,
         cutoff: Optional[int] = None,
-    ) -> tuple[int, int, Optional[int]]:
-        """Delete orphaned payload rows oldest-first. Returns (inputs, outputs, lag_ms).
+    ) -> tuple[int, int, int, Optional[int]]:
+        """Delete orphaned payload and step rows oldest-first.
+
+        Returns (inputs, outputs, steps, lag_ms).
 
         Separate from garbage_collect so a slow sweep cannot stall status GC,
         and so payload retention can run on its own cadence.
@@ -5537,7 +5542,7 @@ class SystemDatabase(ABC):
         )
         if cutoff is None:
             # No workflows at all: nothing anchors the cutoff, so sweep nothing.
-            return 0, 0, None
+            return 0, 0, 0, None
         lag_ms = int(time.time() * 1000) - cutoff
         deadline = (
             time.monotonic() + time_budget_sec if time_budget_sec is not None else None
@@ -5547,7 +5552,7 @@ class SystemDatabase(ABC):
         # sequential they simply add, and at payload sizes where each sweep is
         # substantial their sum alone can exceed the GC interval.
         with ThreadPoolExecutor(
-            max_workers=2, thread_name_prefix="dbos-gc-payload"
+            max_workers=3, thread_name_prefix="dbos-gc-payload"
         ) as executor:
             futures = [
                 executor.submit(
@@ -5556,6 +5561,9 @@ class SystemDatabase(ABC):
                 for table in (
                     SystemSchema.workflow_inputs,
                     SystemSchema.workflow_outputs,
+                    # Swept here rather than cascaded from workflow_status: the
+                    # cascade fired one child delete per parent row.
+                    SystemSchema.operation_outputs,
                 )
             ]
             outcomes = [(f.exception(), f) for f in futures]
@@ -5564,14 +5572,16 @@ class SystemDatabase(ABC):
                 raise error
         deleted = [f.result() for _, f in outcomes]
 
-        if deleted[0] or deleted[1]:
+        if any(deleted):
             t_vacuum = time.monotonic()
-            self._vacuum_tables(["workflow_inputs", "workflow_outputs"])
+            self._vacuum_tables(
+                ["workflow_inputs", "workflow_outputs", "operation_outputs"]
+            )
             dbos_logger.warning(
                 f"[gc-timing] payload vacuum: {time.monotonic() - t_vacuum:.3f}s"
             )
         dbos_logger.warning(f"[gc-timing] payload lag: {lag_ms}ms")
-        return deleted[0], deleted[1], lag_ms
+        return deleted[0], deleted[1], deleted[2], lag_ms
 
     def _vacuum_tables(self, tables: List[str]) -> None:
         """VACUUM the named tables at full speed. No-op where there is no autovacuum."""
@@ -6238,6 +6248,7 @@ class SystemDatabase(ABC):
                             child_workflow_id=output["child_workflow_id"],
                             started_at_epoch_ms=output["started_at_epoch_ms"],
                             completed_at_epoch_ms=output["completed_at_epoch_ms"],
+                            created_at=status["created_at"],
                             serialization=output["serialization"],
                             application_name=output.get("application_name"),
                         )
