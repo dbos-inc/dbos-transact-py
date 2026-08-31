@@ -240,7 +240,7 @@ class DBOSRegistry:
             if self.function_type_map[name] != functype:
                 raise DBOSConflictingRegistrationError(name)
             # Error if a workflow is registered with the same name in different modules.
-            if not name.startswith("<temp>."):
+            if functype == "workflow":
 
                 def code_origin(fn: Any) -> Optional[Tuple[str, int]]:
                     """Where a function's code was defined, as (file, first line)."""

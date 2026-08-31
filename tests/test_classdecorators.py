@@ -16,6 +16,7 @@ from dbos import DBOS, DBOSConfiguredInstance, Queue, SetWorkflowID
 
 # Private API used because this is a test
 from dbos._context import DBOSContextEnsure, assert_current_dbos_context
+from dbos._dbos import _get_or_create_dbos_registry
 from dbos._dbos_config import DBOSConfig
 from dbos._error import DBOSException
 from tests.conftest import queue_entries_are_cleaned_up, set_workflow_status
@@ -1019,18 +1020,6 @@ def _fresh_import(module_name: str) -> ModuleType:
     return importlib.import_module(module_name)
 
 
-def _capture_dbos_warnings(caplog: pytest.LogCaptureFixture) -> Callable[[], None]:
-    """Route dbos warnings into caplog; returns a restore callable."""
-    original_propagate = logging.getLogger("dbos").propagate
-    caplog.set_level(logging.WARNING, "dbos")
-    logging.getLogger("dbos").propagate = True
-
-    def restore() -> None:
-        logging.getLogger("dbos").propagate = original_propagate
-
-    return restore
-
-
 def test_duplicate_workflow_name_across_modules(dbos: DBOS) -> None:
     """A registered name is the durable identity recovery resolves, so two
     genuinely different functions cannot both claim one."""
@@ -1045,13 +1034,21 @@ def test_duplicate_workflow_name_across_modules(dbos: DBOS) -> None:
     assert "dupname_workflows1.py" in str(exc_info.value)
     assert "dupname_workflowsa.py" in str(exc_info.value)
 
+    # The first registration is the one that survives -- the guarantee the durable
+    # name depends on, and the reason the raise precedes the registry writes.
+    registered = _get_or_create_dbos_registry().workflow_info_map[
+        "duplicated_workflow_name"
+    ]
+    assert getattr(registered, "__wrapped__")(1) == "one:1"
+
 
 def test_same_file_imported_under_two_names_warns(
     dbos: DBOS, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """One file reached under two module names is a re-registration, not a
     collision: the function objects differ but the code came from one place."""
-    restore = _capture_dbos_warnings(caplog)
+    caplog.set_level(logging.WARNING, "dbos")
+    monkeypatch.setattr(logging.getLogger("dbos"), "propagate", True)
     try:
         first = _fresh_import("tests.dupname_workflows1")
         # The same file, reached again as a top-level module: a second, distinct
@@ -1069,44 +1066,39 @@ def test_same_file_imported_under_two_names_warns(
         )
     finally:
         sys.modules.pop("dupname_workflows1", None)
-        restore()
 
 
-def test_module_reload_warns(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
+def test_module_reload_warns(
+    dbos: DBOS, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Reloading a module re-runs its decorators against the same source. That is
     a re-registration and must keep warning rather than raise."""
-    restore = _capture_dbos_warnings(caplog)
-    try:
-        module = _fresh_import("tests.dupname_workflows1")
-        importlib.reload(module)
+    caplog.set_level(logging.WARNING, "dbos")
+    monkeypatch.setattr(logging.getLogger("dbos"), "propagate", True)
 
-        assert (
-            "Duplicate registration of function 'duplicated_workflow_name'"
-            in caplog.text
-        )
-    finally:
-        restore()
+    module = _fresh_import("tests.dupname_workflows1")
+    importlib.reload(module)
+
+    assert (
+        "Duplicate registration of function 'duplicated_workflow_name'" in caplog.text
+    )
 
 
 def test_duplicate_step_name_warns(
-    dbos: DBOS, caplog: pytest.LogCaptureFixture
+    dbos: DBOS, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A step registers a `<temp>` name wrapping a library-local closure, so its
-    code origin is DBOS's own source and is never compared. A sync and an async
-    step are two such closures, and must not be reported as two user functions."""
-    restore = _capture_dbos_warnings(caplog)
-    try:
+    """Only workflows are checked. A step's registered function is a library-local
+    closure, and the sync and async ones live at different lines of _core.py, so
+    comparing their origins would report two DBOS internals as two user functions."""
+    caplog.set_level(logging.WARNING, "dbos")
+    monkeypatch.setattr(logging.getLogger("dbos"), "propagate", True)
 
-        @DBOS.step(name="duplicated_step_name")
-        def step_one() -> str:
-            return "one"
+    @DBOS.step(name="duplicated_step_name")
+    def step_one() -> str:
+        return "one"
 
-        @DBOS.step(name="duplicated_step_name")
-        async def step_two() -> str:
-            return "two"
+    @DBOS.step(name="duplicated_step_name")
+    async def step_two() -> str:
+        return "two"
 
-        assert (
-            "Duplicate registration of function 'duplicated_step_name'" in caplog.text
-        )
-    finally:
-        restore()
+    assert "Duplicate registration of function 'duplicated_step_name'" in caplog.text
