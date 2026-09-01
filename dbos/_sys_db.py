@@ -5520,7 +5520,6 @@ class SystemDatabase(ABC):
         target: int,
         *,
         batch_size: int = 10000,
-        time_budget_sec: Optional[float] = None,
         max_stragglers: int = 10_000,
     ) -> tuple[int, int, int]:
         """Delete payload and step rows below the boundary, returning the count
@@ -5576,12 +5575,8 @@ class SystemDatabase(ABC):
                         ).rowcount
             return pinned
 
-        def sweep_table(
-            table: sa.Table, boundary: int, deadline: Optional[float]
-        ) -> int:
-            """Delete one payload table's rows below the boundary, oldest first,
-            returning the count. A retention_timestamp watermark bounds each batch,
-            so no batch rescans the dead tuples an earlier one left behind."""
+        def garbage_collect_table(table: sa.Table, cutoff: int) -> int:
+            """Delete all rows in a table older than a cutoff."""
             total = 0
             ts = table.c.retention_timestamp
 
@@ -5590,13 +5585,13 @@ class SystemDatabase(ABC):
                 None when this table is done."""
                 nonlocal total
                 with self.engine.begin() as c:
-                    probe = sa.select(ts).where(ts < boundary)
+                    probe = sa.select(ts).where(ts < cutoff)
                     if watermark is not None:
                         probe = probe.where(ts > watermark)
                     step: Optional[int] = c.execute(
                         probe.order_by(ts).limit(1).offset(batch_size - 1)
                     ).scalar()
-                    bounds: List[sa.ColumnElement[bool]] = [ts < boundary]
+                    bounds: List[sa.ColumnElement[bool]] = [ts < cutoff]
                     if watermark is not None:
                         bounds.append(ts > watermark)
                     if step is not None:
@@ -5607,8 +5602,6 @@ class SystemDatabase(ABC):
 
             watermark: Optional[int] = None
             while True:
-                if deadline is not None and time.monotonic() >= deadline:
-                    break
                 watermark = self._retry_on_serialization_error(
                     functools.partial(delete_batch, watermark)
                 )
@@ -5652,16 +5645,13 @@ class SystemDatabase(ABC):
         else:
             newly_pinned = pin_stragglers(stragglers)
 
-        deadline = (
-            time.monotonic() + time_budget_sec if time_budget_sec is not None else None
-        )
         # The payload tables are disjoint, so sweep them concurrently: sequentially
         # their durations add and can exceed the GC interval.
         with ThreadPoolExecutor(
             max_workers=3, thread_name_prefix="dbos-gc-payload"
         ) as executor:
             futures = [
-                executor.submit(sweep_table, table, boundary, deadline)
+                executor.submit(garbage_collect_table, table, boundary)
                 for table in payload_tables
             ]
             outcomes = [(f.exception(), f) for f in futures]
