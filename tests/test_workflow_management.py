@@ -2,7 +2,6 @@ import threading
 import time
 import uuid
 from typing import Any, List, Optional
-from unittest.mock import patch
 
 import pytest
 import sqlalchemy as sa
@@ -2586,11 +2585,29 @@ def test_pin_is_idempotent(dbos: DBOS) -> None:
         return x
 
     assert workflow(1) == 1
-    wfid = DBOS.list_workflows()[0].workflow_id
     target = int(time.time() * 1000) + 60_000
+    rewritten: List[int] = []
 
-    assert dbos._sys_db._pin_stragglers([wfid], target) > 0
-    assert dbos._sys_db._pin_stragglers([wfid], target) == 0
+    def record(
+        conn: Any, cursor: Any, statement: str, *args: Any, **kwargs: Any
+    ) -> None:
+        # The pin is the only write that sets a retention timestamp. Count rows
+        # rewritten, not statements issued: the guard makes the second round's
+        # UPDATE match nothing, which is the property that matters.
+        if statement.lstrip().upper().startswith("UPDATE") and (
+            "retention_timestamp" in statement
+        ):
+            rewritten.append(cursor.rowcount)
+
+    sa_event.listen(dbos._sys_db.engine, "after_cursor_execute", record)
+    try:
+        dbos._sys_db.garbage_collect_payloads(target)
+        assert sum(rewritten) > 0, "the straggler must be pinned on the first round"
+        rewritten.clear()
+        dbos._sys_db.garbage_collect_payloads(target)
+        assert sum(rewritten) == 0, "an already-pinned straggler must not be rewritten"
+    finally:
+        sa_event.remove(dbos._sys_db.engine, "after_cursor_execute", record)
 
 
 def test_pinned_rows_collected_after_workflow_ends(dbos: DBOS) -> None:
@@ -2603,11 +2620,11 @@ def test_pinned_rows_collected_after_workflow_ends(dbos: DBOS) -> None:
 
     assert workflow(1) == 1
     wfid = DBOS.list_workflows()[0].workflow_id
-    dbos._sys_db._pin_stragglers([wfid], int(time.time() * 1000) + 60_000)
-    assert _pinned_counts(dbos)[0] == 1
+    target = int(time.time() * 1000) + 60_000
 
-    # Still referenced, so it stays.
-    assert dbos._sys_db._collect_pinned_orphans() == 0
+    # Pinned while still referenced, so the sweep leaves it alone.
+    dbos._sys_db.garbage_collect_payloads(target)
+    assert _pinned_counts(dbos)[0] == 1
     assert _payload_counts(dbos) == (1, 1)
 
     with dbos._sys_db.engine.begin() as c:
@@ -2616,8 +2633,9 @@ def test_pinned_rows_collected_after_workflow_ends(dbos: DBOS) -> None:
                 SystemSchema.workflow_status.c.workflow_uuid == wfid
             )
         )
-    assert dbos._sys_db._collect_pinned_orphans() >= 2
+    dbos._sys_db.garbage_collect_payloads(target)
     assert _payload_counts(dbos) == (0, 0)
+    assert _pinned_counts(dbos) == (0, 0, 0)
 
 
 def test_straggler_overflow_skips_the_sweep(dbos: DBOS) -> None:
@@ -2633,7 +2651,6 @@ def test_straggler_overflow_skips_the_sweep(dbos: DBOS) -> None:
     before = _payload_counts(dbos)
 
     target = int(time.time() * 1000) + 60_000
-    assert dbos._sys_db._enumerate_stragglers(target, 2) is None
     assert dbos._sys_db.garbage_collect_payloads(target, max_stragglers=2)[:3] == (
         0,
         0,
@@ -2655,13 +2672,34 @@ def test_partial_pin_failure_skips_the_sweep(dbos: DBOS) -> None:
     before = _payload_counts(dbos)
     target = int(time.time() * 1000) + 60_000
 
-    def failing_pin(workflow_ids: List[str], t: int) -> int:
-        raise RuntimeError("pin failed")
+    def fail_last_pin(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> Any:
+        # Break the third of the three pin statements at the database itself, so
+        # the failure unwinds the way a real one would.
+        if statement.lstrip().upper().startswith("UPDATE") and (
+            "retention_timestamp" in statement and "operation_outputs" in statement
+        ):
+            statement += " AND (SELECT 1 FROM pin_failure_injection) = 1"
+        return statement, parameters
 
-    with patch.object(dbos._sys_db, "_pin_stragglers", failing_pin):
-        with pytest.raises(RuntimeError, match="pin failed"):
+    sa_event.listen(
+        dbos._sys_db.engine, "before_cursor_execute", fail_last_pin, retval=True
+    )
+    try:
+        with pytest.raises(Exception, match="pin_failure_injection"):
             dbos._sys_db.garbage_collect_payloads(target)
+    finally:
+        sa_event.remove(dbos._sys_db.engine, "before_cursor_execute", fail_last_pin)
+
+    # Nothing swept, and the two pins that did land were rolled back with it.
     assert _payload_counts(dbos) == before
+    assert _pinned_counts(dbos) == (0, 0, 0)
 
 
 def test_peer_application_payloads_survive(dbos: DBOS) -> None:

@@ -5525,125 +5525,6 @@ class SystemDatabase(ABC):
                 backoff = min(backoff * 2, max_backoff)
         raise AssertionError("unreachable")
 
-    def _enumerate_stragglers(
-        self, target: int, max_stragglers: int
-    ) -> Optional[List[str]]:
-        """Workflows still below the retention boundary once the status sweep has
-        run, or None when there are more than the caller can pin, which means the
-        payload sweep must not run this round."""
-        with self.engine.begin() as c:
-            rows = c.execute(
-                sa.select(SystemSchema.workflow_status.c.workflow_uuid)
-                .where(SystemSchema.workflow_status.c.created_at < target)
-                .limit(max_stragglers + 1)
-            ).fetchall()
-        if len(rows) > max_stragglers:
-            return None
-        return [row[0] for row in rows]
-
-    def _pin_stragglers(self, workflow_ids: List[str], target: int) -> int:
-        """Lift straggler payloads above the boundary, returning rows newly pinned.
-
-        One transaction across all three tables: a pin that half-lands followed by
-        a sweep that fully lands would delete a live workflow's payload. The
-        retention_timestamp < target guard makes this idempotent, so a workflow
-        running for a month is rewritten once rather than once per round.
-        """
-        if not workflow_ids:
-            return 0
-        pinned = 0
-        with self.engine.begin() as c:
-            for table in _PAYLOAD_TABLES:
-                for i in range(0, len(workflow_ids), 1000):
-                    pinned += c.execute(
-                        sa.update(table)
-                        .where(table.c.workflow_uuid.in_(workflow_ids[i : i + 1000]))
-                        .where(table.c.retention_timestamp < target)
-                        .values(retention_timestamp=PINNED_RETENTION_TIMESTAMP)
-                    ).rowcount
-        return pinned
-
-    def _collect_pinned_orphans(self) -> int:
-        """Delete pinned payloads whose workflow is gone. They sit above every
-        boundary, so the range sweep can never reach them."""
-        ws = SystemSchema.workflow_status
-        total = 0
-        for table in _PAYLOAD_TABLES:
-            with self.engine.begin() as c:
-                total += c.execute(
-                    sa.delete(table).where(
-                        table.c.retention_timestamp == PINNED_RETENTION_TIMESTAMP,
-                        ~sa.exists(
-                            sa.select(sa.literal(1))
-                            .select_from(ws)
-                            .where(ws.c.workflow_uuid == table.c.workflow_uuid)
-                            .correlate(table)
-                        ),
-                    )
-                ).rowcount
-        return total
-
-    def _count_pinned_rows(self) -> int:
-        """Rows currently held above the boundary by a straggler: the health signal."""
-        total = 0
-        with self.engine.begin() as c:
-            for table in _PAYLOAD_TABLES:
-                total += (
-                    c.execute(
-                        sa.select(sa.func.count())
-                        .select_from(table)
-                        .where(
-                            table.c.retention_timestamp == PINNED_RETENTION_TIMESTAMP
-                        )
-                    ).scalar()
-                    or 0
-                )
-        return total
-
-    def _sweep_payload_table(
-        self,
-        table: sa.Table,
-        target: int,
-        batch_size: int,
-        deadline: Optional[float],
-    ) -> int:
-        """Delete one payload table's rows below the boundary, oldest first,
-        returning the count. A retention_timestamp watermark bounds each batch, so
-        no batch rescans the dead tuples an earlier one left behind."""
-        total = 0
-        ts = table.c.retention_timestamp
-
-        def delete_batch(watermark: Optional[int]) -> Optional[int]:
-            """Delete one batch, returning the watermark to resume from, or None
-            when this table is done."""
-            nonlocal total
-            with self.engine.begin() as c:
-                probe = sa.select(ts).where(ts < target)
-                if watermark is not None:
-                    probe = probe.where(ts > watermark)
-                step: Optional[int] = c.execute(
-                    probe.order_by(ts).limit(1).offset(batch_size - 1)
-                ).scalar()
-                bounds: List[sa.ColumnElement[bool]] = [ts < target]
-                if watermark is not None:
-                    bounds.append(ts > watermark)
-                if step is not None:
-                    # timestamp ties may push the batch slightly over batch_size
-                    bounds.append(ts <= step)
-                total += c.execute(sa.delete(table).where(*bounds)).rowcount
-                return step
-
-        watermark: Optional[int] = None
-        while True:
-            if deadline is not None and time.monotonic() >= deadline:
-                break
-            watermark = self._retry_on_serialization_error(
-                functools.partial(delete_batch, watermark)
-            )
-            if watermark is None:
-                break
-        return total
-
     def garbage_collect_payloads(
         self,
         target: int,
@@ -5657,15 +5538,131 @@ class SystemDatabase(ABC):
         collects what that sweep leaves behind."""
         if batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
-        stragglers = self._enumerate_stragglers(target, max_stragglers)
+
+        def count_pinned_rows() -> int:
+            """Rows held above the boundary by a straggler: the health signal."""
+            total = 0
+            with self.engine.begin() as c:
+                for table in _PAYLOAD_TABLES:
+                    total += (
+                        c.execute(
+                            sa.select(sa.func.count())
+                            .select_from(table)
+                            .where(
+                                table.c.retention_timestamp
+                                == PINNED_RETENTION_TIMESTAMP
+                            )
+                        ).scalar()
+                        or 0
+                    )
+            return total
+
+        def enumerate_stragglers() -> Optional[List[str]]:
+            """Workflows still below the boundary once the status sweep has run,
+            or None when there are more than can be pinned, which means the
+            payload sweep must not run this round."""
+            with self.engine.begin() as c:
+                rows = c.execute(
+                    sa.select(SystemSchema.workflow_status.c.workflow_uuid)
+                    .where(SystemSchema.workflow_status.c.created_at < target)
+                    .limit(max_stragglers + 1)
+                ).fetchall()
+            if len(rows) > max_stragglers:
+                return None
+            return [row[0] for row in rows]
+
+        def pin_stragglers(workflow_ids: List[str]) -> int:
+            """Lift straggler payloads above the boundary, returning rows newly
+            pinned.
+
+            One transaction across all three tables: a pin that half-lands
+            followed by a sweep that fully lands would delete a live workflow's
+            payload. The retention_timestamp < target guard makes this idempotent,
+            so a workflow running for a month is rewritten once, not once a round.
+            """
+            if not workflow_ids:
+                return 0
+            pinned = 0
+            with self.engine.begin() as c:
+                for table in _PAYLOAD_TABLES:
+                    for i in range(0, len(workflow_ids), 1000):
+                        pinned += c.execute(
+                            sa.update(table)
+                            .where(
+                                table.c.workflow_uuid.in_(workflow_ids[i : i + 1000])
+                            )
+                            .where(table.c.retention_timestamp < target)
+                            .values(retention_timestamp=PINNED_RETENTION_TIMESTAMP)
+                        ).rowcount
+            return pinned
+
+        def sweep_table(table: sa.Table, deadline: Optional[float]) -> int:
+            """Delete one payload table's rows below the boundary, oldest first,
+            returning the count. A retention_timestamp watermark bounds each batch,
+            so no batch rescans the dead tuples an earlier one left behind."""
+            total = 0
+            ts = table.c.retention_timestamp
+
+            def delete_batch(watermark: Optional[int]) -> Optional[int]:
+                """Delete one batch, returning the watermark to resume from, or
+                None when this table is done."""
+                nonlocal total
+                with self.engine.begin() as c:
+                    probe = sa.select(ts).where(ts < target)
+                    if watermark is not None:
+                        probe = probe.where(ts > watermark)
+                    step: Optional[int] = c.execute(
+                        probe.order_by(ts).limit(1).offset(batch_size - 1)
+                    ).scalar()
+                    bounds: List[sa.ColumnElement[bool]] = [ts < target]
+                    if watermark is not None:
+                        bounds.append(ts > watermark)
+                    if step is not None:
+                        # timestamp ties may push the batch slightly over batch_size
+                        bounds.append(ts <= step)
+                    total += c.execute(sa.delete(table).where(*bounds)).rowcount
+                    return step
+
+            watermark: Optional[int] = None
+            while True:
+                if deadline is not None and time.monotonic() >= deadline:
+                    break
+                watermark = self._retry_on_serialization_error(
+                    functools.partial(delete_batch, watermark)
+                )
+                if watermark is None:
+                    break
+            return total
+
+        def collect_pinned_orphans() -> int:
+            """Delete pinned payloads whose workflow is gone. They sit above every
+            boundary, so the range sweep can never reach them."""
+            ws = SystemSchema.workflow_status
+            total = 0
+            for table in _PAYLOAD_TABLES:
+                with self.engine.begin() as c:
+                    total += c.execute(
+                        sa.delete(table).where(
+                            table.c.retention_timestamp == PINNED_RETENTION_TIMESTAMP,
+                            ~sa.exists(
+                                sa.select(sa.literal(1))
+                                .select_from(ws)
+                                .where(ws.c.workflow_uuid == table.c.workflow_uuid)
+                                .correlate(table)
+                            ),
+                        )
+                    ).rowcount
+            return total
+
+        stragglers = enumerate_stragglers()
         if stragglers is None:
             dbos_logger.warning(
                 f"Payload retention skipped: more than {max_stragglers} workflows are "
                 "older than the retention boundary and still present, so their payloads "
                 "cannot all be pinned. Nothing was deleted."
             )
-            return 0, 0, 0, self._count_pinned_rows()
-        newly_pinned = self._pin_stragglers(stragglers, target)
+            return 0, 0, 0, count_pinned_rows()
+        newly_pinned = pin_stragglers(stragglers)
 
         deadline = (
             time.monotonic() + time_budget_sec if time_budget_sec is not None else None
@@ -5676,9 +5673,7 @@ class SystemDatabase(ABC):
             max_workers=3, thread_name_prefix="dbos-gc-payload"
         ) as executor:
             futures = [
-                executor.submit(
-                    self._sweep_payload_table, table, target, batch_size, deadline
-                )
+                executor.submit(sweep_table, table, deadline)
                 for table in _PAYLOAD_TABLES
             ]
             outcomes = [(f.exception(), f) for f in futures]
@@ -5687,8 +5682,8 @@ class SystemDatabase(ABC):
                 raise error
         deleted = [f.result() for _, f in outcomes]
 
-        orphans = self._collect_pinned_orphans()
-        pinned = self._count_pinned_rows()
+        orphans = collect_pinned_orphans()
+        pinned = count_pinned_rows()
         dbos_logger.debug(
             f"Payload retention swept {deleted[0]} inputs, {deleted[1]} outputs, "
             f"{deleted[2]} steps and {orphans} orphaned pinned rows; pinned "
