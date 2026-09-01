@@ -5609,18 +5609,11 @@ class SystemDatabase(ABC):
                 raise error
         deleted = [f.result() for _, f in outcomes]
 
-        if any(deleted):
-            self._vacuum_tables(
-                ["workflow_inputs", "workflow_outputs", "operation_outputs"]
-            )
         dbos_logger.debug(
             f"Payload retention swept {deleted[0]} inputs, {deleted[1]} outputs, "
             f"{deleted[2]} steps; running {lag_ms}ms behind"
         )
         return deleted[0], deleted[1], deleted[2], lag_ms
-
-    def _vacuum_tables(self, tables: List[str]) -> None:
-        """VACUUM the named tables at full speed. No-op where there is no autovacuum."""
 
     def garbage_collect(
         self,

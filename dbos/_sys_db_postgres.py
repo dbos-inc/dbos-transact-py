@@ -119,25 +119,6 @@ class PostgresSystemDatabase(SystemDatabase):
         )
         self._assert_migration_version(current_version, latest_version)
 
-    def _vacuum_tables(self, tables: List[str]) -> None:
-        """VACUUM the named tables right after the sweep that dirtied them; a
-        manual VACUUM is unthrottled where autovacuum is not. TRUNCATE OFF, as the
-        sweep frees the front of the heap. Best effort: it needs table ownership."""
-        assert self.schema
-        try:
-            with self.engine.connect().execution_options(
-                isolation_level="AUTOCOMMIT"
-            ) as conn:
-                for table in tables:
-                    conn.execute(
-                        sa.text(
-                            "VACUUM (INDEX_CLEANUP AUTO, TRUNCATE OFF) "
-                            f"{quote_identifier(self.schema)}.{quote_identifier(table)}"
-                        )
-                    )
-        except Exception as e:
-            dbos_logger.debug(f"Could not vacuum {', '.join(tables)}: {e}")
-
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""
         with self._listener_thread_lock:
