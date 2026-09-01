@@ -50,7 +50,6 @@ class DBOSConfig(TypedDict, total=False):
         use_listen_notify (bool): Whether to use LISTEN/NOTIFY or polling to listen for notifications and events.  Defaults to True. As this affects migrations, may not be changed after the system database is first created.
         run_migrations (bool): Whether to create and migrate the system database on launch. Defaults to True. Set to False for a process that must not alter the schema, such as one whose database role cannot run DDL, or a deployment that migrates out of band with `dbos migrate`. Launch then verifies the schema instead: a system database that is missing, or behind the version this build requires, fails launch rather than being created or migrated.
         notification_listener_polling_interval_sec (float): Polling interval in seconds for the notification listener background process. Defaults to 1.0. Minimum value is 0.001. Lower values can speed up test execution.
-        payload_retention_enabled (bool): Whether garbage collection also collects rows from workflow_inputs, workflow_outputs and operation_outputs. Defaults to True. A kill switch, not an opt-in: with it off those tables grow without bound, since nothing else collects them.
         notification_coalesce_sec (float): Interval in seconds for coalescing LISTEN/NOTIFY notifications (streams and events) pushed off the write path. Bounds read latency and caps the rate of notifying commits independent of write throughput. Defaults to 0.01. Minimum value is 0.001.
         observability_query_timeout_sec (float): Statement timeout, in seconds, for read-only observability queries against the system database. Defaults to 30.0.
         scheduler_polling_interval_sec (float): Polling interval in seconds for the scheduler thread to detect new workflow schedules. Defaults to 30.0.
@@ -155,7 +154,6 @@ class ConfigFile(TypedDict, total=False):
     dbos_system_schema: Optional[str]
     use_listen_notify: bool
     run_migrations: bool
-    payload_retention_enabled: bool
 
 
 def _default_run_admin_server() -> bool:

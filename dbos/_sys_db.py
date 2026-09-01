@@ -605,7 +605,6 @@ class SystemDatabase(ABC):
         polling_concurrency: Optional[int] = None,
         app_name: Optional[str] = None,
         retry_connection_errors: bool = True,
-        payload_retention_enabled: bool = True,
         observability_query_timeout_sec: Optional[float] = None,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
@@ -625,7 +624,6 @@ class SystemDatabase(ABC):
                 polling_concurrency=polling_concurrency,
                 app_name=app_name,
                 retry_connection_errors=retry_connection_errors,
-                payload_retention_enabled=payload_retention_enabled,
                 observability_query_timeout_sec=observability_query_timeout_sec,
             )
         else:
@@ -644,7 +642,6 @@ class SystemDatabase(ABC):
                 polling_concurrency=polling_concurrency,
                 app_name=app_name,
                 retry_connection_errors=retry_connection_errors,
-                payload_retention_enabled=payload_retention_enabled,
                 observability_query_timeout_sec=observability_query_timeout_sec,
             )
 
@@ -663,7 +660,6 @@ class SystemDatabase(ABC):
         polling_concurrency: Optional[int] = None,
         app_name: Optional[str] = None,
         retry_connection_errors: bool = True,
-        payload_retention_enabled: bool = True,
         observability_query_timeout_sec: Optional[float] = None,
     ):
         import sqlalchemy.dialects.postgresql as pg
@@ -697,10 +693,6 @@ class SystemDatabase(ABC):
         self.use_listen_notify = use_listen_notify
         # Whether db_retry blocks on a lost connection until it recovers, or raises.
         self._retry_connection_errors = retry_connection_errors
-        # Kill switch, on by default. Disabled, the payload tables grow without
-        # bound: nothing else collects them, and workflow_status's cascade does
-        # not reach them.
-        self.payload_retention_enabled = payload_retention_enabled
         # db_retry trusts the text-based SQLite retriability heuristic only on SQLite.
         self._is_sqlite = system_database_url.startswith("sqlite")
         # Statement timeout for observability reads, in ms. Unset takes the default; non-positive disables the cap.
@@ -5589,8 +5581,6 @@ class SystemDatabase(ABC):
         """
         if batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
-        if not self.payload_retention_enabled:
-            return 0, 0, 0, None
         if cutoff is None:
             cutoff = self._payload_retention_cutoff()
         if cutoff is None:

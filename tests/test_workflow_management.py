@@ -2460,26 +2460,6 @@ def test_step_checkpoints_are_swept_not_cascaded(
     assert len(dbos._sys_db.list_workflow_steps(survivor)) == 2
 
 
-def test_payload_retention_can_be_disabled(dbos: DBOS) -> None:
-    """The flag is a kill switch: off, the sweep collects nothing."""
-
-    @DBOS.workflow()
-    def workflow(x: int) -> int:
-        return x
-
-    for i in range(3):
-        assert workflow(i) == i
-    dbos._sys_db.payload_retention_enabled = False
-    try:
-        garbage_collect(
-            dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
-        )
-        assert dbos._sys_db.garbage_collect_payloads()[:3] == (0, 0, 0)
-        assert _payload_counts(dbos)[0] == 3
-    finally:
-        dbos._sys_db.payload_retention_enabled = True
-
-
 def test_payload_garbage_collection(
     dbos: DBOS, skip_with_sqlite_imprecise_time: None
 ) -> None:
