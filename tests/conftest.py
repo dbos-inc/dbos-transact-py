@@ -297,9 +297,8 @@ def dbos_dual_write(
     config: DBOSConfig, cleanup_test_databases: None
 ) -> Generator[DBOS, Any, None]:
     """The dbos fixture with dual write left on, for the tests that check dual
-    write itself. Every other test runs with it off, so the payload tables are
-    the only place a payload lives and a broken new-table path cannot hide
-    behind the legacy columns."""
+    write itself. Every other test runs with it off, so a broken new-table path
+    cannot hide behind the legacy columns."""
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config={**config, "dual_write_payloads": True})
     DBOS.launch()

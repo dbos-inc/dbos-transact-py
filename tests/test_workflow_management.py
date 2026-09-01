@@ -2420,10 +2420,8 @@ def test_payload_dual_write_and_read_fallback(dbos_dual_write: DBOS) -> None:
     assert legacy is not None and legacy[0] is not None and legacy[1] is not None
     assert split is not None and split[0] == legacy[0]
     assert out is not None and out[0] == legacy[1]
-    # Retention needs the payload stamped no earlier than its status row, which
-    # holds because the status row is always inserted first. Postgres makes them
-    # identical, since now() is fixed at transaction start; SQLite evaluates its
-    # timestamp per statement, so there the payload is a millisecond or two later.
+    # The status row is inserted first, so the payload is never stamped earlier:
+    # equal on Postgres, where now() is fixed per transaction, later on SQLite.
     assert split[1] >= status_created
 
     # Drop the split rows: a row written before the migration looks exactly like
@@ -2504,9 +2502,7 @@ def test_payload_garbage_collection(
     assert _payload_counts(dbos) == (num_workflows, num_workflows)
 
     # Collect all but the newest. The payload cutoff is read before the status
-    # sweep -- an index-min taken straight after it would have to walk the dead
-    # prefix the sweep just created -- so this round removes the status rows and
-    # the next one reclaims their payloads.
+    # sweep, so this round drops the status rows and the next reclaims payloads.
     garbage_collect(
         dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
     )

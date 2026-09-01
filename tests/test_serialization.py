@@ -1296,8 +1296,7 @@ def test_directinsert_datetime_validation(dbos: DBOS) -> None:
 
 def test_nodejs_invoke(dbos_dual_write: DBOS) -> None:
     # The committed TS bundle predates the payload split and reads
-    # workflow_status.output, so this is the test that proves dual write
-    # keeps an older SDK reading the same system database working.
+    # workflow_status.output: this is the test that proves dual write carries it.
     dbos = dbos_dual_write
     dburl = dbos._config["system_database_url"]
     assert dburl is not None

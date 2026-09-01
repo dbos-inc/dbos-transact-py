@@ -679,9 +679,7 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
 
     def forget_workflow() -> None:
         # Drop the sysdb checkpoint so run_step calls _body again instead of replaying.
-        # A real concurrent duplicate keeps that row and ends in DBOSWorkflowConflictIDError instead.
-        # Via delete_workflows, not a raw status delete: operation_outputs has no
-        # foreign key any more, so the checkpoint no longer goes with the parent.
+        # Via delete_workflows: operation_outputs has no foreign key to cascade now.
         dbos._sys_db.delete_workflows([wfid])
 
     # Blind one pre-check, so a loser misses the winner's row as it does in the real race.
@@ -1503,9 +1501,7 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
 
     def forget_workflow() -> None:
         # Drop the sysdb checkpoint so run_step calls _body again instead of replaying.
-        # A real concurrent duplicate keeps that row and ends in DBOSWorkflowConflictIDError instead.
-        # Via delete_workflows, not a raw status delete: operation_outputs has no
-        # foreign key any more, so the checkpoint no longer goes with the parent.
+        # Via delete_workflows: operation_outputs has no foreign key to cascade now.
         dbos._sys_db.delete_workflows([wfid])
 
     # Blind one pre-check, so a loser misses the winner's row as it does in the real race.

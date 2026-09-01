@@ -697,9 +697,8 @@ class SystemDatabase(ABC):
         self.use_listen_notify = use_listen_notify
         # Whether db_retry blocks on a lost connection until it recovers, or raises.
         self._retry_connection_errors = retry_connection_errors
-        # Transitional: keep writing the payload columns on workflow_status so a
-        # reader that predates the payload tables still finds inputs and outputs.
-        # Retired once every reader is on the new tables; reads COALESCE either way.
+        # For now, also write the workflow_status payload columns so a reader
+        # predating the payload tables still finds inputs and outputs.
         self.dual_write_payloads = dual_write_payloads
         # db_retry trusts the text-based SQLite retriability heuristic only on SQLite.
         self._is_sqlite = system_database_url.startswith("sqlite")
@@ -1021,12 +1020,6 @@ class SystemDatabase(ABC):
                 workflow_uuid=status["workflow_uuid"],
                 inputs=status["inputs"],
                 serialization=status["serialization"],
-                # created_at is left to the column default, the same expression
-                # workflow_status uses, so no caller can supply a client clock.
-                # Retention needs this stamped no earlier than the status row;
-                # that holds because the status insert above runs first. Postgres
-                # makes the two identical (now() is fixed at transaction start),
-                # SQLite a millisecond later -- either satisfies the ordering.
             )
             .on_conflict_do_nothing(index_elements=["workflow_uuid"])
         )
@@ -1160,16 +1153,13 @@ class SystemDatabase(ABC):
                 # The outcome was not ours to write, so leave no orphan payload.
                 return False
             c.execute(
-                self.dialect.insert(SystemSchema.workflow_outputs).values(
+                self.dialect.insert(SystemSchema.workflow_outputs)
+                .values(
                     workflow_uuid=workflow_id,
                     output=output,
                     error=error,
                     serialization=None,
                 )
-                # Overwrite, matching the column this replaces: a workflow reset
-                # to PENDING and recovered records a second outcome, and DO NOTHING
-                # would leave the first attempt's error standing against a SUCCESS
-                # status -- read back as a null result.
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid"],
                     set_={"output": output, "error": error},
@@ -1385,12 +1375,6 @@ class SystemDatabase(ABC):
                 .returning(wsc.workflow_uuid)
             ).fetchone()
             if updated is not None:
-                # A bounce replaces the pending workflow's arguments, so the
-                # payload table has to move with the column above -- reads prefer
-                # it, and a stale row here would run the workflow on the inputs
-                # the bounce superseded. The only write that updates a payload
-                # rather than appending one; it is bounded to workflows still
-                # sitting DELAYED, which never reach the retention sweep.
                 c.execute(
                     self.dialect.insert(SystemSchema.workflow_inputs)
                     .values(
@@ -1677,11 +1661,6 @@ class SystemDatabase(ABC):
                             child_wf_expr,
                             oo.c.started_at_epoch_ms,
                             oo.c.completed_at_epoch_ms,
-                            # Copied steps carry the owner the fork itself resolved to.
-                            # created_at is omitted so copied steps take the
-                            # column default. Carrying the original's value could
-                            # put a brand-new fork's steps below the retention
-                            # cutoff while it is still running.
                             mapping_subquery.c.owner,
                         ).select_from(
                             mapping_subquery.join(
@@ -5537,26 +5516,9 @@ class SystemDatabase(ABC):
         raise AssertionError("unreachable")
 
     def _payload_retention_cutoff(self) -> Optional[int]:
-        """The created_at below which every payload row is provably orphaned.
-
-        Read this BEFORE the status sweep. An index-min run straight after a
-        multi-million-row delete has to walk the dead prefix those deletes left
-        at the left edge of workflow_status_created_at_index, and that cost grows
-        with every round. A pre-sweep cutoff is always <= the post-sweep one, so
-        reading it early is strictly conservative: it defers a little work to the
-        next round and never deletes something it should not.
-
-        Any payload row older than the oldest surviving workflow_status row
-        belongs to a workflow that row-set no longer contains: a status row for
-        it would have created_at <= the payload's, contradicting the minimum.
-        So no reader can observe a status row whose payload this deletes --
-        which matters because a missing workflow_outputs row on a SUCCESS
-        workflow does not error, it deserializes to None.
-
-        Deliberately unfiltered by application_name: the payload tables carry no
-        owner column, so a per-application cutoff would delete a peer's live
-        payloads. A global minimum is conservative and correct.
-        """
+        """The created_at below which a payload row is provably orphaned: its own
+        status row would have created_at <= this minimum, contradicting it. Read
+        before the status sweep; global, or it deletes a peer app's live payloads."""
         with self.engine.begin() as c:
             return c.execute(
                 sa.select(sa.func.min(SystemSchema.workflow_status.c.created_at))
@@ -5569,15 +5531,9 @@ class SystemDatabase(ABC):
         batch_size: int,
         deadline: Optional[float],
     ) -> int:
-        """Delete one payload table's orphaned rows oldest-first, returning the count.
-
-        Same shape as the status sweep: advance a created_at watermark and delete
-        a bounded range per committed transaction. Both the probe and the delete
-        are driven by idx_workflow_*_created_at, so no batch ever rescans the dead
-        tuples an earlier one left behind -- which is what made a LIMIT-only sweep
-        degrade quadratically. On an append-only table created_at order is also
-        physical order, so each batch walks a contiguous run of the oldest pages.
-        """
+        """Delete one payload table's orphaned rows oldest-first, returning the
+        count. Like the status sweep, a created_at watermark bounds each batch, so
+        no batch rescans the dead tuples an earlier one left behind."""
         total = 0
 
         def delete_batch(watermark: Optional[int]) -> Optional[int]:
@@ -5618,13 +5574,9 @@ class SystemDatabase(ABC):
         time_budget_sec: Optional[float] = None,
         cutoff: Optional[int] = None,
     ) -> tuple[int, int, int, Optional[int]]:
-        """Delete orphaned payload and step rows oldest-first.
-
-        Returns (inputs, outputs, steps, lag_ms).
-
-        Separate from garbage_collect so a slow sweep cannot stall status GC,
-        and so payload retention can run on its own cadence.
-        """
+        """Delete orphaned payload and step rows oldest-first, returning
+        (inputs, outputs, steps, lag_ms). Separate from garbage_collect so a slow
+        sweep cannot stall status GC and retention can run on its own cadence."""
         if batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
         if cutoff is None:
@@ -5637,9 +5589,7 @@ class SystemDatabase(ABC):
             time.monotonic() + time_budget_sec if time_budget_sec is not None else None
         )
 
-        # The two payload tables are disjoint, so they sweep concurrently. Kept
-        # sequential they simply add, and at payload sizes where each sweep is
-        # substantial their sum alone can exceed the GC interval.
+        # Garbage-collect payload tables concurrently
         with ThreadPoolExecutor(
             max_workers=3, thread_name_prefix="dbos-gc-payload"
         ) as executor:
@@ -5650,8 +5600,6 @@ class SystemDatabase(ABC):
                 for table in (
                     SystemSchema.workflow_inputs,
                     SystemSchema.workflow_outputs,
-                    # Swept here rather than cascaded from workflow_status: the
-                    # cascade fired one child delete per parent row.
                     SystemSchema.operation_outputs,
                 )
             ]
@@ -5665,9 +5613,6 @@ class SystemDatabase(ABC):
             self._vacuum_tables(
                 ["workflow_inputs", "workflow_outputs", "operation_outputs"]
             )
-        # lag_ms is the health signal: it should hover around the retention
-        # window. Growing without bound means one old non-terminal workflow is
-        # pinning the cutoff and reclamation has stalled.
         dbos_logger.debug(
             f"Payload retention swept {deleted[0]} inputs, {deleted[1]} outputs, "
             f"{deleted[2]} steps; running {lag_ms}ms behind"

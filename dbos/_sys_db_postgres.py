@@ -120,14 +120,9 @@ class PostgresSystemDatabase(SystemDatabase):
         self._assert_migration_version(current_version, latest_version)
 
     def _vacuum_tables(self, tables: List[str]) -> None:
-        """VACUUM the named tables at full speed, right after the sweep that
-        dirtied them. A manual VACUUM uses vacuum_cost_delay, which defaults to
-        0, so it is unthrottled where autovacuum is not.
-
-        TRUNCATE OFF because the sweep deletes from the front of the heap and
-        truncation only reclaims at the end: it would take an ACCESS EXCLUSIVE
-        lock for nothing. Best effort -- VACUUM needs table ownership (or
-        MAINTAIN on PG16+), and CockroachDB has no VACUUM at all."""
+        """VACUUM the named tables right after the sweep that dirtied them; a
+        manual VACUUM is unthrottled where autovacuum is not. TRUNCATE OFF, as the
+        sweep frees the front of the heap. Best effort: it needs table ownership."""
         assert self.schema
         try:
             with self.engine.connect().execution_options(

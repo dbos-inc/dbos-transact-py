@@ -94,14 +94,11 @@ def garbage_collect(
 ) -> None:
     if cutoff_epoch_timestamp_ms is None and rows_threshold is None:
         return
-    # Read before the status sweep: afterwards this index-min has to walk the
-    # dead prefix that sweep just created, and that cost grows every round. A
-    # pre-sweep cutoff is always <= the post-sweep one, so it is conservative.
+    # Read before the status sweep: afterwards this index-min walks the dead prefix
+    # that sweep just created. A pre-sweep cutoff is always <= it, so it is safe.
     payload_cutoff = dbos._sys_db._payload_retention_cutoff()
 
-    # The status and payload sweeps touch disjoint tables and, with the cutoff
-    # already read, neither depends on the other. Sequentially their durations
-    # add; concurrently a round costs the slower of the two.
+    # Garbage-collect the status and payload tables concurrently
     def status_sweep() -> None:
         cutoff = dbos._sys_db.garbage_collect(
             cutoff_epoch_timestamp_ms=cutoff_epoch_timestamp_ms,

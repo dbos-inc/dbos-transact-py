@@ -190,9 +190,6 @@ class SystemSchema:
         Column("serialization", Text()),
         # Denormalized from the parent so step observability filters without a join.
         Column("application_name", Text, nullable=True),
-        # Retention key. Distinct from completed_at_epoch_ms, which is stamped
-        # from the client clock; the cutoff is a server-clock minimum, and
-        # mixing the two lets skew collect a live workflow's steps.
         Column("created_at", BigInteger, nullable=True),
         PrimaryKeyConstraint("workflow_uuid", "function_id"),
         Index("idx_operation_outputs_created_at", "created_at"),
