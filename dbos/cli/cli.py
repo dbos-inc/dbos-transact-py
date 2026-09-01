@@ -270,7 +270,7 @@ def _resolve_project_name_and_template(
 
     if not _is_valid_app_name(project_name):
         raise Exception(
-            f"{project_name} is an invalid DBOS app name. App names must be between 3 and 30 characters long and contain only lowercase letters, numbers, dashes, and underscores."
+            f"{project_name} is an invalid DBOS app name. App names must be between 3 and 256 characters long and contain only lowercase letters, numbers, dashes, and underscores."
         )
 
     assert project_name is not None, "Project name cannot be None"

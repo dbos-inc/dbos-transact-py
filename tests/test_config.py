@@ -354,6 +354,18 @@ def test_config_bad_name():
     assert "Invalid app name" in str(exc_info.value)
 
 
+def test_config_name_length_bounds():
+    for name in ["abc", "a" * 256]:
+        config: ConfigFile = {"name": name}
+        assert process_config(data=config)["name"] == name
+
+    for name in ["ab", "a" * 257]:
+        config = {"name": name}
+        with pytest.raises(DBOSInitializationError) as exc_info:
+            process_config(data=config)
+        assert "Invalid app name" in str(exc_info.value)
+
+
 ####################
 # PROCESS DB ENGINE KWARGS
 ####################

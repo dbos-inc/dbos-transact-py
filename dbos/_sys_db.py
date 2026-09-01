@@ -7020,7 +7020,7 @@ class SystemDatabase(ABC):
         if not _is_valid_app_name(new_name):
             raise DBOSException(
                 f"Invalid application name '{new_name}'. Application names must be "
-                "between 3 and 30 characters long and contain only lowercase letters, "
+                "between 3 and 256 characters long and contain only lowercase letters, "
                 "numbers, dashes, and underscores."
             )
         if old_name == new_name:
