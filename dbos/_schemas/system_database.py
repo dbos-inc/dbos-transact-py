@@ -179,14 +179,7 @@ class SystemSchema:
     operation_outputs = Table(
         "operation_outputs",
         metadata_obj,
-        Column(
-            "workflow_uuid",
-            Text,
-            ForeignKey(
-                "workflow_status.workflow_uuid", onupdate="CASCADE", ondelete="CASCADE"
-            ),
-            nullable=False,
-        ),
+        Column("workflow_uuid", Text, nullable=False),
         Column("function_id", Integer, nullable=False),
         Column("function_name", Text, nullable=False),
         Column("output", Text, nullable=True),

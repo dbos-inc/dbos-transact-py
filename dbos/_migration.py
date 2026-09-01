@@ -1297,6 +1297,13 @@ ALTER FUNCTION {quoted_schema}.enqueue_workflow(
     return migration
 
 
+def get_dbos_migration_hundredthirteen(quoted_schema: str) -> str:
+    return f"""
+ALTER TABLE {quoted_schema}."operation_outputs"
+    DROP CONSTRAINT IF EXISTS "operation_outputs_workflow_uuid_fkey";
+"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -1366,6 +1373,7 @@ def get_dbos_migrations(
         get_dbos_migration_hundredten(quoted_schema),
         get_dbos_migration_hundredeleven(quoted_schema, is_cockroach),
         get_dbos_migration_hundredtwelve(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredthirteen(quoted_schema),
     ]
 
 
@@ -1755,6 +1763,36 @@ CREATE INDEX IF NOT EXISTS idx_operation_outputs_created_at
 """
 
 
+sqlite_migration_hundredthirteen = """
+CREATE TABLE operation_outputs_new (
+    workflow_uuid TEXT NOT NULL,
+    function_id INTEGER NOT NULL,
+    function_name TEXT NOT NULL DEFAULT '',
+    output TEXT,
+    error TEXT,
+    child_workflow_id TEXT,
+    started_at_epoch_ms INTEGER,
+    completed_at_epoch_ms INTEGER,
+    serialization TEXT,
+    application_name TEXT DEFAULT NULL,
+    created_at INTEGER,
+    PRIMARY KEY (workflow_uuid, function_id)
+);
+INSERT INTO operation_outputs_new (workflow_uuid, function_id, function_name, output,
+    error, child_workflow_id, started_at_epoch_ms, completed_at_epoch_ms, serialization,
+    application_name, created_at)
+SELECT workflow_uuid, function_id, function_name, output, error, child_workflow_id,
+    started_at_epoch_ms, completed_at_epoch_ms, serialization, application_name, created_at
+FROM operation_outputs;
+DROP TABLE operation_outputs;
+ALTER TABLE operation_outputs_new RENAME TO operation_outputs;
+CREATE INDEX IF NOT EXISTS idx_operation_outputs_created_at
+    ON operation_outputs (created_at);
+CREATE INDEX IF NOT EXISTS idx_operation_outputs_completed_at_function_name
+    ON operation_outputs (completed_at_epoch_ms, function_name);
+"""
+
+
 sqlite_migrations = [
     *_pad_to_shared_base(_sqlite_history),
     sqlite_migration_hundred,
@@ -1772,4 +1810,5 @@ sqlite_migrations = [
     sqlite_migration_hundredeleven,
     # Postgres migration 112 rewrites a stored function; SQLite has none.
     "",
+    sqlite_migration_hundredthirteen,
 ]

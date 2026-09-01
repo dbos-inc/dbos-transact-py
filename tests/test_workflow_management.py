@@ -2416,6 +2416,50 @@ def test_payload_dual_write_and_read_fallback(dbos: DBOS) -> None:
     assert forked.get_result() == 11
 
 
+def test_step_checkpoints_are_swept_not_cascaded(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
+    """operation_outputs has no foreign key, so retention -- not a cascade --
+    is what removes step checkpoints."""
+    oo = SystemSchema.operation_outputs
+
+    @DBOS.step()
+    def step(x: int) -> int:
+        return x
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return step(x) + step(x)
+
+    for i in range(4):
+        assert workflow(i) == i * 2
+
+    def step_rows() -> int:
+        with dbos._sys_db.engine.begin() as c:
+            return c.execute(sa.select(sa.func.count()).select_from(oo)).scalar() or 0
+
+    assert step_rows() == 8
+
+    # Deleting the status rows leaves the checkpoints behind: nothing cascades.
+    garbage_collect(
+        dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
+    )
+    assert len(DBOS.list_workflows()) == 1
+    assert step_rows() == 8
+
+    # The next round's cutoff has advanced past them, so the sweep collects them.
+    garbage_collect(
+        dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
+    )
+    assert step_rows() == 2  # only the surviving workflow's own checkpoints
+
+    # And the survivor still replays from its checkpoints.
+    survivor = DBOS.list_workflows()[0].workflow_id
+    handle: WorkflowHandle[int] = DBOS.retrieve_workflow(survivor)
+    assert handle.get_result() == 6
+    assert len(dbos._sys_db.list_workflow_steps(survivor)) == 2
+
+
 def test_payload_retention_can_be_disabled(dbos: DBOS) -> None:
     """The flag is a kill switch: off, the sweep collects nothing."""
 
