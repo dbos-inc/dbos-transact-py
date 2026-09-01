@@ -410,7 +410,7 @@ def process_config(
 
     if not _is_valid_app_name(data["name"]):
         raise DBOSInitializationError(
-            f'Invalid app name {data["name"]}.  App names must be between 3 and 30 characters long and contain only lowercase letters, numbers, dashes, and underscores.'
+            f'Invalid app name {data["name"]}.  App names must be between 3 and 256 characters long and contain only lowercase letters, numbers, dashes, and underscores.'
         )
 
     if data.get("telemetry") is None:
@@ -578,7 +578,7 @@ def is_valid_database_url(database_url: str) -> bool:
 
 def _is_valid_app_name(name: str) -> bool:
     name_len = len(name)
-    if name_len < 3 or name_len > 30:
+    if name_len < 3 or name_len > 256:
         return False
     match = re.match("^[a-z0-9-_]+$", name)
     return True if match != None else False
