@@ -20,6 +20,10 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 from . import SCHEMA_PLACEHOLDER
 
+# A payload row pinned to this is never swept by the retention range delete: it
+# belongs to a workflow whose status row still exists past the retention boundary.
+PINNED_RETENTION_TIMESTAMP = 2**63 - 1
+
 
 class SystemSchema:
     ### System table schema
@@ -161,8 +165,16 @@ class SystemSchema:
         Column("workflow_uuid", Text, primary_key=True),
         Column("inputs", Text, nullable=True),
         Column("serialization", Text, nullable=True),
-        Column("created_at", BigInteger, nullable=False),
-        Index("idx_workflow_inputs_created_at", "created_at"),
+        Column("retention_timestamp", BigInteger, nullable=False),
+        Index("idx_workflow_inputs_retention", "retention_timestamp"),
+        Index(
+            "idx_workflow_inputs_pinned",
+            "workflow_uuid",
+            postgresql_where=text(
+                f"retention_timestamp = {PINNED_RETENTION_TIMESTAMP}"
+            ),
+            sqlite_where=text(f"retention_timestamp = {PINNED_RETENTION_TIMESTAMP}"),
+        ),
     )
 
     workflow_outputs = Table(
@@ -172,8 +184,16 @@ class SystemSchema:
         Column("output", Text, nullable=True),
         Column("error", Text, nullable=True),
         Column("serialization", Text, nullable=True),
-        Column("created_at", BigInteger, nullable=False),
-        Index("idx_workflow_outputs_created_at", "created_at"),
+        Column("retention_timestamp", BigInteger, nullable=False),
+        Index("idx_workflow_outputs_retention", "retention_timestamp"),
+        Index(
+            "idx_workflow_outputs_pinned",
+            "workflow_uuid",
+            postgresql_where=text(
+                f"retention_timestamp = {PINNED_RETENTION_TIMESTAMP}"
+            ),
+            sqlite_where=text(f"retention_timestamp = {PINNED_RETENTION_TIMESTAMP}"),
+        ),
     )
 
     operation_outputs = Table(
@@ -190,9 +210,19 @@ class SystemSchema:
         Column("serialization", Text()),
         # Denormalized from the parent so step observability filters without a join.
         Column("application_name", Text, nullable=True),
-        Column("created_at", BigInteger, nullable=True),
+        # Retention key. Server-clock, unlike completed_at_epoch_ms, whose client
+        # skew would let the boundary collect a live workflow's steps.
+        Column("retention_timestamp", BigInteger, nullable=True),
         PrimaryKeyConstraint("workflow_uuid", "function_id"),
-        Index("idx_operation_outputs_created_at", "created_at"),
+        Index("idx_operation_outputs_retention", "retention_timestamp"),
+        Index(
+            "idx_operation_outputs_pinned",
+            "workflow_uuid",
+            postgresql_where=text(
+                f"retention_timestamp = {PINNED_RETENTION_TIMESTAMP}"
+            ),
+            sqlite_where=text(f"retention_timestamp = {PINNED_RETENTION_TIMESTAMP}"),
+        ),
         Index(
             "idx_operation_outputs_completed_at_function_name",
             "completed_at_epoch_ms",

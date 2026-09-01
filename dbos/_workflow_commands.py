@@ -1,4 +1,3 @@
-from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Optional
 
 from dbos._context import get_local_dbos_context
@@ -94,36 +93,22 @@ def garbage_collect(
 ) -> None:
     if cutoff_epoch_timestamp_ms is None and rows_threshold is None:
         return
-    # Read before the status sweep: afterwards this index-min walks the dead prefix
-    # that sweep just created. A pre-sweep cutoff is always <= it, so it is safe.
-    payload_cutoff = dbos._sys_db._payload_retention_cutoff()
-
-    # Garbage-collect the status and payload tables concurrently
-    def status_sweep() -> None:
-        cutoff = dbos._sys_db.garbage_collect(
-            cutoff_epoch_timestamp_ms=cutoff_epoch_timestamp_ms,
-            rows_threshold=rows_threshold,
-            batch_size=batch_size,
-        )
-        # The application database is deprecated: only pay for its cleanup when
-        # one exists. It needs the status sweep's cutoff, so it stays here.
-        if cutoff is not None and dbos._app_db is not None:
-            retained_ids = dbos._sys_db.list_retained_workflow_ids(cutoff)
-            dbos._app_db.garbage_collect(cutoff, retained_ids, batch_size=batch_size)
-
-    def payload_sweep() -> None:
-        dbos._sys_db.garbage_collect_payloads(
-            batch_size=batch_size or DEFAULT_GC_BATCH_SIZE, cutoff=payload_cutoff
-        )
-
-    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="dbos-gc") as executor:
-        futures = [executor.submit(status_sweep), executor.submit(payload_sweep)]
-        # Collect both before raising: one sweep failing must not leave the
-        # other unobserved, and the pool's shutdown waits for both either way.
-        errors = [f.exception() for f in futures]
-    for error in errors:
-        if error is not None:
-            raise error
+    cutoff = dbos._sys_db.garbage_collect(
+        cutoff_epoch_timestamp_ms=cutoff_epoch_timestamp_ms,
+        rows_threshold=rows_threshold,
+        batch_size=batch_size,
+    )
+    if cutoff is None:
+        return
+    # The application database is deprecated: only pay for its cleanup when one exists.
+    if dbos._app_db is not None:
+        retained_ids = dbos._sys_db.list_retained_workflow_ids(cutoff)
+        dbos._app_db.garbage_collect(cutoff, retained_ids, batch_size=batch_size)
+    # Strictly after the status sweep, which is what makes the straggler set small:
+    # everything still below the boundary once that sweep has run.
+    dbos._sys_db.garbage_collect_payloads(
+        cutoff, batch_size=batch_size or DEFAULT_GC_BATCH_SIZE
+    )
 
 
 def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:

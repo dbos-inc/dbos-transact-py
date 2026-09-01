@@ -62,7 +62,7 @@ from ._error import (
 from ._logger import dbos_logger
 from ._outcome import NoResult
 from ._schemas import SCHEMA_PLACEHOLDER
-from ._schemas.system_database import SystemSchema
+from ._schemas.system_database import PINNED_RETENTION_TIMESTAMP, SystemSchema
 from ._serialization import (
     DBOSPortableJSON,
     Serializer,
@@ -587,6 +587,16 @@ DEFAULT_NOTIFICATION_COALESCE_SEC = 0.01
 # Statement timeout for read-only introspection queries (workflow listings, aggregates, metrics).
 # One of those scanning a huge table for minutes holds back xmin, which stalls autovacuum database-wide.
 DEFAULT_OBSERVABILITY_QUERY_TIMEOUT_SEC = 30.0
+
+# Above this many workflows below the retention boundary, payload retention skips
+# the round rather than trusting an incomplete pin.
+DEFAULT_MAX_STRAGGLERS = 10_000
+
+_PAYLOAD_TABLES = (
+    SystemSchema.workflow_inputs,
+    SystemSchema.workflow_outputs,
+    SystemSchema.operation_outputs,
+)
 
 
 class SystemDatabase(ABC):
@@ -1381,7 +1391,7 @@ class SystemDatabase(ABC):
                         workflow_uuid=updated[0],
                         inputs=inputs,
                         serialization=serialization,
-                        created_at=self._now_ms_sql(),
+                        retention_timestamp=self._now_ms_sql(),
                     )
                     .on_conflict_do_update(
                         index_elements=["workflow_uuid"],
@@ -2999,7 +3009,7 @@ class SystemDatabase(ABC):
                     application_name=self.app_name,
                     # Explicit rather than a column default: SQLite cannot add a
                     # column with a non-constant default, so it has none there.
-                    created_at=self._now_ms_sql(),
+                    retention_timestamp=self._now_ms_sql(),
                 )
                 .on_conflict_do_update(
                     index_elements=[
@@ -3084,7 +3094,7 @@ class SystemDatabase(ABC):
                     child_workflow_id=result_workflow_id,
                     started_at_epoch_ms=started_at_epoch_ms,
                     completed_at_epoch_ms=int(time.time() * 1000),
-                    created_at=self._now_ms_sql(),
+                    retention_timestamp=self._now_ms_sql(),
                     serialization=serialization,
                     application_name=self.app_name,
                 )
@@ -3119,7 +3129,7 @@ class SystemDatabase(ABC):
             child_workflow_id=childUUID,
             started_at_epoch_ms=started_at_epoch_ms,
             completed_at_epoch_ms=int(time.time() * 1000),
-            created_at=self._now_ms_sql(),
+            retention_timestamp=self._now_ms_sql(),
             application_name=self.app_name,
         )
         try:
@@ -5515,44 +5525,111 @@ class SystemDatabase(ABC):
                 backoff = min(backoff * 2, max_backoff)
         raise AssertionError("unreachable")
 
-    def _payload_retention_cutoff(self) -> Optional[int]:
-        """The created_at below which a payload row is provably orphaned: its own
-        status row would have created_at <= this minimum, contradicting it. Read
-        before the status sweep; global, or it deletes a peer app's live payloads."""
+    def _enumerate_stragglers(
+        self, target: int, max_stragglers: int
+    ) -> Optional[List[str]]:
+        """Workflows still below the retention boundary once the status sweep has
+        run, or None when there are more than the caller can pin, which means the
+        payload sweep must not run this round."""
         with self.engine.begin() as c:
-            return c.execute(
-                sa.select(sa.func.min(SystemSchema.workflow_status.c.created_at))
-            ).scalar()
+            rows = c.execute(
+                sa.select(SystemSchema.workflow_status.c.workflow_uuid)
+                .where(SystemSchema.workflow_status.c.created_at < target)
+                .limit(max_stragglers + 1)
+            ).fetchall()
+        if len(rows) > max_stragglers:
+            return None
+        return [row[0] for row in rows]
+
+    def _pin_stragglers(self, workflow_ids: List[str], target: int) -> int:
+        """Lift straggler payloads above the boundary, returning rows newly pinned.
+
+        One transaction across all three tables: a pin that half-lands followed by
+        a sweep that fully lands would delete a live workflow's payload. The
+        retention_timestamp < target guard makes this idempotent, so a workflow
+        running for a month is rewritten once rather than once per round.
+        """
+        if not workflow_ids:
+            return 0
+        pinned = 0
+        with self.engine.begin() as c:
+            for table in _PAYLOAD_TABLES:
+                for i in range(0, len(workflow_ids), 1000):
+                    pinned += c.execute(
+                        sa.update(table)
+                        .where(table.c.workflow_uuid.in_(workflow_ids[i : i + 1000]))
+                        .where(table.c.retention_timestamp < target)
+                        .values(retention_timestamp=PINNED_RETENTION_TIMESTAMP)
+                    ).rowcount
+        return pinned
+
+    def _collect_pinned_orphans(self) -> int:
+        """Delete pinned payloads whose workflow is gone. They sit above every
+        boundary, so the range sweep can never reach them."""
+        ws = SystemSchema.workflow_status
+        total = 0
+        for table in _PAYLOAD_TABLES:
+            with self.engine.begin() as c:
+                total += c.execute(
+                    sa.delete(table).where(
+                        table.c.retention_timestamp == PINNED_RETENTION_TIMESTAMP,
+                        ~sa.exists(
+                            sa.select(sa.literal(1))
+                            .select_from(ws)
+                            .where(ws.c.workflow_uuid == table.c.workflow_uuid)
+                            .correlate(table)
+                        ),
+                    )
+                ).rowcount
+        return total
+
+    def _count_pinned_rows(self) -> int:
+        """Rows currently held above the boundary by a straggler: the health signal."""
+        total = 0
+        with self.engine.begin() as c:
+            for table in _PAYLOAD_TABLES:
+                total += (
+                    c.execute(
+                        sa.select(sa.func.count())
+                        .select_from(table)
+                        .where(
+                            table.c.retention_timestamp == PINNED_RETENTION_TIMESTAMP
+                        )
+                    ).scalar()
+                    or 0
+                )
+        return total
 
     def _sweep_payload_table(
         self,
         table: sa.Table,
-        cutoff: int,
+        target: int,
         batch_size: int,
         deadline: Optional[float],
     ) -> int:
-        """Delete one payload table's orphaned rows oldest-first, returning the
-        count. Like the status sweep, a created_at watermark bounds each batch, so
+        """Delete one payload table's rows below the boundary, oldest first,
+        returning the count. A retention_timestamp watermark bounds each batch, so
         no batch rescans the dead tuples an earlier one left behind."""
         total = 0
+        ts = table.c.retention_timestamp
 
         def delete_batch(watermark: Optional[int]) -> Optional[int]:
             """Delete one batch, returning the watermark to resume from, or None
             when this table is done."""
             nonlocal total
             with self.engine.begin() as c:
-                probe = sa.select(table.c.created_at).where(table.c.created_at < cutoff)
+                probe = sa.select(ts).where(ts < target)
                 if watermark is not None:
-                    probe = probe.where(table.c.created_at > watermark)
+                    probe = probe.where(ts > watermark)
                 step: Optional[int] = c.execute(
-                    probe.order_by(table.c.created_at).limit(1).offset(batch_size - 1)
+                    probe.order_by(ts).limit(1).offset(batch_size - 1)
                 ).scalar()
-                bounds: List[sa.ColumnElement[bool]] = [table.c.created_at < cutoff]
+                bounds: List[sa.ColumnElement[bool]] = [ts < target]
                 if watermark is not None:
-                    bounds.append(table.c.created_at > watermark)
+                    bounds.append(ts > watermark)
                 if step is not None:
-                    # created_at ties may push the batch slightly over batch_size
-                    bounds.append(table.c.created_at <= step)
+                    # timestamp ties may push the batch slightly over batch_size
+                    bounds.append(ts <= step)
                 total += c.execute(sa.delete(table).where(*bounds)).rowcount
                 return step
 
@@ -5569,39 +5646,40 @@ class SystemDatabase(ABC):
 
     def garbage_collect_payloads(
         self,
+        target: int,
         *,
         batch_size: int = 10000,
         time_budget_sec: Optional[float] = None,
-        cutoff: Optional[int] = None,
-    ) -> tuple[int, int, int, Optional[int]]:
-        """Delete orphaned payload and step rows oldest-first, returning
-        (inputs, outputs, steps, lag_ms). Separate from garbage_collect so a slow
-        sweep cannot stall status GC and retention can run on its own cadence."""
+        max_stragglers: int = DEFAULT_MAX_STRAGGLERS,
+    ) -> tuple[int, int, int, int]:
+        """Delete payload and step rows below the boundary, returning
+        (inputs, outputs, steps, pinned). Must run after the status sweep: it
+        collects what that sweep leaves behind."""
         if batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
-        if cutoff is None:
-            cutoff = self._payload_retention_cutoff()
-        if cutoff is None:
-            # No workflows at all: nothing anchors the cutoff, so sweep nothing.
-            return 0, 0, 0, None
-        lag_ms = int(time.time() * 1000) - cutoff
+        stragglers = self._enumerate_stragglers(target, max_stragglers)
+        if stragglers is None:
+            dbos_logger.warning(
+                f"Payload retention skipped: more than {max_stragglers} workflows are "
+                "older than the retention boundary and still present, so their payloads "
+                "cannot all be pinned. Nothing was deleted."
+            )
+            return 0, 0, 0, self._count_pinned_rows()
+        newly_pinned = self._pin_stragglers(stragglers, target)
+
         deadline = (
             time.monotonic() + time_budget_sec if time_budget_sec is not None else None
         )
-
-        # Garbage-collect payload tables concurrently
+        # The payload tables are disjoint, so sweep them concurrently: sequentially
+        # their durations add and can exceed the GC interval.
         with ThreadPoolExecutor(
             max_workers=3, thread_name_prefix="dbos-gc-payload"
         ) as executor:
             futures = [
                 executor.submit(
-                    self._sweep_payload_table, table, cutoff, batch_size, deadline
+                    self._sweep_payload_table, table, target, batch_size, deadline
                 )
-                for table in (
-                    SystemSchema.workflow_inputs,
-                    SystemSchema.workflow_outputs,
-                    SystemSchema.operation_outputs,
-                )
+                for table in _PAYLOAD_TABLES
             ]
             outcomes = [(f.exception(), f) for f in futures]
         for error, _ in outcomes:
@@ -5609,11 +5687,14 @@ class SystemDatabase(ABC):
                 raise error
         deleted = [f.result() for _, f in outcomes]
 
+        orphans = self._collect_pinned_orphans()
+        pinned = self._count_pinned_rows()
         dbos_logger.debug(
             f"Payload retention swept {deleted[0]} inputs, {deleted[1]} outputs, "
-            f"{deleted[2]} steps; running {lag_ms}ms behind"
+            f"{deleted[2]} steps and {orphans} orphaned pinned rows; pinned "
+            f"{newly_pinned} rows for {len(stragglers)} stragglers, {pinned} held"
         )
-        return deleted[0], deleted[1], deleted[2], lag_ms
+        return deleted[0], deleted[1], deleted[2], pinned
 
     def garbage_collect(
         self,
@@ -6247,7 +6328,9 @@ class SystemDatabase(ABC):
                         workflow_uuid=status["workflow_uuid"],
                         inputs=status["inputs"],
                         serialization=status.get("serialization"),
-                        created_at=status["created_at"],
+                        # Retention starts at import: the original timestamps are
+                        # long past the boundary and would be swept immediately.
+                        retention_timestamp=self._now_ms_sql(),
                     )
                 )
                 if status["output"] is not None or status["error"] is not None:
@@ -6257,8 +6340,7 @@ class SystemDatabase(ABC):
                             output=status["output"],
                             error=status["error"],
                             serialization=status.get("serialization"),
-                            created_at=status.get("completed_at")
-                            or status["updated_at"],
+                            retention_timestamp=self._now_ms_sql(),
                         )
                     )
 
@@ -6274,7 +6356,7 @@ class SystemDatabase(ABC):
                             child_workflow_id=output["child_workflow_id"],
                             started_at_epoch_ms=output["started_at_epoch_ms"],
                             completed_at_epoch_ms=output["completed_at_epoch_ms"],
-                            created_at=status["created_at"],
+                            retention_timestamp=self._now_ms_sql(),
                             serialization=output["serialization"],
                             application_name=output.get("application_name"),
                         )

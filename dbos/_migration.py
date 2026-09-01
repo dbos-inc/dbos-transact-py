@@ -3,6 +3,7 @@ import sys
 import sqlalchemy as sa
 
 from ._logger import dbos_logger
+from ._schemas.system_database import PINNED_RETENTION_TIMESTAMP
 from ._utils import quote_identifier
 
 # Migration versions that contain CONCURRENTLY index DDL and must run with
@@ -28,6 +29,7 @@ _ONLINE_MIGRATIONS = {
     47,
     107,
     111,
+    114,
 }
 
 # From this index on, every SDK defines the same migration at the same index.
@@ -1156,7 +1158,7 @@ CREATE TABLE IF NOT EXISTS {quoted_schema}."workflow_inputs" (
     workflow_uuid TEXT NOT NULL PRIMARY KEY,
     inputs TEXT,
     serialization TEXT,
-    created_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint
+    retention_timestamp BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint
 );
 
 CREATE TABLE IF NOT EXISTS {quoted_schema}."workflow_outputs" (
@@ -1164,28 +1166,36 @@ CREATE TABLE IF NOT EXISTS {quoted_schema}."workflow_outputs" (
     output TEXT,
     error TEXT,
     serialization TEXT,
-    created_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint
+    retention_timestamp BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint
 );
 
-CREATE INDEX IF NOT EXISTS "idx_workflow_inputs_created_at"
-    ON {quoted_schema}."workflow_inputs" ("created_at");
+CREATE INDEX IF NOT EXISTS "idx_workflow_inputs_retention"
+    ON {quoted_schema}."workflow_inputs" ("retention_timestamp");
 
-CREATE INDEX IF NOT EXISTS "idx_workflow_outputs_created_at"
-    ON {quoted_schema}."workflow_outputs" ("created_at");
+CREATE INDEX IF NOT EXISTS "idx_workflow_outputs_retention"
+    ON {quoted_schema}."workflow_outputs" ("retention_timestamp");
+
+CREATE INDEX IF NOT EXISTS "idx_workflow_inputs_pinned"
+    ON {quoted_schema}."workflow_inputs" ("workflow_uuid")
+    WHERE "retention_timestamp" = {PINNED_RETENTION_TIMESTAMP};
+
+CREATE INDEX IF NOT EXISTS "idx_workflow_outputs_pinned"
+    ON {quoted_schema}."workflow_outputs" ("workflow_uuid")
+    WHERE "retention_timestamp" = {PINNED_RETENTION_TIMESTAMP};
 """
 
 
 def get_dbos_migration_hundredten(quoted_schema: str) -> str:
     return f"""
 ALTER TABLE {quoted_schema}."operation_outputs"
-    ADD COLUMN IF NOT EXISTS "created_at" BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint;
+    ADD COLUMN IF NOT EXISTS "retention_timestamp" BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint;
 """
 
 
 def get_dbos_migration_hundredeleven(quoted_schema: str, is_cockroach: bool) -> str:
     c = _concurrently(is_cockroach)
-    return f"""CREATE INDEX {c} IF NOT EXISTS "idx_operation_outputs_created_at"
-    ON {quoted_schema}."operation_outputs" ("created_at")"""
+    return f"""CREATE INDEX {c} IF NOT EXISTS "idx_operation_outputs_retention"
+    ON {quoted_schema}."operation_outputs" ("retention_timestamp")"""
 
 
 def get_dbos_migration_hundredtwelve(quoted_schema: str, is_cockroach: bool) -> str:
@@ -1272,7 +1282,7 @@ BEGIN
         updated_at = EXCLUDED.updated_at;
 
     INSERT INTO {quoted_schema}.workflow_inputs (
-        workflow_uuid, inputs, serialization, created_at
+        workflow_uuid, inputs, serialization, retention_timestamp
     ) VALUES (
         v_workflow_id, v_serialized_inputs, 'portable_json', v_now
     )
@@ -1374,7 +1384,15 @@ def get_dbos_migrations(
         get_dbos_migration_hundredeleven(quoted_schema, is_cockroach),
         get_dbos_migration_hundredtwelve(quoted_schema, is_cockroach),
         get_dbos_migration_hundredthirteen(quoted_schema),
+        get_dbos_migration_hundredfourteen(quoted_schema, is_cockroach),
     ]
+
+
+def get_dbos_migration_hundredfourteen(quoted_schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f"""CREATE INDEX {c} IF NOT EXISTS "idx_operation_outputs_pinned"
+    ON {quoted_schema}."operation_outputs" ("workflow_uuid")
+    WHERE "retention_timestamp" = {PINNED_RETENTION_TIMESTAMP}"""
 
 
 def get_sqlite_timestamp_expr() -> str:
@@ -1736,7 +1754,7 @@ CREATE TABLE IF NOT EXISTS workflow_inputs (
     workflow_uuid TEXT NOT NULL PRIMARY KEY,
     inputs TEXT,
     serialization TEXT,
-    created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()}
+    retention_timestamp INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()}
 );
 
 CREATE TABLE IF NOT EXISTS workflow_outputs (
@@ -1744,22 +1762,28 @@ CREATE TABLE IF NOT EXISTS workflow_outputs (
     output TEXT,
     error TEXT,
     serialization TEXT,
-    created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()}
+    retention_timestamp INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()}
 );
 
-CREATE INDEX IF NOT EXISTS idx_workflow_inputs_created_at
-    ON workflow_inputs (created_at);
-CREATE INDEX IF NOT EXISTS idx_workflow_outputs_created_at
-    ON workflow_outputs (created_at);
+CREATE INDEX IF NOT EXISTS idx_workflow_inputs_retention
+    ON workflow_inputs (retention_timestamp);
+CREATE INDEX IF NOT EXISTS idx_workflow_outputs_retention
+    ON workflow_outputs (retention_timestamp);
+CREATE INDEX IF NOT EXISTS idx_workflow_inputs_pinned
+    ON workflow_inputs (workflow_uuid)
+    WHERE retention_timestamp = {PINNED_RETENTION_TIMESTAMP};
+CREATE INDEX IF NOT EXISTS idx_workflow_outputs_pinned
+    ON workflow_outputs (workflow_uuid)
+    WHERE retention_timestamp = {PINNED_RETENTION_TIMESTAMP};
 """
 
 sqlite_migration_hundredten = """
-ALTER TABLE operation_outputs ADD COLUMN created_at INTEGER;
+ALTER TABLE operation_outputs ADD COLUMN retention_timestamp INTEGER;
 """
 
 sqlite_migration_hundredeleven = """
-CREATE INDEX IF NOT EXISTS idx_operation_outputs_created_at
-    ON operation_outputs (created_at);
+CREATE INDEX IF NOT EXISTS idx_operation_outputs_retention
+    ON operation_outputs (retention_timestamp);
 """
 
 
@@ -1775,21 +1799,27 @@ CREATE TABLE operation_outputs_new (
     completed_at_epoch_ms INTEGER,
     serialization TEXT,
     application_name TEXT DEFAULT NULL,
-    created_at INTEGER,
+    retention_timestamp INTEGER,
     PRIMARY KEY (workflow_uuid, function_id)
 );
 INSERT INTO operation_outputs_new (workflow_uuid, function_id, function_name, output,
     error, child_workflow_id, started_at_epoch_ms, completed_at_epoch_ms, serialization,
-    application_name, created_at)
+    application_name, retention_timestamp)
 SELECT workflow_uuid, function_id, function_name, output, error, child_workflow_id,
-    started_at_epoch_ms, completed_at_epoch_ms, serialization, application_name, created_at
+    started_at_epoch_ms, completed_at_epoch_ms, serialization, application_name, retention_timestamp
 FROM operation_outputs;
 DROP TABLE operation_outputs;
 ALTER TABLE operation_outputs_new RENAME TO operation_outputs;
-CREATE INDEX IF NOT EXISTS idx_operation_outputs_created_at
-    ON operation_outputs (created_at);
+CREATE INDEX IF NOT EXISTS idx_operation_outputs_retention
+    ON operation_outputs (retention_timestamp);
 CREATE INDEX IF NOT EXISTS idx_operation_outputs_completed_at_function_name
     ON operation_outputs (completed_at_epoch_ms, function_name);
+"""
+
+sqlite_migration_hundredfourteen = f"""
+CREATE INDEX IF NOT EXISTS idx_operation_outputs_pinned
+    ON operation_outputs (workflow_uuid)
+    WHERE retention_timestamp = {PINNED_RETENTION_TIMESTAMP};
 """
 
 
@@ -1811,4 +1841,5 @@ sqlite_migrations = [
     # Postgres migration 112 rewrites a stored function; SQLite has none.
     "",
     sqlite_migration_hundredthirteen,
+    sqlite_migration_hundredfourteen,
 ]
