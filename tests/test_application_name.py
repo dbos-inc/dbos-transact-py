@@ -1048,6 +1048,8 @@ def test_rename_rejects_names_an_application_could_not_use(dbos: DBOS) -> None:
         dbos._sys_db.rename_application(OTHER_APP, "No Spaces Allowed")
     with pytest.raises(DBOSException, match="Invalid application name"):
         dbos._sys_db.rename_application(OTHER_APP, "ab")
+    with pytest.raises(DBOSException, match="Invalid application name"):
+        dbos._sys_db.rename_application(OTHER_APP, "a" * 257)
     with pytest.raises(DBOSException, match="already holds that name"):
         dbos._sys_db.rename_application(OTHER_APP, OTHER_APP)
     with pytest.raises(DBOSException, match="cannot be empty"):
