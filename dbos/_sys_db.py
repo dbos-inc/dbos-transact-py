@@ -1431,6 +1431,16 @@ class SystemDatabase(ABC):
     def delete_workflows(self, workflow_ids: list[str]) -> None:
         """Delete workflows and all associated data from the system database."""
         with self.engine.begin() as c:
+            # The payload tables carry no foreign key, so the status delete does
+            # not cascade into them; without this they survive as orphans.
+            for table in (
+                SystemSchema.workflow_inputs,
+                SystemSchema.workflow_outputs,
+                SystemSchema.operation_outputs,
+            ):
+                c.execute(
+                    sa.delete(table).where(table.c.workflow_uuid.in_(workflow_ids))
+                )
             c.execute(
                 sa.delete(SystemSchema.workflow_status).where(
                     SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids)
