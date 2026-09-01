@@ -1575,6 +1575,16 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
 
 
 # batch_size: 3 = short final batch, 5 = exact multiple, 20 = larger than all eligible rows
+def _delete_target(statement: str) -> str:
+    """The table a DELETE targets, ignoring any table named in a subquery. The
+    payload sweep's deletes carry `NOT EXISTS (... FROM workflow_status ...)`, so
+    a substring test counts them as status deletes."""
+    head = statement.lstrip()
+    if not head.upper().startswith("DELETE FROM"):
+        return ""
+    return head[len("DELETE FROM") :].strip().split()[0].rsplit(".", 1)[-1].strip('"')
+
+
 @pytest.mark.parametrize("batch_size", [3, 5, 20])
 def test_garbage_collection_batched(
     dbos: DBOS, skip_with_sqlite_imprecise_time: None, batch_size: int
@@ -1625,9 +1635,7 @@ def test_garbage_collection_batched(
         context: Any,
         executemany: bool,
     ) -> None:
-        if statement.lstrip().upper().startswith("DELETE") and (
-            "workflow_status" in statement
-        ):
+        if _delete_target(statement) == "workflow_status":
             sys_delete_counts.append(1)
 
     def count_app_deletes(
@@ -1638,9 +1646,7 @@ def test_garbage_collection_batched(
         context: Any,
         executemany: bool,
     ) -> None:
-        if statement.lstrip().upper().startswith("DELETE") and (
-            "transaction_outputs" in statement
-        ):
+        if _delete_target(statement) == "transaction_outputs":
             app_delete_counts.append(1)
 
     sa_event.listen(dbos._sys_db.engine, "before_cursor_execute", count_sys_deletes)
@@ -1777,9 +1783,7 @@ def test_garbage_collection_batched_resumable(
         executemany: bool,
     ) -> None:
         nonlocal delete_count
-        if statement.lstrip().upper().startswith("DELETE") and (
-            "workflow_status" in statement
-        ):
+        if _delete_target(statement) == "workflow_status":
             delete_count += 1
             if delete_count > 1:
                 raise RuntimeError("injected garbage collection failure")
