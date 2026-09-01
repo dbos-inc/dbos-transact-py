@@ -20,10 +20,6 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 from . import SCHEMA_PLACEHOLDER
 
-# A payload row marked with this is never reached by a retention cutoff: it
-# belongs to a straggler, a workflow still present past the retention cutoff.
-STRAGGLER_RETENTION_TIMESTAMP = 2**63 - 1
-
 
 class SystemSchema:
     ### System table schema

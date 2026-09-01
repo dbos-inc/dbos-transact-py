@@ -62,7 +62,7 @@ from ._error import (
 from ._logger import dbos_logger
 from ._outcome import NoResult
 from ._schemas import SCHEMA_PLACEHOLDER
-from ._schemas.system_database import STRAGGLER_RETENTION_TIMESTAMP, SystemSchema
+from ._schemas.system_database import SystemSchema
 from ._serialization import (
     DBOSPortableJSON,
     Serializer,
@@ -5532,6 +5532,9 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_outputs,
             SystemSchema.operation_outputs,
         )
+        # A payload marked with this is never reached by a retention cutoff: it
+        # belongs to a straggler, a workflow still present past the cutoff.
+        STRAGGLER_RETENTION_TIMESTAMP = 2**63 - 1
 
         def enumerate_stragglers() -> tuple[Optional[List[str]], Optional[int]]:
             """Workflows still older than the cutoff once the status sweep has run,

@@ -3720,14 +3720,38 @@ def test_rate_limiter_query_plan(dbos: DBOS) -> None:
         )
     assert captured
     statement, parameters = captured[0]
+
+    # Plan against a populated, freshly analyzed table. On an empty one every
+    # candidate plan costs about nothing, so the winner turns on whatever row
+    # estimate autoanalyze last wrote for the shared test database -- which is a
+    # coin flip, not a property of the query.
+    ws = SystemSchema.workflow_status
+    now = int(time.time() * 1000)
+    rows = [
+        {
+            "workflow_uuid": f"plan-{i}-{uuid.uuid4()}",
+            "name": "plan_probe",
+            "status": "SUCCESS",
+            "created_at": now,
+            "updated_at": now,
+            # A tenth of the table is rate-limited on this queue, so the partial
+            # index is small relative to the heap, as it is in production.
+            "queue_name": queue.name if i % 10 == 0 else f"other-queue-{i % 7}",
+            "rate_limited": i % 10 == 0,
+            "started_at_epoch_ms": now - (i % 50),
+        }
+        for i in range(1000)
+    ]
+    with dbos._sys_db.engine.begin() as conn:
+        conn.execute(sa.insert(ws), rows)
     with dbos._sys_db.engine.begin() as conn:
         if using_sqlite():
+            conn.exec_driver_sql("ANALYZE")
             plan = conn.exec_driver_sql(
                 f"EXPLAIN QUERY PLAN {statement}", parameters
             ).fetchall()
         else:
-            # A near-empty table plans as a seq scan whatever the query shape, so price that out.
-            conn.exec_driver_sql("SET LOCAL enable_seqscan = off")
+            conn.exec_driver_sql(f'ANALYZE "{dbos._sys_db.schema}".workflow_status')
             plan = conn.exec_driver_sql(f"EXPLAIN {statement}", parameters).fetchall()
     details = [str(row[-1]) for row in plan]
     assert any("idx_workflow_status_rate_limited" in d for d in details)
