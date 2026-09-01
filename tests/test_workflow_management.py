@@ -2450,7 +2450,7 @@ def test_payload_garbage_collection(
         assert workflow(i) == i * 2
     assert _payload_counts(dbos) == (num_workflows, num_workflows, num_workflows * 2)
 
-    # A boundary in the past reaches nothing.
+    # A cutoff in the past reaches nothing.
     assert dbos._sys_db.garbage_collect_payloads(0) == (0, 0, 0)
     assert _payload_counts(dbos) == (num_workflows, num_workflows, num_workflows * 2)
 
@@ -2476,7 +2476,7 @@ def test_payload_garbage_collection(
 def test_payload_gc_spares_a_straggler_then_reclaims_it(
     dbos: DBOS, skip_with_sqlite_imprecise_time: None
 ) -> None:
-    """A workflow older than the boundary that still has a status row keeps its
+    """A workflow older than the cutoff that still has a status row keeps its
     payload across repeated rounds -- it may yet recover or be forked -- and is
     reclaimed once that row is gone."""
     event = threading.Event()
@@ -2537,7 +2537,7 @@ def test_payload_gc_spares_a_straggler_then_reclaims_it(
     assert handle.get_result() == 0
 
     # Once the status row is gone the payload must go with it. A spared payload
-    # sits above every boundary, so a later round has to reach it some other way.
+    # sits above every cutoff, so a later round has to reach it some other way.
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.delete(SystemSchema.workflow_status).where(
@@ -2580,11 +2580,11 @@ def test_straggler_overflow_sweeps_from_the_oldest(dbos: DBOS) -> None:
                 .values(retention_timestamp=oldest - 1)
             )
 
-    # Two workflows remain below the boundary, one over the bound of 1.
+    # Two workflows remain older than the cutoff, one over the bound of 1.
     dbos._sys_db.garbage_collect_payloads(
         int(time.time() * 1000) + 60_000, max_stragglers=1
     )
-    # The orphan below the boundary is gone; both live workflows keep theirs.
+    # The orphan older than the cutoff is gone; both live workflows keep theirs.
     assert _payload_counts(dbos) == (2, 2, 0)
     for wfid in ids[1:]:
         assert (
@@ -2595,7 +2595,7 @@ def test_straggler_overflow_sweeps_from_the_oldest(dbos: DBOS) -> None:
 
 def test_a_failed_round_deletes_nothing(dbos: DBOS) -> None:
     """A round that fails partway must not delete a live workflow's payload:
-    every workflow here is below the boundary, so an unguarded sweep would take
+    every workflow here is older than the cutoff, so an unguarded sweep would take
     all of them."""
 
     @DBOS.workflow()
@@ -2645,7 +2645,7 @@ def test_a_failed_round_deletes_nothing(dbos: DBOS) -> None:
 
 
 def test_peer_application_payloads_survive(dbos: DBOS) -> None:
-    """Status GC is per-application but the payload boundary is global, so a peer
+    """Status GC is per-application but the payload cutoff is global, so a peer
     application's payloads must survive a sweep this application runs."""
 
     @DBOS.workflow()

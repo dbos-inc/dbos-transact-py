@@ -5522,7 +5522,7 @@ class SystemDatabase(ABC):
         batch_size: int = 10000,
         max_stragglers: int = 10_000,
     ) -> tuple[int, int, int]:
-        """Delete payload and step rows below the boundary, returning the count
+        """Delete payload and step rows older than the cutoff, returning the count
         removed from each table. Must run after the status sweep: it collects
         what that sweep leaves behind."""
         if batch_size < 1:
@@ -5534,9 +5534,9 @@ class SystemDatabase(ABC):
         )
 
         def enumerate_stragglers() -> tuple[Optional[List[str]], Optional[int]]:
-            """Workflows still below the boundary once the status sweep has run,
+            """Workflows still older than the cutoff once the status sweep has run,
             oldest first, with their oldest created_at. The list is None when
-            there are more than can be pinned."""
+            there are more than can be marked."""
             ws = SystemSchema.workflow_status
             with self.engine.begin() as c:
                 rows = c.execute(
@@ -5550,22 +5550,16 @@ class SystemDatabase(ABC):
                 return None, oldest
             return [row[0] for row in rows], oldest
 
-        def pin_stragglers(workflow_ids: List[str]) -> int:
-            """Lift straggler payloads above the boundary, returning rows newly
-            pinned.
-
-            One transaction across all three tables: a pin that half-lands
-            followed by a sweep that fully lands would delete a live workflow's
-            payload. The retention_timestamp < target guard makes this idempotent,
-            so a workflow running for a month is rewritten once, not once a round.
-            """
+        def mark_stragglers(workflow_ids: List[str]) -> int:
+            """Stamp the payloads of straggler workflows with a sentinel (the
+            maximum BIGINT) so no retention cutoff can reach them."""
             if not workflow_ids:
                 return 0
-            pinned = 0
+            marked = 0
             with self.engine.begin() as c:
                 for table in payload_tables:
                     for i in range(0, len(workflow_ids), 1000):
-                        pinned += c.execute(
+                        marked += c.execute(
                             sa.update(table)
                             .where(
                                 table.c.workflow_uuid.in_(workflow_ids[i : i + 1000])
@@ -5573,7 +5567,7 @@ class SystemDatabase(ABC):
                             .where(table.c.retention_timestamp < target)
                             .values(retention_timestamp=PINNED_RETENTION_TIMESTAMP)
                         ).rowcount
-            return pinned
+            return marked
 
         def garbage_collect_table(table: sa.Table, cutoff: int) -> int:
             """Delete all rows in a table older than a cutoff."""
@@ -5609,9 +5603,9 @@ class SystemDatabase(ABC):
                     break
             return total
 
-        def collect_pinned_orphans() -> int:
-            """Delete pinned payloads whose workflow is gone. They sit above every
-            boundary, so the range sweep can never reach them."""
+        def garbage_collect_stragglers() -> int:
+            """Delete marked payloads whose workflow is gone. They sit above
+            every cutoff, so nothing else can reach them."""
             ws = SystemSchema.workflow_status
             total = 0
             for table in payload_tables:
@@ -5630,28 +5624,25 @@ class SystemDatabase(ABC):
             return total
 
         stragglers, oldest = enumerate_stragglers()
-        boundary, newly_pinned = target, 0
+        cutoff, marked_rows = target, 0
         if stragglers is None:
-            # Too many to pin. The oldest straggler is the minimum created_at over
-            # every status row, so a payload below it cannot have a surviving
-            # status row: sweeping there is safe with nothing pinned, and still
-            # reclaims everything older than the oldest workflow left.
-            boundary = target if oldest is None else oldest
+            # If there are too many stragglers, don't mark them, just delete payloads
+            # older than the oldest straggler.
+            cutoff = target if oldest is None else oldest
             dbos_logger.warning(
                 f"More than {max_stragglers} workflows are older than the retention "
-                "boundary and still present, so their payloads cannot all be pinned. "
-                f"Falling back to the oldest of them ({boundary}) as the boundary."
+                f"cutoff and still present, so their payloads cannot all be marked. "
+                f"Using the oldest of them ({cutoff}) as the cutoff instead."
             )
         else:
-            newly_pinned = pin_stragglers(stragglers)
+            marked_rows = mark_stragglers(stragglers)
 
-        # The payload tables are disjoint, so sweep them concurrently: sequentially
-        # their durations add and can exceed the GC interval.
+        # Garbage-collect the three payload tables concurrently
         with ThreadPoolExecutor(
             max_workers=3, thread_name_prefix="dbos-gc-payload"
         ) as executor:
             futures = [
-                executor.submit(garbage_collect_table, table, boundary)
+                executor.submit(garbage_collect_table, table, cutoff)
                 for table in payload_tables
             ]
             outcomes = [(f.exception(), f) for f in futures]
@@ -5660,11 +5651,11 @@ class SystemDatabase(ABC):
                 raise error
         deleted = [f.result() for _, f in outcomes]
 
-        orphans = collect_pinned_orphans()
+        deleted_stragglers = garbage_collect_stragglers()
         dbos_logger.debug(
-            f"Payload retention swept {deleted[0]} inputs, {deleted[1]} outputs, "
-            f"{deleted[2]} steps and {orphans} rows spared by a since-departed "
-            f"workflow; spared {newly_pinned} rows this round"
+            f"Payload retention deleted {deleted[0]} inputs, {deleted[1]} outputs, "
+            f"{deleted[2]} steps, and {deleted_stragglers} rows whose straggler has "
+            f"since departed; marked {marked_rows} rows to keep"
         )
         return deleted[0], deleted[1], deleted[2]
 
@@ -6301,7 +6292,7 @@ class SystemDatabase(ABC):
                         inputs=status["inputs"],
                         serialization=status.get("serialization"),
                         # Retention starts at import: the original timestamps are
-                        # long past the boundary and would be swept immediately.
+                        # long past the cutoff and would be collected immediately.
                         retention_timestamp=self._now_ms_sql(),
                     )
                 )

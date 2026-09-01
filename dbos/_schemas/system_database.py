@@ -20,8 +20,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 from . import SCHEMA_PLACEHOLDER
 
-# A payload row pinned to this is never swept by the retention range delete: it
-# belongs to a workflow whose status row still exists past the retention boundary.
+# A payload row marked with this is never reached by a retention cutoff: it
+# belongs to a straggler, a workflow still present past the retention cutoff.
 PINNED_RETENTION_TIMESTAMP = 2**63 - 1
 
 
@@ -211,7 +211,7 @@ class SystemSchema:
         # Denormalized from the parent so step observability filters without a join.
         Column("application_name", Text, nullable=True),
         # Retention key. Server-clock, unlike completed_at_epoch_ms, whose client
-        # skew would let the boundary collect a live workflow's steps.
+        # skew would let the cutoff collect a live workflow's steps.
         Column("retention_timestamp", BigInteger, nullable=True),
         PrimaryKeyConstraint("workflow_uuid", "function_id"),
         Index("idx_operation_outputs_retention", "retention_timestamp"),
