@@ -1,5 +1,5 @@
 import time
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, Optional, cast
 
 import psycopg
 import sqlalchemy as sa
