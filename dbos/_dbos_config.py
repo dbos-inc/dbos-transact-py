@@ -50,6 +50,7 @@ class DBOSConfig(TypedDict, total=False):
         use_listen_notify (bool): Whether to use LISTEN/NOTIFY or polling to listen for notifications and events.  Defaults to True. As this affects migrations, may not be changed after the system database is first created.
         run_migrations (bool): Whether to create and migrate the system database on launch. Defaults to True. Set to False for a process that must not alter the schema, such as one whose database role cannot run DDL, or a deployment that migrates out of band with `dbos migrate`. Launch then verifies the schema instead: a system database that is missing, or behind the version this build requires, fails launch rather than being created or migrated.
         notification_listener_polling_interval_sec (float): Polling interval in seconds for the notification listener background process. Defaults to 1.0. Minimum value is 0.001. Lower values can speed up test execution.
+        dual_write_payloads (bool): Whether workflow inputs and outputs are also written to their legacy columns on workflow_status, alongside the workflow_inputs and workflow_outputs tables. Defaults to True, so a reader that predates those tables still finds payloads. Set False once every reader is upgraded.
         notification_coalesce_sec (float): Interval in seconds for coalescing LISTEN/NOTIFY notifications (streams and events) pushed off the write path. Bounds read latency and caps the rate of notifying commits independent of write throughput. Defaults to 0.01. Minimum value is 0.001.
         observability_query_timeout_sec (float): Statement timeout, in seconds, for read-only observability queries against the system database. Defaults to 30.0.
         scheduler_polling_interval_sec (float): Polling interval in seconds for the scheduler thread to detect new workflow schedules. Defaults to 30.0.
@@ -88,6 +89,7 @@ class DBOSConfig(TypedDict, total=False):
     enable_patching: Optional[bool]
     use_listen_notify: Optional[bool]
     run_migrations: Optional[bool]
+    dual_write_payloads: Optional[bool]
     max_executor_threads: Optional[int]
     notification_listener_polling_interval_sec: Optional[float]
     notification_coalesce_sec: Optional[float]
@@ -154,6 +156,7 @@ class ConfigFile(TypedDict, total=False):
     dbos_system_schema: Optional[str]
     use_listen_notify: bool
     run_migrations: bool
+    dual_write_payloads: bool
 
 
 def _default_run_admin_server() -> bool:
@@ -299,6 +302,10 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     run_migrations = config.get("run_migrations", None)
     translated_config["run_migrations"] = (
         run_migrations if run_migrations is not None else True
+    )
+    dual_write_payloads = config.get("dual_write_payloads", None)
+    translated_config["dual_write_payloads"] = (
+        dual_write_payloads if dual_write_payloads is not None else True
     )
 
     return translated_config

@@ -638,6 +638,7 @@ class DBOS:
                 observability_query_timeout_sec=self._config.get(
                     "runtimeConfig", {}
                 ).get("observability_query_timeout_sec"),
+                dual_write_payloads=self._config.get("dual_write_payloads", True),
             )
             assert self._config["database"]["db_engine_kwargs"] is not None
             if self._config["database_url"]:

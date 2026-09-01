@@ -4,6 +4,7 @@ from dbos import DBOS, DBOSConfig
 
 config: DBOSConfig = {
     "name": "dbos-starter",
+    "dual_write_payloads": False,
     "system_database_url": os.environ.get("DBOS_SYSTEM_DATABASE_URL"),
 }
 DBOS(config=config)

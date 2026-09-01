@@ -274,9 +274,17 @@ def test_workflow_outcome_is_owned_by_the_pending_row(dbos: DBOS) -> None:
             return c.execute(
                 sa.select(
                     SystemSchema.workflow_status.c.status,
-                    SystemSchema.workflow_status.c.output,
+                    SystemSchema.workflow_outputs.c.output,
                     SystemSchema.workflow_status.c.serialization,
-                ).where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+                )
+                .select_from(
+                    SystemSchema.workflow_status.outerjoin(
+                        SystemSchema.workflow_outputs,
+                        SystemSchema.workflow_status.c.workflow_uuid
+                        == SystemSchema.workflow_outputs.c.workflow_uuid,
+                    )
+                )
+                .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
             ).fetchone()
 
     # 1. A recorded success supersedes the run's own result.
@@ -2360,7 +2368,7 @@ def _payload_counts(dbos: DBOS) -> tuple[int, int]:
         )
 
 
-def test_payload_dual_write_and_read_fallback(dbos: DBOS) -> None:
+def test_payload_dual_write_and_read_fallback(dbos_dual_write: DBOS) -> None:
     """Phase 2: payloads land in both places, and a legacy-only row still reads."""
 
     @DBOS.workflow()
@@ -2375,7 +2383,7 @@ def test_payload_dual_write_and_read_fallback(dbos: DBOS) -> None:
         SystemSchema.workflow_outputs,
     )
 
-    with dbos._sys_db.engine.begin() as c:
+    with dbos_dual_write._sys_db.engine.begin() as c:
         legacy = c.execute(
             sa.select(ws.c.inputs, ws.c.output).where(ws.c.workflow_uuid == workflow_id)
         ).fetchone()
@@ -2403,7 +2411,7 @@ def test_payload_dual_write_and_read_fallback(dbos: DBOS) -> None:
 
     # Drop the split rows: a row written before the migration looks exactly like
     # this, and every read path must still resolve it from workflow_status.
-    with dbos._sys_db.engine.begin() as c:
+    with dbos_dual_write._sys_db.engine.begin() as c:
         c.execute(sa.delete(wi).where(wi.c.workflow_uuid == workflow_id))
         c.execute(sa.delete(wo).where(wo.c.workflow_uuid == workflow_id))
 

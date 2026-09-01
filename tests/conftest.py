@@ -94,6 +94,7 @@ def default_config(sqlite_path: Path) -> DBOSConfig:
     application_url, system_url = postgres_urls()
     return {
         "name": "test-app",
+        "dual_write_payloads": False,
         "application_database_url": (
             f"sqlite:///{sqlite_path}" if using_sqlite() else application_url
         ),
@@ -287,6 +288,20 @@ def dbos(
     dbos = DBOS(config=config)
     DBOS.launch()
 
+    yield dbos
+    DBOS.destroy(destroy_registry=True)
+
+
+@pytest.fixture()
+def dbos_dual_write(
+    config: DBOSConfig, cleanup_test_databases: None
+) -> Generator[DBOS, Any, None]:
+    """The dbos fixture with dual write left on. Every other test runs with it
+    off, so the payload tables are the only place a payload lives and a broken
+    new-table path cannot hide behind the legacy columns."""
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config={**config, "dual_write_payloads": True})
+    DBOS.launch()
     yield dbos
     DBOS.destroy(destroy_registry=True)
 

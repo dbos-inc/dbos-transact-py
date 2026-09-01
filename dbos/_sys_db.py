@@ -605,6 +605,7 @@ class SystemDatabase(ABC):
         polling_concurrency: Optional[int] = None,
         app_name: Optional[str] = None,
         retry_connection_errors: bool = True,
+        dual_write_payloads: bool = True,
         observability_query_timeout_sec: Optional[float] = None,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
@@ -624,6 +625,7 @@ class SystemDatabase(ABC):
                 polling_concurrency=polling_concurrency,
                 app_name=app_name,
                 retry_connection_errors=retry_connection_errors,
+                dual_write_payloads=dual_write_payloads,
                 observability_query_timeout_sec=observability_query_timeout_sec,
             )
         else:
@@ -642,6 +644,7 @@ class SystemDatabase(ABC):
                 polling_concurrency=polling_concurrency,
                 app_name=app_name,
                 retry_connection_errors=retry_connection_errors,
+                dual_write_payloads=dual_write_payloads,
                 observability_query_timeout_sec=observability_query_timeout_sec,
             )
 
@@ -660,6 +663,7 @@ class SystemDatabase(ABC):
         polling_concurrency: Optional[int] = None,
         app_name: Optional[str] = None,
         retry_connection_errors: bool = True,
+        dual_write_payloads: bool = True,
         observability_query_timeout_sec: Optional[float] = None,
     ):
         import sqlalchemy.dialects.postgresql as pg
@@ -693,6 +697,10 @@ class SystemDatabase(ABC):
         self.use_listen_notify = use_listen_notify
         # Whether db_retry blocks on a lost connection until it recovers, or raises.
         self._retry_connection_errors = retry_connection_errors
+        # Transitional: keep writing the payload columns on workflow_status so a
+        # reader that predates the payload tables still finds inputs and outputs.
+        # Retired once every reader is on the new tables; reads COALESCE either way.
+        self.dual_write_payloads = dual_write_payloads
         # db_retry trusts the text-based SQLite retriability heuristic only on SQLite.
         self._is_sqlite = system_database_url.startswith("sqlite")
         # Statement timeout for observability reads, in ms. Unset takes the default; non-positive disables the cap.
@@ -948,18 +956,24 @@ class SystemDatabase(ABC):
         if wf_status not in _enqueued_statuses:
             update_values["executor_id"] = status["executor_id"]
 
+        legacy_payload: Dict[str, Any] = (
+            {
+                "inputs": status["inputs"],
+                "output": status["output"],
+                "error": status["error"],
+            }
+            if self.dual_write_payloads
+            else {}
+        )
         cmd = (
             self.dialect.insert(SystemSchema.workflow_status)
             .values(
+                **legacy_payload,
                 workflow_uuid=status["workflow_uuid"],
                 status=status["status"],
                 name=status["name"],
                 class_name=status["class_name"],
                 config_name=status["config_name"],
-                # Dual write, phase 2: these columns stay authoritative until
-                # every SDK reaching this database reads the payload tables.
-                output=status["output"],
-                error=status["error"],
                 executor_id=status["executor_id"],
                 application_version=status["app_version"],
                 application_id=status["app_id"],
@@ -972,7 +986,6 @@ class SystemDatabase(ABC):
                 workflow_deadline_epoch_ms=status["workflow_deadline_epoch_ms"],
                 deduplication_id=status["deduplication_id"],
                 priority=status["priority"],
-                inputs=status["inputs"],
                 serialization=status["serialization"],
                 queue_partition_key=status["queue_partition_key"],
                 parent_workflow_id=status["parent_workflow_id"],
@@ -1126,10 +1139,12 @@ class SystemDatabase(ABC):
             result = c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .values(
+                    **(
+                        {"output": output, "error": error}
+                        if self.dual_write_payloads
+                        else {}
+                    ),
                     status=status,
-                    # Dual write, phase 2.
-                    output=output,
-                    error=error,
                     # As the workflow is complete, remove its deduplication ID
                     deduplication_id=None,
                     updated_at=now_ms,
@@ -1525,8 +1540,12 @@ class SystemDatabase(ABC):
                                 else INTERNAL_QUEUE_NAME
                             ),
                             queue_partition_key=queue_partition_key,
-                            inputs=status[8],
                             assumed_role=status[7],
+                            **(
+                                {"inputs": status[8]}
+                                if self.dual_write_payloads
+                                else {}
+                            ),
                             forked_from=original_workflow_id,
                             attributes=status[10],
                             # Inherit the source's owner so the fork runs on the same application; claim an unclaimed one, as dequeue does.
@@ -5139,8 +5158,6 @@ class SystemDatabase(ABC):
                     "name": status["name"],
                     "class_name": status["class_name"],
                     "config_name": status["config_name"],
-                    "output": None,
-                    "error": None,
                     "executor_id": status["executor_id"],
                     "application_version": status["app_version"],
                     "application_id": status["app_id"],
@@ -5153,8 +5170,12 @@ class SystemDatabase(ABC):
                     "workflow_deadline_epoch_ms": status["workflow_deadline_epoch_ms"],
                     "deduplication_id": None,
                     "priority": status["priority"],
-                    "inputs": status["inputs"],
                     "serialization": status["serialization"],
+                    **(
+                        {"inputs": status["inputs"], "output": None, "error": None}
+                        if self.dual_write_payloads
+                        else {}
+                    ),
                     "queue_partition_key": status["queue_partition_key"],
                     "parent_workflow_id": status["parent_workflow_id"],
                     "owner_xid": None,
@@ -6209,14 +6230,21 @@ class SystemDatabase(ABC):
                 # Import workflow_status
                 c.execute(
                     sa.insert(SystemSchema.workflow_status).values(
+                        **(
+                            {
+                                "inputs": status["inputs"],
+                                "output": status["output"],
+                                "error": status["error"],
+                            }
+                            if self.dual_write_payloads
+                            else {}
+                        ),
                         workflow_uuid=status["workflow_uuid"],
                         status=status["status"],
                         name=status["name"],
                         authenticated_user=status["authenticated_user"],
                         assumed_role=status["assumed_role"],
                         authenticated_roles=status["authenticated_roles"],
-                        output=status["output"],
-                        error=status["error"],
                         executor_id=status["executor_id"],
                         created_at=status["created_at"],
                         updated_at=status["updated_at"],
@@ -6230,7 +6258,6 @@ class SystemDatabase(ABC):
                         workflow_deadline_epoch_ms=status["workflow_deadline_epoch_ms"],
                         started_at_epoch_ms=status["started_at_epoch_ms"],
                         deduplication_id=status["deduplication_id"],
-                        inputs=status["inputs"],
                         priority=status["priority"],
                         queue_partition_key=status["queue_partition_key"],
                         forked_from=status["forked_from"],

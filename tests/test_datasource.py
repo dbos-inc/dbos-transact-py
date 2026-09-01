@@ -680,12 +680,9 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
     def forget_workflow() -> None:
         # Drop the sysdb checkpoint so run_step calls _body again instead of replaying.
         # A real concurrent duplicate keeps that row and ends in DBOSWorkflowConflictIDError instead.
-        with dbos._sys_db.engine.begin() as conn:
-            conn.execute(
-                sa.delete(SystemSchema.workflow_status).where(
-                    SystemSchema.workflow_status.c.workflow_uuid == wfid
-                )
-            )
+        # Via delete_workflows, not a raw status delete: operation_outputs has no
+        # foreign key any more, so the checkpoint no longer goes with the parent.
+        dbos._sys_db.delete_workflows([wfid])
 
     # Blind one pre-check, so a loser misses the winner's row as it does in the real race.
     real_check = sync_ds._check_execution
@@ -907,14 +904,21 @@ def test_sync_ds_duplicate_execution_stops_at_the_lost_race(
     # step checkpoint yet: nothing to replay, and no outcome for a waiter to adopt.
     with dbos._sys_db.engine.begin() as conn:
         winner_output = conn.execute(
-            sa.select(SystemSchema.workflow_status.c.output).where(
-                SystemSchema.workflow_status.c.workflow_uuid == wfid
+            sa.select(SystemSchema.workflow_outputs.c.output).where(
+                SystemSchema.workflow_outputs.c.workflow_uuid == wfid
             )
         ).scalar_one()
         winner_step.update(_winner_step_row(conn, wfid, reserve.__qualname__))
         conn.execute(
             sa.delete(SystemSchema.operation_outputs).where(
                 SystemSchema.operation_outputs.c.workflow_uuid == wfid
+            )
+        )
+        # Clearing the recorded outcome means both places it can live: the
+        # payload table, and the legacy column a dual-writing deployment fills.
+        conn.execute(
+            sa.delete(SystemSchema.workflow_outputs).where(
+                SystemSchema.workflow_outputs.c.workflow_uuid == wfid
             )
         )
         conn.execute(
@@ -1500,12 +1504,9 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
     def forget_workflow() -> None:
         # Drop the sysdb checkpoint so run_step calls _body again instead of replaying.
         # A real concurrent duplicate keeps that row and ends in DBOSWorkflowConflictIDError instead.
-        with dbos._sys_db.engine.begin() as conn:
-            conn.execute(
-                sa.delete(SystemSchema.workflow_status).where(
-                    SystemSchema.workflow_status.c.workflow_uuid == wfid
-                )
-            )
+        # Via delete_workflows, not a raw status delete: operation_outputs has no
+        # foreign key any more, so the checkpoint no longer goes with the parent.
+        dbos._sys_db.delete_workflows([wfid])
 
     # Blind one pre-check, so a loser misses the winner's row as it does in the real race.
     real_check = async_ds._check_execution
@@ -1638,14 +1639,21 @@ async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
     # step checkpoint yet: nothing to replay, and no outcome for a waiter to adopt.
     with dbos._sys_db.engine.begin() as conn:
         winner_output = conn.execute(
-            sa.select(SystemSchema.workflow_status.c.output).where(
-                SystemSchema.workflow_status.c.workflow_uuid == wfid
+            sa.select(SystemSchema.workflow_outputs.c.output).where(
+                SystemSchema.workflow_outputs.c.workflow_uuid == wfid
             )
         ).scalar_one()
         winner_step.update(_winner_step_row(conn, wfid, reserve.__qualname__))
         conn.execute(
             sa.delete(SystemSchema.operation_outputs).where(
                 SystemSchema.operation_outputs.c.workflow_uuid == wfid
+            )
+        )
+        # Clearing the recorded outcome means both places it can live: the
+        # payload table, and the legacy column a dual-writing deployment fills.
+        conn.execute(
+            sa.delete(SystemSchema.workflow_outputs).where(
+                SystemSchema.workflow_outputs.c.workflow_uuid == wfid
             )
         )
         conn.execute(
