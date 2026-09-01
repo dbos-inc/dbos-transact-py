@@ -588,16 +588,6 @@ DEFAULT_NOTIFICATION_COALESCE_SEC = 0.01
 # One of those scanning a huge table for minutes holds back xmin, which stalls autovacuum database-wide.
 DEFAULT_OBSERVABILITY_QUERY_TIMEOUT_SEC = 30.0
 
-# Above this many workflows below the retention boundary, payload retention skips
-# the round rather than trusting an incomplete pin.
-DEFAULT_MAX_STRAGGLERS = 10_000
-
-_PAYLOAD_TABLES = (
-    SystemSchema.workflow_inputs,
-    SystemSchema.workflow_outputs,
-    SystemSchema.operation_outputs,
-)
-
 
 class SystemDatabase(ABC):
 
@@ -5531,19 +5521,24 @@ class SystemDatabase(ABC):
         *,
         batch_size: int = 10000,
         time_budget_sec: Optional[float] = None,
-        max_stragglers: int = DEFAULT_MAX_STRAGGLERS,
+        max_stragglers: int = 10_000,
     ) -> tuple[int, int, int, int]:
         """Delete payload and step rows below the boundary, returning
         (inputs, outputs, steps, pinned). Must run after the status sweep: it
         collects what that sweep leaves behind."""
         if batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
+        payload_tables = (
+            SystemSchema.workflow_inputs,
+            SystemSchema.workflow_outputs,
+            SystemSchema.operation_outputs,
+        )
 
         def count_pinned_rows() -> int:
             """Rows held above the boundary by a straggler: the health signal."""
             total = 0
             with self.engine.begin() as c:
-                for table in _PAYLOAD_TABLES:
+                for table in payload_tables:
                     total += (
                         c.execute(
                             sa.select(sa.func.count())
@@ -5584,7 +5579,7 @@ class SystemDatabase(ABC):
                 return 0
             pinned = 0
             with self.engine.begin() as c:
-                for table in _PAYLOAD_TABLES:
+                for table in payload_tables:
                     for i in range(0, len(workflow_ids), 1000):
                         pinned += c.execute(
                             sa.update(table)
@@ -5639,7 +5634,7 @@ class SystemDatabase(ABC):
             boundary, so the range sweep can never reach them."""
             ws = SystemSchema.workflow_status
             total = 0
-            for table in _PAYLOAD_TABLES:
+            for table in payload_tables:
                 with self.engine.begin() as c:
                     total += c.execute(
                         sa.delete(table).where(
@@ -5674,7 +5669,7 @@ class SystemDatabase(ABC):
         ) as executor:
             futures = [
                 executor.submit(sweep_table, table, deadline)
-                for table in _PAYLOAD_TABLES
+                for table in payload_tables
             ]
             outcomes = [(f.exception(), f) for f in futures]
         for error, _ in outcomes:
