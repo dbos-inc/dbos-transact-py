@@ -1160,14 +1160,20 @@ class SystemDatabase(ABC):
                 # The outcome was not ours to write, so leave no orphan payload.
                 return False
             c.execute(
-                self.dialect.insert(SystemSchema.workflow_outputs)
-                .values(
+                self.dialect.insert(SystemSchema.workflow_outputs).values(
                     workflow_uuid=workflow_id,
                     output=output,
                     error=error,
                     serialization=None,
                 )
-                .on_conflict_do_nothing(index_elements=["workflow_uuid"])
+                # Overwrite, matching the column this replaces: a workflow reset
+                # to PENDING and recovered records a second outcome, and DO NOTHING
+                # would leave the first attempt's error standing against a SUCCESS
+                # status -- read back as a null result.
+                .on_conflict_do_update(
+                    index_elements=["workflow_uuid"],
+                    set_={"output": output, "error": error},
+                )
             )
             return True
 
@@ -1379,6 +1385,25 @@ class SystemDatabase(ABC):
                 .returning(wsc.workflow_uuid)
             ).fetchone()
             if updated is not None:
+                # A bounce replaces the pending workflow's arguments, so the
+                # payload table has to move with the column above -- reads prefer
+                # it, and a stale row here would run the workflow on the inputs
+                # the bounce superseded. The only write that updates a payload
+                # rather than appending one; it is bounded to workflows still
+                # sitting DELAYED, which never reach the retention sweep.
+                c.execute(
+                    self.dialect.insert(SystemSchema.workflow_inputs)
+                    .values(
+                        workflow_uuid=updated[0],
+                        inputs=inputs,
+                        serialization=serialization,
+                        created_at=self._now_ms_sql(),
+                    )
+                    .on_conflict_do_update(
+                        index_elements=["workflow_uuid"],
+                        set_={"inputs": inputs, "serialization": serialization},
+                    )
+                )
                 return {
                     "bounced_workflow_id": updated[0],
                     "holder_workflow_id": None,

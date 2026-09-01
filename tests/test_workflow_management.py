@@ -265,8 +265,25 @@ def test_workflow_outcome_is_owned_by_the_pending_row(dbos: DBOS) -> None:
         with dbos._sys_db.engine.begin() as c:
             c.execute(
                 sa.update(SystemSchema.workflow_status)
-                .values(status=status, output=output, error=error)
+                .values(status=status)
                 .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+            )
+            if output is None and error is None:
+                return
+            # Record the payload where a real recorder puts it, not in the
+            # legacy columns: the run must lose to the payload table itself.
+            c.execute(
+                dbos._sys_db.dialect.insert(SystemSchema.workflow_outputs)
+                .values(
+                    workflow_uuid=wfid,
+                    output=output,
+                    error=error,
+                    serialization=None,
+                )
+                .on_conflict_do_update(
+                    index_elements=["workflow_uuid"],
+                    set_={"output": output, "error": error},
+                )
             )
 
     def read_row(wfid: str) -> Any:
