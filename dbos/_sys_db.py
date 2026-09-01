@@ -1363,8 +1363,8 @@ class SystemDatabase(ABC):
                 # Never extend a workflow the target application doesn't own; falls through to the holder below.
                 .where(self._name_filter(wsc.application_name, application_name))
                 .values(
+                    **({"inputs": inputs} if self.dual_write_payloads else {}),
                     delay_until_epoch_ms=capped_delay,
-                    inputs=inputs,
                     serialization=serialization,
                     updated_at=self._now_ms_sql(),
                     # Claim it for the target, as its dequeue would: left unclaimed, every peer coalesces onto the one workflow and the last inputs win.
@@ -1650,6 +1650,7 @@ class SystemDatabase(ABC):
                             "started_at_epoch_ms",
                             "completed_at_epoch_ms",
                             "application_name",
+                            "retention_timestamp",
                         ],
                         sa.select(
                             mapping_subquery.c.fork_id.label("workflow_uuid"),
@@ -1662,6 +1663,7 @@ class SystemDatabase(ABC):
                             oo.c.started_at_epoch_ms,
                             oo.c.completed_at_epoch_ms,
                             mapping_subquery.c.owner,
+                            self._now_ms_sql(),
                         ).select_from(
                             mapping_subquery.join(
                                 oo,
@@ -5196,7 +5198,7 @@ class SystemDatabase(ABC):
                 "workflow_uuid": status["workflow_uuid"],
                 "inputs": status["inputs"],
                 "serialization": status["serialization"],
-                "created_at": created_ats[i],
+                "retention_timestamp": created_ats[i],
             }
             for i, status in enumerate(statuses)
         ]

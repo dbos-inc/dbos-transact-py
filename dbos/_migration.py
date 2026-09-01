@@ -1763,7 +1763,7 @@ CREATE INDEX IF NOT EXISTS idx_operation_outputs_retention
 """
 
 
-sqlite_migration_hundredtwelve = """
+sqlite_migration_hundredtwelve = f"""
 CREATE TABLE operation_outputs_new (
     workflow_uuid TEXT NOT NULL,
     function_id INTEGER NOT NULL,
@@ -1775,14 +1775,15 @@ CREATE TABLE operation_outputs_new (
     completed_at_epoch_ms INTEGER,
     serialization TEXT,
     application_name TEXT DEFAULT NULL,
-    retention_timestamp INTEGER,
+    retention_timestamp INTEGER DEFAULT {get_sqlite_timestamp_expr()},
     PRIMARY KEY (workflow_uuid, function_id)
 );
 INSERT INTO operation_outputs_new (workflow_uuid, function_id, function_name, output,
     error, child_workflow_id, started_at_epoch_ms, completed_at_epoch_ms, serialization,
     application_name, retention_timestamp)
 SELECT workflow_uuid, function_id, function_name, output, error, child_workflow_id,
-    started_at_epoch_ms, completed_at_epoch_ms, serialization, application_name, retention_timestamp
+    started_at_epoch_ms, completed_at_epoch_ms, serialization, application_name,
+    COALESCE(retention_timestamp, {get_sqlite_timestamp_expr()})
 FROM operation_outputs;
 DROP TABLE operation_outputs;
 ALTER TABLE operation_outputs_new RENAME TO operation_outputs;
