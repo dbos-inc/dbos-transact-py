@@ -160,7 +160,6 @@ class SystemSchema:
         metadata_obj,
         Column("workflow_uuid", Text, primary_key=True),
         Column("inputs", Text, nullable=True),
-        Column("serialization", Text, nullable=True),
         Column("retention_timestamp", BigInteger, nullable=False),
         Index("idx_workflow_inputs_retention", "retention_timestamp"),
     )
@@ -171,7 +170,6 @@ class SystemSchema:
         Column("workflow_uuid", Text, primary_key=True),
         Column("output", Text, nullable=True),
         Column("error", Text, nullable=True),
-        Column("serialization", Text, nullable=True),
         Column("retention_timestamp", BigInteger, nullable=False),
         Index("idx_workflow_outputs_retention", "retention_timestamp"),
     )

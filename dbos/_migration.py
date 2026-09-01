@@ -1155,7 +1155,6 @@ def get_dbos_migration_hundrednine(quoted_schema: str) -> str:
 CREATE TABLE IF NOT EXISTS {quoted_schema}."workflow_inputs" (
     workflow_uuid TEXT NOT NULL PRIMARY KEY,
     inputs TEXT,
-    serialization TEXT,
     retention_timestamp BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint
 );
 
@@ -1163,7 +1162,6 @@ CREATE TABLE IF NOT EXISTS {quoted_schema}."workflow_outputs" (
     workflow_uuid TEXT NOT NULL PRIMARY KEY,
     output TEXT,
     error TEXT,
-    serialization TEXT,
     retention_timestamp BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint
 );
 
@@ -1279,9 +1277,9 @@ BEGIN
         updated_at = EXCLUDED.updated_at;
 
     INSERT INTO {quoted_schema}.workflow_inputs (
-        workflow_uuid, inputs, serialization, retention_timestamp
+        workflow_uuid, inputs, retention_timestamp
     ) VALUES (
-        v_workflow_id, v_serialized_inputs, 'portable_json', v_now
+        v_workflow_id, v_serialized_inputs, v_now
     )
     ON CONFLICT (workflow_uuid) DO NOTHING;
 
@@ -1735,7 +1733,6 @@ sqlite_migration_hundrednine = f"""
 CREATE TABLE IF NOT EXISTS workflow_inputs (
     workflow_uuid TEXT NOT NULL PRIMARY KEY,
     inputs TEXT,
-    serialization TEXT,
     retention_timestamp INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()}
 );
 
@@ -1743,7 +1740,6 @@ CREATE TABLE IF NOT EXISTS workflow_outputs (
     workflow_uuid TEXT NOT NULL PRIMARY KEY,
     output TEXT,
     error TEXT,
-    serialization TEXT,
     retention_timestamp INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()}
 );
 

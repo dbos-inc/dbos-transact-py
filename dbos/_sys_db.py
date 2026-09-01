@@ -1019,7 +1019,6 @@ class SystemDatabase(ABC):
             .values(
                 workflow_uuid=status["workflow_uuid"],
                 inputs=status["inputs"],
-                serialization=status["serialization"],
             )
             .on_conflict_do_nothing(index_elements=["workflow_uuid"])
         )
@@ -1158,7 +1157,6 @@ class SystemDatabase(ABC):
                     workflow_uuid=workflow_id,
                     output=output,
                     error=error,
-                    serialization=None,
                 )
                 .on_conflict_do_update(
                     index_elements=["workflow_uuid"],
@@ -1574,7 +1572,6 @@ class SystemDatabase(ABC):
                         dict(
                             workflow_uuid=forked_workflow_id,
                             inputs=status[8],
-                            serialization=status[9],
                         )
                         for forked_workflow_id, status in zip(
                             forked_workflow_ids, statuses
@@ -5197,7 +5194,6 @@ class SystemDatabase(ABC):
             {
                 "workflow_uuid": status["workflow_uuid"],
                 "inputs": status["inputs"],
-                "serialization": status["serialization"],
                 "retention_timestamp": created_ats[i],
             }
             for i, status in enumerate(statuses)
@@ -6296,7 +6292,6 @@ class SystemDatabase(ABC):
                     sa.insert(SystemSchema.workflow_inputs).values(
                         workflow_uuid=status["workflow_uuid"],
                         inputs=status["inputs"],
-                        serialization=status.get("serialization"),
                         # Retention starts at import: the original timestamps are
                         # long past the cutoff and would be collected immediately.
                         retention_timestamp=self._now_ms_sql(),
@@ -6308,7 +6303,6 @@ class SystemDatabase(ABC):
                             workflow_uuid=status["workflow_uuid"],
                             output=status["output"],
                             error=status["error"],
-                            serialization=status.get("serialization"),
                             retention_timestamp=self._now_ms_sql(),
                         )
                     )
