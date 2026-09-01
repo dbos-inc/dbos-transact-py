@@ -5632,9 +5632,9 @@ class SystemDatabase(ABC):
             # older than the oldest straggler.
             cutoff = target if oldest is None else oldest
             dbos_logger.warning(
-                f"More than {max_stragglers} workflows are older than the retention "
-                f"cutoff and still present, so their payloads cannot all be marked. "
-                f"Using the oldest of them ({cutoff}) as the cutoff instead."
+                f"More than {max_stragglers} active workflows are older than the "
+                f"retention cutoff. Using the oldest of them ({cutoff}) as the "
+                f"cutoff instead."
             )
         else:
             marked_rows = mark_stragglers(stragglers)
