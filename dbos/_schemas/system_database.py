@@ -22,7 +22,7 @@ from . import SCHEMA_PLACEHOLDER
 
 # A payload row marked with this is never reached by a retention cutoff: it
 # belongs to a straggler, a workflow still present past the retention cutoff.
-PINNED_RETENTION_TIMESTAMP = 2**63 - 1
+STRAGGLER_RETENTION_TIMESTAMP = 2**63 - 1
 
 
 class SystemSchema:
@@ -167,14 +167,6 @@ class SystemSchema:
         Column("serialization", Text, nullable=True),
         Column("retention_timestamp", BigInteger, nullable=False),
         Index("idx_workflow_inputs_retention", "retention_timestamp"),
-        Index(
-            "idx_workflow_inputs_pinned",
-            "workflow_uuid",
-            postgresql_where=text(
-                f"retention_timestamp = {PINNED_RETENTION_TIMESTAMP}"
-            ),
-            sqlite_where=text(f"retention_timestamp = {PINNED_RETENTION_TIMESTAMP}"),
-        ),
     )
 
     workflow_outputs = Table(
@@ -186,14 +178,6 @@ class SystemSchema:
         Column("serialization", Text, nullable=True),
         Column("retention_timestamp", BigInteger, nullable=False),
         Index("idx_workflow_outputs_retention", "retention_timestamp"),
-        Index(
-            "idx_workflow_outputs_pinned",
-            "workflow_uuid",
-            postgresql_where=text(
-                f"retention_timestamp = {PINNED_RETENTION_TIMESTAMP}"
-            ),
-            sqlite_where=text(f"retention_timestamp = {PINNED_RETENTION_TIMESTAMP}"),
-        ),
     )
 
     operation_outputs = Table(
@@ -215,14 +199,6 @@ class SystemSchema:
         Column("retention_timestamp", BigInteger, nullable=True),
         PrimaryKeyConstraint("workflow_uuid", "function_id"),
         Index("idx_operation_outputs_retention", "retention_timestamp"),
-        Index(
-            "idx_operation_outputs_pinned",
-            "workflow_uuid",
-            postgresql_where=text(
-                f"retention_timestamp = {PINNED_RETENTION_TIMESTAMP}"
-            ),
-            sqlite_where=text(f"retention_timestamp = {PINNED_RETENTION_TIMESTAMP}"),
-        ),
         Index(
             "idx_operation_outputs_completed_at_function_name",
             "completed_at_epoch_ms",

@@ -3,7 +3,6 @@ import sys
 import sqlalchemy as sa
 
 from ._logger import dbos_logger
-from ._schemas.system_database import PINNED_RETENTION_TIMESTAMP
 from ._utils import quote_identifier
 
 # Migration versions that contain CONCURRENTLY index DDL and must run with
@@ -29,7 +28,6 @@ _ONLINE_MIGRATIONS = {
     47,
     107,
     111,
-    114,
 }
 
 # From this index on, every SDK defines the same migration at the same index.
@@ -1174,14 +1172,6 @@ CREATE INDEX IF NOT EXISTS "idx_workflow_inputs_retention"
 
 CREATE INDEX IF NOT EXISTS "idx_workflow_outputs_retention"
     ON {quoted_schema}."workflow_outputs" ("retention_timestamp");
-
-CREATE INDEX IF NOT EXISTS "idx_workflow_inputs_pinned"
-    ON {quoted_schema}."workflow_inputs" ("workflow_uuid")
-    WHERE "retention_timestamp" = {PINNED_RETENTION_TIMESTAMP};
-
-CREATE INDEX IF NOT EXISTS "idx_workflow_outputs_pinned"
-    ON {quoted_schema}."workflow_outputs" ("workflow_uuid")
-    WHERE "retention_timestamp" = {PINNED_RETENTION_TIMESTAMP};
 """
 
 
@@ -1384,15 +1374,7 @@ def get_dbos_migrations(
         get_dbos_migration_hundredeleven(quoted_schema, is_cockroach),
         get_dbos_migration_hundredtwelve(quoted_schema, is_cockroach),
         get_dbos_migration_hundredthirteen(quoted_schema),
-        get_dbos_migration_hundredfourteen(quoted_schema, is_cockroach),
     ]
-
-
-def get_dbos_migration_hundredfourteen(quoted_schema: str, is_cockroach: bool) -> str:
-    c = _concurrently(is_cockroach)
-    return f"""CREATE INDEX {c} IF NOT EXISTS "idx_operation_outputs_pinned"
-    ON {quoted_schema}."operation_outputs" ("workflow_uuid")
-    WHERE "retention_timestamp" = {PINNED_RETENTION_TIMESTAMP}"""
 
 
 def get_sqlite_timestamp_expr() -> str:
@@ -1769,12 +1751,6 @@ CREATE INDEX IF NOT EXISTS idx_workflow_inputs_retention
     ON workflow_inputs (retention_timestamp);
 CREATE INDEX IF NOT EXISTS idx_workflow_outputs_retention
     ON workflow_outputs (retention_timestamp);
-CREATE INDEX IF NOT EXISTS idx_workflow_inputs_pinned
-    ON workflow_inputs (workflow_uuid)
-    WHERE retention_timestamp = {PINNED_RETENTION_TIMESTAMP};
-CREATE INDEX IF NOT EXISTS idx_workflow_outputs_pinned
-    ON workflow_outputs (workflow_uuid)
-    WHERE retention_timestamp = {PINNED_RETENTION_TIMESTAMP};
 """
 
 sqlite_migration_hundredten = """
@@ -1816,13 +1792,6 @@ CREATE INDEX IF NOT EXISTS idx_operation_outputs_completed_at_function_name
     ON operation_outputs (completed_at_epoch_ms, function_name);
 """
 
-sqlite_migration_hundredfourteen = f"""
-CREATE INDEX IF NOT EXISTS idx_operation_outputs_pinned
-    ON operation_outputs (workflow_uuid)
-    WHERE retention_timestamp = {PINNED_RETENTION_TIMESTAMP};
-"""
-
-
 sqlite_migrations = [
     *_pad_to_shared_base(_sqlite_history),
     sqlite_migration_hundred,
@@ -1841,5 +1810,4 @@ sqlite_migrations = [
     # Postgres migration 112 rewrites a stored function; SQLite has none.
     "",
     sqlite_migration_hundredthirteen,
-    sqlite_migration_hundredfourteen,
 ]

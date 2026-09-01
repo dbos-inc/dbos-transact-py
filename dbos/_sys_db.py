@@ -62,7 +62,7 @@ from ._error import (
 from ._logger import dbos_logger
 from ._outcome import NoResult
 from ._schemas import SCHEMA_PLACEHOLDER
-from ._schemas.system_database import PINNED_RETENTION_TIMESTAMP, SystemSchema
+from ._schemas.system_database import STRAGGLER_RETENTION_TIMESTAMP, SystemSchema
 from ._serialization import (
     DBOSPortableJSON,
     Serializer,
@@ -5565,7 +5565,7 @@ class SystemDatabase(ABC):
                                 table.c.workflow_uuid.in_(workflow_ids[i : i + 1000])
                             )
                             .where(table.c.retention_timestamp < target)
-                            .values(retention_timestamp=PINNED_RETENTION_TIMESTAMP)
+                            .values(retention_timestamp=STRAGGLER_RETENTION_TIMESTAMP)
                         ).rowcount
             return marked
 
@@ -5612,7 +5612,8 @@ class SystemDatabase(ABC):
                 with self.engine.begin() as c:
                     total += c.execute(
                         sa.delete(table).where(
-                            table.c.retention_timestamp == PINNED_RETENTION_TIMESTAMP,
+                            table.c.retention_timestamp
+                            == STRAGGLER_RETENTION_TIMESTAMP,
                             ~sa.exists(
                                 sa.select(sa.literal(1))
                                 .select_from(ws)
