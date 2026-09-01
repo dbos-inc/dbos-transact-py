@@ -605,6 +605,7 @@ class SystemDatabase(ABC):
         polling_concurrency: Optional[int] = None,
         app_name: Optional[str] = None,
         retry_connection_errors: bool = True,
+        payload_retention_enabled: bool = True,
         observability_query_timeout_sec: Optional[float] = None,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
@@ -624,6 +625,7 @@ class SystemDatabase(ABC):
                 polling_concurrency=polling_concurrency,
                 app_name=app_name,
                 retry_connection_errors=retry_connection_errors,
+                payload_retention_enabled=payload_retention_enabled,
                 observability_query_timeout_sec=observability_query_timeout_sec,
             )
         else:
@@ -642,6 +644,7 @@ class SystemDatabase(ABC):
                 polling_concurrency=polling_concurrency,
                 app_name=app_name,
                 retry_connection_errors=retry_connection_errors,
+                payload_retention_enabled=payload_retention_enabled,
                 observability_query_timeout_sec=observability_query_timeout_sec,
             )
 
@@ -660,6 +663,7 @@ class SystemDatabase(ABC):
         polling_concurrency: Optional[int] = None,
         app_name: Optional[str] = None,
         retry_connection_errors: bool = True,
+        payload_retention_enabled: bool = True,
         observability_query_timeout_sec: Optional[float] = None,
     ):
         import sqlalchemy.dialects.postgresql as pg
@@ -693,6 +697,10 @@ class SystemDatabase(ABC):
         self.use_listen_notify = use_listen_notify
         # Whether db_retry blocks on a lost connection until it recovers, or raises.
         self._retry_connection_errors = retry_connection_errors
+        # Kill switch, on by default. Disabled, the payload tables grow without
+        # bound: nothing else collects them, and workflow_status's cascade does
+        # not reach them.
+        self.payload_retention_enabled = payload_retention_enabled
         # db_retry trusts the text-based SQLite retriability heuristic only on SQLite.
         self._is_sqlite = system_database_url.startswith("sqlite")
         # Statement timeout for observability reads, in ms. Unset takes the default; non-positive disables the cap.
@@ -956,6 +964,10 @@ class SystemDatabase(ABC):
                 name=status["name"],
                 class_name=status["class_name"],
                 config_name=status["config_name"],
+                # Dual write, phase 2: these columns stay authoritative until
+                # every SDK reaching this database reads the payload tables.
+                output=status["output"],
+                error=status["error"],
                 executor_id=status["executor_id"],
                 application_version=status["app_version"],
                 application_id=status["app_id"],
@@ -968,6 +980,7 @@ class SystemDatabase(ABC):
                 workflow_deadline_epoch_ms=status["workflow_deadline_epoch_ms"],
                 deduplication_id=status["deduplication_id"],
                 priority=status["priority"],
+                inputs=status["inputs"],
                 serialization=status["serialization"],
                 queue_partition_key=status["queue_partition_key"],
                 parent_workflow_id=status["parent_workflow_id"],
@@ -1003,10 +1016,12 @@ class SystemDatabase(ABC):
                 workflow_uuid=status["workflow_uuid"],
                 inputs=status["inputs"],
                 serialization=status["serialization"],
-                # created_at is left to the column default, which is the same
-                # now()-based expression workflow_status uses. now() is fixed at
-                # transaction start, so the pair is equal, and no caller can
-                # accidentally supply a client clock.
+                # created_at is left to the column default, the same expression
+                # workflow_status uses, so no caller can supply a client clock.
+                # Retention needs this stamped no earlier than the status row;
+                # that holds because the status insert above runs first. Postgres
+                # makes the two identical (now() is fixed at transaction start),
+                # SQLite a millisecond later -- either satisfies the ordering.
             )
             .on_conflict_do_nothing(index_elements=["workflow_uuid"])
         )
@@ -1120,6 +1135,9 @@ class SystemDatabase(ABC):
                 sa.update(SystemSchema.workflow_status)
                 .values(
                     status=status,
+                    # Dual write, phase 2.
+                    output=output,
+                    error=error,
                     # As the workflow is complete, remove its deduplication ID
                     deduplication_id=None,
                     updated_at=now_ms,
@@ -1452,7 +1470,10 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.authenticated_user,
                     SystemSchema.workflow_status.c.authenticated_roles,
                     SystemSchema.workflow_status.c.assumed_role,
-                    SystemSchema.workflow_inputs.c.inputs,
+                    sa.func.coalesce(
+                        SystemSchema.workflow_inputs.c.inputs,
+                        SystemSchema.workflow_status.c.inputs,
+                    ).label("inputs"),
                     SystemSchema.workflow_status.c.serialization,
                     SystemSchema.workflow_status.c.attributes,
                     SystemSchema.workflow_status.c.application_name,
@@ -1502,6 +1523,7 @@ class SystemDatabase(ABC):
                                 else INTERNAL_QUEUE_NAME
                             ),
                             queue_partition_key=queue_partition_key,
+                            inputs=status[8],
                             assumed_role=status[7],
                             forked_from=original_workflow_id,
                             attributes=status[10],
@@ -1855,7 +1877,9 @@ class SystemDatabase(ABC):
                         ws.c.workflow_timeout_ms,
                         ws.c.deduplication_id,
                         ws.c.priority,
-                        SystemSchema.workflow_inputs.c.inputs,
+                        sa.func.coalesce(
+                            SystemSchema.workflow_inputs.c.inputs, ws.c.inputs
+                        ).label("inputs"),
                         ws.c.queue_partition_key,
                         ws.c.forked_from,
                         ws.c.parent_workflow_id,
@@ -1934,8 +1958,14 @@ class SystemDatabase(ABC):
             return c.execute(
                 sa.select(
                     SystemSchema.workflow_status.c.status,
-                    SystemSchema.workflow_outputs.c.output,
-                    SystemSchema.workflow_outputs.c.error,
+                    sa.func.coalesce(
+                        SystemSchema.workflow_outputs.c.output,
+                        SystemSchema.workflow_status.c.output,
+                    ),
+                    sa.func.coalesce(
+                        SystemSchema.workflow_outputs.c.error,
+                        SystemSchema.workflow_status.c.error,
+                    ),
                     SystemSchema.workflow_status.c.serialization,
                 )
                 .select_from(
@@ -2117,7 +2147,7 @@ class SystemDatabase(ABC):
         prefix_list = _to_list(workflow_id_prefix)
         schedule_name_list = _to_list(schedule_name)
 
-        load_columns = [
+        load_columns: List[Any] = [
             SystemSchema.workflow_status.c.workflow_uuid,
             SystemSchema.workflow_status.c.status,
             SystemSchema.workflow_status.c.name,
@@ -2149,10 +2179,25 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.application_name,
         ]
         if load_input:
-            load_columns.append(SystemSchema.workflow_inputs.c.inputs)
+            load_columns.append(
+                sa.func.coalesce(
+                    SystemSchema.workflow_inputs.c.inputs,
+                    SystemSchema.workflow_status.c.inputs,
+                ).label("inputs")
+            )
         if load_output:
-            load_columns.append(SystemSchema.workflow_outputs.c.output)
-            load_columns.append(SystemSchema.workflow_outputs.c.error)
+            load_columns.append(
+                sa.func.coalesce(
+                    SystemSchema.workflow_outputs.c.output,
+                    SystemSchema.workflow_status.c.output,
+                ).label("output")
+            )
+            load_columns.append(
+                sa.func.coalesce(
+                    SystemSchema.workflow_outputs.c.error,
+                    SystemSchema.workflow_status.c.error,
+                ).label("error")
+            )
         if load_input or load_output:
             load_columns.append(SystemSchema.workflow_status.c.serialization)
 
@@ -2927,6 +2972,9 @@ class SystemDatabase(ABC):
                     serialization=result["serialization"],
                     # Mirrors the parent: only the running application records its steps.
                     application_name=self.app_name,
+                    # Explicit rather than a column default: SQLite cannot add a
+                    # column with a non-constant default, so it has none there.
+                    created_at=self._now_ms_sql(),
                 )
                 .on_conflict_do_update(
                     index_elements=[
@@ -3011,6 +3059,7 @@ class SystemDatabase(ABC):
                     child_workflow_id=result_workflow_id,
                     started_at_epoch_ms=started_at_epoch_ms,
                     completed_at_epoch_ms=int(time.time() * 1000),
+                    created_at=self._now_ms_sql(),
                     serialization=serialization,
                     application_name=self.app_name,
                 )
@@ -3045,6 +3094,7 @@ class SystemDatabase(ABC):
             child_workflow_id=childUUID,
             started_at_epoch_ms=started_at_epoch_ms,
             completed_at_epoch_ms=int(time.time() * 1000),
+            created_at=self._now_ms_sql(),
             application_name=self.app_name,
         )
         try:
@@ -5087,6 +5137,8 @@ class SystemDatabase(ABC):
                     "name": status["name"],
                     "class_name": status["class_name"],
                     "config_name": status["config_name"],
+                    "output": None,
+                    "error": None,
                     "executor_id": status["executor_id"],
                     "application_version": status["app_version"],
                     "application_id": status["app_id"],
@@ -5099,6 +5151,7 @@ class SystemDatabase(ABC):
                     "workflow_deadline_epoch_ms": status["workflow_deadline_epoch_ms"],
                     "deduplication_id": None,
                     "priority": status["priority"],
+                    "inputs": status["inputs"],
                     "serialization": status["serialization"],
                     "queue_partition_key": status["queue_partition_key"],
                     "parent_workflow_id": status["parent_workflow_id"],
@@ -5478,8 +5531,6 @@ class SystemDatabase(ABC):
         physical order, so each batch walks a contiguous run of the oldest pages.
         """
         total = 0
-        batches = 0
-        t_table = time.monotonic()
 
         def delete_batch(watermark: Optional[int]) -> Optional[int]:
             """Delete one batch, returning the watermark to resume from, or None
@@ -5508,13 +5559,8 @@ class SystemDatabase(ABC):
             watermark = self._retry_on_serialization_error(
                 functools.partial(delete_batch, watermark)
             )
-            batches += 1
             if watermark is None:
                 break
-        dbos_logger.warning(
-            f"[gc-timing] payload delete {table.name}: "
-            f"{time.monotonic() - t_table:.3f}s, {total} rows, {batches} batches"
-        )
         return total
 
     def garbage_collect_payloads(
@@ -5533,13 +5579,10 @@ class SystemDatabase(ABC):
         """
         if batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
-        # TEMPORARY [gc-timing]: phase timings for retention benchmarking. Remove.
-        t_cutoff = time.monotonic()
+        if not self.payload_retention_enabled:
+            return 0, 0, 0, None
         if cutoff is None:
             cutoff = self._payload_retention_cutoff()
-        dbos_logger.warning(
-            f"[gc-timing] payload cutoff: {time.monotonic() - t_cutoff:.3f}s"
-        )
         if cutoff is None:
             # No workflows at all: nothing anchors the cutoff, so sweep nothing.
             return 0, 0, 0, None
@@ -5573,14 +5616,16 @@ class SystemDatabase(ABC):
         deleted = [f.result() for _, f in outcomes]
 
         if any(deleted):
-            t_vacuum = time.monotonic()
             self._vacuum_tables(
                 ["workflow_inputs", "workflow_outputs", "operation_outputs"]
             )
-            dbos_logger.warning(
-                f"[gc-timing] payload vacuum: {time.monotonic() - t_vacuum:.3f}s"
-            )
-        dbos_logger.warning(f"[gc-timing] payload lag: {lag_ms}ms")
+        # lag_ms is the health signal: it should hover around the retention
+        # window. Growing without bound means one old non-terminal workflow is
+        # pinning the cutoff and reclamation has stalled.
+        dbos_logger.debug(
+            f"Payload retention swept {deleted[0]} inputs, {deleted[1]} outputs, "
+            f"{deleted[2]} steps; running {lag_ms}ms behind"
+        )
         return deleted[0], deleted[1], deleted[2], lag_ms
 
     def _vacuum_tables(self, tables: List[str]) -> None:
@@ -5596,8 +5641,6 @@ class SystemDatabase(ABC):
         actually used, or None when there is nothing to collect."""
         if batch_size is not None and batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
-        # TEMPORARY [gc-timing]: phase timings for retention benchmarking. Remove.
-        t_cutoff = time.monotonic()
         if rows_threshold is not None:
             with self.engine.begin() as c:
                 # Get the completed_at timestamp of the rows_threshold newest completed row
@@ -5624,9 +5667,6 @@ class SystemDatabase(ABC):
                     ):
                         cutoff_epoch_timestamp_ms = rows_based_cutoff
 
-        dbos_logger.warning(
-            f"[gc-timing] status cutoff: {time.monotonic() - t_cutoff:.3f}s"
-        )
         if cutoff_epoch_timestamp_ms is None:
             return None
 
@@ -5641,19 +5681,11 @@ class SystemDatabase(ABC):
             ),
         )
 
-        # TEMPORARY [gc-timing]
-        t_delete = time.monotonic()
-        status_rows_deleted = 0
-        status_batches = 0
-
         if batch_size is None:
 
             def delete_all() -> None:
                 with self.engine.begin() as c:
-                    nonlocal status_rows_deleted
-                    status_rows_deleted += c.execute(
-                        sa.delete(SystemSchema.workflow_status).where(gc_filter)
-                    ).rowcount
+                    c.execute(sa.delete(SystemSchema.workflow_status).where(gc_filter))
 
             self._retry_on_serialization_error(delete_all)
         else:
@@ -5683,10 +5715,7 @@ class SystemDatabase(ABC):
                         bounds.append(
                             SystemSchema.workflow_status.c.completed_at <= step
                         )
-                    nonlocal status_rows_deleted
-                    status_rows_deleted += c.execute(
-                        sa.delete(SystemSchema.workflow_status).where(*bounds)
-                    ).rowcount
+                    c.execute(sa.delete(SystemSchema.workflow_status).where(*bounds))
                     return step
 
             watermark = 0
@@ -5694,15 +5723,10 @@ class SystemDatabase(ABC):
                 next_watermark = self._retry_on_serialization_error(
                     functools.partial(delete_batch, watermark)
                 )
-                status_batches += 1
                 if next_watermark is None:
                     break
                 watermark = next_watermark
 
-        dbos_logger.warning(
-            f"[gc-timing] status delete: {time.monotonic() - t_delete:.3f}s, "
-            f"{status_rows_deleted} rows, {status_batches} batches"
-        )
         return cutoff_epoch_timestamp_ms
 
     def list_retained_workflow_ids(self, cutoff_epoch_timestamp_ms: int) -> List[str]:
@@ -5959,8 +5983,14 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.authenticated_user,
                         SystemSchema.workflow_status.c.assumed_role,
                         SystemSchema.workflow_status.c.authenticated_roles,
-                        SystemSchema.workflow_outputs.c.output,
-                        SystemSchema.workflow_outputs.c.error,
+                        sa.func.coalesce(
+                            SystemSchema.workflow_outputs.c.output,
+                            SystemSchema.workflow_status.c.output,
+                        ),
+                        sa.func.coalesce(
+                            SystemSchema.workflow_outputs.c.error,
+                            SystemSchema.workflow_status.c.error,
+                        ),
                         SystemSchema.workflow_status.c.executor_id,
                         SystemSchema.workflow_status.c.created_at,
                         SystemSchema.workflow_status.c.updated_at,
@@ -5974,7 +6004,10 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
                         SystemSchema.workflow_status.c.started_at_epoch_ms,
                         SystemSchema.workflow_status.c.deduplication_id,
-                        SystemSchema.workflow_inputs.c.inputs,
+                        sa.func.coalesce(
+                            SystemSchema.workflow_inputs.c.inputs,
+                            SystemSchema.workflow_status.c.inputs,
+                        ),
                         SystemSchema.workflow_status.c.priority,
                         SystemSchema.workflow_status.c.queue_partition_key,
                         SystemSchema.workflow_status.c.forked_from,
@@ -6182,6 +6215,8 @@ class SystemDatabase(ABC):
                         authenticated_user=status["authenticated_user"],
                         assumed_role=status["assumed_role"],
                         authenticated_roles=status["authenticated_roles"],
+                        output=status["output"],
+                        error=status["error"],
                         executor_id=status["executor_id"],
                         created_at=status["created_at"],
                         updated_at=status["updated_at"],
@@ -6195,6 +6230,7 @@ class SystemDatabase(ABC):
                         workflow_deadline_epoch_ms=status["workflow_deadline_epoch_ms"],
                         started_at_epoch_ms=status["started_at_epoch_ms"],
                         deduplication_id=status["deduplication_id"],
+                        inputs=status["inputs"],
                         priority=status["priority"],
                         queue_partition_key=status["queue_partition_key"],
                         forked_from=status["forked_from"],

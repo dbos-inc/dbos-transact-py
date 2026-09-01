@@ -36,6 +36,8 @@ class SystemSchema:
         Column("authenticated_user", Text, nullable=True),
         Column("assumed_role", Text, nullable=True),
         Column("authenticated_roles", Text, nullable=True),
+        Column("output", Text, nullable=True),
+        Column("error", Text, nullable=True),
         Column("executor_id", Text, nullable=True),
         Column(
             "created_at",
@@ -61,6 +63,7 @@ class SystemSchema:
         Column("workflow_deadline_epoch_ms", BigInteger, nullable=True),
         Column("started_at_epoch_ms", BigInteger(), nullable=True),
         Column("deduplication_id", Text(), nullable=True),
+        Column("inputs", Text()),
         Column("priority", Integer(), nullable=False),
         Column("queue_partition_key", Text()),
         Column("forked_from", Text()),
@@ -176,13 +179,14 @@ class SystemSchema:
     operation_outputs = Table(
         "operation_outputs",
         metadata_obj,
-        # No foreign key: ON DELETE CASCADE fires a per-row trigger, so collecting
-        # 3M workflows meant 3M separate child deletes inside the status sweep.
-        # Retention sweeps this table on its own watermark instead. Dropping it
-        # also spares every step insert an RI check and a FOR KEY SHARE lock on a
-        # status row other transactions are concurrently updating -- the pattern
-        # that allocates multixacts.
-        Column("workflow_uuid", Text, nullable=False),
+        Column(
+            "workflow_uuid",
+            Text,
+            ForeignKey(
+                "workflow_status.workflow_uuid", onupdate="CASCADE", ondelete="CASCADE"
+            ),
+            nullable=False,
+        ),
         Column("function_id", Integer, nullable=False),
         Column("function_name", Text, nullable=False),
         Column("output", Text, nullable=True),
@@ -193,11 +197,10 @@ class SystemSchema:
         Column("serialization", Text()),
         # Denormalized from the parent so step observability filters without a join.
         Column("application_name", Text, nullable=True),
-        # Server clock, and distinct from completed_at_epoch_ms, which is stamped
-        # from the client. The retention cutoff is a server-clock minimum over
-        # workflow_status, so mixing clocks here would let skew drop a live
-        # workflow's steps below the cutoff.
-        Column("created_at", BigInteger, nullable=False),
+        # Retention key. Distinct from completed_at_epoch_ms, which is stamped
+        # from the client clock; the cutoff is a server-clock minimum, and
+        # mixing the two lets skew collect a live workflow's steps.
+        Column("created_at", BigInteger, nullable=True),
         PrimaryKeyConstraint("workflow_uuid", "function_id"),
         Index("idx_operation_outputs_created_at", "created_at"),
         Index(

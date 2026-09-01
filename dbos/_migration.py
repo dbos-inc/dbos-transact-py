@@ -27,6 +27,7 @@ _ONLINE_MIGRATIONS = {
     46,
     47,
     107,
+    111,
 }
 
 # From this index on, every SDK defines the same migration at the same index.
@@ -295,6 +296,8 @@ CREATE TABLE {quoted_schema}.workflow_status (
     assumed_role TEXT,
     authenticated_roles TEXT,
     request TEXT,
+    output TEXT,
+    error TEXT,
     executor_id TEXT,
     created_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint,
     updated_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint,
@@ -306,6 +309,7 @@ CREATE TABLE {quoted_schema}.workflow_status (
     queue_name TEXT,
     workflow_timeout_ms BIGINT,
     workflow_deadline_epoch_ms BIGINT,
+    inputs TEXT,
     started_at_epoch_ms BIGINT,
     deduplication_id TEXT,
     priority INT4 NOT NULL DEFAULT 0
@@ -319,21 +323,6 @@ ALTER TABLE {quoted_schema}.workflow_status
 ADD CONSTRAINT uq_workflow_status_queue_name_dedup_id 
 UNIQUE (queue_name, deduplication_id);
 
-CREATE TABLE {quoted_schema}.workflow_inputs (
-    workflow_uuid TEXT NOT NULL PRIMARY KEY,
-    inputs TEXT,
-    serialization TEXT,
-    created_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint
-);
-
-CREATE TABLE {quoted_schema}.workflow_outputs (
-    workflow_uuid TEXT NOT NULL PRIMARY KEY,
-    output TEXT,
-    error TEXT,
-    serialization TEXT,
-    created_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint
-);
-
 CREATE TABLE {quoted_schema}.operation_outputs (
     workflow_uuid TEXT NOT NULL,
     function_id INT4 NOT NULL,
@@ -341,8 +330,9 @@ CREATE TABLE {quoted_schema}.operation_outputs (
     output TEXT,
     error TEXT,
     child_workflow_id TEXT,
-    created_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint,
-    PRIMARY KEY (workflow_uuid, function_id)
+    PRIMARY KEY (workflow_uuid, function_id),
+    FOREIGN KEY (workflow_uuid) REFERENCES {quoted_schema}.workflow_status(workflow_uuid) 
+        ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 CREATE TABLE {quoted_schema}.notifications (
@@ -573,7 +563,7 @@ BEGIN
     v_now := EXTRACT(epoch FROM now()) * 1000;
 
     INSERT INTO {quoted_schema}.workflow_status (
-        workflow_uuid, status,
+        workflow_uuid, status, inputs,
         name, class_name, config_name,
         queue_name, deduplication_id, priority, queue_partition_key,
         application_version,
@@ -581,7 +571,7 @@ BEGIN
         workflow_timeout_ms, workflow_deadline_epoch_ms,
         parent_workflow_id, owner_xid, serialization
     ) VALUES (
-        v_workflow_id, 'ENQUEUED',
+        v_workflow_id, 'ENQUEUED', v_serialized_inputs,
         workflow_name, class_name, config_name,
         queue_name, deduplication_id, v_priority, queue_partition_key,
         app_version,
@@ -592,13 +582,6 @@ BEGIN
     ON CONFLICT (workflow_uuid)
     DO UPDATE SET
         updated_at = EXCLUDED.updated_at;
-
-    INSERT INTO {quoted_schema}.workflow_inputs (
-        workflow_uuid, inputs, serialization, created_at
-    ) VALUES (
-        v_workflow_id, v_serialized_inputs, 'portable_json', v_now
-    )
-    ON CONFLICT (workflow_uuid) DO NOTHING;
 
     RETURN v_workflow_id;
 
@@ -864,7 +847,7 @@ BEGIN
     v_status := CASE WHEN delay_until_epoch_ms IS NULL THEN 'ENQUEUED' ELSE 'DELAYED' END;
 
     INSERT INTO {quoted_schema}.workflow_status (
-        workflow_uuid, status,
+        workflow_uuid, status, inputs,
         name, class_name, config_name,
         queue_name, deduplication_id, priority, queue_partition_key,
         application_version,
@@ -874,7 +857,7 @@ BEGIN
         authenticated_user, authenticated_roles,
         delay_until_epoch_ms
     ) VALUES (
-        v_workflow_id, v_status,
+        v_workflow_id, v_status, v_serialized_inputs,
         workflow_name, class_name, config_name,
         queue_name, deduplication_id, v_priority, queue_partition_key,
         app_version,
@@ -887,13 +870,6 @@ BEGIN
     ON CONFLICT (workflow_uuid)
     DO UPDATE SET
         updated_at = EXCLUDED.updated_at;
-
-    INSERT INTO {quoted_schema}.workflow_inputs (
-        workflow_uuid, inputs, serialization, created_at
-    ) VALUES (
-        v_workflow_id, v_serialized_inputs, 'portable_json', v_now
-    )
-    ON CONFLICT (workflow_uuid) DO NOTHING;
 
     RETURN v_workflow_id;
 
@@ -1105,7 +1081,7 @@ BEGIN
     v_status := CASE WHEN delay_until_epoch_ms IS NULL THEN 'ENQUEUED' ELSE 'DELAYED' END;
 
     INSERT INTO {quoted_schema}.workflow_status (
-        workflow_uuid, status,
+        workflow_uuid, status, inputs,
         name, class_name, config_name,
         queue_name, deduplication_id, priority, queue_partition_key,
         application_version,
@@ -1115,7 +1091,7 @@ BEGIN
         authenticated_user, authenticated_roles,
         delay_until_epoch_ms, application_name
     ) VALUES (
-        v_workflow_id, v_status,
+        v_workflow_id, v_status, v_serialized_inputs,
         workflow_name, class_name, config_name,
         queue_name, deduplication_id, v_priority, queue_partition_key,
         app_version,
@@ -1128,13 +1104,6 @@ BEGIN
     ON CONFLICT (workflow_uuid)
     DO UPDATE SET
         updated_at = EXCLUDED.updated_at;
-
-    INSERT INTO {quoted_schema}.workflow_inputs (
-        workflow_uuid, inputs, serialization, created_at
-    ) VALUES (
-        v_workflow_id, v_serialized_inputs, 'portable_json', v_now
-    )
-    ON CONFLICT (workflow_uuid) DO NOTHING;
 
     RETURN v_workflow_id;
 
@@ -1182,51 +1151,150 @@ ALTER TABLE {quoted_schema}."queues" ADD COLUMN IF NOT EXISTS "partition_rate_li
 
 
 def get_dbos_migration_hundrednine(quoted_schema: str) -> str:
-    # Btree, not BRIN: the sweep seeds its watermark with an index-min and sizes
-    # each batch with an ordered LIMIT/OFFSET probe, neither of which BRIN can
-    # serve. created_at is monotonic, so inserts always land on the rightmost
-    # leaf -- far cheaper than the UUID primary key on the same row.
-    # cost_delay 0 because the default throttles autovacuum to ~40 MB/s; a high
-    # scale_factor because each pass pays a full PK index scan regardless of how
-    # few rows it reclaims, so few large passes beat many small ones.
-    # Default TOAST storage is deliberately left alone. Raising toast_tuple_target
-    # to keep payloads inline was measured and is a large regression: out of line,
-    # the main heap stays ~4 GB and cached, so the sweep's index scan and every
-    # read hit memory for the tuple and miss only on the cold payload. Inline it
-    # grows to ~100 GB and everything misses -- the sweep slowed 1.9x, its vacuum
-    # 7-29x, and end-to-end throughput nearly halved. TOAST is doing the same job
-    # for the payload column that this table does for workflow_status.
     return f"""
+CREATE TABLE IF NOT EXISTS {quoted_schema}."workflow_inputs" (
+    workflow_uuid TEXT NOT NULL PRIMARY KEY,
+    inputs TEXT,
+    serialization TEXT,
+    created_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint
+);
+
+CREATE TABLE IF NOT EXISTS {quoted_schema}."workflow_outputs" (
+    workflow_uuid TEXT NOT NULL PRIMARY KEY,
+    output TEXT,
+    error TEXT,
+    serialization TEXT,
+    created_at BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint
+);
+
 CREATE INDEX IF NOT EXISTS "idx_workflow_inputs_created_at"
     ON {quoted_schema}."workflow_inputs" ("created_at");
 
 CREATE INDEX IF NOT EXISTS "idx_workflow_outputs_created_at"
     ON {quoted_schema}."workflow_outputs" ("created_at");
-
-CREATE INDEX IF NOT EXISTS "idx_operation_outputs_created_at"
-    ON {quoted_schema}."operation_outputs" ("created_at");
-
-ALTER TABLE {quoted_schema}."workflow_inputs" SET (
-    autovacuum_vacuum_cost_delay = 0,
-    autovacuum_vacuum_scale_factor = 0.15,
-    autovacuum_vacuum_insert_threshold = 100000,
-    autovacuum_freeze_min_age = 0
-);
-
-ALTER TABLE {quoted_schema}."workflow_outputs" SET (
-    autovacuum_vacuum_cost_delay = 0,
-    autovacuum_vacuum_scale_factor = 0.15,
-    autovacuum_vacuum_insert_threshold = 100000,
-    autovacuum_freeze_min_age = 0
-);
-
-ALTER TABLE {quoted_schema}."operation_outputs" SET (
-    autovacuum_vacuum_cost_delay = 0,
-    autovacuum_vacuum_scale_factor = 0.15,
-    autovacuum_vacuum_insert_threshold = 100000,
-    autovacuum_freeze_min_age = 0
-);
 """
+
+
+def get_dbos_migration_hundredten(quoted_schema: str) -> str:
+    return f"""
+ALTER TABLE {quoted_schema}."operation_outputs"
+    ADD COLUMN IF NOT EXISTS "created_at" BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint;
+"""
+
+
+def get_dbos_migration_hundredeleven(quoted_schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f"""CREATE INDEX {c} IF NOT EXISTS "idx_operation_outputs_created_at"
+    ON {quoted_schema}."operation_outputs" ("created_at")"""
+
+
+def get_dbos_migration_hundredtwelve(quoted_schema: str, is_cockroach: bool) -> str:
+    migration = f"""
+CREATE OR REPLACE FUNCTION {quoted_schema}.enqueue_workflow(
+    workflow_name TEXT,
+    queue_name TEXT,
+    positional_args JSON[] DEFAULT ARRAY[]::JSON[],
+    named_args JSON DEFAULT '{{}}'::JSON,
+    class_name TEXT DEFAULT NULL,
+    config_name TEXT DEFAULT NULL,
+    workflow_id TEXT DEFAULT NULL,
+    app_version TEXT DEFAULT NULL,
+    timeout_ms BIGINT DEFAULT NULL,
+    deadline_epoch_ms BIGINT DEFAULT NULL,
+    deduplication_id TEXT DEFAULT NULL,
+    priority INT4 DEFAULT NULL,
+    queue_partition_key TEXT DEFAULT NULL,
+    authenticated_user TEXT DEFAULT NULL,
+    authenticated_roles TEXT DEFAULT NULL,
+    delay_until_epoch_ms BIGINT DEFAULT NULL,
+    application_name TEXT DEFAULT NULL
+) RETURNS TEXT AS $$
+DECLARE
+    v_workflow_id TEXT;
+    v_serialized_inputs TEXT;
+    v_owner_xid TEXT;
+    v_now BIGINT;
+    v_recovery_attempts INT4 := 0;
+    v_priority INT4;
+    v_status TEXT;
+BEGIN
+
+    -- Validate required parameters
+    IF workflow_name IS NULL OR workflow_name = '' THEN
+        RAISE EXCEPTION 'Workflow name cannot be null or empty';
+    END IF;
+    IF queue_name IS NULL OR queue_name = '' THEN
+        RAISE EXCEPTION 'Queue name cannot be null or empty';
+    END IF;
+    IF named_args IS NOT NULL AND jsonb_typeof(named_args::jsonb) != 'object' THEN
+        RAISE EXCEPTION 'Named args must be a JSON object';
+    END IF;
+    IF workflow_id IS NOT NULL AND workflow_id = '' THEN
+        RAISE EXCEPTION 'Workflow ID cannot be an empty string if provided.';
+    END IF;
+    IF delay_until_epoch_ms IS NOT NULL AND delay_until_epoch_ms < 0 THEN
+        RAISE EXCEPTION 'delay_until_epoch_ms must be >= 0';
+    END IF;
+
+    v_workflow_id := COALESCE(workflow_id, gen_random_uuid()::TEXT);
+    v_owner_xid := gen_random_uuid()::TEXT;
+    v_priority := COALESCE(priority, 0);
+    v_serialized_inputs := json_build_object(
+        'positionalArgs', positional_args,
+        'namedArgs', named_args
+    )::TEXT;
+    v_now := EXTRACT(epoch FROM now()) * 1000;
+    v_status := CASE WHEN delay_until_epoch_ms IS NULL THEN 'ENQUEUED' ELSE 'DELAYED' END;
+
+    INSERT INTO {quoted_schema}.workflow_status (
+        workflow_uuid, status, inputs,
+        name, class_name, config_name,
+        queue_name, deduplication_id, priority, queue_partition_key,
+        application_version,
+        created_at, updated_at, recovery_attempts,
+        workflow_timeout_ms, workflow_deadline_epoch_ms,
+        parent_workflow_id, owner_xid, serialization,
+        authenticated_user, authenticated_roles,
+        delay_until_epoch_ms, application_name
+    ) VALUES (
+        v_workflow_id, v_status, v_serialized_inputs,
+        workflow_name, class_name, config_name,
+        queue_name, deduplication_id, v_priority, queue_partition_key,
+        app_version,
+        v_now, v_now, v_recovery_attempts,
+        timeout_ms, deadline_epoch_ms,
+        NULL, v_owner_xid, 'portable_json',
+        authenticated_user, authenticated_roles,
+        delay_until_epoch_ms, application_name
+    )
+    ON CONFLICT (workflow_uuid)
+    DO UPDATE SET
+        updated_at = EXCLUDED.updated_at;
+
+    INSERT INTO {quoted_schema}.workflow_inputs (
+        workflow_uuid, inputs, serialization, created_at
+    ) VALUES (
+        v_workflow_id, v_serialized_inputs, 'portable_json', v_now
+    )
+    ON CONFLICT (workflow_uuid) DO NOTHING;
+
+    RETURN v_workflow_id;
+
+EXCEPTION
+    WHEN unique_violation THEN
+        RAISE EXCEPTION 'DBOS queue duplicated'
+            USING DETAIL = format('Workflow %s with queue %s and deduplication ID %s already exists', v_workflow_id, queue_name, deduplication_id),
+                ERRCODE = 'unique_violation';
+END;
+$$ LANGUAGE plpgsql;
+"""
+    if not is_cockroach:
+        migration += f"""
+ALTER FUNCTION {quoted_schema}.enqueue_workflow(
+    TEXT, TEXT, JSON[], JSON, TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, INT4, TEXT, TEXT, TEXT, BIGINT, TEXT
+) SET search_path = pg_catalog, pg_temp;
+"""
+    return migration
 
 
 def get_dbos_migrations(
@@ -1295,6 +1363,9 @@ def get_dbos_migrations(
         get_dbos_migration_hundredseven(quoted_schema, is_cockroach),
         get_dbos_migration_hundredeight(quoted_schema),
         get_dbos_migration_hundrednine(quoted_schema),
+        get_dbos_migration_hundredten(quoted_schema),
+        get_dbos_migration_hundredeleven(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredtwelve(quoted_schema, is_cockroach),
     ]
 
 
@@ -1315,6 +1386,8 @@ CREATE TABLE workflow_status (
     assumed_role TEXT,
     authenticated_roles TEXT,
     request TEXT,
+    output TEXT,
+    error TEXT,
     executor_id TEXT,
     created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
     updated_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
@@ -1326,6 +1399,7 @@ CREATE TABLE workflow_status (
     queue_name TEXT,
     workflow_timeout_ms INTEGER,
     workflow_deadline_epoch_ms INTEGER,
+    inputs TEXT,
     started_at_epoch_ms INTEGER,
     deduplication_id TEXT,
     priority INTEGER NOT NULL DEFAULT 0
@@ -1338,21 +1412,6 @@ CREATE INDEX workflow_status_status_index ON workflow_status (status);
 CREATE UNIQUE INDEX uq_workflow_status_queue_name_dedup_id 
 ON workflow_status (queue_name, deduplication_id);
 
-CREATE TABLE workflow_inputs (
-    workflow_uuid TEXT NOT NULL PRIMARY KEY,
-    inputs TEXT,
-    serialization TEXT,
-    created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()}
-);
-
-CREATE TABLE workflow_outputs (
-    workflow_uuid TEXT NOT NULL PRIMARY KEY,
-    output TEXT,
-    error TEXT,
-    serialization TEXT,
-    created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()}
-);
-
 CREATE TABLE operation_outputs (
     workflow_uuid TEXT NOT NULL,
     function_id INTEGER NOT NULL,
@@ -1360,8 +1419,9 @@ CREATE TABLE operation_outputs (
     output TEXT,
     error TEXT,
     child_workflow_id TEXT,
-    created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
-    PRIMARY KEY (workflow_uuid, function_id)
+    PRIMARY KEY (workflow_uuid, function_id),
+    FOREIGN KEY (workflow_uuid) REFERENCES workflow_status(workflow_uuid) 
+        ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 CREATE TABLE notifications (
@@ -1663,13 +1723,33 @@ _sqlite_history = [
     sqlite_migration_fortyseven,
 ]
 
-# SQLite has no BRIN and no autovacuum; a plain index keeps the sweep's
-# predicate indexed and the schema in parity.
-sqlite_migration_hundrednine = """
+sqlite_migration_hundrednine = f"""
+CREATE TABLE IF NOT EXISTS workflow_inputs (
+    workflow_uuid TEXT NOT NULL PRIMARY KEY,
+    inputs TEXT,
+    serialization TEXT,
+    created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()}
+);
+
+CREATE TABLE IF NOT EXISTS workflow_outputs (
+    workflow_uuid TEXT NOT NULL PRIMARY KEY,
+    output TEXT,
+    error TEXT,
+    serialization TEXT,
+    created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()}
+);
+
 CREATE INDEX IF NOT EXISTS idx_workflow_inputs_created_at
     ON workflow_inputs (created_at);
 CREATE INDEX IF NOT EXISTS idx_workflow_outputs_created_at
     ON workflow_outputs (created_at);
+"""
+
+sqlite_migration_hundredten = """
+ALTER TABLE operation_outputs ADD COLUMN created_at INTEGER;
+"""
+
+sqlite_migration_hundredeleven = """
 CREATE INDEX IF NOT EXISTS idx_operation_outputs_created_at
     ON operation_outputs (created_at);
 """
@@ -1688,4 +1768,8 @@ sqlite_migrations = [
     sqlite_migration_hundredseven,
     sqlite_migration_hundredeight,
     sqlite_migration_hundrednine,
+    sqlite_migration_hundredten,
+    sqlite_migration_hundredeleven,
+    # Postgres migration 112 rewrites a stored function; SQLite has none.
+    "",
 ]

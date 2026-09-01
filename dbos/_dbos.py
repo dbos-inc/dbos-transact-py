@@ -638,6 +638,9 @@ class DBOS:
                 observability_query_timeout_sec=self._config.get(
                     "runtimeConfig", {}
                 ).get("observability_query_timeout_sec"),
+                payload_retention_enabled=self._config.get(
+                    "payload_retention_enabled", True
+                ),
             )
             assert self._config["database"]["db_engine_kwargs"] is not None
             if self._config["database_url"]:

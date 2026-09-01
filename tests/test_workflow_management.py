@@ -2360,6 +2360,82 @@ def _payload_counts(dbos: DBOS) -> tuple[int, int]:
         )
 
 
+def test_payload_dual_write_and_read_fallback(dbos: DBOS) -> None:
+    """Phase 2: payloads land in both places, and a legacy-only row still reads."""
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    assert workflow(11) == 11
+    workflow_id = DBOS.list_workflows()[0].workflow_id
+    ws, wi, wo = (
+        SystemSchema.workflow_status,
+        SystemSchema.workflow_inputs,
+        SystemSchema.workflow_outputs,
+    )
+
+    with dbos._sys_db.engine.begin() as c:
+        legacy = c.execute(
+            sa.select(ws.c.inputs, ws.c.output).where(ws.c.workflow_uuid == workflow_id)
+        ).fetchone()
+        split = c.execute(
+            sa.select(wi.c.inputs, wi.c.created_at).where(
+                wi.c.workflow_uuid == workflow_id
+            )
+        ).fetchone()
+        out = c.execute(
+            sa.select(wo.c.output).where(wo.c.workflow_uuid == workflow_id)
+        ).fetchone()
+        status_created = c.execute(
+            sa.select(ws.c.created_at).where(ws.c.workflow_uuid == workflow_id)
+        ).scalar()
+
+    # Both destinations written, with identical payloads.
+    assert legacy is not None and legacy[0] is not None and legacy[1] is not None
+    assert split is not None and split[0] == legacy[0]
+    assert out is not None and out[0] == legacy[1]
+    # Retention needs the payload stamped no earlier than its status row, which
+    # holds because the status row is always inserted first. Postgres makes them
+    # identical, since now() is fixed at transaction start; SQLite evaluates its
+    # timestamp per statement, so there the payload is a millisecond or two later.
+    assert split[1] >= status_created
+
+    # Drop the split rows: a row written before the migration looks exactly like
+    # this, and every read path must still resolve it from workflow_status.
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(sa.delete(wi).where(wi.c.workflow_uuid == workflow_id))
+        c.execute(sa.delete(wo).where(wo.c.workflow_uuid == workflow_id))
+
+    listed = DBOS.list_workflows(workflow_ids=[workflow_id])[0]
+    assert listed.input is not None
+    assert listed.output == 11
+    handle: WorkflowHandle[int] = DBOS.retrieve_workflow(workflow_id)
+    assert handle.get_result() == 11
+    forked: WorkflowHandle[int] = DBOS.fork_workflow(workflow_id, 1)
+    assert forked.get_result() == 11
+
+
+def test_payload_retention_can_be_disabled(dbos: DBOS) -> None:
+    """The flag is a kill switch: off, the sweep collects nothing."""
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    for i in range(3):
+        assert workflow(i) == i
+    dbos._sys_db.payload_retention_enabled = False
+    try:
+        garbage_collect(
+            dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
+        )
+        assert dbos._sys_db.garbage_collect_payloads()[:3] == (0, 0, 0)
+        assert _payload_counts(dbos)[0] == 3
+    finally:
+        dbos._sys_db.payload_retention_enabled = True
+
+
 def test_payload_garbage_collection(
     dbos: DBOS, skip_with_sqlite_imprecise_time: None
 ) -> None:

@@ -1,4 +1,3 @@
-import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Optional
 
@@ -95,63 +94,39 @@ def garbage_collect(
 ) -> None:
     if cutoff_epoch_timestamp_ms is None and rows_threshold is None:
         return
-    # TEMPORARY [gc-timing]: phase timings for retention benchmarking. Remove.
-    t_total = time.monotonic()
-    # Before the status sweep: afterwards the index-min this reads has to walk
-    # the dead prefix the sweep just created, which grows every round.
-    t_cutoff = time.monotonic()
+    # Read before the status sweep: afterwards this index-min has to walk the
+    # dead prefix that sweep just created, and that cost grows every round. A
+    # pre-sweep cutoff is always <= the post-sweep one, so it is conservative.
     payload_cutoff = dbos._sys_db._payload_retention_cutoff()
-    dbos.logger.warning(
-        f"[gc-timing] payload cutoff (pre-sweep): {time.monotonic() - t_cutoff:.3f}s"
-    )
 
-    # The two sweeps touch disjoint tables, and the payload cutoff was read
-    # before either ran, so neither depends on the other. Sequentially they sum;
-    # concurrently the round costs the slower of the two, which is the status
-    # sweep -- workflow_status carries thirteen indexes to the payload tables' two.
+    # The status and payload sweeps touch disjoint tables and, with the cutoff
+    # already read, neither depends on the other. Sequentially their durations
+    # add; concurrently a round costs the slower of the two.
     def status_sweep() -> None:
-        t_status = time.monotonic()
         cutoff = dbos._sys_db.garbage_collect(
             cutoff_epoch_timestamp_ms=cutoff_epoch_timestamp_ms,
             rows_threshold=rows_threshold,
             batch_size=batch_size,
         )
-        dbos.logger.warning(
-            f"[gc-timing] status total: {time.monotonic() - t_status:.3f}s"
-        )
         # The application database is deprecated: only pay for its cleanup when
-        # one exists. It needs the status sweep's cutoff, so it stays on this side.
+        # one exists. It needs the status sweep's cutoff, so it stays here.
         if cutoff is not None and dbos._app_db is not None:
-            t_appdb = time.monotonic()
             retained_ids = dbos._sys_db.list_retained_workflow_ids(cutoff)
             dbos._app_db.garbage_collect(cutoff, retained_ids, batch_size=batch_size)
-            dbos.logger.warning(
-                f"[gc-timing] appdb: {time.monotonic() - t_appdb:.3f}s, "
-                f"{len(retained_ids)} retained ids"
-            )
 
     def payload_sweep() -> None:
-        t_payload = time.monotonic()
-        inputs_deleted, outputs_deleted, steps_deleted, lag_ms = (
-            dbos._sys_db.garbage_collect_payloads(
-                batch_size=batch_size or DEFAULT_GC_BATCH_SIZE, cutoff=payload_cutoff
-            )
-        )
-        dbos.logger.warning(
-            f"[gc-timing] payload total: {time.monotonic() - t_payload:.3f}s, "
-            f"{inputs_deleted} inputs, {outputs_deleted} outputs, "
-            f"{steps_deleted} steps"
+        dbos._sys_db.garbage_collect_payloads(
+            batch_size=batch_size or DEFAULT_GC_BATCH_SIZE, cutoff=payload_cutoff
         )
 
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="dbos-gc") as executor:
         futures = [executor.submit(status_sweep), executor.submit(payload_sweep)]
-        # Collect both before raising: one sweep failing must not leave the other
-        # unobserved, and the pool's shutdown waits for both either way.
+        # Collect both before raising: one sweep failing must not leave the
+        # other unobserved, and the pool's shutdown waits for both either way.
         errors = [f.exception() for f in futures]
     for error in errors:
         if error is not None:
             raise error
-    dbos.logger.warning(f"[gc-timing] GC TOTAL: {time.monotonic() - t_total:.3f}s")
 
 
 def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:
