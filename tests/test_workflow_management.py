@@ -2638,9 +2638,10 @@ def test_pinned_rows_collected_after_workflow_ends(dbos: DBOS) -> None:
     assert _pinned_counts(dbos) == (0, 0, 0)
 
 
-def test_straggler_overflow_skips_the_sweep(dbos: DBOS) -> None:
-    """Past the bound the pinned set cannot be trusted to be complete, so the
-    round deletes nothing rather than deleting something live."""
+def test_straggler_overflow_sweeps_from_the_oldest(dbos: DBOS) -> None:
+    """Past the bound nothing is pinned, but the oldest straggler is the minimum
+    created_at over every status row, so a payload below it cannot have a
+    surviving status row. The round still makes progress."""
 
     @DBOS.workflow()
     def workflow(x: int) -> int:
@@ -2648,15 +2649,39 @@ def test_straggler_overflow_skips_the_sweep(dbos: DBOS) -> None:
 
     for i in range(3):
         assert workflow(i) == i
-    before = _payload_counts(dbos)
+    assert _payload_counts(dbos) == (3, 3)
 
-    target = int(time.time() * 1000) + 60_000
-    assert dbos._sys_db.garbage_collect_payloads(target, max_stragglers=2)[:3] == (
-        0,
-        0,
-        0,
+    ws, wi, wo = (
+        SystemSchema.workflow_status,
+        SystemSchema.workflow_inputs,
+        SystemSchema.workflow_outputs,
     )
-    assert _payload_counts(dbos) == before
+    ids = [w.workflow_id for w in DBOS.list_workflows()]
+    with dbos._sys_db.engine.begin() as c:
+        # Drop the first workflow's status row, as a status sweep would, and age
+        # its payload past the oldest row that remains.
+        c.execute(sa.delete(ws).where(ws.c.workflow_uuid == ids[0]))
+        oldest = c.execute(sa.select(sa.func.min(ws.c.created_at))).scalar()
+        assert oldest is not None
+        for table in (wi, wo):
+            c.execute(
+                sa.update(table)
+                .where(table.c.workflow_uuid == ids[0])
+                .values(retention_timestamp=oldest - 1)
+            )
+
+    # Two survivors, one over the bound, so nothing can be pinned.
+    dbos._sys_db.garbage_collect_payloads(
+        int(time.time() * 1000) + 60_000, max_stragglers=1
+    )
+    assert _pinned_counts(dbos) == (0, 0, 0)
+    # The orphan below the boundary is gone; both live workflows keep theirs.
+    assert _payload_counts(dbos) == (2, 2)
+    for wfid in ids[1:]:
+        assert (
+            dbos._sys_db.list_workflows(workflow_ids=[wfid], load_input=True)[0].input
+            is not None
+        )
 
 
 def test_partial_pin_failure_skips_the_sweep(dbos: DBOS) -> None:

@@ -5552,19 +5552,22 @@ class SystemDatabase(ABC):
                     )
             return total
 
-        def enumerate_stragglers() -> Optional[List[str]]:
+        def enumerate_stragglers() -> tuple[Optional[List[str]], Optional[int]]:
             """Workflows still below the boundary once the status sweep has run,
-            or None when there are more than can be pinned, which means the
-            payload sweep must not run this round."""
+            oldest first, with their oldest created_at. The list is None when
+            there are more than can be pinned."""
+            ws = SystemSchema.workflow_status
             with self.engine.begin() as c:
                 rows = c.execute(
-                    sa.select(SystemSchema.workflow_status.c.workflow_uuid)
-                    .where(SystemSchema.workflow_status.c.created_at < target)
+                    sa.select(ws.c.workflow_uuid, ws.c.created_at)
+                    .where(ws.c.created_at < target)
+                    .order_by(ws.c.created_at)
                     .limit(max_stragglers + 1)
                 ).fetchall()
+            oldest = rows[0][1] if rows else None
             if len(rows) > max_stragglers:
-                return None
-            return [row[0] for row in rows]
+                return None, oldest
+            return [row[0] for row in rows], oldest
 
         def pin_stragglers(workflow_ids: List[str]) -> int:
             """Lift straggler payloads above the boundary, returning rows newly
@@ -5591,7 +5594,9 @@ class SystemDatabase(ABC):
                         ).rowcount
             return pinned
 
-        def sweep_table(table: sa.Table, deadline: Optional[float]) -> int:
+        def sweep_table(
+            table: sa.Table, boundary: int, deadline: Optional[float]
+        ) -> int:
             """Delete one payload table's rows below the boundary, oldest first,
             returning the count. A retention_timestamp watermark bounds each batch,
             so no batch rescans the dead tuples an earlier one left behind."""
@@ -5603,13 +5608,13 @@ class SystemDatabase(ABC):
                 None when this table is done."""
                 nonlocal total
                 with self.engine.begin() as c:
-                    probe = sa.select(ts).where(ts < target)
+                    probe = sa.select(ts).where(ts < boundary)
                     if watermark is not None:
                         probe = probe.where(ts > watermark)
                     step: Optional[int] = c.execute(
                         probe.order_by(ts).limit(1).offset(batch_size - 1)
                     ).scalar()
-                    bounds: List[sa.ColumnElement[bool]] = [ts < target]
+                    bounds: List[sa.ColumnElement[bool]] = [ts < boundary]
                     if watermark is not None:
                         bounds.append(ts > watermark)
                     if step is not None:
@@ -5649,15 +5654,21 @@ class SystemDatabase(ABC):
                     ).rowcount
             return total
 
-        stragglers = enumerate_stragglers()
+        stragglers, oldest = enumerate_stragglers()
+        boundary, newly_pinned = target, 0
         if stragglers is None:
+            # Too many to pin. The oldest straggler is the minimum created_at over
+            # every status row, so a payload below it cannot have a surviving
+            # status row: sweeping there is safe with nothing pinned, and still
+            # reclaims everything older than the oldest workflow left.
+            boundary = target if oldest is None else oldest
             dbos_logger.warning(
-                f"Payload retention skipped: more than {max_stragglers} workflows are "
-                "older than the retention boundary and still present, so their payloads "
-                "cannot all be pinned. Nothing was deleted."
+                f"More than {max_stragglers} workflows are older than the retention "
+                "boundary and still present, so their payloads cannot all be pinned. "
+                f"Falling back to the oldest of them ({boundary}) as the boundary."
             )
-            return 0, 0, 0, count_pinned_rows()
-        newly_pinned = pin_stragglers(stragglers)
+        else:
+            newly_pinned = pin_stragglers(stragglers)
 
         deadline = (
             time.monotonic() + time_budget_sec if time_budget_sec is not None else None
@@ -5668,7 +5679,7 @@ class SystemDatabase(ABC):
             max_workers=3, thread_name_prefix="dbos-gc-payload"
         ) as executor:
             futures = [
-                executor.submit(sweep_table, table, deadline)
+                executor.submit(sweep_table, table, boundary, deadline)
                 for table in payload_tables
             ]
             outcomes = [(f.exception(), f) for f in futures]
@@ -5682,7 +5693,7 @@ class SystemDatabase(ABC):
         dbos_logger.debug(
             f"Payload retention swept {deleted[0]} inputs, {deleted[1]} outputs, "
             f"{deleted[2]} steps and {orphans} orphaned pinned rows; pinned "
-            f"{newly_pinned} rows for {len(stragglers)} stragglers, {pinned} held"
+            f"{newly_pinned} rows, {pinned} held"
         )
         return deleted[0], deleted[1], deleted[2], pinned
 
