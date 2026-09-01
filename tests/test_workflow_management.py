@@ -1,7 +1,7 @@
 import threading
 import time
 import uuid
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 import pytest
 import sqlalchemy as sa
@@ -22,7 +22,7 @@ from dbos._error import (
     DBOSWorkflowCancelledError,
 )
 from dbos._schemas.application_database import ApplicationSchema
-from dbos._schemas.system_database import PINNED_RETENTION_TIMESTAMP, SystemSchema
+from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import (
     deserialize_value,
     serialize_exception,
@@ -2371,17 +2371,16 @@ def test_client_delete_workflow(client: DBOSClient, dbos: DBOS) -> None:
     assert len(client.list_workflows(workflow_ids=wfids)) == 0
 
 
-def _payload_counts(dbos: DBOS) -> tuple[int, int]:
+def _payload_counts(dbos: DBOS) -> tuple[int, int, int]:
+    """(inputs, outputs, step checkpoints) currently stored."""
     with dbos._sys_db.engine.begin() as c:
-        return (
-            c.execute(
-                sa.select(sa.func.count()).select_from(SystemSchema.workflow_inputs)
-            ).scalar()
-            or 0,
-            c.execute(
-                sa.select(sa.func.count()).select_from(SystemSchema.workflow_outputs)
-            ).scalar()
-            or 0,
+        return tuple(  # type: ignore[return-value]
+            c.execute(sa.select(sa.func.count()).select_from(table)).scalar() or 0
+            for table in (
+                SystemSchema.workflow_inputs,
+                SystemSchema.workflow_outputs,
+                SystemSchema.operation_outputs,
+            )
         )
 
 
@@ -2405,24 +2404,16 @@ def test_payload_dual_write_and_read_fallback(dbos_dual_write: DBOS) -> None:
             sa.select(ws.c.inputs, ws.c.output).where(ws.c.workflow_uuid == workflow_id)
         ).fetchone()
         split = c.execute(
-            sa.select(wi.c.inputs, wi.c.retention_timestamp).where(
-                wi.c.workflow_uuid == workflow_id
-            )
+            sa.select(wi.c.inputs).where(wi.c.workflow_uuid == workflow_id)
         ).fetchone()
         out = c.execute(
             sa.select(wo.c.output).where(wo.c.workflow_uuid == workflow_id)
         ).fetchone()
-        status_created = c.execute(
-            sa.select(ws.c.created_at).where(ws.c.workflow_uuid == workflow_id)
-        ).scalar()
 
     # Both destinations written, with identical payloads.
     assert legacy is not None and legacy[0] is not None and legacy[1] is not None
     assert split is not None and split[0] == legacy[0]
     assert out is not None and out[0] == legacy[1]
-    # The status row is inserted first, so the payload is never stamped earlier:
-    # equal on Postgres, where now() is fixed per transaction, later on SQLite.
-    assert split[1] >= status_created
 
     # Drop the split rows: a row written before the migration looks exactly like
     # this, and every read path must still resolve it from workflow_status.
@@ -2439,12 +2430,12 @@ def test_payload_dual_write_and_read_fallback(dbos_dual_write: DBOS) -> None:
     assert forked.get_result() == 11
 
 
-def test_step_checkpoints_are_swept_not_cascaded(
+def test_payload_garbage_collection(
     dbos: DBOS, skip_with_sqlite_imprecise_time: None
 ) -> None:
-    """operation_outputs has no foreign key, so retention -- not a cascade --
-    is what removes step checkpoints."""
-    oo = SystemSchema.operation_outputs
+    """Inputs, outputs and step checkpoints are all reclaimed once their status
+    row is gone -- by the sweep, since operation_outputs has no foreign key to
+    cascade from."""
 
     @DBOS.step()
     def step(x: int) -> int:
@@ -2454,47 +2445,14 @@ def test_step_checkpoints_are_swept_not_cascaded(
     def workflow(x: int) -> int:
         return step(x) + step(x)
 
-    for i in range(4):
-        assert workflow(i) == i * 2
-
-    def step_rows() -> int:
-        with dbos._sys_db.engine.begin() as c:
-            return c.execute(sa.select(sa.func.count()).select_from(oo)).scalar() or 0
-
-    assert step_rows() == 8
-
-    # Nothing cascades, so the checkpoints go only because the sweep collects
-    # them -- in the same round, now that the boundary no longer trails a minimum.
-    garbage_collect(
-        dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
-    )
-    assert len(DBOS.list_workflows()) == 1
-    assert step_rows() == 2  # only the surviving workflow's own checkpoints
-
-    # And the survivor still replays from its checkpoints.
-    survivor = DBOS.list_workflows()[0].workflow_id
-    handle: WorkflowHandle[int] = DBOS.retrieve_workflow(survivor)
-    assert handle.get_result() == 6
-    assert len(dbos._sys_db.list_workflow_steps(survivor)) == 2
-
-
-def test_payload_garbage_collection(
-    dbos: DBOS, skip_with_sqlite_imprecise_time: None
-) -> None:
-    """Payloads are reclaimed only once their status row is gone."""
-
-    @DBOS.workflow()
-    def workflow(x: int) -> int:
-        return x
-
     num_workflows = 5
     for i in range(num_workflows):
-        assert workflow(i) == i
-    assert _payload_counts(dbos) == (num_workflows, num_workflows)
+        assert workflow(i) == i * 2
+    assert _payload_counts(dbos) == (num_workflows, num_workflows, num_workflows * 2)
 
     # A boundary in the past reaches nothing.
-    assert dbos._sys_db.garbage_collect_payloads(0)[:2] == (0, 0)
-    assert _payload_counts(dbos) == (num_workflows, num_workflows)
+    assert dbos._sys_db.garbage_collect_payloads(0)[:3] == (0, 0, 0)
+    assert _payload_counts(dbos) == (num_workflows, num_workflows, num_workflows * 2)
 
     # Collect all but the newest. One round does both halves: the status sweep
     # drops the rows and the payload sweep collects what it left behind.
@@ -2502,39 +2460,25 @@ def test_payload_garbage_collection(
         dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
     )
     assert len(DBOS.list_workflows()) == 1
-    assert _payload_counts(dbos) == (1, 1)
+    assert _payload_counts(dbos) == (1, 1, 2)
 
-    # The survivor keeps a readable result and stays forkable.
+    # The survivor keeps a readable result and its checkpoints, and stays forkable.
     workflow_id = DBOS.list_workflows()[0].workflow_id
+    expected = (num_workflows - 1) * 2
     handle: WorkflowHandle[int] = DBOS.retrieve_workflow(workflow_id)
-    assert handle.get_result() == num_workflows - 1
+    assert handle.get_result() == expected
     assert DBOS.list_workflows(workflow_ids=[workflow_id])[0].input is not None
+    assert len(dbos._sys_db.list_workflow_steps(workflow_id)) == 2
     forked: WorkflowHandle[int] = DBOS.fork_workflow(workflow_id, 1)
-    assert forked.get_result() == num_workflows - 1
+    assert forked.get_result() == expected
 
 
-def _pinned_counts(dbos: DBOS) -> tuple[int, int, int]:
-    with dbos._sys_db.engine.begin() as c:
-        return tuple(  # type: ignore[return-value]
-            c.execute(
-                sa.select(sa.func.count())
-                .select_from(table)
-                .where(table.c.retention_timestamp == PINNED_RETENTION_TIMESTAMP)
-            ).scalar()
-            or 0
-            for table in (
-                SystemSchema.workflow_inputs,
-                SystemSchema.workflow_outputs,
-                SystemSchema.operation_outputs,
-            )
-        )
-
-
-def test_straggler_is_pinned_not_deleted(
+def test_payload_gc_spares_a_straggler_then_reclaims_it(
     dbos: DBOS, skip_with_sqlite_imprecise_time: None
 ) -> None:
     """A workflow older than the boundary that still has a status row keeps its
-    payload while everything around it is collected."""
+    payload across repeated rounds -- it may yet recover or be forked -- and is
+    reclaimed once that row is gone."""
     event = threading.Event()
     started = threading.Event()
 
@@ -2545,11 +2489,28 @@ def test_straggler_is_pinned_not_deleted(
     @DBOS.workflow()
     def blocked_workflow() -> int:
         started.set()
+        # Bounded, so a failing assertion below can never park this thread and
+        # hang shutdown on the join.
         event.wait(timeout=60)
         return 0
 
     handle = DBOS.start_workflow(blocked_workflow)
     assert started.wait(timeout=30)
+
+    def blocked_rows() -> int:
+        with dbos._sys_db.engine.begin() as c:
+            return (
+                c.execute(
+                    sa.select(sa.func.count())
+                    .select_from(SystemSchema.workflow_inputs)
+                    .where(
+                        SystemSchema.workflow_inputs.c.workflow_uuid
+                        == handle.workflow_id
+                    )
+                ).scalar()
+                or 0
+            )
+
     try:
         for i in range(4):
             assert workflow(i) == i
@@ -2557,91 +2518,40 @@ def test_straggler_is_pinned_not_deleted(
         garbage_collect(
             dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
         )
-        # Pinned, not merely spared: the sweep passed over it because its
-        # timestamp was lifted, and a second round changes nothing.
-        assert _pinned_counts(dbos)[0] >= 1
-        before = _payload_counts(dbos)
-        garbage_collect(
-            dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
-        )
-        assert _payload_counts(dbos) == before
+        # Its inputs survive even though its own output row does not exist yet.
         assert (
             dbos._sys_db.list_workflows(
                 workflow_ids=[handle.workflow_id], load_input=True
             )[0].input
             is not None
         )
+        # A second round neither collects it nor disturbs what is left.
+        before = _payload_counts(dbos)
+        garbage_collect(
+            dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
+        )
+        assert _payload_counts(dbos) == before
+        assert blocked_rows() == 1
     finally:
         event.set()
     assert handle.get_result() == 0
 
-
-def test_pin_is_idempotent(dbos: DBOS) -> None:
-    """A second round issues no writes for an already-pinned straggler. This is
-    what stops a long-running workflow's step rows being rewritten every round."""
-
-    @DBOS.workflow()
-    def workflow(x: int) -> int:
-        return x
-
-    assert workflow(1) == 1
-    target = int(time.time() * 1000) + 60_000
-    rewritten: List[int] = []
-
-    def record(
-        conn: Any, cursor: Any, statement: str, *args: Any, **kwargs: Any
-    ) -> None:
-        # The pin is the only write that sets a retention timestamp. Count rows
-        # rewritten, not statements issued: the guard makes the second round's
-        # UPDATE match nothing, which is the property that matters.
-        if statement.lstrip().upper().startswith("UPDATE") and (
-            "retention_timestamp" in statement
-        ):
-            rewritten.append(cursor.rowcount)
-
-    sa_event.listen(dbos._sys_db.engine, "after_cursor_execute", record)
-    try:
-        dbos._sys_db.garbage_collect_payloads(target)
-        assert sum(rewritten) > 0, "the straggler must be pinned on the first round"
-        rewritten.clear()
-        dbos._sys_db.garbage_collect_payloads(target)
-        assert sum(rewritten) == 0, "an already-pinned straggler must not be rewritten"
-    finally:
-        sa_event.remove(dbos._sys_db.engine, "after_cursor_execute", record)
-
-
-def test_pinned_rows_collected_after_workflow_ends(dbos: DBOS) -> None:
-    """A pinned row sits above every boundary, so the range sweep can never reach
-    it. Once its status row is gone it must be collected explicitly."""
-
-    @DBOS.workflow()
-    def workflow(x: int) -> int:
-        return x
-
-    assert workflow(1) == 1
-    wfid = DBOS.list_workflows()[0].workflow_id
-    target = int(time.time() * 1000) + 60_000
-
-    # Pinned while still referenced, so the sweep leaves it alone.
-    dbos._sys_db.garbage_collect_payloads(target)
-    assert _pinned_counts(dbos)[0] == 1
-    assert _payload_counts(dbos) == (1, 1)
-
+    # Once the status row is gone the payload must go with it. A spared payload
+    # sits above every boundary, so a later round has to reach it some other way.
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.delete(SystemSchema.workflow_status).where(
-                SystemSchema.workflow_status.c.workflow_uuid == wfid
+                SystemSchema.workflow_status.c.workflow_uuid == handle.workflow_id
             )
         )
-    dbos._sys_db.garbage_collect_payloads(target)
-    assert _payload_counts(dbos) == (0, 0)
-    assert _pinned_counts(dbos) == (0, 0, 0)
+    dbos._sys_db.garbage_collect_payloads(int(time.time() * 1000) + 60_000)
+    assert blocked_rows() == 0
 
 
 def test_straggler_overflow_sweeps_from_the_oldest(dbos: DBOS) -> None:
-    """Past the bound nothing is pinned, but the oldest straggler is the minimum
-    created_at over every status row, so a payload below it cannot have a
-    surviving status row. The round still makes progress."""
+    """Past the bound nothing can be spared individually, but the oldest such
+    workflow is the minimum created_at over every status row, so a payload below
+    it cannot have a surviving status row. The round still makes progress."""
 
     @DBOS.workflow()
     def workflow(x: int) -> int:
@@ -2649,7 +2559,7 @@ def test_straggler_overflow_sweeps_from_the_oldest(dbos: DBOS) -> None:
 
     for i in range(3):
         assert workflow(i) == i
-    assert _payload_counts(dbos) == (3, 3)
+    assert _payload_counts(dbos) == (3, 3, 0)
 
     ws, wi, wo = (
         SystemSchema.workflow_status,
@@ -2670,13 +2580,12 @@ def test_straggler_overflow_sweeps_from_the_oldest(dbos: DBOS) -> None:
                 .values(retention_timestamp=oldest - 1)
             )
 
-    # Two survivors, one over the bound, so nothing can be pinned.
+    # Two workflows remain below the boundary, one over the bound of 1.
     dbos._sys_db.garbage_collect_payloads(
         int(time.time() * 1000) + 60_000, max_stragglers=1
     )
-    assert _pinned_counts(dbos) == (0, 0, 0)
     # The orphan below the boundary is gone; both live workflows keep theirs.
-    assert _payload_counts(dbos) == (2, 2)
+    assert _payload_counts(dbos) == (2, 2, 0)
     for wfid in ids[1:]:
         assert (
             dbos._sys_db.list_workflows(workflow_ids=[wfid], load_input=True)[0].input
@@ -2684,9 +2593,10 @@ def test_straggler_overflow_sweeps_from_the_oldest(dbos: DBOS) -> None:
         )
 
 
-def test_partial_pin_failure_skips_the_sweep(dbos: DBOS) -> None:
-    """The hazard the single-transaction pin exists to prevent: a pin that only
-    half-lands must never be followed by a sweep."""
+def test_a_failed_round_deletes_nothing(dbos: DBOS) -> None:
+    """A round that fails partway must not delete a live workflow's payload:
+    every workflow here is below the boundary, so an unguarded sweep would take
+    all of them."""
 
     @DBOS.workflow()
     def workflow(x: int) -> int:
@@ -2695,9 +2605,8 @@ def test_partial_pin_failure_skips_the_sweep(dbos: DBOS) -> None:
     for i in range(3):
         assert workflow(i) == i
     before = _payload_counts(dbos)
-    target = int(time.time() * 1000) + 60_000
 
-    def fail_last_pin(
+    def break_step_table_write(
         conn: Any,
         cursor: Any,
         statement: str,
@@ -2705,31 +2614,39 @@ def test_partial_pin_failure_skips_the_sweep(dbos: DBOS) -> None:
         context: Any,
         executemany: bool,
     ) -> Any:
-        # Break the third of the three pin statements at the database itself, so
-        # the failure unwinds the way a real one would.
+        # Fail at the database itself, so the round unwinds the way a real
+        # failure would rather than the way a patched method would.
         if statement.lstrip().upper().startswith("UPDATE") and (
             "retention_timestamp" in statement and "operation_outputs" in statement
         ):
-            statement += " AND (SELECT 1 FROM pin_failure_injection) = 1"
+            statement += " AND (SELECT 1 FROM retention_failure_injection) = 1"
         return statement, parameters
 
     sa_event.listen(
-        dbos._sys_db.engine, "before_cursor_execute", fail_last_pin, retval=True
+        dbos._sys_db.engine,
+        "before_cursor_execute",
+        break_step_table_write,
+        retval=True,
     )
     try:
-        with pytest.raises(Exception, match="pin_failure_injection"):
-            dbos._sys_db.garbage_collect_payloads(target)
+        with pytest.raises(Exception, match="retention_failure_injection"):
+            dbos._sys_db.garbage_collect_payloads(int(time.time() * 1000) + 60_000)
     finally:
-        sa_event.remove(dbos._sys_db.engine, "before_cursor_execute", fail_last_pin)
+        sa_event.remove(
+            dbos._sys_db.engine, "before_cursor_execute", break_step_table_write
+        )
 
-    # Nothing swept, and the two pins that did land were rolled back with it.
     assert _payload_counts(dbos) == before
-    assert _pinned_counts(dbos) == (0, 0, 0)
+    for wfid in [w.workflow_id for w in DBOS.list_workflows()]:
+        assert (
+            dbos._sys_db.list_workflows(workflow_ids=[wfid], load_input=True)[0].input
+            is not None
+        )
 
 
 def test_peer_application_payloads_survive(dbos: DBOS) -> None:
-    """Only one application runs GC, but the boundary is global. A peer's rows
-    must be pinned by our straggler pass, not deleted by our sweep."""
+    """Status GC is per-application but the payload boundary is global, so a peer
+    application's payloads must survive a sweep this application runs."""
 
     @DBOS.workflow()
     def workflow(x: int) -> int:
@@ -2839,47 +2756,3 @@ def test_payload_gc_never_orphans_a_status_row(
     for h in enqueued:
         assert h.get_result() >= 100
     assert _orphaned_status_rows(dbos) == (0, 0)
-
-
-def test_payload_gc_spares_running_workflow(
-    dbos: DBOS, skip_with_sqlite_imprecise_time: None
-) -> None:
-    """A running workflow keeps its inputs: it may still recover or be forked."""
-    event = threading.Event()
-    started = threading.Event()
-
-    @DBOS.workflow()
-    def workflow(x: int) -> int:
-        return x
-
-    @DBOS.workflow()
-    def blocked_workflow() -> int:
-        started.set()
-        # Bounded, so a failing assertion below can never park this thread and
-        # hang shutdown on the join.
-        event.wait(timeout=60)
-        return 0
-
-    handle = DBOS.start_workflow(blocked_workflow)
-    assert started.wait(timeout=30)
-    try:
-        for i in range(3):
-            assert workflow(i) == i
-
-        # The blocked workflow is still below the boundary when the sweep runs,
-        # so it is pinned rather than collected.
-        garbage_collect(
-            dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
-        )
-        # Its inputs survive even though its own output row does not exist yet.
-        inputs, outputs = _payload_counts(dbos)
-        assert inputs >= 1
-        assert (
-            dbos._sys_db.list_workflows(
-                workflow_ids=[handle.workflow_id], load_input=True
-            )[0].input
-            is not None
-        )
-    finally:
-        event.set()
-    assert handle.get_result() == 0
