@@ -1912,11 +1912,13 @@ def test_double_decoration(dbos: DBOS) -> None:
 
 
 def test_duplicate_registration(
-    dbos: DBOS, caplog: pytest.LogCaptureFixture, config: DBOSConfig
+    dbos: DBOS,
+    caplog: pytest.LogCaptureFixture,
+    config: DBOSConfig,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original_propagate = logging.getLogger("dbos").propagate
     caplog.set_level(logging.WARNING, "dbos")
-    logging.getLogger("dbos").propagate = True
+    monkeypatch.setattr(logging.getLogger("dbos"), "propagate", True)
 
     @DBOS.transaction()
     def my_transaction() -> None:
@@ -1962,9 +1964,6 @@ def test_duplicate_registration(
     DBOS.destroy()
     DBOS(config=config)
     DBOS.launch()
-
-    # Reset logging
-    logging.getLogger("dbos").propagate = original_propagate
 
 
 def test_app_version(

@@ -1,7 +1,11 @@
+import importlib
 import logging
+import os
+import sys
 import threading
 import time
 import uuid
+from types import ModuleType
 from typing import Callable, Optional
 
 import pytest
@@ -12,7 +16,9 @@ from dbos import DBOS, DBOSConfiguredInstance, Queue, SetWorkflowID
 
 # Private API used because this is a test
 from dbos._context import DBOSContextEnsure, assert_current_dbos_context
+from dbos._dbos import _get_or_create_dbos_registry
 from dbos._dbos_config import DBOSConfig
+from dbos._error import DBOSException
 from tests.conftest import queue_entries_are_cleaned_up, set_workflow_status
 
 
@@ -1006,3 +1012,93 @@ def test_class_with_only_steps(dbos: DBOS) -> None:
     steps = DBOS.list_workflow_steps(handle.workflow_id)
     assert len(steps) == 2
     assert steps[1]["output"] == steps[1]["output"] == input * 2
+
+
+def _fresh_import(module_name: str) -> ModuleType:
+    """Import a module, re-running its decorators even if it is already cached."""
+    sys.modules.pop(module_name, None)
+    return importlib.import_module(module_name)
+
+
+def test_duplicate_workflow_name_across_modules(dbos: DBOS) -> None:
+    """A registered name is the durable identity recovery resolves, so two
+    genuinely different functions cannot both claim one."""
+    # Imported fresh so the decorators run against this test's registry
+    # regardless of what an earlier test already pulled into sys.modules.
+    _fresh_import("tests.dupname_workflows1")
+
+    with pytest.raises(DBOSException) as exc_info:
+        _fresh_import("tests.dupname_workflowsa")
+
+    assert "duplicated_workflow_name" in str(exc_info.value)
+    assert "dupname_workflows1.py" in str(exc_info.value)
+    assert "dupname_workflowsa.py" in str(exc_info.value)
+
+    # The first registration is the one that survives -- the guarantee the durable
+    # name depends on, and the reason the raise precedes the registry writes.
+    registered = _get_or_create_dbos_registry().workflow_info_map[
+        "duplicated_workflow_name"
+    ]
+    assert getattr(registered, "__wrapped__")(1) == "one:1"
+
+
+def test_same_file_imported_under_two_names_warns(
+    dbos: DBOS, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One file reached under two module names is a re-registration, not a
+    collision: the function objects differ but the code came from one place."""
+    caplog.set_level(logging.WARNING, "dbos")
+    monkeypatch.setattr(logging.getLogger("dbos"), "propagate", True)
+    try:
+        first = _fresh_import("tests.dupname_workflows1")
+        # The same file, reached again as a top-level module: a second, distinct
+        # sys.modules entry built from one source file.
+        monkeypatch.syspath_prepend(os.path.dirname(__file__))
+        second = _fresh_import("dupname_workflows1")
+
+        assert second is not first
+        # Identity would wrongly reject this; the shared code origin is what makes
+        # it a re-registration.
+        assert second.duplicated_workflow_name is not first.duplicated_workflow_name
+        assert (
+            "Duplicate registration of function 'duplicated_workflow_name'"
+            in caplog.text
+        )
+    finally:
+        sys.modules.pop("dupname_workflows1", None)
+
+
+def test_module_reload_warns(
+    dbos: DBOS, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reloading a module re-runs its decorators against the same source. That is
+    a re-registration and must keep warning rather than raise."""
+    caplog.set_level(logging.WARNING, "dbos")
+    monkeypatch.setattr(logging.getLogger("dbos"), "propagate", True)
+
+    module = _fresh_import("tests.dupname_workflows1")
+    importlib.reload(module)
+
+    assert (
+        "Duplicate registration of function 'duplicated_workflow_name'" in caplog.text
+    )
+
+
+def test_duplicate_step_name_warns(
+    dbos: DBOS, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only workflows are checked. A step's registered function is a library-local
+    closure, and the sync and async ones live at different lines of _core.py, so
+    comparing their origins would report two DBOS internals as two user functions."""
+    caplog.set_level(logging.WARNING, "dbos")
+    monkeypatch.setattr(logging.getLogger("dbos"), "propagate", True)
+
+    @DBOS.step(name="duplicated_step_name")
+    def step_one() -> str:
+        return "one"
+
+    @DBOS.step(name="duplicated_step_name")
+    async def step_two() -> str:
+        return "two"
+
+    assert "Duplicate registration of function 'duplicated_step_name'" in caplog.text
