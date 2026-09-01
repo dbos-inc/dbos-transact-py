@@ -5673,17 +5673,16 @@ class SystemDatabase(ABC):
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
         if rows_threshold is not None:
             with self.engine.begin() as c:
-                # Get the completed_at timestamp of the rows_threshold newest completed row
+                # Get the created_at timestamp of the rows_threshold newest row
                 result = c.execute(
-                    sa.select(SystemSchema.workflow_status.c.completed_at)
+                    sa.select(SystemSchema.workflow_status.c.created_at)
                     .where(
-                        SystemSchema.workflow_status.c.completed_at.isnot(None),
                         self._name_filter(
                             SystemSchema.workflow_status.c.application_name,
                             self.app_name,
                         ),
                     )
-                    .order_by(SystemSchema.workflow_status.c.completed_at.desc())
+                    .order_by(SystemSchema.workflow_status.c.created_at.desc())
                     .limit(1)
                     .offset(rows_threshold - 1)
                 ).fetchone()
@@ -5700,11 +5699,18 @@ class SystemDatabase(ABC):
         if cutoff_epoch_timestamp_ms is None:
             return None
 
-        # completed_at is set on every terminal transition and cleared on resume, so one
-        # predicate covers eligibility: in-flight rows hold NULL and never compare true.
+        # Keyed on created_at, the same key payload retention uses: keying the two
+        # sweeps differently makes every workflow in flight at the cutoff a straggler.
         gc_filter = sa.and_(
-            SystemSchema.workflow_status.c.completed_at
+            SystemSchema.workflow_status.c.created_at
             < sa.literal(cutoff_epoch_timestamp_ms, sa.BigInteger),
+            ~SystemSchema.workflow_status.c.status.in_(
+                [
+                    WorkflowStatusString.PENDING.value,
+                    WorkflowStatusString.ENQUEUED.value,
+                    WorkflowStatusString.DELAYED.value,
+                ]
+            ),
             # Unclaimed rows included: excluding them would leak pre-upgrade rows forever.
             self._name_filter(
                 SystemSchema.workflow_status.c.application_name, self.app_name
@@ -5719,33 +5725,37 @@ class SystemDatabase(ABC):
 
             self._retry_on_serialization_error(delete_all)
         else:
-            # Batch-delete by advancing a completed_at watermark, one committed transaction per batch
+            # Batch-delete by advancing a created_at watermark, one committed transaction per batch
             def delete_batch(watermark: int) -> Optional[int]:
                 """Delete one batch, returning the watermark to resume from, or None when done."""
                 with self.engine.begin() as c:
-                    # Find the completed_at of the batch_size-th oldest eligible row above the watermark
+                    # Find the created_at of the batch_size-th oldest eligible row above the watermark
                     step: Optional[int] = c.execute(
-                        sa.select(SystemSchema.workflow_status.c.completed_at)
+                        sa.select(SystemSchema.workflow_status.c.created_at)
                         .where(
                             gc_filter,
-                            SystemSchema.workflow_status.c.completed_at > watermark,
+                            SystemSchema.workflow_status.c.created_at > watermark,
                         )
-                        .order_by(SystemSchema.workflow_status.c.completed_at)
+                        .order_by(SystemSchema.workflow_status.c.created_at)
                         .limit(1)
                         .offset(batch_size - 1)
                     ).scalar()
-                    # A row that terminalizes mid-pass takes completed_at > cutoff, so it can
-                    # never fall below the watermark: the tail above it is all that remains.
-                    bounds: List[sa.ColumnElement[bool]] = [
-                        gc_filter,
-                        SystemSchema.workflow_status.c.completed_at > watermark,
-                    ]
-                    if step is not None:
-                        # completed_at ties may push the batch slightly over batch_size
-                        bounds.append(
-                            SystemSchema.workflow_status.c.completed_at <= step
+                    if step is None:
+                        # A workflow that terminalizes mid-pass becomes eligible at its
+                        # own created_at, which can sit below the watermark: the final
+                        # batch takes every remaining eligible row, wherever it falls.
+                        c.execute(
+                            sa.delete(SystemSchema.workflow_status).where(gc_filter)
                         )
-                    c.execute(sa.delete(SystemSchema.workflow_status).where(*bounds))
+                        return None
+                    # created_at ties may push the batch slightly over batch_size
+                    c.execute(
+                        sa.delete(SystemSchema.workflow_status).where(
+                            gc_filter,
+                            SystemSchema.workflow_status.c.created_at > watermark,
+                            SystemSchema.workflow_status.c.created_at <= step,
+                        )
+                    )
                     return step
 
             watermark = 0
