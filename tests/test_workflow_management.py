@@ -2451,7 +2451,7 @@ def test_payload_garbage_collection(
     assert _payload_counts(dbos) == (num_workflows, num_workflows, num_workflows * 2)
 
     # A boundary in the past reaches nothing.
-    assert dbos._sys_db.garbage_collect_payloads(0)[:3] == (0, 0, 0)
+    assert dbos._sys_db.garbage_collect_payloads(0) == (0, 0, 0)
     assert _payload_counts(dbos) == (num_workflows, num_workflows, num_workflows * 2)
 
     # Collect all but the newest. One round does both halves: the status sweep

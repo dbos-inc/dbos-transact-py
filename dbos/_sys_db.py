@@ -5522,10 +5522,10 @@ class SystemDatabase(ABC):
         batch_size: int = 10000,
         time_budget_sec: Optional[float] = None,
         max_stragglers: int = 10_000,
-    ) -> tuple[int, int, int, int]:
-        """Delete payload and step rows below the boundary, returning
-        (inputs, outputs, steps, pinned). Must run after the status sweep: it
-        collects what that sweep leaves behind."""
+    ) -> tuple[int, int, int]:
+        """Delete payload and step rows below the boundary, returning the count
+        removed from each table. Must run after the status sweep: it collects
+        what that sweep leaves behind."""
         if batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
         payload_tables = (
@@ -5533,24 +5533,6 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_outputs,
             SystemSchema.operation_outputs,
         )
-
-        def count_pinned_rows() -> int:
-            """Rows held above the boundary by a straggler: the health signal."""
-            total = 0
-            with self.engine.begin() as c:
-                for table in payload_tables:
-                    total += (
-                        c.execute(
-                            sa.select(sa.func.count())
-                            .select_from(table)
-                            .where(
-                                table.c.retention_timestamp
-                                == PINNED_RETENTION_TIMESTAMP
-                            )
-                        ).scalar()
-                        or 0
-                    )
-            return total
 
         def enumerate_stragglers() -> tuple[Optional[List[str]], Optional[int]]:
             """Workflows still below the boundary once the status sweep has run,
@@ -5689,13 +5671,12 @@ class SystemDatabase(ABC):
         deleted = [f.result() for _, f in outcomes]
 
         orphans = collect_pinned_orphans()
-        pinned = count_pinned_rows()
         dbos_logger.debug(
             f"Payload retention swept {deleted[0]} inputs, {deleted[1]} outputs, "
-            f"{deleted[2]} steps and {orphans} orphaned pinned rows; pinned "
-            f"{newly_pinned} rows, {pinned} held"
+            f"{deleted[2]} steps and {orphans} rows spared by a since-departed "
+            f"workflow; spared {newly_pinned} rows this round"
         )
-        return deleted[0], deleted[1], deleted[2], pinned
+        return deleted[0], deleted[1], deleted[2]
 
     def garbage_collect(
         self,
