@@ -190,7 +190,7 @@ class SystemSchema:
         Column("application_name", Text, nullable=True),
         # Retention key. Server-clock, unlike completed_at_epoch_ms, whose client
         # skew would let the cutoff collect a live workflow's steps.
-        Column("retention_timestamp", BigInteger, nullable=True),
+        Column("retention_timestamp", BigInteger, nullable=False),
         PrimaryKeyConstraint("workflow_uuid", "function_id"),
         Index("idx_operation_outputs_retention", "retention_timestamp"),
         Index(

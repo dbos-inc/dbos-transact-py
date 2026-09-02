@@ -1771,7 +1771,7 @@ CREATE TABLE operation_outputs_new (
     completed_at_epoch_ms INTEGER,
     serialization TEXT,
     application_name TEXT DEFAULT NULL,
-    retention_timestamp INTEGER DEFAULT {get_sqlite_timestamp_expr()},
+    retention_timestamp INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
     PRIMARY KEY (workflow_uuid, function_id)
 );
 INSERT INTO operation_outputs_new (workflow_uuid, function_id, function_name, output,
