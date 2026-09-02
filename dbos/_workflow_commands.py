@@ -93,20 +93,27 @@ def garbage_collect(
 ) -> None:
     if cutoff_epoch_timestamp_ms is None and rows_threshold is None:
         return
-    cutoff = dbos._sys_db.garbage_collect(
-        cutoff_epoch_timestamp_ms=cutoff_epoch_timestamp_ms,
-        rows_threshold=rows_threshold,
-        batch_size=batch_size,
-    )
-    if cutoff is None:
-        return
-    # The application database is deprecated: only pay for its cleanup when one exists.
-    if dbos._app_db is not None:
-        retained_ids = dbos._sys_db.list_retained_workflow_ids(cutoff)
-        dbos._app_db.garbage_collect(cutoff, retained_ids, batch_size=batch_size)
-    # Strictly after the status sweep, which is what makes the straggler set small:
-    # everything still older than the cutoff once that sweep has run.
-    dbos._sys_db.garbage_collect_payloads(cutoff, batch_size=batch_size)
+    with dbos._sys_db.retention_lock() as acquired:
+        if not acquired:
+            dbos.logger.warning(
+                "Skipping retention: another round is already running against this "
+                "system database."
+            )
+            return
+        cutoff = dbos._sys_db.garbage_collect(
+            cutoff_epoch_timestamp_ms=cutoff_epoch_timestamp_ms,
+            rows_threshold=rows_threshold,
+            batch_size=batch_size,
+        )
+        if cutoff is None:
+            return
+        # The application database is deprecated: only pay for its cleanup when one exists.
+        if dbos._app_db is not None:
+            retained_ids = dbos._sys_db.list_retained_workflow_ids(cutoff)
+            dbos._app_db.garbage_collect(cutoff, retained_ids, batch_size=batch_size)
+        # Strictly after the status sweep, which is what makes the straggler set small:
+        # everything still older than the cutoff once that sweep has run.
+        dbos._sys_db.garbage_collect_payloads(cutoff, batch_size=batch_size)
 
 
 def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:

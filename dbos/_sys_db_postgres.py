@@ -1,5 +1,7 @@
+import hashlib
 import time
-from typing import Any, Dict, List, Optional, cast
+from contextlib import contextmanager
+from typing import Any, Dict, Generator, List, Optional, cast
 
 import psycopg
 import sqlalchemy as sa
@@ -118,6 +120,40 @@ class PostgresSystemDatabase(SystemDatabase):
             self.engine, self.schema, self.use_listen_notify
         )
         self._assert_migration_version(current_version, latest_version)
+
+    @contextmanager
+    def retention_lock(self) -> Generator[bool, None, None]:
+        """A session-level advisory lock, so only one retention round runs against
+        this schema at a time. Session-scoped, so a crashed round releases it."""
+        assert self.schema
+        # Separate locks for separate schemas
+        key = int.from_bytes(
+            hashlib.blake2b(
+                f"dbos.retention.{self.schema}".encode(), digest_size=8
+            ).digest(),
+            "big",
+            signed=True,
+        )
+        # The lock is session-scoped, so the round holds this connection until it
+        # ends; autocommit keeps the session clear of idle-in-transaction timeouts.
+        with self.engine.connect().execution_options(
+            isolation_level="AUTOCOMMIT"
+        ) as conn:
+            # CockroachDB stubs this out and always returns true, so it collects
+            # unprotected rather than not at all.
+            acquired = bool(
+                conn.execute(
+                    sa.text("SELECT pg_try_advisory_lock(:key)"), {"key": key}
+                ).scalar()
+            )
+            try:
+                yield acquired
+            finally:
+                if acquired:
+                    # Explicit, since closing only returns the session to the pool.
+                    conn.execute(
+                        sa.text("SELECT pg_advisory_unlock(:key)"), {"key": key}
+                    )
 
     def _vacuum_tables(self, tables: List[str]) -> None:
         assert self.schema

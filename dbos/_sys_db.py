@@ -5686,6 +5686,12 @@ class SystemDatabase(ABC):
         )
         return deleted[0], deleted[1], deleted[2]
 
+    @contextmanager
+    def retention_lock(self) -> Generator[bool, None, None]:
+        """Hold a database-wide lock for one retention round, yielding whether it
+        was taken. Engines without advisory locks always yield True."""
+        yield True
+
     def _vacuum_tables(self, tables: List[str]) -> None:
         """VACUUM the tables the sweep just dirtied. No-op where there is no
         autovacuum to outrun."""
