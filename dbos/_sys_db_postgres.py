@@ -137,9 +137,9 @@ class PostgresSystemDatabase(SystemDatabase):
                     )
                 except Exception as e:
                     dbos_logger.warning(
-                        f"Payload retention could not vacuum {table}: {e}. Grant the "
-                        "application role MAINTAIN (Postgres 17 or later), run as the "
-                        "table owner, or tune autovacuum on this table."
+                        f"Payload retention could not vacuum {table}: {e}. Run as the "
+                        "table owner, or on Postgres 17 and later grant the role table "
+                        "privileges; otherwise tune autovacuum on this table."
                     )
 
     def _cleanup_connections(self) -> None:
