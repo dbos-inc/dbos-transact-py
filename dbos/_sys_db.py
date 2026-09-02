@@ -1378,12 +1378,11 @@ class SystemDatabase(ABC):
                     .values(
                         workflow_uuid=updated[0],
                         inputs=inputs,
-                        serialization=serialization,
                         retention_timestamp=self._now_ms_sql(),
                     )
                     .on_conflict_do_update(
                         index_elements=["workflow_uuid"],
-                        set_={"inputs": inputs, "serialization": serialization},
+                        set_={"inputs": inputs},
                     )
                 )
                 return {
