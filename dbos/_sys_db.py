@@ -5631,6 +5631,10 @@ class SystemDatabase(ABC):
                     ).rowcount
             return total
 
+        # To optimize performance, vacuum payload tables both before and after garbage-collecting them
+        table_names = [table.name for table in payload_tables]
+        self._vacuum_tables(table_names)
+
         stragglers, oldest = enumerate_stragglers()
         cutoff, marked_rows = target, 0
         if stragglers is None:
@@ -5660,12 +5664,17 @@ class SystemDatabase(ABC):
         deleted = [f.result() for _, f in outcomes]
 
         deleted_stragglers = garbage_collect_stragglers()
+        self._vacuum_tables(table_names)
         dbos_logger.debug(
             f"Payload retention deleted {deleted[0]} inputs, {deleted[1]} outputs, "
             f"{deleted[2]} steps, and {deleted_stragglers} rows whose straggler has "
             f"since departed; marked {marked_rows} rows to keep"
         )
         return deleted[0], deleted[1], deleted[2]
+
+    def _vacuum_tables(self, tables: List[str]) -> None:
+        """VACUUM the tables the sweep just dirtied. No-op where there is no
+        autovacuum to outrun."""
 
     def garbage_collect(
         self,
@@ -5739,9 +5748,6 @@ class SystemDatabase(ABC):
                     .offset(batch_size - 1)
                 ).scalar()
                 if step is None:
-                    # A workflow that terminalizes mid-pass becomes eligible at its
-                    # own created_at, which can sit below the watermark: the final
-                    # batch takes every remaining eligible row, wherever it falls.
                     c.execute(sa.delete(SystemSchema.workflow_status).where(gc_filter))
                     return None
                 # created_at ties may push the batch slightly over batch_size

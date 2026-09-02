@@ -1,5 +1,5 @@
 import time
-from typing import Any, Dict, Optional, cast
+from typing import Any, Dict, List, Optional, cast
 
 import psycopg
 import sqlalchemy as sa
@@ -118,6 +118,26 @@ class PostgresSystemDatabase(SystemDatabase):
             self.engine, self.schema, self.use_listen_notify
         )
         self._assert_migration_version(current_version, latest_version)
+
+    def _vacuum_tables(self, tables: List[str]) -> None:
+        assert self.schema
+        try:
+            with self.engine.connect().execution_options(
+                isolation_level="AUTOCOMMIT"
+            ) as conn:
+                for table in tables:
+                    conn.execute(
+                        sa.text(
+                            "VACUUM (INDEX_CLEANUP ON, TRUNCATE OFF) "
+                            f"{quote_identifier(self.schema)}.{quote_identifier(table)}"
+                        )
+                    )
+        except Exception as e:
+            dbos_logger.warning(
+                f"Payload retention could not vacuum {', '.join(tables)}: {e}. "
+                "Grant the application role MAINTAIN (Postgres 17 or later), run as "
+                "the table owner, or tune autovacuum on these tables."
+            )
 
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""

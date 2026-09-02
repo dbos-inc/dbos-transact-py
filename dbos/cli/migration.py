@@ -78,11 +78,13 @@ def migrate_dbos_databases(
             app_db.destroy()
 
 
-def get_dbos_schema_permissions_sql(schema: str, role_name: str) -> List[str]:
+def get_dbos_schema_permissions_sql(
+    schema: str, role_name: str, server_major_version: Optional[int] = None
+) -> List[str]:
     """The statements granting permissions on all entities in the system schema to a role."""
     quoted_schema = quote_identifier(schema)
     quoted_role = quote_identifier(role_name)
-    return [
+    statements = [
         # Grant usage on the system schema
         f"GRANT USAGE ON SCHEMA {quoted_schema} TO {quoted_role}",
         # Grant all privileges on all existing tables in the system schema (includes views)
@@ -96,6 +98,16 @@ def get_dbos_schema_permissions_sql(schema: str, role_name: str) -> List[str]:
         f"ALTER DEFAULT PRIVILEGES IN SCHEMA {quoted_schema} GRANT ALL ON SEQUENCES TO {quoted_role}",
         f"ALTER DEFAULT PRIVILEGES IN SCHEMA {quoted_schema} GRANT EXECUTE ON FUNCTIONS TO {quoted_role}",
     ]
+    # MAINTAIN lets a role VACUUM tables it does not own, which payload retention
+    # needs. Postgres 17 and later only: earlier servers reject the privilege name.
+    if server_major_version is not None and server_major_version >= 17:
+        statements.append(
+            f"GRANT MAINTAIN ON ALL TABLES IN SCHEMA {quoted_schema} TO {quoted_role}"
+        )
+        statements.append(
+            f"ALTER DEFAULT PRIVILEGES IN SCHEMA {quoted_schema} GRANT MAINTAIN ON TABLES TO {quoted_role}"
+        )
+    return statements
 
 
 def grant_dbos_schema_permissions(
@@ -114,7 +126,9 @@ def grant_dbos_schema_permissions(
         )
         with engine.connect() as connection:
             connection.execution_options(isolation_level="AUTOCOMMIT")
-            for sql in get_dbos_schema_permissions_sql(schema, role_name):
+            version_info = connection.dialect.server_version_info
+            major = version_info[0] if version_info else None
+            for sql in get_dbos_schema_permissions_sql(schema, role_name, major):
                 click.echo(sql)
                 connection.execute(sa.text(sql))
     except Exception as e:
