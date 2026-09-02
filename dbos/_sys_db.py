@@ -8,7 +8,6 @@ import sys
 import threading
 import time
 from abc import ABC, abstractmethod
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -5661,19 +5660,35 @@ class SystemDatabase(ABC):
                 functools.partial(mark_stragglers, stragglers)
             )
 
-        # Garbage-collect the three payload tables concurrently
-        with ThreadPoolExecutor(
-            max_workers=3, thread_name_prefix="dbos-gc-payload"
-        ) as executor:
-            futures = [
-                executor.submit(garbage_collect_table, table, cutoff)
-                for table in payload_tables
-            ]
-            outcomes = [(f.exception(), f) for f in futures]
-        for error, _ in outcomes:
-            if error is not None:
-                raise error
-        deleted = [f.result() for _, f in outcomes]
+        # Garbage-collect the three payload tables concurrently.
+        deleted = [0] * len(payload_tables)
+        errors: List[Optional[BaseException]] = [None] * len(payload_tables)
+
+        def sweep(i: int, table: sa.Table) -> None:
+            try:
+                deleted[i] = garbage_collect_table(table, cutoff)
+            except BaseException as e:
+                errors[i] = e
+
+        threads = [
+            threading.Thread(
+                target=sweep,
+                args=(i, table),
+                daemon=True,
+                name=f"dbos-gc-payload-{table.name}",
+            )
+            for i, table in enumerate(payload_tables)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        failures = [e for e in errors if e is not None]
+        # Only the first can be raised, so the rest would otherwise be lost.
+        for extra in failures[1:]:
+            dbos_logger.warning(f"Payload retention sweep also failed: {extra}")
+        if failures:
+            raise failures[0]
 
         deleted_stragglers = self._retry_on_serialization_error(
             garbage_collect_stragglers
