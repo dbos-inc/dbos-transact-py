@@ -123,11 +123,20 @@ class PostgresSystemDatabase(SystemDatabase):
         assert self.schema
         if self._is_cockroach:
             return
+
+        notices: List[str] = []
         with self.engine.connect().execution_options(
             isolation_level="AUTOCOMMIT"
         ) as conn:
+            # A refused or stalled VACUUM does not raise, it says so in a notice;
+            # a successful one is silent, so anything here is worth surfacing.
+            raw = conn.connection.dbapi_connection
+            add_handler = getattr(raw, "add_notice_handler", None)
+            if add_handler is not None:
+                add_handler(lambda diag: notices.append(diag.message_primary or ""))
             for table in tables:
                 # Per table, so one refusal does not skip the rest.
+                del notices[:]
                 try:
                     conn.execute(
                         sa.text(
@@ -137,9 +146,12 @@ class PostgresSystemDatabase(SystemDatabase):
                     )
                 except Exception as e:
                     dbos_logger.warning(
-                        f"Payload retention could not vacuum {table}: {e}. Run as the "
-                        "table owner, or on Postgres 17 and later grant the role table "
-                        "privileges; otherwise tune autovacuum on this table."
+                        f"Payload retention could not vacuum {table}: {e}"
+                    )
+                    continue
+                for notice in notices:
+                    dbos_logger.warning(
+                        f"Payload retention vacuuming {table}: {notice}"
                     )
 
     def _cleanup_connections(self) -> None:
