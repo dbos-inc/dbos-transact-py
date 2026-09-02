@@ -121,23 +121,26 @@ class PostgresSystemDatabase(SystemDatabase):
 
     def _vacuum_tables(self, tables: List[str]) -> None:
         assert self.schema
-        try:
-            with self.engine.connect().execution_options(
-                isolation_level="AUTOCOMMIT"
-            ) as conn:
-                for table in tables:
+        if self.engine.url.drivername.startswith("cockroachdb"):
+            return
+        with self.engine.connect().execution_options(
+            isolation_level="AUTOCOMMIT"
+        ) as conn:
+            for table in tables:
+                # Per table, so one refusal does not skip the rest.
+                try:
                     conn.execute(
                         sa.text(
                             "VACUUM (INDEX_CLEANUP ON, TRUNCATE OFF) "
                             f"{quote_identifier(self.schema)}.{quote_identifier(table)}"
                         )
                     )
-        except Exception as e:
-            dbos_logger.warning(
-                f"Payload retention could not vacuum {', '.join(tables)}: {e}. "
-                "Grant the application role MAINTAIN (Postgres 17 or later), run as "
-                "the table owner, or tune autovacuum on these tables."
-            )
+                except Exception as e:
+                    dbos_logger.warning(
+                        f"Payload retention could not vacuum {table}: {e}. Grant the "
+                        "application role MAINTAIN (Postgres 17 or later), run as the "
+                        "table owner, or tune autovacuum on this table."
+                    )
 
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""
