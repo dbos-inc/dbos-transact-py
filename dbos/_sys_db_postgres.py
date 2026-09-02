@@ -1,7 +1,7 @@
 import hashlib
 import time
 from contextlib import contextmanager
-from typing import Any, Dict, Generator, List, Optional, cast
+from typing import Any, Callable, Dict, Generator, List, Optional, cast
 
 import psycopg
 import sqlalchemy as sa
@@ -161,6 +161,10 @@ class PostgresSystemDatabase(SystemDatabase):
             return
 
         notices: List[str] = []
+
+        def collect(diag: Any) -> None:
+            notices.append(diag.message_primary or "")
+
         with self.engine.connect().execution_options(
             isolation_level="AUTOCOMMIT"
         ) as conn:
@@ -168,27 +172,35 @@ class PostgresSystemDatabase(SystemDatabase):
             # a successful one is silent, so anything here is worth surfacing.
             raw = conn.connection.dbapi_connection
             add_handler = getattr(raw, "add_notice_handler", None)
-            if add_handler is not None:
-                add_handler(lambda diag: notices.append(diag.message_primary or ""))
-            for table in tables:
-                # Per table, so one refusal does not skip the rest.
-                del notices[:]
-                try:
-                    conn.execute(
-                        sa.text(
-                            "VACUUM (INDEX_CLEANUP ON, TRUNCATE OFF) "
-                            f"{quote_identifier(self.schema)}.{quote_identifier(table)}"
+            remove_handler = getattr(raw, "remove_notice_handler", None)
+            teardown: Optional[Callable[[Any], None]] = None
+            if add_handler is not None and remove_handler is not None:
+                add_handler(collect)
+                teardown = remove_handler
+            try:
+                for table in tables:
+                    # Per table, so one refusal does not skip the rest.
+                    del notices[:]
+                    try:
+                        conn.execute(
+                            sa.text(
+                                "VACUUM (INDEX_CLEANUP ON, TRUNCATE OFF) "
+                                f"{quote_identifier(self.schema)}.{quote_identifier(table)}"
+                            )
                         )
-                    )
-                except Exception as e:
-                    dbos_logger.warning(
-                        f"Payload retention could not vacuum {table}: {e}"
-                    )
-                    continue
-                for notice in notices:
-                    dbos_logger.warning(
-                        f"Payload retention vacuuming {table}: {notice}"
-                    )
+                    except Exception as e:
+                        dbos_logger.warning(
+                            f"Payload retention could not vacuum {table}: {e}"
+                        )
+                        continue
+                    for notice in notices:
+                        dbos_logger.warning(
+                            f"Payload retention vacuuming {table}: {notice}"
+                        )
+            finally:
+                # Release the notice handler before returning the connection to the pool
+                if teardown is not None:
+                    teardown(collect)
 
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""
