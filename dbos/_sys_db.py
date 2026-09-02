@@ -5765,7 +5765,15 @@ class SystemDatabase(ABC):
                     )
                     return step
 
-            watermark = 0
+            # Seeded from the oldest eligible row
+            with self.engine.begin() as c:
+                oldest = c.execute(
+                    sa.select(SystemSchema.workflow_status.c.created_at)
+                    .where(gc_filter)
+                    .order_by(SystemSchema.workflow_status.c.created_at)
+                    .limit(1)
+                ).scalar()
+            watermark = 0 if oldest is None else oldest - 1
             while True:
                 next_watermark = self._retry_on_serialization_error(
                     functools.partial(delete_batch, watermark)
