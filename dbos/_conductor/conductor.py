@@ -613,6 +613,13 @@ class ConductorWebsocket(threading.Thread):
                                     if timeout_cutoff is not None:
                                         global_timeout(self.dbos, timeout_cutoff)
                                 except Exception:
+                                    if self.evt.is_set():
+                                        # Shutdown took the system database away
+                                        # mid-round; the next round resumes the work.
+                                        self.dbos.logger.debug(
+                                            "Retention interrupted by shutdown"
+                                        )
+                                        return
                                     self.dbos.logger.error(
                                         "Exception encountered during enforcing "
                                         f"retention policy: {traceback.format_exc()}"
@@ -1198,3 +1205,8 @@ class ConductorWebsocket(threading.Thread):
             if self.pong_event is not None:
                 self.pong_event.set()
             self.keepalive_thread.join()
+
+        # Give a round in flight a bounded chance to finish before destroy() takes
+        # the system database away from it. destroy()'s join on this thread caps it.
+        if self.retention_thread is not None:
+            self.retention_thread.join(timeout=10.0)
