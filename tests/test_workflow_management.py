@@ -1438,10 +1438,8 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     for i in range(num_workflows):
         assert workflow(i) == i
 
-    # Garbage collect all but one workflow, exercising the unbatched path
-    garbage_collect(
-        dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
-    )
+    # Garbage collect all but one workflow
+    garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1)
     # Verify two workflows remain: the newest and the blocked workflow
     workflows = DBOS.list_workflows()
     assert len(workflows) == 2
@@ -1857,20 +1855,6 @@ def test_garbage_collection_batch_size_validation(dbos: DBOS) -> None:
             )
         with pytest.raises(ValueError):
             dbos._app_db.garbage_collect(1, [], batch_size=invalid_batch_size)
-
-    @DBOS.workflow()
-    def workflow(x: int) -> int:
-        return x
-
-    assert workflow(1) == 1
-    with pytest.raises(ValueError):
-        garbage_collect(
-            dbos,
-            cutoff_epoch_timestamp_ms=int(time.time() * 1000),
-            rows_threshold=None,
-            batch_size=0,
-        )
-    assert len(DBOS.list_workflows()) == 1
 
 
 def test_global_timeout(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> None:
@@ -2486,9 +2470,7 @@ def test_payload_garbage_collection(
 
     # Collect all but the newest. One round does both halves: the status sweep
     # drops the rows and the payload sweep collects what it left behind.
-    garbage_collect(
-        dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
-    )
+    garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1)
     assert len(DBOS.list_workflows()) == 1
     assert _payload_counts(dbos) == (1, 1, 2)
 
@@ -2545,9 +2527,7 @@ def test_payload_gc_spares_a_straggler_then_reclaims_it(
         for i in range(4):
             assert workflow(i) == i
 
-        garbage_collect(
-            dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
-        )
+        garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1)
         # Its inputs survive even though its own output row does not exist yet.
         assert (
             dbos._sys_db.list_workflows(
@@ -2557,9 +2537,7 @@ def test_payload_gc_spares_a_straggler_then_reclaims_it(
         )
         # A second round neither collects it nor disturbs what is left.
         before = _payload_counts(dbos)
-        garbage_collect(
-            dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
-        )
+        garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1)
         assert _payload_counts(dbos) == before
         assert blocked_rows() == 1
     finally:
@@ -2768,9 +2746,7 @@ def test_payload_gc_never_orphans_a_status_row(
             assert finished(i) == i
 
         for _ in range(3):
-            garbage_collect(
-                dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=2, batch_size=None
-            )
+            garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=2)
             assert _orphaned_status_rows(dbos) == (0, 0)
 
         # The blocked workflow's inputs survived every sweep, so it still runs.

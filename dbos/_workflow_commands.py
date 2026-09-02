@@ -89,7 +89,7 @@ def garbage_collect(
     cutoff_epoch_timestamp_ms: Optional[int],
     rows_threshold: Optional[int],
     *,
-    batch_size: Optional[int] = DEFAULT_GC_BATCH_SIZE,
+    batch_size: int = DEFAULT_GC_BATCH_SIZE,
 ) -> None:
     if cutoff_epoch_timestamp_ms is None and rows_threshold is None:
         return
@@ -106,9 +106,7 @@ def garbage_collect(
         dbos._app_db.garbage_collect(cutoff, retained_ids, batch_size=batch_size)
     # Strictly after the status sweep, which is what makes the straggler set small:
     # everything still older than the cutoff once that sweep has run.
-    dbos._sys_db.garbage_collect_payloads(
-        cutoff, batch_size=batch_size or DEFAULT_GC_BATCH_SIZE
-    )
+    dbos._sys_db.garbage_collect_payloads(cutoff, batch_size=batch_size)
 
 
 def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:

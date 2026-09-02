@@ -446,7 +446,7 @@ def test_claiming_skips_another_applications_workflows(dbos: DBOS) -> None:
 def test_bulk_operations_spare_another_application(dbos: DBOS) -> None:
     """Both take own plus unclaimed rows. Unclaimed are included deliberately:
     excluding them would leak every pre-upgrade row forever."""
-    from dbos._workflow_commands import global_timeout
+    from dbos._workflow_commands import DEFAULT_GC_BATCH_SIZE, global_timeout
 
     @DBOS.workflow()
     def wf() -> int:
@@ -469,7 +469,9 @@ def test_bulk_operations_spare_another_application(dbos: DBOS) -> None:
     assert status_of(dbos, "unclaimed-inflight") == "CANCELLED"
 
     dbos._sys_db.garbage_collect(
-        cutoff_epoch_timestamp_ms=cutoff, rows_threshold=None, batch_size=None
+        cutoff_epoch_timestamp_ms=cutoff,
+        rows_threshold=None,
+        batch_size=DEFAULT_GC_BATCH_SIZE,
     )
     assert workflow_exists(dbos, "foreign-old")
     assert not workflow_exists(dbos, "unclaimed-old")

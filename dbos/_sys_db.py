@@ -5672,11 +5672,11 @@ class SystemDatabase(ABC):
         self,
         cutoff_epoch_timestamp_ms: Optional[int],
         rows_threshold: Optional[int],
-        batch_size: Optional[int],
+        batch_size: int,
     ) -> Optional[int]:
         """Delete this application's old terminal workflows, returning the cutoff
         actually used, or None when there is nothing to collect."""
-        if batch_size is not None and batch_size < 1:
+        if batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
         if rows_threshold is not None:
             with self.engine.begin() as c:
@@ -5724,63 +5724,53 @@ class SystemDatabase(ABC):
             ),
         )
 
-        if batch_size is None:
-
-            def delete_all() -> None:
-                with self.engine.begin() as c:
-                    c.execute(sa.delete(SystemSchema.workflow_status).where(gc_filter))
-
-            self._retry_on_serialization_error(delete_all)
-        else:
-            # Batch-delete by advancing a created_at watermark, one committed transaction per batch
-            def delete_batch(watermark: int) -> Optional[int]:
-                """Delete one batch, returning the watermark to resume from, or None when done."""
-                with self.engine.begin() as c:
-                    # Find the created_at of the batch_size-th oldest eligible row above the watermark
-                    step: Optional[int] = c.execute(
-                        sa.select(SystemSchema.workflow_status.c.created_at)
-                        .where(
-                            gc_filter,
-                            SystemSchema.workflow_status.c.created_at > watermark,
-                        )
-                        .order_by(SystemSchema.workflow_status.c.created_at)
-                        .limit(1)
-                        .offset(batch_size - 1)
-                    ).scalar()
-                    if step is None:
-                        # A workflow that terminalizes mid-pass becomes eligible at its
-                        # own created_at, which can sit below the watermark: the final
-                        # batch takes every remaining eligible row, wherever it falls.
-                        c.execute(
-                            sa.delete(SystemSchema.workflow_status).where(gc_filter)
-                        )
-                        return None
-                    # created_at ties may push the batch slightly over batch_size
-                    c.execute(
-                        sa.delete(SystemSchema.workflow_status).where(
-                            gc_filter,
-                            SystemSchema.workflow_status.c.created_at > watermark,
-                            SystemSchema.workflow_status.c.created_at <= step,
-                        )
-                    )
-                    return step
-
-            # Seeded from the oldest eligible row
+        # Batch-delete by advancing a created_at watermark, one committed transaction per batch
+        def delete_batch(watermark: int) -> Optional[int]:
+            """Delete one batch, returning the watermark to resume from, or None when done."""
             with self.engine.begin() as c:
-                oldest = c.execute(
+                # Find the created_at of the batch_size-th oldest eligible row above the watermark
+                step: Optional[int] = c.execute(
                     sa.select(SystemSchema.workflow_status.c.created_at)
-                    .where(gc_filter)
+                    .where(
+                        gc_filter,
+                        SystemSchema.workflow_status.c.created_at > watermark,
+                    )
                     .order_by(SystemSchema.workflow_status.c.created_at)
                     .limit(1)
+                    .offset(batch_size - 1)
                 ).scalar()
-            watermark = 0 if oldest is None else oldest - 1
-            while True:
-                next_watermark = self._retry_on_serialization_error(
-                    functools.partial(delete_batch, watermark)
+                if step is None:
+                    # A workflow that terminalizes mid-pass becomes eligible at its
+                    # own created_at, which can sit below the watermark: the final
+                    # batch takes every remaining eligible row, wherever it falls.
+                    c.execute(sa.delete(SystemSchema.workflow_status).where(gc_filter))
+                    return None
+                # created_at ties may push the batch slightly over batch_size
+                c.execute(
+                    sa.delete(SystemSchema.workflow_status).where(
+                        gc_filter,
+                        SystemSchema.workflow_status.c.created_at > watermark,
+                        SystemSchema.workflow_status.c.created_at <= step,
+                    )
                 )
-                if next_watermark is None:
-                    break
-                watermark = next_watermark
+                return step
+
+        # Seeded from the oldest eligible row
+        with self.engine.begin() as c:
+            oldest = c.execute(
+                sa.select(SystemSchema.workflow_status.c.created_at)
+                .where(gc_filter)
+                .order_by(SystemSchema.workflow_status.c.created_at)
+                .limit(1)
+            ).scalar()
+        watermark = 0 if oldest is None else oldest - 1
+        while True:
+            next_watermark = self._retry_on_serialization_error(
+                functools.partial(delete_batch, watermark)
+            )
+            if next_watermark is None:
+                break
+            watermark = next_watermark
 
         return cutoff_epoch_timestamp_ms
 

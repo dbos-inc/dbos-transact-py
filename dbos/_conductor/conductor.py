@@ -599,10 +599,12 @@ class ConductorWebsocket(threading.Thread):
                                     rows_threshold=retention_message.body[
                                         "gc_rows_threshold"
                                     ],
-                                    # Older Conductor versions may not send gc_batch_size
+                                    # Older Conductor versions may not send
+                                    # gc_batch_size, and newer ones may send null
                                     batch_size=retention_message.body.get(
-                                        "gc_batch_size", DEFAULT_GC_BATCH_SIZE
-                                    ),
+                                        "gc_batch_size"
+                                    )
+                                    or DEFAULT_GC_BATCH_SIZE,
                                 )
                                 if (
                                     retention_message.body["timeout_cutoff_epoch_ms"]
