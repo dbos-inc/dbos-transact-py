@@ -94,7 +94,6 @@ def default_config(sqlite_path: Path) -> DBOSConfig:
     application_url, system_url = postgres_urls()
     return {
         "name": "test-app",
-        "dual_write_payloads": False,
         "application_database_url": (
             f"sqlite:///{sqlite_path}" if using_sqlite() else application_url
         ),
@@ -292,15 +291,26 @@ def dbos(
     DBOS.destroy(destroy_registry=True)
 
 
+@pytest.fixture(autouse=True)
+def dual_write_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test runs with dual write off, so the payload tables are the only place
+    a payload lives and a broken new-table path cannot hide behind the legacy
+    columns. The dbos_dual_write fixture turns it back on for the tests that need it."""
+    monkeypatch.setenv("DBOS__DUAL_WRITE_PAYLOADS", "false")
+
+
 @pytest.fixture()
 def dbos_dual_write(
-    config: DBOSConfig, cleanup_test_databases: None
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> Generator[DBOS, Any, None]:
     """The dbos fixture with dual write left on, for the tests that check dual
     write itself. Every other test runs with it off, so a broken new-table path
     cannot hide behind the legacy columns."""
+    monkeypatch.setenv("DBOS__DUAL_WRITE_PAYLOADS", "true")
     DBOS.destroy(destroy_registry=True)
-    dbos = DBOS(config={**config, "dual_write_payloads": True})
+    dbos = DBOS(config=config)
     DBOS.launch()
     yield dbos
     DBOS.destroy(destroy_registry=True)

@@ -1195,7 +1195,6 @@ def run_dbos_test_in_process(
     config = default_config(sqlite_path)
     dbos_config: DBOSConfig = {
         "name": "test-app",
-        "dual_write_payloads": False,
         "system_database_url": config["system_database_url"],
         "application_database_url": config["application_database_url"],
         "admin_port": 8001 + i,

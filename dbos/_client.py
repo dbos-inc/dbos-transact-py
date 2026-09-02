@@ -145,7 +145,6 @@ class DBOSClient:
         application_name: Optional[str] = None,
         lazy: bool = False,
         retry_connection_errors: bool = True,
-        dual_write_payloads: bool = True,
         observability_query_timeout_sec: Optional[float] = None,
     ):
         """Create a client for interacting with a DBOS application from outside it.
@@ -222,7 +221,6 @@ class DBOSClient:
             app_name=application_name,
             retry_connection_errors=retry_connection_errors,
             observability_query_timeout_sec=observability_query_timeout_sec,
-            dual_write_payloads=dual_write_payloads,
         )
         self._notification_listener_thread: Optional[threading.Thread] = None
         if not lazy:

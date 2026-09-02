@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import functools
 import json
+import os
 import random
 import sys
 import threading
@@ -605,7 +606,6 @@ class SystemDatabase(ABC):
         polling_concurrency: Optional[int] = None,
         app_name: Optional[str] = None,
         retry_connection_errors: bool = True,
-        dual_write_payloads: bool = True,
         observability_query_timeout_sec: Optional[float] = None,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
@@ -625,7 +625,6 @@ class SystemDatabase(ABC):
                 polling_concurrency=polling_concurrency,
                 app_name=app_name,
                 retry_connection_errors=retry_connection_errors,
-                dual_write_payloads=dual_write_payloads,
                 observability_query_timeout_sec=observability_query_timeout_sec,
             )
         else:
@@ -644,7 +643,6 @@ class SystemDatabase(ABC):
                 polling_concurrency=polling_concurrency,
                 app_name=app_name,
                 retry_connection_errors=retry_connection_errors,
-                dual_write_payloads=dual_write_payloads,
                 observability_query_timeout_sec=observability_query_timeout_sec,
             )
 
@@ -663,7 +661,6 @@ class SystemDatabase(ABC):
         polling_concurrency: Optional[int] = None,
         app_name: Optional[str] = None,
         retry_connection_errors: bool = True,
-        dual_write_payloads: bool = True,
         observability_query_timeout_sec: Optional[float] = None,
     ):
         import sqlalchemy.dialects.postgresql as pg
@@ -698,8 +695,11 @@ class SystemDatabase(ABC):
         # Whether db_retry blocks on a lost connection until it recovers, or raises.
         self._retry_connection_errors = retry_connection_errors
         # For now, also write the workflow_status payload columns so a reader
-        # predating the payload tables still finds inputs and outputs.
-        self.dual_write_payloads = dual_write_payloads
+        # predating the payload tables still finds inputs and outputs. Anything but
+        # the literal "false" keeps them written: the safe state is the default.
+        self.dual_write_payloads = (
+            os.environ.get("DBOS__DUAL_WRITE_PAYLOADS", "true") != "false"
+        )
         # db_retry trusts the text-based SQLite retriability heuristic only on SQLite.
         self._is_sqlite = system_database_url.startswith("sqlite")
         # Statement timeout for observability reads, in ms. Unset takes the default; non-positive disables the cap.

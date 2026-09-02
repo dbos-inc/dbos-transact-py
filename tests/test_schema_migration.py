@@ -726,7 +726,6 @@ def test_migrate(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
             DBOS.destroy(destroy_registry=True)
             config: DBOSConfig = {
                 "name": "test_migrate",
-                "dual_write_payloads": False,
                 "database_url": test_db_url if use_app_db else None,
                 "system_database_url": test_db_url,
                 "dbos_system_schema": schema,
@@ -829,7 +828,6 @@ def test_programmatic_migration(db_engine: sa.Engine, skip_with_sqlite: None) ->
     DBOS.destroy(destroy_registry=True)
     config: DBOSConfig = {
         "name": "test_migrate",
-        "dual_write_payloads": False,
         "database_url": test_db_url,
         "system_database_url": test_db_url,
         "dbos_system_schema": schema,

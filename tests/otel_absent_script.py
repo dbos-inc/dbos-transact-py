@@ -35,7 +35,6 @@ def main() -> None:
 
     config: DBOSConfig = {
         "name": "otel-absent-app",
-        "dual_write_payloads": False,
         "application_database_url": f"sqlite:///{sqlite_path}",
         "system_database_url": f"sqlite:///{sqlite_path}",
         # Default in production; spelled out because it is the whole point of this script.

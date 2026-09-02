@@ -39,7 +39,6 @@ def test_cockroachdb() -> None:
         engine = create_engine(test_url)
         config: DBOSConfig = {
             "name": "cockroachdb-test",
-            "dual_write_payloads": False,
             "system_database_url": test_url,
             "use_listen_notify": False,
             "system_database_engine": engine,
@@ -105,7 +104,6 @@ def test_cockroachdb_fork() -> None:
         engine = create_engine(test_url)
         config: DBOSConfig = {
             "name": "cockroachdb-fork-test",
-            "dual_write_payloads": False,
             "system_database_url": test_url,
             "use_listen_notify": False,
             "system_database_engine": engine,
@@ -182,7 +180,6 @@ def test_cockroachdb_reset_truncate() -> None:
     check_engine = create_engine(test_url)
     config: DBOSConfig = {
         "name": "cockroachdb-truncate-test",
-        "dual_write_payloads": False,
         "system_database_url": test_url,
         "use_listen_notify": False,
         "system_database_engine": sys_db_engine,
