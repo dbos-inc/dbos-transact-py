@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 import uuid
@@ -2417,6 +2418,10 @@ def test_payload_dual_write_and_read_fallback(dbos_dual_write: DBOS) -> None:
     @DBOS.workflow()
     def workflow(x: int) -> int:
         return x
+
+    # No override in the environment: dual write is on because that is the default.
+    assert "DBOS__DUAL_WRITE_PAYLOADS" not in os.environ
+    assert dbos_dual_write._sys_db.dual_write_payloads is True
 
     assert workflow(11) == 11
     workflow_id = DBOS.list_workflows()[0].workflow_id

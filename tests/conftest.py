@@ -305,10 +305,10 @@ def dbos_dual_write(
     cleanup_test_databases: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Generator[DBOS, Any, None]:
-    """The dbos fixture with dual write left on, for the tests that check dual
-    write itself. Every other test runs with it off, so a broken new-table path
-    cannot hide behind the legacy columns."""
-    monkeypatch.setenv("DBOS__DUAL_WRITE_PAYLOADS", "true")
+    """The dbos fixture in the shipped default configuration, dual write on. The
+    variable is unset rather than set to "true" so these tests exercise the default
+    itself; every other test forces it off so a broken new-table path cannot hide."""
+    monkeypatch.delenv("DBOS__DUAL_WRITE_PAYLOADS", raising=False)
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
     DBOS.launch()
