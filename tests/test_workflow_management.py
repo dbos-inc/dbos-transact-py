@@ -2619,10 +2619,11 @@ def test_straggler_overflow_sweeps_from_the_oldest(dbos: DBOS) -> None:
         )
 
 
-def test_a_failed_round_deletes_nothing(dbos: DBOS) -> None:
-    """A round that fails partway must not delete a live workflow's payload:
-    every workflow here is older than the cutoff, so an unguarded sweep would take
-    all of them."""
+def test_a_marking_failure_deletes_nothing(dbos: DBOS) -> None:
+    """Straggler marking runs before any delete, so a failure there aborts the round
+    with nothing collected -- including an orphan the sweep would otherwise have
+    taken. It does not generalise: a failure inside the sweep leaves whatever the
+    other two table workers already committed."""
 
     @DBOS.workflow()
     def workflow(x: int) -> int:
@@ -2630,6 +2631,17 @@ def test_a_failed_round_deletes_nothing(dbos: DBOS) -> None:
 
     for i in range(3):
         assert workflow(i) == i
+    ids = [w.workflow_id for w in DBOS.list_workflows()]
+    target = int(time.time() * 1000) + 60_000
+
+    # An orphan the sweep would collect, so "nothing deleted" is a real claim rather
+    # than one that holds because there was nothing to delete.
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.delete(SystemSchema.workflow_status).where(
+                SystemSchema.workflow_status.c.workflow_uuid == ids[0]
+            )
+        )
     before = _payload_counts(dbos)
 
     def break_step_table_write(
@@ -2656,14 +2668,20 @@ def test_a_failed_round_deletes_nothing(dbos: DBOS) -> None:
     )
     try:
         with pytest.raises(Exception, match="retention_failure_injection"):
-            dbos._sys_db.garbage_collect_payloads(int(time.time() * 1000) + 60_000)
+            dbos._sys_db.garbage_collect_payloads(target)
     finally:
         sa_event.remove(
             dbos._sys_db.engine, "before_cursor_execute", break_step_table_write
         )
 
+    # The sweep never ran, so even the orphan survives.
     assert _payload_counts(dbos) == before
-    for wfid in [w.workflow_id for w in DBOS.list_workflows()]:
+
+    # And the failed round left nothing behind that blocks the next one: a clean
+    # round collects the orphan and spares the two workflows still present.
+    dbos._sys_db.garbage_collect_payloads(target)
+    assert _payload_counts(dbos) == (2, 2, 0)
+    for wfid in ids[1:]:
         assert (
             dbos._sys_db.list_workflows(workflow_ids=[wfid], load_input=True)[0].input
             is not None
