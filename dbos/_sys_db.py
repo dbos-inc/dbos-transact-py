@@ -5576,11 +5576,18 @@ class SystemDatabase(ABC):
             """Delete all rows in a table older than a cutoff."""
             total = 0
             ts = table.c.retention_timestamp
+
             # Seed from the oldest live row.
-            with self.engine.begin() as c:
-                oldest = c.execute(
-                    sa.select(ts).where(ts < cutoff).order_by(ts).limit(1)
-                ).scalar()
+            def seed() -> Optional[int]:
+                with self.engine.begin() as c:
+                    return cast(
+                        Optional[int],
+                        c.execute(
+                            sa.select(ts).where(ts < cutoff).order_by(ts).limit(1)
+                        ).scalar(),
+                    )
+
+            oldest = self._retry_on_serialization_error(seed)
             if oldest is None:
                 return 0
             watermark = oldest - 1
@@ -5638,7 +5645,7 @@ class SystemDatabase(ABC):
         table_names = [table.name for table in payload_tables]
         self._vacuum_tables(table_names)
 
-        stragglers, oldest = enumerate_stragglers()
+        stragglers, oldest = self._retry_on_serialization_error(enumerate_stragglers)
         cutoff, marked_rows = target, 0
         if stragglers is None:
             # If there are too many stragglers, don't mark them, just delete payloads
@@ -5650,7 +5657,9 @@ class SystemDatabase(ABC):
                 f"cutoff instead."
             )
         else:
-            marked_rows = mark_stragglers(stragglers)
+            marked_rows = self._retry_on_serialization_error(
+                functools.partial(mark_stragglers, stragglers)
+            )
 
         # Garbage-collect the three payload tables concurrently
         with ThreadPoolExecutor(
@@ -5666,7 +5675,9 @@ class SystemDatabase(ABC):
                 raise error
         deleted = [f.result() for _, f in outcomes]
 
-        deleted_stragglers = garbage_collect_stragglers()
+        deleted_stragglers = self._retry_on_serialization_error(
+            garbage_collect_stragglers
+        )
         self._vacuum_tables(table_names)
         dbos_logger.debug(
             f"Payload retention deleted {deleted[0]} inputs, {deleted[1]} outputs, "
@@ -5690,36 +5701,39 @@ class SystemDatabase(ABC):
         if batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
         if rows_threshold is not None:
-            with self.engine.begin() as c:
-                # The created_at of the rows_threshold newest collectable row.
-                result = c.execute(
-                    sa.select(SystemSchema.workflow_status.c.created_at)
-                    .where(
-                        ~SystemSchema.workflow_status.c.status.in_(
-                            [
-                                WorkflowStatusString.PENDING.value,
-                                WorkflowStatusString.ENQUEUED.value,
-                                WorkflowStatusString.DELAYED.value,
-                            ]
-                        ),
-                        self._name_filter(
-                            SystemSchema.workflow_status.c.application_name,
-                            self.app_name,
-                        ),
+            # The created_at of the rows_threshold newest collectable row.
+            def threshold_probe() -> Optional[int]:
+                with self.engine.begin() as c:
+                    return cast(
+                        Optional[int],
+                        c.execute(
+                            sa.select(SystemSchema.workflow_status.c.created_at)
+                            .where(
+                                ~SystemSchema.workflow_status.c.status.in_(
+                                    [
+                                        WorkflowStatusString.PENDING.value,
+                                        WorkflowStatusString.ENQUEUED.value,
+                                        WorkflowStatusString.DELAYED.value,
+                                    ]
+                                ),
+                                self._name_filter(
+                                    SystemSchema.workflow_status.c.application_name,
+                                    self.app_name,
+                                ),
+                            )
+                            .order_by(SystemSchema.workflow_status.c.created_at.desc())
+                            .limit(1)
+                            .offset(rows_threshold - 1)
+                        ).scalar(),
                     )
-                    .order_by(SystemSchema.workflow_status.c.created_at.desc())
-                    .limit(1)
-                    .offset(rows_threshold - 1)
-                ).fetchone()
 
-                if result is not None:
-                    rows_based_cutoff = result[0]
-                    # Use the more restrictive cutoff (higher timestamp = more recent = more deletion)
-                    if (
-                        cutoff_epoch_timestamp_ms is None
-                        or rows_based_cutoff > cutoff_epoch_timestamp_ms
-                    ):
-                        cutoff_epoch_timestamp_ms = rows_based_cutoff
+            rows_based_cutoff = self._retry_on_serialization_error(threshold_probe)
+            # Use the more restrictive cutoff: higher timestamp means more deletion
+            if rows_based_cutoff is not None and (
+                cutoff_epoch_timestamp_ms is None
+                or rows_based_cutoff > cutoff_epoch_timestamp_ms
+            ):
+                cutoff_epoch_timestamp_ms = rows_based_cutoff
 
         if cutoff_epoch_timestamp_ms is None:
             return None
@@ -5771,13 +5785,19 @@ class SystemDatabase(ABC):
                 return step
 
         # Seeded from the oldest eligible row
-        with self.engine.begin() as c:
-            oldest = c.execute(
-                sa.select(SystemSchema.workflow_status.c.created_at)
-                .where(gc_filter)
-                .order_by(SystemSchema.workflow_status.c.created_at)
-                .limit(1)
-            ).scalar()
+        def status_seed() -> Optional[int]:
+            with self.engine.begin() as c:
+                return cast(
+                    Optional[int],
+                    c.execute(
+                        sa.select(SystemSchema.workflow_status.c.created_at)
+                        .where(gc_filter)
+                        .order_by(SystemSchema.workflow_status.c.created_at)
+                        .limit(1)
+                    ).scalar(),
+                )
+
+        oldest = self._retry_on_serialization_error(status_seed)
         watermark = 0 if oldest is None else oldest - 1
         while True:
             next_watermark = self._retry_on_serialization_error(
