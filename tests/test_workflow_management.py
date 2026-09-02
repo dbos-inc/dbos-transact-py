@@ -1706,6 +1706,16 @@ def test_garbage_collection_batched_rows_threshold(
         workflow_ids.append(handle.workflow_id)
         time.sleep(0.005)
 
+    # worker_concurrency=0 blocks dequeue, so these stay ENQUEUED. They are the
+    # newest rows by created_at and the sweep cannot delete them, so they must not
+    # count toward the threshold -- otherwise a backlog consumes the whole quota
+    # and every completed workflow is collected.
+    DBOS.register_queue("gc_threshold_queue", worker_concurrency=0)
+    enqueued_ids = [
+        DBOS.enqueue_workflow("gc_threshold_queue", workflow, i).workflow_id
+        for i in range(num_workflows)
+    ]
+
     garbage_collect(
         dbos,
         cutoff_epoch_timestamp_ms=None,
@@ -1713,9 +1723,12 @@ def test_garbage_collection_batched_rows_threshold(
         batch_size=3,
     )
 
-    # exactly newest rows_threshold workflows survive
+    # exactly newest rows_threshold completed workflows survive, plus the in-flight rows
     surviving_ids = {w.workflow_id for w in DBOS.list_workflows()}
-    assert surviving_ids == set(workflow_ids[-rows_threshold:])
+    assert surviving_ids == set(workflow_ids[-rows_threshold:]) | set(enqueued_ids)
+
+    for workflow_id in enqueued_ids:
+        DBOS.cancel_workflow(workflow_id)
 
 
 def test_garbage_collection_collects_rows_that_terminalize_mid_sweep(

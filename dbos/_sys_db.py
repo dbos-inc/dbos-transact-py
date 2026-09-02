@@ -732,6 +732,9 @@ class SystemDatabase(ABC):
         self.engine = base_engine.execution_options(
             schema_translate_map={SCHEMA_PLACEHOLDER: self.schema}
         )
+        self._is_cockroach = system_database_url.startswith(
+            "cockroachdb"
+        ) or self.engine.url.drivername.startswith("cockroachdb")
         self._engine_kwargs = engine_kwargs
 
         # Cap concurrent polling reads (default half the pool, min 1; non-positive disables) so a storm can't starve the control plane. See PollingLimiter.
@@ -5688,10 +5691,17 @@ class SystemDatabase(ABC):
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
         if rows_threshold is not None:
             with self.engine.begin() as c:
-                # Get the created_at timestamp of the rows_threshold newest row
+                # The created_at of the rows_threshold newest collectable row.
                 result = c.execute(
                     sa.select(SystemSchema.workflow_status.c.created_at)
                     .where(
+                        ~SystemSchema.workflow_status.c.status.in_(
+                            [
+                                WorkflowStatusString.PENDING.value,
+                                WorkflowStatusString.ENQUEUED.value,
+                                WorkflowStatusString.DELAYED.value,
+                            ]
+                        ),
                         self._name_filter(
                             SystemSchema.workflow_status.c.application_name,
                             self.app_name,

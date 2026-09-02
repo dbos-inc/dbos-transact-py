@@ -121,7 +121,7 @@ class PostgresSystemDatabase(SystemDatabase):
 
     def _vacuum_tables(self, tables: List[str]) -> None:
         assert self.schema
-        if self.engine.url.drivername.startswith("cockroachdb"):
+        if self._is_cockroach:
             return
         with self.engine.connect().execution_options(
             isolation_level="AUTOCOMMIT"
