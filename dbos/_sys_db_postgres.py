@@ -151,9 +151,20 @@ class PostgresSystemDatabase(SystemDatabase):
             finally:
                 if acquired:
                     # Explicit, since closing only returns the session to the pool.
-                    conn.execute(
+                    released = conn.execute(
                         sa.text("SELECT pg_advisory_unlock(:key)"), {"key": key}
-                    )
+                    ).scalar()
+                    if not released:
+                        # False means this session no longer holds it, which a
+                        # transaction-pooling proxy causes by switching backends.
+                        dbos_logger.warning(
+                            "Could not release the retention lock: this session no "
+                            "longer holds it. Retention will not proceed until "
+                            "the lock is released, which happens when the holding "
+                            "backend closes. A transaction-pooling proxy in front of "
+                            "Postgres causes this; run DBOS through a session-pooled "
+                            "or direct connection."
+                        )
 
     def _vacuum_tables(self, tables: List[str]) -> None:
         assert self.schema
