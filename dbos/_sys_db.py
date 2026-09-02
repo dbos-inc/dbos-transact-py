@@ -5574,34 +5574,41 @@ class SystemDatabase(ABC):
             """Delete all rows in a table older than a cutoff."""
             total = 0
             ts = table.c.retention_timestamp
+            # Seed from the oldest live row.
+            with self.engine.begin() as c:
+                oldest = c.execute(
+                    sa.select(ts).where(ts < cutoff).order_by(ts).limit(1)
+                ).scalar()
+            if oldest is None:
+                return 0
+            watermark = oldest - 1
 
-            def delete_batch(watermark: Optional[int]) -> Optional[int]:
+            def delete_batch(watermark: int) -> Optional[int]:
                 """Delete one batch, returning the watermark to resume from, or
                 None when this table is done."""
                 nonlocal total
                 with self.engine.begin() as c:
-                    probe = sa.select(ts).where(ts < cutoff)
-                    if watermark is not None:
-                        probe = probe.where(ts > watermark)
                     step: Optional[int] = c.execute(
-                        probe.order_by(ts).limit(1).offset(batch_size - 1)
+                        sa.select(ts)
+                        .where(ts < cutoff, ts > watermark)
+                        .order_by(ts)
+                        .limit(1)
+                        .offset(batch_size - 1)
                     ).scalar()
-                    bounds: List[sa.ColumnElement[bool]] = [ts < cutoff]
-                    if watermark is not None:
-                        bounds.append(ts > watermark)
+                    bounds: List[sa.ColumnElement[bool]] = [ts < cutoff, ts > watermark]
                     if step is not None:
                         # timestamp ties may push the batch slightly over batch_size
                         bounds.append(ts <= step)
                     total += c.execute(sa.delete(table).where(*bounds)).rowcount
                     return step
 
-            watermark: Optional[int] = None
             while True:
-                watermark = self._retry_on_serialization_error(
+                next_watermark = self._retry_on_serialization_error(
                     functools.partial(delete_batch, watermark)
                 )
-                if watermark is None:
+                if next_watermark is None:
                     break
+                watermark = next_watermark
             return total
 
         def garbage_collect_stragglers() -> int:
