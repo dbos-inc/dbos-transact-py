@@ -2998,8 +2998,8 @@ class SystemDatabase(ABC):
                     serialization=result["serialization"],
                     # Mirrors the parent: only the running application records its steps.
                     application_name=self.app_name,
-                    # Explicit rather than a column default: SQLite cannot add a
-                    # column with a non-constant default, so it has none there.
+                    # Explicit rather than the column default, so every engine
+                    # stamps a step the same way.
                     retention_timestamp=self._now_ms_sql(),
                 )
                 .on_conflict_do_update(
@@ -5744,8 +5744,8 @@ class SystemDatabase(ABC):
         if cutoff_epoch_timestamp_ms is None:
             return None
 
-        # Keyed on created_at, the same key payload retention uses: keying the two
-        # sweeps differently makes every workflow in flight at the cutoff a straggler.
+        # Keyed on created_at, the stamp workflow_inputs carries: keying the status
+        # sweep any later leaves every workflow in flight at the cutoff a straggler.
         gc_filter = sa.and_(
             SystemSchema.workflow_status.c.created_at
             < sa.literal(cutoff_epoch_timestamp_ms, sa.BigInteger),
