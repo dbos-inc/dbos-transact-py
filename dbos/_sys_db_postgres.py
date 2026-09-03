@@ -195,7 +195,7 @@ class PostgresSystemDatabase(SystemDatabase):
                     try:
                         conn.execute(
                             sa.text(
-                                "VACUUM (INDEX_CLEANUP ON, TRUNCATE OFF) "
+                                "VACUUM (INDEX_CLEANUP ON, TRUNCATE OFF, ANALYZE) "
                                 f"{quote_identifier(self.schema)}.{quote_identifier(table)}"
                             )
                         )

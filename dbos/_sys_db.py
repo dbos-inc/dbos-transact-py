@@ -5537,12 +5537,15 @@ class SystemDatabase(ABC):
             """Delete a table's orphans below the cutoff, one batch per transaction."""
             total = 0
             ts = table.c.retention_timestamp
-            # The anti-join is the safety: a row whose status row survives is never
-            # deleted, whichever clock stamped it, so nothing needs marking.
+            # A payload below the cutoff belongs to a workflow created before it, so the
+            # status side is the few such rows still present, not the whole table.
             orphaned = ~sa.exists(
                 sa.select(sa.literal(1))
                 .select_from(ws)
-                .where(ws.c.workflow_uuid == table.c.workflow_uuid)
+                .where(
+                    ws.c.workflow_uuid == table.c.workflow_uuid,
+                    ws.c.created_at < cutoff,
+                )
                 .correlate(table)
             )
 
@@ -5595,9 +5598,9 @@ class SystemDatabase(ABC):
                 watermark = next_watermark
             return total
 
-        # To optimize performance, vacuum payload tables both before and after garbage-collecting them
+        # To optimize performance, vacuum payload tables both before and after garbage-collecting them.
         table_names = [table.name for table in payload_tables]
-        self._vacuum_tables(table_names)
+        self._vacuum_tables([ws.name, *table_names])
 
         # Garbage-collect the three payload tables concurrently.
         deleted = [0] * len(payload_tables)
