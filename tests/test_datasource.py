@@ -621,15 +621,9 @@ def test_sync_ds_recovers_from_sysdb_loss(
         assert my_workflow() == "recovered"
     assert call_count["n"] == 1
 
-    # Simulate crash: remove the workflow record from the system DB.
-    # The CASCADE on operation_outputs.workflow_uuid wipes the step record too,
-    # while datasource_outputs (in the app DB) is unaffected.
-    with dbos._sys_db.engine.begin() as conn:
-        conn.execute(
-            sa.delete(SystemSchema.workflow_status).where(
-                SystemSchema.workflow_status.c.workflow_uuid == wfid
-            )
-        )
+    # Simulate crash: delete_workflows drops the sysdb records including the step
+    # checkpoint, since operation_outputs no longer cascades; the app DB is untouched.
+    dbos._sys_db.delete_workflows([wfid])
 
     # Re-run: DBOS treats this as a new workflow (no workflow_status row).
     # run_step finds no operation_outputs entry, so it calls _body().
@@ -1441,15 +1435,9 @@ async def test_async_ds_recovers_from_sysdb_loss(
         assert await my_workflow() == "recovered"
     assert call_count["n"] == 1
 
-    # Simulate crash: remove the workflow record from the system DB.
-    # The CASCADE on operation_outputs.workflow_uuid wipes the step record too,
-    # while datasource_outputs (in the app DB) is unaffected.
-    with dbos._sys_db.engine.begin() as conn:
-        conn.execute(
-            sa.delete(SystemSchema.workflow_status).where(
-                SystemSchema.workflow_status.c.workflow_uuid == wfid
-            )
-        )
+    # Simulate crash: delete_workflows drops the sysdb records including the step
+    # checkpoint, since operation_outputs no longer cascades; the app DB is untouched.
+    dbos._sys_db.delete_workflows([wfid])
 
     # Re-run: DBOS treats this as a new workflow (no workflow_status row).
     # run_step finds no operation_outputs entry, so it calls _body().

@@ -2806,7 +2806,7 @@ def test_payload_gc_never_orphans_a_status_row(
     ever loses the payload a reader could still ask for."""
     event = threading.Event()
     started = threading.Event()
-    queue = Queue("payload_gc_queue")
+    queue = Queue("payload_gc_queue", concurrency=1)
 
     @DBOS.workflow()
     def finished(x: int) -> int:
@@ -2819,9 +2819,9 @@ def test_payload_gc_never_orphans_a_status_row(
         return 0
 
     try:
-        # A running workflow, enqueued work that never starts, and completed
-        # workflows interleaved so their created_at values straddle each other.
-        handle = DBOS.start_workflow(blocked)
+        # The queue's one slot is held by the blocked workflow, so the enqueued work
+        # cannot start mid-sweep and be collected out from under its own handle.
+        handle = queue.enqueue(blocked)
         assert started.wait(timeout=30)
         for i in range(3):
             assert finished(i) == i
@@ -2833,6 +2833,12 @@ def test_payload_gc_never_orphans_a_status_row(
         for _ in range(3):
             garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=2)
             assert _orphaned_status_rows(dbos) == (0, 0)
+            # Enforced, not assumed: one of these starting would hang the handle below.
+            assert all(
+                dbos._sys_db.list_workflows(workflow_ids=[h.workflow_id])[0].status
+                == "ENQUEUED"
+                for h in enqueued
+            )
 
         # The blocked workflow's inputs survived every sweep, so it still runs.
         assert (
