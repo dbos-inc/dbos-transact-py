@@ -1189,6 +1189,9 @@ def get_dbos_migration_hundredeleven(quoted_schema: str, is_cockroach: bool) -> 
 def get_dbos_migration_hundredtwelve(quoted_schema: str) -> str:
     return f"""
 ALTER TABLE {quoted_schema}."operation_outputs"
+    DROP CONSTRAINT IF EXISTS "operation_outputs_workflow_uuid_foreign";
+
+ALTER TABLE {quoted_schema}."operation_outputs"
     DROP CONSTRAINT IF EXISTS "operation_outputs_workflow_uuid_fkey";
 """
 
