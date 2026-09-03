@@ -5717,8 +5717,8 @@ class SystemDatabase(ABC):
         rows_threshold: Optional[int],
         batch_size: int,
     ) -> Optional[int]:
-        """Delete this application's old terminal workflows, returning the cutoff
-        actually used, or None when there is nothing to collect."""
+        """Delete old terminal workflows throughout the system database, returning
+        the cutoff actually used, or None when there is nothing to collect."""
         if batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
         if rows_threshold is not None:
@@ -5736,10 +5736,6 @@ class SystemDatabase(ABC):
                                         WorkflowStatusString.ENQUEUED.value,
                                         WorkflowStatusString.DELAYED.value,
                                     ]
-                                ),
-                                self._name_filter(
-                                    SystemSchema.workflow_status.c.application_name,
-                                    self.app_name,
                                 ),
                             )
                             .order_by(SystemSchema.workflow_status.c.created_at.desc())
@@ -5770,10 +5766,6 @@ class SystemDatabase(ABC):
                     WorkflowStatusString.ENQUEUED.value,
                     WorkflowStatusString.DELAYED.value,
                 ]
-            ),
-            # Unclaimed rows included: excluding them would leak pre-upgrade rows forever.
-            self._name_filter(
-                SystemSchema.workflow_status.c.application_name, self.app_name
             ),
         )
 

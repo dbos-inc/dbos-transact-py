@@ -91,6 +91,7 @@ def garbage_collect(
     *,
     batch_size: int = DEFAULT_GC_BATCH_SIZE,
 ) -> None:
+    """Enforce retention across the entire system database."""
     if cutoff_epoch_timestamp_ms is None and rows_threshold is None:
         return
     with dbos._sys_db.retention_lock() as acquired:

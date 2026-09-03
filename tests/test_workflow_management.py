@@ -2688,9 +2688,9 @@ def test_a_marking_failure_deletes_nothing(dbos: DBOS) -> None:
         )
 
 
-def test_peer_application_payloads_survive(dbos: DBOS) -> None:
-    """Status GC is per-application but the payload cutoff is global, so a peer
-    application's payloads must survive a sweep this application runs."""
+def test_payloads_survive_while_their_status_row_does(dbos: DBOS) -> None:
+    """One rule for every application now that retention is system-wide: the sweep
+    spares the payloads of any workflow whose status row is still there."""
 
     @DBOS.workflow()
     def workflow(x: int) -> int:
@@ -2725,6 +2725,55 @@ def test_peer_application_payloads_survive(dbos: DBOS) -> None:
                 .where(SystemSchema.workflow_input.c.workflow_uuid == peer_id)
             ).scalar()
             == 1
+        )
+
+
+def test_garbage_collection_spans_every_application(dbos: DBOS) -> None:
+    """Retention is system-wide, so a round this application runs collects a peer
+    application's old terminal workflow along with its payloads."""
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    assert workflow(1) == 1
+    peer_id = f"peer-{uuid.uuid4()}"
+    now = int(time.time() * 1000)
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.insert(SystemSchema.workflow_status).values(
+                workflow_uuid=peer_id,
+                status="SUCCESS",
+                name="peer_workflow",
+                application_name="a-different-application",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        c.execute(
+            sa.insert(SystemSchema.workflow_input).values(
+                workflow_uuid=peer_id, inputs="{}", retention_timestamp=now
+            )
+        )
+
+    garbage_collect(dbos, cutoff_epoch_timestamp_ms=now + 60_000, rows_threshold=None)
+
+    with dbos._sys_db.engine.begin() as c:
+        assert (
+            c.execute(
+                sa.select(sa.func.count())
+                .select_from(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == peer_id)
+            ).scalar()
+            == 0
+        )
+        assert (
+            c.execute(
+                sa.select(sa.func.count())
+                .select_from(SystemSchema.workflow_input)
+                .where(SystemSchema.workflow_input.c.workflow_uuid == peer_id)
+            ).scalar()
+            == 0
         )
 
 

@@ -202,6 +202,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             inputs = json.loads(post_data.decode("utf-8"))
             cutoff_epoch_timestamp_ms = inputs.get("cutoff_epoch_timestamp_ms", None)
             rows_threshold = inputs.get("rows_threshold", None)
+            # System-wide: this collects every application sharing the system database.
             garbage_collect(
                 self.dbos,
                 cutoff_epoch_timestamp_ms=cutoff_epoch_timestamp_ms,
