@@ -126,11 +126,11 @@ class PostgresSystemDatabase(SystemDatabase):
         """A session-level advisory lock, so only one retention round runs against
         this schema at a time. Session-scoped, so a crashed round releases it."""
         assert self.schema
-        # Separate locks for separate schemas
+        # Separate locks for separate schemas. Every SDK derives the key this way -- the
+        # leading 8 bytes of SHA-256, big-endian signed -- so rounds in different languages
+        # against one system database contend for the same lock.
         key = int.from_bytes(
-            hashlib.blake2b(
-                f"dbos.retention.{self.schema}".encode(), digest_size=8
-            ).digest(),
+            hashlib.sha256(f"dbos.retention.{self.schema}".encode()).digest()[:8],
             "big",
             signed=True,
         )
