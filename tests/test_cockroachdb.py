@@ -265,7 +265,7 @@ def test_cockroachdb_observability_query_timeout() -> None:
 
 def test_cockroachdb_retention() -> None:
     """A full retention round runs on CockroachDB: it collects, drains the payload
-    tables, pins stragglers, and is never blocked by the advisory-lock stub."""
+    tables, spares in-flight rows, and is never blocked by the advisory-lock stub."""
     database_url = os.environ.get("DBOS_COCKROACHDB_URL")
     if database_url is None:
         pytest.skip("No CockroachDB database URL provided")
@@ -345,7 +345,7 @@ def test_cockroachdb_retention() -> None:
         retained_ids = set(completed_ids[-rows_threshold:]) | set(straggler_ids)
         assert {w.workflow_id for w in DBOS.list_workflows()} == retained_ids
 
-        # Payloads follow their workflows: collected ones gone, stragglers pinned
+        # Payloads follow their workflows: collected ones gone, in-flight ones spared
         assert payload_ids(SystemSchema.workflow_input) == retained_ids
         assert (
             payload_ids(SystemSchema.workflow_output) & collected_ids == set()

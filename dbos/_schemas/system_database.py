@@ -188,8 +188,8 @@ class SystemSchema:
         Column("serialization", Text()),
         # Denormalized from the parent so step observability filters without a join.
         Column("application_name", Text, nullable=True),
-        # Retention key. Server-clock, unlike completed_at_epoch_ms, whose client
-        # skew would let the cutoff collect a live workflow's steps.
+        # Sweep order only: the payload sweep deletes by absence of a status row, so
+        # this bounds what a round scans rather than deciding what it may delete.
         Column("retention_timestamp", BigInteger, nullable=False),
         PrimaryKeyConstraint("workflow_uuid", "function_id"),
         Index("idx_operation_outputs_retention", "retention_timestamp"),

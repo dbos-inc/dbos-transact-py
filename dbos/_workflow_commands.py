@@ -112,8 +112,8 @@ def garbage_collect(
         if dbos._app_db is not None:
             retained_ids = dbos._sys_db.list_retained_workflow_ids(cutoff)
             dbos._app_db.garbage_collect(cutoff, retained_ids, batch_size=batch_size)
-        # Strictly after the status sweep, which is what makes the straggler set small:
-        # everything still older than the cutoff once that sweep has run.
+        # Strictly after the status sweep: the payload sweep only takes orphans, so
+        # this round's are only visible to it once that sweep has committed.
         dbos._sys_db.garbage_collect_payloads(cutoff, batch_size=batch_size)
 
 

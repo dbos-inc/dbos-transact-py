@@ -1395,12 +1395,24 @@ def test_resume_and_fork_to_queue(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def _cutoff_past_all_creations() -> int:
-    """A cutoff every creation so far falls strictly before. created_at is stamped by
-    the database and rounded to the millisecond, while a wall-clock cutoff taken right
-    after a workflow starts truncates, so the two can land on the same value and spare
-    the row. Only rows the sweep excludes by status need to survive these cutoffs."""
+def _cutoff_past_all_completions() -> int:
+    """A cutoff every completion so far falls strictly before. completed_at is stamped
+    by the database and rounded to the millisecond, while a wall-clock cutoff taken
+    right after a workflow finishes truncates, so the two can land on the same value
+    and spare the row. Only rows with no completed_at need to survive these cutoffs."""
     return int(time.time() * 1000) + 1000
+
+
+def _status_timestamp(dbos: DBOS, workflow_id: str, column: str) -> Optional[int]:
+    """Read a DB-stamped timestamp, so a test can derive its cutoff from the same
+    clock the rows were written with instead of racing the Python clock against it."""
+    with dbos._sys_db.engine.begin() as c:
+        value = c.execute(
+            sa.select(SystemSchema.workflow_status.c[column]).where(
+                SystemSchema.workflow_status.c.workflow_uuid == workflow_id
+            )
+        ).scalar()
+    return None if value is None else int(value)
 
 
 def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> None:
@@ -1436,6 +1448,11 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     handle = DBOS.start_workflow(blocked_workflow)
     # Wait for its txn output to commit so GC assertions can count on it
     assert started.wait(timeout=30)
+    # A cutoff taken from this row's own created_at while it is provably still
+    # running. +1 is the smallest value that puts its creation behind the cutoff.
+    blocked_created_at = _status_timestamp(dbos, handle.workflow_id, "created_at")
+    assert blocked_created_at is not None
+    blocked_cutoff = blocked_created_at + 1
     for i in range(num_workflows):
         assert workflow(i) == i
 
@@ -1458,7 +1475,7 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     # Garbage collect all previous workflows
     garbage_collect(
         dbos,
-        cutoff_epoch_timestamp_ms=_cutoff_past_all_creations(),
+        cutoff_epoch_timestamp_ms=_cutoff_past_all_completions(),
         rows_threshold=None,
     )
     # Verify only the blocked workflow remains
@@ -1474,14 +1491,21 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
         ).all()
         assert len(rows) == 1
 
-    # Finish the blocked workflow. Retention keys on creation, so the status
-    # exclusion was the only thing sparing it; terminal, it is collected.
+    # Finish the blocked workflow
     event.set()
     assert handle.get_result() is not None
+    blocked_completed_at = _status_timestamp(dbos, handle.workflow_id, "completed_at")
+    assert blocked_completed_at is not None
+    # Retention keys on completion, not creation. Asserted rather than assumed: if
+    # these collapsed to one instant the survival check below would be vacuous.
+    assert blocked_created_at < blocked_cutoff <= blocked_completed_at
+    # So the cutoff from while it was running spares it, though it was created first
+    garbage_collect(dbos, cutoff_epoch_timestamp_ms=blocked_cutoff, rows_threshold=None)
+    assert [w.workflow_id for w in DBOS.list_workflows()] == [handle.workflow_id]
+
+    # Once the cutoff passes its completion, it is collected
     garbage_collect(
-        dbos,
-        cutoff_epoch_timestamp_ms=_cutoff_past_all_creations(),
-        rows_threshold=None,
+        dbos, cutoff_epoch_timestamp_ms=blocked_completed_at + 1, rows_threshold=None
     )
     assert len(DBOS.list_workflows()) == 0
 
@@ -1515,7 +1539,7 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     DBOS.resume_workflow(enqueued_handle.workflow_id, queue_name="gc_test_queue")
     garbage_collect(
         dbos,
-        cutoff_epoch_timestamp_ms=_cutoff_past_all_creations(),
+        cutoff_epoch_timestamp_ms=_cutoff_past_all_completions(),
         rows_threshold=None,
     )
     assert enqueued_handle.workflow_id in {w.workflow_id for w in DBOS.list_workflows()}
@@ -1628,7 +1652,7 @@ def test_garbage_collection_batched(
     try:
         garbage_collect(
             dbos,
-            cutoff_epoch_timestamp_ms=_cutoff_past_all_creations(),
+            cutoff_epoch_timestamp_ms=_cutoff_past_all_completions(),
             rows_threshold=None,
             batch_size=batch_size,
         )
@@ -1667,7 +1691,7 @@ def test_garbage_collection_batched(
     assert handle.get_result() is not None
     garbage_collect(
         dbos,
-        cutoff_epoch_timestamp_ms=_cutoff_past_all_creations(),
+        cutoff_epoch_timestamp_ms=_cutoff_past_all_completions(),
         rows_threshold=None,
         batch_size=1,
     )
@@ -1724,7 +1748,8 @@ def test_garbage_collection_batched_rows_threshold(
         batch_size=3,
     )
 
-    # exactly newest rows_threshold completed workflows survive, plus the in-flight rows
+    # The threshold counts completions, not rows: exactly the newest rows_threshold
+    # completed workflows survive, and the in-flight rows all survive besides.
     surviving_ids = {w.workflow_id for w in DBOS.list_workflows()}
     assert surviving_ids == set(workflow_ids[-rows_threshold:]) | set(enqueued_ids)
 
@@ -1735,9 +1760,10 @@ def test_garbage_collection_batched_rows_threshold(
 def test_garbage_collection_collects_rows_that_terminalize_mid_sweep(
     dbos: DBOS, skip_with_sqlite_imprecise_time: None
 ) -> None:
-    """Keyed on created_at, a workflow becomes eligible at its own creation time,
-    which can sit below a watermark the sweep has already passed. The final batch
-    has to take every remaining eligible row, wherever it falls."""
+    """A row that terminalizes mid-pass takes completed_at > cutoff and cannot fall
+    below the watermark, but an imported row lands with whatever completed_at it
+    carries. The final batch has to take every remaining eligible row, wherever it
+    falls."""
 
     @DBOS.workflow()
     def workflow(x: int) -> int:
@@ -1755,7 +1781,7 @@ def test_garbage_collection_collects_rows_that_terminalize_mid_sweep(
         conn: Any, cursor: Any, statement: str, *args: Any, **kwargs: Any
     ) -> None:
         # Inject before the second batch, once the watermark has advanced past
-        # created_at=1: from here no bounded batch can reach the row, so only the
+        # completed_at=1: from here no bounded batch can reach the row, so only the
         # final unbounded delete can. Its own connection, so it commits at once.
         nonlocal deletes, injected
         if injected or _delete_target(statement) != "workflow_status":
@@ -1772,6 +1798,7 @@ def test_garbage_collection_collects_rows_that_terminalize_mid_sweep(
                     name="stowaway",
                     created_at=1,
                     updated_at=1,
+                    completed_at=1,
                 )
             )
 
@@ -1781,7 +1808,7 @@ def test_garbage_collection_collects_rows_that_terminalize_mid_sweep(
     try:
         garbage_collect(
             dbos,
-            cutoff_epoch_timestamp_ms=_cutoff_past_all_creations(),
+            cutoff_epoch_timestamp_ms=_cutoff_past_all_completions(),
             rows_threshold=None,
             batch_size=3,
         )
@@ -1830,7 +1857,7 @@ def test_garbage_collection_batched_resumable(
     try:
         with pytest.raises(Exception, match="injected garbage collection failure"):
             dbos._sys_db.garbage_collect(
-                cutoff_epoch_timestamp_ms=_cutoff_past_all_creations(),
+                cutoff_epoch_timestamp_ms=_cutoff_past_all_completions(),
                 rows_threshold=None,
                 batch_size=batch_size,
             )
@@ -1844,7 +1871,7 @@ def test_garbage_collection_batched_resumable(
 
     # rerunning GC completes deletion
     dbos._sys_db.garbage_collect(
-        cutoff_epoch_timestamp_ms=_cutoff_past_all_creations(),
+        cutoff_epoch_timestamp_ms=_cutoff_past_all_completions(),
         rows_threshold=None,
         batch_size=batch_size,
     )
@@ -2601,8 +2628,8 @@ def test_payload_gc_spares_a_straggler_then_reclaims_it(
         event.set()
     assert handle.get_result() == 0
 
-    # Once the status row is gone the payload must go with it. A spared payload
-    # sits above every cutoff, so a later round has to reach it some other way.
+    # Once the status row is gone the payload must go with it: nothing was marked,
+    # so the ordinary sweep reaches it the moment it is an orphan.
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.delete(SystemSchema.workflow_status).where(
@@ -2611,120 +2638,6 @@ def test_payload_gc_spares_a_straggler_then_reclaims_it(
         )
     dbos._sys_db.garbage_collect_payloads(int(time.time() * 1000) + 60_000)
     assert blocked_rows() == (0, 0)
-
-
-def test_straggler_overflow_sweeps_from_the_oldest(dbos: DBOS) -> None:
-    """Past the bound nothing can be spared individually, but the oldest such
-    workflow is the minimum created_at over every status row, so a payload below
-    it cannot have a surviving status row. The round still makes progress."""
-
-    @DBOS.workflow()
-    def workflow(x: int) -> int:
-        return x
-
-    for i in range(3):
-        assert workflow(i) == i
-    assert _payload_counts(dbos) == (3, 3, 0)
-
-    ws, wi, wo = (
-        SystemSchema.workflow_status,
-        SystemSchema.workflow_input,
-        SystemSchema.workflow_output,
-    )
-    ids = [w.workflow_id for w in DBOS.list_workflows()]
-    with dbos._sys_db.engine.begin() as c:
-        # Drop the first workflow's status row, as a status sweep would, and age
-        # its payload past the oldest row that remains.
-        c.execute(sa.delete(ws).where(ws.c.workflow_uuid == ids[0]))
-        oldest = c.execute(sa.select(sa.func.min(ws.c.created_at))).scalar()
-        assert oldest is not None
-        for table in (wi, wo):
-            c.execute(
-                sa.update(table)
-                .where(table.c.workflow_uuid == ids[0])
-                .values(retention_timestamp=oldest - 1)
-            )
-
-    # Two workflows remain older than the cutoff, one over the bound of 1.
-    dbos._sys_db.garbage_collect_payloads(
-        int(time.time() * 1000) + 60_000, max_stragglers=1
-    )
-    # The orphan older than the cutoff is gone; both live workflows keep theirs.
-    assert _payload_counts(dbos) == (2, 2, 0)
-    for wfid in ids[1:]:
-        assert (
-            dbos._sys_db.list_workflows(workflow_ids=[wfid], load_input=True)[0].input
-            is not None
-        )
-
-
-def test_a_marking_failure_deletes_nothing(dbos: DBOS) -> None:
-    """Straggler marking runs before any delete, so a failure there aborts the round
-    with nothing collected -- including an orphan the sweep would otherwise have
-    taken. It does not generalise: a failure inside the sweep leaves whatever the
-    other two table workers already committed."""
-
-    @DBOS.workflow()
-    def workflow(x: int) -> int:
-        return x
-
-    for i in range(3):
-        assert workflow(i) == i
-    ids = [w.workflow_id for w in DBOS.list_workflows()]
-    target = int(time.time() * 1000) + 60_000
-
-    # An orphan the sweep would collect, so "nothing deleted" is a real claim rather
-    # than one that holds because there was nothing to delete.
-    with dbos._sys_db.engine.begin() as c:
-        c.execute(
-            sa.delete(SystemSchema.workflow_status).where(
-                SystemSchema.workflow_status.c.workflow_uuid == ids[0]
-            )
-        )
-    before = _payload_counts(dbos)
-
-    def break_step_table_write(
-        conn: Any,
-        cursor: Any,
-        statement: str,
-        parameters: Any,
-        context: Any,
-        executemany: bool,
-    ) -> Any:
-        # Fail at the database itself, so the round unwinds the way a real
-        # failure would rather than the way a patched method would.
-        if statement.lstrip().upper().startswith("UPDATE") and (
-            "retention_timestamp" in statement and "operation_outputs" in statement
-        ):
-            statement += " AND (SELECT 1 FROM retention_failure_injection) = 1"
-        return statement, parameters
-
-    sa_event.listen(
-        dbos._sys_db.engine,
-        "before_cursor_execute",
-        break_step_table_write,
-        retval=True,
-    )
-    try:
-        with pytest.raises(Exception, match="retention_failure_injection"):
-            dbos._sys_db.garbage_collect_payloads(target)
-    finally:
-        sa_event.remove(
-            dbos._sys_db.engine, "before_cursor_execute", break_step_table_write
-        )
-
-    # The sweep never ran, so even the orphan survives.
-    assert _payload_counts(dbos) == before
-
-    # And the failed round left nothing behind that blocks the next one: a clean
-    # round collects the orphan and spares the two workflows still present.
-    dbos._sys_db.garbage_collect_payloads(target)
-    assert _payload_counts(dbos) == (2, 2, 0)
-    for wfid in ids[1:]:
-        assert (
-            dbos._sys_db.list_workflows(workflow_ids=[wfid], load_input=True)[0].input
-            is not None
-        )
 
 
 def test_payloads_survive_while_their_status_row_does(dbos: DBOS) -> None:
@@ -2747,6 +2660,8 @@ def test_payloads_survive_while_their_status_row_does(dbos: DBOS) -> None:
                 application_name="a-different-application",
                 created_at=now,
                 updated_at=now,
+                # Terminal rows carry completed_at, as ones written by DBOS itself do
+                completed_at=now,
             )
         )
         c.execute(
@@ -2787,6 +2702,8 @@ def test_garbage_collection_spans_every_application(dbos: DBOS) -> None:
                 application_name="a-different-application",
                 created_at=now,
                 updated_at=now,
+                # Terminal rows carry completed_at, as ones written by DBOS itself do
+                completed_at=now,
             )
         )
         c.execute(

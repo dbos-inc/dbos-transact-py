@@ -5516,14 +5516,14 @@ class SystemDatabase(ABC):
 
     def garbage_collect_payloads(
         self,
-        target: int,
+        cutoff: int,
         *,
         batch_size: int = 10000,
-        max_stragglers: int = 10_000,
     ) -> tuple[int, int, int]:
-        """Delete payload and step rows older than the cutoff, returning the count
-        removed from each table. Must run after the status sweep: it collects
-        what that sweep leaves behind."""
+        """Delete payload and step rows below the cutoff whose workflow is gone,
+        returning the count removed from each table. Runs after the status sweep,
+        whose orphans all fall in range: every payload is stamped no later than
+        the completion that made the row collectable."""
         if batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
         payload_tables = (
@@ -5531,52 +5531,22 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_output,
             SystemSchema.operation_outputs,
         )
-        # A payload marked with this is never reached by a retention cutoff: it
-        # belongs to a straggler, a workflow still present past the cutoff.
-        STRAGGLER_RETENTION_TIMESTAMP = 2**63 - 1
+        ws = SystemSchema.workflow_status
 
-        def enumerate_stragglers() -> tuple[Optional[List[str]], Optional[int]]:
-            """Workflows still older than the cutoff once the status sweep has run,
-            oldest first, with their oldest created_at. The list is None when
-            there are more than can be marked."""
-            ws = SystemSchema.workflow_status
-            with self.engine.begin() as c:
-                rows = c.execute(
-                    sa.select(ws.c.workflow_uuid, ws.c.created_at)
-                    .where(ws.c.created_at < target)
-                    .order_by(ws.c.created_at)
-                    .limit(max_stragglers + 1)
-                ).fetchall()
-            oldest = rows[0][1] if rows else None
-            if len(rows) > max_stragglers:
-                return None, oldest
-            return [row[0] for row in rows], oldest
-
-        def mark_stragglers(workflow_ids: List[str]) -> int:
-            """Stamp the payloads of straggler workflows with a sentinel (the
-            maximum BIGINT) so no retention cutoff can reach them."""
-            if not workflow_ids:
-                return 0
-            marked = 0
-            with self.engine.begin() as c:
-                for table in payload_tables:
-                    for i in range(0, len(workflow_ids), 1000):
-                        marked += c.execute(
-                            sa.update(table)
-                            .where(
-                                table.c.workflow_uuid.in_(workflow_ids[i : i + 1000])
-                            )
-                            .where(table.c.retention_timestamp < target)
-                            .values(retention_timestamp=STRAGGLER_RETENTION_TIMESTAMP)
-                        ).rowcount
-            return marked
-
-        def garbage_collect_table(table: sa.Table, cutoff: int) -> int:
-            """Delete all rows in a table older than a cutoff."""
+        def garbage_collect_table(table: sa.Table) -> int:
+            """Delete a table's orphans below the cutoff, one batch per transaction."""
             total = 0
             ts = table.c.retention_timestamp
+            # The anti-join is the safety: a row whose status row survives is never
+            # deleted, whichever clock stamped it, so nothing needs marking.
+            orphaned = ~sa.exists(
+                sa.select(sa.literal(1))
+                .select_from(ws)
+                .where(ws.c.workflow_uuid == table.c.workflow_uuid)
+                .correlate(table)
+            )
 
-            # Seed from the oldest live row.
+            # Seed from the oldest row in range.
             def seed() -> Optional[int]:
                 with self.engine.begin() as c:
                     return cast(
@@ -5596,6 +5566,8 @@ class SystemDatabase(ABC):
                 None when this table is done."""
                 nonlocal total
                 with self.engine.begin() as c:
+                    # Batches are cut by candidate count, so rows spared by the
+                    # anti-join only thin one out; they are re-checked next round.
                     step: Optional[int] = c.execute(
                         sa.select(ts)
                         .where(ts < cutoff, ts > watermark)
@@ -5603,7 +5575,11 @@ class SystemDatabase(ABC):
                         .limit(1)
                         .offset(batch_size - 1)
                     ).scalar()
-                    bounds: List[sa.ColumnElement[bool]] = [ts < cutoff, ts > watermark]
+                    bounds: List[sa.ColumnElement[bool]] = [
+                        ts < cutoff,
+                        ts > watermark,
+                        orphaned,
+                    ]
                     if step is not None:
                         # timestamp ties may push the batch slightly over batch_size
                         bounds.append(ts <= step)
@@ -5619,46 +5595,9 @@ class SystemDatabase(ABC):
                 watermark = next_watermark
             return total
 
-        def garbage_collect_stragglers() -> int:
-            """Delete marked payloads whose workflow is gone. They sit above
-            every cutoff, so nothing else can reach them."""
-            ws = SystemSchema.workflow_status
-            total = 0
-            for table in payload_tables:
-                with self.engine.begin() as c:
-                    total += c.execute(
-                        sa.delete(table).where(
-                            table.c.retention_timestamp
-                            == STRAGGLER_RETENTION_TIMESTAMP,
-                            ~sa.exists(
-                                sa.select(sa.literal(1))
-                                .select_from(ws)
-                                .where(ws.c.workflow_uuid == table.c.workflow_uuid)
-                                .correlate(table)
-                            ),
-                        )
-                    ).rowcount
-            return total
-
         # To optimize performance, vacuum payload tables both before and after garbage-collecting them
         table_names = [table.name for table in payload_tables]
         self._vacuum_tables(table_names)
-
-        stragglers, oldest = self._retry_on_serialization_error(enumerate_stragglers)
-        cutoff, marked_rows = target, 0
-        if stragglers is None:
-            # If there are too many stragglers, don't mark them, just delete payloads
-            # older than the oldest straggler.
-            cutoff = target if oldest is None else oldest
-            dbos_logger.warning(
-                f"More than {max_stragglers} active workflows are older than the "
-                f"retention cutoff. Using the oldest of them ({cutoff}) as the "
-                f"cutoff instead."
-            )
-        else:
-            marked_rows = self._retry_on_serialization_error(
-                functools.partial(mark_stragglers, stragglers)
-            )
 
         # Garbage-collect the three payload tables concurrently.
         deleted = [0] * len(payload_tables)
@@ -5666,7 +5605,7 @@ class SystemDatabase(ABC):
 
         def sweep(i: int, table: sa.Table) -> None:
             try:
-                deleted[i] = garbage_collect_table(table, cutoff)
+                deleted[i] = garbage_collect_table(table)
             except BaseException as e:
                 errors[i] = e
 
@@ -5690,14 +5629,10 @@ class SystemDatabase(ABC):
         if failures:
             raise failures[0]
 
-        deleted_stragglers = self._retry_on_serialization_error(
-            garbage_collect_stragglers
-        )
         self._vacuum_tables(table_names)
         dbos_logger.debug(
             f"Payload retention deleted {deleted[0]} inputs, {deleted[1]} outputs, "
-            f"{deleted[2]} steps, and {deleted_stragglers} rows whose straggler has "
-            f"since departed; marked {marked_rows} rows to keep"
+            f"and {deleted[2]} steps"
         )
         return deleted[0], deleted[1], deleted[2]
 
@@ -5722,23 +5657,19 @@ class SystemDatabase(ABC):
         if batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
         if rows_threshold is not None:
-            # The created_at of the rows_threshold newest collectable row.
+            # The completed_at of the rows_threshold newest completed row.
             def threshold_probe() -> Optional[int]:
                 with self.engine.begin() as c:
                     return cast(
                         Optional[int],
                         c.execute(
-                            sa.select(SystemSchema.workflow_status.c.created_at)
+                            sa.select(SystemSchema.workflow_status.c.completed_at)
                             .where(
-                                ~SystemSchema.workflow_status.c.status.in_(
-                                    [
-                                        WorkflowStatusString.PENDING.value,
-                                        WorkflowStatusString.ENQUEUED.value,
-                                        WorkflowStatusString.DELAYED.value,
-                                    ]
-                                ),
+                                SystemSchema.workflow_status.c.completed_at.isnot(None)
                             )
-                            .order_by(SystemSchema.workflow_status.c.created_at.desc())
+                            .order_by(
+                                SystemSchema.workflow_status.c.completed_at.desc()
+                            )
                             .limit(1)
                             .offset(rows_threshold - 1)
                         ).scalar(),
@@ -5755,44 +5686,37 @@ class SystemDatabase(ABC):
         if cutoff_epoch_timestamp_ms is None:
             return None
 
-        # Keyed on created_at, the stamp workflow_input carries: keying the status
-        # sweep any later leaves every workflow in flight at the cutoff a straggler.
-        gc_filter = sa.and_(
-            SystemSchema.workflow_status.c.created_at
-            < sa.literal(cutoff_epoch_timestamp_ms, sa.BigInteger),
-            ~SystemSchema.workflow_status.c.status.in_(
-                [
-                    WorkflowStatusString.PENDING.value,
-                    WorkflowStatusString.ENQUEUED.value,
-                    WorkflowStatusString.DELAYED.value,
-                ]
-            ),
+        # completed_at is set on every terminal transition and cleared on resume, so one
+        # predicate covers eligibility: in-flight rows hold NULL and never compare true.
+        gc_filter = SystemSchema.workflow_status.c.completed_at < sa.literal(
+            cutoff_epoch_timestamp_ms, sa.BigInteger
         )
 
-        # Batch-delete by advancing a created_at watermark, one committed transaction per batch
+        # Batch-delete by advancing a completed_at watermark, one committed transaction per batch
         def delete_batch(watermark: int) -> Optional[int]:
             """Delete one batch, returning the watermark to resume from, or None when done."""
             with self.engine.begin() as c:
-                # Find the created_at of the batch_size-th oldest eligible row above the watermark
+                # Find the completed_at of the batch_size-th oldest eligible row above the watermark
                 step: Optional[int] = c.execute(
-                    sa.select(SystemSchema.workflow_status.c.created_at)
+                    sa.select(SystemSchema.workflow_status.c.completed_at)
                     .where(
                         gc_filter,
-                        SystemSchema.workflow_status.c.created_at > watermark,
+                        SystemSchema.workflow_status.c.completed_at > watermark,
                     )
-                    .order_by(SystemSchema.workflow_status.c.created_at)
+                    .order_by(SystemSchema.workflow_status.c.completed_at)
                     .limit(1)
                     .offset(batch_size - 1)
                 ).scalar()
                 if step is None:
+                    # Unbounded: an import can land a completed_at below the watermark mid-pass.
                     c.execute(sa.delete(SystemSchema.workflow_status).where(gc_filter))
                     return None
-                # created_at ties may push the batch slightly over batch_size
+                # completed_at ties may push the batch slightly over batch_size
                 c.execute(
                     sa.delete(SystemSchema.workflow_status).where(
                         gc_filter,
-                        SystemSchema.workflow_status.c.created_at > watermark,
-                        SystemSchema.workflow_status.c.created_at <= step,
+                        SystemSchema.workflow_status.c.completed_at > watermark,
+                        SystemSchema.workflow_status.c.completed_at <= step,
                     )
                 )
                 return step
@@ -5803,9 +5727,9 @@ class SystemDatabase(ABC):
                 return cast(
                     Optional[int],
                     c.execute(
-                        sa.select(SystemSchema.workflow_status.c.created_at)
+                        sa.select(SystemSchema.workflow_status.c.completed_at)
                         .where(gc_filter)
-                        .order_by(SystemSchema.workflow_status.c.created_at)
+                        .order_by(SystemSchema.workflow_status.c.completed_at)
                         .limit(1)
                     ).scalar(),
                 )
