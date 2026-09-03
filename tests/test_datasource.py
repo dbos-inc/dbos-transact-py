@@ -902,8 +902,8 @@ def test_sync_ds_duplicate_execution_stops_at_the_lost_race(
     # step checkpoint yet: nothing to replay, and no outcome for a waiter to adopt.
     with dbos._sys_db.engine.begin() as conn:
         winner_output = conn.execute(
-            sa.select(SystemSchema.workflow_outputs.c.output).where(
-                SystemSchema.workflow_outputs.c.workflow_uuid == wfid
+            sa.select(SystemSchema.workflow_output.c.output).where(
+                SystemSchema.workflow_output.c.workflow_uuid == wfid
             )
         ).scalar_one()
         winner_step.update(_winner_step_row(conn, wfid, reserve.__qualname__))
@@ -915,8 +915,8 @@ def test_sync_ds_duplicate_execution_stops_at_the_lost_race(
         # Clearing the recorded outcome means both places it can live: the
         # payload table, and the legacy column a dual-writing deployment fills.
         conn.execute(
-            sa.delete(SystemSchema.workflow_outputs).where(
-                SystemSchema.workflow_outputs.c.workflow_uuid == wfid
+            sa.delete(SystemSchema.workflow_output).where(
+                SystemSchema.workflow_output.c.workflow_uuid == wfid
             )
         )
         conn.execute(
@@ -1635,8 +1635,8 @@ async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
     # step checkpoint yet: nothing to replay, and no outcome for a waiter to adopt.
     with dbos._sys_db.engine.begin() as conn:
         winner_output = conn.execute(
-            sa.select(SystemSchema.workflow_outputs.c.output).where(
-                SystemSchema.workflow_outputs.c.workflow_uuid == wfid
+            sa.select(SystemSchema.workflow_output.c.output).where(
+                SystemSchema.workflow_output.c.workflow_uuid == wfid
             )
         ).scalar_one()
         winner_step.update(_winner_step_row(conn, wfid, reserve.__qualname__))
@@ -1648,8 +1648,8 @@ async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
         # Clearing the recorded outcome means both places it can live: the
         # payload table, and the legacy column a dual-writing deployment fills.
         conn.execute(
-            sa.delete(SystemSchema.workflow_outputs).where(
-                SystemSchema.workflow_outputs.c.workflow_uuid == wfid
+            sa.delete(SystemSchema.workflow_output).where(
+                SystemSchema.workflow_output.c.workflow_uuid == wfid
             )
         )
         conn.execute(

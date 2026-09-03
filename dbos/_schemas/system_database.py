@@ -155,23 +155,23 @@ class SystemSchema:
         ),
     )
 
-    workflow_inputs = Table(
-        "workflow_inputs",
+    workflow_input = Table(
+        "workflow_input",
         metadata_obj,
         Column("workflow_uuid", Text, primary_key=True),
         Column("inputs", Text, nullable=True),
         Column("retention_timestamp", BigInteger, nullable=False),
-        Index("idx_workflow_inputs_retention", "retention_timestamp"),
+        Index("idx_workflow_input_retention", "retention_timestamp"),
     )
 
-    workflow_outputs = Table(
-        "workflow_outputs",
+    workflow_output = Table(
+        "workflow_output",
         metadata_obj,
         Column("workflow_uuid", Text, primary_key=True),
         Column("output", Text, nullable=True),
         Column("error", Text, nullable=True),
         Column("retention_timestamp", BigInteger, nullable=False),
-        Index("idx_workflow_outputs_retention", "retention_timestamp"),
+        Index("idx_workflow_output_retention", "retention_timestamp"),
     )
 
     operation_outputs = Table(

@@ -1152,24 +1152,24 @@ ALTER TABLE {quoted_schema}."queues" ADD COLUMN IF NOT EXISTS "partition_rate_li
 
 def get_dbos_migration_hundrednine(quoted_schema: str) -> str:
     return f"""
-CREATE TABLE IF NOT EXISTS {quoted_schema}."workflow_inputs" (
+CREATE TABLE IF NOT EXISTS {quoted_schema}."workflow_input" (
     workflow_uuid TEXT NOT NULL PRIMARY KEY,
     inputs TEXT,
     retention_timestamp BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint
 );
 
-CREATE TABLE IF NOT EXISTS {quoted_schema}."workflow_outputs" (
+CREATE TABLE IF NOT EXISTS {quoted_schema}."workflow_output" (
     workflow_uuid TEXT NOT NULL PRIMARY KEY,
     output TEXT,
     error TEXT,
     retention_timestamp BIGINT NOT NULL DEFAULT (EXTRACT(epoch FROM now()) * 1000.0)::bigint
 );
 
-CREATE INDEX IF NOT EXISTS "idx_workflow_inputs_retention"
-    ON {quoted_schema}."workflow_inputs" ("retention_timestamp");
+CREATE INDEX IF NOT EXISTS "idx_workflow_input_retention"
+    ON {quoted_schema}."workflow_input" ("retention_timestamp");
 
-CREATE INDEX IF NOT EXISTS "idx_workflow_outputs_retention"
-    ON {quoted_schema}."workflow_outputs" ("retention_timestamp");
+CREATE INDEX IF NOT EXISTS "idx_workflow_output_retention"
+    ON {quoted_schema}."workflow_output" ("retention_timestamp");
 """
 
 
@@ -1276,7 +1276,7 @@ BEGIN
     DO UPDATE SET
         updated_at = EXCLUDED.updated_at;
 
-    INSERT INTO {quoted_schema}.workflow_inputs (
+    INSERT INTO {quoted_schema}.workflow_input (
         workflow_uuid, inputs, retention_timestamp
     ) VALUES (
         v_workflow_id, v_serialized_inputs, v_now
@@ -1730,23 +1730,23 @@ _sqlite_history = [
 ]
 
 sqlite_migration_hundrednine = f"""
-CREATE TABLE IF NOT EXISTS workflow_inputs (
+CREATE TABLE IF NOT EXISTS workflow_input (
     workflow_uuid TEXT NOT NULL PRIMARY KEY,
     inputs TEXT,
     retention_timestamp INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()}
 );
 
-CREATE TABLE IF NOT EXISTS workflow_outputs (
+CREATE TABLE IF NOT EXISTS workflow_output (
     workflow_uuid TEXT NOT NULL PRIMARY KEY,
     output TEXT,
     error TEXT,
     retention_timestamp INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()}
 );
 
-CREATE INDEX IF NOT EXISTS idx_workflow_inputs_retention
-    ON workflow_inputs (retention_timestamp);
-CREATE INDEX IF NOT EXISTS idx_workflow_outputs_retention
-    ON workflow_outputs (retention_timestamp);
+CREATE INDEX IF NOT EXISTS idx_workflow_input_retention
+    ON workflow_input (retention_timestamp);
+CREATE INDEX IF NOT EXISTS idx_workflow_output_retention
+    ON workflow_output (retention_timestamp);
 """
 
 sqlite_migration_hundredten = """

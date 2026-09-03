@@ -1017,7 +1017,7 @@ class SystemDatabase(ABC):
         )
 
         inputs_insert = (
-            self.dialect.insert(SystemSchema.workflow_inputs)
+            self.dialect.insert(SystemSchema.workflow_input)
             .values(
                 workflow_uuid=status["workflow_uuid"],
                 inputs=status["inputs"],
@@ -1154,7 +1154,7 @@ class SystemDatabase(ABC):
                 # The outcome was not ours to write, so leave no orphan payload.
                 return False
             c.execute(
-                self.dialect.insert(SystemSchema.workflow_outputs)
+                self.dialect.insert(SystemSchema.workflow_output)
                 .values(
                     workflow_uuid=workflow_id,
                     output=output,
@@ -1376,7 +1376,7 @@ class SystemDatabase(ABC):
             ).fetchone()
             if updated is not None:
                 c.execute(
-                    self.dialect.insert(SystemSchema.workflow_inputs)
+                    self.dialect.insert(SystemSchema.workflow_input)
                     .values(
                         workflow_uuid=updated[0],
                         inputs=inputs,
@@ -1449,8 +1449,8 @@ class SystemDatabase(ABC):
             # The payload tables carry no foreign key, so the status delete does
             # not cascade into them; without this they survive as orphans.
             for table in (
-                SystemSchema.workflow_inputs,
-                SystemSchema.workflow_outputs,
+                SystemSchema.workflow_input,
+                SystemSchema.workflow_output,
                 SystemSchema.operation_outputs,
             ):
                 c.execute(
@@ -1496,7 +1496,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.authenticated_roles,
                     SystemSchema.workflow_status.c.assumed_role,
                     sa.func.coalesce(
-                        SystemSchema.workflow_inputs.c.inputs,
+                        SystemSchema.workflow_input.c.inputs,
                         SystemSchema.workflow_status.c.inputs,
                     ).label("inputs"),
                     SystemSchema.workflow_status.c.serialization,
@@ -1505,9 +1505,9 @@ class SystemDatabase(ABC):
                 )
                 .select_from(
                     SystemSchema.workflow_status.outerjoin(
-                        SystemSchema.workflow_inputs,
+                        SystemSchema.workflow_input,
                         SystemSchema.workflow_status.c.workflow_uuid
-                        == SystemSchema.workflow_inputs.c.workflow_uuid,
+                        == SystemSchema.workflow_input.c.workflow_uuid,
                     )
                 )
                 .where(
@@ -1568,7 +1568,7 @@ class SystemDatabase(ABC):
             )
 
             c.execute(
-                sa.insert(SystemSchema.workflow_inputs).values(
+                sa.insert(SystemSchema.workflow_input).values(
                     [
                         dict(
                             workflow_uuid=forked_workflow_id,
@@ -1903,7 +1903,7 @@ class SystemDatabase(ABC):
                         ws.c.deduplication_id,
                         ws.c.priority,
                         sa.func.coalesce(
-                            SystemSchema.workflow_inputs.c.inputs, ws.c.inputs
+                            SystemSchema.workflow_input.c.inputs, ws.c.inputs
                         ).label("inputs"),
                         ws.c.queue_partition_key,
                         ws.c.forked_from,
@@ -1919,9 +1919,9 @@ class SystemDatabase(ABC):
                     )
                     .select_from(
                         ws.outerjoin(
-                            SystemSchema.workflow_inputs,
+                            SystemSchema.workflow_input,
                             ws.c.workflow_uuid
-                            == SystemSchema.workflow_inputs.c.workflow_uuid,
+                            == SystemSchema.workflow_input.c.workflow_uuid,
                         )
                     )
                     .where(ws.c.workflow_uuid.in_(chunk))
@@ -1984,20 +1984,20 @@ class SystemDatabase(ABC):
                 sa.select(
                     SystemSchema.workflow_status.c.status,
                     sa.func.coalesce(
-                        SystemSchema.workflow_outputs.c.output,
+                        SystemSchema.workflow_output.c.output,
                         SystemSchema.workflow_status.c.output,
                     ),
                     sa.func.coalesce(
-                        SystemSchema.workflow_outputs.c.error,
+                        SystemSchema.workflow_output.c.error,
                         SystemSchema.workflow_status.c.error,
                     ),
                     SystemSchema.workflow_status.c.serialization,
                 )
                 .select_from(
                     SystemSchema.workflow_status.outerjoin(
-                        SystemSchema.workflow_outputs,
+                        SystemSchema.workflow_output,
                         SystemSchema.workflow_status.c.workflow_uuid
-                        == SystemSchema.workflow_outputs.c.workflow_uuid,
+                        == SystemSchema.workflow_output.c.workflow_uuid,
                     )
                 )
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
@@ -2206,20 +2206,20 @@ class SystemDatabase(ABC):
         if load_input:
             load_columns.append(
                 sa.func.coalesce(
-                    SystemSchema.workflow_inputs.c.inputs,
+                    SystemSchema.workflow_input.c.inputs,
                     SystemSchema.workflow_status.c.inputs,
                 ).label("inputs")
             )
         if load_output:
             load_columns.append(
                 sa.func.coalesce(
-                    SystemSchema.workflow_outputs.c.output,
+                    SystemSchema.workflow_output.c.output,
                     SystemSchema.workflow_status.c.output,
                 ).label("output")
             )
             load_columns.append(
                 sa.func.coalesce(
-                    SystemSchema.workflow_outputs.c.error,
+                    SystemSchema.workflow_output.c.error,
                     SystemSchema.workflow_status.c.error,
                 ).label("error")
             )
@@ -2230,15 +2230,15 @@ class SystemDatabase(ABC):
         from_clause: Any = SystemSchema.workflow_status
         if load_input:
             from_clause = from_clause.outerjoin(
-                SystemSchema.workflow_inputs,
+                SystemSchema.workflow_input,
                 SystemSchema.workflow_status.c.workflow_uuid
-                == SystemSchema.workflow_inputs.c.workflow_uuid,
+                == SystemSchema.workflow_input.c.workflow_uuid,
             )
         if load_output:
             from_clause = from_clause.outerjoin(
-                SystemSchema.workflow_outputs,
+                SystemSchema.workflow_output,
                 SystemSchema.workflow_status.c.workflow_uuid
-                == SystemSchema.workflow_outputs.c.workflow_uuid,
+                == SystemSchema.workflow_output.c.workflow_uuid,
             )
 
         if queues_only:
@@ -5214,7 +5214,7 @@ class SystemDatabase(ABC):
                 inserted.update(row[0] for row in result)
             for start in range(0, len(input_rows), chunk_size):
                 conn.execute(
-                    self.dialect.insert(SystemSchema.workflow_inputs)
+                    self.dialect.insert(SystemSchema.workflow_input)
                     .values(input_rows[start : start + chunk_size])
                     .on_conflict_do_nothing(index_elements=["workflow_uuid"])
                 )
@@ -5527,8 +5527,8 @@ class SystemDatabase(ABC):
         if batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
         payload_tables = (
-            SystemSchema.workflow_inputs,
-            SystemSchema.workflow_outputs,
+            SystemSchema.workflow_input,
+            SystemSchema.workflow_output,
             SystemSchema.operation_outputs,
         )
         # A payload marked with this is never reached by a retention cutoff: it
@@ -5759,7 +5759,7 @@ class SystemDatabase(ABC):
         if cutoff_epoch_timestamp_ms is None:
             return None
 
-        # Keyed on created_at, the stamp workflow_inputs carries: keying the status
+        # Keyed on created_at, the stamp workflow_input carries: keying the status
         # sweep any later leaves every workflow in flight at the cutoff a straggler.
         gc_filter = sa.and_(
             SystemSchema.workflow_status.c.created_at
@@ -6085,11 +6085,11 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.assumed_role,
                         SystemSchema.workflow_status.c.authenticated_roles,
                         sa.func.coalesce(
-                            SystemSchema.workflow_outputs.c.output,
+                            SystemSchema.workflow_output.c.output,
                             SystemSchema.workflow_status.c.output,
                         ),
                         sa.func.coalesce(
-                            SystemSchema.workflow_outputs.c.error,
+                            SystemSchema.workflow_output.c.error,
                             SystemSchema.workflow_status.c.error,
                         ),
                         SystemSchema.workflow_status.c.executor_id,
@@ -6106,7 +6106,7 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.started_at_epoch_ms,
                         SystemSchema.workflow_status.c.deduplication_id,
                         sa.func.coalesce(
-                            SystemSchema.workflow_inputs.c.inputs,
+                            SystemSchema.workflow_input.c.inputs,
                             SystemSchema.workflow_status.c.inputs,
                         ),
                         SystemSchema.workflow_status.c.priority,
@@ -6130,13 +6130,13 @@ class SystemDatabase(ABC):
                     )
                     .select_from(
                         SystemSchema.workflow_status.outerjoin(
-                            SystemSchema.workflow_inputs,
+                            SystemSchema.workflow_input,
                             SystemSchema.workflow_status.c.workflow_uuid
-                            == SystemSchema.workflow_inputs.c.workflow_uuid,
+                            == SystemSchema.workflow_input.c.workflow_uuid,
                         ).outerjoin(
-                            SystemSchema.workflow_outputs,
+                            SystemSchema.workflow_output,
                             SystemSchema.workflow_status.c.workflow_uuid
-                            == SystemSchema.workflow_outputs.c.workflow_uuid,
+                            == SystemSchema.workflow_output.c.workflow_uuid,
                         )
                     )
                     .where(SystemSchema.workflow_status.c.workflow_uuid == wf_id)
@@ -6360,7 +6360,7 @@ class SystemDatabase(ABC):
                 )
 
                 c.execute(
-                    sa.insert(SystemSchema.workflow_inputs).values(
+                    sa.insert(SystemSchema.workflow_input).values(
                         workflow_uuid=status["workflow_uuid"],
                         inputs=status["inputs"],
                         # Retention starts at import: the original timestamps are
@@ -6370,7 +6370,7 @@ class SystemDatabase(ABC):
                 )
                 if status["output"] is not None or status["error"] is not None:
                     c.execute(
-                        sa.insert(SystemSchema.workflow_outputs).values(
+                        sa.insert(SystemSchema.workflow_output).values(
                             workflow_uuid=status["workflow_uuid"],
                             output=status["output"],
                             error=status["error"],

@@ -68,8 +68,8 @@ def _get_workflow_status(
            s.created_at, s.updated_at, s.application_version,
            COALESCE(o.output, s.output), COALESCE(o.error, s.error)
     FROM "{schema}".workflow_status s
-    LEFT JOIN "{schema}".workflow_inputs i ON i.workflow_uuid = s.workflow_uuid
-    LEFT JOIN "{schema}".workflow_outputs o ON o.workflow_uuid = s.workflow_uuid
+    LEFT JOIN "{schema}".workflow_input i ON i.workflow_uuid = s.workflow_uuid
+    LEFT JOIN "{schema}".workflow_output o ON o.workflow_uuid = s.workflow_uuid
     WHERE s.workflow_uuid = :workflow_id
     """
     row = _execute_sql(engine, sql, {"workflow_id": workflow_id})

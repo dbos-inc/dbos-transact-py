@@ -317,7 +317,7 @@ def test_cockroachdb_retention() -> None:
                     r[0] for r in conn.execute(sa.select(table.c.workflow_uuid)).all()
                 }
 
-        assert payload_ids(SystemSchema.workflow_inputs) == set(
+        assert payload_ids(SystemSchema.workflow_input) == set(
             straggler_ids + completed_ids
         )
 
@@ -346,9 +346,9 @@ def test_cockroachdb_retention() -> None:
         assert {w.workflow_id for w in DBOS.list_workflows()} == retained_ids
 
         # Payloads follow their workflows: collected ones gone, stragglers pinned
-        assert payload_ids(SystemSchema.workflow_inputs) == retained_ids
+        assert payload_ids(SystemSchema.workflow_input) == retained_ids
         assert (
-            payload_ids(SystemSchema.workflow_outputs) & collected_ids == set()
+            payload_ids(SystemSchema.workflow_output) & collected_ids == set()
         ), "outputs of collected workflows survived the sweep"
 
         # CockroachDB rejects VACUUM outright, so a round that tried would warn

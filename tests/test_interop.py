@@ -150,8 +150,8 @@ def test_interop_canonical(dbos: DBOS, client: DBOSClient) -> None:
         # workflow_status
         ws_row = c.execute(
             sa.select(
-                SystemSchema.workflow_inputs.c.inputs,
-                SystemSchema.workflow_outputs.c.output,
+                SystemSchema.workflow_input.c.inputs,
+                SystemSchema.workflow_output.c.output,
                 SystemSchema.workflow_status.c.serialization,
                 SystemSchema.workflow_status.c.status,
                 SystemSchema.workflow_status.c.name,
@@ -159,13 +159,13 @@ def test_interop_canonical(dbos: DBOS, client: DBOSClient) -> None:
             )
             .select_from(
                 SystemSchema.workflow_status.outerjoin(
-                    SystemSchema.workflow_inputs,
+                    SystemSchema.workflow_input,
                     SystemSchema.workflow_status.c.workflow_uuid
-                    == SystemSchema.workflow_inputs.c.workflow_uuid,
+                    == SystemSchema.workflow_input.c.workflow_uuid,
                 ).outerjoin(
-                    SystemSchema.workflow_outputs,
+                    SystemSchema.workflow_output,
                     SystemSchema.workflow_status.c.workflow_uuid
-                    == SystemSchema.workflow_outputs.c.workflow_uuid,
+                    == SystemSchema.workflow_output.c.workflow_uuid,
                 )
             )
             .where(
@@ -332,8 +332,8 @@ def test_interop_direct_insert(dbos: DBOS) -> None:
     # Verify the output was written as the golden string
     with dbos._sys_db.engine.connect() as c:
         ws_row = c.execute(
-            sa.select(SystemSchema.workflow_outputs.c.output).where(
-                SystemSchema.workflow_outputs.c.workflow_uuid == wf_id,
+            sa.select(SystemSchema.workflow_output.c.output).where(
+                SystemSchema.workflow_output.c.workflow_uuid == wf_id,
             )
         ).fetchone()
         assert ws_row is not None
@@ -375,14 +375,14 @@ def test_interop_kwargs(dbos: DBOS) -> None:
     with dbos._sys_db.engine.connect() as c:
         ws_row = c.execute(
             sa.select(
-                SystemSchema.workflow_inputs.c.inputs,
+                SystemSchema.workflow_input.c.inputs,
                 SystemSchema.workflow_status.c.serialization,
             )
             .select_from(
                 SystemSchema.workflow_status.outerjoin(
-                    SystemSchema.workflow_inputs,
+                    SystemSchema.workflow_input,
                     SystemSchema.workflow_status.c.workflow_uuid
-                    == SystemSchema.workflow_inputs.c.workflow_uuid,
+                    == SystemSchema.workflow_input.c.workflow_uuid,
                 )
             )
             .where(
@@ -440,8 +440,8 @@ def test_interop_kwargs(dbos: DBOS) -> None:
     # Verify the output matches the golden string
     with dbos._sys_db.engine.connect() as c:
         ws_row2 = c.execute(
-            sa.select(SystemSchema.workflow_outputs.c.output).where(
-                SystemSchema.workflow_outputs.c.workflow_uuid == wf_id2,
+            sa.select(SystemSchema.workflow_output.c.output).where(
+                SystemSchema.workflow_output.c.workflow_uuid == wf_id2,
             )
         ).fetchone()
         assert ws_row2 is not None

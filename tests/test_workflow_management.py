@@ -274,7 +274,7 @@ def test_workflow_outcome_is_owned_by_the_pending_row(dbos: DBOS) -> None:
             # Record the payload where a real recorder puts it, not in the
             # legacy columns: the run must lose to the payload table itself.
             c.execute(
-                dbos._sys_db.dialect.insert(SystemSchema.workflow_outputs)
+                dbos._sys_db.dialect.insert(SystemSchema.workflow_output)
                 .values(
                     workflow_uuid=wfid,
                     output=output,
@@ -291,14 +291,14 @@ def test_workflow_outcome_is_owned_by_the_pending_row(dbos: DBOS) -> None:
             return c.execute(
                 sa.select(
                     SystemSchema.workflow_status.c.status,
-                    SystemSchema.workflow_outputs.c.output,
+                    SystemSchema.workflow_output.c.output,
                     SystemSchema.workflow_status.c.serialization,
                 )
                 .select_from(
                     SystemSchema.workflow_status.outerjoin(
-                        SystemSchema.workflow_outputs,
+                        SystemSchema.workflow_output,
                         SystemSchema.workflow_status.c.workflow_uuid
-                        == SystemSchema.workflow_outputs.c.workflow_uuid,
+                        == SystemSchema.workflow_output.c.workflow_uuid,
                     )
                 )
                 .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
@@ -2405,8 +2405,8 @@ def _payload_counts(dbos: DBOS) -> tuple[int, int, int]:
         return tuple(  # type: ignore[return-value]
             c.execute(sa.select(sa.func.count()).select_from(table)).scalar() or 0
             for table in (
-                SystemSchema.workflow_inputs,
-                SystemSchema.workflow_outputs,
+                SystemSchema.workflow_input,
+                SystemSchema.workflow_output,
                 SystemSchema.operation_outputs,
             )
         )
@@ -2427,8 +2427,8 @@ def test_payload_dual_write_and_read_fallback(dbos_dual_write: DBOS) -> None:
     workflow_id = DBOS.list_workflows()[0].workflow_id
     ws, wi, wo = (
         SystemSchema.workflow_status,
-        SystemSchema.workflow_inputs,
-        SystemSchema.workflow_outputs,
+        SystemSchema.workflow_input,
+        SystemSchema.workflow_output,
     )
 
     with dbos_dual_write._sys_db.engine.begin() as c:
@@ -2532,9 +2532,9 @@ def test_payload_gc_spares_a_straggler_then_reclaims_it(
             return (
                 c.execute(
                     sa.select(sa.func.count())
-                    .select_from(SystemSchema.workflow_inputs)
+                    .select_from(SystemSchema.workflow_input)
                     .where(
-                        SystemSchema.workflow_inputs.c.workflow_uuid
+                        SystemSchema.workflow_input.c.workflow_uuid
                         == handle.workflow_id
                     )
                 ).scalar()
@@ -2589,8 +2589,8 @@ def test_straggler_overflow_sweeps_from_the_oldest(dbos: DBOS) -> None:
 
     ws, wi, wo = (
         SystemSchema.workflow_status,
-        SystemSchema.workflow_inputs,
-        SystemSchema.workflow_outputs,
+        SystemSchema.workflow_input,
+        SystemSchema.workflow_output,
     )
     ids = [w.workflow_id for w in DBOS.list_workflows()]
     with dbos._sys_db.engine.begin() as c:
@@ -2711,7 +2711,7 @@ def test_peer_application_payloads_survive(dbos: DBOS) -> None:
             )
         )
         c.execute(
-            sa.insert(SystemSchema.workflow_inputs).values(
+            sa.insert(SystemSchema.workflow_input).values(
                 workflow_uuid=peer_id, inputs="{}", retention_timestamp=now
             )
         )
@@ -2721,8 +2721,8 @@ def test_peer_application_payloads_survive(dbos: DBOS) -> None:
         assert (
             c.execute(
                 sa.select(sa.func.count())
-                .select_from(SystemSchema.workflow_inputs)
-                .where(SystemSchema.workflow_inputs.c.workflow_uuid == peer_id)
+                .select_from(SystemSchema.workflow_input)
+                .where(SystemSchema.workflow_input.c.workflow_uuid == peer_id)
             ).scalar()
             == 1
         )
@@ -2733,8 +2733,8 @@ def _orphaned_status_rows(dbos: DBOS) -> tuple[int, int]:
     (any row missing its inputs, terminal rows missing their output)."""
     ws, wi, wo = (
         SystemSchema.workflow_status,
-        SystemSchema.workflow_inputs,
-        SystemSchema.workflow_outputs,
+        SystemSchema.workflow_input,
+        SystemSchema.workflow_output,
     )
     with dbos._sys_db.engine.begin() as c:
         missing_inputs = c.execute(
