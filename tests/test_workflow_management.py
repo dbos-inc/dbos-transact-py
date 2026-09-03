@@ -2503,6 +2503,31 @@ def test_payload_dual_write_and_read_fallback(dbos_dual_write: DBOS) -> None:
         ), "the legacy columns live on workflow_status, so the status sweep takes them"
 
 
+def test_retention_lock_key_is_the_cross_sdk_contract(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    """Rounds in different languages have to contend for one lock, so both the key and
+    the single-bigint form are a contract: changing either splits the lock silently,
+    leaving every SDK collecting at once and none of them the wiser."""
+    assert dbos._sys_db.schema == "dbos"
+    with dbos._sys_db.retention_lock() as held:
+        assert held
+        with dbos._sys_db.engine.connect() as c:
+            # objsubid 1 is the pg_try_advisory_lock(bigint) keyspace. The two-int
+            # form lands in objsubid 2 and never contends with it, same bits or not.
+            advisory = {
+                ((int(classid) << 32) | int(objid), int(objsubid))
+                for classid, objid, objsubid in c.execute(
+                    sa.text(
+                        "SELECT classid, objid, objsubid FROM pg_locks "
+                        "WHERE locktype = 'advisory'"
+                    )
+                )
+            }
+    # The leading 8 bytes of SHA-256 over "dbos.retention.dbos", big-endian signed.
+    assert (7208852302618897048, 1) in advisory
+
+
 def test_payload_garbage_collection(
     dbos: DBOS, skip_with_sqlite_imprecise_time: None
 ) -> None:
