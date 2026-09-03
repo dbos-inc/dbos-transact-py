@@ -15,9 +15,9 @@ from websockets.sync.connection import Connection
 
 from dbos._context import SetWorkflowID
 from dbos._scheduler import backfill_schedule, trigger_schedule
+from dbos._sys_db import DEFAULT_GC_BATCH_SIZE
 from dbos._utils import GlobalParams, generate_uuid
 from dbos._workflow_commands import (
-    DEFAULT_GC_BATCH_SIZE,
     delete_workflow,
     garbage_collect,
     get_workflow,

@@ -375,7 +375,9 @@ class VersionInfo(TypedDict):
     application_name: Optional[str]
 
 
-# Workflows re-owned per transaction by a rename. Matches the GC default.
+# Default number of rows deleted per garbage collection batch
+DEFAULT_GC_BATCH_SIZE = 50_000
+# Workflows re-owned per transaction by a rename.
 DEFAULT_RENAME_BATCH_SIZE = 10_000
 
 
@@ -5518,7 +5520,7 @@ class SystemDatabase(ABC):
         self,
         cutoff: int,
         *,
-        batch_size: int = 10000,
+        batch_size: int = DEFAULT_GC_BATCH_SIZE,
     ) -> tuple[int, int, int]:
         """Delete payload and step rows below the cutoff whose workflow is gone,
         returning the count removed from each table. Runs after the status sweep,

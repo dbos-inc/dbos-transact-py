@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Optional
 from dbos._context import get_local_dbos_context
 from dbos._utils import generate_uuid
 
-from ._sys_db import SystemDatabase, WorkflowStatus
+from ._sys_db import DEFAULT_GC_BATCH_SIZE, SystemDatabase, WorkflowStatus
 
 if TYPE_CHECKING:
     from ._dbos import DBOS
@@ -78,10 +78,6 @@ def delete_workflow(
     dbos._sys_db.delete_workflows(all_ids)
     if dbos._app_db:
         dbos._app_db.delete_transaction_outputs(all_ids)
-
-
-# Default number of rows deleted per garbage collection batch
-DEFAULT_GC_BATCH_SIZE = 10_000
 
 
 def garbage_collect(

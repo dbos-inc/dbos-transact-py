@@ -446,7 +446,8 @@ def test_claiming_skips_another_applications_workflows(dbos: DBOS) -> None:
 def test_bulk_operations_across_applications(dbos: DBOS) -> None:
     """The two bulk operations scope differently. Timing out cancels running work,
     so it takes own plus unclaimed rows only; retention is system-wide."""
-    from dbos._workflow_commands import DEFAULT_GC_BATCH_SIZE, global_timeout
+    from dbos._sys_db import DEFAULT_GC_BATCH_SIZE
+    from dbos._workflow_commands import global_timeout
 
     @DBOS.workflow()
     def wf() -> int:
