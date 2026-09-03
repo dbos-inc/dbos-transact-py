@@ -2461,6 +2461,20 @@ def test_payload_dual_write_and_read_fallback(dbos_dual_write: DBOS) -> None:
     forked: WorkflowHandle[int] = DBOS.fork_workflow(workflow_id, 1)
     assert forked.get_result() == 11
 
+    # Retention in the configuration that actually ships: a round collects both
+    # destinations, including the legacy-only row, and leaves nothing stranded.
+    garbage_collect(
+        dbos_dual_write,
+        cutoff_epoch_timestamp_ms=int(time.time() * 1000) + 60_000,
+        rows_threshold=None,
+    )
+    assert DBOS.list_workflows() == []
+    assert _payload_counts(dbos_dual_write) == (0, 0, 0)
+    with dbos_dual_write._sys_db.engine.begin() as c:
+        assert (
+            c.execute(sa.select(sa.func.count()).select_from(ws)).scalar() == 0
+        ), "the legacy columns live on workflow_status, so the status sweep takes them"
+
 
 def test_payload_garbage_collection(
     dbos: DBOS, skip_with_sqlite_imprecise_time: None
@@ -2485,6 +2499,20 @@ def test_payload_garbage_collection(
     # A cutoff in the past reaches nothing.
     assert dbos._sys_db.garbage_collect_payloads(0) == (0, 0, 0)
     assert _payload_counts(dbos) == (num_workflows, num_workflows, num_workflows * 2)
+
+    # The advisory lock is what keeps two rounds from overlapping, so a round that
+    # cannot take it must collect nothing at all. Postgres only: the base
+    # implementation has no lock to contend for and always proceeds.
+    if dbos._sys_db.engine.dialect.name == "postgresql":
+        with dbos._sys_db.retention_lock() as held:
+            assert held
+            garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1)
+        assert len(DBOS.list_workflows()) == num_workflows
+        assert _payload_counts(dbos) == (
+            num_workflows,
+            num_workflows,
+            num_workflows * 2,
+        )
 
     # Collect all but the newest. One round does both halves: the status sweep
     # drops the rows and the payload sweep collects what it left behind.
@@ -2516,8 +2544,15 @@ def test_payload_gc_spares_a_straggler_then_reclaims_it(
     def workflow(x: int) -> int:
         return x
 
+    @DBOS.step()
+    def checkpoint() -> int:
+        return 1
+
     @DBOS.workflow()
     def blocked_workflow() -> int:
+        # A recorded step, so what the sweep spares covers the checkpoints a
+        # replay would read and not only the inputs.
+        checkpoint()
         started.set()
         # Bounded, so a failing assertion below can never park this thread and
         # hang shutdown on the join.
@@ -2527,18 +2562,20 @@ def test_payload_gc_spares_a_straggler_then_reclaims_it(
     handle = DBOS.start_workflow(blocked_workflow)
     assert started.wait(timeout=30)
 
-    def blocked_rows() -> int:
+    def blocked_rows() -> tuple[int, int]:
+        """(inputs, step checkpoints) still stored for the blocked workflow."""
         with dbos._sys_db.engine.begin() as c:
-            return (
+            return tuple(  # type: ignore[return-value]
                 c.execute(
                     sa.select(sa.func.count())
-                    .select_from(SystemSchema.workflow_input)
-                    .where(
-                        SystemSchema.workflow_input.c.workflow_uuid
-                        == handle.workflow_id
-                    )
+                    .select_from(table)
+                    .where(table.c.workflow_uuid == handle.workflow_id)
                 ).scalar()
                 or 0
+                for table in (
+                    SystemSchema.workflow_input,
+                    SystemSchema.operation_outputs,
+                )
             )
 
     try:
@@ -2557,7 +2594,9 @@ def test_payload_gc_spares_a_straggler_then_reclaims_it(
         before = _payload_counts(dbos)
         garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1)
         assert _payload_counts(dbos) == before
-        assert blocked_rows() == 1
+        # Inputs and the step checkpoint both survive, so a recovery of this
+        # workflow would replay the step rather than run it again.
+        assert blocked_rows() == (1, 1)
     finally:
         event.set()
     assert handle.get_result() == 0
@@ -2571,7 +2610,7 @@ def test_payload_gc_spares_a_straggler_then_reclaims_it(
             )
         )
     dbos._sys_db.garbage_collect_payloads(int(time.time() * 1000) + 60_000)
-    assert blocked_rows() == 0
+    assert blocked_rows() == (0, 0)
 
 
 def test_straggler_overflow_sweeps_from_the_oldest(dbos: DBOS) -> None:

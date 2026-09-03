@@ -1,6 +1,7 @@
 """Conductor websocket lifecycle: staying connected, and disconnecting on time.
 
-Two regressions live here, at opposite ends of the connection's life.
+Two regressions live here, at opposite ends of the connection's life, plus one
+command the loop must not run inline.
 
 Reconnect (test_conductor_reconnects_after_keepalive_timeout): when the
 websockets library's built-in keepalive fires (websockets >= 15.0) and the close
@@ -18,6 +19,9 @@ as the executor's liveness signal, so dropping it at the start of the wait lets
 Conductor declare this executor dead mid-drain and have a peer re-enqueue
 workflows that are still running here. The connection must stay up for the whole
 wait and only be torn down just before the system database is.
+
+Retention (test_conductor_retention_answers_at_once_and_still_collects): a round
+takes minutes, so the loop dispatches it to a thread and answers immediately.
 """
 
 import base64
@@ -308,6 +312,8 @@ class _ConductorStandIn:
     def __init__(self) -> None:
         self.connected = threading.Event()
         self.disconnected_at: Optional[float] = None
+        self.received: List[str] = []
+        self._connection: Optional[ServerConnection] = None
         self._lock = threading.Lock()
         self._open = 0
         self._server = serve(self._handle, "127.0.0.1", 0)
@@ -325,14 +331,22 @@ class _ConductorStandIn:
     def stop(self) -> None:
         self._server.shutdown()
 
+    def send(self, payload: str) -> None:
+        """Dispatch a command to the executor, as Conductor would."""
+        connection = self._connection
+        assert connection is not None, "no executor is connected"
+        connection.send(payload)
+
     def _handle(self, websocket: ServerConnection) -> None:
         with self._lock:
             self._open += 1
+            self._connection = websocket
         self.connected.set()
         try:
-            # Send nothing; hold the connection open until the client closes it.
-            for _ in websocket:
-                pass
+            # Send nothing unasked; hold the connection open until the client closes it.
+            for message in websocket:
+                with self._lock:
+                    self.received.append(str(message))
         except Exception:
             pass
         finally:
@@ -426,3 +440,64 @@ def test_conductor_connection_outlives_shutdown_drain(
         if destroy_thread is not None:
             destroy_thread.join(timeout=60)
         DBOS.destroy(destroy_registry=True)
+
+
+def test_conductor_retention_answers_at_once_and_still_collects(
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+    conductor_stand_in: _ConductorStandIn,
+) -> None:
+    """A retention round takes minutes, so it runs off the command loop: the
+    response comes back without waiting for it, and the round still collects."""
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(
+        config=config,
+        conductor_key="test-key",
+        conductor_url=f"ws://127.0.0.1:{conductor_stand_in.port}",
+    )
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    DBOS.launch()
+    try:
+        assert conductor_stand_in.connected.wait(timeout=10)
+        assert workflow(1) == 1
+        assert len(DBOS.list_workflows()) == 1
+
+        conductor_stand_in.send(
+            p.RetentionRequest(
+                type=p.MessageType.RETENTION,
+                request_id="retention-round-1",
+                body={
+                    "gc_cutoff_epoch_ms": int(time.time() * 1000) + 60_000,
+                    "gc_rows_threshold": None,
+                    # Null rather than absent: a Conductor that omits a batch size
+                    # must fall back to the default instead of failing validation.
+                    "gc_batch_size": None,
+                    "timeout_cutoff_epoch_ms": None,
+                },
+            ).to_json()
+        )
+
+        def answered() -> None:
+            with conductor_stand_in._lock:
+                messages = list(conductor_stand_in.received)
+            assert any(
+                p.BaseMessage.from_json(m).request_id == "retention-round-1"
+                for m in messages
+            ), "the command loop never answered the retention request"
+
+        retry_until_success(answered, interval=0.2, max_attempts=100)
+
+        def collected() -> None:
+            assert DBOS.list_workflows() == []
+
+        retry_until_success(collected, interval=0.2, max_attempts=100)
+
+        # The round ran on its own thread, so the loop is still serving commands.
+        conductor = dbos.conductor_websocket
+        assert conductor is not None and conductor.is_alive()
+    finally:
+        DBOS.destroy()
