@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Optional
 from dbos._context import get_local_dbos_context
 from dbos._utils import generate_uuid
 
-from ._sys_db import SystemDatabase, WorkflowStatus
+from ._sys_db import DEFAULT_GC_BATCH_SIZE, SystemDatabase, WorkflowStatus
 
 if TYPE_CHECKING:
     from ._dbos import DBOS
@@ -80,28 +80,37 @@ def delete_workflow(
         dbos._app_db.delete_transaction_outputs(all_ids)
 
 
-# Default number of rows deleted per garbage collection batch
-DEFAULT_GC_BATCH_SIZE = 10_000
-
-
 def garbage_collect(
     dbos: "DBOS",
     cutoff_epoch_timestamp_ms: Optional[int],
     rows_threshold: Optional[int],
     *,
-    batch_size: Optional[int] = DEFAULT_GC_BATCH_SIZE,
+    batch_size: int = DEFAULT_GC_BATCH_SIZE,
 ) -> None:
+    """Enforce retention across the entire system database."""
     if cutoff_epoch_timestamp_ms is None and rows_threshold is None:
         return
-    cutoff = dbos._sys_db.garbage_collect(
-        cutoff_epoch_timestamp_ms=cutoff_epoch_timestamp_ms,
-        rows_threshold=rows_threshold,
-        batch_size=batch_size,
-    )
-    # The application database is deprecated: only pay for its cleanup when one exists.
-    if cutoff is not None and dbos._app_db is not None:
-        retained_ids = dbos._sys_db.list_retained_workflow_ids(cutoff)
-        dbos._app_db.garbage_collect(cutoff, retained_ids, batch_size=batch_size)
+    with dbos._sys_db.retention_lock() as acquired:
+        if not acquired:
+            dbos.logger.warning(
+                "Skipping retention: another round is already running against this "
+                "system database."
+            )
+            return
+        cutoff = dbos._sys_db.garbage_collect(
+            cutoff_epoch_timestamp_ms=cutoff_epoch_timestamp_ms,
+            rows_threshold=rows_threshold,
+            batch_size=batch_size,
+        )
+        if cutoff is None:
+            return
+        # The application database is deprecated: only pay for its cleanup when one exists.
+        if dbos._app_db is not None:
+            retained_ids = dbos._sys_db.list_retained_workflow_ids(cutoff)
+            dbos._app_db.garbage_collect(cutoff, retained_ids, batch_size=batch_size)
+        # Strictly after the status sweep: the payload sweep only takes orphans, so
+        # this round's are only visible to it once that sweep has committed.
+        dbos._sys_db.garbage_collect_payloads(cutoff, batch_size=batch_size)
 
 
 def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:

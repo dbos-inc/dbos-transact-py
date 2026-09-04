@@ -15,9 +15,9 @@ from websockets.sync.connection import Connection
 
 from dbos._context import SetWorkflowID
 from dbos._scheduler import backfill_schedule, trigger_schedule
+from dbos._sys_db import DEFAULT_GC_BATCH_SIZE
 from dbos._utils import GlobalParams, generate_uuid
 from dbos._workflow_commands import (
-    DEFAULT_GC_BATCH_SIZE,
     delete_workflow,
     garbage_collect,
     get_workflow,
@@ -54,6 +54,7 @@ class ConductorWebsocket(threading.Thread):
         self.ping_interval = 20  # Time between pings in seconds
         self.ping_timeout = 15  # Time to wait for a pong response in seconds
         self.keepalive_thread: Optional[threading.Thread] = None
+        self.retention_thread: Optional[threading.Thread] = None
         self.pong_event: Optional[threading.Event] = None
         self.last_ping_time = -1.0
 
@@ -589,35 +590,58 @@ class ConductorWebsocket(threading.Thread):
                             websocket.send(list_steps_response.to_json())
                         elif msg_type == p.MessageType.RETENTION:
                             retention_message = p.RetentionRequest.from_json(message)
-                            success = True
-                            try:
-                                garbage_collect(
-                                    self.dbos,
-                                    cutoff_epoch_timestamp_ms=retention_message.body[
-                                        "gc_cutoff_epoch_ms"
-                                    ],
-                                    rows_threshold=retention_message.body[
-                                        "gc_rows_threshold"
-                                    ],
-                                    # Older Conductor versions may not send gc_batch_size
-                                    batch_size=retention_message.body.get(
-                                        "gc_batch_size", DEFAULT_GC_BATCH_SIZE
-                                    ),
-                                )
-                                if (
-                                    retention_message.body["timeout_cutoff_epoch_ms"]
-                                    is not None
-                                ):
-                                    global_timeout(
+                            retention_body = retention_message.body
+
+                            def run_retention() -> None:
+                                try:
+                                    garbage_collect(
                                         self.dbos,
-                                        retention_message.body[
-                                            "timeout_cutoff_epoch_ms"
+                                        cutoff_epoch_timestamp_ms=retention_body[
+                                            "gc_cutoff_epoch_ms"
                                         ],
+                                        rows_threshold=retention_body[
+                                            "gc_rows_threshold"
+                                        ],
+                                        # Older Conductor versions may not send
+                                        # gc_batch_size, and newer ones may send null
+                                        batch_size=retention_body.get("gc_batch_size")
+                                        or DEFAULT_GC_BATCH_SIZE,
                                     )
-                            except Exception as e:
-                                error_message = f"Exception encountered during enforcing retention policy: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
-                                success = False
+                                    timeout_cutoff = retention_body[
+                                        "timeout_cutoff_epoch_ms"
+                                    ]
+                                    if timeout_cutoff is not None:
+                                        global_timeout(self.dbos, timeout_cutoff)
+                                except Exception:
+                                    if self.evt.is_set():
+                                        # Shutdown took the system database away
+                                        # mid-round; the next round resumes the work.
+                                        self.dbos.logger.debug(
+                                            "Retention interrupted by shutdown"
+                                        )
+                                        return
+                                    self.dbos.logger.error(
+                                        "Exception encountered during enforcing "
+                                        f"retention policy: {traceback.format_exc()}"
+                                    )
+
+                            # Off this thread: a round takes minutes, and blocking
+                            # here stops every other command and lets the dispatch
+                            # time out into a second round on another executor.
+                            success = True
+                            if (
+                                self.retention_thread is not None
+                                and self.retention_thread.is_alive()
+                            ):
+                                self.dbos.logger.warning(
+                                    "Skipping retention: the previous round on this "
+                                    "executor is still running."
+                                )
+                            else:
+                                self.retention_thread = threading.Thread(
+                                    target=run_retention, daemon=True
+                                )
+                                self.retention_thread.start()
 
                             retention_response = p.RetentionResponse(
                                 type=p.MessageType.RETENTION,
@@ -1181,3 +1205,8 @@ class ConductorWebsocket(threading.Thread):
             if self.pong_event is not None:
                 self.pong_event.set()
             self.keepalive_thread.join()
+
+        # Give a round in flight a bounded chance to finish before destroy() takes
+        # the system database away from it. destroy()'s join on this thread caps it.
+        if self.retention_thread is not None:
+            self.retention_thread.join(timeout=10.0)

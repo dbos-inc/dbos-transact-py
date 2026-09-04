@@ -155,17 +155,29 @@ class SystemSchema:
         ),
     )
 
+    workflow_input = Table(
+        "workflow_input",
+        metadata_obj,
+        Column("workflow_uuid", Text, primary_key=True),
+        Column("inputs", Text, nullable=True),
+        Column("retention_timestamp", BigInteger, nullable=False),
+        Index("idx_workflow_input_retention", "retention_timestamp"),
+    )
+
+    workflow_output = Table(
+        "workflow_output",
+        metadata_obj,
+        Column("workflow_uuid", Text, primary_key=True),
+        Column("output", Text, nullable=True),
+        Column("error", Text, nullable=True),
+        Column("retention_timestamp", BigInteger, nullable=False),
+        Index("idx_workflow_output_retention", "retention_timestamp"),
+    )
+
     operation_outputs = Table(
         "operation_outputs",
         metadata_obj,
-        Column(
-            "workflow_uuid",
-            Text,
-            ForeignKey(
-                "workflow_status.workflow_uuid", onupdate="CASCADE", ondelete="CASCADE"
-            ),
-            nullable=False,
-        ),
+        Column("workflow_uuid", Text, nullable=False),
         Column("function_id", Integer, nullable=False),
         Column("function_name", Text, nullable=False),
         Column("output", Text, nullable=True),
@@ -176,7 +188,11 @@ class SystemSchema:
         Column("serialization", Text()),
         # Denormalized from the parent so step observability filters without a join.
         Column("application_name", Text, nullable=True),
+        # Sweep order only: the payload sweep deletes by absence of a status row, so
+        # this bounds what a round scans rather than deciding what it may delete.
+        Column("retention_timestamp", BigInteger, nullable=False),
         PrimaryKeyConstraint("workflow_uuid", "function_id"),
+        Index("idx_operation_outputs_retention", "retention_timestamp"),
         Index(
             "idx_operation_outputs_completed_at_function_name",
             "completed_at_epoch_ms",

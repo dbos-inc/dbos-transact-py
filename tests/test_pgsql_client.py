@@ -60,12 +60,17 @@ def _get_workflow_status(
     engine: sa.Engine, schema: str, workflow_id: str
 ) -> Optional[Dict[str, Any]]:
     """Get workflow status from database."""
+    # Payloads come from the split tables, falling back to the legacy columns so
+    # this reads correctly whether or not dual write is on.
     sql = f"""
-    SELECT workflow_uuid, status, name, class_name, queue_name, 
-           deduplication_id, priority, inputs, created_at, updated_at,
-           application_version, output, error
-    FROM "{schema}".workflow_status 
-    WHERE workflow_uuid = :workflow_id
+    SELECT s.workflow_uuid, s.status, s.name, s.class_name, s.queue_name,
+           s.deduplication_id, s.priority, COALESCE(i.inputs, s.inputs),
+           s.created_at, s.updated_at, s.application_version,
+           COALESCE(o.output, s.output), COALESCE(o.error, s.error)
+    FROM "{schema}".workflow_status s
+    LEFT JOIN "{schema}".workflow_input i ON i.workflow_uuid = s.workflow_uuid
+    LEFT JOIN "{schema}".workflow_output o ON o.workflow_uuid = s.workflow_uuid
+    WHERE s.workflow_uuid = :workflow_id
     """
     row = _execute_sql(engine, sql, {"workflow_id": workflow_id})
     if row:

@@ -374,7 +374,9 @@ class VersionInfo(TypedDict):
     application_name: Optional[str]
 
 
-# Workflows re-owned per transaction by a rename. Matches the GC default.
+# Default number of rows deleted per garbage collection batch
+DEFAULT_GC_BATCH_SIZE = 50_000
+# Workflows re-owned per transaction by a rename.
 DEFAULT_RENAME_BATCH_SIZE = 10_000
 
 
@@ -724,6 +726,9 @@ class SystemDatabase(ABC):
         self.engine = base_engine.execution_options(
             schema_translate_map={SCHEMA_PLACEHOLDER: self.schema}
         )
+        self._is_cockroach = system_database_url.startswith(
+            "cockroachdb"
+        ) or self.engine.url.drivername.startswith("cockroachdb")
         self._engine_kwargs = engine_kwargs
 
         # Cap concurrent polling reads (default half the pool, min 1; non-positive disables) so a storm can't starve the control plane. See PollingLimiter.
@@ -955,8 +960,6 @@ class SystemDatabase(ABC):
                 name=status["name"],
                 class_name=status["class_name"],
                 config_name=status["config_name"],
-                output=status["output"],
-                error=status["error"],
                 executor_id=status["executor_id"],
                 application_version=status["app_version"],
                 application_id=status["app_id"],
@@ -969,7 +972,6 @@ class SystemDatabase(ABC):
                 workflow_deadline_epoch_ms=status["workflow_deadline_epoch_ms"],
                 deduplication_id=status["deduplication_id"],
                 priority=status["priority"],
-                inputs=status["inputs"],
                 serialization=status["serialization"],
                 queue_partition_key=status["queue_partition_key"],
                 parent_workflow_id=status["parent_workflow_id"],
@@ -999,8 +1001,19 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.serialization,
         )
 
+        inputs_insert = (
+            self.dialect.insert(SystemSchema.workflow_input)
+            .values(
+                workflow_uuid=status["workflow_uuid"],
+                inputs=status["inputs"],
+            )
+            .on_conflict_do_nothing(index_elements=["workflow_uuid"])
+        )
+        # Two statements, not a data-modifying CTE: at scale the CTE costs more
+        # than the round trip it saves.
         try:
             results = conn.execute(cmd)
+            conn.execute(inputs_insert)
         except DBAPIError as dbapi_error:
             # Unique constraint violation for the deduplication ID
             if self._is_unique_constraint_violation(dbapi_error):
@@ -1106,8 +1119,6 @@ class SystemDatabase(ABC):
                 sa.update(SystemSchema.workflow_status)
                 .values(
                     status=status,
-                    output=output,
-                    error=error,
                     # As the workflow is complete, remove its deduplication ID
                     deduplication_id=None,
                     updated_at=now_ms,
@@ -1119,7 +1130,22 @@ class SystemDatabase(ABC):
                     == WorkflowStatusString.PENDING.value
                 )
             )
-            return result.rowcount > 0
+            if result.rowcount == 0:
+                # The outcome was not ours to write, so leave no orphan payload.
+                return False
+            c.execute(
+                self.dialect.insert(SystemSchema.workflow_output)
+                .values(
+                    workflow_uuid=workflow_id,
+                    output=output,
+                    error=error,
+                )
+                .on_conflict_do_update(
+                    index_elements=["workflow_uuid"],
+                    set_={"output": output, "error": error},
+                )
+            )
+            return True
 
     def cancel_workflows(
         self,
@@ -1318,7 +1344,6 @@ class SystemDatabase(ABC):
                 .where(self._name_filter(wsc.application_name, application_name))
                 .values(
                     delay_until_epoch_ms=capped_delay,
-                    inputs=inputs,
                     serialization=serialization,
                     updated_at=self._now_ms_sql(),
                     # Claim it for the target, as its dequeue would: left unclaimed, every peer coalesces onto the one workflow and the last inputs win.
@@ -1329,6 +1354,18 @@ class SystemDatabase(ABC):
                 .returning(wsc.workflow_uuid)
             ).fetchone()
             if updated is not None:
+                c.execute(
+                    self.dialect.insert(SystemSchema.workflow_input)
+                    .values(
+                        workflow_uuid=updated[0],
+                        inputs=inputs,
+                        retention_timestamp=self._now_ms_sql(),
+                    )
+                    .on_conflict_do_update(
+                        index_elements=["workflow_uuid"],
+                        set_={"inputs": inputs},
+                    )
+                )
                 return {
                     "bounced_workflow_id": updated[0],
                     "holder_workflow_id": None,
@@ -1388,6 +1425,16 @@ class SystemDatabase(ABC):
     def delete_workflows(self, workflow_ids: list[str]) -> None:
         """Delete workflows and all associated data from the system database."""
         with self.engine.begin() as c:
+            # The payload tables carry no foreign key, so the status delete does
+            # not cascade into them; without this they survive as orphans.
+            for table in (
+                SystemSchema.workflow_input,
+                SystemSchema.workflow_output,
+                SystemSchema.operation_outputs,
+            ):
+                c.execute(
+                    sa.delete(table).where(table.c.workflow_uuid.in_(workflow_ids))
+                )
             c.execute(
                 sa.delete(SystemSchema.workflow_status).where(
                     SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids)
@@ -1427,11 +1474,22 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.authenticated_user,
                     SystemSchema.workflow_status.c.authenticated_roles,
                     SystemSchema.workflow_status.c.assumed_role,
-                    SystemSchema.workflow_status.c.inputs,
+                    sa.func.coalesce(
+                        SystemSchema.workflow_input.c.inputs,
+                        SystemSchema.workflow_status.c.inputs,
+                    ).label("inputs"),
                     SystemSchema.workflow_status.c.serialization,
                     SystemSchema.workflow_status.c.attributes,
                     SystemSchema.workflow_status.c.application_name,
-                ).where(
+                )
+                .select_from(
+                    SystemSchema.workflow_status.outerjoin(
+                        SystemSchema.workflow_input,
+                        SystemSchema.workflow_status.c.workflow_uuid
+                        == SystemSchema.workflow_input.c.workflow_uuid,
+                    )
+                )
+                .where(
                     SystemSchema.workflow_status.c.workflow_uuid.in_(
                         original_workflow_ids
                     )
@@ -1469,7 +1527,6 @@ class SystemDatabase(ABC):
                                 else INTERNAL_QUEUE_NAME
                             ),
                             queue_partition_key=queue_partition_key,
-                            inputs=status[8],
                             assumed_role=status[7],
                             forked_from=original_workflow_id,
                             attributes=status[10],
@@ -1479,6 +1536,20 @@ class SystemDatabase(ABC):
                         )
                         for original_workflow_id, forked_workflow_id, status in zip(
                             original_workflow_ids, forked_workflow_ids, statuses
+                        )
+                    ]
+                )
+            )
+
+            c.execute(
+                sa.insert(SystemSchema.workflow_input).values(
+                    [
+                        dict(
+                            workflow_uuid=forked_workflow_id,
+                            inputs=status[8],
+                        )
+                        for forked_workflow_id, status in zip(
+                            forked_workflow_ids, statuses
                         )
                     ]
                 )
@@ -1551,6 +1622,7 @@ class SystemDatabase(ABC):
                             "started_at_epoch_ms",
                             "completed_at_epoch_ms",
                             "application_name",
+                            "retention_timestamp",
                         ],
                         sa.select(
                             mapping_subquery.c.fork_id.label("workflow_uuid"),
@@ -1562,8 +1634,8 @@ class SystemDatabase(ABC):
                             child_wf_expr,
                             oo.c.started_at_epoch_ms,
                             oo.c.completed_at_epoch_ms,
-                            # Copied steps carry the owner the fork itself resolved to.
                             mapping_subquery.c.owner,
+                            self._now_ms_sql(),
                         ).select_from(
                             mapping_subquery.join(
                                 oo,
@@ -1804,7 +1876,9 @@ class SystemDatabase(ABC):
                         ws.c.workflow_timeout_ms,
                         ws.c.deduplication_id,
                         ws.c.priority,
-                        ws.c.inputs,
+                        sa.func.coalesce(
+                            SystemSchema.workflow_input.c.inputs, ws.c.inputs
+                        ).label("inputs"),
                         ws.c.queue_partition_key,
                         ws.c.forked_from,
                         ws.c.parent_workflow_id,
@@ -1816,7 +1890,15 @@ class SystemDatabase(ABC):
                         ws.c.debounce_deadline_epoch_ms,
                         ws.c.is_debounced,
                         ws.c.application_name,
-                    ).where(ws.c.workflow_uuid.in_(chunk))
+                    )
+                    .select_from(
+                        ws.outerjoin(
+                            SystemSchema.workflow_input,
+                            ws.c.workflow_uuid
+                            == SystemSchema.workflow_input.c.workflow_uuid,
+                        )
+                    )
+                    .where(ws.c.workflow_uuid.in_(chunk))
                 ).fetchall()
             # Keyed by column name, not position, so adding a column above cannot
             # silently shift every field. output/error/owner_xid are never selected.
@@ -1875,10 +1957,24 @@ class SystemDatabase(ABC):
             return c.execute(
                 sa.select(
                     SystemSchema.workflow_status.c.status,
-                    SystemSchema.workflow_status.c.output,
-                    SystemSchema.workflow_status.c.error,
+                    sa.func.coalesce(
+                        SystemSchema.workflow_output.c.output,
+                        SystemSchema.workflow_status.c.output,
+                    ),
+                    sa.func.coalesce(
+                        SystemSchema.workflow_output.c.error,
+                        SystemSchema.workflow_status.c.error,
+                    ),
                     SystemSchema.workflow_status.c.serialization,
-                ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                )
+                .select_from(
+                    SystemSchema.workflow_status.outerjoin(
+                        SystemSchema.workflow_output,
+                        SystemSchema.workflow_status.c.workflow_uuid
+                        == SystemSchema.workflow_output.c.workflow_uuid,
+                    )
+                )
+                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
             ).fetchone()
 
     def check_workflow_result(
@@ -2050,7 +2146,7 @@ class SystemDatabase(ABC):
         prefix_list = _to_list(workflow_id_prefix)
         schedule_name_list = _to_list(schedule_name)
 
-        load_columns = [
+        load_columns: List[Any] = [
             SystemSchema.workflow_status.c.workflow_uuid,
             SystemSchema.workflow_status.c.status,
             SystemSchema.workflow_status.c.name,
@@ -2082,16 +2178,50 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.application_name,
         ]
         if load_input:
-            load_columns.append(SystemSchema.workflow_status.c.inputs)
+            load_columns.append(
+                sa.func.coalesce(
+                    SystemSchema.workflow_input.c.inputs,
+                    SystemSchema.workflow_status.c.inputs,
+                ).label("inputs")
+            )
         if load_output:
-            load_columns.append(SystemSchema.workflow_status.c.output)
-            load_columns.append(SystemSchema.workflow_status.c.error)
+            load_columns.append(
+                sa.func.coalesce(
+                    SystemSchema.workflow_output.c.output,
+                    SystemSchema.workflow_status.c.output,
+                ).label("output")
+            )
+            load_columns.append(
+                sa.func.coalesce(
+                    SystemSchema.workflow_output.c.error,
+                    SystemSchema.workflow_status.c.error,
+                ).label("error")
+            )
         if load_input or load_output:
             load_columns.append(SystemSchema.workflow_status.c.serialization)
 
+        # Only join the payload tables the caller actually asked for.
+        from_clause: Any = SystemSchema.workflow_status
+        if load_input:
+            from_clause = from_clause.outerjoin(
+                SystemSchema.workflow_input,
+                SystemSchema.workflow_status.c.workflow_uuid
+                == SystemSchema.workflow_input.c.workflow_uuid,
+            )
+        if load_output:
+            from_clause = from_clause.outerjoin(
+                SystemSchema.workflow_output,
+                SystemSchema.workflow_status.c.workflow_uuid
+                == SystemSchema.workflow_output.c.workflow_uuid,
+            )
+
         if queues_only:
-            query = sa.select(*load_columns).where(
-                SystemSchema.workflow_status.c.queue_name.isnot(None),
+            query = (
+                sa.select(*load_columns)
+                .select_from(from_clause)
+                .where(
+                    SystemSchema.workflow_status.c.queue_name.isnot(None),
+                )
             )
             if not status_list:
                 query = query.where(
@@ -2100,7 +2230,7 @@ class SystemDatabase(ABC):
                     )
                 )
         else:
-            query = sa.select(*load_columns)
+            query = sa.select(*load_columns).select_from(from_clause)
         if sort_desc:
             query = query.order_by(SystemSchema.workflow_status.c.created_at.desc())
         else:
@@ -2841,6 +2971,9 @@ class SystemDatabase(ABC):
                     serialization=result["serialization"],
                     # Mirrors the parent: only the running application records its steps.
                     application_name=self.app_name,
+                    # Explicit rather than the column default, so every engine
+                    # stamps a step the same way.
+                    retention_timestamp=self._now_ms_sql(),
                 )
                 .on_conflict_do_update(
                     index_elements=[
@@ -2925,6 +3058,7 @@ class SystemDatabase(ABC):
                     child_workflow_id=result_workflow_id,
                     started_at_epoch_ms=started_at_epoch_ms,
                     completed_at_epoch_ms=int(time.time() * 1000),
+                    retention_timestamp=self._now_ms_sql(),
                     serialization=serialization,
                     application_name=self.app_name,
                 )
@@ -2959,6 +3093,7 @@ class SystemDatabase(ABC):
             child_workflow_id=childUUID,
             started_at_epoch_ms=started_at_epoch_ms,
             completed_at_epoch_ms=int(time.time() * 1000),
+            retention_timestamp=self._now_ms_sql(),
             application_name=self.app_name,
         )
         try:
@@ -5001,8 +5136,6 @@ class SystemDatabase(ABC):
                     "name": status["name"],
                     "class_name": status["class_name"],
                     "config_name": status["config_name"],
-                    "output": None,
-                    "error": None,
                     "executor_id": status["executor_id"],
                     "application_version": status["app_version"],
                     "application_id": status["app_id"],
@@ -5015,7 +5148,6 @@ class SystemDatabase(ABC):
                     "workflow_deadline_epoch_ms": status["workflow_deadline_epoch_ms"],
                     "deduplication_id": None,
                     "priority": status["priority"],
-                    "inputs": status["inputs"],
                     "serialization": status["serialization"],
                     "queue_partition_key": status["queue_partition_key"],
                     "parent_workflow_id": status["parent_workflow_id"],
@@ -5028,6 +5160,14 @@ class SystemDatabase(ABC):
                     "updated_at": created_ats[i],
                 }
             )
+        input_rows: List[Dict[str, Any]] = [
+            {
+                "workflow_uuid": status["workflow_uuid"],
+                "inputs": status["inputs"],
+                "retention_timestamp": created_ats[i],
+            }
+            for i, status in enumerate(statuses)
+        ]
         inserted: Set[str] = set()
         # Chunk to stay well under bind-parameter limits (~30 params per row).
         chunk_size = 500
@@ -5041,6 +5181,12 @@ class SystemDatabase(ABC):
                     .returning(SystemSchema.workflow_status.c.workflow_uuid)
                 )
                 inserted.update(row[0] for row in result)
+            for start in range(0, len(input_rows), chunk_size):
+                conn.execute(
+                    self.dialect.insert(SystemSchema.workflow_input)
+                    .values(input_rows[start : start + chunk_size])
+                    .on_conflict_do_nothing(index_elements=["workflow_uuid"])
+                )
         return inserted
 
     def _apply_caller_schema(self, conn: Union[sa.Connection, Session]) -> None:
@@ -5312,126 +5458,263 @@ class SystemDatabase(ABC):
             return row[0], _no_stream_value
         return row[0], deserialize_value(row[1], row[2], self.serializer)
 
+    def _retry_on_serialization_error(self, operation: Callable[[], T]) -> T:
+        """Re-run a batch that lost a deadlock or serialization race. The database
+        already rolled it back, so replaying it is safe."""
+        max_attempts, backoff, max_backoff = 10, 0.05, 2.0
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return operation()
+            except DBAPIError as e:
+                if not self._is_serialization_error(e):
+                    raise
+                if attempt == max_attempts:
+                    dbos_logger.warning(
+                        f"Garbage collection failed after {max_attempts} attempts: {str(e.orig)}"
+                    )
+                    raise
+                # Jittered backoff, so peers that collided do not collide again
+                actual_backoff = backoff * (0.5 + random.random())
+                dbos_logger.warning(
+                    f"Contention or deadlock detected in workflow garbage collection: {str(e.orig)}. "
+                    f"Retrying in {actual_backoff:.2f}s (attempt {attempt})"
+                )
+                time.sleep(actual_backoff)
+                backoff = min(backoff * 2, max_backoff)
+        raise AssertionError("unreachable")
+
+    def garbage_collect_payloads(
+        self,
+        cutoff: int,
+        *,
+        batch_size: int = DEFAULT_GC_BATCH_SIZE,
+    ) -> tuple[int, int, int]:
+        """Delete payload and step rows below the cutoff whose workflow is gone,
+        returning the count removed from each table. Runs after the status sweep,
+        whose orphans all fall in range: every payload is stamped no later than
+        the completion that made the row collectable."""
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
+        payload_tables = (
+            SystemSchema.workflow_input,
+            SystemSchema.workflow_output,
+            SystemSchema.operation_outputs,
+        )
+        ws = SystemSchema.workflow_status
+
+        def garbage_collect_table(table: sa.Table) -> int:
+            """Delete a table's orphans below the cutoff, one batch per transaction."""
+            total = 0
+            ts = table.c.retention_timestamp
+            # A payload below the cutoff belongs to a workflow created before it, so the
+            # status side is the few such rows still present, not the whole table.
+            orphaned = ~sa.exists(
+                sa.select(sa.literal(1))
+                .select_from(ws)
+                .where(
+                    ws.c.workflow_uuid == table.c.workflow_uuid,
+                    ws.c.created_at < cutoff,
+                )
+                .correlate(table)
+            )
+
+            # Seed from the oldest row in range.
+            def seed() -> Optional[int]:
+                with self.engine.begin() as c:
+                    return cast(
+                        Optional[int],
+                        c.execute(
+                            sa.select(ts).where(ts < cutoff).order_by(ts).limit(1)
+                        ).scalar(),
+                    )
+
+            oldest = self._retry_on_serialization_error(seed)
+            if oldest is None:
+                return 0
+            watermark = oldest - 1
+
+            def delete_batch(watermark: int) -> Optional[int]:
+                """Delete one batch, returning the watermark to resume from, or
+                None when this table is done."""
+                nonlocal total
+                with self.engine.begin() as c:
+                    # Batches are cut by candidate count, so rows spared by the
+                    # anti-join only thin one out; they are re-checked next round.
+                    step: Optional[int] = c.execute(
+                        sa.select(ts)
+                        .where(ts < cutoff, ts > watermark)
+                        .order_by(ts)
+                        .limit(1)
+                        .offset(batch_size - 1)
+                    ).scalar()
+                    bounds: List[sa.ColumnElement[bool]] = [
+                        ts < cutoff,
+                        ts > watermark,
+                        orphaned,
+                    ]
+                    if step is not None:
+                        # timestamp ties may push the batch slightly over batch_size
+                        bounds.append(ts <= step)
+                    total += c.execute(sa.delete(table).where(*bounds)).rowcount
+                    return step
+
+            while True:
+                next_watermark = self._retry_on_serialization_error(
+                    functools.partial(delete_batch, watermark)
+                )
+                if next_watermark is None:
+                    break
+                watermark = next_watermark
+            return total
+
+        # To optimize performance, vacuum payload tables both before and after garbage-collecting them.
+        table_names = [table.name for table in payload_tables]
+        self._vacuum_tables([ws.name, *table_names])
+
+        # Garbage-collect the three payload tables concurrently.
+        deleted = [0] * len(payload_tables)
+        errors: List[Optional[BaseException]] = [None] * len(payload_tables)
+
+        def sweep(i: int, table: sa.Table) -> None:
+            try:
+                deleted[i] = garbage_collect_table(table)
+            except BaseException as e:
+                errors[i] = e
+
+        threads = [
+            threading.Thread(
+                target=sweep,
+                args=(i, table),
+                daemon=True,
+                name=f"dbos-gc-payload-{table.name}",
+            )
+            for i, table in enumerate(payload_tables)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        failures = [e for e in errors if e is not None]
+        # Only the first can be raised, so the rest would otherwise be lost.
+        for extra in failures[1:]:
+            dbos_logger.warning(f"Payload retention sweep also failed: {extra}")
+        if failures:
+            raise failures[0]
+
+        self._vacuum_tables(table_names)
+        dbos_logger.debug(
+            f"Payload retention deleted {deleted[0]} inputs, {deleted[1]} outputs, "
+            f"and {deleted[2]} steps"
+        )
+        return deleted[0], deleted[1], deleted[2]
+
+    @contextmanager
+    def retention_lock(self) -> Generator[bool, None, None]:
+        """Hold a database-wide lock for one retention round, yielding whether it
+        was taken. Engines without advisory locks always yield True."""
+        yield True
+
+    def _vacuum_tables(self, tables: List[str]) -> None:
+        """VACUUM the tables the sweep just dirtied. No-op where there is no
+        autovacuum to outrun."""
+
     def garbage_collect(
         self,
         cutoff_epoch_timestamp_ms: Optional[int],
         rows_threshold: Optional[int],
-        batch_size: Optional[int],
+        batch_size: int,
     ) -> Optional[int]:
-        """Delete this application's old terminal workflows, returning the cutoff
-        actually used, or None when there is nothing to collect."""
-        if batch_size is not None and batch_size < 1:
+        """Delete old terminal workflows throughout the system database, returning
+        the cutoff actually used, or None when there is nothing to collect."""
+        if batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
         if rows_threshold is not None:
-            with self.engine.begin() as c:
-                # Get the completed_at timestamp of the rows_threshold newest completed row
-                result = c.execute(
-                    sa.select(SystemSchema.workflow_status.c.completed_at)
-                    .where(
-                        SystemSchema.workflow_status.c.completed_at.isnot(None),
-                        self._name_filter(
-                            SystemSchema.workflow_status.c.application_name,
-                            self.app_name,
-                        ),
+            # The completed_at of the rows_threshold newest completed row.
+            def threshold_probe() -> Optional[int]:
+                with self.engine.begin() as c:
+                    return cast(
+                        Optional[int],
+                        c.execute(
+                            sa.select(SystemSchema.workflow_status.c.completed_at)
+                            .where(
+                                SystemSchema.workflow_status.c.completed_at.isnot(None)
+                            )
+                            .order_by(
+                                SystemSchema.workflow_status.c.completed_at.desc()
+                            )
+                            .limit(1)
+                            .offset(rows_threshold - 1)
+                        ).scalar(),
                     )
-                    .order_by(SystemSchema.workflow_status.c.completed_at.desc())
-                    .limit(1)
-                    .offset(rows_threshold - 1)
-                ).fetchone()
 
-                if result is not None:
-                    rows_based_cutoff = result[0]
-                    # Use the more restrictive cutoff (higher timestamp = more recent = more deletion)
-                    if (
-                        cutoff_epoch_timestamp_ms is None
-                        or rows_based_cutoff > cutoff_epoch_timestamp_ms
-                    ):
-                        cutoff_epoch_timestamp_ms = rows_based_cutoff
+            rows_based_cutoff = self._retry_on_serialization_error(threshold_probe)
+            # Use the more restrictive cutoff: higher timestamp means more deletion
+            if rows_based_cutoff is not None and (
+                cutoff_epoch_timestamp_ms is None
+                or rows_based_cutoff > cutoff_epoch_timestamp_ms
+            ):
+                cutoff_epoch_timestamp_ms = rows_based_cutoff
 
         if cutoff_epoch_timestamp_ms is None:
             return None
 
         # completed_at is set on every terminal transition and cleared on resume, so one
         # predicate covers eligibility: in-flight rows hold NULL and never compare true.
-        gc_filter = sa.and_(
-            SystemSchema.workflow_status.c.completed_at
-            < sa.literal(cutoff_epoch_timestamp_ms, sa.BigInteger),
-            # Unclaimed rows included: excluding them would leak pre-upgrade rows forever.
-            self._name_filter(
-                SystemSchema.workflow_status.c.application_name, self.app_name
-            ),
+        gc_filter = SystemSchema.workflow_status.c.completed_at < sa.literal(
+            cutoff_epoch_timestamp_ms, sa.BigInteger
         )
 
-        def retry_on_serialization_error(operation: Callable[[], T]) -> T:
-            """Re-run a batch that lost a deadlock or serialization race. The database
-            already rolled it back, so replaying it is safe."""
-            max_attempts, backoff, max_backoff = 10, 0.05, 2.0
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    return operation()
-                except DBAPIError as e:
-                    if not self._is_serialization_error(e):
-                        raise
-                    if attempt == max_attempts:
-                        dbos_logger.warning(
-                            f"Garbage collection failed after {max_attempts} attempts: {str(e.orig)}"
-                        )
-                        raise
-                    # Jittered backoff, so peers that collided do not collide again
-                    actual_backoff = backoff * (0.5 + random.random())
-                    dbos_logger.warning(
-                        f"Contention or deadlock detected in workflow garbage collection: {str(e.orig)}. "
-                        f"Retrying in {actual_backoff:.2f}s (attempt {attempt})"
-                    )
-                    time.sleep(actual_backoff)
-                    backoff = min(backoff * 2, max_backoff)
-            raise AssertionError("unreachable")
-
-        if batch_size is None:
-
-            def delete_all() -> None:
-                with self.engine.begin() as c:
-                    c.execute(sa.delete(SystemSchema.workflow_status).where(gc_filter))
-
-            retry_on_serialization_error(delete_all)
-        else:
-            # Batch-delete by advancing a completed_at watermark, one committed transaction per batch
-            def delete_batch(watermark: int) -> Optional[int]:
-                """Delete one batch, returning the watermark to resume from, or None when done."""
-                with self.engine.begin() as c:
-                    # Find the completed_at of the batch_size-th oldest eligible row above the watermark
-                    step: Optional[int] = c.execute(
-                        sa.select(SystemSchema.workflow_status.c.completed_at)
-                        .where(
-                            gc_filter,
-                            SystemSchema.workflow_status.c.completed_at > watermark,
-                        )
-                        .order_by(SystemSchema.workflow_status.c.completed_at)
-                        .limit(1)
-                        .offset(batch_size - 1)
-                    ).scalar()
-                    # A row that terminalizes mid-pass takes completed_at > cutoff, so it can
-                    # never fall below the watermark: the tail above it is all that remains.
-                    bounds: List[sa.ColumnElement[bool]] = [
+        # Batch-delete by advancing a completed_at watermark, one committed transaction per batch
+        def delete_batch(watermark: int) -> Optional[int]:
+            """Delete one batch, returning the watermark to resume from, or None when done."""
+            with self.engine.begin() as c:
+                # Find the completed_at of the batch_size-th oldest eligible row above the watermark
+                step: Optional[int] = c.execute(
+                    sa.select(SystemSchema.workflow_status.c.completed_at)
+                    .where(
                         gc_filter,
                         SystemSchema.workflow_status.c.completed_at > watermark,
-                    ]
-                    if step is not None:
-                        # completed_at ties may push the batch slightly over batch_size
-                        bounds.append(
-                            SystemSchema.workflow_status.c.completed_at <= step
-                        )
-                    c.execute(sa.delete(SystemSchema.workflow_status).where(*bounds))
-                    return step
-
-            watermark = 0
-            while True:
-                next_watermark = retry_on_serialization_error(
-                    functools.partial(delete_batch, watermark)
+                    )
+                    .order_by(SystemSchema.workflow_status.c.completed_at)
+                    .limit(1)
+                    .offset(batch_size - 1)
+                ).scalar()
+                if step is None:
+                    # Unbounded: an import can land a completed_at below the watermark mid-pass.
+                    c.execute(sa.delete(SystemSchema.workflow_status).where(gc_filter))
+                    return None
+                # completed_at ties may push the batch slightly over batch_size
+                c.execute(
+                    sa.delete(SystemSchema.workflow_status).where(
+                        gc_filter,
+                        SystemSchema.workflow_status.c.completed_at > watermark,
+                        SystemSchema.workflow_status.c.completed_at <= step,
+                    )
                 )
-                if next_watermark is None:
-                    break
-                watermark = next_watermark
+                return step
+
+        # Seeded from the oldest eligible row
+        def status_seed() -> Optional[int]:
+            with self.engine.begin() as c:
+                return cast(
+                    Optional[int],
+                    c.execute(
+                        sa.select(SystemSchema.workflow_status.c.completed_at)
+                        .where(gc_filter)
+                        .order_by(SystemSchema.workflow_status.c.completed_at)
+                        .limit(1)
+                    ).scalar(),
+                )
+
+        oldest = self._retry_on_serialization_error(status_seed)
+        watermark = 0 if oldest is None else oldest - 1
+        while True:
+            next_watermark = self._retry_on_serialization_error(
+                functools.partial(delete_batch, watermark)
+            )
+            if next_watermark is None:
+                break
+            watermark = next_watermark
 
         return cutoff_epoch_timestamp_ms
 
@@ -5689,8 +5972,14 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.authenticated_user,
                         SystemSchema.workflow_status.c.assumed_role,
                         SystemSchema.workflow_status.c.authenticated_roles,
-                        SystemSchema.workflow_status.c.output,
-                        SystemSchema.workflow_status.c.error,
+                        sa.func.coalesce(
+                            SystemSchema.workflow_output.c.output,
+                            SystemSchema.workflow_status.c.output,
+                        ),
+                        sa.func.coalesce(
+                            SystemSchema.workflow_output.c.error,
+                            SystemSchema.workflow_status.c.error,
+                        ),
                         SystemSchema.workflow_status.c.executor_id,
                         SystemSchema.workflow_status.c.created_at,
                         SystemSchema.workflow_status.c.updated_at,
@@ -5704,7 +5993,10 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
                         SystemSchema.workflow_status.c.started_at_epoch_ms,
                         SystemSchema.workflow_status.c.deduplication_id,
-                        SystemSchema.workflow_status.c.inputs,
+                        sa.func.coalesce(
+                            SystemSchema.workflow_input.c.inputs,
+                            SystemSchema.workflow_status.c.inputs,
+                        ),
                         SystemSchema.workflow_status.c.priority,
                         SystemSchema.workflow_status.c.queue_partition_key,
                         SystemSchema.workflow_status.c.forked_from,
@@ -5723,7 +6015,19 @@ class SystemDatabase(ABC):
                         # transaction-ownership token, not logical workflow state
                         # (get_workflow_status also returns None for it), and a
                         # source database's xid is meaningless in the target.
-                    ).where(SystemSchema.workflow_status.c.workflow_uuid == wf_id)
+                    )
+                    .select_from(
+                        SystemSchema.workflow_status.outerjoin(
+                            SystemSchema.workflow_input,
+                            SystemSchema.workflow_status.c.workflow_uuid
+                            == SystemSchema.workflow_input.c.workflow_uuid,
+                        ).outerjoin(
+                            SystemSchema.workflow_output,
+                            SystemSchema.workflow_status.c.workflow_uuid
+                            == SystemSchema.workflow_output.c.workflow_uuid,
+                        )
+                    )
+                    .where(SystemSchema.workflow_status.c.workflow_uuid == wf_id)
                 ).fetchone()
 
                 if status_row is None:
@@ -5900,8 +6204,6 @@ class SystemDatabase(ABC):
                         authenticated_user=status["authenticated_user"],
                         assumed_role=status["assumed_role"],
                         authenticated_roles=status["authenticated_roles"],
-                        output=status["output"],
-                        error=status["error"],
                         executor_id=status["executor_id"],
                         created_at=status["created_at"],
                         updated_at=status["updated_at"],
@@ -5915,7 +6217,6 @@ class SystemDatabase(ABC):
                         workflow_deadline_epoch_ms=status["workflow_deadline_epoch_ms"],
                         started_at_epoch_ms=status["started_at_epoch_ms"],
                         deduplication_id=status["deduplication_id"],
-                        inputs=status["inputs"],
                         priority=status["priority"],
                         queue_partition_key=status["queue_partition_key"],
                         forked_from=status["forked_from"],
@@ -5937,6 +6238,25 @@ class SystemDatabase(ABC):
                     )
                 )
 
+                c.execute(
+                    sa.insert(SystemSchema.workflow_input).values(
+                        workflow_uuid=status["workflow_uuid"],
+                        inputs=status["inputs"],
+                        # Retention starts at import: the original timestamps are
+                        # long past the cutoff and would be collected immediately.
+                        retention_timestamp=self._now_ms_sql(),
+                    )
+                )
+                if status["output"] is not None or status["error"] is not None:
+                    c.execute(
+                        sa.insert(SystemSchema.workflow_output).values(
+                            workflow_uuid=status["workflow_uuid"],
+                            output=status["output"],
+                            error=status["error"],
+                            retention_timestamp=self._now_ms_sql(),
+                        )
+                    )
+
                 # Import operation_outputs
                 for output in workflow["operation_outputs"]:
                     c.execute(
@@ -5949,6 +6269,7 @@ class SystemDatabase(ABC):
                             child_workflow_id=output["child_workflow_id"],
                             started_at_epoch_ms=output["started_at_epoch_ms"],
                             completed_at_epoch_ms=output["completed_at_epoch_ms"],
+                            retention_timestamp=self._now_ms_sql(),
                             serialization=output["serialization"],
                             application_name=output.get("application_name"),
                         )

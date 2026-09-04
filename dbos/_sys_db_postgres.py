@@ -1,5 +1,7 @@
+import hashlib
 import time
-from typing import Any, Dict, Optional, cast
+from contextlib import contextmanager
+from typing import Any, Callable, Dict, Generator, List, Optional, cast
 
 import psycopg
 import sqlalchemy as sa
@@ -119,6 +121,98 @@ class PostgresSystemDatabase(SystemDatabase):
         )
         self._assert_migration_version(current_version, latest_version)
 
+    @contextmanager
+    def retention_lock(self) -> Generator[bool, None, None]:
+        """A session-level advisory lock, so only one retention round runs against
+        this schema at a time. Session-scoped, so a crashed round releases it."""
+        assert self.schema
+        # Separate locks for separate schemas. Every SDK derives the key this way -- the
+        # leading 8 bytes of SHA-256, big-endian signed -- so rounds in different languages
+        # against one system database contend for the same lock.
+        key = int.from_bytes(
+            hashlib.sha256(f"dbos.retention.{self.schema}".encode()).digest()[:8],
+            "big",
+            signed=True,
+        )
+        # The lock is session-scoped, so the round holds this connection until it
+        # ends; autocommit keeps the session clear of idle-in-transaction timeouts.
+        with self.engine.connect().execution_options(
+            isolation_level="AUTOCOMMIT"
+        ) as conn:
+            # CockroachDB stubs this out and always returns true, so it collects
+            # unprotected rather than not at all.
+            acquired = bool(
+                conn.execute(
+                    sa.text("SELECT pg_try_advisory_lock(:key)"), {"key": key}
+                ).scalar()
+            )
+            try:
+                yield acquired
+            finally:
+                if acquired:
+                    # Explicit, since closing only returns the session to the pool.
+                    released = conn.execute(
+                        sa.text("SELECT pg_advisory_unlock(:key)"), {"key": key}
+                    ).scalar()
+                    if not released:
+                        # False means this session no longer holds it, which a
+                        # transaction-pooling proxy causes by switching backends.
+                        dbos_logger.warning(
+                            "Could not release the retention lock: this session no "
+                            "longer holds it. Retention will not proceed until "
+                            "the lock is released, which happens when the holding "
+                            "backend closes. A transaction-pooling proxy in front of "
+                            "Postgres causes this; run DBOS through a session-pooled "
+                            "or direct connection."
+                        )
+
+    def _vacuum_tables(self, tables: List[str]) -> None:
+        assert self.schema
+        if self._is_cockroach:
+            return
+
+        notices: List[str] = []
+
+        def collect(diag: Any) -> None:
+            notices.append(diag.message_primary or "")
+
+        with self.engine.connect().execution_options(
+            isolation_level="AUTOCOMMIT"
+        ) as conn:
+            # A refused or stalled VACUUM does not raise, it says so in a notice;
+            # a successful one is silent, so anything here is worth surfacing.
+            raw = conn.connection.dbapi_connection
+            add_handler = getattr(raw, "add_notice_handler", None)
+            remove_handler = getattr(raw, "remove_notice_handler", None)
+            teardown: Optional[Callable[[Any], None]] = None
+            if add_handler is not None and remove_handler is not None:
+                add_handler(collect)
+                teardown = remove_handler
+            try:
+                for table in tables:
+                    # Per table, so one refusal does not skip the rest.
+                    del notices[:]
+                    try:
+                        conn.execute(
+                            sa.text(
+                                "VACUUM (INDEX_CLEANUP ON, TRUNCATE OFF, ANALYZE) "
+                                f"{quote_identifier(self.schema)}.{quote_identifier(table)}"
+                            )
+                        )
+                    except Exception as e:
+                        dbos_logger.warning(
+                            f"Payload retention could not vacuum {table}: {e}"
+                        )
+                        continue
+                    for notice in notices:
+                        dbos_logger.warning(
+                            f"Payload retention vacuuming {table}: {notice}"
+                        )
+            finally:
+                # Release the notice handler before returning the connection to the pool
+                if teardown is not None:
+                    teardown(collect)
+
     def _cleanup_connections(self) -> None:
         """Clean up PostgreSQL-specific connections."""
         with self._listener_thread_lock:
@@ -148,15 +242,14 @@ class PostgresSystemDatabase(SystemDatabase):
         return dbapi_error.orig.sqlstate == "23505"  # type: ignore
 
     def _is_serialization_error(self, dbapi_error: DBAPIError) -> bool:
-        """Check if the error is a serialization/concurrency error in PostgreSQL."""
-        # 40001: serialization_failure (MVCC conflict)
-        # 40P01: deadlock_detected
-        driver_error = dbapi_error.orig
-        return (
-            driver_error is not None
-            and isinstance(driver_error, psycopg.OperationalError)
-            and driver_error.sqlstate in ("40001", "40P01")
-        )
+        """40001 is serialization_failure (an MVCC conflict), 40P01 deadlock_detected.
+        psycopg reports them as sqlstate, psycopg2 (which the CockroachDB dialect
+        uses) as pgcode."""
+        orig = dbapi_error.orig
+        return not {
+            getattr(orig, "sqlstate", None),
+            getattr(orig, "pgcode", None),
+        }.isdisjoint(("40001", "40P01"))
 
     def _attributes_contains_clause(
         self, attributes: Dict[str, Any]

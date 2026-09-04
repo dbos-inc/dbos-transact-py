@@ -443,9 +443,10 @@ def test_claiming_skips_another_applications_workflows(dbos: DBOS) -> None:
     assert "foreign-pending" not in [p.workflow_id for p in pending]
 
 
-def test_bulk_operations_spare_another_application(dbos: DBOS) -> None:
-    """Both take own plus unclaimed rows. Unclaimed are included deliberately:
-    excluding them would leak every pre-upgrade row forever."""
+def test_bulk_operations_across_applications(dbos: DBOS) -> None:
+    """The two bulk operations scope differently. Timing out cancels running work,
+    so it takes own plus unclaimed rows only; retention is system-wide."""
+    from dbos._sys_db import DEFAULT_GC_BATCH_SIZE
     from dbos._workflow_commands import global_timeout
 
     @DBOS.workflow()
@@ -469,11 +470,16 @@ def test_bulk_operations_spare_another_application(dbos: DBOS) -> None:
     assert status_of(dbos, "unclaimed-inflight") == "CANCELLED"
 
     dbos._sys_db.garbage_collect(
-        cutoff_epoch_timestamp_ms=cutoff, rows_threshold=None, batch_size=None
+        cutoff_epoch_timestamp_ms=cutoff,
+        rows_threshold=None,
+        batch_size=DEFAULT_GC_BATCH_SIZE,
     )
-    assert workflow_exists(dbos, "foreign-old")
+    # Retention spans every application, so the peer's old terminal row goes too.
+    assert not workflow_exists(dbos, "foreign-old")
     assert not workflow_exists(dbos, "unclaimed-old")
     assert not workflow_exists(dbos, handle.workflow_id)
+    # Still keyed on status, so a peer's in-flight row survives whoever sweeps.
+    assert status_of(dbos, "foreign-inflight") == "ENQUEUED"
 
 
 def test_unclaimed_rows_belong_to_every_application(

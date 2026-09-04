@@ -621,15 +621,9 @@ def test_sync_ds_recovers_from_sysdb_loss(
         assert my_workflow() == "recovered"
     assert call_count["n"] == 1
 
-    # Simulate crash: remove the workflow record from the system DB.
-    # The CASCADE on operation_outputs.workflow_uuid wipes the step record too,
-    # while datasource_outputs (in the app DB) is unaffected.
-    with dbos._sys_db.engine.begin() as conn:
-        conn.execute(
-            sa.delete(SystemSchema.workflow_status).where(
-                SystemSchema.workflow_status.c.workflow_uuid == wfid
-            )
-        )
+    # Simulate crash: delete_workflows drops the sysdb records including the step
+    # checkpoint, since operation_outputs no longer cascades; the app DB is untouched.
+    dbos._sys_db.delete_workflows([wfid])
 
     # Re-run: DBOS treats this as a new workflow (no workflow_status row).
     # run_step finds no operation_outputs entry, so it calls _body().
@@ -679,13 +673,8 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
 
     def forget_workflow() -> None:
         # Drop the sysdb checkpoint so run_step calls _body again instead of replaying.
-        # A real concurrent duplicate keeps that row and ends in DBOSWorkflowConflictIDError instead.
-        with dbos._sys_db.engine.begin() as conn:
-            conn.execute(
-                sa.delete(SystemSchema.workflow_status).where(
-                    SystemSchema.workflow_status.c.workflow_uuid == wfid
-                )
-            )
+        # Via delete_workflows: operation_outputs has no foreign key to cascade now.
+        dbos._sys_db.delete_workflows([wfid])
 
     # Blind one pre-check, so a loser misses the winner's row as it does in the real race.
     real_check = sync_ds._check_execution
@@ -907,14 +896,21 @@ def test_sync_ds_duplicate_execution_stops_at_the_lost_race(
     # step checkpoint yet: nothing to replay, and no outcome for a waiter to adopt.
     with dbos._sys_db.engine.begin() as conn:
         winner_output = conn.execute(
-            sa.select(SystemSchema.workflow_status.c.output).where(
-                SystemSchema.workflow_status.c.workflow_uuid == wfid
+            sa.select(SystemSchema.workflow_output.c.output).where(
+                SystemSchema.workflow_output.c.workflow_uuid == wfid
             )
         ).scalar_one()
         winner_step.update(_winner_step_row(conn, wfid, reserve.__qualname__))
         conn.execute(
             sa.delete(SystemSchema.operation_outputs).where(
                 SystemSchema.operation_outputs.c.workflow_uuid == wfid
+            )
+        )
+        # Clearing the recorded outcome means both places it can live: the
+        # payload table, and the legacy column a dual-writing deployment fills.
+        conn.execute(
+            sa.delete(SystemSchema.workflow_output).where(
+                SystemSchema.workflow_output.c.workflow_uuid == wfid
             )
         )
         conn.execute(
@@ -1439,15 +1435,9 @@ async def test_async_ds_recovers_from_sysdb_loss(
         assert await my_workflow() == "recovered"
     assert call_count["n"] == 1
 
-    # Simulate crash: remove the workflow record from the system DB.
-    # The CASCADE on operation_outputs.workflow_uuid wipes the step record too,
-    # while datasource_outputs (in the app DB) is unaffected.
-    with dbos._sys_db.engine.begin() as conn:
-        conn.execute(
-            sa.delete(SystemSchema.workflow_status).where(
-                SystemSchema.workflow_status.c.workflow_uuid == wfid
-            )
-        )
+    # Simulate crash: delete_workflows drops the sysdb records including the step
+    # checkpoint, since operation_outputs no longer cascades; the app DB is untouched.
+    dbos._sys_db.delete_workflows([wfid])
 
     # Re-run: DBOS treats this as a new workflow (no workflow_status row).
     # run_step finds no operation_outputs entry, so it calls _body().
@@ -1499,13 +1489,8 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
 
     def forget_workflow() -> None:
         # Drop the sysdb checkpoint so run_step calls _body again instead of replaying.
-        # A real concurrent duplicate keeps that row and ends in DBOSWorkflowConflictIDError instead.
-        with dbos._sys_db.engine.begin() as conn:
-            conn.execute(
-                sa.delete(SystemSchema.workflow_status).where(
-                    SystemSchema.workflow_status.c.workflow_uuid == wfid
-                )
-            )
+        # Via delete_workflows: operation_outputs has no foreign key to cascade now.
+        dbos._sys_db.delete_workflows([wfid])
 
     # Blind one pre-check, so a loser misses the winner's row as it does in the real race.
     real_check = async_ds._check_execution
@@ -1638,14 +1623,21 @@ async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
     # step checkpoint yet: nothing to replay, and no outcome for a waiter to adopt.
     with dbos._sys_db.engine.begin() as conn:
         winner_output = conn.execute(
-            sa.select(SystemSchema.workflow_status.c.output).where(
-                SystemSchema.workflow_status.c.workflow_uuid == wfid
+            sa.select(SystemSchema.workflow_output.c.output).where(
+                SystemSchema.workflow_output.c.workflow_uuid == wfid
             )
         ).scalar_one()
         winner_step.update(_winner_step_row(conn, wfid, reserve.__qualname__))
         conn.execute(
             sa.delete(SystemSchema.operation_outputs).where(
                 SystemSchema.operation_outputs.c.workflow_uuid == wfid
+            )
+        )
+        # Clearing the recorded outcome means both places it can live: the
+        # payload table, and the legacy column a dual-writing deployment fills.
+        conn.execute(
+            sa.delete(SystemSchema.workflow_output).where(
+                SystemSchema.workflow_output.c.workflow_uuid == wfid
             )
         )
         conn.execute(

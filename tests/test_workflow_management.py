@@ -7,7 +7,14 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import event as sa_event
 
-from dbos import DBOS, DBOSClient, SetEnqueueOptions, SetWorkflowID, WorkflowHandle
+from dbos import (
+    DBOS,
+    DBOSClient,
+    Queue,
+    SetEnqueueOptions,
+    SetWorkflowID,
+    WorkflowHandle,
+)
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
@@ -258,8 +265,24 @@ def test_workflow_outcome_is_owned_by_the_pending_row(dbos: DBOS) -> None:
         with dbos._sys_db.engine.begin() as c:
             c.execute(
                 sa.update(SystemSchema.workflow_status)
-                .values(status=status, output=output, error=error)
+                .values(status=status)
                 .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+            )
+            if output is None and error is None:
+                return
+            # Record the payload where a real recorder puts it, not in the
+            # legacy columns: the run must lose to the payload table itself.
+            c.execute(
+                dbos._sys_db.dialect.insert(SystemSchema.workflow_output)
+                .values(
+                    workflow_uuid=wfid,
+                    output=output,
+                    error=error,
+                )
+                .on_conflict_do_update(
+                    index_elements=["workflow_uuid"],
+                    set_={"output": output, "error": error},
+                )
             )
 
     def read_row(wfid: str) -> Any:
@@ -267,9 +290,17 @@ def test_workflow_outcome_is_owned_by_the_pending_row(dbos: DBOS) -> None:
             return c.execute(
                 sa.select(
                     SystemSchema.workflow_status.c.status,
-                    SystemSchema.workflow_status.c.output,
+                    SystemSchema.workflow_output.c.output,
                     SystemSchema.workflow_status.c.serialization,
-                ).where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+                )
+                .select_from(
+                    SystemSchema.workflow_status.outerjoin(
+                        SystemSchema.workflow_output,
+                        SystemSchema.workflow_status.c.workflow_uuid
+                        == SystemSchema.workflow_output.c.workflow_uuid,
+                    )
+                )
+                .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
             ).fetchone()
 
     # 1. A recorded success supersedes the run's own result.
@@ -1363,6 +1394,14 @@ def test_resume_and_fork_to_queue(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
+def _cutoff_past_all_completions() -> int:
+    """A cutoff every completion so far falls strictly before. completed_at is stamped
+    by the database and rounded to the millisecond, while a wall-clock cutoff taken
+    right after a workflow finishes truncates, so the two can land on the same value
+    and spare the row. Only rows with no completed_at need to survive these cutoffs."""
+    return int(time.time() * 1000) + 1000
+
+
 def _status_timestamp(dbos: DBOS, workflow_id: str, column: str) -> Optional[int]:
     """Read a DB-stamped timestamp, so a test can derive its cutoff from the same
     clock the rows were written with instead of racing the Python clock against it."""
@@ -1373,14 +1412,6 @@ def _status_timestamp(dbos: DBOS, workflow_id: str, column: str) -> Optional[int
             )
         ).scalar()
     return None if value is None else int(value)
-
-
-def _cutoff_past_all_completions() -> int:
-    """A cutoff every completion so far falls strictly before. completed_at is stamped
-    by the database and rounded to the millisecond, while a wall-clock cutoff taken
-    right after a workflow finishes truncates, so the two can land on the same value
-    and spare the row. Only rows with no completed_at need to survive these cutoffs."""
-    return int(time.time() * 1000) + 1000
 
 
 def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> None:
@@ -1424,10 +1455,8 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     for i in range(num_workflows):
         assert workflow(i) == i
 
-    # Garbage collect all but one workflow, exercising the unbatched path
-    garbage_collect(
-        dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1, batch_size=None
-    )
+    # Garbage collect all but one workflow
+    garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1)
     # Verify two workflows remain: the newest and the blocked workflow
     workflows = DBOS.list_workflows()
     assert len(workflows) == 2
@@ -1499,18 +1528,18 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     assert enqueued_handle.workflow_id in wf_ids
     assert delayed_handle.workflow_id in wf_ids
 
-    # Cancelling stamps completed_at, making the row eligible for this cutoff
+    # Cancelling makes the row eligible: CANCELLED is not one of the in-flight
+    # statuses the sweep excludes.
     DBOS.cancel_workflow(enqueued_handle.workflow_id)
     DBOS.cancel_workflow(delayed_handle.workflow_id)
-    cancelled_at = _status_timestamp(dbos, enqueued_handle.workflow_id, "completed_at")
-    assert cancelled_at is not None
 
-    # Resuming must clear completed_at: it is the only thing stopping GC from
-    # deleting a workflow that can run again. The queue still blocks dequeue.
+    # Resuming must put it back into an excluded status: that is the only thing
+    # stopping GC from deleting a workflow that can run again.
     DBOS.resume_workflow(enqueued_handle.workflow_id, queue_name="gc_test_queue")
-    assert _status_timestamp(dbos, enqueued_handle.workflow_id, "completed_at") is None
     garbage_collect(
-        dbos, cutoff_epoch_timestamp_ms=cancelled_at + 1, rows_threshold=None
+        dbos,
+        cutoff_epoch_timestamp_ms=_cutoff_past_all_completions(),
+        rows_threshold=None,
     )
     assert enqueued_handle.workflow_id in {w.workflow_id for w in DBOS.list_workflows()}
 
@@ -1543,6 +1572,16 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
 
 
 # batch_size: 3 = short final batch, 5 = exact multiple, 20 = larger than all eligible rows
+def _delete_target(statement: str) -> str:
+    """The table a DELETE targets, ignoring any table named in a subquery. The
+    payload sweep's deletes carry `NOT EXISTS (... FROM workflow_status ...)`, so
+    a substring test counts them as status deletes."""
+    head = statement.lstrip()
+    if not head.upper().startswith("DELETE FROM"):
+        return ""
+    return head[len("DELETE FROM") :].strip().split()[0].rsplit(".", 1)[-1].strip('"')
+
+
 @pytest.mark.parametrize("batch_size", [3, 5, 20])
 def test_garbage_collection_batched(
     dbos: DBOS, skip_with_sqlite_imprecise_time: None, batch_size: int
@@ -1593,9 +1632,7 @@ def test_garbage_collection_batched(
         context: Any,
         executemany: bool,
     ) -> None:
-        if statement.lstrip().upper().startswith("DELETE") and (
-            "workflow_status" in statement
-        ):
+        if _delete_target(statement) == "workflow_status":
             sys_delete_counts.append(1)
 
     def count_app_deletes(
@@ -1606,9 +1643,7 @@ def test_garbage_collection_batched(
         context: Any,
         executemany: bool,
     ) -> None:
-        if statement.lstrip().upper().startswith("DELETE") and (
-            "transaction_outputs" in statement
-        ):
+        if _delete_target(statement) == "transaction_outputs":
             app_delete_counts.append(1)
 
     sa_event.listen(dbos._sys_db.engine, "before_cursor_execute", count_sys_deletes)
@@ -1695,11 +1730,14 @@ def test_garbage_collection_batched_rows_threshold(
         workflow_ids.append(handle.workflow_id)
         time.sleep(0.005)
 
-    # worker_concurrency=0 blocks dequeue, so these stay ENQUEUED with no completed_at
+    # worker_concurrency=0 blocks dequeue, so these stay ENQUEUED. They are the
+    # newest rows by created_at and the sweep cannot delete them, so they must not
+    # count toward the threshold -- otherwise a backlog consumes the whole quota
+    # and every completed workflow is collected.
     DBOS.register_queue("gc_threshold_queue", worker_concurrency=0)
     enqueued_ids = [
         DBOS.enqueue_workflow("gc_threshold_queue", workflow, i).workflow_id
-        for i in range(3)
+        for i in range(num_workflows)
     ]
 
     garbage_collect(
@@ -1716,6 +1754,70 @@ def test_garbage_collection_batched_rows_threshold(
 
     for workflow_id in enqueued_ids:
         DBOS.cancel_workflow(workflow_id)
+
+
+def test_garbage_collection_collects_rows_that_terminalize_mid_sweep(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
+    """A row that terminalizes mid-pass takes completed_at > cutoff and cannot fall
+    below the watermark, but an imported row lands with whatever completed_at it
+    carries. The final batch has to take every remaining eligible row, wherever it
+    falls."""
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    for i in range(10):
+        assert workflow(i) == i
+        time.sleep(0.005)
+
+    stowaway = f"stowaway-{uuid.uuid4()}"
+    deletes = 0
+    injected = False
+
+    def inject_below_the_watermark(
+        conn: Any, cursor: Any, statement: str, *args: Any, **kwargs: Any
+    ) -> None:
+        # Inject before the second batch, once the watermark has advanced past
+        # completed_at=1: from here no bounded batch can reach the row, so only the
+        # final unbounded delete can. Its own connection, so it commits at once.
+        nonlocal deletes, injected
+        if injected or _delete_target(statement) != "workflow_status":
+            return
+        deletes += 1
+        if deletes < 2:
+            return
+        injected = True
+        with dbos._sys_db.engine.begin() as c:
+            c.execute(
+                sa.insert(SystemSchema.workflow_status).values(
+                    workflow_uuid=stowaway,
+                    status="SUCCESS",
+                    name="stowaway",
+                    created_at=1,
+                    updated_at=1,
+                    completed_at=1,
+                )
+            )
+
+    sa_event.listen(
+        dbos._sys_db.engine, "before_cursor_execute", inject_below_the_watermark
+    )
+    try:
+        garbage_collect(
+            dbos,
+            cutoff_epoch_timestamp_ms=_cutoff_past_all_completions(),
+            rows_threshold=None,
+            batch_size=3,
+        )
+    finally:
+        sa_event.remove(
+            dbos._sys_db.engine, "before_cursor_execute", inject_below_the_watermark
+        )
+
+    assert injected, "the sweep never issued a batched delete"
+    assert stowaway not in {w.workflow_id for w in DBOS.list_workflows()}
 
 
 def test_garbage_collection_batched_resumable(
@@ -1745,9 +1847,7 @@ def test_garbage_collection_batched_resumable(
         executemany: bool,
     ) -> None:
         nonlocal delete_count
-        if statement.lstrip().upper().startswith("DELETE") and (
-            "workflow_status" in statement
-        ):
+        if _delete_target(statement) == "workflow_status":
             delete_count += 1
             if delete_count > 1:
                 raise RuntimeError("injected garbage collection failure")
@@ -1795,20 +1895,6 @@ def test_garbage_collection_batch_size_validation(dbos: DBOS) -> None:
             )
         with pytest.raises(ValueError):
             dbos._app_db.garbage_collect(1, [], batch_size=invalid_batch_size)
-
-    @DBOS.workflow()
-    def workflow(x: int) -> int:
-        return x
-
-    assert workflow(1) == 1
-    with pytest.raises(ValueError):
-        garbage_collect(
-            dbos,
-            cutoff_epoch_timestamp_ms=int(time.time() * 1000),
-            rows_threshold=None,
-            batch_size=0,
-        )
-    assert len(DBOS.list_workflows()) == 1
 
 
 def test_global_timeout(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> None:
@@ -2337,3 +2423,407 @@ def test_client_delete_workflow(client: DBOSClient, dbos: DBOS) -> None:
     assert len(client.list_workflows(workflow_ids=wfids)) == 3
     client.delete_workflows(wfids)
     assert len(client.list_workflows(workflow_ids=wfids)) == 0
+
+
+def _payload_counts(dbos: DBOS) -> tuple[int, int, int]:
+    """(inputs, outputs, step checkpoints) currently stored."""
+    with dbos._sys_db.engine.begin() as c:
+        return tuple(  # type: ignore[return-value]
+            c.execute(sa.select(sa.func.count()).select_from(table)).scalar() or 0
+            for table in (
+                SystemSchema.workflow_input,
+                SystemSchema.workflow_output,
+                SystemSchema.operation_outputs,
+            )
+        )
+
+
+def test_legacy_payload_rows_still_read(dbos: DBOS) -> None:
+    """Payloads live only in the payload tables, but a row written before the split
+    keeps them on workflow_status and every read path must still resolve it."""
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    assert workflow(11) == 11
+    workflow_id = DBOS.list_workflows()[0].workflow_id
+    ws, wi, wo = (
+        SystemSchema.workflow_status,
+        SystemSchema.workflow_input,
+        SystemSchema.workflow_output,
+    )
+
+    with dbos._sys_db.engine.begin() as c:
+        legacy = c.execute(
+            sa.select(ws.c.inputs, ws.c.output).where(ws.c.workflow_uuid == workflow_id)
+        ).one()
+        inputs = c.execute(
+            sa.select(wi.c.inputs).where(wi.c.workflow_uuid == workflow_id)
+        ).scalar_one()
+        output = c.execute(
+            sa.select(wo.c.output).where(wo.c.workflow_uuid == workflow_id)
+        ).scalar_one()
+    # No dual write: the legacy columns stay empty.
+    assert tuple(legacy) == (None, None)
+    assert inputs is not None and output is not None
+
+    # Move the payloads onto the legacy columns: a pre-split row looks exactly like this.
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(ws)
+            .where(ws.c.workflow_uuid == workflow_id)
+            .values(inputs=inputs, output=output)
+        )
+        c.execute(sa.delete(wi).where(wi.c.workflow_uuid == workflow_id))
+        c.execute(sa.delete(wo).where(wo.c.workflow_uuid == workflow_id))
+
+    listed = DBOS.list_workflows(workflow_ids=[workflow_id])[0]
+    assert listed.input is not None
+    assert listed.output == 11
+    handle: WorkflowHandle[int] = DBOS.retrieve_workflow(workflow_id)
+    assert handle.get_result() == 11
+    forked: WorkflowHandle[int] = DBOS.fork_workflow(workflow_id, 1)
+    assert forked.get_result() == 11
+
+    # A round collects the legacy-only row with everything else and strands nothing.
+    garbage_collect(
+        dbos,
+        cutoff_epoch_timestamp_ms=int(time.time() * 1000) + 60_000,
+        rows_threshold=None,
+    )
+    assert DBOS.list_workflows() == []
+    assert _payload_counts(dbos) == (0, 0, 0)
+
+
+def test_retention_lock_key_is_the_cross_sdk_contract(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    """Rounds in different languages have to contend for one lock, so both the key and
+    the single-bigint form are a contract: changing either splits the lock silently,
+    leaving every SDK collecting at once and none of them the wiser."""
+    assert dbos._sys_db.schema == "dbos"
+    with dbos._sys_db.retention_lock() as held:
+        assert held
+        with dbos._sys_db.engine.connect() as c:
+            # objsubid 1 is the pg_try_advisory_lock(bigint) keyspace. The two-int
+            # form lands in objsubid 2 and never contends with it, same bits or not.
+            advisory = {
+                ((int(classid) << 32) | int(objid), int(objsubid))
+                for classid, objid, objsubid in c.execute(
+                    sa.text(
+                        "SELECT classid, objid, objsubid FROM pg_locks "
+                        "WHERE locktype = 'advisory'"
+                    )
+                )
+            }
+    # The leading 8 bytes of SHA-256 over "dbos.retention.dbos", big-endian signed.
+    assert (7208852302618897048, 1) in advisory
+
+
+def test_payload_garbage_collection(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
+    """Inputs, outputs and step checkpoints are all reclaimed once their status
+    row is gone -- by the sweep, since operation_outputs has no foreign key to
+    cascade from."""
+
+    @DBOS.step()
+    def step(x: int) -> int:
+        return x
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return step(x) + step(x)
+
+    num_workflows = 5
+    for i in range(num_workflows):
+        assert workflow(i) == i * 2
+    assert _payload_counts(dbos) == (num_workflows, num_workflows, num_workflows * 2)
+
+    # A cutoff in the past reaches nothing.
+    assert dbos._sys_db.garbage_collect_payloads(0) == (0, 0, 0)
+    assert _payload_counts(dbos) == (num_workflows, num_workflows, num_workflows * 2)
+
+    # The advisory lock is what keeps two rounds from overlapping, so a round that
+    # cannot take it must collect nothing at all. Postgres only: the base
+    # implementation has no lock to contend for and always proceeds.
+    if dbos._sys_db.engine.dialect.name == "postgresql":
+        with dbos._sys_db.retention_lock() as held:
+            assert held
+            garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1)
+        assert len(DBOS.list_workflows()) == num_workflows
+        assert _payload_counts(dbos) == (
+            num_workflows,
+            num_workflows,
+            num_workflows * 2,
+        )
+
+    # Collect all but the newest. One round does both halves: the status sweep
+    # drops the rows and the payload sweep collects what it left behind.
+    garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1)
+    assert len(DBOS.list_workflows()) == 1
+    assert _payload_counts(dbos) == (1, 1, 2)
+
+    # The survivor keeps a readable result and its checkpoints, and stays forkable.
+    workflow_id = DBOS.list_workflows()[0].workflow_id
+    expected = (num_workflows - 1) * 2
+    handle: WorkflowHandle[int] = DBOS.retrieve_workflow(workflow_id)
+    assert handle.get_result() == expected
+    assert DBOS.list_workflows(workflow_ids=[workflow_id])[0].input is not None
+    assert len(dbos._sys_db.list_workflow_steps(workflow_id)) == 2
+    forked: WorkflowHandle[int] = DBOS.fork_workflow(workflow_id, 1)
+    assert forked.get_result() == expected
+
+
+def test_payload_gc_spares_a_straggler_then_reclaims_it(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
+    """A workflow older than the cutoff that still has a status row keeps its
+    payload across repeated rounds -- it may yet recover or be forked -- and is
+    reclaimed once that row is gone."""
+    event = threading.Event()
+    started = threading.Event()
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    @DBOS.step()
+    def checkpoint() -> int:
+        return 1
+
+    @DBOS.workflow()
+    def blocked_workflow() -> int:
+        # A recorded step, so what the sweep spares covers the checkpoints a
+        # replay would read and not only the inputs.
+        checkpoint()
+        started.set()
+        # Bounded, so a failing assertion below can never park this thread and
+        # hang shutdown on the join.
+        event.wait(timeout=60)
+        return 0
+
+    handle = DBOS.start_workflow(blocked_workflow)
+    assert started.wait(timeout=30)
+
+    def blocked_rows() -> tuple[int, int]:
+        """(inputs, step checkpoints) still stored for the blocked workflow."""
+        with dbos._sys_db.engine.begin() as c:
+            return tuple(  # type: ignore[return-value]
+                c.execute(
+                    sa.select(sa.func.count())
+                    .select_from(table)
+                    .where(table.c.workflow_uuid == handle.workflow_id)
+                ).scalar()
+                or 0
+                for table in (
+                    SystemSchema.workflow_input,
+                    SystemSchema.operation_outputs,
+                )
+            )
+
+    try:
+        for i in range(4):
+            assert workflow(i) == i
+
+        garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1)
+        # Its inputs survive even though its own output row does not exist yet.
+        assert (
+            dbos._sys_db.list_workflows(
+                workflow_ids=[handle.workflow_id], load_input=True
+            )[0].input
+            is not None
+        )
+        # A second round neither collects it nor disturbs what is left.
+        before = _payload_counts(dbos)
+        garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=1)
+        assert _payload_counts(dbos) == before
+        # Inputs and the step checkpoint both survive, so a recovery of this
+        # workflow would replay the step rather than run it again.
+        assert blocked_rows() == (1, 1)
+    finally:
+        event.set()
+    assert handle.get_result() == 0
+
+    # Once the status row is gone the payload must go with it: nothing was marked,
+    # so the ordinary sweep reaches it the moment it is an orphan.
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.delete(SystemSchema.workflow_status).where(
+                SystemSchema.workflow_status.c.workflow_uuid == handle.workflow_id
+            )
+        )
+    dbos._sys_db.garbage_collect_payloads(int(time.time() * 1000) + 60_000)
+    assert blocked_rows() == (0, 0)
+
+
+def test_payloads_survive_while_their_status_row_does(dbos: DBOS) -> None:
+    """One rule for every application now that retention is system-wide: the sweep
+    spares the payloads of any workflow whose status row is still there."""
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    assert workflow(1) == 1
+    peer_id = f"peer-{uuid.uuid4()}"
+    now = int(time.time() * 1000)
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.insert(SystemSchema.workflow_status).values(
+                workflow_uuid=peer_id,
+                status="SUCCESS",
+                name="peer_workflow",
+                application_name="a-different-application",
+                created_at=now,
+                updated_at=now,
+                # Terminal rows carry completed_at, as ones written by DBOS itself do
+                completed_at=now,
+            )
+        )
+        c.execute(
+            sa.insert(SystemSchema.workflow_input).values(
+                workflow_uuid=peer_id, inputs="{}", retention_timestamp=now
+            )
+        )
+
+    dbos._sys_db.garbage_collect_payloads(now + 60_000)
+    with dbos._sys_db.engine.begin() as c:
+        assert (
+            c.execute(
+                sa.select(sa.func.count())
+                .select_from(SystemSchema.workflow_input)
+                .where(SystemSchema.workflow_input.c.workflow_uuid == peer_id)
+            ).scalar()
+            == 1
+        )
+
+
+def test_garbage_collection_spans_every_application(dbos: DBOS) -> None:
+    """Retention is system-wide, so a round this application runs collects a peer
+    application's old terminal workflow along with its payloads."""
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    assert workflow(1) == 1
+    peer_id = f"peer-{uuid.uuid4()}"
+    now = int(time.time() * 1000)
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.insert(SystemSchema.workflow_status).values(
+                workflow_uuid=peer_id,
+                status="SUCCESS",
+                name="peer_workflow",
+                application_name="a-different-application",
+                created_at=now,
+                updated_at=now,
+                # Terminal rows carry completed_at, as ones written by DBOS itself do
+                completed_at=now,
+            )
+        )
+        c.execute(
+            sa.insert(SystemSchema.workflow_input).values(
+                workflow_uuid=peer_id, inputs="{}", retention_timestamp=now
+            )
+        )
+
+    garbage_collect(dbos, cutoff_epoch_timestamp_ms=now + 60_000, rows_threshold=None)
+
+    with dbos._sys_db.engine.begin() as c:
+        assert (
+            c.execute(
+                sa.select(sa.func.count())
+                .select_from(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == peer_id)
+            ).scalar()
+            == 0
+        )
+        assert (
+            c.execute(
+                sa.select(sa.func.count())
+                .select_from(SystemSchema.workflow_input)
+                .where(SystemSchema.workflow_input.c.workflow_uuid == peer_id)
+            ).scalar()
+            == 0
+        )
+
+
+def _orphaned_status_rows(dbos: DBOS) -> tuple[int, int]:
+    """Status rows whose payload the sweep should never have removed:
+    (any row missing its inputs, terminal rows missing their output)."""
+    ws, wi, wo = (
+        SystemSchema.workflow_status,
+        SystemSchema.workflow_input,
+        SystemSchema.workflow_output,
+    )
+    with dbos._sys_db.engine.begin() as c:
+        missing_inputs = c.execute(
+            sa.select(sa.func.count())
+            .select_from(ws.outerjoin(wi, ws.c.workflow_uuid == wi.c.workflow_uuid))
+            .where(wi.c.workflow_uuid.is_(None))
+        ).scalar()
+        missing_outputs = c.execute(
+            sa.select(sa.func.count())
+            .select_from(ws.outerjoin(wo, ws.c.workflow_uuid == wo.c.workflow_uuid))
+            .where(ws.c.status.in_(["SUCCESS", "ERROR"]), wo.c.workflow_uuid.is_(None))
+        ).scalar()
+    return missing_inputs or 0, missing_outputs or 0
+
+
+def test_payload_gc_never_orphans_a_status_row(
+    dbos: DBOS, skip_with_sqlite_imprecise_time: None
+) -> None:
+    """Across a mixed population and repeated sweeps, no surviving status row
+    ever loses the payload a reader could still ask for."""
+    event = threading.Event()
+    started = threading.Event()
+    queue = Queue("payload_gc_queue", concurrency=1)
+
+    @DBOS.workflow()
+    def finished(x: int) -> int:
+        return x
+
+    @DBOS.workflow()
+    def blocked() -> int:
+        started.set()
+        event.wait(timeout=60)
+        return 0
+
+    try:
+        # The queue's one slot is held by the blocked workflow, so the enqueued work
+        # cannot start mid-sweep and be collected out from under its own handle.
+        handle = queue.enqueue(blocked)
+        assert started.wait(timeout=30)
+        for i in range(3):
+            assert finished(i) == i
+        with SetEnqueueOptions(deduplication_id=None):
+            enqueued = [queue.enqueue(finished, 100 + i) for i in range(2)]
+        for i in range(3, 6):
+            assert finished(i) == i
+
+        for _ in range(3):
+            garbage_collect(dbos, cutoff_epoch_timestamp_ms=None, rows_threshold=2)
+            assert _orphaned_status_rows(dbos) == (0, 0)
+            # Enforced, not assumed: one of these starting would hang the handle below.
+            assert all(
+                dbos._sys_db.list_workflows(workflow_ids=[h.workflow_id])[0].status
+                == "ENQUEUED"
+                for h in enqueued
+            )
+
+        # The blocked workflow's inputs survived every sweep, so it still runs.
+        assert (
+            dbos._sys_db.list_workflows(
+                workflow_ids=[handle.workflow_id], load_input=True
+            )[0].input
+            is not None
+        )
+    finally:
+        event.set()
+    assert handle.get_result() == 0
+    for h in enqueued:
+        assert h.get_result() >= 100
+    assert _orphaned_status_rows(dbos) == (0, 0)
