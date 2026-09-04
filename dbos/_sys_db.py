@@ -2,7 +2,6 @@ import asyncio
 import datetime
 import functools
 import json
-import os
 import random
 import sys
 import threading
@@ -695,12 +694,6 @@ class SystemDatabase(ABC):
         self.use_listen_notify = use_listen_notify
         # Whether db_retry blocks on a lost connection until it recovers, or raises.
         self._retry_connection_errors = retry_connection_errors
-        # For now, also write the workflow_status payload columns so a reader
-        # predating the payload tables still finds inputs and outputs. Anything but
-        # the literal "false" keeps them written: the safe state is the default.
-        self.dual_write_payloads = (
-            os.environ.get("DBOS__DUAL_WRITE_PAYLOADS", "true") != "false"
-        )
         # db_retry trusts the text-based SQLite retriability heuristic only on SQLite.
         self._is_sqlite = system_database_url.startswith("sqlite")
         # Statement timeout for observability reads, in ms. Unset takes the default; non-positive disables the cap.
@@ -959,19 +952,9 @@ class SystemDatabase(ABC):
         if wf_status not in _enqueued_statuses:
             update_values["executor_id"] = status["executor_id"]
 
-        legacy_payload: Dict[str, Any] = (
-            {
-                "inputs": status["inputs"],
-                "output": status["output"],
-                "error": status["error"],
-            }
-            if self.dual_write_payloads
-            else {}
-        )
         cmd = (
             self.dialect.insert(SystemSchema.workflow_status)
             .values(
-                **legacy_payload,
                 workflow_uuid=status["workflow_uuid"],
                 status=status["status"],
                 name=status["name"],
@@ -1135,11 +1118,6 @@ class SystemDatabase(ABC):
             result = c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .values(
-                    **(
-                        {"output": output, "error": error}
-                        if self.dual_write_payloads
-                        else {}
-                    ),
                     status=status,
                     # As the workflow is complete, remove its deduplication ID
                     deduplication_id=None,
@@ -1365,7 +1343,6 @@ class SystemDatabase(ABC):
                 # Never extend a workflow the target application doesn't own; falls through to the holder below.
                 .where(self._name_filter(wsc.application_name, application_name))
                 .values(
-                    **({"inputs": inputs} if self.dual_write_payloads else {}),
                     delay_until_epoch_ms=capped_delay,
                     serialization=serialization,
                     updated_at=self._now_ms_sql(),
@@ -1551,11 +1528,6 @@ class SystemDatabase(ABC):
                             ),
                             queue_partition_key=queue_partition_key,
                             assumed_role=status[7],
-                            **(
-                                {"inputs": status[8]}
-                                if self.dual_write_payloads
-                                else {}
-                            ),
                             forked_from=original_workflow_id,
                             attributes=status[10],
                             # Inherit the source's owner so the fork runs on the same application; claim an unclaimed one, as dequeue does.
@@ -5177,11 +5149,6 @@ class SystemDatabase(ABC):
                     "deduplication_id": None,
                     "priority": status["priority"],
                     "serialization": status["serialization"],
-                    **(
-                        {"inputs": status["inputs"], "output": None, "error": None}
-                        if self.dual_write_payloads
-                        else {}
-                    ),
                     "queue_partition_key": status["queue_partition_key"],
                     "parent_workflow_id": status["parent_workflow_id"],
                     "owner_xid": None,
@@ -6231,15 +6198,6 @@ class SystemDatabase(ABC):
                 # Import workflow_status
                 c.execute(
                     sa.insert(SystemSchema.workflow_status).values(
-                        **(
-                            {
-                                "inputs": status["inputs"],
-                                "output": status["output"],
-                                "error": status["error"],
-                            }
-                            if self.dual_write_payloads
-                            else {}
-                        ),
                         workflow_uuid=status["workflow_uuid"],
                         status=status["status"],
                         name=status["name"],

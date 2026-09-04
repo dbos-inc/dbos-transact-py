@@ -1,4 +1,3 @@
-import os
 import threading
 import time
 import uuid
@@ -2439,16 +2438,13 @@ def _payload_counts(dbos: DBOS) -> tuple[int, int, int]:
         )
 
 
-def test_payload_dual_write_and_read_fallback(dbos_dual_write: DBOS) -> None:
-    """Phase 2: payloads land in both places, and a legacy-only row still reads."""
+def test_legacy_payload_rows_still_read(dbos: DBOS) -> None:
+    """Payloads live only in the payload tables, but a row written before the split
+    keeps them on workflow_status and every read path must still resolve it."""
 
     @DBOS.workflow()
     def workflow(x: int) -> int:
         return x
-
-    # No override in the environment: dual write is on because that is the default.
-    assert "DBOS__DUAL_WRITE_PAYLOADS" not in os.environ
-    assert dbos_dual_write._sys_db.dual_write_payloads is True
 
     assert workflow(11) == 11
     workflow_id = DBOS.list_workflows()[0].workflow_id
@@ -2458,25 +2454,27 @@ def test_payload_dual_write_and_read_fallback(dbos_dual_write: DBOS) -> None:
         SystemSchema.workflow_output,
     )
 
-    with dbos_dual_write._sys_db.engine.begin() as c:
+    with dbos._sys_db.engine.begin() as c:
         legacy = c.execute(
             sa.select(ws.c.inputs, ws.c.output).where(ws.c.workflow_uuid == workflow_id)
-        ).fetchone()
-        split = c.execute(
+        ).one()
+        inputs = c.execute(
             sa.select(wi.c.inputs).where(wi.c.workflow_uuid == workflow_id)
-        ).fetchone()
-        out = c.execute(
+        ).scalar_one()
+        output = c.execute(
             sa.select(wo.c.output).where(wo.c.workflow_uuid == workflow_id)
-        ).fetchone()
+        ).scalar_one()
+    # No dual write: the legacy columns stay empty.
+    assert tuple(legacy) == (None, None)
+    assert inputs is not None and output is not None
 
-    # Both destinations written, with identical payloads.
-    assert legacy is not None and legacy[0] is not None and legacy[1] is not None
-    assert split is not None and split[0] == legacy[0]
-    assert out is not None and out[0] == legacy[1]
-
-    # Drop the split rows: a row written before the migration looks exactly like
-    # this, and every read path must still resolve it from workflow_status.
-    with dbos_dual_write._sys_db.engine.begin() as c:
+    # Move the payloads onto the legacy columns: a pre-split row looks exactly like this.
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(ws)
+            .where(ws.c.workflow_uuid == workflow_id)
+            .values(inputs=inputs, output=output)
+        )
         c.execute(sa.delete(wi).where(wi.c.workflow_uuid == workflow_id))
         c.execute(sa.delete(wo).where(wo.c.workflow_uuid == workflow_id))
 
@@ -2488,19 +2486,14 @@ def test_payload_dual_write_and_read_fallback(dbos_dual_write: DBOS) -> None:
     forked: WorkflowHandle[int] = DBOS.fork_workflow(workflow_id, 1)
     assert forked.get_result() == 11
 
-    # Retention in the configuration that actually ships: a round collects both
-    # destinations, including the legacy-only row, and leaves nothing stranded.
+    # A round collects the legacy-only row with everything else and strands nothing.
     garbage_collect(
-        dbos_dual_write,
+        dbos,
         cutoff_epoch_timestamp_ms=int(time.time() * 1000) + 60_000,
         rows_threshold=None,
     )
     assert DBOS.list_workflows() == []
-    assert _payload_counts(dbos_dual_write) == (0, 0, 0)
-    with dbos_dual_write._sys_db.engine.begin() as c:
-        assert (
-            c.execute(sa.select(sa.func.count()).select_from(ws)).scalar() == 0
-        ), "the legacy columns live on workflow_status, so the status sweep takes them"
+    assert _payload_counts(dbos) == (0, 0, 0)
 
 
 def test_retention_lock_key_is_the_cross_sdk_contract(

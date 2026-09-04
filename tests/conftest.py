@@ -291,31 +291,6 @@ def dbos(
     DBOS.destroy(destroy_registry=True)
 
 
-@pytest.fixture(autouse=True)
-def dual_write_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every test runs with dual write off, so the payload tables are the only place
-    a payload lives and a broken new-table path cannot hide behind the legacy
-    columns. The dbos_dual_write fixture turns it back on for the tests that need it."""
-    monkeypatch.setenv("DBOS__DUAL_WRITE_PAYLOADS", "false")
-
-
-@pytest.fixture()
-def dbos_dual_write(
-    config: DBOSConfig,
-    cleanup_test_databases: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> Generator[DBOS, Any, None]:
-    """The dbos fixture in the shipped default configuration, dual write on. The
-    variable is unset rather than set to "true" so these tests exercise the default
-    itself; every other test forces it off so a broken new-table path cannot hide."""
-    monkeypatch.delenv("DBOS__DUAL_WRITE_PAYLOADS", raising=False)
-    DBOS.destroy(destroy_registry=True)
-    dbos = DBOS(config=config)
-    DBOS.launch()
-    yield dbos
-    DBOS.destroy(destroy_registry=True)
-
-
 @pytest.fixture()
 def dbos_dropped_databases(
     config: DBOSConfig, drop_test_databases: None
