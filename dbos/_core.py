@@ -287,7 +287,8 @@ class WorkflowHandleAsyncTask(Generic[R]):
         start_time = int(time.time() * 1000)
         try:
             try:
-                r = await self.task
+                # A cancelled waiter must not cancel the shared result future.
+                r = await asyncio.shield(self.task)
             # If the handle was cancelled, check the database
             except (DBOSWorkflowCancelledError, DBOSAwaitedWorkflowCancelledError):
                 r = await self.dbos._sys_db.await_workflow_result_async(

@@ -651,6 +651,73 @@ async def test_retrieve_workflow_async(dbos: DBOS) -> None:
     assert wfstatus.workflow_id == wfuuid
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("waiter_timeout", [False, True], ids=["cancel", "timeout"])
+@pytest.mark.parametrize("workflow_fails", [False, True], ids=["success", "error"])
+async def test_result_waiter_cancellation_isolated(
+    dbos: DBOS, waiter_timeout: bool, workflow_fails: bool
+) -> None:
+    """Cancelling one result waiter must not poison a shared workflow handle."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    executions = 0
+
+    @DBOS.workflow()
+    async def workflow() -> str:
+        nonlocal executions
+        executions += 1
+        started.set()
+        await release.wait()
+        if workflow_fails:
+            raise ValueError("workflow failed")
+        return "completed"
+
+    handle = await DBOS.start_workflow_async(workflow)
+    await asyncio.wait_for(started.wait(), timeout=5)
+    waiting = asyncio.Event()
+
+    async def wait_for_result() -> str:
+        waiting.set()
+        return await handle.get_result()
+
+    other_waiter = asyncio.create_task(wait_for_result())
+    await asyncio.wait_for(waiting.wait(), timeout=5)
+    try:
+        if waiter_timeout:
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(handle.get_result(), timeout=0.01)
+        else:
+            waiting.clear()
+            cancelled_waiter = asyncio.create_task(wait_for_result())
+            await asyncio.wait_for(waiting.wait(), timeout=5)
+            cancelled_waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await cancelled_waiter
+
+        assert not other_waiter.done()
+        release.set()
+        if workflow_fails:
+            with pytest.raises(ValueError, match="workflow failed"):
+                await asyncio.wait_for(other_waiter, timeout=5)
+            with pytest.raises(ValueError, match="workflow failed"):
+                await handle.get_result()
+        else:
+            assert await asyncio.wait_for(other_waiter, timeout=5) == "completed"
+            assert await handle.get_result() == "completed"
+
+        assert executions == 1
+        status = await handle.get_status()
+        assert status.status == ("ERROR" if workflow_fails else "SUCCESS")
+    finally:
+        release.set()
+        await asyncio.gather(other_waiter, return_exceptions=True)
+        # A cancelled handle must not leave its underlying workflow running at teardown.
+        stored: WorkflowHandleAsync[str] = await DBOS.retrieve_workflow_async(
+            handle.get_workflow_id()
+        )
+        await asyncio.gather(stored.get_result(), return_exceptions=True)
+
+
 def test_unawaited_workflow(dbos: DBOS) -> None:
     input = 5
     child_id = str(uuid.uuid4())
