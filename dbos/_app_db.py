@@ -194,7 +194,7 @@ class ApplicationDatabase(ABC):
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
         gc_conditions = [
             ApplicationSchema.transaction_outputs.c.created_at
-            < cutoff_epoch_timestamp_ms
+            < sa.literal(cutoff_epoch_timestamp_ms, sa.BigInteger)
         ]
         if len(pending_workflow_ids) > 0:
             gc_conditions.append(
