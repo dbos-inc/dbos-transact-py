@@ -60,7 +60,6 @@ from ._core import (
     _validate_enqueue_only_options,
     close_stream,
     decorate_step,
-    decorate_transaction,
     decorate_workflow,
     enqueue_workflow_with_options,
     enqueue_workflow_with_options_async,
@@ -129,10 +128,7 @@ if TYPE_CHECKING:
 
 from typing import ParamSpec
 
-from sqlalchemy.orm import Session
-
 from ._admin_server import AdminServer
-from ._app_db import ApplicationDatabase
 from ._context import (
     DBOSContext,
     EnterDBOSStepCtx,
@@ -450,7 +446,6 @@ class DBOS:
 
         self._launched: bool = False
         self._sys_db_field: Optional[SystemDatabase] = None
-        self._app_db_field: Optional[ApplicationDatabase] = None
         self._registry: DBOSRegistry = _get_or_create_dbos_registry()
         self._registry.dbos = self
         self._listening_queues: Optional[List[str]] = None
@@ -566,10 +561,6 @@ class DBOS:
         return rv
 
     @property
-    def _app_db(self) -> ApplicationDatabase | None:
-        return self._app_db_field
-
-    @property
     def _admin_server(self) -> AdminServer:
         if self._admin_server_field is None:
             raise DBOSException("Admin server accessed before DBOS was launched")
@@ -639,17 +630,8 @@ class DBOS:
                     "runtimeConfig", {}
                 ).get("observability_query_timeout_sec"),
             )
-            assert self._config["database"]["db_engine_kwargs"] is not None
-            if self._config["database_url"]:
-                dbos_logger.debug("Creating application database")
-                self._app_db_field = ApplicationDatabase.create(
-                    database_url=self._config["database_url"],
-                    engine_kwargs=self._config["database"]["db_engine_kwargs"],
-                    schema=schema,
-                    serializer=self._serializer,
-                )
 
-            # Run migrations for the system and application databases
+            # Run migrations for the system database
             if self._config.get("run_migrations", True):
                 dbos_logger.debug("Running system database migrations")
                 self._sys_db.run_migrations()
@@ -658,9 +640,6 @@ class DBOS:
                 # be allowed to run DDL, but it still requires an up-to-date schema.
                 dbos_logger.debug("Verifying system database migrations")
                 self._sys_db.verify_migrations()
-            if self._app_db:
-                dbos_logger.debug("Running application database migrations")
-                self._app_db.run_migrations()
 
             # Register the current application version
             self._sys_db.create_application_version(GlobalParams.app_version)
@@ -958,9 +937,6 @@ class DBOS:
         if self._sys_db_field is not None:
             self._sys_db_field.destroy()
             self._sys_db_field = None
-        if self._app_db_field is not None:
-            self._app_db_field.destroy()
-            self._app_db_field = None
 
     @classmethod
     def register_instance(cls, inst: object) -> None:
@@ -1196,24 +1172,6 @@ class DBOS:
             max_recovery_attempts,
             serialization_type=serialization_type,
             validate_args=validate_args,
-        )
-
-    @classmethod
-    def transaction(
-        cls,
-        isolation_level: IsolationLevel = "SERIALIZABLE",
-        *,
-        name: Optional[str] = None,
-    ) -> Callable[[F], F]:
-        """
-        Decorate a function for use as a DBOS transaction.
-
-        Args:
-            isolation_level(IsolationLevel): Transaction isolation level
-
-        """
-        return decorate_transaction(
-            _get_or_create_dbos_registry(), name, isolation_level
         )
 
     @classmethod
@@ -3375,15 +3333,6 @@ class DBOS:
         return dbos_logger  # TODO get from context if appropriate...
 
     @classproperty
-    def sql_session(cls) -> Session:
-        """Return the SQLAlchemy `Session` for the current context, which must be within a transaction function."""
-        ctx = assert_current_dbos_context()
-        assert ctx.is_transaction(), "db is only available within a transaction."
-        rv = ctx.sql_session
-        assert rv
-        return rv
-
-    @classproperty
     def workflow_id(cls) -> Optional[str]:
         """Return the ID of the currently executing workflow. If a workflow is not executing, return None."""
         ctx = get_local_dbos_context()
@@ -3396,7 +3345,7 @@ class DBOS:
     def step_id(cls) -> Optional[int]:
         """Return the step ID for the currently executing step. This is a unique identifier of the current step within the workflow. If a step is not currently executing, return None."""
         ctx = get_local_dbos_context()
-        if ctx and (ctx.is_step() or ctx.is_transaction()):
+        if ctx and ctx.is_step():
             return ctx.function_id
         else:
             return None

@@ -11,16 +11,19 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
-from dbos import DBOS, DBOSConfig
+from dbos import DBOS, DBOSConfig, SQLAlchemyDatasource
 
 from .schema import dbos_hello
+
+database_url = os.environ.get("DBOS_DATABASE_URL", "postgresql+psycopg://postgres:dbos@localhost:5432/${default_db_name}?connect_timeout=5")
 
 app = FastAPI()
 dbos_config: DBOSConfig = {
     "name": "${project_name}",
-    "database_url": os.environ.get("DBOS_DATABASE_URL", "postgresql+psycopg://postgres:dbos@localhost:5432/${default_db_name}?connect_timeout=5")
+    "system_database_url": os.environ.get("DBOS_SYSTEM_DATABASE_URL", "postgresql+psycopg://postgres:dbos@localhost:5432/${default_db_name}_dbos_sys?connect_timeout=5"),
 }
 DBOS(fastapi=app, config=dbos_config)
+db = SQLAlchemyDatasource.create(database_url)
 
 # Next, let's write a function that greets visitors.
 # To make it more interesting, we'll keep track of how
@@ -29,15 +32,15 @@ DBOS(fastapi=app, config=dbos_config)
 
 # We implement the database operations using SQLAlchemy
 # and serve the function from a FastAPI endpoint.
-# We annotate it with @DBOS.transaction() to access
-# an automatically-configured database client.
+# We annotate it with @db.transaction to run it in a
+# transaction on our datasource, exactly once.
 
 
 @app.get("/greeting/{name}")
-@DBOS.transaction()
+@db.transaction
 def example_transaction(name: str) -> str:
     query = dbos_hello.insert().values(name=name).returning(dbos_hello.c.greet_count)
-    greet_count = DBOS.sql_session.execute(query).scalar_one()
+    greet_count = db.sql_session().execute(query).scalar_one()
     greeting = f"Greetings, {name}! You have been greeted {greet_count} times."
     DBOS.logger.info(greeting)
     return greeting

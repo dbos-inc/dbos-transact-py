@@ -41,7 +41,6 @@ def main() -> None:
         config={
             "name": "test-app",
             "system_database_url": config["system_database_url"],
-            "application_database_url": config["application_database_url"],
         }
     )
     DBOS.launch()

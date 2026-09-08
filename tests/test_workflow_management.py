@@ -21,7 +21,6 @@ from dbos._error import (
     DBOSNonExistentWorkflowError,
     DBOSWorkflowCancelledError,
 )
-from dbos._schemas.application_database import ApplicationSchema
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import (
     deserialize_value,
@@ -423,14 +422,13 @@ def test_workflow_outcome_is_owned_by_the_pending_row(dbos: DBOS) -> None:
 
 
 def test_delete_workflow(dbos: DBOS) -> None:
-    @DBOS.transaction()
-    def txn(x: int) -> int:
-        DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+    @DBOS.step()
+    def step(x: int) -> int:
         return x
 
     @DBOS.workflow()
     def child_workflow(x: int) -> int:
-        txn(x)
+        step(x)
         return x * 2
 
     @DBOS.workflow()
@@ -452,16 +450,6 @@ def test_delete_workflow(dbos: DBOS) -> None:
     # Verify both workflows exist
     assert DBOS.get_workflow_status(parent_wfid) is not None
     assert DBOS.get_workflow_status(child_wfid) is not None
-
-    # Verify transaction outputs exist for the child workflow
-    assert dbos._app_db
-    with dbos._app_db.engine.begin() as c:
-        rows = c.execute(
-            sa.select(ApplicationSchema.transaction_outputs.c.workflow_uuid).where(
-                ApplicationSchema.transaction_outputs.c.workflow_uuid == child_wfid
-            )
-        ).all()
-        assert len(rows) == 1
 
     # Delete without delete_children - only parent should be deleted
     DBOS.delete_workflow(parent_wfid, delete_children=False)
@@ -486,15 +474,6 @@ def test_delete_workflow(dbos: DBOS) -> None:
     DBOS.delete_workflow(parent_wfid2, delete_children=True)
     assert DBOS.get_workflow_status(parent_wfid2) is None
     assert DBOS.get_workflow_status(child_wfid2) is None
-
-    # Verify transaction outputs are deleted for child
-    with dbos._app_db.engine.begin() as c:
-        rows = c.execute(
-            sa.select(ApplicationSchema.transaction_outputs.c.workflow_uuid).where(
-                ApplicationSchema.transaction_outputs.c.workflow_uuid == child_wfid2
-            )
-        ).all()
-        assert len(rows) == 0
 
     # Verify deleting a non-existent workflow doesn't error
     DBOS.delete_workflow(parent_wfid2, delete_children=False)
@@ -767,53 +746,6 @@ def test_bulk_delete(dbos: DBOS) -> None:
         assert DBOS.get_workflow_status(wfid) is None
 
 
-def test_cancel_resume_txn(dbos: DBOS) -> None:
-    txn_completed = 0
-    workflow_event = threading.Event()
-    main_thread_event = threading.Event()
-    input = 5
-
-    @DBOS.transaction()
-    def txn_one() -> None:
-        nonlocal txn_completed
-        txn_completed += 1
-
-    @DBOS.transaction()
-    def txn_two() -> None:
-        nonlocal txn_completed
-        txn_completed += 1
-
-    @DBOS.workflow()
-    def simple_workflow(x: int) -> int:
-        txn_one()
-        main_thread_event.set()
-        workflow_event.wait()
-        txn_two()
-        return x
-
-    # Start the workflow and cancel it.
-    # Verify it stops after step one but before step two
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        handle = DBOS.start_workflow(simple_workflow, input)
-    main_thread_event.wait()
-    DBOS.cancel_workflow(wfid)
-    workflow_event.set()
-    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
-        handle.get_result()
-    assert txn_completed == 1
-
-    # Resume the workflow. Verify it completes successfully.
-    handle = DBOS.resume_workflow(wfid)
-    assert handle.get_result() == input
-    assert txn_completed == 2
-
-    # Resume the workflow again. Verify it does not run again.
-    handle = DBOS.resume_workflow(wfid)
-    assert handle.get_result() == input
-    assert txn_completed == 2
-
-
 def test_cancel_resume_queue(dbos: DBOS) -> None:
     steps_completed = 0
     workflow_event = threading.Event()
@@ -987,122 +919,29 @@ def test_fork_steps(
     }
 
 
-def test_restart_fromsteps_transactionsonly(
+def test_restart_fromsteps_stepsonly(
     dbos: DBOS,
 ) -> None:
 
-    trOneCount = 0
-    trTwoCount = 0
-    trThreeCount = 0
-    trFourCount = 0
-    trFiveCount = 0
-
-    @DBOS.workflow()
-    def simple_workflow() -> None:
-        trOne()
-        trTwo()
-        trThree()
-        trFour()
-        trFive()
-        return
-
-    @DBOS.transaction()
-    def trOne() -> None:
-        nonlocal trOneCount
-        trOneCount += 1
-        return
-
-    @DBOS.transaction()
-    def trTwo() -> None:
-        nonlocal trTwoCount
-        trTwoCount += 1
-        return
-
-    @DBOS.transaction()
-    def trThree() -> None:
-        nonlocal trThreeCount
-        trThreeCount += 1
-        return
-
-    @DBOS.transaction()
-    def trFour() -> None:
-        nonlocal trFourCount
-        trFourCount += 1
-        return
-
-    @DBOS.transaction()
-    def trFive() -> None:
-        nonlocal trFiveCount
-        trFiveCount += 1
-        return
-
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        simple_workflow()
-
-    assert trOneCount == 1
-    assert trTwoCount == 1
-    assert trThreeCount == 1
-    assert trFourCount == 1
-    assert trFiveCount == 1
-
-    forked_handle = DBOS.fork_workflow(wfid, 2)
-    assert forked_handle.workflow_id != wfid
-    fork_id_one = forked_handle.workflow_id
-    forked_handle.get_result()
-
-    assert trOneCount == 1
-    assert trTwoCount == 2
-    assert trThreeCount == 2
-    assert trFourCount == 2
-    assert trFiveCount == 2
-
-    forked_handle = DBOS.fork_workflow(wfid, 4)
-    assert forked_handle.workflow_id != wfid
-    fork_id_two = forked_handle.workflow_id
-    forked_handle.get_result()
-
-    assert trOneCount == 1
-    assert trTwoCount == 2
-    assert trThreeCount == 2
-    assert trFourCount == 3
-    assert trFiveCount == 3
-
-    forked_handle = DBOS.fork_workflow(wfid, 1)
-    assert forked_handle.workflow_id != wfid
-    fork_id_three = forked_handle.workflow_id
-    forked_handle.get_result()
-
-    assert trOneCount == 2
-    assert trTwoCount == 3
-    assert trThreeCount == 3
-    assert trFourCount == 4
-    assert trFiveCount == 4
-
-
-def test_restart_fromsteps_steps_tr(
-    dbos: DBOS,
-) -> None:
-
-    trOneCount = 0
+    stepOneCount = 0
     stepTwoCount = 0
-    trThreeCount = 0
+    stepThreeCount = 0
     stepFourCount = 0
-    trFiveCount = 0
+    stepFiveCount = 0
 
     @DBOS.workflow()
     def simple_workflow() -> None:
-        trOne()
+        stepOne()
         stepTwo()
-        trThree()
+        stepThree()
         stepFour()
-        trFive()
+        stepFive()
         return
 
-    @DBOS.transaction()
-    def trOne() -> None:
-        nonlocal trOneCount
-        trOneCount += 1
+    @DBOS.step()
+    def stepOne() -> None:
+        nonlocal stepOneCount
+        stepOneCount += 1
         return
 
     @DBOS.step()
@@ -1111,10 +950,10 @@ def test_restart_fromsteps_steps_tr(
         stepTwoCount += 1
         return
 
-    @DBOS.transaction()
-    def trThree() -> None:
-        nonlocal trThreeCount
-        trThreeCount += 1
+    @DBOS.step()
+    def stepThree() -> None:
+        nonlocal stepThreeCount
+        stepThreeCount += 1
         return
 
     @DBOS.step()
@@ -1123,52 +962,145 @@ def test_restart_fromsteps_steps_tr(
         stepFourCount += 1
         return
 
-    @DBOS.transaction()
-    def trFive() -> None:
-        nonlocal trFiveCount
-        trFiveCount += 1
+    @DBOS.step()
+    def stepFive() -> None:
+        nonlocal stepFiveCount
+        stepFiveCount += 1
         return
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         simple_workflow()
 
-    assert trOneCount == 1
+    assert stepOneCount == 1
     assert stepTwoCount == 1
-    assert trThreeCount == 1
+    assert stepThreeCount == 1
     assert stepFourCount == 1
-    assert trFiveCount == 1
+    assert stepFiveCount == 1
+
+    forked_handle = DBOS.fork_workflow(wfid, 2)
+    assert forked_handle.workflow_id != wfid
+    fork_id_one = forked_handle.workflow_id
+    forked_handle.get_result()
+
+    assert stepOneCount == 1
+    assert stepTwoCount == 2
+    assert stepThreeCount == 2
+    assert stepFourCount == 2
+    assert stepFiveCount == 2
+
+    forked_handle = DBOS.fork_workflow(wfid, 4)
+    assert forked_handle.workflow_id != wfid
+    fork_id_two = forked_handle.workflow_id
+    forked_handle.get_result()
+
+    assert stepOneCount == 1
+    assert stepTwoCount == 2
+    assert stepThreeCount == 2
+    assert stepFourCount == 3
+    assert stepFiveCount == 3
+
+    forked_handle = DBOS.fork_workflow(wfid, 1)
+    assert forked_handle.workflow_id != wfid
+    fork_id_three = forked_handle.workflow_id
+    forked_handle.get_result()
+
+    assert stepOneCount == 2
+    assert stepTwoCount == 3
+    assert stepThreeCount == 3
+    assert stepFourCount == 4
+    assert stepFiveCount == 4
+
+
+def test_restart_fromsteps_invalid_start(
+    dbos: DBOS,
+) -> None:
+
+    stepOneCount = 0
+    stepTwoCount = 0
+    stepThreeCount = 0
+    stepFourCount = 0
+    stepFiveCount = 0
+
+    @DBOS.workflow()
+    def simple_workflow() -> None:
+        stepOne()
+        stepTwo()
+        stepThree()
+        stepFour()
+        stepFive()
+        return
+
+    @DBOS.step()
+    def stepOne() -> None:
+        nonlocal stepOneCount
+        stepOneCount += 1
+        return
+
+    @DBOS.step()
+    def stepTwo() -> None:
+        nonlocal stepTwoCount
+        stepTwoCount += 1
+        return
+
+    @DBOS.step()
+    def stepThree() -> None:
+        nonlocal stepThreeCount
+        stepThreeCount += 1
+        return
+
+    @DBOS.step()
+    def stepFour() -> None:
+        nonlocal stepFourCount
+        stepFourCount += 1
+        return
+
+    @DBOS.step()
+    def stepFive() -> None:
+        nonlocal stepFiveCount
+        stepFiveCount += 1
+        return
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        simple_workflow()
+
+    assert stepOneCount == 1
+    assert stepTwoCount == 1
+    assert stepThreeCount == 1
+    assert stepFourCount == 1
+    assert stepFiveCount == 1
 
     forked_handle = DBOS.fork_workflow(wfid, 3)
     assert forked_handle.workflow_id != wfid
     forked_handle.get_result()
 
-    assert trOneCount == 1
+    assert stepOneCount == 1
     assert stepTwoCount == 1
-    assert trThreeCount == 2
+    assert stepThreeCount == 2
     assert stepFourCount == 2
-    assert trFiveCount == 2
+    assert stepFiveCount == 2
 
     forked_handle = DBOS.fork_workflow(wfid, 5)
     assert forked_handle.workflow_id != wfid
     forked_handle.get_result()
 
-    assert trOneCount == 1
+    assert stepOneCount == 1
     assert stepTwoCount == 1
-    assert trThreeCount == 2
+    assert stepThreeCount == 2
     assert stepFourCount == 2
-    assert trFiveCount == 3
+    assert stepFiveCount == 3
 
     # invalid < 1 will default to 1
     forked_handle = DBOS.fork_workflow(wfid, -1)
     assert forked_handle.workflow_id != wfid
     forked_handle.get_result()
 
-    assert trOneCount == 2
+    assert stepOneCount == 2
     assert stepTwoCount == 2
-    assert trThreeCount == 3
+    assert stepThreeCount == 3
     assert stepFourCount == 3
-    assert trFiveCount == 4
+    assert stepFiveCount == 4
 
 
 def test_restart_fromsteps_childwf(
@@ -1422,20 +1354,14 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     def step(x: int) -> int:
         return x
 
-    @DBOS.transaction()
-    def txn(x: int) -> int:
-        DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
-        return x
-
     @DBOS.workflow()
     def workflow(x: int) -> int:
         step(x)
-        txn(x)
         return x
 
     @DBOS.workflow()
     def blocked_workflow() -> str:
-        txn(0)
+        step(0)
         started.set()
         event.wait()
         workflow_id = DBOS.workflow_id
@@ -1445,7 +1371,6 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     num_workflows = 10
 
     handle = DBOS.start_workflow(blocked_workflow)
-    # Wait for its txn output to commit so GC assertions can count on it
     assert started.wait(timeout=30)
     # A cutoff taken from this row's own created_at while it is provably still
     # running. +1 is the smallest value that puts its creation behind the cutoff.
@@ -1461,15 +1386,6 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     workflows = DBOS.list_workflows()
     assert len(workflows) == 2
     assert workflows[0].workflow_id == handle.workflow_id
-    # Verify txn outputs are preserved only for the remaining workflows
-    assert dbos._app_db
-    with dbos._app_db.engine.begin() as c:
-        rows = c.execute(
-            sa.select(
-                ApplicationSchema.transaction_outputs.c.workflow_uuid,
-            )
-        ).all()
-        assert len(rows) == 2
 
     # Garbage collect all previous workflows
     garbage_collect(
@@ -1481,14 +1397,6 @@ def test_garbage_collection(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -
     workflows = DBOS.list_workflows()
     assert len(workflows) == 1
     assert workflows[0].workflow_id == handle.workflow_id
-    # Verify txn outputs are preserved only for the remaining workflow
-    with dbos._app_db.engine.begin() as c:
-        rows = c.execute(
-            sa.select(
-                ApplicationSchema.transaction_outputs.c.workflow_uuid,
-            )
-        ).all()
-        assert len(rows) == 1
 
     # Finish the blocked workflow
     event.set()
@@ -1589,19 +1497,18 @@ def test_garbage_collection_batched(
     event = threading.Event()
     started = threading.Event()
 
-    @DBOS.transaction()
-    def txn(x: int) -> int:
-        DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+    @DBOS.step()
+    def step(x: int) -> int:
         return x
 
     @DBOS.workflow()
     def workflow(x: int) -> int:
-        txn(x)
+        step(x)
         return x
 
     @DBOS.workflow()
     def blocked_workflow() -> str:
-        txn(0)
+        step(0)
         started.set()
         event.wait()
         workflow_id = DBOS.workflow_id
@@ -1611,18 +1518,14 @@ def test_garbage_collection_batched(
     num_workflows = 10
 
     handle = DBOS.start_workflow(blocked_workflow)
-    # Wait for its txn output to commit so GC assertions can count on it
     assert started.wait(timeout=30)
     for i in range(num_workflows):
         assert workflow(i) == i
         # Space out created_at so watermark batches split deterministically
         time.sleep(0.005)
 
-    assert dbos._app_db
-
     # Count DELETE statements per table to verify del are batched
     sys_delete_counts: list[int] = []
-    app_delete_counts: list[int] = []
 
     def count_sys_deletes(
         conn: Any,
@@ -1635,19 +1538,7 @@ def test_garbage_collection_batched(
         if _delete_target(statement) == "workflow_status":
             sys_delete_counts.append(1)
 
-    def count_app_deletes(
-        conn: Any,
-        cursor: Any,
-        statement: str,
-        parameters: Any,
-        context: Any,
-        executemany: bool,
-    ) -> None:
-        if _delete_target(statement) == "transaction_outputs":
-            app_delete_counts.append(1)
-
     sa_event.listen(dbos._sys_db.engine, "before_cursor_execute", count_sys_deletes)
-    sa_event.listen(dbos._app_db.engine, "before_cursor_execute", count_app_deletes)
     try:
         garbage_collect(
             dbos,
@@ -1657,21 +1548,13 @@ def test_garbage_collection_batched(
         )
     finally:
         sa_event.remove(dbos._sys_db.engine, "before_cursor_execute", count_sys_deletes)
-        sa_event.remove(dbos._app_db.engine, "before_cursor_execute", count_app_deletes)
 
     # Each loop runs num_workflows // batch_size full batches plus a final remainder delete
     assert len(sys_delete_counts) == num_workflows // batch_size + 1
-    assert len(app_delete_counts) == num_workflows // batch_size + 1
 
     workflows = DBOS.list_workflows()
     assert len(workflows) == 1
     assert workflows[0].workflow_id == handle.workflow_id
-    with dbos._app_db.engine.begin() as c:
-        rows = c.execute(
-            sa.select(ApplicationSchema.transaction_outputs.c.workflow_uuid)
-        ).all()
-        assert len(rows) == 1
-        assert rows[0][0] == handle.workflow_id
 
     # worker_concurrency=0 blocks dequeue so the workflow deterministically stays ENQUEUED
     DBOS.register_queue("gc_batched_test_queue", worker_concurrency=0)
@@ -1696,11 +1579,6 @@ def test_garbage_collection_batched(
     )
     wf_ids = {w.workflow_id for w in DBOS.list_workflows()}
     assert wf_ids == {enqueued_handle.workflow_id, delayed_handle.workflow_id}
-    with dbos._app_db.engine.begin() as c:
-        rows = c.execute(
-            sa.select(ApplicationSchema.transaction_outputs.c.workflow_uuid)
-        ).all()
-        assert len(rows) == 0
 
     DBOS.cancel_workflow(enqueued_handle.workflow_id)
     DBOS.cancel_workflow(delayed_handle.workflow_id)
@@ -1878,7 +1756,6 @@ def test_garbage_collection_batched_resumable(
 
 
 def test_garbage_collection_batch_size_validation(dbos: DBOS) -> None:
-    assert dbos._app_db
     for invalid_batch_size in (0, -1):
         with pytest.raises(ValueError):
             garbage_collect(
@@ -1893,8 +1770,6 @@ def test_garbage_collection_batch_size_validation(dbos: DBOS) -> None:
                 rows_threshold=None,
                 batch_size=invalid_batch_size,
             )
-        with pytest.raises(ValueError):
-            dbos._app_db.garbage_collect(1, [], batch_size=invalid_batch_size)
 
 
 def test_global_timeout(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> None:

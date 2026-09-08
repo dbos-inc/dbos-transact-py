@@ -79,7 +79,8 @@ def skip_with_sqlite_imprecise_time() -> None:
 
 
 def postgres_urls() -> Tuple[str, str]:
-    """The (application, system) PostgreSQL URLs shared by every test."""
+    """The (user, system) PostgreSQL URLs shared by every test. The first is a
+    plain user database, for tests that attach a datasource to one."""
     password = quote(os.environ.get("PGPASSWORD", "dbos"), safe="")
     return (
         f"postgresql://postgres:{password}@localhost:5432/dbostestpy",
@@ -91,12 +92,9 @@ def default_config(sqlite_path: Path) -> DBOSConfig:
     """Build a test config. sqlite_path must be unique per test, since DBOS.destroy
     leaves workflow threads running and a shared file lets them corrupt the next
     test's database."""
-    application_url, system_url = postgres_urls()
+    _, system_url = postgres_urls()
     return {
         "name": "test-app",
-        "application_database_url": (
-            f"sqlite:///{sqlite_path}" if using_sqlite() else application_url
-        ),
         "system_database_url": (
             f"sqlite:///{sqlite_path}" if using_sqlite() else system_url
         ),
@@ -145,12 +143,12 @@ def db_engine() -> Generator[sa.Engine, Any, None]:
     engine.dispose()
 
 
-def _truncate_application_database(application_database_url: str) -> None:
-    """Empty every table in the application database, leaving its schemas intact.
+def _truncate_user_database(user_database_url: str) -> None:
+    """Empty every table in the shared user database, leaving its schemas intact.
 
-    Stale transaction_outputs would let a reused workflow ID replay."""
+    Stale datasource_outputs would let a reused workflow ID replay."""
     engine = sa.create_engine(
-        sa.make_url(application_database_url).set(drivername="postgresql+psycopg"),
+        sa.make_url(user_database_url).set(drivername="postgresql+psycopg"),
         connect_args={"connect_timeout": 30},
     )
     try:
@@ -199,8 +197,8 @@ def _reset_test_databases(db_engine: sa.Engine, *, drop: bool) -> None:
         _databases_dropped = True
         drop = True
 
-    app_db_url, sys_db_url = postgres_urls()
-    names = [str(sa.make_url(url).database) for url in (app_db_url, sys_db_url)]
+    user_db_url, sys_db_url = postgres_urls()
+    names = [str(sa.make_url(url).database) for url in (user_db_url, sys_db_url)]
     with db_engine.connect() as connection:
         connection.execution_options(isolation_level="AUTOCOMMIT")
         if drop:
@@ -217,11 +215,11 @@ def _reset_test_databases(db_engine: sa.Engine, *, drop: bool) -> None:
             ).scalars()
         )
 
-    app_db_name, sys_db_name = names
+    user_db_name, sys_db_name = names
     if sys_db_name in present:
         SystemDatabase.reset_system_database(sys_db_url, truncate=True)
-    if app_db_name in present:
-        _truncate_application_database(app_db_url)
+    if user_db_name in present:
+        _truncate_user_database(user_db_url)
 
 
 @pytest.fixture()
@@ -253,8 +251,8 @@ def migrated_system_database(db_engine: sa.Engine) -> None:
         run_dbos_database_migrations(postgres_urls()[1])
 
 
-def ensure_application_database() -> None:
-    """Create the shared application database if a drop_test_databases test removed it.
+def ensure_user_database() -> None:
+    """Create the shared user database if a drop_test_databases test removed it.
 
     For tests connecting to it directly, which DBOS is not there to recreate it for."""
     url = sa.make_url(postgres_urls()[0]).set(drivername="postgresql+psycopg")
@@ -305,12 +303,8 @@ def dbos_dropped_databases(
 
 @pytest.fixture()
 def client(config: DBOSConfig, dbos: DBOS) -> Generator[DBOSClient, Any, None]:
-    assert config["application_database_url"] is not None
     assert config["system_database_url"] is not None
-    client = DBOSClient(
-        application_database_url=config["application_database_url"],
-        system_database_url=config["system_database_url"],
-    )
+    client = DBOSClient(system_database_url=config["system_database_url"])
     yield client
     client.destroy()
 

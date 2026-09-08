@@ -40,12 +40,11 @@ from ._tracer import dbos_tracer
 class OperationType(Enum):
     HANDLER = "handler"
     WORKFLOW = "workflow"
-    TRANSACTION = "transaction"
     STEP = "step"
     PROCEDURE = "procedure"
 
 
-OperationTypes = Literal["handler", "workflow", "transaction", "step", "procedure"]
+OperationTypes = Literal["handler", "workflow", "step", "procedure"]
 
 MaxPriority = 2**31 - 1  # 2,147,483,647
 MinPriority = 1
@@ -127,8 +126,6 @@ class DBOSContext:
         self.curr_step_function_id: int = -1
         # Checkpointed stream reads that have reserved a step but not yet recorded it.
         self.active_stream_reads: int = 0
-        self.curr_tx_function_id: int = -1
-        self.sql_session: Optional[Session] = None
         self.sync_ds_session: Optional[Session] = None
         self.async_ds_session: Optional[AsyncSession] = None
         self.context_spans: list[ContextSpan] = []
@@ -285,14 +282,7 @@ class DBOSContext:
         return len(self.workflow_id) > 0
 
     def is_workflow(self) -> bool:
-        return (
-            len(self.workflow_id) > 0
-            and not self.is_step()
-            and not self.is_transaction()
-        )
-
-    def is_transaction(self) -> bool:
-        return self.sql_session is not None
+        return len(self.workflow_id) > 0 and not self.is_step()
 
     def is_step(self) -> bool:
         return self.curr_step_function_id >= 0
@@ -309,18 +299,6 @@ class DBOSContext:
     def end_step(self, exc_value: Optional[BaseException]) -> None:
         self.curr_step_function_id = -1
         self.step_status = None
-        self._end_span(exc_value)
-
-    def start_transaction(
-        self, ses: Session, fid: int, attributes: TracedAttributes
-    ) -> None:
-        self.sql_session = ses
-        self.curr_tx_function_id = fid
-        self._start_span(attributes)
-
-    def end_transaction(self, exc_value: Optional[BaseException]) -> None:
-        self.sql_session = None
-        self.curr_tx_function_id = -1
         self._end_span(exc_value)
 
     def start_sync_ds_transaction(self, ses: Session) -> None:
@@ -1045,30 +1023,6 @@ class EnterDBOSStepRetry:
         if ctx is not None and ctx.step_status is not None:
             ctx.step_status.current_attempt = None
             ctx.step_status.max_attempts = None
-        return False  # Did not handle
-
-
-class EnterDBOSTransaction:
-    def __init__(self, sqls: Session, attributes: TracedAttributes) -> None:
-        self.sqls = sqls
-        self.attributes = attributes
-
-    def __enter__(self) -> DBOSContext:
-        ctx = assert_current_dbos_context()
-        assert ctx.is_workflow()
-        ctx.function_id += 1
-        ctx.start_transaction(self.sqls, ctx.function_id, attributes=self.attributes)
-        return ctx
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> Literal[False]:
-        ctx = assert_current_dbos_context()
-        assert ctx.is_transaction()
-        ctx.end_transaction(exc_value)
         return False  # Did not handle
 
 

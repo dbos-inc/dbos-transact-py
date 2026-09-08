@@ -4924,8 +4924,6 @@ class SystemDatabase(ABC):
         self, fn: Callable[[], T], function_name: str, ctx: Optional[DBOSContext]
     ) -> T:
         start_time = int(time.time() * 1000)
-        if ctx and ctx.is_transaction():
-            raise Exception(f"Invalid call to `{function_name}` inside a transaction")
         if ctx and ctx.is_workflow():
             res = self.check_operation_execution(
                 ctx.workflow_id, ctx.function_id, function_name
@@ -4973,8 +4971,6 @@ class SystemDatabase(ABC):
         ctx: Optional[DBOSContext],
     ) -> T:
         start_time = int(time.time() * 1000)
-        if ctx and ctx.is_transaction():
-            raise Exception(f"Invalid call to `{function_name}` inside a transaction")
         if ctx and ctx.is_workflow():
             res = await asyncio.to_thread(
                 self.check_operation_execution,
@@ -5214,7 +5210,7 @@ class SystemDatabase(ABC):
 
         Does not begin, commit, rollback, or retry. The caller owns the
         transaction. The connection or session must target the DBOS system
-        database; it cannot atomically span a separate application database.
+        database; it cannot atomically span a separate database.
         """
         self._apply_caller_schema(conn)
         return self._insert_workflow_status(
@@ -5717,24 +5713,6 @@ class SystemDatabase(ABC):
             watermark = next_watermark
 
         return cutoff_epoch_timestamp_ms
-
-    def list_retained_workflow_ids(self, cutoff_epoch_timestamp_ms: int) -> List[str]:
-        """IDs of this application's pre-cutoff workflows that garbage collection kept.
-        Only the deprecated application database needs them, to spare the transaction
-        outputs of workflows that may still run."""
-        with self.engine.begin() as c:
-            return list(
-                c.execute(
-                    sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
-                        SystemSchema.workflow_status.c.created_at
-                        < sa.literal(cutoff_epoch_timestamp_ms, sa.BigInteger),
-                        self._name_filter(
-                            SystemSchema.workflow_status.c.application_name,
-                            self.app_name,
-                        ),
-                    )
-                ).scalars()
-            )
 
     def list_timed_out_workflow_ids(self, cutoff_epoch_timestamp_ms: int) -> List[str]:
         """IDs of this application's in-flight workflows created before the cutoff.

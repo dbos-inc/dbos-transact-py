@@ -12,7 +12,6 @@ from dbos._serialization import Serializer
 
 from ._error import DBOSInitializationError
 from ._logger import dbos_logger
-from ._schemas.system_database import SystemSchema
 from ._utils import GlobalParams
 
 DBOS_CONFIG_PATH = "dbos-config.yaml"
@@ -25,11 +24,9 @@ class DBOSConfig(TypedDict, total=False):
     Attributes:
         name (str): Application name
         system_database_url (str): Connection string for the DBOS system database. Defaults to sqlite:///{name} if not provided.
-        application_database_url (str): Connection string for the DBOS application database, in which DBOS @Transaction functions run. Optional. Should be the same type of database (SQLite or Postgres) as the system database.
-        database_url (str): (DEPRECATED) Database connection string
         sys_db_pool_size (int): System database pool size
         sys_db_polling_concurrency (int): Maximum number of DB-backed polling reads (from wait operations such as get_result, recv, get_event, and read_stream) that may run concurrently against the system database pool. This keeps high-fan-out polling from checking out every pool connection and starving control-plane operations such as enqueue/dequeue, status writes, recovery, and cancellation. Defaults to half the system database pool size (minimum 1). Set to a non-positive value to disable the limiter.
-        db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs (See https://docs.sqlalchemy.org/en/20/core/engines.html#sqlalchemy.create_engine)
+        db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs for the system database engine (See https://docs.sqlalchemy.org/en/20/core/engines.html#sqlalchemy.create_engine)
         log_level (str): Log level
         otlp_log_level: Optional[str]: log level specficially for OTLP logging (if enabled); must be no less severe than log_level
         console_log_level: Optional[str]: log level specficially for console logging; must be no less severe than log_level
@@ -63,8 +60,6 @@ class DBOSConfig(TypedDict, total=False):
 
     name: str
     system_database_url: Optional[str]
-    application_database_url: Optional[str]
-    database_url: Optional[str]
     sys_db_pool_size: Optional[int]
     sys_db_polling_concurrency: Optional[int]
     db_engine_kwargs: Optional[Dict[str, Any]]
@@ -146,7 +141,6 @@ class ConfigFile(TypedDict, total=False):
     name: str
     runtimeConfig: RuntimeConfig
     database: DatabaseConfig
-    database_url: Optional[str]
     system_database_url: Optional[str]
     telemetry: Optional[TelemetryConfig]
     env: Dict[str, str]
@@ -169,9 +163,24 @@ def _validate_observability_query_timeout_sec(value: Optional[float]) -> None:
         )
 
 
+# Removed in DBOS 3.0 along with the application database. Rejected explicitly so a
+# config still naming one fails loudly instead of silently moving the system database.
+REMOVED_DATABASE_URL_KEYS = ("database_url", "application_database_url")
+
+
+def _reject_removed_database_url_keys(source: Any, origin: str) -> None:
+    for key in REMOVED_DATABASE_URL_KEYS:
+        if key in source:
+            raise DBOSInitializationError(
+                f"{origin} sets {key}, which was removed in DBOS 3.0 along with the "
+                "application database. Use system_database_url instead."
+            )
+
+
 def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     if "name" not in config:
         raise DBOSInitializationError(f"Configuration must specify an application name")
+    _reject_removed_database_url_keys(config, "DBOSConfig")
 
     translated_config: ConfigFile = {
         "name": config["name"],
@@ -189,12 +198,6 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         db_config["db_engine_kwargs"] = config.get("db_engine_kwargs")
     if db_config:
         translated_config["database"] = db_config
-
-    # Use application_database_url instead of the deprecated database_url if provided
-    if "database_url" in config:
-        translated_config["database_url"] = config.get("database_url")
-    elif "application_database_url" in config:
-        translated_config["database_url"] = config.get("application_database_url")
 
     if "system_database_url" in config:
         translated_config["system_database_url"] = config.get("system_database_url")
@@ -376,6 +379,7 @@ def load_config(
             f"dbos-config.yaml must contain a dictionary, not {type(data)}"
         )
     data = cast(Dict[str, Any], data)
+    _reject_removed_database_url_keys(data, config_file_path)
 
     # Special case: convert logsEndpoint and tracesEndpoint from strings to lists of strings, if present
     if "telemetry" in data and "OTLPExporter" in data["telemetry"]:
@@ -397,12 +401,11 @@ def process_config(
     silent: bool = False,
 ) -> ConfigFile:
     """
-    If a database_url is provided, pass it as is in the config.
+    If a system_database_url is provided, pass it as is in the config.
 
     Else, default to SQLite.
 
     Also build SQL Alchemy "kwargs" base on user input + defaults.
-    Specifically, db_engine_kwargs takes precedence over app_db_pool_size
     """
 
     if "name" not in data:
@@ -434,28 +437,7 @@ def process_config(
     data.setdefault("database", {})
     connect_timeout = None
 
-    # Process the application database URL, if provided
-    if data.get("database_url"):
-        # Parse the db string and check required fields
-        assert data["database_url"] is not None
-        assert is_valid_database_url(data["database_url"])
-
-        url = make_url(data["database_url"])
-
-        # Gather connect_timeout from the URL if provided. It should be used in engine kwargs if not provided there (instead of our default)
-        connect_timeout_str = url.query.get("connect_timeout")
-        if connect_timeout_str is not None:
-            assert isinstance(
-                connect_timeout_str, str
-            ), "connect_timeout must be a string and defined once in the URL"
-            if connect_timeout_str.isdigit():
-                connect_timeout = int(connect_timeout_str)
-
-    if (
-        data.get("system_database_engine")
-        and not data.get("system_database_url")
-        and not data.get("database_url")
-    ):
+    if data.get("system_database_engine") and not data.get("system_database_url"):
         engine = data.get("system_database_engine")
         assert engine is not None
         if "sqlite" in engine.dialect.name:
@@ -473,7 +455,7 @@ def process_config(
 
         url = make_url(data["system_database_url"])
 
-        # Gather connect_timeout from the URL if provided. It should be used in engine kwargs if not provided there (instead of our default). This overrides a timeout from the application database, if any.
+        # Gather connect_timeout from the URL if provided. It should be used in engine kwargs if not provided there (instead of our default)
         connect_timeout_str = url.query.get("connect_timeout")
         if connect_timeout_str is not None:
             assert isinstance(
@@ -482,29 +464,10 @@ def process_config(
             if connect_timeout_str.isdigit():
                 connect_timeout = int(connect_timeout_str)
 
-    # If an application database URL is provided but not the system database URL,
-    # construct the system database URL.
-    if data.get("database_url") and not data.get("system_database_url"):
-        assert data["database_url"]
-        if data["database_url"].startswith("sqlite"):
-            data["system_database_url"] = data["database_url"]
-        else:
-            url = make_url(data["database_url"])
-            assert url.database
-            url = url.set(database=f"{url.database}{SystemSchema.sysdb_suffix}")
-            data["system_database_url"] = url.render_as_string(hide_password=False)
-
-    # If a system database URL is provided but not an application database URL,
-    # do not create an application database.
-    if data.get("system_database_url") and not data.get("database_url"):
-        assert data["system_database_url"]
-        data["database_url"] = None
-
-    # If neither URL is provided, use a default SQLite system database URL.
-    if not data.get("database_url") and not data.get("system_database_url"):
-        _app_db_name = _app_name_to_db_name(data["name"])
-        data["system_database_url"] = f"sqlite:///{_app_db_name}.sqlite"
-        data["database_url"] = None
+    # If no URL is provided, use a default SQLite system database URL.
+    if not data.get("system_database_url"):
+        _sys_db_name = _app_name_to_db_name(data["name"])
+        data["system_database_url"] = f"sqlite:///{_sys_db_name}.sqlite"
 
     configure_db_engine_parameters(data["database"], connect_timeout=connect_timeout)
 
@@ -591,7 +554,7 @@ def _app_name_to_db_name(app_name: str) -> str:
 
 def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # Load the DBOS configuration file and force the use of:
-    # 1. The application and system database url provided by DBOS_DATABASE_URL and DBOS_SYSTEM_DATABASE_URL
+    # 1. The system database url provided by DBOS_SYSTEM_DATABASE_URL
     # 2. OTLP traces endpoints (add the config data to the provided config)
     # 3. Use the application name from the file. This is a defensive measure to ensure the application name is whatever it was registered with in the cloud
     # 4. Remove admin_port is provided in code
@@ -606,13 +569,7 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # Set the application name to the cloud app name
     provided_config["name"] = config_from_file["name"]
 
-    # Use the DBOS Cloud application and system database URLs
-    db_url = os.environ.get("DBOS_DATABASE_URL")
-    if db_url is None:
-        raise DBOSInitializationError(
-            "DBOS_DATABASE_URL environment variable is not set. This is required to connect to the database."
-        )
-    provided_config["database_url"] = db_url
+    # Use the DBOS Cloud system database URL
     system_db_url = os.environ.get("DBOS_SYSTEM_DATABASE_URL")
     if system_db_url is None:
         raise DBOSInitializationError(
@@ -676,25 +633,6 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
 
 
 def get_system_database_url(config: ConfigFile) -> str:
-    if "system_database_url" in config and config["system_database_url"] is not None:
-        return config["system_database_url"]
-    else:
-        assert config["database_url"] is not None
-        if config["database_url"].startswith("sqlite"):
-            return config["database_url"]
-        app_db_url = make_url(config["database_url"])
-        assert app_db_url.database is not None
-        sys_db_name = app_db_url.database + SystemSchema.sysdb_suffix
-        return app_db_url.set(database=sys_db_name).render_as_string(
-            hide_password=False
-        )
-
-
-def get_application_database_url(config: ConfigFile) -> str | None:
-    # For backwards compatibility, the application database URL is "database_url"
-    if config.get("database_url"):
-        assert config["database_url"]
-        return config["database_url"]
-    else:
-        # If the application database URL is not specified, return None
-        return None
+    system_database_url = config.get("system_database_url")
+    assert system_database_url is not None
+    return system_database_url

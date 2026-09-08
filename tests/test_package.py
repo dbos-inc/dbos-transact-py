@@ -121,7 +121,7 @@ def test_init_config(skip_with_sqlite: None) -> None:
         "name": app_name,
         "language": "python",
         "runtimeConfig": {"start": ["python3 main.py"]},
-        "database_url": "${DBOS_DATABASE_URL}",
+        "system_database_url": "${DBOS_SYSTEM_DATABASE_URL}",
     }
     with tempfile.TemporaryDirectory() as temp_path:
 
@@ -151,6 +151,7 @@ def test_reset(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
     with tempfile.TemporaryDirectory() as temp_path:
         env = os.environ.copy()
         env["DBOS_DATABASE_URL"] = db_url
+        env["DBOS_SYSTEM_DATABASE_URL"] = sys_db_url
         subprocess.check_call(
             ["dbos", "init", app_name, "--template", "dbos-db-starter"],
             cwd=temp_path,
@@ -169,7 +170,7 @@ def test_reset(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
 
         # Call reset and verify it's destroyed
         subprocess.check_call(
-            ["dbos", "reset", "-y", "--db-url", db_url, "--sys-db-url", sys_db_url],
+            ["dbos", "reset", "-y", "--sys-db-url", sys_db_url],
             cwd=temp_path,
         )
         with db_engine.connect() as c:
@@ -184,7 +185,6 @@ def test_reset(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
 
 @pytest.mark.timeout(300)
 def test_workflow_commands(config: DBOSConfig) -> None:
-    assert config["application_database_url"] is not None
     assert config["system_database_url"] is not None
     if using_sqlite():
         db_url = config["system_database_url"]

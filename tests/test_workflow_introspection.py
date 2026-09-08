@@ -1208,77 +1208,6 @@ async def test_callchild_rerun_asyncio(dbos: DBOS) -> None:
     assert res1 == res2
 
 
-def test_list_transaction(dbos: DBOS) -> None:
-
-    @DBOS.workflow()
-    def simple_workflow() -> None:
-        transactionOne()
-        stepTwo()
-        DBOS.sleep(1)
-        return
-
-    @DBOS.transaction()
-    def transactionOne() -> str:
-        return "a test transaction"
-
-    @DBOS.step()
-    def stepTwo() -> None:
-        return
-
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        simple_workflow()
-
-    wfsteps = DBOS.list_workflow_steps(wfid)
-    assert len(wfsteps) == 3
-    assert wfsteps[0]["function_name"] == transactionOne.__qualname__
-    assert wfsteps[0]["output"] == "a test transaction"
-    assert wfsteps[0]["error"] == None
-    assert wfsteps[1]["function_name"] == stepTwo.__qualname__
-    assert wfsteps[2]["function_name"] == "DBOS.sleep"
-
-
-def test_list_transaction_error(dbos: DBOS) -> None:
-
-    @DBOS.workflow()
-    def simple_workflow() -> None:
-        transactionOne()
-        stepTwo()
-        try:
-            transactionErr()
-        except Exception as e:
-            print(f"Error: {e}")
-        DBOS.sleep(1)
-        return
-
-    @DBOS.transaction()
-    def transactionOne() -> str:
-        return "a test transaction"
-
-    @DBOS.transaction()
-    def transactionErr() -> None:
-        raise Exception("a test transaction error")
-
-    @DBOS.step()
-    def stepTwo() -> None:
-        return
-
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        simple_workflow()
-
-    wfsteps = DBOS.list_workflow_steps(wfid)
-    assert len(wfsteps) == 4
-    assert wfsteps[0]["function_name"] == transactionOne.__qualname__
-    assert wfsteps[0]["output"] == "a test transaction"
-    assert wfsteps[0]["error"] == None
-    assert wfsteps[1]["function_name"] == stepTwo.__qualname__
-    assert wfsteps[2]["function_name"] == transactionErr.__qualname__
-    assert wfsteps[2]["output"] == None
-    assert isinstance(wfsteps[2]["error"], Exception)
-    assert wfsteps[3]["function_name"] == "DBOS.sleep"
-
-
 def test_list_workflows_as_step(dbos: DBOS) -> None:
     workflow_event = threading.Event()
     main_thread_event = threading.Event()
@@ -1328,12 +1257,6 @@ def test_call_as_step_within_step(dbos: DBOS) -> None:
         assert workflow_id is not None
         return getStatus(workflow_id)
 
-    @DBOS.transaction()
-    def transactionStatus() -> None:
-        workflow_id = DBOS.workflow_id
-        assert workflow_id is not None
-        DBOS.get_workflow_status(workflow_id)
-
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         status = getStatusWorkflow()
@@ -1343,12 +1266,6 @@ def test_call_as_step_within_step(dbos: DBOS) -> None:
 
     assert len(steps) == 1
     assert steps[0]["function_name"] == getStatus.__qualname__
-
-    with pytest.raises(Exception) as exc_info:
-        transactionStatus()
-    assert "Invalid call to `DBOS.getStatus` inside a transaction" in str(
-        exc_info.value
-    )
 
 
 def test_step_timing(dbos: DBOS) -> None:
@@ -1627,51 +1544,6 @@ async def test_asyncio_wait_timing(dbos: DBOS) -> None:
     step = waits[0]
     assert step["started_at_epoch_ms"] and step["completed_at_epoch_ms"]
     assert step["completed_at_epoch_ms"] - step["started_at_epoch_ms"] >= 400
-
-
-def test_transaction_timing(dbos: DBOS) -> None:
-    @DBOS.transaction()
-    def txn() -> None:
-        time.sleep(0.2)
-
-    @DBOS.workflow()
-    def workflow() -> None:
-        txn()
-
-    handle = DBOS.start_workflow(workflow)
-    handle.get_result()
-
-    steps = DBOS.list_workflow_steps(handle.workflow_id)
-    assert len(steps) == 1
-    step = steps[0]
-    assert step["started_at_epoch_ms"] and step["completed_at_epoch_ms"]
-    assert step["completed_at_epoch_ms"] - step["started_at_epoch_ms"] >= 200
-
-
-def test_transaction_timing_includes_checkpoint_lookup(dbos: DBOS) -> None:
-    real_check = dbos._sys_db.check_operation_execution
-
-    def slow_check(*args: Any, **kwargs: Any) -> Any:
-        time.sleep(0.5)
-        return real_check(*args, **kwargs)
-
-    @DBOS.transaction()
-    def txn() -> None:
-        return
-
-    @DBOS.workflow()
-    def workflow() -> None:
-        txn()
-
-    dbos._sys_db.check_operation_execution = slow_check  # type: ignore[method-assign]
-    try:
-        handle = DBOS.start_workflow(workflow)
-        handle.get_result()
-    finally:
-        dbos._sys_db.check_operation_execution = real_check  # type: ignore[method-assign]
-
-    step = _only_step(DBOS.list_workflow_steps(handle.workflow_id), txn.__qualname__)
-    assert step["completed_at_epoch_ms"] - step["started_at_epoch_ms"] >= 500
 
 
 @pytest.mark.asyncio

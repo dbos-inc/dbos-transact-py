@@ -874,27 +874,6 @@ def test_queue_step(dbos: DBOS) -> None:
     assert step_counter == 1
 
 
-def test_queue_transaction(dbos: DBOS) -> None:
-    step_counter: int = 0
-    wfid = str(uuid.uuid4())
-
-    @DBOS.transaction()
-    def test_transaction(var: str) -> str:
-        assert DBOS.workflow_id == wfid
-        nonlocal step_counter
-        step_counter += 1
-        return var + "1"
-
-    DBOS.register_queue("test_queue")
-
-    with SetWorkflowID(wfid):
-        handle = DBOS.enqueue_workflow("test_queue", test_transaction, "abc")
-    assert handle.get_result() == "abc1"
-    with SetWorkflowID(wfid):
-        assert test_transaction("abc") == "abc1"
-    assert step_counter == 1
-
-
 def test_limiter(dbos: DBOS) -> None:
 
     @DBOS.workflow()
@@ -1196,7 +1175,6 @@ def run_dbos_test_in_process(
     dbos_config: DBOSConfig = {
         "name": "test-app",
         "system_database_url": config["system_database_url"],
-        "application_database_url": config["application_database_url"],
         "admin_port": 8001 + i,
     }
     dbos = DBOS(config=dbos_config)

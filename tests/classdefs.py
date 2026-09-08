@@ -1,18 +1,16 @@
-import sqlalchemy as sa
-
 # Public API
 from dbos import DBOS, DBOSConfiguredInstance
 
 
 @DBOS.dbos_class()
 class DBOSTestClass(DBOSConfiguredInstance):
-    txn_counter_c = 0
+    other_step_counter_c = 0
     wf_counter_c = 0
     step_counter_c = 0
 
     def __init__(self) -> None:
         super().__init__("myconfig")
-        self.txn_counter: int = 0
+        self.other_step_counter: int = 0
         self.wf_counter: int = 0
         self.step_counter: int = 0
 
@@ -20,16 +18,15 @@ class DBOSTestClass(DBOSConfiguredInstance):
     @DBOS.workflow()
     def test_workflow_cls(cls, var: str, var2: str) -> str:
         cls.wf_counter_c += 1
-        res = DBOSTestClass.test_transaction_cls(var2)
+        res = DBOSTestClass.test_other_step_cls(var2)
         res2 = DBOSTestClass.test_step_cls(var)
         return res + res2
 
     @classmethod
-    @DBOS.transaction()
-    def test_transaction_cls(cls, var2: str) -> str:
-        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
-        cls.txn_counter_c += 1
-        return var2 + str(rows[0][0])
+    @DBOS.step()
+    def test_other_step_cls(cls, var2: str) -> str:
+        cls.other_step_counter_c += 1
+        return var2 + "1"
 
     @classmethod
     @DBOS.step()
@@ -40,15 +37,14 @@ class DBOSTestClass(DBOSConfiguredInstance):
     @DBOS.workflow()
     def test_workflow(self, var: str, var2: str) -> str:
         self.wf_counter += 1
-        res = self.test_transaction(var2)
+        res = self.test_other_step(var2)
         res2 = self.test_step(var)
         return res + res2
 
-    @DBOS.transaction()
-    def test_transaction(self, var2: str) -> str:
-        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
-        self.txn_counter += 1
-        return var2 + str(rows[0][0])
+    @DBOS.step()
+    def test_other_step(self, var2: str) -> str:
+        self.other_step_counter += 1
+        return var2 + "1"
 
     @DBOS.step()
     def test_step(self, var: str) -> str:
@@ -101,7 +97,7 @@ class DBOSTestWrapperMethods:
     def __init__(self, name: str) -> None:
         self.wf_counter: int = 0
         self.step_counter: int = 0
-        self.txn_counter: int = 0
+        self.other_step_counter: int = 0
 
         self.name = name
         assert self.name is not None
@@ -111,16 +107,15 @@ class DBOSTestWrapperMethods:
             self.step_counter += 1
             return var
 
-        @DBOS.transaction(name=f"{self.name}_test_transaction")
-        def wrapped_test_transaction(var2: str) -> str:
-            rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
-            self.txn_counter += 1
-            return var2 + str(rows[0][0])
+        @DBOS.step(name=f"{self.name}_test_other_step")
+        def wrapped_test_other_step(var2: str) -> str:
+            self.other_step_counter += 1
+            return var2 + "1"
 
         @DBOS.workflow(name=f"{self.name}_test_workflow")
         def wrapped_test_workflow(var: str, var2: str) -> str:
             self.wf_counter += 1
-            res = wrapped_test_transaction(var2)
+            res = wrapped_test_other_step(var2)
             res2 = wrapped_test_step(var)
             return res + res2
 
