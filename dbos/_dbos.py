@@ -141,7 +141,6 @@ from ._context import (
 from ._dbos_config import (
     ConfigFile,
     DBOSConfig,
-    get_system_database_url,
     overwrite_config,
     process_config,
     translate_dbos_config_to_config_file,
@@ -612,8 +611,10 @@ class DBOS:
                 self._config.get("runtimeConfig", {}).get("notification_coalesce_sec")
                 or DEFAULT_NOTIFICATION_COALESCE_SEC
             )
+            system_database_url = self._config["system_database_url"]
+            assert system_database_url is not None
             self._sys_db_field = SystemDatabase.create(
-                system_database_url=get_system_database_url(self._config),
+                system_database_url=system_database_url,
                 engine_kwargs=self._config["database"]["sys_db_engine_kwargs"],
                 engine=self._config["system_database_engine"],
                 schema=schema,
@@ -849,11 +850,13 @@ class DBOS:
             not self._launched
         ), "The system database cannot be reset after DBOS is launched. Resetting the system database is a destructive operation that should only be used in a test environment."
 
+        configured_url = self._config["system_database_url"]
+        assert configured_url is not None
         SystemDatabase.reset_system_database(
             (
                 system_database_url
                 if system_database_url is not None
-                else get_system_database_url(self._config)
+                else configured_url
             ),
             truncate=truncate,
             schema=(

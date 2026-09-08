@@ -19,13 +19,7 @@ from dbos.cli.migration import (
 )
 
 from .._client import DBOSClient
-from .._dbos_config import (
-    ConfigFile,
-    _app_name_to_db_name,
-    _is_valid_app_name,
-    get_system_database_url,
-    load_config,
-)
+from .._dbos_config import _app_name_to_db_name, _is_valid_app_name, load_config
 from .._docker_pg_helper import start_docker_pg, stop_docker_pg
 from .._logger import dbos_logger, init_logger
 from .._sys_db import DEFAULT_RENAME_BATCH_SIZE, SystemDatabase
@@ -65,14 +59,14 @@ def _resolve_db_url(*, system_database_url: Optional[str]) -> Optional[str]:
         assert system_database_url
         return system_database_url
     if system_database_url:
-        cfg: ConfigFile = {"system_database_url": system_database_url}
-        return get_system_database_url(cfg)
+        return system_database_url
     else:
         # Load from config file if present
         try:
             config = load_config(silent=True)
-            if config.get("system_database_url"):
-                return get_system_database_url(config)
+            configured_url = config.get("system_database_url")
+            if configured_url:
+                return configured_url
             else:
                 _sys_db_name = _app_name_to_db_name(config["name"])
                 # Fallback on the same defaults than the DBOS library

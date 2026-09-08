@@ -630,9 +630,3 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
         del provided_config["env"]
 
     return provided_config
-
-
-def get_system_database_url(config: ConfigFile) -> str:
-    system_database_url = config.get("system_database_url")
-    assert system_database_url is not None
-    return system_database_url

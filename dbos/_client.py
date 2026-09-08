@@ -46,7 +46,7 @@ if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 
 from dbos._croniter import croniter  # type: ignore
-from dbos._dbos_config import get_system_database_url, is_valid_database_url
+from dbos._dbos_config import is_valid_database_url
 from dbos._error import (
     DBOSException,
     DBOSNonExistentWorkflowError,
@@ -184,9 +184,10 @@ class DBOSClient:
             else:
                 system_database_url = "postgresql://custom:system@database/engine"
         else:
-            system_database_url = get_system_database_url(
-                {"system_database_url": system_database_url}
-            )
+            if system_database_url is None:
+                raise DBOSException(
+                    "A DBOSClient requires a system_database_url or a system_database_engine."
+                )
             assert is_valid_database_url(system_database_url)
         # We only create database connections but do not run migrations
         self._sys_db = SystemDatabase.create(
