@@ -152,37 +152,6 @@ def test_async_scheduled_workflow(dbos: DBOS) -> None:
     retry_until_success(check_fired)
 
 
-def test_appdb_downtime(dbos: DBOS, skip_with_sqlite: None) -> None:
-    wf_counter: int = 0
-
-    @DBOS.transaction()
-    def test_transaction(var2: str) -> str:
-        rows = DBOS.sql_session.execute(text("SELECT 1")).fetchall()
-        return "ran"
-
-    @DBOS.scheduled("* * * * * *")
-    @DBOS.workflow()
-    def test_workflow(scheduled: datetime, actual: datetime) -> None:
-        nonlocal wf_counter
-        test_transaction("x")
-        wf_counter += 1
-
-    def check_fired_before() -> None:
-        assert wf_counter >= 1
-
-    retry_until_success(check_fired_before)
-
-    assert dbos._app_db
-    simulate_db_restart(dbos._app_db.engine, 2)
-
-    count_before_restart = wf_counter
-
-    def check_fired_after_restart() -> None:
-        assert wf_counter > count_before_restart
-
-    retry_until_success(check_fired_after_restart)
-
-
 def test_sysdb_downtime(dbos: DBOS, skip_with_sqlite: None) -> None:
     wf_counter: int = 0
 
@@ -205,21 +174,6 @@ def test_sysdb_downtime(dbos: DBOS, skip_with_sqlite: None) -> None:
         assert wf_counter > count_before_restart
 
     retry_until_success(check_fired_after_restart)
-
-
-def test_scheduled_transaction(dbos: DBOS) -> None:
-    txn_counter: int = 0
-
-    @DBOS.scheduled("* * * * * *")
-    @DBOS.transaction()
-    def test_transaction(scheduled: datetime, actual: datetime) -> None:
-        nonlocal txn_counter
-        txn_counter += 1
-
-    def check_fired() -> None:
-        assert txn_counter >= 2
-
-    retry_until_success(check_fired)
 
 
 def test_scheduled_step(dbos: DBOS) -> None:
@@ -255,13 +209,13 @@ def test_scheduled_workflow_exception(dbos: DBOS) -> None:
 
 def test_scheduler_oaoo(dbos: DBOS) -> None:
     wf_counter: int = 0
-    txn_counter: int = 0
+    other_step_counter: int = 0
     workflow_id: str = ""
 
     @DBOS.scheduled("* * * * * *")
     @DBOS.workflow()
     def test_workflow(scheduled: datetime, actual: datetime) -> None:
-        test_transaction()
+        test_other_step()
         nonlocal wf_counter
         wf_counter += 1
         nonlocal workflow_id
@@ -269,20 +223,20 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
         assert wf_id is not None
         workflow_id = wf_id
 
-    @DBOS.transaction()
-    def test_transaction() -> None:
-        nonlocal txn_counter
-        txn_counter += 1
+    @DBOS.step()
+    def test_other_step() -> None:
+        nonlocal other_step_counter
+        other_step_counter += 1
 
     def check_fired() -> None:
         assert wf_counter >= 1
 
     retry_until_success(check_fired)
 
-    def check_txn_matches_wf() -> None:
-        assert txn_counter == wf_counter
+    def check_step_matches_wf() -> None:
+        assert other_step_counter == wf_counter
 
-    retry_until_success(check_txn_matches_wf)
+    retry_until_success(check_step_matches_wf)
 
     # Stop the scheduled workflow
     for evt in dbos.poller_stop_events:
@@ -298,7 +252,7 @@ def test_scheduler_oaoo(dbos: DBOS) -> None:
     assert workflow_handles[0].get_result() == None
 
     def check_recovery_oaoo() -> None:
-        assert wf_counter == txn_counter + 1
+        assert wf_counter == other_step_counter + 1
 
     retry_until_success(check_recovery_oaoo)
 

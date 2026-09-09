@@ -202,7 +202,7 @@ def test_required_roles_class(dbos: DBOS) -> None:
 def test_simple_workflow_static(dbos: DBOS) -> None:
     @DBOS.dbos_class()
     class DBOSTestClassStatic:
-        txn_counter: int = 0
+        other_step_counter: int = 0
         wf_counter: int = 0
         step_counter: int = 0
 
@@ -210,18 +210,17 @@ def test_simple_workflow_static(dbos: DBOS) -> None:
         @DBOS.workflow()
         def test_workflow(var: str, var2: str) -> str:
             DBOSTestClassStatic.wf_counter += 1
-            res = DBOSTestClassStatic.test_transaction(var2)
+            res = DBOSTestClassStatic.test_other_step(var2)
             res2 = DBOSTestClassStatic.test_step(var)
             DBOS.logger.info("I'm test_workflow")
             return res + res2
 
         @staticmethod
-        @DBOS.transaction()
-        def test_transaction(var2: str) -> str:
-            rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
-            DBOSTestClassStatic.txn_counter += 1
-            DBOS.logger.info("I'm test_transaction")
-            return var2 + str(rows[0][0])
+        @DBOS.step()
+        def test_other_step(var2: str) -> str:
+            DBOSTestClassStatic.other_step_counter += 1
+            DBOS.logger.info("I'm test_other_step")
+            return var2 + "1"
 
         @staticmethod
         @DBOS.step()
@@ -233,7 +232,7 @@ def test_simple_workflow_static(dbos: DBOS) -> None:
     assert DBOSTestClassStatic.test_workflow("bob", "bob") == "bob1bob"
     wfh = dbos.start_workflow(DBOSTestClassStatic.test_workflow, "bob", "bob")
     assert wfh.get_result() == "bob1bob"
-    assert DBOSTestClassStatic.txn_counter == 2
+    assert DBOSTestClassStatic.other_step_counter == 2
     assert DBOSTestClassStatic.wf_counter == 2
     assert DBOSTestClassStatic.step_counter == 2
 
@@ -241,7 +240,7 @@ def test_simple_workflow_static(dbos: DBOS) -> None:
 def test_simple_workflow_class(dbos: DBOS) -> None:
     @DBOS.dbos_class()
     class DBOSTestClassClass:
-        txn_counter: int = 0
+        other_step_counter: int = 0
         wf_counter: int = 0
         step_counter: int = 0
 
@@ -249,18 +248,17 @@ def test_simple_workflow_class(dbos: DBOS) -> None:
         @DBOS.workflow()
         def test_workflow(cls, var: str, var2: str) -> str:
             DBOSTestClassClass.wf_counter += 1
-            res = DBOSTestClassClass.test_transaction(var2)
+            res = DBOSTestClassClass.test_other_step(var2)
             res2 = DBOSTestClassClass.test_step(var)
             DBOS.logger.info("I'm test_workflow")
             return res + res2
 
         @classmethod
-        @DBOS.transaction()
-        def test_transaction(cls, var2: str) -> str:
-            rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
-            DBOSTestClassClass.txn_counter += 1
-            DBOS.logger.info("I'm test_transaction")
-            return var2 + str(rows[0][0])
+        @DBOS.step()
+        def test_other_step(cls, var2: str) -> str:
+            DBOSTestClassClass.other_step_counter += 1
+            DBOS.logger.info("I'm test_other_step")
+            return var2 + "1"
 
         @classmethod
         @DBOS.step()
@@ -272,7 +270,7 @@ def test_simple_workflow_class(dbos: DBOS) -> None:
     assert DBOSTestClassClass.test_workflow("bob", "bob") == "bob1bob"
     wfh = dbos.start_workflow(DBOSTestClassClass.test_workflow, "bob", "bob")
     assert wfh.get_result() == "bob1bob"
-    assert DBOSTestClassClass.txn_counter == 2
+    assert DBOSTestClassClass.other_step_counter == 2
     assert DBOSTestClassClass.wf_counter == 2
     assert DBOSTestClassClass.step_counter == 2
 
@@ -294,24 +292,23 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
     class DBOSTestClassInst(DBOSConfiguredInstance):
         def __init__(self) -> None:
             super().__init__("bob")
-            self.txn_counter: int = 0
+            self.other_step_counter: int = 0
             self.wf_counter: int = 0
             self.step_counter: int = 0
 
         @DBOS.workflow()
         def test_workflow(self, var: str, var2: str) -> str:
             self.wf_counter += 1
-            res = self.test_transaction(var2)
+            res = self.test_other_step(var2)
             res2 = self.test_step(var)
             DBOS.logger.info("I'm test_workflow")
             return res + res2
 
-        @DBOS.transaction()
-        def test_transaction(self, var2: str) -> str:
-            rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
-            self.txn_counter += 1
-            DBOS.logger.info("I'm test_transaction")
-            return var2 + str(rows[0][0])
+        @DBOS.step()
+        def test_other_step(self, var2: str) -> str:
+            self.other_step_counter += 1
+            DBOS.logger.info("I'm test_other_step")
+            return var2 + "1"
 
         @DBOS.step()
         def test_step(self, var: str) -> str:
@@ -333,7 +330,7 @@ def test_simple_workflow_inst(dbos: DBOS) -> None:
     assert stat.class_name and "DBOSTestClassInst" in stat.class_name
 
     assert wfh.get_result() == "bob1bob"
-    assert inst.txn_counter == 2
+    assert inst.other_step_counter == 2
     assert inst.wf_counter == 2
     assert inst.step_counter == 2
 
@@ -342,7 +339,7 @@ def test_forgotten_decorator(dbos: DBOS) -> None:
     class DBOSTestRegErr(DBOSConfiguredInstance):
         def __init__(self) -> None:
             super().__init__("bob")
-            self.txn_counter: int = 0
+            self.other_step_counter: int = 0
             self.wf_counter: int = 0
             self.step_counter: int = 0
 
@@ -822,7 +819,7 @@ def test_class_classmethod_queue_recovery(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_inst_txn(dbos: DBOS) -> None:
+def test_inst_step_method(dbos: DBOS) -> None:
     wfid = str(uuid.uuid4())
 
     @DBOS.dbos_class()
@@ -832,8 +829,8 @@ def test_inst_txn(dbos: DBOS) -> None:
             self.multiply: Callable[[int], int] = lambda x: x * multiplier
             super().__init__("test_class")
 
-        @DBOS.transaction()
-        def transaction(self, x: int) -> int:
+        @DBOS.step()
+        def step(self, x: int) -> int:
             return self.multiply(x)
 
     input = 2
@@ -841,12 +838,12 @@ def test_inst_txn(dbos: DBOS) -> None:
     inst = TestClass(multiplier)
 
     with SetWorkflowID(wfid):
-        assert inst.transaction(input) == input * multiplier
+        assert DBOS.start_workflow(inst.step, input).get_result() == input * multiplier
     status = DBOS.retrieve_workflow(wfid).get_status()
     assert status.class_name and "TestClass" in status.class_name
     assert status.config_name == "test_class"
 
-    handle = DBOS.start_workflow(inst.transaction, input)
+    handle = DBOS.start_workflow(inst.step, input)
     assert handle.get_result() == input * multiplier
     status = handle.get_status()
     assert status.class_name and "TestClass" in status.class_name

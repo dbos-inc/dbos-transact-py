@@ -10,7 +10,7 @@ def my_function(foo: str) -> str:
 def default_config() -> DBOSConfig:
     return {
         "name": "forgot-launch",
-        "database_url": f"postgresql://postgres:doesntmatter@localhost:5432/notneeded",
+        "system_database_url": f"postgresql://postgres:doesntmatter@localhost:5432/notneeded",
     }
 
 

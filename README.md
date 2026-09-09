@@ -120,7 +120,7 @@ Handle bugs or failures that affect thousands of workflows with power and flexib
 
 ```python
 # Create a DBOS client connected to your Postgres database.
-client = DBOSClient(database_url)
+client = DBOSClient(system_database_url=system_database_url)
 # Find all workflows that errored between 3:00 and 5:00 AM UTC on 2025-04-22.
 workflows = client.list_workflows(status="ERROR", 
   start_time="2025-04-22T03:00:00Z", end_time="2025-04-22T05:00:00Z")

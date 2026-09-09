@@ -25,7 +25,6 @@ class SystemSchema:
     ### System table schema
     # Real schema is applied per-engine via schema_translate_map.
     metadata_obj = MetaData(schema=SCHEMA_PLACEHOLDER)
-    sysdb_suffix = "_dbos_sys"
 
     workflow_status = Table(
         "workflow_status",

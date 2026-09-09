@@ -25,16 +25,15 @@ def test_flask_endpoint(
     @app.route("/workflow/<var1>/<var2>")
     @DBOS.workflow()
     def test_workflow(var1: str, var2: str) -> Response:
-        res1 = test_transaction(var1)
+        res1 = test_other_step(var1)
         res2 = test_step(var2)
         result = res1 + res2
         return jsonify({"result": result})
 
-    @app.route("/transaction/<var>")
-    @DBOS.transaction()
-    def test_transaction(var: str) -> str:
-        rows = DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
-        return var + str(rows[0][0])
+    @app.route("/other-step/<var>")
+    @DBOS.step()
+    def test_other_step(var: str) -> str:
+        return var + "1"
 
     @DBOS.step()
     def test_step(var: str) -> str:
@@ -59,7 +58,7 @@ def test_flask_endpoint(
     assert response.json == {"result": "a1b"}
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
-    response = client.get("/transaction/bob")
+    response = client.get("/other-step/bob")
     assert response.status_code == 200
     assert response.text == "bob1"
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
@@ -99,7 +98,7 @@ def test_endpoint_recovery(dbos_flask: Tuple[DBOS, Flask]) -> None:
     # Change the workflow status to pending
     set_workflow_status(dbos._sys_db, wfuuid, "PENDING")
 
-    # Recovery should execute the workflow again but skip the transaction
+    # Recovery should execute the workflow again but skip the step
     workflow_handles = DBOS._recover_pending_workflows()
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == ("a", wfuuid)

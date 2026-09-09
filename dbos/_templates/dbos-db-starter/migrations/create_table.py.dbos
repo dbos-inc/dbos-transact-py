@@ -3,29 +3,42 @@ Create the dbos_hello table using SQLAlchemy.
 """
 
 import os
-from sqlalchemy import create_engine, MetaData, Table, Column, Integer, String
+from sqlalchemy import create_engine, make_url, text, MetaData, Table, Column, Integer, String
 
 
 def create_dbos_hello_table() -> None:
     """
-    Create the dbos_hello table in the database.
-    
-    Args:
-        database_url: Database connection string. If not provided,
-                     uses DATABASE_URL environment variable.
+    Create the application database, if it does not already exist, and the
+    dbos_hello table in it.
     """
     database_url = os.environ.get("DBOS_DATABASE_URL", "postgresql+psycopg://postgres:dbos@localhost:5432/${default_db_name}?connect_timeout=5")
-    
+    url = make_url(database_url)
+
+    # Create the application database if it does not already exist
+    if not database_url.startswith("sqlite"):
+        try:
+            postgres_engine = create_engine(url.set(database="postgres"), isolation_level="AUTOCOMMIT")
+            try:
+                with postgres_engine.connect() as conn:
+                    exists = conn.execute(text("SELECT 1 FROM pg_database WHERE datname=:name"), {"name": url.database}).scalar()
+                    if not exists:
+                        quoted = str(url.database).replace('"', '""')
+                        conn.execute(text(f'CREATE DATABASE "{quoted}"'))
+            finally:
+                postgres_engine.dispose()
+        except Exception as e:
+            print(f"Could not verify that database {url.database} exists ({e}). Continuing...")
+
     engine = create_engine(database_url)
     metadata = MetaData()
-    
+
     dbos_hello = Table(
         'dbos_hello',
         metadata,
         Column('greet_count', Integer, primary_key=True, autoincrement=True, nullable=False),
         Column('name', String, nullable=False)
     )
-    
+
     metadata.create_all(engine)
     engine.dispose()
 

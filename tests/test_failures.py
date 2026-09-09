@@ -38,92 +38,6 @@ from .conftest import (
 )
 
 
-def test_transaction_errors(dbos: DBOS, skip_with_sqlite: None) -> None:
-    retry_counter: int = 0
-
-    @DBOS.transaction()
-    def test_retry_transaction(max_retry: int) -> int:
-        nonlocal retry_counter
-        if retry_counter < max_retry:
-            retry_counter += 1
-            raise OperationalError(
-                "Serialization test error", {}, SerializationFailure()
-            )
-        return max_retry
-
-    @DBOS.transaction()
-    def test_noretry_transaction() -> None:
-        nonlocal retry_counter
-        retry_counter += 1
-        DBOS.sql_session.execute(sa.text("selct abc from c;")).fetchall()
-
-    res = test_retry_transaction(10)
-    assert res == 10
-    assert retry_counter == 10
-
-    with pytest.raises(Exception) as exc_info:
-        test_noretry_transaction()
-    assert exc_info.value.orig.sqlstate == "42601"  # type: ignore
-    assert retry_counter == 11
-
-
-def test_invalid_transaction_error(dbos: DBOS) -> None:
-    commit_txn_counter: int = 0
-    rollback_txn_counter: int = 0
-
-    @DBOS.transaction()
-    def test_commit_transaction() -> None:
-        nonlocal commit_txn_counter
-        commit_txn_counter += 1
-        # Commit shouldn't be allowed to be called in a transaction. The error message should be clear.
-        DBOS.sql_session.commit()
-        return
-
-    @DBOS.transaction()
-    def test_abort_transaction() -> None:
-        nonlocal rollback_txn_counter
-        rollback_txn_counter += 1
-        # Rollback shouldn't be allowed to be called in a transaction. The error message should be clear.
-        DBOS.sql_session.rollback()
-        return
-
-    # Test OAOO and exception handling
-    wfuuid = str(uuid.uuid4())
-    with pytest.raises(InvalidRequestError) as exc_info:
-        with SetWorkflowID(wfuuid):
-            test_commit_transaction()
-    assert "Can't operate on closed transaction inside context manager." in str(
-        exc_info.value
-    )
-    print(exc_info.value)
-
-    with pytest.raises(InvalidRequestError) as exc_info:
-        with SetWorkflowID(wfuuid):
-            test_commit_transaction()
-    assert "Can't operate on closed transaction inside context manager." in str(
-        exc_info.value
-    )
-
-    assert commit_txn_counter == 1
-
-    wfuuid = str(uuid.uuid4())
-    with pytest.raises(InvalidRequestError) as exc_info:
-        with SetWorkflowID(wfuuid):
-            test_abort_transaction()
-    assert "Can't operate on closed transaction inside context manager." in str(
-        exc_info.value
-    )
-    print(exc_info.value)
-
-    with pytest.raises(InvalidRequestError) as exc_info:
-        with SetWorkflowID(wfuuid):
-            test_abort_transaction()
-    assert "Can't operate on closed transaction inside context manager." in str(
-        exc_info.value
-    )
-    assert rollback_txn_counter == 1
-
-
 def test_notification_errors(dbos: DBOS, skip_with_sqlite: None) -> None:
     @DBOS.workflow()
     def test_send_workflow(dest_uuid: str, topic: str) -> str:
@@ -270,38 +184,6 @@ def test_nondeterministic_workflow(dbos: DBOS) -> None:
         non_deterministic_workflow()
 
     # To simulate nondeterminism, set the flag then restart the workflow w/ fork;
-    flag = False
-    handle_two = DBOS.fork_workflow(wfid, 2)
-
-    # Due to the nondeterminism, the workflow should encounter an unexpected step.
-    with pytest.raises(DBOSUnexpectedStepError) as exc_info:
-        handle_two.get_result()
-
-
-def test_nondeterministic_workflow_txn(dbos: DBOS) -> None:
-    flag = True
-
-    @DBOS.transaction()
-    def txn_one() -> None:
-        return
-
-    @DBOS.transaction()
-    def txn_two() -> None:
-        return
-
-    @DBOS.workflow()
-    def non_deterministic_workflow() -> None:
-        if flag:
-            txn_one()
-        else:
-            txn_two()
-
-    # Start the workflow. It will complete step_one then wait.
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        non_deterministic_workflow()
-
-    # To simulate nondeterminism, set the flag then restart the workflow.
     flag = False
     handle_two = DBOS.fork_workflow(wfid, 2)
 

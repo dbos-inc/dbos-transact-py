@@ -76,8 +76,6 @@ def delete_workflow(
         for wfid in workflow_ids:
             all_ids.extend(dbos._sys_db.get_workflow_children(wfid))
     dbos._sys_db.delete_workflows(all_ids)
-    if dbos._app_db:
-        dbos._app_db.delete_transaction_outputs(all_ids)
 
 
 def garbage_collect(
@@ -104,10 +102,6 @@ def garbage_collect(
         )
         if cutoff is None:
             return
-        # The application database is deprecated: only pay for its cleanup when one exists.
-        if dbos._app_db is not None:
-            retained_ids = dbos._sys_db.list_retained_workflow_ids(cutoff)
-            dbos._app_db.garbage_collect(cutoff, retained_ids, batch_size=batch_size)
         # Strictly after the status sweep: the payload sweep only takes orphans, so
         # this round's are only visible to it once that sweep has committed.
         dbos._sys_db.garbage_collect_payloads(cutoff, batch_size=batch_size)

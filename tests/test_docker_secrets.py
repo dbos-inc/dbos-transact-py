@@ -12,7 +12,7 @@ from dbos._dbos_config import _substitute_env_vars, load_config
 class ConfigFile(TypedDict, total=False):
     name: str
     database: Dict[str, Any]
-    database_url: str
+    system_database_url: str
     telemetry: Dict[str, Any]
     runtimeConfig: Dict[str, List[str]]
 
@@ -96,7 +96,7 @@ class TestDockerSecrets(unittest.TestCase):
         # Create a mock configuration file with Docker secrets in the database URL
         config_content = """
 name: test-app
-database_url: postgresql://postgres:${DOCKER_SECRET:db_password}@localhost:5432/test_db
+system_database_url: postgresql://postgres:${DOCKER_SECRET:db_password}@localhost:5432/test_db
 """
 
         # Mock the file open and read operations
@@ -105,22 +105,18 @@ database_url: postgresql://postgres:${DOCKER_SECRET:db_password}@localhost:5432/
         # Create a mock dictionary that would be returned by yaml.safe_load
         mock_config_dict: ConfigFile = {
             "name": "test-app",
-            "database_url": "postgresql://postgres:secret_password@localhost:5432/test_db",
+            "system_database_url": "postgresql://postgres:secret_password@localhost:5432/test_db",
         }
 
-        # Mock the schema validation to always pass
+        # Mock reading the config file
         with (
             patch("builtins.open", mock_file),
-            patch("dbos._dbos_config.resources.files") as mock_resources,
             patch("os.path.exists") as mock_exists,
             patch("yaml.safe_load") as mock_yaml_load,
         ):
 
             # Set up the mocks
             mock_exists.return_value = True
-            mock_resources.return_value.joinpath.return_value.open.return_value.__enter__.return_value.read.return_value = (
-                "{}"
-            )
             mock_yaml_load.return_value = mock_config_dict
 
             # Call the load_config function
@@ -128,7 +124,7 @@ database_url: postgresql://postgres:${DOCKER_SECRET:db_password}@localhost:5432/
 
             # Verify that the Docker secret was correctly substituted in the database URL
             self.assertEqual(
-                config["database_url"],
+                config["system_database_url"],
                 "postgresql://postgres:secret_password@localhost:5432/test_db",
             )
 
@@ -158,19 +154,15 @@ runtimeConfig:
             },
         }
 
-        # Mock the schema validation to always pass
+        # Mock reading the config file
         with (
             patch("builtins.open", mock_file),
-            patch("dbos._dbos_config.resources.files") as mock_resources,
             patch("os.path.exists") as mock_exists,
             patch("yaml.safe_load") as mock_yaml_load,
         ):
 
             # Set up the mocks
             mock_exists.return_value = True
-            mock_resources.return_value.joinpath.return_value.open.return_value.__enter__.return_value.read.return_value = (
-                "{}"
-            )
             mock_yaml_load.return_value = mock_config_dict
 
             # Call the load_config function
@@ -187,7 +179,7 @@ runtimeConfig:
         # Create a mock configuration file with multiple Docker secrets in a string
         config_content = """
 name: test-app
-database_url: postgresql://${DOCKER_SECRET:db_user}:${DOCKER_SECRET:db_password}@${DOCKER_SECRET:db_host}:${DOCKER_SECRET:db_port}/${DOCKER_SECRET:db_name}
+system_database_url: postgresql://${DOCKER_SECRET:db_user}:${DOCKER_SECRET:db_password}@${DOCKER_SECRET:db_host}:${DOCKER_SECRET:db_port}/${DOCKER_SECRET:db_name}
 """
 
         # Mock the file open and read operations
@@ -196,22 +188,18 @@ database_url: postgresql://${DOCKER_SECRET:db_user}:${DOCKER_SECRET:db_password}
         # Create a mock dictionary that would be returned by yaml.safe_load
         mock_config_dict: ConfigFile = {
             "name": "test-app",
-            "database_url": "postgresql://user:pass@host:5432/db",
+            "system_database_url": "postgresql://user:pass@host:5432/db",
         }
 
-        # Mock the schema validation to always pass
+        # Mock reading the config file
         with (
             patch("builtins.open", mock_file),
-            patch("dbos._dbos_config.resources.files") as mock_resources,
             patch("os.path.exists") as mock_exists,
             patch("yaml.safe_load") as mock_yaml_load,
         ):
 
             # Set up the mocks
             mock_exists.return_value = True
-            mock_resources.return_value.joinpath.return_value.open.return_value.__enter__.return_value.read.return_value = (
-                "{}"
-            )
             mock_yaml_load.return_value = mock_config_dict
 
             def mock_secret_open(*args: Any, **kwargs: Any) -> Any:
@@ -237,7 +225,7 @@ database_url: postgresql://${DOCKER_SECRET:db_user}:${DOCKER_SECRET:db_password}
 
                 # Verify that all Docker secrets were correctly substituted in the string
                 self.assertEqual(
-                    config["database_url"],
+                    config["system_database_url"],
                     "postgresql://user:pass@host:5432/db",
                 )
 
@@ -245,7 +233,7 @@ database_url: postgresql://${DOCKER_SECRET:db_user}:${DOCKER_SECRET:db_password}
         # Create a mock configuration file without Docker secrets
         config_content = """
 name: test-app
-database_url: postgresql://postgres:plain_password@localhost:5432/test_db
+system_database_url: postgresql://postgres:plain_password@localhost:5432/test_db
 """
 
         # Mock the file open and read operations
@@ -254,36 +242,32 @@ database_url: postgresql://postgres:plain_password@localhost:5432/test_db
         # Create a mock dictionary that would be returned by yaml.safe_load
         mock_config_dict: ConfigFile = {
             "name": "test-app",
-            "database_url": "postgresql://postgres:plain_password@localhost:5432/test_db",
+            "system_database_url": "postgresql://postgres:plain_password@localhost:5432/test_db",
         }
 
-        # Mock the schema validation to always pass
+        # Mock reading the config file
         with (
             patch("builtins.open", mock_file),
-            patch("dbos._dbos_config.resources.files") as mock_resources,
             patch("yaml.safe_load") as mock_yaml_load,
         ):
 
             # Set up the mocks
-            mock_resources.return_value.joinpath.return_value.open.return_value.__enter__.return_value.read.return_value = (
-                "{}"
-            )
             mock_yaml_load.return_value = mock_config_dict
 
             # Call the load_config function
             config = load_config()
 
             # Verify that the configuration was loaded correctly without any substitutions
-            assert config["database_url"] is not None
+            assert config["system_database_url"] is not None
             self.assertEqual(
-                make_url(config["database_url"]).password, "plain_password"
+                make_url(config["system_database_url"]).password, "plain_password"
             )
 
     def test_load_config_with_mixed_env_vars_and_docker_secrets(self) -> None:
         # Create a mock configuration file with both environment variables and Docker secrets
         config_content = """
 name: test-app
-database_url: postgresql://${DB_USER}:${DOCKER_SECRET:db_password}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+system_database_url: postgresql://${DB_USER}:${DOCKER_SECRET:db_password}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 """
 
         # Mock the file open and read operations
@@ -292,13 +276,12 @@ database_url: postgresql://${DB_USER}:${DOCKER_SECRET:db_password}@${DB_HOST}:${
         # Create a mock dictionary that would be returned by yaml.safe_load
         mock_config_dict: ConfigFile = {
             "name": "test-app",
-            "database_url": "postgresql://postgres:secret_password@localhost:5432/test_db",
+            "system_database_url": "postgresql://postgres:secret_password@localhost:5432/test_db",
         }
 
-        # Mock the schema validation to always pass
+        # Mock reading the config file
         with (
             patch("builtins.open", mock_file),
-            patch("dbos._dbos_config.resources.files") as mock_resources,
             patch("os.path.exists") as mock_exists,
             patch(
                 "builtins.open", mock_open(read_data="secret_password"), create=True
@@ -317,9 +300,6 @@ database_url: postgresql://${DB_USER}:${DOCKER_SECRET:db_password}@${DB_HOST}:${
 
             # Set up the mocks
             mock_exists.return_value = True
-            mock_resources.return_value.joinpath.return_value.open.return_value.__enter__.return_value.read.return_value = (
-                "{}"
-            )
             mock_yaml_load.return_value = mock_config_dict
 
             # Call the load_config function
@@ -327,7 +307,7 @@ database_url: postgresql://${DB_USER}:${DOCKER_SECRET:db_password}@${DB_HOST}:${
 
             # Verify that both environment variables and Docker secrets were correctly substituted
             self.assertEqual(
-                config["database_url"],
+                config["system_database_url"],
                 "postgresql://postgres:secret_password@localhost:5432/test_db",
             )
 

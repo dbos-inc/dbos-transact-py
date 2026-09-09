@@ -21,6 +21,15 @@ dbos migrate
 dbos start
 ```
 
+This app uses two databases: `DBOS_DATABASE_URL` holds its own `dbos_hello` table,
+and `DBOS_SYSTEM_DATABASE_URL` holds DBOS's workflow state. Both have local defaults,
+so you do not need to set either to run the app above. To point them elsewhere:
+
+```shell
+export DBOS_DATABASE_URL=postgresql+psycopg://user:password@host:5432/mydb
+export DBOS_SYSTEM_DATABASE_URL=postgresql+psycopg://user:password@host:5432/mydb_dbos_sys
+```
+
 Visit [`http://localhost:8000`](http://localhost:8000) to see your app!
 
 ### Deploying to the Cloud

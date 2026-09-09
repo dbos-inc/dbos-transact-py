@@ -3,7 +3,6 @@ from typing import List, Optional
 import click
 import sqlalchemy as sa
 
-from dbos._app_db import ApplicationDatabase
 from dbos._migration import get_dbos_migrations
 from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
@@ -13,34 +12,10 @@ from dbos._utils import quote_identifier
 def run_dbos_database_migrations(
     system_database_url: str,
     *,
-    app_database_url: Optional[str] = None,
     schema: str = "dbos",
     application_role: Optional[str] = None,
 ) -> None:
-    # First, run DBOS migrations on the system database and (optionally) the application database
-    migrate_dbos_databases(
-        system_database_url=system_database_url,
-        app_database_url=app_database_url,
-        schema=schema,
-    )
-
-    # Then, assign permissions on the DBOS schema to the application role, if any
-    if application_role:
-        if app_database_url:
-            grant_dbos_schema_permissions(
-                database_url=app_database_url,
-                role_name=application_role,
-                schema=schema,
-            )
-        grant_dbos_schema_permissions(
-            database_url=system_database_url, role_name=application_role, schema=schema
-        )
-
-
-def migrate_dbos_databases(
-    system_database_url: str, app_database_url: Optional[str], schema: str
-) -> None:
-    app_db = None
+    # First, run DBOS migrations on the system database
     sys_db = None
     try:
         sys_db = SystemDatabase.create(
@@ -56,26 +31,18 @@ def migrate_dbos_databases(
             executor_id=None,
         )
         sys_db.run_migrations()
-        if app_database_url:
-            app_db = ApplicationDatabase.create(
-                database_url=app_database_url,
-                engine_kwargs={
-                    "pool_timeout": 30,
-                    "max_overflow": 0,
-                    "pool_size": 2,
-                },
-                schema=schema,
-                serializer=DefaultSerializer(),
-            )
-            app_db.run_migrations()
     except Exception as e:
         click.echo(f"DBOS migrations failed: {e}")
         raise click.exceptions.Exit(code=1)
     finally:
         if sys_db:
             sys_db.destroy()
-        if app_db:
-            app_db.destroy()
+
+    # Then, assign permissions on the DBOS schema to the application role, if any
+    if application_role:
+        grant_dbos_schema_permissions(
+            database_url=system_database_url, role_name=application_role, schema=schema
+        )
 
 
 def get_dbos_schema_permissions_sql(schema: str, role_name: str) -> List[str]:

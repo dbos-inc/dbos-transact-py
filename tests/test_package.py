@@ -7,6 +7,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 import requests
@@ -121,7 +122,7 @@ def test_init_config(skip_with_sqlite: None) -> None:
         "name": app_name,
         "language": "python",
         "runtimeConfig": {"start": ["python3 main.py"]},
-        "database_url": "${DBOS_DATABASE_URL}",
+        "system_database_url": "${DBOS_SYSTEM_DATABASE_URL}",
     }
     with tempfile.TemporaryDirectory() as temp_path:
 
@@ -139,6 +140,72 @@ def test_init_config(skip_with_sqlite: None) -> None:
         assert actual_yaml == expected_yaml
 
 
+@pytest.mark.parametrize("set_system_url", [False, True])
+def test_db_starter_migrate_and_app_agree_on_system_database(
+    monkeypatch: pytest.MonkeyPatch, set_system_url: bool
+) -> None:
+    """`dbos migrate` reads dbos-config.yaml while the running app builds its own
+    DBOSConfig, so the two must resolve the same system database whether or not
+    DBOS_SYSTEM_DATABASE_URL is set. They diverged once: migrate fell back to
+    SQLite while the app used a hardcoded localhost Postgres URL."""
+    from dbos._dbos_config import process_config, translate_dbos_config_to_config_file
+    from dbos.cli._template_init import copy_template, get_templates_directory
+    from dbos.cli.cli import _resolve_db_url
+
+    monkeypatch.setenv(
+        "DBOS_DATABASE_URL", "postgresql+psycopg://u:pw@db.example.com:5432/myapp"
+    )
+    system_url = "postgresql+psycopg://u:pw@db.example.com:5432/myapp_dbos_sys"
+    if set_system_url:
+        monkeypatch.setenv("DBOS_SYSTEM_DATABASE_URL", system_url)
+    else:
+        monkeypatch.delenv("DBOS_SYSTEM_DATABASE_URL", raising=False)
+
+    with tempfile.TemporaryDirectory() as temp_path:
+        monkeypatch.chdir(temp_path)
+        copy_template(
+            os.path.join(get_templates_directory(), "dbos-db-starter"),
+            "myapp",
+            config_mode=False,
+        )
+        migrate_target = _resolve_db_url(system_database_url=None)
+
+    app_target = process_config(
+        data=translate_dbos_config_to_config_file(
+            {
+                "name": "myapp",
+                "system_database_url": os.environ.get("DBOS_SYSTEM_DATABASE_URL"),
+            }
+        )
+    )["system_database_url"]
+
+    assert migrate_target == app_target
+    if set_system_url:
+        assert migrate_target == system_url
+
+
+def test_migrate_rejects_bad_config_before_touching_the_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A config this build rejects must fail before the system database is migrated.
+    With --sys-db-url the resolver never reads the config, so the read used to happen
+    after migrating: the command exited 1 having left a fully migrated database behind,
+    and CI read a successful migration as a failed one."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "dbos-config.yaml").write_text("- not\n- a\n- dictionary\n")
+
+    result = subprocess.run(
+        ["dbos", "migrate", "-s", "sqlite:///m.sqlite"],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+
+    assert result.returncode != 0
+    assert "must contain a dictionary" in result.stdout + result.stderr
+    assert not (tmp_path / "m.sqlite").exists()
+
+
 def test_reset(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
     app_name = "reset-app"
     db_url = db_engine.url.set(database="reset_app").render_as_string(
@@ -151,6 +218,7 @@ def test_reset(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
     with tempfile.TemporaryDirectory() as temp_path:
         env = os.environ.copy()
         env["DBOS_DATABASE_URL"] = db_url
+        env["DBOS_SYSTEM_DATABASE_URL"] = sys_db_url
         subprocess.check_call(
             ["dbos", "init", app_name, "--template", "dbos-db-starter"],
             cwd=temp_path,
@@ -169,7 +237,7 @@ def test_reset(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
 
         # Call reset and verify it's destroyed
         subprocess.check_call(
-            ["dbos", "reset", "-y", "--db-url", db_url, "--sys-db-url", sys_db_url],
+            ["dbos", "reset", "-y", "--sys-db-url", sys_db_url],
             cwd=temp_path,
         )
         with db_engine.connect() as c:
@@ -184,7 +252,6 @@ def test_reset(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
 
 @pytest.mark.timeout(300)
 def test_workflow_commands(config: DBOSConfig) -> None:
-    assert config["application_database_url"] is not None
     assert config["system_database_url"] is not None
     if using_sqlite():
         db_url = config["system_database_url"]

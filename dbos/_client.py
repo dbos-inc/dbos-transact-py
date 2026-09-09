@@ -11,7 +11,6 @@ from typing import (
     Generic,
     List,
     Optional,
-    Tuple,
     TypeVar,
     Union,
 )
@@ -46,7 +45,7 @@ if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 
 from dbos._croniter import croniter  # type: ignore
-from dbos._dbos_config import get_system_database_url, is_valid_database_url
+from dbos._dbos_config import is_valid_database_url
 from dbos._error import (
     DBOSException,
     DBOSNonExistentWorkflowError,
@@ -132,11 +131,9 @@ class DBOSClient:
 
     def __init__(
         self,
-        database_url: Optional[str] = None,  # DEPRECATED
         *,
         system_database_url: Optional[str] = None,
         system_database_engine: Optional[sa.Engine] = None,
-        application_database_url: Optional[str] = None,
         dbos_system_schema: Optional[str] = "dbos",
         serializer: Serializer = DefaultSerializer(),
         system_database_pool_size: Optional[int] = None,
@@ -159,10 +156,8 @@ class DBOSClient:
         database must already have been created by a DBOS application.
 
         Args:
-            database_url (str): (DEPRECATED) Use system_database_url instead.
             system_database_url (str): Connection string for the DBOS system database.
             system_database_engine (sa.Engine): A custom system database engine. If provided, the client uses it as-is instead of creating one, the database URL and pool size arguments are ignored, and destroy() does not dispose of it.
-            application_database_url (str): (DEPRECATED) Use system_database_url instead.
             dbos_system_schema (str): Schema name for DBOS system tables. Defaults to "dbos". Must match the schema the application uses.
             serializer (Serializer): A custom serializer and deserializer for program data the client reads from and writes to the system database. Must match the application's serializer.
             system_database_pool_size (int): System database pool size. Defaults to 5.
@@ -188,15 +183,10 @@ class DBOSClient:
             else:
                 system_database_url = "postgresql://custom:system@database/engine"
         else:
-            application_database_url = (
-                database_url if database_url else application_database_url
-            )
-            system_database_url = get_system_database_url(
-                {
-                    "system_database_url": system_database_url,
-                    "database_url": application_database_url,
-                }
-            )
+            if system_database_url is None:
+                raise DBOSException(
+                    "A DBOSClient requires a system_database_url or a system_database_engine."
+                )
             assert is_valid_database_url(system_database_url)
         # We only create database connections but do not run migrations
         self._sys_db = SystemDatabase.create(

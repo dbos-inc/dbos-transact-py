@@ -52,8 +52,8 @@ def blocked_workflow() -> None:
         DBOS.sleep(0.1)
 
 
-@DBOS.transaction()
-def test_txn(x: int) -> int:
+@DBOS.step()
+def test_other_step(x: int) -> int:
     return x
 
 
@@ -64,4 +64,4 @@ def test_step(x: int) -> int:
 
 @DBOS.workflow()
 def fork_test(x: int) -> int:
-    return test_txn(x) + test_step(x)
+    return test_other_step(x) + test_step(x)

@@ -144,8 +144,8 @@ def test_client_no_migrate(
 
     # The client should not be able to connect to the system database
     with pytest.raises(Exception) as exc_info:
-        assert config["application_database_url"]
-        client = DBOSClient(config["application_database_url"])
+        assert config["system_database_url"]
+        client = DBOSClient(system_database_url=config["system_database_url"])
         client.list_workflows()
     assert f'database "dbostestpy_dbos_sys" does not exist' in str(exc_info.value)
 
@@ -1541,7 +1541,9 @@ def test_enqueue_with_priority(dbos: DBOS, client: DBOSClient) -> None:
 
 def test_client_bad_url() -> None:
     with pytest.raises(DBAPIError) as exc_info:
-        DBOSClient("postgresql://postgres:fakepassword@localhost:5433/fake_database")
+        DBOSClient(
+            system_database_url="postgresql://postgres:fakepassword@localhost:5433/fake_database"
+        )
 
 
 def test_client_auth(dbos: DBOS, client: DBOSClient) -> None:

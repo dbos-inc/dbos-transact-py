@@ -17,7 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
 from dbos import DBOS, AsyncSQLAlchemyDatasource, SetWorkflowID, SQLAlchemyDatasource
-from dbos._app_db import RecordedResult
+from dbos._datasource import RecordedResult
 from dbos._datasource_postgres import PostgresAsyncDatasource, PostgresSyncDatasource
 from dbos._datasource_sqlite import SqliteAsyncDatasource, SqliteSyncDatasource
 from dbos._error import DBOSException, DBOSWorkflowConflictIDError
@@ -27,7 +27,7 @@ from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import deserialize_value
 from dbos._sys_db import WorkflowStatusString
 from tests.conftest import (
-    ensure_application_database,
+    ensure_user_database,
     postgres_urls,
     reexecute_workflow_by_id,
     retry_until_success,
@@ -189,7 +189,7 @@ def sync_ds(
         if not url.startswith("postgresql"):
             pytest.skip("not a PostgreSQL environment")
         _skip_if_pg_unreachable(url)
-        ensure_application_database()
+        ensure_user_database()
         schema = f"ds_test_{uuid.uuid4().hex[:8]}"
         ds = SQLAlchemyDatasource.create(
             url.replace("postgresql://", "postgresql+psycopg://"), schema=schema
@@ -216,7 +216,7 @@ async def async_ds(
         if not url.startswith("postgresql"):
             pytest.skip("not a PostgreSQL environment")
         _skip_if_pg_unreachable(url)
-        ensure_application_database()
+        ensure_user_database()
         schema = f"ds_test_{uuid.uuid4().hex[:8]}"
         ds = await AsyncSQLAlchemyDatasource.create(
             url.replace("postgresql://", "postgresql+psycopg://"), schema=schema

@@ -1,8 +1,6 @@
 import uuid
 from typing import Any
 
-import sqlalchemy as sa
-
 from dbos import DBOS, Queue, SetWorkflowID
 
 
@@ -16,16 +14,15 @@ def test_workflow(dbos: DBOS) -> None:
     def step_two(x: int) -> int:
         return x + 2
 
-    @DBOS.transaction()
-    def txn_one(x: int) -> int:
-        DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+    @DBOS.step()
+    def step_three(x: int) -> int:
         return x + 3
 
     @DBOS.workflow()
     def workflow(x: int) -> int:
         x = step_one(x)
         x = step_two(x)
-        x = txn_one(x)
+        x = step_three(x)
         return x
 
     num_workflows = 5000
@@ -84,16 +81,15 @@ def test_queues(dbos: DBOS) -> None:
     def step_two(x: int) -> int:
         return x + 2
 
-    @DBOS.transaction()
-    def txn_one(x: int) -> int:
-        DBOS.sql_session.execute(sa.text("SELECT 1")).fetchall()
+    @DBOS.step()
+    def step_three(x: int) -> int:
         return x + 3
 
     @DBOS.workflow()
     def workflow(x: int) -> int:
         x = queue.enqueue(step_one, x).get_result()
         x = queue.enqueue(step_two, x).get_result()
-        x = queue.enqueue(txn_one, x).get_result()
+        x = queue.enqueue(step_three, x).get_result()
         return x
 
     num_workflows = 30

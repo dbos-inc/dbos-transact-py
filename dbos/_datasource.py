@@ -27,7 +27,6 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import Session, sessionmaker
 
-from dbos._app_db import RecordedResult
 from dbos._context import DBOSContextEnsure, get_local_dbos_context
 from dbos._dbos import IsolationLevel
 from dbos._error import DBOSException, DBOSWorkflowConflictIDError
@@ -55,6 +54,12 @@ _DUPLICATE_CHECKPOINT_POLL_SECONDS = 0.01
 
 P = ParamSpec("P")
 R = TypeVar("R")
+
+
+class RecordedResult(TypedDict):
+    output: Optional[str]  # determined by `serialization`
+    error: Optional[str]  # determined by `serialization`
+    serialization: Optional[str]
 
 
 class _StepAlreadyRecorded(Exception):
