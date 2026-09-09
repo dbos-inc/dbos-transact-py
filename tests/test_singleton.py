@@ -73,7 +73,7 @@ def test_dbos_singleton(
 
     stepi = DBOS.list_workflow_steps(wh.get_workflow_id())
     assert len(stepi) == 2
-    assert stepi[0]["function_name"] == "dynamicconfig_test_transaction"
+    assert stepi[0]["function_name"] == "dynamicconfig_test_other_step"
     assert stepi[1]["function_name"] == "dynamicconfig_test_step"
 
     # Roles
