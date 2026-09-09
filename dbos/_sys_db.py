@@ -83,7 +83,7 @@ def queue_from_db_row(
     client_system_database: Optional["SystemDatabase"] = None,
 ) -> "Queue":
     """Build a Queue from a queues-table row."""
-    from ._queue import Queue
+    from ._queue import _INTERNAL_QUEUE_CONSTRUCTION, Queue
 
     m = row._mapping
     limiter: Optional["QueueRateLimit"] = None
@@ -112,6 +112,7 @@ def queue_from_db_row(
         application_name=m["application_name"],
         database_backed_queue=True,
         client_system_database=client_system_database,
+        token=_INTERNAL_QUEUE_CONSTRUCTION,
     )
 
 

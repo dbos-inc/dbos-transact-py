@@ -58,6 +58,11 @@ DEFAULT_QUEUE_POLLING_INTERVAL_SEC = 1.0
 # DBOS's own queues are named under this prefix, so users may not claim it.
 RESERVED_QUEUE_NAME_PREFIX = "_dbos_"
 
+# Presented by DBOS when it builds a Queue. Module-private and unguessable, so
+# the exported Queue is usable as a type but not as a constructor: a queue can
+# only come from DBOS.register_queue or DBOS.retrieve_queue.
+_INTERNAL_QUEUE_CONSTRUCTION = object()
+
 
 class QueueRateLimit(TypedDict):
     """
@@ -88,9 +93,8 @@ class Queue:
     Workflow queue.
 
     Workflow queues allow workflows to be started at a later time, based on
-    concurrency and rate limits. Not part of the public API: a queue is declared
-    with ``DBOS.register_queue`` and looked up with ``DBOS.retrieve_queue``,
-    both of which return one of these.
+    concurrency and rate limits. A queue is declared with
+    ``DBOS.register_queue`` and looked up with ``DBOS.retrieve_queue``.
     """
 
     def __init__(
@@ -111,10 +115,18 @@ class Queue:
         # Deprecated, retained for backwards compatibility
         priority_enabled: bool = False,
         partition_queue: bool = False,
+        # Proof the caller is DBOS itself; see _INTERNAL_CONSTRUCTION.
+        token: object = None,
     ) -> None:
+        if token is not _INTERNAL_QUEUE_CONSTRUCTION:
+            raise DBOSException(
+                "Queue objects cannot be constructed directly. Declare a queue "
+                "with DBOS.register_queue(name, ...) and look one up with "
+                "DBOS.retrieve_queue(name)."
+            )
         self.name = name
         self.database_backed_queue = database_backed_queue
-        # Owner from the queues table; None for in-memory and pre-upgrade queues.
+        # Owner from the queues table; None for internal and pre-upgrade queues.
         self.application_name = application_name
         # When set, getters/setters use this SystemDatabase instead of the
         # DBOS singleton's. This allows a DBOSClient to manipulate queues

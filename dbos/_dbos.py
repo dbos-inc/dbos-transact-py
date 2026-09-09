@@ -79,6 +79,7 @@ from ._core import (
 from ._croniter import croniter  # type: ignore
 from ._enqueue_options import EnqueueOptions
 from ._queue import (
+    _INTERNAL_QUEUE_CONSTRUCTION,
     Queue,
     QueueConflictResolution,
     QueueRateLimit,
@@ -351,7 +352,7 @@ class DBOSRegistry:
         queues are database-backed, registered with DBOS.register_queue."""
         queue = self.internal_queue_map.get(name)
         if queue is None:
-            queue = Queue(name, **limits)
+            queue = Queue(name, token=_INTERNAL_QUEUE_CONSTRUCTION, **limits)
             self.internal_queue_map[name] = queue
         return queue
 
@@ -1387,7 +1388,9 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
         """Enqueue a workflow on a queue, returning a handle to the ongoing execution."""
-        queue = Queue(queue_name, database_backed_queue=True)
+        queue = Queue(
+            queue_name, database_backed_queue=True, token=_INTERNAL_QUEUE_CONSTRUCTION
+        )
         return queue.enqueue(func, *args, **kwargs)
 
     @classmethod
@@ -1400,7 +1403,9 @@ class DBOS:
     ) -> WorkflowHandleAsync[R]:
         """Async version of :meth:`enqueue_workflow`."""
         await cls._configure_asyncio_thread_pool()
-        queue = Queue(queue_name, database_backed_queue=True)
+        queue = Queue(
+            queue_name, database_backed_queue=True, token=_INTERNAL_QUEUE_CONSTRUCTION
+        )
         return await queue.enqueue_async(func, *args, **kwargs)
 
     @classmethod

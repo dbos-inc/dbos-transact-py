@@ -26,6 +26,7 @@ from dbos import (
     DBOSConfiguredInstance,
     DBOSContextSetAuth,
     EnqueueOptions,
+    Queue,
     SetEnqueueOptions,
     SetWorkflowAttributes,
     SetWorkflowID,
@@ -39,7 +40,7 @@ from dbos._error import (
     DBOSException,
     DBOSQueueDeduplicatedError,
 )
-from dbos._queue import Queue
+from dbos._queue import _INTERNAL_QUEUE_CONSTRUCTION
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
@@ -57,12 +58,14 @@ from tests.conftest import (
 def unpolled_queue(name: str, **kwargs: Any) -> Queue:
     """A Queue value object with no database row, so no worker thread drains it.
     Lets a test drive the dequeue path directly against rows it inserted."""
-    return Queue(name, database_backed_queue=True, **kwargs)
+    return Queue(
+        name, database_backed_queue=True, token=_INTERNAL_QUEUE_CONSTRUCTION, **kwargs
+    )
 
 
 def in_memory_queue(name: str, **kwargs: Any) -> Queue:
     """An in-memory queue, the kind DBOS declares for its own internal use."""
-    return Queue(name, **kwargs)
+    return Queue(name, token=_INTERNAL_QUEUE_CONSTRUCTION, **kwargs)
 
 
 def test_simple_queue(dbos: DBOS) -> None:
@@ -103,6 +106,16 @@ def test_simple_queue(dbos: DBOS) -> None:
         assert status.dequeued_at >= status.created_at
     else:
         assert status.dequeued_at > status.created_at
+
+
+def test_queue_cannot_be_constructed(dbos: DBOS) -> None:
+    """Queue is exported as a type, but only DBOS can build one: a queue comes
+    from DBOS.register_queue or DBOS.retrieve_queue."""
+    with pytest.raises(DBOSException, match="cannot be constructed directly"):
+        Queue("constructed_queue")
+    # Nor by guessing at the construction token.
+    with pytest.raises(DBOSException, match="cannot be constructed directly"):
+        Queue("constructed_queue", token=True)
 
 
 def test_internal_queue_names_are_reserved(dbos: DBOS) -> None:
