@@ -987,9 +987,6 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
             ):
                 if listening_set is not None and queue.name not in listening_set:
                     continue
-                if queue.name in dbos._registry.internal_queue_map:
-                    # A row left by an older version cannot shadow an internal queue.
-                    continue
                 if queue.name in queue_threads and queue_threads[queue.name].is_alive():
                     continue
                 current_queues[queue.name] = queue
