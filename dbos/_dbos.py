@@ -351,7 +351,7 @@ class DBOSRegistry:
         queues are database-backed, registered with DBOS.register_queue."""
         queue = self.internal_queue_map.get(name)
         if queue is None:
-            queue = Queue(name, _dbos_internal=True, **limits)
+            queue = Queue(name, **limits)
             self.internal_queue_map[name] = queue
         return queue
 
@@ -1134,7 +1134,7 @@ class DBOS:
 
     @classmethod
     def delete_queue(cls, name: str) -> None:
-        """Delete a database-backed queue. Pending workflows on it are unrecoverable."""
+        """Delete a queue. Pending workflows on it are unrecoverable."""
         check_async("delete_queue")
         _get_dbos_instance()._sys_db.delete_queue(name)
 
@@ -1149,7 +1149,7 @@ class DBOS:
         cls, *, application_name: Optional[Union[str, List[str]]] = None
     ) -> List[Queue]:
         """
-        List database-backed queues registered in the system database.
+        List the queues registered in the system database.
 
         :param application_name: List only queues owned by these applications.
             By default, only list this application's queues.
@@ -1378,8 +1378,8 @@ class DBOS:
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
-        """Enqueue a workflow on a database-backed queue, returning a handle to the ongoing execution."""
-        queue = Queue(queue_name, database_backed_queue=True, _dbos_internal=True)
+        """Enqueue a workflow on a queue, returning a handle to the ongoing execution."""
+        queue = Queue(queue_name, database_backed_queue=True)
         return queue.enqueue(func, *args, **kwargs)
 
     @classmethod
@@ -1392,7 +1392,7 @@ class DBOS:
     ) -> WorkflowHandleAsync[R]:
         """Async version of :meth:`enqueue_workflow`."""
         await cls._configure_asyncio_thread_pool()
-        queue = Queue(queue_name, database_backed_queue=True, _dbos_internal=True)
+        queue = Queue(queue_name, database_backed_queue=True)
         return await queue.enqueue_async(func, *args, **kwargs)
 
     @classmethod

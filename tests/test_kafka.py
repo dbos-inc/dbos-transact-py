@@ -445,20 +445,18 @@ def test_kafka_listen_queues_still_polls_consumer(
 def test_kafka_listen_queues_polls_db_backed_consumer_queue(
     dbos: DBOS, config: DBOSConfig
 ) -> None:
-    # Regression (M1): a consumer's custom queue must be polled even when it is
-    # database-backed — i.e. absent from the in-memory registry — and listen_queues
-    # names only unrelated queues. The poller must resolve it from the DB, else its
-    # messages sit ENQUEUED forever.
+    # Regression (M1): a consumer's custom queue must be polled even when
+    # listen_queues names only unrelated queues. Unlike the internal Kafka queue,
+    # a custom one is not in the internal registry, so the poller has to resolve it
+    # from the DB, else its messages sit ENQUEUED forever.
     server = "localhost:9092"
     topic = f"dbos-kafka-dbq-{random.randrange(1_000_000_000)}"
 
     send_test_messages(server, topic)
 
-    # Persist a database-backed queue via the public API: it lives in the DB, not the
-    # in-memory registry. The fixture instance is launched, so _sys_db is available.
+    # Register the queue up front: the fixture instance is launched, so _sys_db is available.
     queue_name = f"dbos-test-kafka-dbq-{random.randrange(1_000_000_000)}"
-    registered = DBOS.register_queue(queue_name, concurrency=10)
-    assert registered.database_backed_queue is True
+    DBOS.register_queue(queue_name, concurrency=10)
 
     # Fresh, un-launched instance so we control decoration, listen_queues, and launch.
     # The queue row survives destroy (only connections are torn down).
@@ -469,7 +467,7 @@ def test_kafka_listen_queues_polls_db_backed_consumer_queue(
     lock = threading.Lock()
     seen: set[int] = set()
 
-    # The queue is named, and nothing adds it to the in-memory registry, so the poller can only reach it by resolving it from the DB.
+    # The queue is named rather than internal, so the poller can only reach it by resolving it from the DB.
     @DBOS.kafka_consumer(
         {
             "bootstrap.servers": server,

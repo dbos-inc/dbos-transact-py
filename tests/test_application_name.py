@@ -10,8 +10,9 @@ import pytest
 import sqlalchemy as sa
 
 import dbos._conductor.protocol as p
-from dbos import DBOS, DBOSClient, Queue, WorkflowHandle
+from dbos import DBOS, DBOSClient, WorkflowHandle
 from dbos._error import DBOSException
+from dbos._queue import Queue
 from dbos._schemas.system_database import SystemSchema
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 
@@ -550,7 +551,7 @@ def test_unclaimed_rows_belong_to_every_application(
 
     # A read-through handle picks up ownership along with the rest of the row.
     # Built directly, the way enqueue_workflow does, so nothing is read until asked.
-    handle = Queue("theirs-queue", database_backed_queue=True, _dbos_internal=True)
+    handle = Queue("theirs-queue", database_backed_queue=True)
     assert handle.application_name is None
     assert handle.concurrency is None
     assert handle.application_name == OTHER_APP

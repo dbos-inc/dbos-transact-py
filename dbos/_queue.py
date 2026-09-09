@@ -87,8 +87,10 @@ class Queue:
     """
     Workflow queue.
 
-    Workflow queues allow workflows to be started at a later time, based on concurrency and
-    rate limits.
+    Workflow queues allow workflows to be started at a later time, based on
+    concurrency and rate limits. Not part of the public API: a queue is declared
+    with ``DBOS.register_queue`` and looked up with ``DBOS.retrieve_queue``,
+    both of which return one of these.
     """
 
     def __init__(
@@ -109,15 +111,7 @@ class Queue:
         # Deprecated, retained for backwards compatibility
         priority_enabled: bool = False,
         partition_queue: bool = False,
-        # Set only by DBOS itself, to build a queue object directly.
-        _dbos_internal: bool = False,
     ) -> None:
-        if not _dbos_internal:
-            raise DBOSException(
-                "The Queue(...) constructor was removed in DBOS 3.0. Use "
-                "DBOS.register_queue(name, ...) to declare a queue, and "
-                "DBOS.retrieve_queue(name) to look one up."
-            )
         self.name = name
         self.database_backed_queue = database_backed_queue
         # Owner from the queues table; None for in-memory and pre-upgrade queues.

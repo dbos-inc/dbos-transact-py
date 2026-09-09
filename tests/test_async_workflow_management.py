@@ -4,7 +4,7 @@ from typing import List
 
 import pytest
 
-from dbos import DBOS, Queue, SetWorkflowID
+from dbos import DBOS, SetWorkflowID
 from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSException
 from dbos._sys_db import StepInfo, WorkflowStatus
 from dbos._utils import INTERNAL_QUEUE_NAME

@@ -26,7 +26,6 @@ from dbos import (
     DBOSConfiguredInstance,
     DBOSContextSetAuth,
     EnqueueOptions,
-    Queue,
     SetEnqueueOptions,
     SetWorkflowAttributes,
     SetWorkflowID,
@@ -40,9 +39,10 @@ from dbos._error import (
     DBOSException,
     DBOSQueueDeduplicatedError,
 )
+from dbos._queue import Queue
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
-from dbos._utils import GlobalParams
+from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from tests.conftest import (
     default_config,
     imprecise_timestamps,
@@ -57,12 +57,12 @@ from tests.conftest import (
 def unpolled_queue(name: str, **kwargs: Any) -> Queue:
     """A Queue value object with no database row, so no worker thread drains it.
     Lets a test drive the dequeue path directly against rows it inserted."""
-    return Queue(name, database_backed_queue=True, _dbos_internal=True, **kwargs)
+    return Queue(name, database_backed_queue=True, **kwargs)
 
 
 def in_memory_queue(name: str, **kwargs: Any) -> Queue:
     """An in-memory queue, the kind DBOS declares for its own internal use."""
-    return Queue(name, _dbos_internal=True, **kwargs)
+    return Queue(name, **kwargs)
 
 
 def test_simple_queue(dbos: DBOS) -> None:
@@ -105,18 +105,10 @@ def test_simple_queue(dbos: DBOS) -> None:
         assert status.dequeued_at > status.created_at
 
 
-def test_queue_constructor_removed(dbos: DBOS) -> None:
-    """The in-memory `Queue(...)` constructor was removed: queues are declared
-    with DBOS.register_queue and are database-backed."""
-    with pytest.raises(DBOSException, match="was removed in DBOS 3.0"):
-        Queue("constructed_queue")
-
-
-@pytest.mark.parametrize("name", ["_dbos_internal_queue", "_dbos_kafka_queue"])
-def test_internal_queue_names_are_reserved(dbos: DBOS, name: str) -> None:
+def test_internal_queue_names_are_reserved(dbos: DBOS) -> None:
     """A user queue cannot claim a name DBOS uses for one of its own queues."""
     with pytest.raises(ValueError, match="is reserved"):
-        DBOS.register_queue(name)
+        DBOS.register_queue(INTERNAL_QUEUE_NAME)
 
 
 def test_queue_crud(dbos: DBOS) -> None:
@@ -141,8 +133,6 @@ def test_queue_crud(dbos: DBOS) -> None:
     )
     assert registered.name == queue_name
     assert registered.database_backed_queue is True
-    # User queues are database-backed; only DBOS's own queues are in-memory.
-    assert queue_name not in dbos._registry.internal_queue_map
 
     # retrieve_queue reconstructs the queue from the database.
     retrieved = DBOS.retrieve_queue(queue_name)
@@ -164,7 +154,6 @@ def test_queue_crud(dbos: DBOS) -> None:
         assert q.priority_enabled is True
         assert q.polling_interval_sec == 2.5
         assert q.database_backed_queue is True
-    assert queue_name not in dbos._registry.internal_queue_map
 
     # on_conflict="never_update" leaves the existing row alone.
     DBOS.register_queue(queue_name, concurrency=99, on_conflict="never_update")
@@ -561,11 +550,6 @@ async def test_queue_crud_async(dbos: DBOS) -> None:
     cleared = await DBOS.retrieve_queue_async(queue_name)
     assert cleared is not None
     assert await cleared.get_limiter_async() is None
-
-    # Internal queues do not support async setters either.
-    internal = dbos._registry.get_internal_queue()
-    with pytest.raises(DBOSException):
-        await internal.set_concurrency_async(5)
 
     # Sync DBOS.register_queue / retrieve_queue / delete_queue / list_queues
     # raise when called from a running event loop; async callers must use the

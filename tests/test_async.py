@@ -13,7 +13,6 @@ import sqlalchemy as sa
 from dbos import (
     DBOS,
     DBOSConfig,
-    Queue,
     SendMessage,
     SetWorkflowID,
     SetWorkflowTimeout,

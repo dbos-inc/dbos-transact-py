@@ -514,7 +514,7 @@ class DBOSClient:
         )
 
     def retrieve_queue(self, name: str) -> Optional[Queue]:
-        """Retrieve a database-backed queue by name from the client."""
+        """Retrieve a queue by name from the client."""
         _warn_sync_db_call_in_async_context(
             "DBOSClient.retrieve_queue", "DBOSClient.retrieve_queue_async"
         )
@@ -525,7 +525,7 @@ class DBOSClient:
         return await asyncio.to_thread(self.retrieve_queue, name)
 
     def delete_queue(self, name: str) -> None:
-        """Delete a database-backed queue. Pending workflows on it are unrecoverable."""
+        """Delete a queue. Pending workflows on it are unrecoverable."""
         _warn_sync_db_call_in_async_context(
             "DBOSClient.delete_queue", "DBOSClient.delete_queue_async"
         )
@@ -538,7 +538,7 @@ class DBOSClient:
     def list_queues(
         self, *, application_name: Optional[Union[str, List[str]]] = None
     ) -> List[Queue]:
-        """List all database-backed queues registered in the system database.
+        """List all queues registered in the system database.
 
         :param application_name: List only queues owned by these applications.
             By default, only list this application's queues.
