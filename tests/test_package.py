@@ -7,6 +7,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 import requests
@@ -183,6 +184,31 @@ def test_db_starter_migrate_and_app_agree_on_system_database(
     assert migrate_target == app_target
     if set_system_url:
         assert migrate_target == system_url
+
+
+def test_migrate_rejects_bad_config_before_touching_the_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A config this build rejects must fail before the system database is migrated.
+    With --sys-db-url the resolver never reads the config, so the read used to happen
+    after migrating: the command exited 1 having left a fully migrated database behind,
+    and CI read a successful migration as a failed one."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "dbos-config.yaml").write_text(
+        "name: legacy-app\nlanguage: python\n"
+        "database_url: postgresql://u:pw@h:5432/shop\n"
+    )
+
+    result = subprocess.run(
+        ["dbos", "migrate", "-s", "sqlite:///m.sqlite"],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+
+    assert result.returncode != 0
+    assert "database_url" in result.stdout + result.stderr
+    assert not (tmp_path / "m.sqlite").exists()
 
 
 def test_reset(db_engine: sa.Engine, skip_with_sqlite: None) -> None:

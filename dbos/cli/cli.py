@@ -319,6 +319,19 @@ def migrate(
 
     system_database_url = _get_db_url(system_database_url=system_database_url)
 
+    # Read the custom migration commands before touching the database. A config this
+    # build rejects has to fail before the system database is migrated rather than
+    # after, so a non-zero exit never leaves a fully migrated database behind. With
+    # --sys-db-url the resolver never reads the config, so this is the only read.
+    migrate_commands: List[str] = []
+    if os.path.exists("dbos-config.yaml"):
+        try:
+            config = load_config(silent=True)
+        except DBOSInitializationError as e:
+            raise click.ClickException(str(e))
+        database_config = config.get("database") or {}
+        migrate_commands = database_config.get("migrate") or []
+
     # Emit INFO logs from migrations
     init_logger()
     dbos_logger.setLevel(logging.INFO)
@@ -333,30 +346,21 @@ def migrate(
     )
 
     # Next, run any custom migration commands specified in the configuration
-    if os.path.exists("dbos-config.yaml"):
-        config = load_config(silent=True)
-        if "database" not in config:
-            config["database"] = {}
-        migrate_commands = (
-            config["database"]["migrate"]
-            if "migrate" in config["database"] and config["database"]["migrate"]
-            else []
-        )
-        if migrate_commands:
-            click.echo("Executing migration commands from 'dbos-config.yaml'")
-            try:
-                for command in migrate_commands:
-                    click.echo(f"Executing migration command: {command}")
-                    result = subprocess.run(command, shell=True, text=True)
-                    if result.returncode != 0:
-                        click.echo(f"Migration command failed: {command}")
-                        click.echo(result.stderr)
-                        raise click.exceptions.Exit(1)
-                    if result.stdout:
-                        click.echo(result.stdout.rstrip())
-            except Exception as e:
-                click.echo(f"An error occurred during schema migration: {e}")
-                raise click.exceptions.Exit(code=1)
+    if migrate_commands:
+        click.echo("Executing migration commands from 'dbos-config.yaml'")
+        try:
+            for command in migrate_commands:
+                click.echo(f"Executing migration command: {command}")
+                result = subprocess.run(command, shell=True, text=True)
+                if result.returncode != 0:
+                    click.echo(f"Migration command failed: {command}")
+                    click.echo(result.stderr)
+                    raise click.exceptions.Exit(1)
+                if result.stdout:
+                    click.echo(result.stdout.rstrip())
+        except Exception as e:
+            click.echo(f"An error occurred during schema migration: {e}")
+            raise click.exceptions.Exit(code=1)
 
 
 @app.command(help="Reset the DBOS system database")
