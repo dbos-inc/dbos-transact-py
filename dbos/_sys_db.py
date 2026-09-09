@@ -218,12 +218,7 @@ class WorkflowStatus:
     recovery_attempts: Optional[int]
 
 
-class WorkflowStatusInternalOptional(TypedDict, total=False):
-    # Only populated by reads that ask for it; see SystemDatabase.get_workflow_statuses.
-    step_id_base: int
-
-
-class WorkflowStatusInternal(WorkflowStatusInternalOptional):
+class WorkflowStatusInternal(TypedDict):
     workflow_uuid: str
     status: WorkflowStatuses
     name: str
@@ -377,15 +372,6 @@ class VersionInfo(TypedDict):
     created_at: int
     # Owning application; None if unclaimed.
     application_name: Optional[str]
-
-
-# Step IDs are 0-based. Workflows checkpointed before DBOS 3.0 numbered them from 1.
-LEGACY_STEP_ID_BASE = 1
-
-
-def _step_id_base_of(first_step_id: Optional[int]) -> int:
-    """Infer a workflow's step numbering from the lowest step ID it has checkpointed."""
-    return LEGACY_STEP_ID_BASE if first_step_id == LEGACY_STEP_ID_BASE else 0
 
 
 # Default number of rows deleted per garbage collection batch
@@ -1851,42 +1837,31 @@ class SystemDatabase(ABC):
         )
 
     def get_workflow_status(
-        self, workflow_uuid: str, *, include_step_id_base: bool = False
+        self, workflow_uuid: str
     ) -> Optional[WorkflowStatusInternal]:
-        statuses = self.get_workflow_statuses(
-            [workflow_uuid], include_step_id_base=include_step_id_base
-        )
+        statuses = self.get_workflow_statuses([workflow_uuid])
         return statuses[0] if statuses else None
 
     @db_retry()
     def get_step_id_base(self, workflow_id: str) -> int:
-        """Return the step numbering a workflow's existing checkpoints use.
-
-        0 for workflows this version created, 1 for those checkpointed before step IDs became 0-based.
-        """
+        """Return the step numbering this workflow's checkpoints use: 0, or 1 before DBOS 3.0."""
+        oo = SystemSchema.operation_outputs
         with self.engine.begin() as c:
             first_step_id = c.execute(
-                sa.select(
-                    sa.func.min(SystemSchema.operation_outputs.c.function_id)
-                ).where(SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
+                sa.select(sa.func.min(oo.c.function_id)).where(
+                    oo.c.workflow_uuid == workflow_id
+                )
             ).scalar()
-        return _step_id_base_of(first_step_id)
+        return 1 if first_step_id == 1 else 0
 
     def get_workflow_statuses(
-        self, workflow_ids: List[str], *, include_step_id_base: bool = False
+        self, workflow_ids: List[str]
     ) -> List[WorkflowStatusInternal]:
         """Fetch many statuses in one round trip per chunk, in the order requested.
 
         IDs with no row are omitted, so the result may be shorter than the input.
         """
         ws = SystemSchema.workflow_status
-        # Rides along with the status read, so replay costs no extra round trip.
-        step_id_base_column = (
-            sa.select(sa.func.min(SystemSchema.operation_outputs.c.function_id))
-            .where(SystemSchema.operation_outputs.c.workflow_uuid == ws.c.workflow_uuid)
-            .scalar_subquery()
-            .label("first_step_id")
-        )
 
         # Decorated per chunk so a reconnect retries one chunk, not the whole loop.
         @db_retry(sys_db=self)
@@ -1927,7 +1902,6 @@ class SystemDatabase(ABC):
                         ws.c.debounce_deadline_epoch_ms,
                         ws.c.is_debounced,
                         ws.c.application_name,
-                        *([step_id_base_column] if include_step_id_base else []),
                     )
                     .select_from(
                         ws.outerjoin(
@@ -1940,9 +1914,8 @@ class SystemDatabase(ABC):
                 ).fetchall()
             # Keyed by column name, not position, so adding a column above cannot
             # silently shift every field. output/error/owner_xid are never selected.
-            statuses: List[WorkflowStatusInternal] = []
-            for m in (row._mapping for row in rows):
-                status: WorkflowStatusInternal = {
+            return [
+                {
                     "workflow_uuid": m["workflow_uuid"],
                     "output": None,
                     "error": None,
@@ -1978,10 +1951,8 @@ class SystemDatabase(ABC):
                     "is_debounced": bool(m["is_debounced"]),
                     "application_name": m["application_name"],
                 }
-                if include_step_id_base:
-                    status["step_id_base"] = _step_id_base_of(m["first_step_id"])
-                statuses.append(status)
-            return statuses
+                for m in (row._mapping for row in rows)
+            ]
 
         found: Dict[str, WorkflowStatusInternal] = {}
         # Chunk the IN list to stay under bind-parameter limits (SQLite caps at 32766, libpq at 65535).

@@ -2728,12 +2728,6 @@ def _rewrite_as_one_based(dbos: DBOS, workflow_id: str, keep_through: int) -> No
 def test_legacy_one_based_step_ids(dbos: DBOS) -> None:
     """Workflows checkpointed before step IDs became 0-based keep their original numbering."""
     counts = {"step": 0, "child": 0}
-    probed: list[str] = []
-    real_probe = dbos._sys_db.get_step_id_base
-
-    def counting_probe(workflow_id: str) -> int:
-        probed.append(workflow_id)
-        return real_probe(workflow_id)
 
     @DBOS.step()
     def step_one() -> int:
@@ -2749,41 +2743,28 @@ def test_legacy_one_based_step_ids(dbos: DBOS) -> None:
     def workflow() -> int:
         return step_one() + child()
 
-    setattr(dbos._sys_db, "get_step_id_base", counting_probe)
-    try:
-        # A generated workflow ID cannot name a pre-3.0 workflow, so it is never probed.
-        handle: WorkflowHandle[int] = DBOS.start_workflow(workflow)
-        wfid = handle.workflow_id
-        assert handle.get_result() == 3
-        assert counts == {"step": 1, "child": 1}
-        assert [s["function_id"] for s in DBOS.list_workflow_steps(wfid)] == [0, 1, 2]
-        assert probed == []
+    handle: WorkflowHandle[int] = DBOS.start_workflow(workflow)
+    wfid = handle.workflow_id
+    assert handle.get_result() == 3
+    assert counts == {"step": 1, "child": 1}
+    assert [s["function_id"] for s in DBOS.list_workflow_steps(wfid)] == [0, 1, 2]
 
-        # Renumber from 1 as DBOS 2.x would have, dropping the trailing getResult so
-        # the replay has something left to run.
-        _rewrite_as_one_based(dbos, wfid, keep_through=1)
-        assert [s["function_id"] for s in DBOS.list_workflow_steps(wfid)] == [1, 2]
+    # Renumber from 1 as DBOS 2.x would have, dropping the trailing getResult so
+    # the replay has something left to run.
+    _rewrite_as_one_based(dbos, wfid, keep_through=1)
+    assert [s["function_id"] for s in DBOS.list_workflow_steps(wfid)] == [1, 2]
 
-        # Recovery replays the legacy checkpoints in place and continues past them.
-        assert reexecute_workflow_by_id(dbos, wfid).get_result() == 3
-        assert counts == {"step": 1, "child": 1}
-        assert [s["function_id"] for s in DBOS.list_workflow_steps(wfid)] == [1, 2, 3]
-        # Replays take their numbering from the dequeued row, so they cost no extra query.
-        assert probed == []
+    # Recovery replays the legacy checkpoints in place and continues past them.
+    assert reexecute_workflow_by_id(dbos, wfid).get_result() == 3
+    assert counts == {"step": 1, "child": 1}
+    assert [s["function_id"] for s in DBOS.list_workflow_steps(wfid)] == [1, 2, 3]
 
-        # A fork copies step_one's legacy checkpoint, so it must resume numbering at 2.
-        forked: WorkflowHandle[int] = DBOS.fork_workflow(wfid, 2)
-        assert forked.get_result() == 3
-        assert counts == {"step": 1, "child": 2}
-        forked_steps = DBOS.list_workflow_steps(forked.workflow_id)
-        assert [s["function_id"] for s in forked_steps] == [1, 2, 3]
-        # The child the legacy parent started anew may itself predate the switch, so it is probed.
-        assert probed == [forked_steps[1]["child_workflow_id"]]
-
-        # A caller-supplied ID is probed; the child ID derived from this 0-based parent is not.
-        named = str(uuid.uuid4())
-        with SetWorkflowID(named):
-            assert workflow() == 3
-        assert probed[-1:] == [named] and len(probed) == 2
-    finally:
-        setattr(dbos._sys_db, "get_step_id_base", real_probe)
+    # A fork copies step_one's legacy checkpoint, so it must resume numbering at 2.
+    forked: WorkflowHandle[int] = DBOS.fork_workflow(wfid, 2)
+    assert forked.get_result() == 3
+    assert counts == {"step": 1, "child": 2}
+    assert [s["function_id"] for s in DBOS.list_workflow_steps(forked.workflow_id)] == [
+        1,
+        2,
+        3,
+    ]

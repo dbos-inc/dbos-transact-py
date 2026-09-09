@@ -123,8 +123,6 @@ class DBOSContext:
         self.function_id: int = -1
         # First step ID of this workflow: 0, or 1 when replaying a workflow checkpointed before step IDs became 0-based.
         self.step_id_base: int = 0
-        # True if this workflow's ID was not generated here, so it may name a pre-existing workflow.
-        self.may_have_legacy_steps: bool = False
 
         self.curr_step_function_id: int = -1
         # Checkpointed stream reads that have reserved a step but not yet recorded it.
@@ -232,8 +230,6 @@ class DBOSContext:
         #      If this is a child workflow, assign parent wf id with call# suffix
         #   Make a (system) DB record for the workflow
         #   Pass the new context to a worker thread that will run the wf function
-        # True once the child's ID is derived from a parent that numbers steps from 0.
-        derived_from_zero_based_parent = False
         if cur_ctx is not None and cur_ctx.is_within_workflow():
             assert cur_ctx.is_workflow()  # Not in a step
             cur_ctx.function_id += 1
@@ -241,18 +237,11 @@ class DBOSContext:
                 cur_ctx.id_assigned_for_next_workflow = (
                     cur_ctx.workflow_id + "-" + str(cur_ctx.function_id)
                 )
-                derived_from_zero_based_parent = cur_ctx.step_id_base == 0
 
         new_wf_ctx = (
             DBOSContext()
             if cur_ctx is None
             else cur_ctx.create_child(is_for_workflow=True)
-        )
-        # A caller-supplied ID may name a workflow that predates 0-based step IDs; a
-        # generated one cannot, and neither can a child of an already 0-based parent.
-        new_wf_ctx.may_have_legacy_steps = (
-            len(new_wf_ctx.id_assigned_for_next_workflow) > 0
-            and not derived_from_zero_based_parent
         )
         new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
 
