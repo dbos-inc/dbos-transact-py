@@ -787,38 +787,64 @@ def test_translate_rejects_removed_application_database_url(key):
 
 
 @pytest.mark.parametrize("key", ["database_url", "application_database_url"])
-def test_load_config_rejects_removed_application_database_url(mocker, key):
+@pytest.mark.parametrize(
+    "value", ['"postgres://user:pw@localhost:5432/shop"', "", None]
+)
+def test_load_config_drops_removed_application_database_url(mocker, key, value):
+    """DBOS Cloud rewrites dbos-config.yaml to add a database URL, so rejecting the key
+    there would fail every cloud deploy, not just stale ones. It is dropped instead."""
+    rendered = "" if value is None else f" {value}"
     mock_config = f"""
     name: "some-app"
-    {key}: "postgres://user:password@localhost:5432/dbname"
+    system_database_url: "postgres://user:pw@localhost:5432/shop_dbos_sys"
+    {key}:{rendered}
     """
     mocker.patch(
         "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
     )
-    with pytest.raises(DBOSInitializationError) as exc_info:
-        load_config(mock_filename)
-    assert f"sets {key}" in str(exc_info.value)
+
+    config = load_config(mock_filename)
+
+    assert key not in config
+    assert config["name"] == "some-app"
+    assert (
+        process_config(data=config)["system_database_url"]
+        == "postgres://user:pw@localhost:5432/shop_dbos_sys"
+    )
+
+
+@pytest.mark.parametrize("key", ["database_url", "application_database_url"])
+def test_overwrite_config_ignores_removed_keys(mocker, key):
+    """The cloud path reaches the same drop through load_config, so a rewritten file
+    still resolves to the system database URL the environment supplies."""
+    mock_config = f"""
+    name: "stock-prices"
+    {key}: "postgres://user:pw@localhost:5432/shop"
+    """
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
+    )
+    exported_sys_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname_dbos_sys"
+    os.environ["DBOS_SYSTEM_DATABASE_URL"] = exported_sys_db_url
+    try:
+        config = overwrite_config({"name": "test-app"})
+    finally:
+        del os.environ["DBOS_SYSTEM_DATABASE_URL"]
+
+    assert config["system_database_url"] == exported_sys_db_url
+    assert key not in config
 
 
 @pytest.mark.parametrize("key", ["database_url", "application_database_url"])
 @pytest.mark.parametrize("value", [None, ""])
-def test_removed_application_database_url_ignored_when_empty(mocker, key, value):
+def test_removed_application_database_url_ignored_when_empty(key, value):
     """A key left null meant "no application database" in 2.x and resolved exactly
-    as omitting it does now, so it must not be rejected. The 2.x starter template
-    produced one whenever ${DBOS_DATABASE_URL} was unset."""
+    as omitting it does now, so DBOSConfig must not reject it either. The 2.x starter
+    template produced one whenever ${DBOS_DATABASE_URL} was unset."""
     translated = translate_dbos_config_to_config_file({"name": "some-app", key: value})
     assert process_config(data=translated)["system_database_url"] == (
         "sqlite:///some_app.sqlite"
     )
-
-    mock_config = f"""
-    name: "some-app"
-    {key}:{'' if value is None else ' ""'}
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
-    )
-    assert load_config(mock_filename)["name"] == "some-app"
 
 
 ####################

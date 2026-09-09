@@ -162,17 +162,17 @@ def _validate_observability_query_timeout_sec(value: Optional[float]) -> None:
         )
 
 
-# Removed in DBOS 3.0 along with the application database. Rejected explicitly so a
-# config still naming one fails loudly instead of silently moving the system database.
+# Removed in DBOS 3.0 along with the application database. Rejected in DBOSConfig, but
+# only dropped from dbos-config.yaml, which DBOS Cloud rewrites to add a database URL.
 REMOVED_DATABASE_URL_KEYS = ("database_url", "application_database_url")
 
 
-def _reject_removed_database_url_keys(source: Any, origin: str) -> None:
+def _reject_removed_database_url_keys(config: DBOSConfig) -> None:
     for key in REMOVED_DATABASE_URL_KEYS:
-        if not source.get(key):
+        if not config.get(key):
             continue
         raise DBOSInitializationError(
-            f"{origin} sets {key}, which was removed in DBOS 3.0 along with the "
+            f"DBOSConfig sets {key}, which was removed in DBOS 3.0 along with the "
             "application database. Use system_database_url instead."
         )
 
@@ -180,7 +180,7 @@ def _reject_removed_database_url_keys(source: Any, origin: str) -> None:
 def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     if "name" not in config:
         raise DBOSInitializationError(f"Configuration must specify an application name")
-    _reject_removed_database_url_keys(config, "DBOSConfig")
+    _reject_removed_database_url_keys(config)
 
     translated_config: ConfigFile = {
         "name": config["name"],
@@ -379,7 +379,8 @@ def load_config(
             f"dbos-config.yaml must contain a dictionary, not {type(data)}"
         )
     data = cast(Dict[str, Any], data)
-    _reject_removed_database_url_keys(data, config_file_path)
+    for removed_key in REMOVED_DATABASE_URL_KEYS:
+        data.pop(removed_key, None)
 
     # Special case: convert logsEndpoint and tracesEndpoint from strings to lists of strings, if present
     if "telemetry" in data and "OTLPExporter" in data["telemetry"]:

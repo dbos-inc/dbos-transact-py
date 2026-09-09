@@ -192,10 +192,7 @@ def test_migrate_rejects_bad_config_before_touching_the_database(
     after migrating: the command exited 1 having left a fully migrated database behind,
     and CI read a successful migration as a failed one."""
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "dbos-config.yaml").write_text(
-        "name: legacy-app\nlanguage: python\n"
-        "database_url: postgresql://u:pw@h:5432/shop\n"
-    )
+    (tmp_path / "dbos-config.yaml").write_text("- not\n- a\n- dictionary\n")
 
     result = subprocess.run(
         ["dbos", "migrate", "-s", "sqlite:///m.sqlite"],
@@ -205,7 +202,7 @@ def test_migrate_rejects_bad_config_before_touching_the_database(
     )
 
     assert result.returncode != 0
-    assert "database_url" in result.stdout + result.stderr
+    assert "must contain a dictionary" in result.stdout + result.stderr
     assert not (tmp_path / "m.sqlite").exists()
 
 
