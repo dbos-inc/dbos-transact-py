@@ -611,7 +611,11 @@ def _schedule_workflow_timeout(
 
 
 def _seed_step_id_base(dbos: "DBOS", ctx: DBOSContext, workflow_id: str) -> None:
-    """Number this workflow's steps from where its checkpoints already do, for replays predating 0-based IDs."""
+    """Number this workflow's steps from where its checkpoints already do, for replays predating 0-based IDs.
+
+    Called before the workflow is dispatched: the executors must not await or block
+    between dispatch and claiming the workflow in dbos._active_workflows_set.
+    """
     ctx.step_id_base = dbos._sys_db.get_step_id_base(workflow_id)
     if ctx.is_within_workflow():
         # A direct call has already entered the workflow, so correct the seeded counter.
@@ -1057,7 +1061,6 @@ def _execute_workflow_wthread(
         "queueName": status.get("queue_name"),
     }
     fi = get_func_info(func)
-    _seed_step_id_base(dbos, ctx, status["workflow_uuid"])
     with (
         _UseOtelContext(_workflow_otel_context(status, otel_ctx)),
         EnterDBOSWorkflow(attributes, ctx),
@@ -1124,8 +1127,6 @@ async def _execute_workflow_async(
         "queueName": status.get("queue_name"),
     }
     fi = get_func_info(func)
-    # Off the event loop: this is the only blocking DB call on the way in.
-    await asyncio.to_thread(_seed_step_id_base, dbos, ctx, status["workflow_uuid"])
     # No submitted context: asyncio.create_task already copied the caller's.
     with (
         _UseOtelContext(_workflow_otel_context(status, None)),
@@ -1328,6 +1329,7 @@ def execute_dequeued_workflow(
                 serialization_type = WorkflowSerializationFormat.PORTABLE
             ctx.serialization_type = serialization_type
             ctx.workflow_deadline_epoch_ms = status["workflow_deadline_epoch_ms"]
+            _seed_step_id_base(dbos, ctx, workflow_id)
             _schedule_workflow_timeout(
                 dbos, workflow_id, status["workflow_deadline_epoch_ms"]
             )
@@ -1489,6 +1491,8 @@ def start_workflow(
     ):
         return WorkflowHandlePolling(new_child_workflow_id, dbos)
 
+    _seed_step_id_base(dbos, new_wf_ctx, new_child_workflow_id)
+
     # Captured on the caller's thread, re-attached inside the executor thread.
     future = dbos._executor.submit(
         cast(Callable[..., R], _execute_workflow_wthread),
@@ -1627,6 +1631,9 @@ async def start_workflow_async(
         or wf_status == WorkflowStatusString.SUCCESS.value
     ):
         return WorkflowHandleAsyncPolling(new_child_workflow_id, dbos)
+
+    # Before the task is created, so nothing awaits between dispatch and the acquire below.
+    await asyncio.to_thread(_seed_step_id_base, dbos, new_wf_ctx, new_child_workflow_id)
 
     coro = _execute_workflow_async(dbos, status, func, new_wf_ctx, args, kwargs)
     inner_task = asyncio.create_task(coro)
