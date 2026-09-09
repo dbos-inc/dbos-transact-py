@@ -606,10 +606,8 @@ class DBOSClient:
         handle_map: Dict[str, "WorkflowHandleAsync[Any]"] = {
             h.workflow_id: h for h in handles
         }
-        completed_id = await asyncio.to_thread(
-            self._sys_db.await_first_workflow_id,
-            workflow_ids,
-            polling_interval_sec,
+        completed_id = await self._sys_db.await_first_workflow_id_async(
+            workflow_ids, polling_interval_sec
         )
         return handle_map[completed_id]
 

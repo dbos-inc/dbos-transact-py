@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Optional, TypedDict
 
@@ -29,6 +30,7 @@ from dbos import (
 )
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 from dbos._error import DBOSException, DBOSNonExistentWorkflowError
+from dbos._outcome import NoResult
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import db_retry
 from dbos._utils import retriable_sqlite_exception
@@ -41,6 +43,69 @@ class Person(TypedDict):
     first: str
     last: str
     age: int
+
+
+@pytest.mark.parametrize("cancel_waiter", [False, True], ids=["waiting", "cancelled"])
+def test_wait_first_async_does_not_starve_client_executor(
+    dbos: DBOS, client: DBOSClient, monkeypatch: pytest.MonkeyPatch, cancel_waiter: bool
+) -> None:
+    release = threading.Event()
+
+    @DBOS.workflow()
+    def blocked_workflow() -> str:
+        assert release.wait(timeout=15)
+        return "finished"
+
+    handle = DBOS.start_workflow(blocked_workflow)
+
+    async def run_client() -> None:
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        first_poll = asyncio.Event()
+        check_first = client._sys_db.check_first_workflow_id
+
+        def observe_poll(workflow_ids: list[str]) -> NoResult | str:
+            result = check_first(workflow_ids)
+            loop.call_soon_threadsafe(first_poll.set)
+            return result
+
+        monkeypatch.setattr(client._sys_db, "check_first_workflow_id", observe_poll)
+        client_handle: WorkflowHandleAsync[str] = await client.retrieve_workflow_async(
+            handle.get_workflow_id()
+        )
+        waiter = asyncio.create_task(
+            client.wait_first_async([client_handle], polling_interval_sec=0.01)
+        )
+        try:
+            await asyncio.wait_for(first_poll.wait(), timeout=5)
+            if cancel_waiter:
+                waiter.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await waiter
+
+            # This real database read shares the client's bounded executor.
+            # A polling thread held until workflow completion would starve it,
+            # including after its wait_first_async caller has been cancelled.
+            status = await asyncio.wait_for(client_handle.get_status(), timeout=2)
+            assert status.status == "PENDING"
+            release.set()
+            if not cancel_waiter:
+                assert await asyncio.wait_for(waiter, timeout=5) is client_handle
+            assert (
+                await asyncio.wait_for(client_handle.get_result(), timeout=5)
+                == "finished"
+            )
+        finally:
+            release.set()
+            waiter.cancel()
+            await asyncio.gather(waiter, return_exceptions=True)
+
+    try:
+        # A client-only event loop keeps DBOS's workflow executor separate.
+        asyncio.run(run_client())
+    finally:
+        release.set()
+        assert handle.get_result() == "finished"
 
 
 def run_client_collateral() -> None:
