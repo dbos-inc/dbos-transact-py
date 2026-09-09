@@ -272,7 +272,7 @@ class Debouncer(Generic[P, R]):
         # Resolve the queue the debounced workflow will run on.
         queue_name = self.options["queue_name"]
         if queue_name:
-            queue: Optional[Queue] = dbos._registry.queue_info_map.get(queue_name)
+            queue: Optional[Queue] = dbos._registry.internal_queue_map.get(queue_name)
             if queue is None:
                 queue = DBOS.retrieve_queue(queue_name)
             if queue is None:

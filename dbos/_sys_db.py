@@ -112,6 +112,7 @@ def queue_from_db_row(
         application_name=m["application_name"],
         database_backed_queue=True,
         client_system_database=client_system_database,
+        _dbos_internal=True,
     )
 
 

@@ -7,14 +7,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import event as sa_event
 
-from dbos import (
-    DBOS,
-    DBOSClient,
-    Queue,
-    SetEnqueueOptions,
-    SetWorkflowID,
-    WorkflowHandle,
-)
+from dbos import DBOS, DBOSClient, SetEnqueueOptions, SetWorkflowID, WorkflowHandle
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
@@ -2655,7 +2648,7 @@ def test_payload_gc_never_orphans_a_status_row(
     ever loses the payload a reader could still ask for."""
     event = threading.Event()
     started = threading.Event()
-    queue = Queue("payload_gc_queue", concurrency=1)
+    queue = DBOS.register_queue("payload_gc_queue", global_concurrency=1)
 
     @DBOS.workflow()
     def finished(x: int) -> int:

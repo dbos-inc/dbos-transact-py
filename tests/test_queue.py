@@ -54,6 +54,17 @@ from tests.conftest import (
 )
 
 
+def unpolled_queue(name: str, **kwargs: Any) -> Queue:
+    """A Queue value object with no database row, so no worker thread drains it.
+    Lets a test drive the dequeue path directly against rows it inserted."""
+    return Queue(name, database_backed_queue=True, _dbos_internal=True, **kwargs)
+
+
+def in_memory_queue(name: str, **kwargs: Any) -> Queue:
+    """An in-memory queue, the kind DBOS declares for its own internal use."""
+    return Queue(name, _dbos_internal=True, **kwargs)
+
+
 def test_simple_queue(dbos: DBOS) -> None:
     wf_counter: int = 0
     step_counter: int = 0
@@ -94,51 +105,18 @@ def test_simple_queue(dbos: DBOS) -> None:
         assert status.dequeued_at > status.created_at
 
 
-def test_in_memory_queues(dbos: DBOS, config: DBOSConfig) -> None:
-    """Cover the legacy `Queue(...)` constructor API and confirm in-memory and
-    database-backed queues coexist correctly.
-    """
-    DBOS.destroy(destroy_registry=True)
-    DBOS(config=config)
+def test_queue_constructor_removed(dbos: DBOS) -> None:
+    """The in-memory `Queue(...)` constructor was removed: queues are declared
+    with DBOS.register_queue and are database-backed."""
+    with pytest.raises(DBOSException, match="was removed in DBOS 3.0"):
+        Queue("constructed_queue")
 
-    queue_one = Queue("in_memory_queue_one")
-    queue_two = Queue("in_memory_queue_two", concurrency=2)
 
-    # Re-declaring an in-memory queue raises.
-    with pytest.raises(Exception):
-        Queue(queue_one.name)
-
-    @DBOS.workflow()
-    def workflow(val: str) -> str:
-        return val + "!"
-
-    # listen_queues accepts a mix of Queue objects and string names.
-    DBOS.listen_queues([queue_one, "db_backed_queue"])
-    DBOS.launch()
-
-    # Register the database-backed queue post-launch (it requires _sys_db).
-    DBOS.register_queue("db_backed_queue")
-
-    # In-memory listened queue runs workflows.
-    handle_one = queue_one.enqueue(workflow, "hello")
-    assert handle_one.get_result() == "hello!"
-
-    # Database-backed listened queue also runs workflows.
-    handle_db = DBOS.enqueue_workflow("db_backed_queue", workflow, "db")
-    assert handle_db.get_result() == "db!"
-
-    # Workflows enqueued on a queue we are not listening to stay ENQUEUED.
-    handle_two = queue_two.enqueue(workflow, "world")
-    time.sleep(2)
-    assert handle_two.get_status().status == "ENQUEUED"
-
-    # Restart listening to queue_two and confirm the pending workflow runs.
-    DBOS.destroy()
-    DBOS(config=config)
-    DBOS.listen_queues([queue_two])
-    DBOS.launch()
-
-    assert DBOS.retrieve_workflow(handle_two.workflow_id).get_result() == "world!"
+@pytest.mark.parametrize("name", ["_dbos_internal_queue", "_dbos_kafka_queue"])
+def test_internal_queue_names_are_reserved(dbos: DBOS, name: str) -> None:
+    """A user queue cannot claim a name DBOS uses for one of its own queues."""
+    with pytest.raises(ValueError, match="is reserved"):
+        DBOS.register_queue(name)
 
 
 def test_queue_crud(dbos: DBOS) -> None:
@@ -163,8 +141,8 @@ def test_queue_crud(dbos: DBOS) -> None:
     )
     assert registered.name == queue_name
     assert registered.database_backed_queue is True
-    # Database-backed queues are not added to the in-memory registry.
-    assert queue_name not in dbos._registry.queue_info_map
+    # User queues are database-backed; only DBOS's own queues are in-memory.
+    assert queue_name not in dbos._registry.internal_queue_map
 
     # retrieve_queue reconstructs the queue from the database.
     retrieved = DBOS.retrieve_queue(queue_name)
@@ -186,7 +164,7 @@ def test_queue_crud(dbos: DBOS) -> None:
         assert q.priority_enabled is True
         assert q.polling_interval_sec == 2.5
         assert q.database_backed_queue is True
-    assert queue_name not in dbos._registry.queue_info_map
+    assert queue_name not in dbos._registry.internal_queue_map
 
     # on_conflict="never_update" leaves the existing row alone.
     DBOS.register_queue(queue_name, concurrency=99, on_conflict="never_update")
@@ -347,12 +325,12 @@ def test_queue_dynamic_config(dbos: DBOS) -> None:
     with pytest.raises(ValueError):
         two.set_worker_concurrency(20)
 
-    # In-memory queues read from their local fields, not the database.
-    legacy = Queue(f"legacy_dyn_queue_{uuid.uuid4()}", concurrency=2)
-    assert legacy.concurrency == 2
-    # In-memory queues do not support setters.
+    # DBOS's internal queues are in-memory: they read their local fields rather
+    # than the database, and have no row for a setter to write.
+    internal = dbos._registry.get_internal_queue()
+    assert internal.concurrency is None
     with pytest.raises(DBOSException):
-        legacy.set_concurrency(5)
+        internal.set_concurrency(5)
 
 
 @pytest.mark.parametrize(
@@ -403,7 +381,7 @@ def test_partition_limit_validation(
     """Configurations whose limits could never bind, or that mix a deprecated option
     with the one replacing it, are rejected before the queue exists."""
     with pytest.raises(ValueError, match=message):
-        Queue(f"invalid_{uuid.uuid4()}", **kwargs)
+        DBOS.register_queue(f"invalid_{uuid.uuid4()}", **kwargs)
 
 
 def test_client_queue_crud(dbos: DBOS, client: DBOSClient) -> None:
@@ -584,10 +562,10 @@ async def test_queue_crud_async(dbos: DBOS) -> None:
     assert cleared is not None
     assert await cleared.get_limiter_async() is None
 
-    # In-memory queues do not support async setters either.
-    legacy = Queue(f"legacy_async_dyn_queue_{uuid.uuid4()}", concurrency=2)
+    # Internal queues do not support async setters either.
+    internal = dbos._registry.get_internal_queue()
     with pytest.raises(DBOSException):
-        await legacy.set_concurrency_async(5)
+        await internal.set_concurrency_async(5)
 
     # Sync DBOS.register_queue / retrieve_queue / delete_queue / list_queues
     # raise when called from a running event loop; async callers must use the
@@ -2397,19 +2375,22 @@ async def test_priority_queue_async(dbos: DBOS) -> None:
 
 @pytest.mark.asyncio
 async def test_enqueue_async_validation(dbos: DBOS) -> None:
-    """Enqueue-time validation rules fire for in-memory queues. Database-backed
-    queues skip these checks to avoid a per-enqueue DB round-trip, so the
-    assertions below intentionally exercise the in-memory queue path."""
+    """Enqueue-time validation rules. The partition checks read the queue's
+    configuration, so they fire only for DBOS's in-memory internal queues (the
+    Kafka ordered queue is partitioned); database-backed queues skip them to
+    avoid a per-enqueue DB round-trip."""
 
     @DBOS.workflow()
     async def noop_workflow() -> None:
         return
 
-    no_priority_q = Queue(f"async_validation_no_priority_{uuid.uuid4()}")
-    partition_q = Queue(
-        f"async_validation_partition_{uuid.uuid4()}", partition_queue=True
+    partition_q = in_memory_queue(
+        f"async_validation_partition_{uuid.uuid4()}", partition_concurrency=1
     )
-    no_partition_q = Queue(f"async_validation_no_partition_{uuid.uuid4()}")
+    no_partition_q = in_memory_queue(f"async_validation_no_partition_{uuid.uuid4()}")
+    no_priority_q = await DBOS.register_queue_async(
+        f"async_validation_no_priority_{uuid.uuid4()}"
+    )
 
     # Partition queue requires a partition key
     with pytest.raises(Exception, match="without a partition key"):
@@ -2422,12 +2403,12 @@ async def test_enqueue_async_validation(dbos: DBOS) -> None:
         with SetEnqueueOptions(queue_partition_key="key"):
             await no_partition_q.enqueue_async(noop_workflow)
 
-    # Deduplication is not supported for partitioned queues
+    # Deduplication is not supported for partitioned queues, whatever the queue
     with pytest.raises(
         Exception, match="Deduplication is not supported for partitioned queues"
     ):
         with SetEnqueueOptions(queue_partition_key="key", deduplication_id="dedupe"):
-            await partition_q.enqueue_async(noop_workflow)
+            await no_priority_q.enqueue_async(noop_workflow)
 
     # priority_enabled is deprecated and ignored: priority needs no opt-in.
     with SetEnqueueOptions(priority=1):
@@ -2850,7 +2831,7 @@ def test_partition_serialization_failure_skips_key(
     from sqlalchemy.exc import OperationalError
 
     # concurrency=2 keeps this queue on the per-partition sweep loop; only concurrency=1 uses the batched path.
-    queue = Queue(
+    queue = DBOS.register_queue(
         f"serialization_skip_{uuid.uuid4().hex[:8]}",
         concurrency=2,
         partition_queue=True,
@@ -3270,9 +3251,7 @@ def test_partitioned_batch_dequeue_sweep_cap(
         pass
 
     queue_name = f"unpolled-sweep-{uuid.uuid4().hex[:8]}"
-    queue = Queue(
-        queue_name, concurrency=1, partition_queue=True, database_backed_queue=True
-    )
+    queue = unpolled_queue(queue_name, concurrency=1, partition_queue=True)
     partitions = [f"p{i}" for i in range(8)]
     ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "sweep", partitions, 1)
 
@@ -3297,9 +3276,7 @@ def test_partitioned_batch_dequeue_exclusive_direct(dbos: DBOS) -> None:
         pass
 
     queue_name = f"unpolled-excl-{uuid.uuid4().hex[:8]}"
-    queue = Queue(
-        queue_name, concurrency=1, partition_queue=True, database_backed_queue=True
-    )
+    queue = unpolled_queue(queue_name, concurrency=1, partition_queue=True)
     partitions = ["p0", "p1", "p2"]
     ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "excl", partitions, 3)
 
@@ -3328,9 +3305,7 @@ def test_partitioned_batch_dequeue_skips_requeued_rows(dbos: DBOS) -> None:
         pass
 
     queue_name = f"unpolled-requeue-{uuid.uuid4().hex[:8]}"
-    queue = Queue(
-        queue_name, concurrency=1, partition_queue=True, database_backed_queue=True
-    )
+    queue = unpolled_queue(queue_name, concurrency=1, partition_queue=True)
     ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "requeue", ["p0"], 3)
     head_id = ids["p0"][0]
     # Resume onto another unpolled queue: the internal queue is live, and its worker would drain the row before the assertions below.
@@ -3423,9 +3398,7 @@ def test_partitioned_batch_dequeue_contention(dbos: DBOS) -> None:
         pass
 
     queue_name = f"unpolled-race-{uuid.uuid4().hex[:8]}"
-    queue = Queue(
-        queue_name, concurrency=1, partition_queue=True, database_backed_queue=True
-    )
+    queue = unpolled_queue(queue_name, concurrency=1, partition_queue=True)
     partitions = [f"p{i}" for i in range(4)]
     ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "race", partitions, 2)
 
@@ -3474,14 +3447,14 @@ def test_partitioned_queue_fallback_routing(
         return tag
 
     # Both are concurrency=1 partitioned queues, so only the limiter / the pause excludes them.
-    limiter_queue = Queue(
+    limiter_queue = DBOS.register_queue(
         f"limiter_fallback_{uuid.uuid4().hex[:8]}",
         concurrency=1,
         limiter={"limit": 10, "period": 60},
         partition_queue=True,
         polling_interval_sec=0.25,
     )
-    paused_queue = Queue(
+    paused_queue = DBOS.register_queue(
         f"paused_fallback_{uuid.uuid4().hex[:8]}",
         concurrency=1,
         worker_concurrency=0,
@@ -3553,9 +3526,7 @@ def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
         pass
 
     queue_name = f"unpolled-ver-{uuid.uuid4().hex[:8]}"
-    queue = Queue(
-        queue_name, concurrency=1, partition_queue=True, database_backed_queue=True
-    )
+    queue = unpolled_queue(queue_name, concurrency=1, partition_queue=True)
     ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "ver", ["p0", "p1"], 3)
 
     def pin_version(wfid: str, version: Any) -> None:
@@ -3613,9 +3584,7 @@ def test_partitioned_batch_dequeue_sqlite_plan(dbos: DBOS) -> None:
         pass
 
     queue_name = f"unpolled-plan-{uuid.uuid4().hex[:8]}"
-    queue = Queue(
-        queue_name, concurrency=1, partition_queue=True, database_backed_queue=True
-    )
+    queue = unpolled_queue(queue_name, concurrency=1, partition_queue=True)
     ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "plan", ["p0", "p1"], 2)
 
     captured: List[Any] = []
@@ -3660,7 +3629,7 @@ def test_rate_limiter_query_plan(dbos: DBOS) -> None:
     """The limiter's remaining-slots count must seek idx_workflow_status_rate_limited on
     both of its columns, else it rescans every workflow the queue ever rate-limited."""
 
-    queue = Queue(
+    queue = unpolled_queue(
         f"limiter-plan-{uuid.uuid4().hex[:8]}", limiter={"limit": 5, "period": 60}
     )
 
@@ -3770,7 +3739,7 @@ def test_partitioned_queue_global_exclusivity(
             execution_order.append(tag)
         return tag
 
-    queue = Queue(
+    queue = DBOS.register_queue(
         f"exclusive_{uuid.uuid4().hex[:8]}",
         concurrency=1,
         partition_queue=True,

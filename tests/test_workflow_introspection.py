@@ -14,7 +14,6 @@ from dbos import (
     DBOS,
     DBOSClient,
     DBOSConfig,
-    Queue,
     SetWorkflowAttributes,
     SetWorkflowID,
     WorkflowStatusString,
@@ -1570,7 +1569,7 @@ async def test_get_result_timing_async_direct_child(dbos: DBOS) -> None:
 
 def test_get_result_timing_enqueued_child(dbos: DBOS) -> None:
     """Covers the polling handle, which only an enqueued child produces."""
-    queue = Queue("timing-queue")
+    queue = DBOS.register_queue("timing-queue")
 
     @DBOS.workflow()
     def child() -> str:
@@ -1981,7 +1980,7 @@ def test_get_workflow_aggregates_completed_dequeued(
     def workflow_queued() -> str:
         return "done"
 
-    queue = Queue(f"agg_test_queue_{uuid.uuid4()}")
+    queue = DBOS.register_queue(f"agg_test_queue_{uuid.uuid4()}")
 
     before_all = datetime.now().isoformat()
 
@@ -2162,7 +2161,7 @@ def test_get_workflow_aggregates_select_min_created_at(dbos: DBOS) -> None:
     assert by_name[workflow_b.__qualname__]["min_created_at"] is None
 
     # Queue-oldest-item pattern: group by queue_name with a status filter.
-    queue = Queue(f"agg_min_q_{uuid.uuid4()}")
+    queue = DBOS.register_queue(f"agg_min_q_{uuid.uuid4()}")
     qh1 = queue.enqueue(workflow_a)
     qh1.get_result()
     q_first_created_at = DBOS.get_workflow_status(qh1.workflow_id).created_at  # type: ignore[union-attr]
@@ -2193,7 +2192,7 @@ def test_get_workflow_aggregates_select_max_durations(
     def workflow_queued() -> str:
         return "done"
 
-    queue = Queue(f"agg_max_q_{uuid.uuid4()}")
+    queue = DBOS.register_queue(f"agg_max_q_{uuid.uuid4()}")
 
     # Two sync workflows: started_at_epoch_ms is NULL, so they are excluded
     # from max_queue_wait_ms but included in max_total_latency_ms.

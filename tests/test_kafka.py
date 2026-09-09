@@ -7,7 +7,7 @@ from typing import Any, NoReturn, Optional
 import pytest
 from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 
-from dbos import DBOS, DBOSConfig, KafkaMessage, Queue
+from dbos import DBOS, DBOSConfig, KafkaMessage
 from dbos._kafka import _describe_kafka_error, _make_error_cb
 from dbos._logger import dbos_logger
 
@@ -813,7 +813,7 @@ def test_kafka_queue_polling_interval(
         def late_consumer(msg: KafkaMessage) -> None:
             pass
 
-        queues = dbos._registry.queue_info_map
+        queues = dbos._registry.internal_queue_map
         # The late consumer's queue was created after the config was known.
         assert queues[KAFKA_QUEUE_NAME].polling_interval_sec == 7.5
         DBOS.launch()
@@ -849,7 +849,7 @@ def test_kafka_queue_polling_interval_default(
 
     dbos = DBOS(config=config)
     try:
-        queues = dbos._registry.queue_info_map
+        queues = dbos._registry.internal_queue_map
         assert queues[KAFKA_QUEUE_NAME].polling_interval_sec == 1.0
         DBOS.launch()
         assert queues[KAFKA_QUEUE_NAME].polling_interval_sec == 1.0
@@ -884,7 +884,8 @@ def test_kafka_queue_polling_interval_not_stale_across_reinit(
         dbos = DBOS(config=config)
         DBOS.launch()
         assert (
-            dbos._registry.queue_info_map[KAFKA_QUEUE_NAME].polling_interval_sec == 7.5
+            dbos._registry.internal_queue_map[KAFKA_QUEUE_NAME].polling_interval_sec
+            == 7.5
         )
 
         # Keep the registry, so the same Queue object carries 7.5 into the next run.
@@ -893,7 +894,8 @@ def test_kafka_queue_polling_interval_not_stale_across_reinit(
         dbos = DBOS(config=config)
         DBOS.launch()
         assert (
-            dbos._registry.queue_info_map[KAFKA_QUEUE_NAME].polling_interval_sec == 1.0
+            dbos._registry.internal_queue_map[KAFKA_QUEUE_NAME].polling_interval_sec
+            == 1.0
         )
     finally:
         DBOS.destroy(destroy_registry=True)
@@ -1448,34 +1450,6 @@ def test_kafka_partitioned_queue_name_rejected_at_launch(
     )
     @DBOS.workflow()
     def partitioned_queue_wf(msg: KafkaMessage) -> None:
-        pass
-
-    with pytest.raises(DBOSInitializationError, match="is a partitioned queue"):
-        DBOS.launch()
-
-
-def test_kafka_partitioned_in_memory_queue_rejected_at_launch(
-    dbos: DBOS, config: DBOSConfig
-) -> None:
-    # Same rejection, but for an in-memory queue, which lives only in the registry and has no database row: this is the sole cover for resolving a named queue from queue_info_map rather than from the DB.
-    from dbos._error import DBOSInitializationError
-
-    DBOS.destroy(destroy_registry=True)
-    DBOS(config=config)
-
-    queue_name = f"dbos-test-kafka-partq-inmem-{random.randrange(1_000_000_000)}"
-    Queue(queue_name, partition_queue=True)
-
-    @DBOS.kafka_consumer(
-        {
-            "bootstrap.servers": "localhost:9092",
-            "group.id": f"partq-inmem-{random.randrange(1_000_000_000)}",
-        },
-        ["t"],
-        queue_name=queue_name,
-    )
-    @DBOS.workflow()
-    def in_memory_partitioned_queue_wf(msg: KafkaMessage) -> None:
         pass
 
     with pytest.raises(DBOSInitializationError, match="is a partitioned queue"):

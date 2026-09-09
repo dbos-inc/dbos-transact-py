@@ -23,6 +23,7 @@ from ._utils import GlobalParams
 
 if TYPE_CHECKING:
     from ._dbos import DBOS
+    from ._queue import Queue
 
 _health_check_path = "/dbos-healthz"
 _workflow_recovery_path = "/dbos-workflow-recovery"
@@ -103,15 +104,12 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"status": True}).encode("utf-8"))
         elif self.path == _workflow_queues_metadata_path:
             queue_metadata_array = []
-            from ._dbos import _get_or_create_dbos_registry
-
-            registry = _get_or_create_dbos_registry()
-            queues = dict(registry.queue_info_map)
+            queues: dict[str, "Queue"] = {}
             try:
                 for q in self.dbos._sys_db.list_queues():
                     queues.setdefault(q.name, q)
             except Exception as e:
-                dbos_logger.warning(f"Exception listing database-backed queues: {e}")
+                dbos_logger.warning(f"Exception listing queues: {e}")
             for queue in queues.values():
                 queue_metadata = {
                     "name": queue.name,

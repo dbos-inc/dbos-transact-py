@@ -12,7 +12,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 # Public API
-from dbos import DBOS, DBOSContextSetAuth, Queue
+from dbos import DBOS, DBOSContextSetAuth
 from dbos._error import DBOSInitializationError, DBOSNotAuthorizedError
 from dbos._sys_db import WorkflowStatusString
 from tests.conftest import TestOtelType, retry_until_success, set_workflow_status
@@ -222,7 +222,7 @@ def test_roles_denied_start_workflow(dbos: DBOS) -> None:
 def test_roles_denied_queue(dbos: DBOS) -> None:
     # The dequeue path must also finalize a role-denied workflow as ERROR rather
     # than leaving it PENDING to be redequeued forever (issue #743).
-    queue = Queue("test_roles_denied_queue")
+    queue = DBOS.register_queue("test_roles_denied_queue")
 
     @DBOS.required_roles(["admin"])
     @DBOS.workflow()
@@ -245,7 +245,7 @@ def test_roles_denied_queue_no_auth_context(dbos: DBOS) -> None:
     # enqueue that never set authenticated_roles) must finalize as ERROR rather
     # than stay PENDING (issue #743). Exercises the other raise branch in
     # check_required_roles (no authentication information).
-    queue = Queue("test_roles_denied_queue_no_auth_context")
+    queue = DBOS.register_queue("test_roles_denied_queue_no_auth_context")
 
     @DBOS.required_roles(["admin"])
     @DBOS.workflow()
@@ -304,7 +304,7 @@ def test_roles_denied_queue_recovery(dbos: DBOS) -> None:
     # returns the row to the queue instead of running it directly. The queue must
     # then re-dispatch it and the dequeue path must finalize it as ERROR, rather
     # than bouncing it back to PENDING and redequeueing it forever.
-    queue = Queue("test_roles_denied_queue_recovery")
+    queue = DBOS.register_queue("test_roles_denied_queue_recovery")
 
     @DBOS.required_roles(["admin"])
     @DBOS.workflow()

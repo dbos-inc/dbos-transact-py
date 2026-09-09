@@ -55,6 +55,9 @@ def _warn_sync_db_call_in_async_context(
 
 DEFAULT_QUEUE_POLLING_INTERVAL_SEC = 1.0
 
+# DBOS's own queues are named under this prefix, so users may not claim it.
+RESERVED_QUEUE_NAME_PREFIX = "_dbos_"
+
 
 class QueueRateLimit(TypedDict):
     """
@@ -106,18 +109,14 @@ class Queue:
         # Deprecated, retained for backwards compatibility
         priority_enabled: bool = False,
         partition_queue: bool = False,
+        # Set only by DBOS itself, to build a queue object directly.
+        _dbos_internal: bool = False,
     ) -> None:
-        if not database_backed_queue:
-            Queue._validate_queue(
-                concurrency=concurrency,
-                worker_concurrency=worker_concurrency,
-                global_concurrency=global_concurrency,
-                partition_concurrency=partition_concurrency,
-                partition_worker_concurrency=partition_worker_concurrency,
-                partition_limiter=partition_limiter,
-                partition_queue=partition_queue,
-                polling_interval_sec=polling_interval_sec,
-                limiter=limiter,
+        if not _dbos_internal:
+            raise DBOSException(
+                "The Queue(...) constructor was removed in DBOS 3.0. Use "
+                "DBOS.register_queue(name, ...) to declare a queue, and "
+                "DBOS.retrieve_queue(name) to look one up."
             )
         self.name = name
         self.database_backed_queue = database_backed_queue
@@ -140,21 +139,10 @@ class Queue:
         self._partition_queue = partition_queue or self._has_partition_limits()
         self._polling_interval_sec = polling_interval_sec
 
-        # Database-backed queues skip the in-memory global registry; their
-        # source of truth is the queues table.
-        if database_backed_queue:
-            return
-
-        from ._dbos import _get_or_create_dbos_registry
-
-        registry = _get_or_create_dbos_registry()
-        if self.name in registry.queue_info_map and self.name != INTERNAL_QUEUE_NAME:
-            raise Exception(f"Queue {name} has already been declared")
-        registry.queue_info_map[self.name] = self
-
     @staticmethod
     def _validate_queue(
         *,
+        name: str,
         concurrency: Optional[int],
         worker_concurrency: Optional[int],
         polling_interval_sec: float,
@@ -166,6 +154,11 @@ class Queue:
         partition_queue: bool = False,
     ) -> None:
         """Validate queue configuration parameters, raising ValueError on bad input."""
+        if name.startswith(RESERVED_QUEUE_NAME_PREFIX):
+            raise ValueError(
+                f"Queue name {name} is reserved: names starting with "
+                f"'{RESERVED_QUEUE_NAME_PREFIX}' belong to DBOS's internal queues."
+            )
         if concurrency is not None and global_concurrency is not None:
             raise ValueError(
                 "concurrency is deprecated in favor of global_concurrency; set only one of them"
@@ -990,65 +983,41 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
     log_queues(dbos, dbos._listening_queues)
 
     while not stop_event.is_set():
-        if dbos._listening_queues is not None:
-            # If explicitly listening for queues, resolve each name to a Queue
-            # from either the in-memory registry or the database.
-            listening_set = set(dbos._listening_queues)
-            current_queues = {
-                name: q
-                for name, q in dbos._registry.queue_info_map.items()
-                if name in listening_set
-            }
-            try:
-                for queue in dbos._sys_db.list_queues(
-                    application_name=dbos._sys_db.app_name
-                ):
-                    if queue.name in listening_set and queue.name not in current_queues:
-                        current_queues[queue.name] = queue
-            except Exception as e:
-                dbos.logger.warning(f"Exception listing database-backed queues: {e}")
-            # Always listen to the internal queue
-            current_queues[INTERNAL_QUEUE_NAME] = dbos._registry.get_internal_queue()
-            # Always poll this process's poller-fed queues (e.g. Kafka), else their workflows sit ENQUEUED forever under a listen_queues filter; snapshot since a late poller may mutate the set.
-            for name in list(dbos._registry.poller_queue_names):
-                if name in current_queues:
+        current_queues: dict[str, Queue] = {}
+        listening_set = (
+            set(dbos._listening_queues) if dbos._listening_queues is not None else None
+        )
+        try:
+            for queue in dbos._sys_db.list_queues(
+                application_name=dbos._sys_db.app_name
+            ):
+                if listening_set is not None and queue.name not in listening_set:
                     continue
-                q = dbos._registry.queue_info_map.get(name)
-                if q is None:
-                    # Database-backed queues (e.g. from register_queue) aren't in the in-memory registry; resolve from the DB.
-                    try:
-                        q = dbos._sys_db.get_queue(name)
-                    except Exception as e:
-                        dbos.logger.warning(
-                            f"Exception resolving poller queue {name}: {e}"
-                        )
-                        continue
-                if q is not None:
-                    current_queues[name] = q
-        else:
-            # Else, check all in-memory and database-backed queues
-            current_queues = dict(dbos._registry.queue_info_map)
-            try:
-                for queue in dbos._sys_db.list_queues(
-                    application_name=dbos._sys_db.app_name
-                ):
-                    if queue.name in dbos._registry.queue_info_map:
-                        dbos.logger.warning(
-                            f"Database-backed queue {queue.name} has the same "
-                            "name as an in-memory queue. The in-memory queue's "
-                            "configuration is being used; the database-backed "
-                            "queue is ignored. Rename one of them to resolve "
-                            "the conflict."
-                        )
-                        continue
-                    if (
-                        queue.name in queue_threads
-                        and queue_threads[queue.name].is_alive()
-                    ):
-                        continue
-                    current_queues[queue.name] = queue
-            except Exception as e:
-                dbos.logger.warning(f"Exception listing database-backed queues: {e}")
+                if queue.name in dbos._registry.internal_queue_map:
+                    # A row left by an older version cannot shadow an internal queue.
+                    continue
+                if queue.name in queue_threads and queue_threads[queue.name].is_alive():
+                    continue
+                current_queues[queue.name] = queue
+        except Exception as e:
+            dbos.logger.warning(f"Exception listing queues: {e}")
+
+        # Always listen to the internal queue, regardless of any listen_queues filter
+        current_queues[INTERNAL_QUEUE_NAME] = dbos._registry.get_internal_queue()
+        # Always poll this process's poller-fed queues (e.g. Kafka), else their workflows sit ENQUEUED forever under a listen_queues filter; snapshot since a late poller may mutate the set.
+        for name in list(dbos._registry.poller_queue_names):
+            if name in current_queues:
+                continue
+            q = dbos._registry.internal_queue_map.get(name)
+            if q is None:
+                # A consumer's custom queue is database-backed; resolve it from the DB.
+                try:
+                    q = dbos._sys_db.get_queue(name)
+                except Exception as e:
+                    dbos.logger.warning(f"Exception resolving poller queue {name}: {e}")
+                    continue
+            if q is not None:
+                current_queues[name] = q
 
         # Transition any DELAYED workflows whose delay has expired to ENQUEUED.
         try:
@@ -1124,15 +1093,15 @@ def log_queue(q: Queue) -> None:
 def log_queues(dbos: "DBOS", listening_queues: Optional[list[str]]) -> None:
     """Log all queues this process will listen to on DBOS launch.
 
-    Combines in-memory registered queues with database-backed queues, applies
-    the listen_queues filter if any, and excludes the internal queue.
+    Applies the listen_queues filter if any, and excludes the internal queue.
     """
-    queues: dict[str, Queue] = dict(dbos._registry.queue_info_map)
+    # Seeded with the internal queues so poller-fed ones (e.g. Kafka) are still reported.
+    queues: dict[str, Queue] = dict(dbos._registry.internal_queue_map)
     try:
         for q in dbos._sys_db.list_queues(application_name=dbos._sys_db.app_name):
             queues.setdefault(q.name, q)
     except Exception as e:
-        dbos.logger.warning(f"Exception listing database-backed queues: {e}")
+        dbos.logger.warning(f"Exception listing queues: {e}")
 
     if listening_queues is not None:
         # Poller-fed queues (e.g. Kafka) are always listened to, so reflect them here.

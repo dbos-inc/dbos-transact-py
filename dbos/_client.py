@@ -425,6 +425,7 @@ class DBOSClient:
             "DBOSClient.register_queue", "DBOSClient.register_queue_async"
         )
         Queue._validate_queue(
+            name=name,
             concurrency=concurrency,
             worker_concurrency=worker_concurrency,
             global_concurrency=global_concurrency,
