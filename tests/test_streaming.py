@@ -897,7 +897,7 @@ def test_stream_write_from_step(dbos: DBOS) -> None:
         # This step will fail 3 times, then succeed on the 4th attempt
         # But each failure should still write to the stream
         result = step_that_writes_and_fails("retry_stream", "test_value")
-        assert result == 1
+        assert result == 0
 
         # Also write directly from workflow
         DBOS.write_stream("retry_stream", "from_workflow")

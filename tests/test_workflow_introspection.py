@@ -528,13 +528,13 @@ def test_queued_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> 
     assert len(steps) == queued_steps * 2
     for i in range(queued_steps):
         # Check the enqueues
-        assert steps[i]["function_id"] == i + 1
+        assert steps[i]["function_id"] == i
         assert steps[i]["function_name"] == f"<temp>.{blocking_step.__qualname__}"
         assert steps[i]["child_workflow_id"] is not None
         assert steps[i]["output"] is None
         assert steps[i]["error"] is None
         # Check the get_results
-        assert steps[i + queued_steps]["function_id"] == queued_steps + i + 1
+        assert steps[i + queued_steps]["function_id"] == queued_steps + i
         assert steps[i + queued_steps]["function_name"] == "DBOS.getResult"
         assert steps[i + queued_steps]["child_workflow_id"] is not None
         assert steps[i + queued_steps]["output"] == i
@@ -545,7 +545,7 @@ def test_queued_workflows(dbos: DBOS, skip_with_sqlite_imprecise_time: None) -> 
     for i, c in enumerate(child_workflows):
         steps = DBOS.list_workflow_steps(c.workflow_id)
         assert len(steps) == 1
-        assert steps[0]["function_id"] == 1
+        assert steps[0]["function_id"] == 0
         assert steps[0]["function_name"] == blocking_step.__qualname__
         assert steps[0]["child_workflow_id"] is None
         assert steps[0]["output"] == i
@@ -939,11 +939,11 @@ def test_list_steps_errors(dbos: DBOS) -> None:
     wfsteps = DBOS.list_workflow_steps(wfid)
     assert len(wfsteps) == 2
     assert wfsteps[0]["function_name"] == f"<temp>.{failing_step.__qualname__}"
-    assert wfsteps[0]["child_workflow_id"] == f"{wfid}-1"
+    assert wfsteps[0]["child_workflow_id"] == f"{wfid}-0"
     assert wfsteps[0]["output"] == None
     assert wfsteps[0]["error"] == None
     assert wfsteps[1]["function_name"] == f"DBOS.getResult"
-    assert wfsteps[1]["child_workflow_id"] == f"{wfid}-1"
+    assert wfsteps[1]["child_workflow_id"] == f"{wfid}-0"
     assert wfsteps[1]["output"] == None
     assert isinstance(wfsteps[1]["error"], Exception)
 
@@ -955,11 +955,11 @@ def test_list_steps_errors(dbos: DBOS) -> None:
     wfsteps = DBOS.list_workflow_steps(wfid)
     assert len(wfsteps) == 2
     assert wfsteps[0]["function_name"] == f"<temp>.{failing_step.__qualname__}"
-    assert wfsteps[0]["child_workflow_id"] == f"{wfid}-1"
+    assert wfsteps[0]["child_workflow_id"] == f"{wfid}-0"
     assert wfsteps[0]["output"] == None
     assert wfsteps[0]["error"] == None
     assert wfsteps[1]["function_name"] == f"DBOS.getResult"
-    assert wfsteps[1]["child_workflow_id"] == f"{wfid}-1"
+    assert wfsteps[1]["child_workflow_id"] == f"{wfid}-0"
     assert wfsteps[1]["output"] == None
     assert isinstance(wfsteps[1]["error"], Exception)
 
@@ -1006,11 +1006,11 @@ async def test_list_steps_errors_async(dbos: DBOS) -> None:
     wfsteps = await DBOS.list_workflow_steps_async(wfid)
     assert len(wfsteps) == 2
     assert wfsteps[0]["function_name"] == f"<temp>.{failing_step.__qualname__}"
-    assert wfsteps[0]["child_workflow_id"] == f"{wfid}-1"
+    assert wfsteps[0]["child_workflow_id"] == f"{wfid}-0"
     assert wfsteps[0]["output"] == None
     assert wfsteps[0]["error"] == None
     assert wfsteps[1]["function_name"] == f"DBOS.getResult"
-    assert wfsteps[1]["child_workflow_id"] == f"{wfid}-1"
+    assert wfsteps[1]["child_workflow_id"] == f"{wfid}-0"
     assert wfsteps[1]["output"] == None
     assert isinstance(wfsteps[1]["error"], Exception)
 
@@ -1022,11 +1022,11 @@ async def test_list_steps_errors_async(dbos: DBOS) -> None:
     wfsteps = await DBOS.list_workflow_steps_async(wfid)
     assert len(wfsteps) == 2
     assert wfsteps[0]["function_name"] == f"<temp>.{failing_step.__qualname__}"
-    assert wfsteps[0]["child_workflow_id"] == f"{wfid}-1"
+    assert wfsteps[0]["child_workflow_id"] == f"{wfid}-0"
     assert wfsteps[0]["output"] == None
     assert wfsteps[0]["error"] == None
     assert wfsteps[1]["function_name"] == f"DBOS.getResult"
-    assert wfsteps[1]["child_workflow_id"] == f"{wfid}-1"
+    assert wfsteps[1]["child_workflow_id"] == f"{wfid}-0"
     assert wfsteps[1]["output"] == None
     assert isinstance(wfsteps[1]["error"], Exception)
 
@@ -1756,7 +1756,7 @@ def test_list_workflows_by_parent(dbos: DBOS) -> None:
         _, async_child1_id, async_child2_id = parent_workflow()
 
     # The sync child workflow ID follows the pattern: parent_id-function_id
-    sync_child_id = f"{parent_id}-1"
+    sync_child_id = f"{parent_id}-0"
 
     # Verify each child handle has correct parent_workflow_id
     sync_child_status = DBOS.get_workflow_status(sync_child_id)
@@ -2083,7 +2083,7 @@ def test_get_workflow_aggregates_filters(dbos: DBOS, skip_with_sqlite: None) -> 
     assert sum(r["count"] or 0 for r in results) == 1
 
     # Fork the standalone workflow, exercising forked_from / was_forked_from.
-    forked = DBOS.fork_workflow(standalone_id, 1)
+    forked = DBOS.fork_workflow(standalone_id, 0)
     forked.get_result()
     results = dbos._sys_db.get_workflow_aggregates(
         group_by_status=True, select_count=True, was_forked_from=True

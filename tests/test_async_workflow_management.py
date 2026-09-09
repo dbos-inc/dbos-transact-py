@@ -139,7 +139,7 @@ async def test_fork_workflow_async(dbos: DBOS) -> None:
     assert step_three_count == 1
 
     # Fork from step 2 async
-    forked_handle = await DBOS.fork_workflow_async(wfid, 2)
+    forked_handle = await DBOS.fork_workflow_async(wfid, 1)
     assert forked_handle.workflow_id != wfid
     assert (await forked_handle.get_result()) == output
 
@@ -287,7 +287,7 @@ async def test_bulk_async_workflow_management(dbos: DBOS) -> None:
             assert wf.workflow_id in cancel_ids
         steps = await DBOS.list_workflow_steps_async(fork_target_id)
         assert isinstance(steps, list)
-        forked = await DBOS.fork_workflow_async(fork_target_id, 1)
+        forked = await DBOS.fork_workflow_async(fork_target_id, 0)
         assert (await forked.get_result()) == 0
 
     mgmt_wfid = str(uuid.uuid4())

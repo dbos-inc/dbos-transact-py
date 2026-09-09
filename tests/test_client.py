@@ -930,11 +930,11 @@ def test_client_fork(dbos: DBOS, client: DBOSClient) -> None:
 
     fork_id = str(uuid.uuid4())
     with SetWorkflowID(fork_id):
-        forked_handle: WorkflowHandle[int] = client.fork_workflow(handle.workflow_id, 1)
+        forked_handle: WorkflowHandle[int] = client.fork_workflow(handle.workflow_id, 0)
     assert forked_handle.workflow_id == fork_id
     assert forked_handle.get_result() == input * 2
 
-    forked_handle = client.fork_workflow(handle.workflow_id, 2)
+    forked_handle = client.fork_workflow(handle.workflow_id, 1)
     assert (
         forked_handle.workflow_id != handle.workflow_id
         and forked_handle.workflow_id != fork_id
@@ -967,12 +967,12 @@ async def test_client_fork_async(dbos: DBOS, client: DBOSClient) -> None:
     assert all(s["output"] is None for s in steps)
 
     forked_handle: WorkflowHandleAsync[int] = await client.fork_workflow_async(
-        handle.workflow_id, 1
+        handle.workflow_id, 0
     )
     assert forked_handle.workflow_id != handle.workflow_id
     assert await forked_handle.get_result() == input * 2
 
-    forked_handle = await client.fork_workflow_async(handle.workflow_id, 2)
+    forked_handle = await client.fork_workflow_async(handle.workflow_id, 1)
     assert forked_handle.workflow_id != handle.workflow_id
     assert await forked_handle.get_result() == input * 2
 

@@ -3911,7 +3911,7 @@ def test_wait_first_queue(dbos: DBOS) -> None:
 
     # First num_tasks steps are the enqueues
     for i in range(num_tasks):
-        assert steps[i]["function_id"] == i + 1
+        assert steps[i]["function_id"] == i
         assert steps[i]["function_name"] == process_task.__qualname__
         assert steps[i]["child_workflow_id"] is not None
 
@@ -4316,30 +4316,30 @@ def test_enqueue_with_options_child(dbos: DBOS) -> None:
     steps = DBOS.list_workflow_steps(wfid)
     assert len(steps) == 4
     assert steps[0]["function_name"] == "with_options_child"
-    assert steps[0]["child_workflow_id"] == f"{wfid}-1"
-    assert steps[1]["child_workflow_id"] == f"{wfid}-2"
-    assert DBOS.retrieve_workflow(f"{wfid}-1").get_status().parent_workflow_id == wfid
+    assert steps[0]["child_workflow_id"] == f"{wfid}-0"
+    assert steps[1]["child_workflow_id"] == f"{wfid}-1"
+    assert DBOS.retrieve_workflow(f"{wfid}-0").get_status().parent_workflow_id == wfid
 
     # The children inherit the parent's deadline instead of running unbounded.
     parent_deadline = (
         DBOS.retrieve_workflow(wfid).get_status().workflow_deadline_epoch_ms
     )
     assert parent_deadline is not None
-    for child_id in (f"{wfid}-1", f"{wfid}-2"):
+    for child_id in (f"{wfid}-0", f"{wfid}-1"):
         child_status = DBOS.retrieve_workflow(child_id).get_status()
         assert child_status.workflow_deadline_epoch_ms == parent_deadline
 
     # On recovery the parent re-runs but returns the recorded children, not new ones.
     # A re-attempted enqueue would rebuild the same deterministic ID and upsert
     # over the finished child, so watch updated_at: only a replay leaves it alone.
-    child_updated_at = DBOS.retrieve_workflow(f"{wfid}-1").get_status().updated_at
+    child_updated_at = DBOS.retrieve_workflow(f"{wfid}-0").get_status().updated_at
     set_workflow_status(dbos._sys_db, wfid, "PENDING")
     handles = DBOS._recover_pending_workflows()
     assert len(handles) == 1
     assert handles[0].get_result() == 14
     assert child_counter == 2
     assert (
-        DBOS.retrieve_workflow(f"{wfid}-1").get_status().updated_at == child_updated_at
+        DBOS.retrieve_workflow(f"{wfid}-0").get_status().updated_at == child_updated_at
     )
 
 
@@ -4370,7 +4370,7 @@ async def test_enqueue_with_options_async(dbos: DBOS) -> None:
 
     steps = await DBOS.list_workflow_steps_async(wfid)
     assert steps[0]["function_name"] == "with_options_async_child"
-    assert steps[0]["child_workflow_id"] == f"{wfid}-1"
+    assert steps[0]["child_workflow_id"] == f"{wfid}-0"
 
 
 def test_enqueue_with_options_ambient_context(dbos: DBOS) -> None:

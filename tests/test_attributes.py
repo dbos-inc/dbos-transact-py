@@ -90,7 +90,7 @@ def test_attributes_fork(dbos: DBOS) -> None:
         with SetWorkflowID(wfid):
             forkable_workflow()
 
-    forked_handle = DBOS.fork_workflow(wfid, 1)
+    forked_handle = DBOS.fork_workflow(wfid, 0)
     forked_handle.get_result()
     assert forked_handle.get_status().attributes == attributes
 

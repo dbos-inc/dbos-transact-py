@@ -54,7 +54,7 @@ def test_simple_workflow(dbos: DBOS) -> None:
 
     @DBOS.step()
     def test_other_step(var2: str) -> str:
-        assert DBOS.step_id == 1
+        assert DBOS.step_id == 0
         nonlocal other_step_counter
         other_step_counter += 1
         DBOS.logger.info("I'm test_other_step " + var2)
@@ -62,10 +62,10 @@ def test_simple_workflow(dbos: DBOS) -> None:
 
     @DBOS.step()
     def test_step(var: str) -> str:
-        assert DBOS.step_id == 2
+        assert DBOS.step_id == 1
         step_status = DBOS.step_status
         assert step_status is not None
-        assert step_status.step_id == 2
+        assert step_status.step_id == 1
         assert step_status.current_attempt is None
         assert step_status.max_attempts is None
         nonlocal step_counter
@@ -177,7 +177,7 @@ def test_child_workflow(dbos: DBOS) -> None:
     assert parent_status.parent_workflow_id is None
 
     # The synchronous child workflow ID follows the pattern: parent_id-function_id
-    sync_child_id = f"{parent_id}-1"
+    sync_child_id = f"{parent_id}-0"
     sync_child_status = DBOS.get_workflow_status(sync_child_id)
     assert sync_child_status is not None
     assert sync_child_status.parent_workflow_id == parent_id
@@ -1467,7 +1467,7 @@ def test_send_bulk_send_to_forks(dbos: DBOS) -> None:
         return wfid
 
     def fork(wfid: str) -> str:
-        handle = DBOS.fork_workflow(wfid, 1)
+        handle = DBOS.fork_workflow(wfid, 0)
         assert handle.get_result() == 1
         assert handle.get_status().forked_from == wfid
         return handle.workflow_id
@@ -2678,8 +2678,8 @@ def test_get_events(dbos: DBOS) -> None:
 def test_run_step(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_workflow(var: str, var2: str) -> str:
-        res1 = DBOS.run_step(None, test_step, var, 1)
-        res2 = DBOS.run_step({"name": "test_step"}, test_step, var2, 2)
+        res1 = DBOS.run_step(None, test_step, var, 0)
+        res2 = DBOS.run_step({"name": "test_step"}, test_step, var2, 1)
         res3 = DBOS.run_step({"name": "concat"}, lambda: res1 + res2)
         return res1 + res2 + res3
 
@@ -2713,8 +2713,8 @@ def test_run_step(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def test_workflow_sca(var: str, var2: str) -> str:
-        res1: str = DBOS.run_step(None, test_step_async, var, 1)
-        res2: str = DBOS.run_step({"name": "test_step"}, test_step_async, var2, 2)
+        res1: str = DBOS.run_step(None, test_step_async, var, 0)
+        res2: str = DBOS.run_step({"name": "test_step"}, test_step_async, var2, 1)
         return res1 + res2
 
     async def test_step_async(var: str, sn: int) -> str:
@@ -2744,8 +2744,8 @@ def test_run_step(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     async def test_workflow_acs(var: str, var2: str) -> str:
-        res1 = await DBOS.run_step_async(None, test_step, var, 1)
-        res2 = await DBOS.run_step_async({"name": "test_step"}, test_step, var2, 2)
+        res1 = await DBOS.run_step_async(None, test_step, var, 0)
+        res2 = await DBOS.run_step_async({"name": "test_step"}, test_step, var2, 1)
         return res1 + res2
 
     def test_step(var: str, sn: int) -> str:
@@ -2814,8 +2814,8 @@ def test_run_step(dbos: DBOS) -> None:
 async def test_run_step_async(dbos: DBOS) -> None:
     @DBOS.workflow()
     async def test_workflow_acs(var: str, var2: str) -> str:
-        res1 = await DBOS.run_step_async(None, test_step, var, 1)
-        res2 = await DBOS.run_step_async({"name": "test_step"}, test_step, var2, 2)
+        res1 = await DBOS.run_step_async(None, test_step, var, 0)
+        res2 = await DBOS.run_step_async({"name": "test_step"}, test_step, var2, 1)
         return res1 + res2
 
     def test_step(var: str, sn: int) -> str:
@@ -2852,9 +2852,9 @@ async def test_run_step_async(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     async def test_workflow(var: str, var2: str) -> str:
-        res1: str = await DBOS.run_step_async(None, test_step_async, var, 1)
+        res1: str = await DBOS.run_step_async(None, test_step_async, var, 0)
         res2: str = await DBOS.run_step_async(
-            {"name": "test_step"}, test_step_async, var2, 2
+            {"name": "test_step"}, test_step_async, var2, 1
         )
         return res1 + res2
 

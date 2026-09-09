@@ -234,7 +234,7 @@ def test_steps_carry_owner_and_forks_inherit_it(dbos: DBOS) -> None:
     assert step_owners(dbos, handle.workflow_id) == {APP_NAME}
 
     # Forking past the step copies its row, which must carry the owner too.
-    forked = DBOS.fork_workflow(handle.workflow_id, 2)
+    forked = DBOS.fork_workflow(handle.workflow_id, 1)
     assert forked.get_result() == 8
     assert application_name_of(dbos, forked.workflow_id) == APP_NAME
     assert step_owners(dbos, forked.workflow_id) == {APP_NAME}

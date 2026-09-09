@@ -460,13 +460,13 @@ async def test_gather_manysteps(dbos: DBOS) -> None:
     assert wfsteps_concurrent is not None
     compare_wf_runs(wfsteps_serial, wfsteps_concurrent)
 
-    fwf1 = await DBOS.fork_workflow_async(wfid_concurrent, 3)
+    fwf1 = await DBOS.fork_workflow_async(wfid_concurrent, 2)
     await fwf1.get_result()
 
-    fwf2 = await DBOS.fork_workflow_async(wfid_concurrent, 5)
+    fwf2 = await DBOS.fork_workflow_async(wfid_concurrent, 4)
     await fwf2.get_result()
 
-    fwf3 = await DBOS.fork_workflow_async(wfid_concurrent, 7)
+    fwf3 = await DBOS.fork_workflow_async(wfid_concurrent, 6)
     await fwf3.get_result()
 
 
@@ -749,8 +749,8 @@ async def test_async_recovery_direct_child_no_thread_starvation(
 
     num_parents = 12
     parent_ids = [f"starve-parent-{i}" for i in range(num_parents)]
-    # Child ids are deterministic: "<parent_id>-1" (the parent's first call).
-    child_ids = [f"{pid}-1" for pid in parent_ids]
+    # Child ids are deterministic: "<parent_id>-0" (the parent's first call).
+    child_ids = [f"{pid}-0" for pid in parent_ids]
 
     # Run each parent once so the parent->child relationship is recorded.
     for i, pid in enumerate(parent_ids):

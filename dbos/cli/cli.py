@@ -646,7 +646,7 @@ def resume(
     help="fork a workflow from the beginning with a new id and from a step"
 )
 @click.argument("workflow_id")
-@click.option("--step", "-S", type=int, default=1, help="Restart from this step")
+@click.option("--step", "-S", type=int, default=0, help="Restart from this step")
 @click.option("--forked-workflow-id", "-f", help="Custom ID for the forked workflow")
 @click.option(
     "--application-version",

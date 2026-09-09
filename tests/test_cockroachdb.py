@@ -132,7 +132,7 @@ def test_cockroachdb_fork() -> None:
         assert DBOS.get_event(wfid, "after_step_three") == 8
 
         # Fork from step 2: step_one replayed, step_two and step_three re-executed
-        forked = DBOS.fork_workflow(wfid, 2)
+        forked = DBOS.fork_workflow(wfid, 1)
         assert forked.get_result() == 21
         assert step_one_count == 1  # replayed
         assert step_two_count == 2  # re-executed

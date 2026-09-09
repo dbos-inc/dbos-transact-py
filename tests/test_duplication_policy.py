@@ -297,10 +297,10 @@ def test_return_existing_in_parent_workflow(dbos: DBOS) -> None:
     # contiguous function IDs, because the retry consumed no extra ID.
     steps = DBOS.list_workflow_steps(parent_a.workflow_id)
     assert len(steps) == 3
-    assert [s["function_id"] for s in steps] == [1, 2, 3]
+    assert [s["function_id"] for s in steps] == [0, 1, 2]
     assert steps[0]["child_workflow_id"] == child_handle.workflow_id
     marker = next(s for s in steps if s["function_name"] == marker_step.__qualname__)
-    assert marker["function_id"] == 3
+    assert marker["function_id"] == 2
 
     # Forking past the last step replays every cached operation instead of rerunning it.
     forked: WorkflowHandle[str] = DBOS.fork_workflow(

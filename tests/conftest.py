@@ -396,7 +396,7 @@ def set_workflow_status(sys_db: SystemDatabase, workflow_id: str, status: str) -
 def reexecute_workflow_by_id(dbos: DBOS, wfid: str) -> "WorkflowHandle[Any]":
     """Dispatch a workflow off its persisted row, exactly as a queue claim does."""
     set_workflow_status(dbos._sys_db, wfid, "PENDING")
-    status = dbos._sys_db.get_workflow_status(wfid)
+    status = dbos._sys_db.get_workflow_status(wfid, include_step_id_base=True)
     assert status is not None
     return execute_dequeued_workflow(dbos, status)
 

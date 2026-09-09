@@ -992,7 +992,7 @@ async def test_child_workflow_async(dbos: DBOS) -> None:
     assert parent_status.parent_workflow_id is None
 
     # The synchronous child workflow ID follows the pattern: parent_id-function_id
-    sync_child_id = f"{parent_id}-1"
+    sync_child_id = f"{parent_id}-0"
     sync_child_status = await DBOS.get_workflow_status_async(sync_child_id)
     assert sync_child_status is not None
     assert sync_child_status.parent_workflow_id == parent_id
@@ -1048,18 +1048,18 @@ async def test_asyncio_wait(dbos: DBOS) -> None:
     assert len(steps) == 4
     # Step 1: first asyncio_wait snapshots its context before the tasks run.
     # Recorded done indices [0] means the first future (fast_step) completed.
-    assert steps[0]["function_id"] == 1
+    assert steps[0]["function_id"] == 0
     assert steps[0]["function_name"] == "DBOS.asyncio_wait"
     assert steps[0]["output"] == [0]
     # Steps 2 & 3: the step coroutines execute inside the asyncio tasks
-    assert steps[1]["function_id"] == 2
+    assert steps[1]["function_id"] == 1
     assert steps[1]["function_name"] == fast_step.__qualname__
     assert steps[1]["output"] == "fast_done"
-    assert steps[2]["function_id"] == 3
+    assert steps[2]["function_id"] == 2
     assert steps[2]["function_name"] == slow_step.__qualname__
     assert steps[2]["output"] == "slow_done"
     # Step 4: second asyncio_wait on the pending set
-    assert steps[3]["function_id"] == 4
+    assert steps[3]["function_id"] == 3
     assert steps[3]["function_name"] == "DBOS.asyncio_wait"
     assert steps[3]["output"] == [0]
 

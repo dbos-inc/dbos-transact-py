@@ -610,6 +610,19 @@ def _schedule_workflow_timeout(
     )
 
 
+def _resume_legacy_step_ids(dbos: "DBOS", ctx: DBOSContext, workflow_id: str) -> None:
+    """Replay a workflow checkpointed before step IDs became 0-based under its original numbering.
+
+    Skipped unless the workflow ID could name one, so the common path costs no query.
+    """
+    if not ctx.may_have_legacy_steps:
+        return
+    ctx.step_id_base = dbos._sys_db.get_step_id_base(workflow_id)
+    if ctx.is_within_workflow():
+        # start_workflow already seeded the counter, so correct it in place.
+        ctx.function_id = ctx.step_id_base - 1
+
+
 def _init_workflow(
     dbos: "DBOS",
     ctx: DBOSContext,
@@ -1317,6 +1330,8 @@ def execute_dequeued_workflow(
                 serialization_type = WorkflowSerializationFormat.PORTABLE
             ctx.serialization_type = serialization_type
             ctx.workflow_deadline_epoch_ms = status["workflow_deadline_epoch_ms"]
+            ctx.step_id_base = status.get("step_id_base", 0)
+            ctx.may_have_legacy_steps = False
             _schedule_workflow_timeout(
                 dbos, workflow_id, status["workflow_deadline_epoch_ms"]
             )
@@ -1478,6 +1493,8 @@ def start_workflow(
     ):
         return WorkflowHandlePolling(new_child_workflow_id, dbos)
 
+    _resume_legacy_step_ids(dbos, new_wf_ctx, new_child_workflow_id)
+
     # Captured on the caller's thread, re-attached inside the executor thread.
     future = dbos._executor.submit(
         cast(Callable[..., R], _execute_workflow_wthread),
@@ -1616,6 +1633,10 @@ async def start_workflow_async(
         or wf_status == WorkflowStatusString.SUCCESS.value
     ):
         return WorkflowHandleAsyncPolling(new_child_workflow_id, dbos)
+
+    await asyncio.to_thread(
+        _resume_legacy_step_ids, dbos, new_wf_ctx, new_child_workflow_id
+    )
 
     coro = _execute_workflow_async(dbos, status, func, new_wf_ctx, args, kwargs)
     inner_task = asyncio.create_task(coro)
@@ -1959,6 +1980,8 @@ def workflow_wrapper(
                     )
                 elif r and r["child_workflow_id"]:
                     return _deferred_workflow_result(dbos, r["child_workflow_id"])
+
+            _resume_legacy_step_ids(dbos, newwfctx, child_wfid)
 
             status, should_execute, _ = _init_workflow(
                 dbos,

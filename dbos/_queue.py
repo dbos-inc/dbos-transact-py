@@ -833,14 +833,18 @@ def queue_worker_thread(
         try:
             found = {
                 status["workflow_uuid"]: status
-                for status in dbos._sys_db.get_workflow_statuses(workflow_ids)
+                for status in dbos._sys_db.get_workflow_statuses(
+                    workflow_ids, include_step_id_base=True
+                )
             }
         except Exception as e:
             dbos.logger.warning(f"Error fetching dequeued workflow statuses: {e}")
             found = {}
         for id in workflow_ids:
             try:
-                status = found.get(id) or dbos._sys_db.get_workflow_status(id)
+                status = found.get(id) or dbos._sys_db.get_workflow_status(
+                    id, include_step_id_base=True
+                )
                 if status is None:
                     raise DBOSRecoveryError(id, "Workflow status not found")
                 execute_dequeued_workflow(dbos, status)

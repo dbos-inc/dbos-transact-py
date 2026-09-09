@@ -40,7 +40,7 @@ def test_workflow_export(dbos: DBOS, config: DBOSConfig) -> None:
     with SetWorkflowAttributes(attributes):
         workflow_id, child_id = workflow()
     # Child workflow ID follows pattern: parent_id-function_id
-    grandchild_id = f"{child_id}-1"
+    grandchild_id = f"{child_id}-0"
 
     # Capture the original status so we can confirm a faithful round-trip of
     # every persisted status field (not just the input/output/steps).
@@ -101,7 +101,7 @@ def test_workflow_export(dbos: DBOS, config: DBOSConfig) -> None:
     assert imported_grandchild_status.parent_workflow_id == child_id
 
     # The imported workflow can be forked
-    forked_workflow = DBOS.fork_workflow(workflow_id, len(imported_steps))
+    forked_workflow = DBOS.fork_workflow(workflow_id, len(imported_steps) - 1)
     assert forked_workflow.get_result()[0] == forked_workflow.workflow_id
     assert DBOS.get_event(forked_workflow.workflow_id, key) == value
 

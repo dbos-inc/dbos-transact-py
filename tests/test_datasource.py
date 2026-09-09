@@ -127,7 +127,7 @@ def _check_both_tables(
             ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
         ).first()
     assert ds_row is not None, "datasource_outputs row missing"
-    assert ds_row.step_id == 1
+    assert ds_row.step_id == 0
     assert ds_row.output is not None
 
     with dbos_instance._sys_db.engine.connect() as conn:
@@ -138,7 +138,7 @@ def _check_both_tables(
             ).where(SystemSchema.operation_outputs.c.workflow_uuid == wfid)
         ).first()
     assert sys_row is not None, "operation_outputs row missing"
-    assert sys_row.function_id == 1
+    assert sys_row.function_id == 0
     assert sys_row.output is not None
 
 
@@ -155,7 +155,7 @@ async def _async_check_both_tables(
             )
         ).first()
     assert ds_row is not None, "datasource_outputs row missing"
-    assert ds_row.step_id == 1
+    assert ds_row.step_id == 0
     assert ds_row.output is not None
 
     with dbos_instance._sys_db.engine.connect() as conn:
@@ -166,7 +166,7 @@ async def _async_check_both_tables(
             ).where(SystemSchema.operation_outputs.c.workflow_uuid == wfid)
         ).first()
     assert sys_row is not None, "operation_outputs row missing"
-    assert sys_row.function_id == 1
+    assert sys_row.function_id == 0
     assert sys_row.output is not None
 
 
@@ -561,13 +561,13 @@ def test_sync_ds_step_recorded_with_name(
 
     steps = DBOS.list_workflow_steps(wfid)
     assert len(steps) == 3
-    assert steps[0]["function_id"] == 1
+    assert steps[0]["function_id"] == 0
     assert steps[0]["function_name"].endswith("my_step")
     assert steps[0]["output"] == "run_tx_result"
-    assert steps[1]["function_id"] == 2
+    assert steps[1]["function_id"] == 1
     assert steps[1]["function_name"].endswith("unnamed_step")
     assert steps[1]["output"] == "unnamed_result"
-    assert steps[2]["function_id"] == 3
+    assert steps[2]["function_id"] == 2
     assert steps[2]["function_name"] == "my_named_step"
     assert steps[2]["output"] == "named_result"
 
@@ -586,11 +586,11 @@ def test_sync_ds_step_recorded_with_name(
     for row in ds_rows:
         assert row.error is None
         assert row.serialization == "py_pickle"
-    assert ds_rows[0].step_id == 1
+    assert ds_rows[0].step_id == 0
     assert pickle.loads(base64.b64decode(ds_rows[0].output)) == "run_tx_result"
-    assert ds_rows[1].step_id == 2
+    assert ds_rows[1].step_id == 1
     assert pickle.loads(base64.b64decode(ds_rows[1].output)) == "unnamed_result"
-    assert ds_rows[2].step_id == 3
+    assert ds_rows[2].step_id == 2
     assert pickle.loads(base64.b64decode(ds_rows[2].output)) == "named_result"
 
 
@@ -1372,13 +1372,13 @@ async def test_async_ds_step_recorded_with_name(
 
     steps = await DBOS.list_workflow_steps_async(wfid)
     assert len(steps) == 3
-    assert steps[0]["function_id"] == 1
+    assert steps[0]["function_id"] == 0
     assert steps[0]["function_name"].endswith("my_step")
     assert steps[0]["output"] == "run_tx_result"
-    assert steps[1]["function_id"] == 2
+    assert steps[1]["function_id"] == 1
     assert steps[1]["function_name"].endswith("unnamed_step")
     assert steps[1]["output"] == "unnamed_result"
-    assert steps[2]["function_id"] == 3
+    assert steps[2]["function_id"] == 2
     assert steps[2]["function_name"] == "my_named_async_step"
     assert steps[2]["output"] == "named_result"
 
@@ -1399,11 +1399,11 @@ async def test_async_ds_step_recorded_with_name(
     for row in ds_rows:
         assert row.error is None
         assert row.serialization == "py_pickle"
-    assert ds_rows[0].step_id == 1
+    assert ds_rows[0].step_id == 0
     assert pickle.loads(base64.b64decode(ds_rows[0].output)) == "run_tx_result"
-    assert ds_rows[1].step_id == 2
+    assert ds_rows[1].step_id == 1
     assert pickle.loads(base64.b64decode(ds_rows[1].output)) == "unnamed_result"
-    assert ds_rows[2].step_id == 3
+    assert ds_rows[2].step_id == 2
     assert pickle.loads(base64.b64decode(ds_rows[2].output)) == "named_result"
 
 

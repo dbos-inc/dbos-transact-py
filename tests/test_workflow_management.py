@@ -29,7 +29,7 @@ from dbos._serialization import (
 )
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from dbos._workflow_commands import garbage_collect, global_timeout
-from tests.conftest import queue_entries_are_cleaned_up
+from tests.conftest import queue_entries_are_cleaned_up, reexecute_workflow_by_id
 
 
 def test_cancel_resume(dbos: DBOS) -> None:
@@ -716,9 +716,9 @@ def test_fork_nonexistent_workflow(dbos: DBOS, client: DBOSClient) -> None:
     missing_id = str(uuid.uuid4())
 
     with pytest.raises(DBOSNonExistentWorkflowError):
-        DBOS.fork_workflow(missing_id, 1)
+        DBOS.fork_workflow(missing_id, 0)
     with pytest.raises(DBOSNonExistentWorkflowError):
-        client.fork_workflow(missing_id, 1)
+        client.fork_workflow(missing_id, 0)
 
 
 def test_bulk_delete(dbos: DBOS) -> None:
@@ -858,7 +858,7 @@ def test_fork_steps(
 
     fork_id = str(uuid.uuid4())
     with SetWorkflowID(fork_id):
-        forked_handle = DBOS.fork_workflow(wfid, 3)
+        forked_handle = DBOS.fork_workflow(wfid, 2)
     assert forked_handle.workflow_id == fork_id
     app_version = forked_handle.get_status().app_version
     assert app_version is None or app_version == DBOS.application_version
@@ -871,7 +871,7 @@ def test_fork_steps(
     assert stepFourCount == 2
     assert stepFiveCount == 2
 
-    forked_handle = DBOS.fork_workflow(wfid, 5)
+    forked_handle = DBOS.fork_workflow(wfid, 4)
     fork_id_2 = forked_handle.workflow_id
     assert forked_handle.workflow_id != wfid
     assert forked_handle.get_status().forked_from == wfid
@@ -883,7 +883,7 @@ def test_fork_steps(
     assert stepFourCount == 2
     assert stepFiveCount == 3
 
-    forked_handle = DBOS.fork_workflow(wfid, 1)
+    forked_handle = DBOS.fork_workflow(wfid, 0)
     fork_id_3 = forked_handle.workflow_id
     assert forked_handle.workflow_id != wfid
     assert forked_handle.get_status().forked_from == wfid
@@ -978,7 +978,7 @@ def test_restart_fromsteps_stepsonly(
     assert stepFourCount == 1
     assert stepFiveCount == 1
 
-    forked_handle = DBOS.fork_workflow(wfid, 2)
+    forked_handle = DBOS.fork_workflow(wfid, 1)
     assert forked_handle.workflow_id != wfid
     fork_id_one = forked_handle.workflow_id
     forked_handle.get_result()
@@ -989,7 +989,7 @@ def test_restart_fromsteps_stepsonly(
     assert stepFourCount == 2
     assert stepFiveCount == 2
 
-    forked_handle = DBOS.fork_workflow(wfid, 4)
+    forked_handle = DBOS.fork_workflow(wfid, 3)
     assert forked_handle.workflow_id != wfid
     fork_id_two = forked_handle.workflow_id
     forked_handle.get_result()
@@ -1000,7 +1000,7 @@ def test_restart_fromsteps_stepsonly(
     assert stepFourCount == 3
     assert stepFiveCount == 3
 
-    forked_handle = DBOS.fork_workflow(wfid, 1)
+    forked_handle = DBOS.fork_workflow(wfid, 0)
     assert forked_handle.workflow_id != wfid
     fork_id_three = forked_handle.workflow_id
     forked_handle.get_result()
@@ -1071,7 +1071,7 @@ def test_restart_fromsteps_invalid_start(
     assert stepFourCount == 1
     assert stepFiveCount == 1
 
-    forked_handle = DBOS.fork_workflow(wfid, 3)
+    forked_handle = DBOS.fork_workflow(wfid, 2)
     assert forked_handle.workflow_id != wfid
     forked_handle.get_result()
 
@@ -1081,7 +1081,7 @@ def test_restart_fromsteps_invalid_start(
     assert stepFourCount == 2
     assert stepFiveCount == 2
 
-    forked_handle = DBOS.fork_workflow(wfid, 5)
+    forked_handle = DBOS.fork_workflow(wfid, 4)
     assert forked_handle.workflow_id != wfid
     forked_handle.get_result()
 
@@ -1091,7 +1091,7 @@ def test_restart_fromsteps_invalid_start(
     assert stepFourCount == 2
     assert stepFiveCount == 3
 
-    # invalid < 1 will default to 1
+    # invalid < 0 will default to 0
     forked_handle = DBOS.fork_workflow(wfid, -1)
     assert forked_handle.workflow_id != wfid
     forked_handle.get_result()
@@ -1157,14 +1157,14 @@ def test_restart_fromsteps_childwf(
     assert childwfCount == 1
     assert stepThreeCount == 1
 
-    forked_handle = DBOS.fork_workflow(wfid, 2)
+    forked_handle = DBOS.fork_workflow(wfid, 1)
     forked_handle.get_result()
     assert forked_handle.workflow_id != wfid
     assert stepOneCount == 1
     assert childwfCount == 2
     assert stepThreeCount == 2
 
-    forked_handle = DBOS.fork_workflow(wfid, 3)
+    forked_handle = DBOS.fork_workflow(wfid, 2)
     forked_handle.get_result()
     assert forked_handle.workflow_id != wfid
     assert stepOneCount == 1
@@ -1174,7 +1174,7 @@ def test_restart_fromsteps_childwf(
     # call fork from within a workflow
     forkwfid = str(uuid.uuid4())
     with SetWorkflowID(forkwfid):
-        fh = DBOS.start_workflow(fork, wfid, 1)
+        fh = DBOS.start_workflow(fork, wfid, 0)
     firstforkedwfid = fh.get_result()
     assert firstforkedwfid != wfid
     assert stepOneCount == 2
@@ -1184,7 +1184,7 @@ def test_restart_fromsteps_childwf(
     # call the workflow again with the same id
     # testing that fork is not called again
     with SetWorkflowID(forkwfid):
-        fh2 = DBOS.start_workflow(fork, wfid, 1)
+        fh2 = DBOS.start_workflow(fork, wfid, 0)
 
     secondforkedwfid = fh2.get_result()
     assert secondforkedwfid == firstforkedwfid
@@ -1226,7 +1226,7 @@ def test_fork_version(
 
     # Fork the workflow with a different version. Verify it is set to that version.
     new_version = "my_new_version"
-    handle = DBOS.fork_workflow(workflow_id, 2, application_version=new_version)
+    handle = DBOS.fork_workflow(workflow_id, 1, application_version=new_version)
     assert handle.get_status().app_version == new_version
     assert handle.get_status().queue_name == INTERNAL_QUEUE_NAME
     # Set the global version to this new version, verify the workflow completes
@@ -1249,14 +1249,14 @@ def test_fork_timeout(dbos: DBOS) -> None:
         handle.get_result()
 
     # Forking with a short timeout should cancel the forked workflow too.
-    forked_handle = DBOS.fork_workflow(workflow_id, 1, timeout_seconds=0.1)
+    forked_handle = DBOS.fork_workflow(workflow_id, 0, timeout_seconds=0.1)
     assert forked_handle.get_status().workflow_timeout_ms == 100
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         forked_handle.get_result()
     assert queue_entries_are_cleaned_up(dbos)
 
     # Forking without a timeout should leave it unset.
-    no_timeout_handle = DBOS.fork_workflow(workflow_id, 1)
+    no_timeout_handle = DBOS.fork_workflow(workflow_id, 0)
     assert no_timeout_handle.get_status().workflow_timeout_ms is None
     DBOS.cancel_workflow(no_timeout_handle.workflow_id)
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
@@ -1313,9 +1313,9 @@ def test_resume_and_fork_to_queue(dbos: DBOS) -> None:
     assert step_one_count == 1  # Step 1 replayed from checkpoint
     assert step_two_count == 1
 
-    # Fork the workflow onto the queue from step 2 and verify queue_name
+    # Fork the workflow onto the queue from step 1 and verify queue_name
     forked_handle = DBOS.fork_workflow(
-        wfid, 2, queue_name="test_resume_fork_queue", queue_partition_key="my_partition"
+        wfid, 1, queue_name="test_resume_fork_queue", queue_partition_key="my_partition"
     )
     assert forked_handle.get_status().queue_name == "test_resume_fork_queue"
     assert forked_handle.get_status().forked_from == wfid
@@ -1829,16 +1829,16 @@ def test_fork_events(dbos: DBOS) -> None:
     event.clear()
 
     # Fork the workflow from each step, verify the event is set to the appropriate value
-    fork_one = DBOS.fork_workflow(handle.workflow_id, 1)
+    fork_one = DBOS.fork_workflow(handle.workflow_id, 0)
     assert DBOS.get_event(fork_one.workflow_id, key, timeout_seconds=0.0) is None
-    fork_two = DBOS.fork_workflow(handle.workflow_id, 2)
+    fork_two = DBOS.fork_workflow(handle.workflow_id, 1)
     assert DBOS.get_event(fork_two.workflow_id, key) == 0
-    fork_three = DBOS.fork_workflow(handle.workflow_id, 3)
+    fork_three = DBOS.fork_workflow(handle.workflow_id, 2)
     assert DBOS.get_event(fork_three.workflow_id, key) == 1
-    fork_four = DBOS.fork_workflow(handle.workflow_id, 4)
+    fork_four = DBOS.fork_workflow(handle.workflow_id, 3)
     assert DBOS.get_event(fork_four.workflow_id, key) == 2
     # Fork from a fork
-    fork_five = DBOS.fork_workflow(fork_four.workflow_id, 4)
+    fork_five = DBOS.fork_workflow(fork_four.workflow_id, 3)
     assert DBOS.get_event(fork_four.workflow_id, key) == 2
 
     # Unblock the forked workflows, verify they successfully complete
@@ -1880,15 +1880,15 @@ def test_fork_streams(dbos: DBOS) -> None:
     event.clear()
 
     # Fork the workflow from each step, verify the stream contains the appropriate values
-    fork_one = DBOS.fork_workflow(handle.workflow_id, 1)
+    fork_one = DBOS.fork_workflow(handle.workflow_id, 0)
     assert read_stream(fork_one.workflow_id, 0) == []
-    fork_two = DBOS.fork_workflow(handle.workflow_id, 2)
+    fork_two = DBOS.fork_workflow(handle.workflow_id, 1)
     assert read_stream(fork_two.workflow_id, 1) == [0]
-    fork_three = DBOS.fork_workflow(handle.workflow_id, 3)
+    fork_three = DBOS.fork_workflow(handle.workflow_id, 2)
     assert read_stream(fork_three.workflow_id, 2) == [0, 1]
-    fork_four = DBOS.fork_workflow(handle.workflow_id, 4)
+    fork_four = DBOS.fork_workflow(handle.workflow_id, 3)
     assert read_stream(fork_four.workflow_id, 3) == [0, 1, 2]
-    fork_five = DBOS.fork_workflow(handle.workflow_id, 5)
+    fork_five = DBOS.fork_workflow(handle.workflow_id, 4)
     assert list(DBOS.read_stream(fork_five.workflow_id, key)) == [0, 1, 2]
 
     # Unblock the forked workflows, verify they successfully complete
@@ -1995,11 +1995,11 @@ def test_fork_from_failure(dbos: DBOS) -> None:
     assert step_three_count == 8  # +3 (all three forks re-run step_three)
 
     # --- from_step mode ---
-    # Fork all from step 1: all steps re-executed
+    # Fork all from step 0: all steps re-executed
     forked_ids_step = dbos._sys_db.fork_from_failure(
         [wf3_id],
         application_version=None,
-        from_step=1,
+        from_step=0,
     )
     fs: WorkflowHandle[int] = DBOS.retrieve_workflow(forked_ids_step[0])
     assert fs.get_result() == 6
@@ -2149,20 +2149,20 @@ def test_fork_replacement_children(dbos: DBOS) -> None:
     # Change the multiplier so forked children produce different results.
     multiplier = 10
 
-    # Fork children 0, 2, and 4 from step 1 (re-run child_step with new multiplier).
-    forked_child_0 = DBOS.fork_workflow(orig_ids[0], 1)
-    forked_child_2 = DBOS.fork_workflow(orig_ids[2], 1)
-    forked_child_4 = DBOS.fork_workflow(orig_ids[4], 1)
+    # Fork children 0, 2, and 4 from step 0 (re-run child_step with new multiplier).
+    forked_child_0 = DBOS.fork_workflow(orig_ids[0], 0)
+    forked_child_2 = DBOS.fork_workflow(orig_ids[2], 0)
+    forked_child_4 = DBOS.fork_workflow(orig_ids[4], 0)
     assert forked_child_0.get_result() == 100  # 10 * 10
     assert forked_child_2.get_result() == 300  # 30 * 10
     assert forked_child_4.get_result() == 500  # 50 * 10
 
-    # Fork the parent from step 6 (combine step, after the 5 start_workflow steps).
-    # Steps 1-5 are replayed with replaced child_workflow_ids.
+    # Fork the parent from step 5 (combine step, after the 5 start_workflow steps).
+    # Steps 0-4 are replayed with replaced child_workflow_ids.
     # The workflow then re-reads results from the new children before re-executing combine.
     forked_parent = DBOS.fork_workflow(
         parent_handle.workflow_id,
-        6,
+        5,
         replacement_children={
             orig_ids[0]: forked_child_0.workflow_id,
             orig_ids[2]: forked_child_2.workflow_id,
@@ -2358,7 +2358,7 @@ def test_legacy_payload_rows_still_read(dbos: DBOS) -> None:
     assert listed.output == 11
     handle: WorkflowHandle[int] = DBOS.retrieve_workflow(workflow_id)
     assert handle.get_result() == 11
-    forked: WorkflowHandle[int] = DBOS.fork_workflow(workflow_id, 1)
+    forked: WorkflowHandle[int] = DBOS.fork_workflow(workflow_id, 0)
     assert forked.get_result() == 11
 
     # A round collects the legacy-only row with everything else and strands nothing.
@@ -2447,7 +2447,7 @@ def test_payload_garbage_collection(
     assert handle.get_result() == expected
     assert DBOS.list_workflows(workflow_ids=[workflow_id])[0].input is not None
     assert len(dbos._sys_db.list_workflow_steps(workflow_id)) == 2
-    forked: WorkflowHandle[int] = DBOS.fork_workflow(workflow_id, 1)
+    forked: WorkflowHandle[int] = DBOS.fork_workflow(workflow_id, 0)
     assert forked.get_result() == expected
 
 
@@ -2702,3 +2702,88 @@ def test_payload_gc_never_orphans_a_status_row(
     for h in enqueued:
         assert h.get_result() >= 100
     assert _orphaned_status_rows(dbos) == (0, 0)
+
+
+def _rewrite_as_one_based(dbos: DBOS, workflow_id: str, keep_through: int) -> None:
+    """Renumber a workflow's checkpoints from 1, as a pre-3.0 release would have written them."""
+    oo = SystemSchema.operation_outputs
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.delete(oo).where(
+                (oo.c.workflow_uuid == workflow_id) & (oo.c.function_id > keep_through)
+            )
+        )
+        # Descending, so each row moves into a slot the previous one has vacated.
+        for function_id in range(keep_through, -1, -1):
+            c.execute(
+                sa.update(oo)
+                .where(
+                    (oo.c.workflow_uuid == workflow_id)
+                    & (oo.c.function_id == function_id)
+                )
+                .values(function_id=function_id + 1)
+            )
+
+
+def test_legacy_one_based_step_ids(dbos: DBOS) -> None:
+    """Workflows checkpointed before step IDs became 0-based keep their original numbering."""
+    counts = {"step": 0, "child": 0}
+    probed: list[str] = []
+    real_probe = dbos._sys_db.get_step_id_base
+
+    def counting_probe(workflow_id: str) -> int:
+        probed.append(workflow_id)
+        return real_probe(workflow_id)
+
+    @DBOS.step()
+    def step_one() -> int:
+        counts["step"] += 1
+        return 1
+
+    @DBOS.workflow()
+    def child() -> int:
+        counts["child"] += 1
+        return 2
+
+    @DBOS.workflow()
+    def workflow() -> int:
+        return step_one() + child()
+
+    setattr(dbos._sys_db, "get_step_id_base", counting_probe)
+    try:
+        # A generated workflow ID cannot name a pre-3.0 workflow, so it is never probed.
+        handle: WorkflowHandle[int] = DBOS.start_workflow(workflow)
+        wfid = handle.workflow_id
+        assert handle.get_result() == 3
+        assert counts == {"step": 1, "child": 1}
+        assert [s["function_id"] for s in DBOS.list_workflow_steps(wfid)] == [0, 1, 2]
+        assert probed == []
+
+        # Renumber from 1 as DBOS 2.x would have, dropping the trailing getResult so
+        # the replay has something left to run.
+        _rewrite_as_one_based(dbos, wfid, keep_through=1)
+        assert [s["function_id"] for s in DBOS.list_workflow_steps(wfid)] == [1, 2]
+
+        # Recovery replays the legacy checkpoints in place and continues past them.
+        assert reexecute_workflow_by_id(dbos, wfid).get_result() == 3
+        assert counts == {"step": 1, "child": 1}
+        assert [s["function_id"] for s in DBOS.list_workflow_steps(wfid)] == [1, 2, 3]
+        # Replays take their numbering from the dequeued row, so they cost no extra query.
+        assert probed == []
+
+        # A fork copies step_one's legacy checkpoint, so it must resume numbering at 2.
+        forked: WorkflowHandle[int] = DBOS.fork_workflow(wfid, 2)
+        assert forked.get_result() == 3
+        assert counts == {"step": 1, "child": 2}
+        forked_steps = DBOS.list_workflow_steps(forked.workflow_id)
+        assert [s["function_id"] for s in forked_steps] == [1, 2, 3]
+        # The child the legacy parent started anew may itself predate the switch, so it is probed.
+        assert probed == [forked_steps[1]["child_workflow_id"]]
+
+        # A caller-supplied ID is probed; the child ID derived from this 0-based parent is not.
+        named = str(uuid.uuid4())
+        with SetWorkflowID(named):
+            assert workflow() == 3
+        assert probed[-1:] == [named] and len(probed) == 2
+    finally:
+        setattr(dbos._sys_db, "get_step_id_base", real_probe)

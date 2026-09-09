@@ -564,7 +564,7 @@ def test_schedule_crud_from_workflow(dbos: DBOS) -> None:
         "DBOS.getSchedule",
     ]
 
-    forked_handle = DBOS.fork_workflow(handle.workflow_id, len(steps))
+    forked_handle = DBOS.fork_workflow(handle.workflow_id, len(steps) - 1)
     forked_handle.get_result()
     assert [
         s["function_name"] for s in DBOS.list_workflow_steps(forked_handle.workflow_id)

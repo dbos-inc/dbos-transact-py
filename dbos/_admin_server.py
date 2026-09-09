@@ -234,7 +234,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 workflow_id = fork_match.group("workflow_id")
                 try:
                     data = json.loads(post_data.decode("utf-8"))
-                    start_step: int = data.get("start_step", 1)
+                    start_step: int = data.get("start_step", 0)
                     new_workflow_id: Optional[str] = data.get("new_workflow_id")
                     application_version: Optional[str] = data.get("application_version")
                     self._handle_fork(

@@ -70,7 +70,7 @@ def test_patch(
 
     # Verify an execution containing the patch marker
     # can recover past the patch marker
-    handle = DBOS.fork_workflow(v2_id, 3)
+    handle = DBOS.fork_workflow(v2_id, 2)
     assert handle.get_result() == 5
     steps = DBOS.list_workflow_steps(handle.workflow_id)
     assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 3
@@ -78,7 +78,7 @@ def test_patch(
 
     # Verify an old execution runs the pre-patch workflow
     # and does not store a patch marker
-    handle = DBOS.fork_workflow(v1_id, 2)
+    handle = DBOS.fork_workflow(v1_id, 1)
     assert handle.get_result() == 3
     assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 2
 
@@ -114,7 +114,7 @@ def test_patch(
 
     # Verify an execution containing the v3 patch marker
     # recovers to v3
-    handle = DBOS.fork_workflow(v3_id, 3)
+    handle = DBOS.fork_workflow(v3_id, 2)
     assert handle.get_result() == 4
     steps = DBOS.list_workflow_steps(handle.workflow_id)
     assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 3
@@ -122,7 +122,7 @@ def test_patch(
 
     # Verify an execution containing the v2 patch marker
     # recovers to v2
-    handle = DBOS.fork_workflow(v2_id, 3)
+    handle = DBOS.fork_workflow(v2_id, 2)
     assert handle.get_result() == 5
     steps = DBOS.list_workflow_steps(handle.workflow_id)
     assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 3
@@ -130,7 +130,7 @@ def test_patch(
 
     # Verify a v1 execution recovers the pre-patch workflow
     # and does not store a patch marker
-    handle = DBOS.fork_workflow(v1_id, 2)
+    handle = DBOS.fork_workflow(v1_id, 1)
     assert handle.get_result() == 3
     assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 2
 
@@ -160,14 +160,14 @@ def test_patch(
     assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 2
 
     # Verify an execution sans patch marker recovers correctly
-    handle = DBOS.fork_workflow(v4_id, 3)
+    handle = DBOS.fork_workflow(v4_id, 2)
     assert handle.get_result() == 4
     steps = DBOS.list_workflow_steps(handle.workflow_id)
     assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 2
 
     # Verify an execution containing the v3 patch marker
     # recovers to v3
-    handle = DBOS.fork_workflow(v3_id, 3)
+    handle = DBOS.fork_workflow(v3_id, 2)
     assert handle.get_result() == 4
     steps = DBOS.list_workflow_steps(handle.workflow_id)
     assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 3
@@ -175,12 +175,12 @@ def test_patch(
 
     # Verify an execution containing the v2 patch marker
     # cleanly fails
-    handle = DBOS.fork_workflow(v2_id, 3)
+    handle = DBOS.fork_workflow(v2_id, 2)
     with pytest.raises(DBOSUnexpectedStepError):
         handle.get_result()
 
     # Verify a v1 execution cleanly fails
-    handle = DBOS.fork_workflow(v1_id, 2)
+    handle = DBOS.fork_workflow(v1_id, 1)
     with pytest.raises(DBOSUnexpectedStepError):
         handle.get_result()
 
@@ -202,25 +202,25 @@ def test_patch(
 
     # Verify an execution from the deprecated patch works
     # sans patch marker
-    handle = DBOS.fork_workflow(v4_id, 3)
+    handle = DBOS.fork_workflow(v4_id, 2)
     assert handle.get_result() == 4
     steps = DBOS.list_workflow_steps(handle.workflow_id)
     assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 2
 
     # Verify an execution containing the v3 patch marker
     # cleanly fails
-    handle = DBOS.fork_workflow(v3_id, 3)
+    handle = DBOS.fork_workflow(v3_id, 2)
     with pytest.raises(DBOSUnexpectedStepError):
         handle.get_result()
 
     # Verify an execution containing the v2 patch marker
     # cleanly fails
-    handle = DBOS.fork_workflow(v2_id, 3)
+    handle = DBOS.fork_workflow(v2_id, 2)
     with pytest.raises(DBOSUnexpectedStepError):
         handle.get_result()
 
     # Verify a v1 execution cleanly fails
-    handle = DBOS.fork_workflow(v1_id, 2)
+    handle = DBOS.fork_workflow(v1_id, 1)
     with pytest.raises(DBOSUnexpectedStepError):
         handle.get_result()
 
@@ -288,7 +288,7 @@ async def test_patch_async(
 
     # Verify an old execution runs the pre-patch workflow
     # and does not store a patch marker
-    handle = await DBOS.fork_workflow_async(v1_id, 2)
+    handle = await DBOS.fork_workflow_async(v1_id, 1)
     assert await handle.get_result() == 3
     assert len(await DBOS.list_workflow_steps_async(handle.workflow_id)) == 2
 

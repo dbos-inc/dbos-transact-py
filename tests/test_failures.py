@@ -185,7 +185,7 @@ def test_nondeterministic_workflow(dbos: DBOS) -> None:
 
     # To simulate nondeterminism, set the flag then restart the workflow w/ fork;
     flag = False
-    handle_two = DBOS.fork_workflow(wfid, 2)
+    handle_two = DBOS.fork_workflow(wfid, 1)
 
     # Due to the nondeterminism, the workflow should encounter an unexpected step.
     with pytest.raises(DBOSUnexpectedStepError) as exc_info:
@@ -617,7 +617,7 @@ def test_step_status(dbos: DBOS) -> None:
         nonlocal step_counter
         step_status = DBOS.step_status
         assert step_status is not None
-        assert step_status.step_id == 1
+        assert step_status.step_id == 0
         assert step_status.current_attempt == step_counter
         assert step_status.max_attempts == max_attempts
         step_counter += 1
