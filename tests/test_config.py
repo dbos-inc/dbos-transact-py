@@ -195,14 +195,6 @@ def test_process_config_full():
         == "postgres://user:password@localhost:7777/dbn_dbos_sys?connect_timeout=1&sslmode=require&sslrootcert=ca.pem"
     )
     assert configFile["database"]["migrate"] == ["alembic upgrade head"]
-    assert configFile["database"]["db_engine_kwargs"] == {
-        "key": "value",
-        "pool_timeout": 30,
-        "max_overflow": 0,
-        "pool_size": 20,
-        "pool_pre_ping": True,
-        "connect_args": {"connect_timeout": 1, "application_name": "dbos_transact"},
-    }
     assert configFile["database"]["sys_db_engine_kwargs"] == {
         "key": "value",
         "pool_timeout": 30,
@@ -239,14 +231,6 @@ def test_process_config_system_database():
     configFile = process_config(data=config)
     assert configFile["name"] == "some-app"
     assert configFile["system_database_url"] == config["system_database_url"]
-    assert configFile["database"]["db_engine_kwargs"] == {
-        "key": "value",
-        "pool_timeout": 30,
-        "max_overflow": 0,
-        "pool_size": 20,
-        "pool_pre_ping": True,
-        "connect_args": {"connect_timeout": 1, "application_name": "dbos_transact"},
-    }
     assert configFile["database"]["sys_db_engine_kwargs"] == {
         "key": "value",
         "pool_timeout": 30,
@@ -286,7 +270,6 @@ def test_process_config_load_defaults():
     processed_config = process_config(data=config)
     assert processed_config["name"] == "some-app"
     assert processed_config["system_database_url"] == f"sqlite:///some_app.sqlite"
-    assert processed_config["database"]["db_engine_kwargs"] is not None
     assert processed_config["database"]["sys_db_engine_kwargs"] is not None
     assert processed_config["telemetry"]["logs"]["logLevel"] == "INFO"
     assert processed_config["runtimeConfig"]["run_admin_server"] == False
@@ -300,7 +283,6 @@ def test_process_config_load_default_with_None_system_database_url():
     processed_config = process_config(data=config)
     assert processed_config["name"] == "some-app"
     assert processed_config["system_database_url"] == f"sqlite:///some_app.sqlite"
-    assert processed_config["database"]["db_engine_kwargs"] is not None
     assert processed_config["database"]["sys_db_engine_kwargs"] is not None
     assert processed_config["telemetry"]["logs"]["logLevel"] == "INFO"
     assert processed_config["runtimeConfig"]["run_admin_server"] == False
@@ -314,7 +296,6 @@ def test_process_config_load_default_with_empty_system_database_url():
     processed_config = process_config(data=config)
     assert processed_config["name"] == "some-app"
     assert processed_config["system_database_url"] == f"sqlite:///some_app.sqlite"
-    assert processed_config["database"]["db_engine_kwargs"] is not None
     assert processed_config["database"]["sys_db_engine_kwargs"] is not None
     assert processed_config["telemetry"]["logs"]["logLevel"] == "INFO"
     assert processed_config["runtimeConfig"]["run_admin_server"] == False
@@ -358,13 +339,6 @@ def test_configure_db_engine_parameters_defaults():
 
     configure_db_engine_parameters(data)
 
-    assert data["db_engine_kwargs"] == {
-        "pool_timeout": 30,
-        "max_overflow": 0,
-        "pool_size": 20,
-        "pool_pre_ping": True,
-        "connect_args": {"connect_timeout": 10, "application_name": "dbos_transact"},
-    }
     assert data["sys_db_engine_kwargs"] == {
         "pool_timeout": 30,
         "max_overflow": 0,
@@ -380,13 +354,6 @@ def test_configure_db_engine_parameters_custom_sys_db_pool_sizes():
 
     configure_db_engine_parameters(data)
 
-    assert data["db_engine_kwargs"] == {
-        "pool_timeout": 30,
-        "max_overflow": 0,
-        "pool_size": 20,
-        "pool_pre_ping": True,
-        "connect_args": {"connect_timeout": 10, "application_name": "dbos_transact"},
-    }
     assert data["sys_db_engine_kwargs"] == {
         "pool_timeout": 30,
         "max_overflow": 0,
@@ -417,18 +384,6 @@ def test_configure_db_engine_parameters_user_kwargs_override():
     configure_db_engine_parameters(data)
 
     # User kwargs should override defaults and include custom params
-    assert data["db_engine_kwargs"] == {
-        "pool_timeout": 60,
-        "max_overflow": 10,
-        "pool_pre_ping": True,
-        "custom_param": "value",
-        "pool_size": 50,
-        "connect_args": {
-            "connect_timeout": 30,
-            "key": "value",
-            "application_name": "dbos_transact",
-        },
-    }
 
     # System engine kwargs should use system pool size but same user overrides
     assert data["sys_db_engine_kwargs"] == {
@@ -459,14 +414,6 @@ def test_configure_db_engine_parameters_user_kwargs_and_db_url_connect_timeout()
     configure_db_engine_parameters(data, connect_timeout=22)
 
     # User kwargs should override defaults and include custom params
-    assert data["db_engine_kwargs"] == {
-        "pool_timeout": 60,
-        "max_overflow": 0,
-        "pool_pre_ping": True,
-        "custom_param": "value",
-        "pool_size": 50,
-        "connect_args": {"connect_timeout": 22, "application_name": "dbos_transact"},
-    }
 
     # System engine kwargs should use system pool size but same user overrides
     assert data["sys_db_engine_kwargs"] == {
@@ -494,14 +441,6 @@ def test_configure_db_engine_parameters_user_kwargs_plus_db_url_connect_timeout(
     configure_db_engine_parameters(data, connect_timeout=22)
 
     # User kwargs should override defaults and include custom params
-    assert data["db_engine_kwargs"] == {
-        "pool_timeout": 60,
-        "max_overflow": 0,
-        "pool_pre_ping": True,
-        "custom_param": "value",
-        "pool_size": 50,
-        "connect_args": {"connect_timeout": 1},
-    }
 
     # System engine kwargs should use system pool size but same user overrides
     assert data["sys_db_engine_kwargs"] == {
@@ -528,14 +467,6 @@ def test_configure_db_engine_parameters_user_kwargs_mixed_params():
     configure_db_engine_parameters(data)
 
     # User kwargs should override defaults and include custom params
-    assert data["db_engine_kwargs"] == {
-        "pool_timeout": 60,
-        "max_overflow": 0,
-        "pool_pre_ping": True,
-        "custom_param": "value",
-        "pool_size": 50,
-        "connect_args": {"connect_timeout": 10, "application_name": "dbos_transact"},
-    }
 
     # System engine kwargs should use system pool size but same user overrides
     assert data["sys_db_engine_kwargs"] == {
@@ -554,13 +485,6 @@ def test_configure_db_engine_parameters_empty_user_kwargs():
 
     configure_db_engine_parameters(data)
 
-    assert data["db_engine_kwargs"] == {
-        "pool_timeout": 30,
-        "max_overflow": 0,
-        "pool_size": 20,
-        "pool_pre_ping": True,
-        "connect_args": {"connect_timeout": 10, "application_name": "dbos_transact"},
-    }
     assert data["sys_db_engine_kwargs"] == {
         "pool_timeout": 30,
         "max_overflow": 0,

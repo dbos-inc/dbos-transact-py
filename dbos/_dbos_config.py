@@ -1,7 +1,6 @@
 import math
 import os
 import re
-from importlib import resources
 from typing import Any, Dict, List, Literal, Optional, TypedDict, cast
 
 import sqlalchemy as sa
@@ -479,7 +478,7 @@ def configure_db_engine_parameters(
     data: DatabaseConfig, connect_timeout: Optional[int] = None
 ) -> None:
     """
-    Configure SQLAlchemy engine parameters for both user and system databases.
+    Configure SQLAlchemy engine parameters for the system database.
 
     If provided, sys_db_pool_size will take precedence over user_kwargs for the system db engine.
 
@@ -487,8 +486,7 @@ def configure_db_engine_parameters(
         data: Configuration dictionary containing database settings
     """
 
-    # Configure user database engine parameters
-    default_engine_kwargs: dict[str, Any] = {
+    engine_kwargs: dict[str, Any] = {
         "connect_args": {"application_name": "dbos_transact"},
         "pool_timeout": 30,
         "max_overflow": 0,
@@ -498,31 +496,29 @@ def configure_db_engine_parameters(
     # If user-provided kwargs are present, use them instead
     custom_engine_kwargs = data.get("db_engine_kwargs")
     if custom_engine_kwargs is not None:
-        default_engine_kwargs.update(custom_engine_kwargs)
+        engine_kwargs.update(custom_engine_kwargs)
 
     # If user-provided kwargs do not contain connect_timeout, check if their URL did (this function connect_timeout parameter).
     # Else default to 10
-    if "connect_args" not in default_engine_kwargs:
-        default_engine_kwargs["connect_args"] = {}
-    if "connect_timeout" not in default_engine_kwargs["connect_args"]:
-        default_engine_kwargs["connect_args"]["connect_timeout"] = (
+    if "connect_args" not in engine_kwargs:
+        engine_kwargs["connect_args"] = {}
+    if "connect_timeout" not in engine_kwargs["connect_args"]:
+        engine_kwargs["connect_args"]["connect_timeout"] = (
             connect_timeout if connect_timeout else 10
         )
 
     # If NullPool is specified, remove pool parameters
     if custom_engine_kwargs and custom_engine_kwargs.get("poolclass") == sa.NullPool:
-        del default_engine_kwargs["pool_timeout"]
-        del default_engine_kwargs["max_overflow"]
-        del default_engine_kwargs["pool_size"]
-        del default_engine_kwargs["pool_pre_ping"]
+        del engine_kwargs["pool_timeout"]
+        del engine_kwargs["max_overflow"]
+        del engine_kwargs["pool_size"]
+        del engine_kwargs["pool_pre_ping"]
 
-    # Configure system database engine parameters. User-provided sys_db_pool_size takes precedence
-    system_engine_kwargs = default_engine_kwargs.copy()
+    # User-provided sys_db_pool_size takes precedence
     if data.get("sys_db_pool_size") is not None:
-        system_engine_kwargs["pool_size"] = data["sys_db_pool_size"]
+        engine_kwargs["pool_size"] = data["sys_db_pool_size"]
 
-    data["db_engine_kwargs"] = default_engine_kwargs
-    data["sys_db_engine_kwargs"] = system_engine_kwargs
+    data["sys_db_engine_kwargs"] = engine_kwargs
 
 
 def is_valid_database_url(database_url: str) -> bool:

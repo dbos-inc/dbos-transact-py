@@ -89,7 +89,6 @@ from ._registrations import (
     get_or_create_func_info,
     set_dbos_func_name,
     set_func_info,
-    set_temp_workflow_type,
 )
 from ._roles import check_required_roles
 from ._serialization import (
@@ -2545,7 +2544,6 @@ def decorate_step(
         wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + step_name)
         set_dbos_func_name(wrapped_wf, "<temp>." + step_name)
-        set_temp_workflow_type(temp_wf, "step")
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf, "step")
         wrapper.__orig_func = temp_wf  # type: ignore
         set_func_info(wrapped_wf, get_or_create_func_info(func))

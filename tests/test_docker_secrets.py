@@ -108,19 +108,15 @@ system_database_url: postgresql://postgres:${DOCKER_SECRET:db_password}@localhos
             "system_database_url": "postgresql://postgres:secret_password@localhost:5432/test_db",
         }
 
-        # Mock the schema validation to always pass
+        # Mock reading the config file
         with (
             patch("builtins.open", mock_file),
-            patch("dbos._dbos_config.resources.files") as mock_resources,
             patch("os.path.exists") as mock_exists,
             patch("yaml.safe_load") as mock_yaml_load,
         ):
 
             # Set up the mocks
             mock_exists.return_value = True
-            mock_resources.return_value.joinpath.return_value.open.return_value.__enter__.return_value.read.return_value = (
-                "{}"
-            )
             mock_yaml_load.return_value = mock_config_dict
 
             # Call the load_config function
@@ -158,19 +154,15 @@ runtimeConfig:
             },
         }
 
-        # Mock the schema validation to always pass
+        # Mock reading the config file
         with (
             patch("builtins.open", mock_file),
-            patch("dbos._dbos_config.resources.files") as mock_resources,
             patch("os.path.exists") as mock_exists,
             patch("yaml.safe_load") as mock_yaml_load,
         ):
 
             # Set up the mocks
             mock_exists.return_value = True
-            mock_resources.return_value.joinpath.return_value.open.return_value.__enter__.return_value.read.return_value = (
-                "{}"
-            )
             mock_yaml_load.return_value = mock_config_dict
 
             # Call the load_config function
@@ -199,19 +191,15 @@ system_database_url: postgresql://${DOCKER_SECRET:db_user}:${DOCKER_SECRET:db_pa
             "system_database_url": "postgresql://user:pass@host:5432/db",
         }
 
-        # Mock the schema validation to always pass
+        # Mock reading the config file
         with (
             patch("builtins.open", mock_file),
-            patch("dbos._dbos_config.resources.files") as mock_resources,
             patch("os.path.exists") as mock_exists,
             patch("yaml.safe_load") as mock_yaml_load,
         ):
 
             # Set up the mocks
             mock_exists.return_value = True
-            mock_resources.return_value.joinpath.return_value.open.return_value.__enter__.return_value.read.return_value = (
-                "{}"
-            )
             mock_yaml_load.return_value = mock_config_dict
 
             def mock_secret_open(*args: Any, **kwargs: Any) -> Any:
@@ -257,17 +245,13 @@ system_database_url: postgresql://postgres:plain_password@localhost:5432/test_db
             "system_database_url": "postgresql://postgres:plain_password@localhost:5432/test_db",
         }
 
-        # Mock the schema validation to always pass
+        # Mock reading the config file
         with (
             patch("builtins.open", mock_file),
-            patch("dbos._dbos_config.resources.files") as mock_resources,
             patch("yaml.safe_load") as mock_yaml_load,
         ):
 
             # Set up the mocks
-            mock_resources.return_value.joinpath.return_value.open.return_value.__enter__.return_value.read.return_value = (
-                "{}"
-            )
             mock_yaml_load.return_value = mock_config_dict
 
             # Call the load_config function
@@ -295,10 +279,9 @@ system_database_url: postgresql://${DB_USER}:${DOCKER_SECRET:db_password}@${DB_H
             "system_database_url": "postgresql://postgres:secret_password@localhost:5432/test_db",
         }
 
-        # Mock the schema validation to always pass
+        # Mock reading the config file
         with (
             patch("builtins.open", mock_file),
-            patch("dbos._dbos_config.resources.files") as mock_resources,
             patch("os.path.exists") as mock_exists,
             patch(
                 "builtins.open", mock_open(read_data="secret_password"), create=True
@@ -317,9 +300,6 @@ system_database_url: postgresql://${DB_USER}:${DOCKER_SECRET:db_password}@${DB_H
 
             # Set up the mocks
             mock_exists.return_value = True
-            mock_resources.return_value.joinpath.return_value.open.return_value.__enter__.return_value.read.return_value = (
-                "{}"
-            )
             mock_yaml_load.return_value = mock_config_dict
 
             # Call the load_config function

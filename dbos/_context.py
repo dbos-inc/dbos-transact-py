@@ -41,10 +41,9 @@ class OperationType(Enum):
     HANDLER = "handler"
     WORKFLOW = "workflow"
     STEP = "step"
-    PROCEDURE = "procedure"
 
 
-OperationTypes = Literal["handler", "workflow", "step", "procedure"]
+OperationTypes = Literal["handler", "workflow", "step"]
 
 MaxPriority = 2**31 - 1  # 2,147,483,647
 MinPriority = 1

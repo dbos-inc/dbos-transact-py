@@ -11,7 +11,6 @@ from typing import (
     Generic,
     List,
     Optional,
-    Tuple,
     TypeVar,
     Union,
 )

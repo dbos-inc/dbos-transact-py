@@ -16,19 +16,6 @@ def run_dbos_database_migrations(
     application_role: Optional[str] = None,
 ) -> None:
     # First, run DBOS migrations on the system database
-    migrate_dbos_databases(
-        system_database_url=system_database_url,
-        schema=schema,
-    )
-
-    # Then, assign permissions on the DBOS schema to the application role, if any
-    if application_role:
-        grant_dbos_schema_permissions(
-            database_url=system_database_url, role_name=application_role, schema=schema
-        )
-
-
-def migrate_dbos_databases(system_database_url: str, schema: str) -> None:
     sys_db = None
     try:
         sys_db = SystemDatabase.create(
@@ -50,6 +37,12 @@ def migrate_dbos_databases(system_database_url: str, schema: str) -> None:
     finally:
         if sys_db:
             sys_db.destroy()
+
+    # Then, assign permissions on the DBOS schema to the application role, if any
+    if application_role:
+        grant_dbos_schema_permissions(
+            database_url=system_database_url, role_name=application_role, schema=schema
+        )
 
 
 def get_dbos_schema_permissions_sql(schema: str, role_name: str) -> List[str]:
