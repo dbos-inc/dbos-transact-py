@@ -14,9 +14,7 @@ def create_dbos_hello_table() -> None:
     database_url = os.environ.get("DBOS_DATABASE_URL", "postgresql+psycopg://postgres:dbos@localhost:5432/${default_db_name}?connect_timeout=5")
     url = make_url(database_url)
 
-    # SQLite creates its file on connect. Postgres does not, so create the database
-    # first -- best-effort, since a role that cannot reach the "postgres" maintenance
-    # database may still own an application database that already exists.
+    # Create the application database if it does not already exist
     if not database_url.startswith("sqlite"):
         try:
             postgres_engine = create_engine(url.set(database="postgres"), isolation_level="AUTOCOMMIT")

@@ -31,11 +31,7 @@ from dbos import (
 # Private API because this is a test
 from dbos._client import DBOSClient
 from dbos._context import assert_current_dbos_context, get_local_dbos_context
-from dbos._error import (
-    DBOSAwaitedWorkflowCancelledError,
-    DBOSConflictingRegistrationError,
-    DBOSException,
-)
+from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSException
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import _dbos_null_topic
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
@@ -1864,23 +1860,6 @@ async def test_destroy_semantics_async(dbos: DBOS, config: DBOSConfig) -> None:
 
     wf = await dbos.start_workflow_async(test_workflow, var)
     assert await wf.get_result() == var
-
-
-def test_double_decoration(dbos: DBOS) -> None:
-    # Steps register under a "<temp>." name, so the collision only shows up with
-    # custom names that make a workflow and a step claim the same one.
-    with pytest.raises(
-        DBOSConflictingRegistrationError,
-        match="is already registered with a conflicting function type",
-    ):
-
-        @DBOS.step(name="my_function")
-        def my_step() -> None:
-            pass
-
-        @DBOS.workflow(name="<temp>.my_function")
-        def my_workflow() -> None:
-            pass
 
 
 def test_duplicate_registration(

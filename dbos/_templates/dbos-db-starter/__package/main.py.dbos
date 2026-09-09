@@ -15,9 +15,6 @@ from dbos import DBOS, DBOSConfig, SQLAlchemyDatasource
 
 from .schema import dbos_hello
 
-# This app's own tables live in DBOS_DATABASE_URL. DBOS keeps its workflow state
-# somewhere separate, DBOS_SYSTEM_DATABASE_URL. Leaving that unset defaults it to a
-# local SQLite file -- the same one `dbos migrate` creates, so the two always agree.
 database_url = os.environ.get("DBOS_DATABASE_URL", "postgresql+psycopg://postgres:dbos@localhost:5432/${default_db_name}?connect_timeout=5")
 
 app = FastAPI()
@@ -33,10 +30,10 @@ db = SQLAlchemyDatasource.create(database_url)
 # many times visitors have been greeted and store
 # the count in the database.
 
-# We implement the database operations using SQLAlchemy and serve them from a
-# FastAPI endpoint. The endpoint is a @DBOS.workflow, so each request is durable
-# and shows up in `dbos workflow list`. The write itself is a @db.transaction, so
-# it runs against our datasource exactly once, even if the workflow is retried.
+# We implement the database operations using SQLAlchemy
+# and serve the function from a FastAPI endpoint.
+# We annotate it with @db.transaction to run it in a
+# transaction on our datasource, exactly once.
 
 
 @app.get("/greeting/{name}")

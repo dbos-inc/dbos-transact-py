@@ -319,10 +319,6 @@ def migrate(
 
     system_database_url = _get_db_url(system_database_url=system_database_url)
 
-    # Read the custom migration commands before touching the database. A config this
-    # build rejects has to fail before the system database is migrated rather than
-    # after, so a non-zero exit never leaves a fully migrated database behind. With
-    # --sys-db-url the resolver never reads the config, so this is the only read.
     migrate_commands: List[str] = []
     if os.path.exists("dbos-config.yaml"):
         try:
@@ -382,9 +378,11 @@ def reset(
     try:
         system_database_url = _get_db_url(system_database_url=system_database_url)
         SystemDatabase.reset_system_database(system_database_url)
+    except (click.ClickException, click.exceptions.Exit):
+        raise
     except Exception as e:
-        click.echo(f"Error resetting system database: {str(e)}")
-        return
+        click.echo(f"Error resetting system database: {str(e)}", err=True)
+        raise click.exceptions.Exit(code=1)
 
 
 @app.command(

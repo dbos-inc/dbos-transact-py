@@ -170,8 +170,6 @@ def test_db_starter_migrate_and_app_agree_on_system_database(
         )
         migrate_target = _resolve_db_url(system_database_url=None)
 
-    # What myapp/main.py builds, mirrored here so the template's config is asserted
-    # rather than imported (importing it would connect a datasource).
     app_target = process_config(
         data=translate_dbos_config_to_config_file(
             {

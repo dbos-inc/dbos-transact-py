@@ -169,9 +169,6 @@ REMOVED_DATABASE_URL_KEYS = ("database_url", "application_database_url")
 
 def _reject_removed_database_url_keys(source: Any, origin: str) -> None:
     for key in REMOVED_DATABASE_URL_KEYS:
-        # Only a real value is rejected: a key left null (as the 2.x template's
-        # unset ${DBOS_DATABASE_URL} produced) already meant "no application
-        # database" and resolved exactly as omitting it does now.
         if not source.get(key):
             continue
         raise DBOSInitializationError(
