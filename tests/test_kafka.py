@@ -10,6 +10,7 @@ from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 from dbos import DBOS, DBOSConfig, KafkaMessage
 from dbos._kafka import _describe_kafka_error, _make_error_cb
 from dbos._logger import dbos_logger
+from tests.conftest import retry_until_success
 
 # These tests require local Kafka to run.
 # Without it, they're automatically skipped.
@@ -442,13 +443,12 @@ def test_kafka_listen_queues_still_polls_consumer(
     assert seen == set(range(NUM_EVENTS))
 
 
-def test_kafka_listen_queues_polls_db_backed_consumer_queue(
+def test_kafka_listen_queues_excludes_custom_consumer_queue(
     dbos: DBOS, config: DBOSConfig
 ) -> None:
-    # Regression (M1): a consumer's custom queue must be polled even when
-    # listen_queues names only unrelated queues. Unlike the internal Kafka queue,
-    # a custom one is not in the internal registry, so the poller has to resolve it
-    # from the DB, else its messages sit ENQUEUED forever.
+    # A consumer's custom queue is a user queue, so listen_queues governs it: this
+    # process consumes the messages and enqueues them, but dequeues nothing. Only
+    # the internal Kafka queues, which a user cannot name, override the filter.
     server = "localhost:9092"
     topic = f"dbos-kafka-dbq-{random.randrange(1_000_000_000)}"
 
@@ -463,11 +463,9 @@ def test_kafka_listen_queues_polls_db_backed_consumer_queue(
     DBOS.destroy(destroy_registry=True)
     DBOS(config=config)
 
-    event = threading.Event()
     lock = threading.Lock()
     seen: set[int] = set()
 
-    # The queue is named rather than internal, so the poller can only reach it by resolving it from the DB.
     @DBOS.kafka_consumer(
         {
             "bootstrap.servers": server,
@@ -479,18 +477,27 @@ def test_kafka_listen_queues_polls_db_backed_consumer_queue(
     )
     @DBOS.workflow()
     def db_queue_workflow(msg: KafkaMessage) -> None:
-        assert msg.value is not None
         with lock:
             seen.add(int(msg.value.decode().split()[-1]))  # type: ignore
-            if len(seen) == NUM_EVENTS:
-                event.set()
 
     # Listen only to an unrelated queue — deliberately NOT the consumer's queue.
     DBOS.listen_queues(["dbos-test-unrelated-queue"])
     DBOS.launch()
 
-    assert event.wait(timeout=30)
-    assert seen == set(range(NUM_EVENTS))
+    # The consumer runs and enqueues every message, which is what makes the
+    # absence of execution below attributable to the filter rather than to Kafka.
+    def all_enqueued() -> list[str]:
+        statuses = [w.status for w in DBOS.list_workflows(queue_name=queue_name)]
+        assert len(statuses) == NUM_EVENTS, statuses
+        return statuses
+
+    retry_until_success(all_enqueued, interval=1, max_attempts=30)
+    # Nothing dequeues them. Asserting an absence needs real time to pass: the
+    # queue manager rechecks every second and a worker polls every second, so
+    # several cycles go by. Were the filter ignored, all three would have run.
+    time.sleep(3)
+    assert all_enqueued() == ["ENQUEUED"] * NUM_EVENTS
+    assert seen == set()
 
 
 def test_kafka_throughput(
@@ -2076,7 +2083,7 @@ def test_kafka_custom_queue(dbos: DBOS) -> None:
             if len(processed) == num_messages:
                 event.set()
 
-    # The consumer's custom queue is force-polled even under a listen_queues filter.
+    # The consumer's custom queue is recorded as one this process feeds.
     assert queue_name in dbos._registry.poller_queue_names
     assert event.wait(timeout=60)
     assert processed == set(range(num_messages))

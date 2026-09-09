@@ -998,20 +998,9 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
 
         # Always listen to the internal queue, regardless of any listen_queues filter
         current_queues[INTERNAL_QUEUE_NAME] = dbos._registry.get_internal_queue()
-        # Always poll this process's poller-fed queues (e.g. Kafka), else their workflows sit ENQUEUED forever under a listen_queues filter; snapshot since a late poller may mutate the set.
-        for name in list(dbos._registry.poller_queue_names):
-            if name in current_queues:
-                continue
-            q = dbos._registry.internal_queue_map.get(name)
-            if q is None:
-                # A consumer's custom queue is database-backed; resolve it from the DB.
-                try:
-                    q = dbos._sys_db.get_queue(name)
-                except Exception as e:
-                    dbos.logger.warning(f"Exception resolving poller queue {name}: {e}")
-                    continue
-            if q is not None:
-                current_queues[name] = q
+        # Always poll the internal queues this process's pollers (e.g. Kafka) feed, else their workflows sit ENQUEUED forever under a listen_queues filter.
+        for queue in dbos._registry.internal_poller_queues():
+            current_queues[queue.name] = queue
 
         # Transition any DELAYED workflows whose delay has expired to ENQUEUED.
         try:
@@ -1098,8 +1087,10 @@ def log_queues(dbos: "DBOS", listening_queues: Optional[list[str]]) -> None:
         dbos.logger.warning(f"Exception listing queues: {e}")
 
     if listening_queues is not None:
-        # Poller-fed queues (e.g. Kafka) are always listened to, so reflect them here.
-        listening_set = set(listening_queues) | dbos._registry.poller_queue_names
+        # Poller-fed internal queues are always listened to, so reflect them here.
+        listening_set = set(listening_queues) | {
+            q.name for q in dbos._registry.internal_poller_queues()
+        }
         queues = {n: q for n, q in queues.items() if n in listening_set}
 
     queues.pop(INTERNAL_QUEUE_NAME, None)
