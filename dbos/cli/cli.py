@@ -21,6 +21,7 @@ from dbos.cli.migration import (
 from .._client import DBOSClient
 from .._dbos_config import _app_name_to_db_name, _is_valid_app_name, load_config
 from .._docker_pg_helper import start_docker_pg, stop_docker_pg
+from .._error import DBOSInitializationError
 from .._logger import dbos_logger, init_logger
 from .._sys_db import DEFAULT_RENAME_BATCH_SIZE, SystemDatabase
 from .._utils import GlobalParams
@@ -73,6 +74,8 @@ def _resolve_db_url(*, system_database_url: Optional[str]) -> Optional[str]:
                 return f"sqlite:///{_sys_db_name}.sqlite"
         except (FileNotFoundError, OSError):
             return None
+        except DBOSInitializationError as e:
+            raise click.ClickException(str(e))
 
 
 def _get_db_url(*, system_database_url: Optional[str]) -> str:

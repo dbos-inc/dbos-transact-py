@@ -139,6 +139,52 @@ def test_init_config(skip_with_sqlite: None) -> None:
         assert actual_yaml == expected_yaml
 
 
+@pytest.mark.parametrize("set_system_url", [False, True])
+def test_db_starter_migrate_and_app_agree_on_system_database(
+    monkeypatch: pytest.MonkeyPatch, set_system_url: bool
+) -> None:
+    """`dbos migrate` reads dbos-config.yaml while the running app builds its own
+    DBOSConfig, so the two must resolve the same system database whether or not
+    DBOS_SYSTEM_DATABASE_URL is set. They diverged once: migrate fell back to
+    SQLite while the app used a hardcoded localhost Postgres URL."""
+    from dbos._dbos_config import process_config, translate_dbos_config_to_config_file
+    from dbos.cli._template_init import copy_template, get_templates_directory
+    from dbos.cli.cli import _resolve_db_url
+
+    monkeypatch.setenv(
+        "DBOS_DATABASE_URL", "postgresql+psycopg://u:pw@db.example.com:5432/myapp"
+    )
+    system_url = "postgresql+psycopg://u:pw@db.example.com:5432/myapp_dbos_sys"
+    if set_system_url:
+        monkeypatch.setenv("DBOS_SYSTEM_DATABASE_URL", system_url)
+    else:
+        monkeypatch.delenv("DBOS_SYSTEM_DATABASE_URL", raising=False)
+
+    with tempfile.TemporaryDirectory() as temp_path:
+        monkeypatch.chdir(temp_path)
+        copy_template(
+            os.path.join(get_templates_directory(), "dbos-db-starter"),
+            "myapp",
+            config_mode=False,
+        )
+        migrate_target = _resolve_db_url(system_database_url=None)
+
+    # What myapp/main.py builds, mirrored here so the template's config is asserted
+    # rather than imported (importing it would connect a datasource).
+    app_target = process_config(
+        data=translate_dbos_config_to_config_file(
+            {
+                "name": "myapp",
+                "system_database_url": os.environ.get("DBOS_SYSTEM_DATABASE_URL"),
+            }
+        )
+    )["system_database_url"]
+
+    assert migrate_target == app_target
+    if set_system_url:
+        assert migrate_target == system_url
+
+
 def test_reset(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
     app_name = "reset-app"
     db_url = db_engine.url.set(database="reset_app").render_as_string(

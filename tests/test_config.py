@@ -800,6 +800,27 @@ def test_load_config_rejects_removed_application_database_url(mocker, key):
     assert f"sets {key}" in str(exc_info.value)
 
 
+@pytest.mark.parametrize("key", ["database_url", "application_database_url"])
+@pytest.mark.parametrize("value", [None, ""])
+def test_removed_application_database_url_ignored_when_empty(mocker, key, value):
+    """A key left null meant "no application database" in 2.x and resolved exactly
+    as omitting it does now, so it must not be rejected. The 2.x starter template
+    produced one whenever ${DBOS_DATABASE_URL} was unset."""
+    translated = translate_dbos_config_to_config_file({"name": "some-app", key: value})
+    assert process_config(data=translated)["system_database_url"] == (
+        "sqlite:///some_app.sqlite"
+    )
+
+    mock_config = f"""
+    name: "some-app"
+    {key}:{'' if value is None else ' ""'}
+    """
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
+    )
+    assert load_config(mock_filename)["name"] == "some-app"
+
+
 ####################
 # CONFIG OVERWRITE
 ####################
