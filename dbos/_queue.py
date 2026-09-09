@@ -998,7 +998,7 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
 
         # Always listen to the internal queue, regardless of any listen_queues filter
         current_queues[INTERNAL_QUEUE_NAME] = dbos._registry.get_internal_queue()
-        # Always poll the internal queues this process's pollers (e.g. Kafka) feed, else their workflows sit ENQUEUED forever under a listen_queues filter.
+        # Always poll the internal queues used by this process's pollers (e.g. Kafka)
         for queue in dbos._registry.internal_poller_queues():
             current_queues[queue.name] = queue
 
