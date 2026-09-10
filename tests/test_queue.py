@@ -33,6 +33,7 @@ from dbos import (
     SetWorkflowTimeout,
     WorkflowHandle,
 )
+from dbos._conductor.protocol import QueueOutput
 from dbos._context import assert_current_dbos_context
 from dbos._dbos import WorkflowHandleAsync
 from dbos._error import (
@@ -53,6 +54,19 @@ from tests.conftest import (
     set_workflow_status,
     using_sqlite,
 )
+
+
+def legacy_queue_columns(dbos: DBOS, name: str) -> tuple[bool, bool]:
+    """Read (priority_enabled, partition_queue) straight from the row. DBOS no longer
+    reads these columns, but other SDKs sharing the system database do."""
+    with dbos._sys_db.engine.begin() as c:
+        row = c.execute(
+            sa.select(
+                SystemSchema.queues.c.priority_enabled,
+                SystemSchema.queues.c.partition_queue,
+            ).where(SystemSchema.queues.c.name == name)
+        ).one()
+    return bool(row[0]), bool(row[1])
 
 
 def unpolled_queue(name: str, **kwargs: Any) -> Queue:
@@ -159,6 +173,13 @@ def test_queue_crud(dbos: DBOS) -> None:
         assert q.polling_interval_sec == 2.5
         assert q.database_backed_queue is True
 
+    # Priority is always on, and the partition_* limits make the queue partitioned.
+    assert legacy_queue_columns(dbos, queue_name) == (True, True)
+    # Conductor is told the same two things.
+    wire = QueueOutput.from_queue(retrieved)
+    assert wire.priority_enabled is True
+    assert wire.partition_queue is True
+
     # on_conflict="never_update" leaves the existing row alone.
     DBOS.register_queue(queue_name, concurrency=99, on_conflict="never_update")
     retrieved = DBOS.retrieve_queue(queue_name)
@@ -178,6 +199,9 @@ def test_queue_crud(dbos: DBOS) -> None:
     assert retrieved.partition_concurrency is None
     assert retrieved.partition_worker_concurrency is None
     assert retrieved.partition_limiter is None
+    # Clearing them clears the derived column, and priority stays on.
+    assert legacy_queue_columns(dbos, queue_name) == (True, False)
+    assert QueueOutput.from_queue(retrieved).partition_queue is False
 
     # on_conflict="update_if_latest_version" updates when the running version
     # is the latest registered version.
@@ -210,6 +234,7 @@ def test_queue_dynamic_config(dbos: DBOS) -> None:
         worker_concurrency=2,
         polling_interval_sec=1.0,
     )
+    assert legacy_queue_columns(dbos, queue_name) == (True, False)
 
     # Setters write to the database; getters read from it.
     queue.set_global_concurrency(8)
@@ -230,6 +255,8 @@ def test_queue_dynamic_config(dbos: DBOS) -> None:
         assert q.partition_worker_concurrency == 2
         assert q.partition_limiter == {"limit": 4, "period": 3.0}
         assert q.polling_interval_sec == 0.5
+    # Setting a per-partition limit partitions the queue for the other SDKs too.
+    assert legacy_queue_columns(dbos, queue_name) == (True, True)
 
     # Setters validate. worker_concurrency cannot exceed concurrency.
     with pytest.raises(ValueError):
@@ -251,10 +278,13 @@ def test_queue_dynamic_config(dbos: DBOS) -> None:
     with pytest.raises(ValueError):
         queue.set_polling_interval_sec(0.0)
 
-    # Every per-partition limit can be cleared, un-partitioning the queue.
+    # Every per-partition limit can be cleared, un-partitioning the queue. The derived
+    # column tracks the limits, so it only clears with the last of them.
     queue.set_partition_concurrency(None)
     queue.set_partition_limiter(None)
+    assert legacy_queue_columns(dbos, queue_name) == (True, True)
     queue.set_partition_worker_concurrency(None)
+    assert legacy_queue_columns(dbos, queue_name) == (True, False)
     unpartitioned = DBOS.retrieve_queue(queue_name)
     assert unpartitioned is not None
     assert unpartitioned.partition_concurrency is None
