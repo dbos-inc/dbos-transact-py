@@ -487,7 +487,9 @@ def test_kafka_listen_queues_excludes_custom_consumer_queue(
     # The consumer runs and enqueues every message, which is what makes the
     # absence of execution below attributable to the filter rather than to Kafka.
     def all_enqueued() -> list[str]:
-        statuses = [w.status for w in DBOS.list_workflows(queue_name=queue_name)]
+        statuses: list[str] = [
+            w.status for w in DBOS.list_workflows(queue_name=queue_name)
+        ]
         assert len(statuses) == NUM_EVENTS, statuses
         return statuses
 
