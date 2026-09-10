@@ -28,6 +28,7 @@ _ONLINE_MIGRATIONS = {
     47,
     107,
     111,
+    115,
 }
 
 # From this index on, every SDK defines the same migration at the same index.
@@ -1305,6 +1306,17 @@ ALTER FUNCTION {quoted_schema}.enqueue_workflow(
     return migration
 
 
+def get_dbos_migration_hundredfourteen(quoted_schema: str) -> str:
+    # Dispatch bookkeeping for the removed in-memory event receivers; nothing reads it.
+    return f'DROP TABLE IF EXISTS {quoted_schema}."event_dispatch_kv"'
+
+
+def get_dbos_migration_hundredfifteen(quoted_schema: str, is_cockroach: bool) -> str:
+    # Duplicate of idx_workflow_topic, which covers the same columns in the same order.
+    c = _concurrently(is_cockroach)
+    return f'DROP INDEX {c} IF EXISTS {quoted_schema}."idx_notifications"'
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -1375,6 +1387,8 @@ def get_dbos_migrations(
         get_dbos_migration_hundredeleven(quoted_schema, is_cockroach),
         get_dbos_migration_hundredtwelve(quoted_schema),
         get_dbos_migration_hundredthirteen(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredfourteen(quoted_schema),
+        get_dbos_migration_hundredfifteen(quoted_schema, is_cockroach),
     ]
 
 
@@ -1792,6 +1806,10 @@ CREATE INDEX IF NOT EXISTS idx_operation_outputs_completed_at_function_name
     ON operation_outputs (completed_at_epoch_ms, function_name);
 """
 
+sqlite_migration_hundredfifteen = """
+DROP INDEX IF EXISTS "idx_notifications";
+"""
+
 sqlite_migrations = [
     *_pad_to_shared_base(_sqlite_history),
     sqlite_migration_hundred,
@@ -1810,4 +1828,7 @@ sqlite_migrations = [
     sqlite_migration_hundredtwelve,
     # Postgres migration 113 rewrites a stored function; SQLite has none.
     "",
+    # Postgres migration 114 drops event_dispatch_kv; SQLite never created it.
+    "",
+    sqlite_migration_hundredfifteen,
 ]
