@@ -178,6 +178,8 @@ def test_relaunch_replaces_the_application_identity(
     assert GlobalParams.app_name == APP_NAME
     config["name"] = OTHER_APP
     DBOS(config=config)
+    # Construction leaves the name alone; launch is the only writer.
+    assert GlobalParams.app_name == APP_NAME
     DBOS.launch()
     assert GlobalParams.app_name == OTHER_APP
 

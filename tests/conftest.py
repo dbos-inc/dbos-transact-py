@@ -186,6 +186,16 @@ def reset_global_params() -> None:
     GlobalParams.app_name = None
 
 
+@pytest.fixture(autouse=True)
+def clean_process_identity() -> Generator[None, Any, None]:
+    """Scrub the identity a test leaves behind.
+
+    Autouse, so it tears down after every other fixture. Destroy no longer resets
+    the identity, so a test that sets it directly would otherwise leak it onward."""
+    yield
+    reset_global_params()
+
+
 # Whether this session has dropped the shared databases yet.
 _databases_dropped = False
 

@@ -1879,7 +1879,9 @@ def test_destroy_preserves_the_process_identity(
     assert status["executor_id"] == executor_id
     assert status["app_version"] == app_version
     assert sys_db.get_pending_workflows(executor_id, app_version) != []
+    # Dispose the pool the claim above re-created, and drop the registry this test filled.
     sys_db.destroy()
+    DBOS.destroy(destroy_registry=True)
 
 
 @pytest.mark.asyncio
