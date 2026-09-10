@@ -55,7 +55,10 @@ def test_required_roles(dbos: DBOS) -> None:
         )
 
         ctx.authenticated_roles = ["a", "b", "c", "user"]
-        tfunc("bare-ctx")
+        wfid = str(uuid.uuid4())
+        with SetWorkflowID(wfid):
+            tfunc("bare-ctx")
+        assert DBOS.retrieve_workflow(wfid).get_status().assumed_role == "user"
 
 
 def test_required_roles_class(dbos: DBOS) -> None:

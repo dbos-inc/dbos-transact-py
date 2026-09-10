@@ -21,6 +21,11 @@ def test_roles_recovery(dbos: DBOS) -> None:
 
     assert handle.get_result() is None
 
+    assert handle.get_status().authenticated_user == "admin"
+    assert [w.workflow_id for w in DBOS.list_workflows(user="admin")] == [
+        handle.workflow_id
+    ]
+
     # Recover the workflow, verify roles are set right
     set_workflow_status(dbos._sys_db, handle.workflow_id, "PENDING")
     recovery_handles = DBOS._recover_pending_workflows()
@@ -199,7 +204,3 @@ async def test_roles_denied_async(dbos: DBOS) -> None:
     status = await DBOS.get_workflow_status_async(handle.workflow_id)
     assert status is not None
     assert status.status == WorkflowStatusString.ERROR.value
-
-
-# This does not test DBOS at all
-# (It's just a hard-earned example of how you can unit test your spans)

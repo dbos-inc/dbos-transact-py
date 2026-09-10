@@ -7,7 +7,7 @@ they're emitted under the OTel-style `dbos.*` namespace.
 
 import uuid
 
-from dbos import DBOS, DBOSConfig
+from dbos import DBOS, DBOSConfig, DBOSContextSetAuth
 from dbos._context import SetWorkflowID
 from dbos._tracer import _LEGACY_TO_SEMCONV, DBOSTracer
 from tests.conftest import TestOtelType
@@ -53,13 +53,15 @@ def test_legacy_attributes_default_emitted_on_span(
         pass
 
     exporter.clear()
-    w()
+    with DBOSContextSetAuth("user1", ["user"]):
+        w()
 
     spans = exporter.get_finished_spans()
     assert spans, "expected at least one span"
     attrs = spans[-1].attributes or {}
     assert "applicationVersion" in attrs
     assert "executorID" in attrs
+    assert attrs["authenticatedUser"] == "user1"
     assert "dbos.application.version" not in attrs
     assert "dbos.executor.id" not in attrs
     DBOS.destroy(destroy_registry=True)
@@ -84,7 +86,7 @@ def test_semconv_attributes_emitted_on_span(
 
     exporter.clear()
     wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
+    with SetWorkflowID(wfid), DBOSContextSetAuth("user1", ["user"]):
         w()
 
     spans = exporter.get_finished_spans()
@@ -94,7 +96,9 @@ def test_semconv_attributes_emitted_on_span(
     assert attrs["dbos.operation.workflow_id"] == wfid
     assert "dbos.application.version" in attrs
     assert "dbos.executor.id" in attrs
+    assert attrs["dbos.user.name"] == "user1"
     # Legacy names must not also appear when semconv is selected.
     assert "applicationVersion" not in attrs
     assert "executorID" not in attrs
+    assert "authenticatedUser" not in attrs
     DBOS.destroy(destroy_registry=True)
