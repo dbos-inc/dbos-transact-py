@@ -9,8 +9,6 @@ from typing import Optional
 
 import pytest
 import sqlalchemy as sa
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from inline_snapshot import snapshot
 from opentelemetry import context as otel_context
 from opentelemetry import trace
@@ -295,78 +293,6 @@ async def test_spans_async(
             ],
         )
     )
-
-
-def test_wf_fastapi(
-    config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
-) -> None:
-    exporter, log_processor, log_exporter = setup_in_memory_otlp_collector
-
-    DBOS.destroy(destroy_registry=True)
-    config["enable_otlp"] = True
-    app = FastAPI()
-    dbos = DBOS(fastapi=app, config=config)
-    DBOS.launch()
-
-    @app.get("/wf")
-    @DBOS.workflow()
-    def test_workflow_endpoint() -> str:
-        dbos.logger.info("This is a test_workflow_endpoint")
-        return "test"
-
-    log_processor.force_flush(timeout_millis=5000)
-    log_exporter.clear()  # Clear any logs generated during setup
-    exporter.clear()
-
-    client = TestClient(app)
-    response = client.get("/wf")
-    assert response.status_code == 200
-    assert response.text == '"test"'
-
-    expected_log_bodies = {"This is a test_workflow_endpoint"}
-
-    log_processor.force_flush(timeout_millis=5000)
-    logs = [
-        l
-        for l in log_exporter.get_finished_logs()
-        if l.log_record.body in expected_log_bodies
-    ]
-
-    assert len(logs) == 1
-    assert logs[0].log_record.attributes is not None
-    assert (
-        logs[0].log_record.attributes["applicationVersion"] == DBOS.application_version
-    )
-    assert logs[0].log_record.span_id is not None and logs[0].log_record.span_id > 0
-    assert logs[0].log_record.trace_id is not None and logs[0].log_record.trace_id > 0
-    assert logs[0].log_record.body == "This is a test_workflow_endpoint"
-    assert logs[0].log_record.attributes["traceId"] == format_trace_id(
-        logs[0].log_record.trace_id
-    )
-
-    spans = exporter.get_finished_spans()
-
-    assert len(spans) == 2
-
-    for span in spans:
-        assert span.attributes is not None
-        assert span.attributes["applicationVersion"] == DBOS.application_version
-        assert span.context is not None
-        assert span.context.span_id > 0
-        assert span.context.trace_id > 0
-
-    assert spans[0].name == test_workflow_endpoint.__qualname__
-    assert spans[1].name == "/wf"
-    assert spans[1].attributes is not None
-    assert spans[1].attributes["responseCode"] == 200
-
-    assert spans[0].parent.span_id == spans[1].context.span_id  # type: ignore
-    assert spans[1].parent == None
-
-    # Span ID and trace ID should match the log record
-    assert spans[0].context is not None
-    assert logs[0].log_record.span_id == spans[0].context.span_id
-    assert logs[0].log_record.trace_id == spans[0].context.trace_id
 
 
 def test_disable_otlp_no_spans(

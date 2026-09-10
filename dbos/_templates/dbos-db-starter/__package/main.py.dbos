@@ -22,7 +22,7 @@ dbos_config: DBOSConfig = {
     "name": "${project_name}",
     "system_database_url": os.environ.get("DBOS_SYSTEM_DATABASE_URL"),
 }
-DBOS(fastapi=app, config=dbos_config)
+DBOS(config=dbos_config)
 db = SQLAlchemyDatasource.create(database_url)
 
 # Next, let's write a function that greets visitors.

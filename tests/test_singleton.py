@@ -30,7 +30,7 @@ def test_dbos_singleton(
 
     from tests.more_classdefs import DBOSWFEvents, wfFunc
 
-    DBOS.launch()  # Usually framework (fastapi) does this via lifecycle event
+    DBOS.launch()
 
     # Basics
     with SetWorkflowID("wfid"):

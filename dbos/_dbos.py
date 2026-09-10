@@ -116,13 +116,11 @@ from ._sys_db import (
 from ._tracer import DBOSTracer, dbos_tracer
 
 if TYPE_CHECKING:
-    from fastapi import FastAPI
     from ._kafka import (
         KafkaConsumerRegistration,
         KafkaOrdering,
         _KafkaConsumerWorkflow,
     )
-    from flask import Flask
     from opentelemetry.trace import Span
 
 from typing import ParamSpec
@@ -403,8 +401,6 @@ class DBOS:
         cls: Type[DBOS],
         *,
         config: DBOSConfig,
-        fastapi: Optional["FastAPI"] = None,
-        flask: Optional["Flask"] = None,
         conductor_url: Optional[str] = None,
         conductor_key: Optional[str] = None,
     ) -> DBOS:
@@ -412,7 +408,7 @@ class DBOS:
         global _dbos_global_registry
         if _dbos_global_instance is None:
             _dbos_global_instance = super().__new__(cls)
-            _dbos_global_instance.__init__(fastapi=fastapi, config=config, flask=flask, conductor_url=conductor_url, conductor_key=conductor_key)  # type: ignore
+            _dbos_global_instance.__init__(config=config, conductor_url=conductor_url, conductor_key=conductor_key)  # type: ignore
         return _dbos_global_instance
 
     @classmethod
@@ -437,8 +433,6 @@ class DBOS:
         self,
         *,
         config: DBOSConfig,
-        fastapi: Optional["FastAPI"] = None,
-        flask: Optional["Flask"] = None,
         conductor_url: Optional[str] = None,
         conductor_key: Optional[str] = None,
     ) -> None:
@@ -457,8 +451,6 @@ class DBOS:
         self.background_thread_stop_events: List[threading.Event] = []
         # Stop pollers (event receivers) that can create new workflows (scheduler, Kafka)
         self.poller_stop_events: List[threading.Event] = []
-        self.fastapi: Optional["FastAPI"] = fastapi
-        self.flask: Optional["Flask"] = flask
         self._executor_field: Optional[ThreadPoolExecutor] = None
         self._background_threads: List[threading.Thread] = []
         self._timeout_tasks: set[asyncio.Task[None]] = set()
@@ -526,18 +518,6 @@ class DBOS:
         config_logger(self._config)
         dbos_tracer.config(self._config)
         dbos_logger.info(f"Initializing DBOS (v{GlobalParams.dbos_version})")
-
-        # If using FastAPI, set up middleware and lifecycle events
-        if self.fastapi is not None:
-            from ._fastapi import setup_fastapi_middleware
-
-            setup_fastapi_middleware(self.fastapi, _get_dbos_instance())
-
-        # If using Flask, set up middleware
-        if self.flask is not None:
-            from ._flask import setup_flask_middleware
-
-            setup_flask_middleware(self.flask)
 
         for handler in dbos_logger.handlers:
             handler.flush()

@@ -24,8 +24,6 @@ from urllib.parse import quote
 
 import pytest
 import sqlalchemy as sa
-from fastapi import FastAPI
-from flask import Flask
 from opentelemetry import trace
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.sdk import trace as tracesdk
@@ -329,41 +327,6 @@ def client(config: DBOSConfig, dbos: DBOS) -> Generator[DBOSClient, Any, None]:
     client = DBOSClient(system_database_url=config["system_database_url"])
     yield client
     client.destroy()
-
-
-@pytest.fixture()
-def dbos_fastapi(  # type: ignore
-    config: DBOSConfig, cleanup_test_databases: None, setup_in_memory_otlp_collector
-) -> Generator[Tuple[DBOS, FastAPI], Any, None]:
-    exporter, log_processor, log_exporter = setup_in_memory_otlp_collector
-    config["enable_otlp"] = True
-    DBOS.destroy(destroy_registry=True)
-    app = FastAPI()
-    dbos = DBOS(fastapi=app, config=config)
-
-    # This is for test convenience.
-    #    Usually fastapi itself does launch, but we are not completing the fastapi lifecycle
-    DBOS.launch()
-
-    yield dbos, app
-    DBOS.destroy(destroy_registry=True)
-
-
-@pytest.fixture()
-def dbos_flask(
-    config: DBOSConfig, cleanup_test_databases: None
-) -> Generator[Tuple[DBOS, Flask], Any, None]:
-    DBOS.destroy(destroy_registry=True)
-    app = Flask(__name__)
-
-    dbos = DBOS(flask=app, config=config)
-
-    # This is for test convenience.
-    #    Usually fastapi itself does launch, but we are not completing the fastapi lifecycle
-    DBOS.launch()
-
-    yield dbos, app
-    DBOS.destroy(destroy_registry=True)
 
 
 # Type for mypy
