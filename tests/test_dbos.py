@@ -34,12 +34,7 @@ from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSException
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import _dbos_null_topic
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
-from tests.conftest import (
-    reset_global_params,
-    retry_until_success,
-    set_workflow_status,
-    using_sqlite,
-)
+from tests.conftest import retry_until_success, set_workflow_status, using_sqlite
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -1853,7 +1848,6 @@ def test_destroy_preserves_the_process_identity(
     executor_id = "test-executor"
     config["executor_id"] = executor_id
     DBOS.destroy(destroy_registry=True)
-    reset_global_params()
     dbos = DBOS(config=config)
 
     @DBOS.workflow()
@@ -1976,7 +1970,6 @@ def test_app_version(
         return all(c in "0123456789abcdefABCDEF" for c in s)
 
     DBOS.destroy(destroy_registry=True)
-    reset_global_params()
     dbos = DBOS(config=config)
 
     @DBOS.workflow()
@@ -1998,9 +1991,10 @@ def test_app_version(
     created_versions = [version_one]
 
     DBOS.destroy(destroy_registry=True)
-    reset_global_params()
-    assert DBOS.application_version == ""
+    # Shutdown leaves the identity alone; constructing the next DBOS clears it.
+    assert DBOS.application_version == version_one
     dbos = DBOS(config=config)
+    assert DBOS.application_version == ""
 
     @DBOS.workflow()
     def workflow_one(x: int) -> int:
@@ -2016,7 +2010,6 @@ def test_app_version(
     assert DBOS.application_version == version_one
 
     DBOS.destroy(destroy_registry=True)
-    reset_global_params()
     dbos = DBOS(config=config)
 
     @DBOS.workflow()
@@ -2034,7 +2027,6 @@ def test_app_version(
     os.environ["DBOS__APPVERSION"] = version_three
 
     DBOS.destroy(destroy_registry=True)
-    reset_global_params()
     dbos = DBOS(config=config)
 
     @DBOS.workflow()
@@ -2052,7 +2044,6 @@ def test_app_version(
     executor_id = str(uuid.uuid4())
 
     DBOS.destroy(destroy_registry=True)
-    reset_global_params()
     config["application_version"] = version_four
     config["executor_id"] = executor_id
     DBOS(config=config)
@@ -2076,7 +2067,6 @@ def test_app_version(
     # Create another version by relaunching with a different app_version
     version_five = str(uuid.uuid4())
     DBOS.destroy(destroy_registry=True)
-    reset_global_params()
     config["application_version"] = version_five
     DBOS(config=config)
 
@@ -2162,7 +2152,6 @@ def test_recovery_appversion(config: DBOSConfig) -> None:
     os.environ["DBOS__VMID"] = "testexecutor"
 
     DBOS.destroy(destroy_registry=True)
-    reset_global_params()
     dbos = DBOS(config=config)
 
     @DBOS.workflow()
@@ -2186,7 +2175,6 @@ def test_recovery_appversion(config: DBOSConfig) -> None:
     # Reconstruct an identical environment to simulate a restart
     os.environ["DBOS__VMID"] = "testexecutor_another"
     DBOS.destroy(destroy_registry=True)
-    reset_global_params()
     dbos = DBOS(config=config)
 
     @DBOS.workflow()
@@ -2210,7 +2198,6 @@ def test_recovery_appversion(config: DBOSConfig) -> None:
 
     # Now reconstruct a "modified application" with a different application version
     DBOS.destroy(destroy_registry=True)
-    reset_global_params()
     dbos = DBOS(config=config)
 
     @DBOS.workflow()

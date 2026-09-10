@@ -439,9 +439,6 @@ class DBOS:
         if destroy_registry:
             global _dbos_global_registry
             _dbos_global_registry = None
-        # GlobalParams are deliberately left as they are: launch sets each of them,
-        # while resetting them here races checkpoints still in flight during shutdown,
-        # which would then stamp workflows with an identity no executor recovers.
         dbos_logger.info("DBOS successfully shut down")
 
     def __init__(
@@ -502,7 +499,9 @@ class DBOS:
                     f"conductor_executor_metadata must be JSON-serializable: {e}"
                 )
 
-        # Globally set the application version and executor ID.
+        # Reset global configuration. If reconfigured, it is set at launch.
+        GlobalParams.app_version = os.environ.get("DBOS__APPVERSION", "")
+        GlobalParams.executor_id = os.environ.get("DBOS__VMID", "local")
         # In DBOS Cloud, instead use the values supplied through environment variables.
         if not os.environ.get("DBOS__CLOUD") == "true":
             if self.enable_patching:

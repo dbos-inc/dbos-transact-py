@@ -125,9 +125,6 @@ def sqlite_path(tmp_path: Path) -> Path:
 
 @pytest.fixture()
 def config(sqlite_path: Path) -> DBOSConfig:
-    # Every test that builds a DBOS asks for this, so it is where the identity a
-    # preceding test launched with is cleared.
-    reset_global_params()
     return default_config(sqlite_path)
 
 
@@ -182,8 +179,8 @@ def _truncate_user_database(user_database_url: str) -> None:
 def reset_global_params() -> None:
     """Return the process identity to its pre-launch defaults.
 
-    DBOS.destroy leaves it alone, since resetting it raced checkpoints still in
-    flight during shutdown, so a test relaunching in-process resets it itself."""
+    Constructing a DBOS does this; a test that reads the identity without building
+    one gets it from here, alongside the environment these are read from."""
     GlobalParams.app_version = os.environ.get("DBOS__APPVERSION", "")
     GlobalParams.executor_id = os.environ.get("DBOS__VMID", "local")
     GlobalParams.app_name = None

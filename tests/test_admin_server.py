@@ -18,7 +18,7 @@ from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
-from tests.conftest import default_config, reset_global_params
+from tests.conftest import default_config
 
 
 @pytest.fixture()
@@ -139,7 +139,6 @@ def test_admin_recovery(config: DBOSConfig) -> None:
     os.environ["DBOS__APPVERSION"] = "testversion"
     os.environ["DBOS__APPID"] = "testappid"
     DBOS.destroy(destroy_registry=True)
-    reset_global_params()
     dbos = DBOS(config=config)
     DBOS.launch()
 

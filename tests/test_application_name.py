@@ -177,8 +177,6 @@ def test_relaunch_replaces_the_application_identity(
     DBOS.destroy(destroy_registry=True)
     assert GlobalParams.app_name == APP_NAME
     config["name"] = OTHER_APP
-    # Its own version: a version name belongs to one application.
-    config["application_version"] = "other-app-version"
     DBOS(config=config)
     DBOS.launch()
     assert GlobalParams.app_name == OTHER_APP
