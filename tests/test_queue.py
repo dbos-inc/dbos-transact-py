@@ -63,11 +63,6 @@ def unpolled_queue(name: str, **kwargs: Any) -> Queue:
     )
 
 
-def in_memory_queue(name: str, **kwargs: Any) -> Queue:
-    """An in-memory queue, the kind DBOS declares for its own internal use."""
-    return Queue(name, token=_INTERNAL_QUEUE_CONSTRUCTION, **kwargs)
-
-
 def test_simple_queue(dbos: DBOS) -> None:
     wf_counter: int = 0
     step_counter: int = 0
@@ -2372,44 +2367,25 @@ async def test_priority_queue_async(dbos: DBOS) -> None:
 
 @pytest.mark.asyncio
 async def test_enqueue_async_validation(dbos: DBOS) -> None:
-    """Enqueue-time validation rules. The partition checks read the queue's
-    configuration, so they fire only for DBOS's in-memory internal queues (the
-    Kafka ordered queue is partitioned); database-backed queues skip them to
-    avoid a per-enqueue DB round-trip."""
+    """Enqueue-time validation rules. Only checks that need no queue
+    configuration run here; partitioning would cost a per-enqueue round trip."""
 
     @DBOS.workflow()
     async def noop_workflow() -> None:
         return
 
-    partition_q = in_memory_queue(
-        f"async_validation_partition_{uuid.uuid4()}", partition_concurrency=1
-    )
-    no_partition_q = in_memory_queue(f"async_validation_no_partition_{uuid.uuid4()}")
-    no_priority_q = await DBOS.register_queue_async(
-        f"async_validation_no_priority_{uuid.uuid4()}"
-    )
+    queue = await DBOS.register_queue_async(f"async_validation_{uuid.uuid4()}")
 
-    # Partition queue requires a partition key
-    with pytest.raises(Exception, match="without a partition key"):
-        await partition_q.enqueue_async(noop_workflow)
-
-    # Partition key on a non-partitioned queue
-    with pytest.raises(
-        Exception, match="only use a partition key on a partition-enabled queue"
-    ):
-        with SetEnqueueOptions(queue_partition_key="key"):
-            await no_partition_q.enqueue_async(noop_workflow)
-
-    # Deduplication is not supported for partitioned queues, whatever the queue
+    # Deduplication is not supported for partitioned queues
     with pytest.raises(
         Exception, match="Deduplication is not supported for partitioned queues"
     ):
         with SetEnqueueOptions(queue_partition_key="key", deduplication_id="dedupe"):
-            await no_priority_q.enqueue_async(noop_workflow)
+            await queue.enqueue_async(noop_workflow)
 
     # priority_enabled is deprecated and ignored: priority needs no opt-in.
     with SetEnqueueOptions(priority=1):
-        await no_priority_q.enqueue_async(noop_workflow)
+        await queue.enqueue_async(noop_workflow)
 
 
 def test_worker_concurrency_across_versions(dbos: DBOS, client: DBOSClient) -> None:

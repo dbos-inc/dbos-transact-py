@@ -115,7 +115,7 @@ class Queue:
         # Deprecated, retained for backwards compatibility
         priority_enabled: bool = False,
         partition_queue: bool = False,
-        # Proof the caller is DBOS itself; see _INTERNAL_CONSTRUCTION.
+        # Proof the caller is DBOS itself; see _INTERNAL_QUEUE_CONSTRUCTION.
         token: object = None,
     ) -> None:
         if token is not _INTERNAL_QUEUE_CONSTRUCTION:
@@ -767,19 +767,9 @@ class Queue:
 
     def _validate_enqueue(self, ctx: Optional[DBOSContext]) -> None:
         self._require_dbos_bound()
+        # Only checks needing no queue configuration: reading it would cost a round trip per enqueue.
         if ctx and ctx.queue_partition_key and ctx.deduplication_id:
             raise Exception("Deduplication is not supported for partitioned queues")
-        # Skip validation for database-backed queues to avoid a roundtrip fetching the queue
-        if self.database_backed_queue:
-            return
-        if self._partition_queue and (ctx is None or ctx.queue_partition_key is None):
-            raise Exception(
-                f"A workflow cannot be enqueued on partitioned queue {self.name} without a partition key"
-            )
-        if ctx and ctx.queue_partition_key and not self._partition_queue:
-            raise Exception(
-                f"You can only use a partition key on a partition-enabled queue. Key {ctx.queue_partition_key} was used with non-partitioned queue {self.name}"
-            )
 
     def enqueue(
         self, func: "Callable[P, R]", *args: P.args, **kwargs: P.kwargs
