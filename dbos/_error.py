@@ -66,7 +66,6 @@ class DBOSErrorCode(Enum):
     StreamTimeout = 16
     StreamNondeterminism = 17
     StepTimeout = 18
-    ConflictingRegistrationError = 25
     QueryTimeout = 26
 
 

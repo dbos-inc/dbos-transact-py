@@ -6,7 +6,6 @@ import time
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from enum import Enum
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
@@ -35,13 +34,7 @@ from ._error import DBOSException
 from ._logger import dbos_logger
 from ._tracer import dbos_tracer
 
-
 # These are used to tag OTel traces
-class OperationType(Enum):
-    WORKFLOW = "workflow"
-    STEP = "step"
-
-
 OperationTypes = Literal["workflow", "step"]
 
 MaxPriority = 2**31 - 1  # 2,147,483,647

@@ -1,12 +1,5 @@
 import pytest
 
-# For tracing test
-from opentelemetry.sdk import trace as tracesdk
-
-# from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-
 # Public API
 from dbos import DBOS, DBOSContextSetAuth
 from dbos._error import DBOSNotAuthorizedError
@@ -210,33 +203,3 @@ async def test_roles_denied_async(dbos: DBOS) -> None:
 
 # This does not test DBOS at all
 # (It's just a hard-earned example of how you can unit test your spans)
-def test_role_tracing() -> None:
-    # Set up a simple in-memory span exporter for testing
-    exporter = InMemorySpanExporter()
-    span_processor = SimpleSpanProcessor(exporter)
-    provider = tracesdk.TracerProvider()
-    provider.add_span_processor(span_processor)
-
-    def function_to_trace() -> None:
-        with provider.get_tracer(__name__).start_as_current_span(  # pyright: ignore
-            "test-span"
-        ) as span:
-            span.set_attribute("testattribute", "value")
-
-    # Clear any existing spans
-    exporter.clear()
-
-    # Run the function that generates the trace spans
-    function_to_trace()
-
-    # Get the spans that were recorded
-    spans = exporter.get_finished_spans()
-
-    # Assert that we have exactly one span
-    assert len(spans) == 1
-
-    # Inspect the span and its attributes
-    span = spans[0]
-    assert span.name == "test-span"
-    assert span.attributes is not None
-    assert span.attributes["testattribute"] == "value"

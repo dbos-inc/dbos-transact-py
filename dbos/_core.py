@@ -44,7 +44,6 @@ from ._context import (
     DuplicationPolicy,
     EnterDBOSStepCtx,
     EnterDBOSWorkflow,
-    OperationType,
     SetEnqueueOptions,
     SetWorkflowID,
     TracedAttributes,
@@ -1044,7 +1043,7 @@ def _execute_workflow_wthread(
 ) -> R:
     attributes: TracedAttributes = {
         "name": get_dbos_func_name(func),
-        "operationType": OperationType.WORKFLOW.value,
+        "operationType": "workflow",
         "queueName": status.get("queue_name"),
     }
     fi = get_func_info(func)
@@ -1110,7 +1109,7 @@ async def _execute_workflow_async(
 ) -> R:
     attributes: TracedAttributes = {
         "name": get_dbos_func_name(func),
-        "operationType": OperationType.WORKFLOW.value,
+        "operationType": "workflow",
         "queueName": status.get("queue_name"),
     }
     fi = get_func_info(func)
@@ -1913,7 +1912,7 @@ def workflow_wrapper(
         rr: Optional[str] = check_required_roles(func, fi)
         attributes: TracedAttributes = {
             "name": get_dbos_func_name(func),
-            "operationType": OperationType.WORKFLOW.value,
+            "operationType": "workflow",
         }
         inputs: WorkflowInputs = {
             "args": args,
@@ -2239,7 +2238,7 @@ def invoke_step(
 
     attributes: TracedAttributes = {
         "name": step_name,
-        "operationType": OperationType.STEP.value,
+        "operationType": "step",
     }
 
     step_start_time = int(time.time() * 1000)

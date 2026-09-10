@@ -63,9 +63,7 @@ def test_package(
             )
 
             # Next, verify a simple DBOS-only script runs
-            subprocess.check_call(
-                ["python3", "tests/script_without_fastapi.py"], env=venv
-            )
+            subprocess.check_call(["python3", "tests/script_dbos_only.py"], env=venv)
 
             # Install FastAPI into the virtual environment
             subprocess.check_call(
