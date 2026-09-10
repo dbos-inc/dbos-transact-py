@@ -104,7 +104,6 @@ from ._scheduler import (
     dynamic_scheduler_loop,
     trigger_schedule,
 )
-from ._scheduler_decorator import DecoratedScheduledWorkflow, scheduled
 from ._sys_db import (
     DEFAULT_NOTIFICATION_COALESCE_SEC,
     GetEventWorkflowContext,
@@ -1287,14 +1286,6 @@ class DBOS:
         """
 
         return required_roles(roles)
-
-    @classmethod
-    def scheduled(
-        cls, cron: str
-    ) -> Callable[[DecoratedScheduledWorkflow], DecoratedScheduledWorkflow]:
-        """Decorate a workflow function with its invocation schedule."""
-
-        return scheduled(_get_or_create_dbos_registry(), cron)
 
     @classmethod
     def kafka_consumer(
