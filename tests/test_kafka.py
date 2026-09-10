@@ -1442,7 +1442,7 @@ def test_kafka_partitioned_queue_name_rejected_at_launch(
 
     # Register on the launched fixture instance; the row survives destroy.
     queue_name = f"dbos-test-kafka-partq-{random.randrange(1_000_000_000)}"
-    DBOS.register_queue(queue_name, partition_queue=True)
+    DBOS.register_queue(queue_name, partition_concurrency=1)
 
     DBOS.destroy(destroy_registry=True)
     DBOS(config=config)
@@ -1468,7 +1468,7 @@ def test_kafka_partitioned_queue_name_rejected_when_launched(dbos: DBOS) -> None
     from dbos._error import DBOSInitializationError
 
     queue_name = f"dbos-test-kafka-partq-live-{random.randrange(1_000_000_000)}"
-    DBOS.register_queue(queue_name, partition_queue=True)
+    DBOS.register_queue(queue_name, partition_concurrency=1)
 
     @DBOS.workflow()
     def live_partitioned_queue_wf(msg: KafkaMessage) -> None:

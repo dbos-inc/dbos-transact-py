@@ -82,9 +82,8 @@ def _reject_conflicting_options(
     """A debounce owns the workflow's deduplication ID (the debounce key) and its
     delay (the debounce period), so a caller must not also set them, nor a
     duplication policy over the key the debounce owns. Priority and partition keys
-    are rejected because they cannot apply to a debounced enqueue (the default
-    internal queue has no priority, and partitioned queues do not support the
-    deduplication a debounce requires)."""
+    are rejected because they cannot apply to a debounced enqueue (partitioned
+    queues do not support the deduplication a debounce requires)."""
     if has_deduplication_id:
         raise DBOSException(
             "Cannot debounce a workflow with a deduplication_id set: the debounce "

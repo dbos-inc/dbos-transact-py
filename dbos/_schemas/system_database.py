@@ -352,6 +352,8 @@ class SystemSchema:
         Column("worker_concurrency", Integer, nullable=True),
         Column("rate_limit_max", Integer, nullable=True),
         Column("rate_limit_period_sec", Float, nullable=True),
+        # Legacy columns, written for other SDKs but no longer read: every queue
+        # is a priority queue, and partitioning follows the partition_* limits.
         Column("priority_enabled", Boolean, nullable=False, server_default="false"),
         Column("partition_queue", Boolean, nullable=False, server_default="false"),
         # Any of these being set means the queue is partitioned; each applies per partition.

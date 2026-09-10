@@ -907,8 +907,10 @@ class QueueOutput:
             worker_concurrency=q._worker_concurrency,
             rate_limit_max=q._limiter["limit"] if q._limiter else None,
             rate_limit_period_sec=q._limiter["period"] if q._limiter else None,
-            priority_enabled=q._priority_enabled,
-            partition_queue=q._partition_queue,
+            # Legacy fields: every queue is a priority queue, and any
+            # per-partition limit makes a queue partitioned.
+            priority_enabled=True,
+            partition_queue=q._has_partition_limits(),
             polling_interval_sec=q._polling_interval_sec,
             application_name=q.application_name,
             partition_concurrency=q._partition_concurrency,
