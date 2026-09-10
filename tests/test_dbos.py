@@ -1837,6 +1837,53 @@ def test_destroy_semantics(dbos: DBOS, config: DBOSConfig) -> None:
     assert wf.get_result() == var
 
 
+def test_destroy_preserves_the_process_identity(
+    config: DBOSConfig, cleanup_test_databases: None
+) -> None:
+    """Shutdown leaves the identity a checkpoint stamps rows with alone.
+
+    Resetting it raced work still in flight: a dequeue reads the identity only
+    once it is about to write, so one landing during shutdown claimed workflows
+    for "local", which the replacement executor never recovers."""
+    executor_id = "test-executor"
+    config["executor_id"] = executor_id
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    @DBOS.workflow()
+    def enqueued_workflow() -> None:
+        pass
+
+    DBOS.launch()
+    app_version = GlobalParams.app_version
+    # Long poll: this test dequeues by hand, at the moment of its choosing.
+    queue = DBOS.register_queue("test-shutdown-queue", polling_interval_sec=3600)
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        queue.enqueue(enqueued_workflow)
+
+    # As the queue worker does: resolve the system database, then read the
+    # identity when the claim is written. Shut down in between.
+    sys_db = dbos._sys_db
+    DBOS.destroy()
+    assert GlobalParams.executor_id == executor_id
+    assert GlobalParams.app_version == app_version
+    sys_db.start_queued_workflows(
+        queue, GlobalParams.executor_id, GlobalParams.app_version, None, 0
+    )
+
+    status = sys_db.get_workflow_status(wfid)
+    assert status is not None
+    assert status["status"] == WorkflowStatusString.PENDING.value
+    # Claimed for this executor, so its replacement recovers the workflow.
+    assert status["executor_id"] == executor_id
+    assert status["app_version"] == app_version
+    assert sys_db.get_pending_workflows(executor_id, app_version) != []
+    # Dispose the pool the claim above re-created, and drop the registry this test filled.
+    sys_db.destroy()
+    DBOS.destroy(destroy_registry=True)
+
+
 @pytest.mark.asyncio
 async def test_destroy_semantics_async(dbos: DBOS, config: DBOSConfig) -> None:
 
@@ -1946,8 +1993,10 @@ def test_app_version(
     created_versions = [version_one]
 
     DBOS.destroy(destroy_registry=True)
-    assert DBOS.application_version == ""
+    # Shutdown leaves the identity alone; constructing the next DBOS clears it.
+    assert DBOS.application_version == version_one
     dbos = DBOS(config=config)
+    assert DBOS.application_version == ""
 
     @DBOS.workflow()
     def workflow_one(x: int) -> int:
