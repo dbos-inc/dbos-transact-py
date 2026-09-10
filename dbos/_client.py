@@ -373,8 +373,6 @@ class DBOSClient:
         application_name: Optional[str] = None,
         # Deprecated, retained for backwards compatibility
         concurrency: Optional[int] = None,
-        priority_enabled: bool = False,
-        partition_queue: bool = False,
     ) -> Queue:
         """Register a queue from a client and persist it to the system database.
 
@@ -416,8 +414,6 @@ class DBOSClient:
             it. Defaults to the client's own application. Registering a queue
             already owned by a different application raises.
         :param concurrency: Deprecated. Use ``global_concurrency``.
-        :param priority_enabled: Deprecated. Priority is always enabled.
-        :param partition_queue: Deprecated. Use the ``partition_*`` limits.
 
         :returns: A :class:`Queue` bound to this client's system database.
         """
@@ -432,7 +428,6 @@ class DBOSClient:
             partition_concurrency=partition_concurrency,
             partition_worker_concurrency=partition_worker_concurrency,
             partition_limiter=partition_limiter,
-            partition_queue=partition_queue,
             polling_interval_sec=polling_interval_sec,
             limiter=limiter,
         )
@@ -456,8 +451,6 @@ class DBOSClient:
             worker_concurrency=worker_concurrency,
             rate_limit_max=limiter["limit"] if limiter else None,
             rate_limit_period_sec=limiter["period"] if limiter else None,
-            priority_enabled=priority_enabled,
-            partition_queue=partition_queue,
             partition_concurrency=partition_concurrency,
             partition_worker_concurrency=partition_worker_concurrency,
             partition_rate_limit_max=(
@@ -491,8 +484,6 @@ class DBOSClient:
         application_name: Optional[str] = None,
         # Deprecated, retained for backwards compatibility
         concurrency: Optional[int] = None,
-        priority_enabled: bool = False,
-        partition_queue: bool = False,
     ) -> Queue:
         """Async version of :meth:`register_queue`."""
         return await asyncio.to_thread(
@@ -508,8 +499,6 @@ class DBOSClient:
                 on_conflict=on_conflict,
                 application_name=application_name,
                 concurrency=concurrency,
-                priority_enabled=priority_enabled,
-                partition_queue=partition_queue,
             )
         )
 

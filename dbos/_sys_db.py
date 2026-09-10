@@ -103,8 +103,6 @@ def queue_from_db_row(
         m["concurrency"],
         limiter,
         worker_concurrency=m["worker_concurrency"],
-        priority_enabled=bool(m["priority_enabled"]),
-        partition_queue=bool(m["partition_queue"]),
         partition_concurrency=m["partition_concurrency"],
         partition_worker_concurrency=m["partition_worker_concurrency"],
         partition_limiter=partition_limiter,
@@ -4704,7 +4702,7 @@ class SystemDatabase(ABC):
         from each active partition successively.
         """
         limits = queue._resolve_limits()
-        assert queue._partition_queue
+        assert queue._has_partition_limits()
         assert limits.partition_concurrency == 1
         assert limits.global_concurrency is None
         assert limits.limiter is None
@@ -6735,8 +6733,6 @@ class SystemDatabase(ABC):
         worker_concurrency: Optional[int],
         rate_limit_max: Optional[int],
         rate_limit_period_sec: Optional[float],
-        priority_enabled: bool,
-        partition_queue: bool,
         polling_interval_sec: float,
         update_existing: bool,
         application_name: Optional[str] = None,
@@ -6755,10 +6751,10 @@ class SystemDatabase(ABC):
             "worker_concurrency": worker_concurrency,
             "rate_limit_max": rate_limit_max,
             "rate_limit_period_sec": rate_limit_period_sec,
-            "priority_enabled": priority_enabled,
-            # Any per-partition limit implies partitioning, whichever mode was used.
-            "partition_queue": partition_queue
-            or partition_concurrency is not None
+            # Legacy columns, still read by other SDKs. Every queue is a priority
+            # queue now, and any per-partition limit implies partitioning.
+            "priority_enabled": True,
+            "partition_queue": partition_concurrency is not None
             or partition_worker_concurrency is not None
             or partition_rate_limit_max is not None,
             "partition_concurrency": partition_concurrency,

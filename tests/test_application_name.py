@@ -781,8 +781,6 @@ def test_conflicting_names_across_applications_raise(
                 worker_concurrency=None,
                 rate_limit_max=None,
                 rate_limit_period_sec=None,
-                priority_enabled=False,
-                partition_queue=False,
                 polling_interval_sec=1.0,
                 update_existing=update_existing,
             )
@@ -922,8 +920,6 @@ def test_two_applications_share_one_system_database(dbos: DBOS, config: Any) -> 
                 worker_concurrency=None,
                 rate_limit_max=None,
                 rate_limit_period_sec=None,
-                priority_enabled=False,
-                partition_queue=False,
                 polling_interval_sec=1.0,
                 update_existing=True,
             )

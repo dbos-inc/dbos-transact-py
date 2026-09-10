@@ -975,8 +975,6 @@ class DBOS:
         on_conflict: QueueConflictResolution = "update_if_latest_version",
         # Deprecated, retained for backwards compatibility
         concurrency: Optional[int] = None,
-        priority_enabled: bool = False,
-        partition_queue: bool = False,
     ) -> Queue:
         """
         Register a queue and persist its configuration to the system database.
@@ -1022,8 +1020,6 @@ class DBOS:
             mode: the name is its address, so a collision is not ours to resolve.
 
         :param concurrency: Deprecated. Use ``global_concurrency``.
-        :param priority_enabled: Deprecated. Priority is always enabled.
-        :param partition_queue: Deprecated. Use the ``partition_*`` limits.
 
         :returns: A :class:`Queue` reflecting the persisted configuration.
         """
@@ -1036,7 +1032,6 @@ class DBOS:
             partition_concurrency=partition_concurrency,
             partition_worker_concurrency=partition_worker_concurrency,
             partition_limiter=partition_limiter,
-            partition_queue=partition_queue,
             polling_interval_sec=polling_interval_sec,
             limiter=limiter,
         )
@@ -1058,8 +1053,6 @@ class DBOS:
             worker_concurrency=worker_concurrency,
             rate_limit_max=limiter["limit"] if limiter else None,
             rate_limit_period_sec=limiter["period"] if limiter else None,
-            priority_enabled=priority_enabled,
-            partition_queue=partition_queue,
             partition_concurrency=partition_concurrency,
             partition_worker_concurrency=partition_worker_concurrency,
             partition_rate_limit_max=(
@@ -1097,8 +1090,6 @@ class DBOS:
         on_conflict: QueueConflictResolution = "update_if_latest_version",
         # Deprecated, retained for backwards compatibility
         concurrency: Optional[int] = None,
-        priority_enabled: bool = False,
-        partition_queue: bool = False,
     ) -> Queue:
         """Async version of :meth:`register_queue`."""
         await cls._configure_asyncio_thread_pool()
@@ -1114,8 +1105,6 @@ class DBOS:
                 polling_interval_sec=polling_interval_sec,
                 on_conflict=on_conflict,
                 concurrency=concurrency,
-                priority_enabled=priority_enabled,
-                partition_queue=partition_queue,
             )
         )
 
