@@ -145,7 +145,6 @@ from ._dbos_config import (
     translate_dbos_config_to_config_file,
 )
 from ._error import (
-    DBOSConflictingRegistrationError,
     DBOSException,
     DBOSNonExistentWorkflowError,
     DBOSPatchNondeterminismError,
@@ -216,7 +215,6 @@ RegisteredJob = Tuple[
 class DBOSRegistry:
     def __init__(self) -> None:
         self.workflow_info_map: dict[str, Callable[..., Any]] = {}
-        self.function_type_map: dict[str, str] = {}
         self.class_info_map: dict[str, type] = {}
         self.instance_info_map: dict[str, object] = {}
         # DBOS's own in-memory queues (the internal queue, the Kafka queues).
@@ -229,12 +227,10 @@ class DBOSRegistry:
         # Polling interval for the internal Kafka queues, from DBOSConfig; None keeps the Queue default.
         self.kafka_queue_polling_interval_sec: Optional[float] = None
 
-    def register_wf_function(self, name: str, wrapped_func: F, functype: str) -> None:
-        if name in self.function_type_map:
-            if self.function_type_map[name] != functype:
-                raise DBOSConflictingRegistrationError(name)
+    def register_wf_function(self, name: str, wrapped_func: F) -> None:
+        if name in self.workflow_info_map:
             # Error if a workflow is registered with the same name in different modules.
-            if functype == "workflow":
+            if not name.startswith("<temp>."):
 
                 def code_origin(fn: Any) -> Optional[Tuple[str, str]]:
                     """Where a function came from, as (module, real source path)."""
@@ -266,7 +262,6 @@ class DBOSRegistry:
             dbos_logger.warning(
                 f"Duplicate registration of function '{truncated_name}'. A function named '{truncated_name}' has already been registered with DBOS. All functions registered with DBOS must have unique names."
             )
-        self.function_type_map[name] = functype
         self.workflow_info_map[name] = wrapped_func
 
     def register_class(self, cls: type, ci: DBOSClassInfo) -> None:

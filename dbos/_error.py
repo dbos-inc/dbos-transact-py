@@ -248,16 +248,6 @@ class DBOSStepTimeoutError(DBOSException):
         return (self.__class__, (self.step_name, self.timeout_seconds))
 
 
-class DBOSConflictingRegistrationError(DBOSException):
-    """Exception raised when conflicting decorators are applied to the same function."""
-
-    def __init__(self, name: str) -> None:
-        super().__init__(
-            f"Operation (Name: {name}) is already registered with a conflicting function type",
-            dbos_error_code=DBOSErrorCode.ConflictingRegistrationError.value,
-        )
-
-
 class DBOSUnexpectedStepError(DBOSException):
     """Exception raised when a step has an unexpected recorded name."""
 
