@@ -153,7 +153,7 @@ def test_debouncer_queue(dbos: DBOS) -> None:
         return x
 
     first_value, second_value, third_value, fourth_value = 0, 1, 2, 3
-    queue = DBOS.register_queue("test-queue", priority_enabled=True)
+    queue = DBOS.register_queue("test-queue")
 
     debouncer = Debouncer.create(workflow, queue=queue)
     debounce_period_sec = 2

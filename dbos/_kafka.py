@@ -92,8 +92,8 @@ def _validate_consumer_queue(dbos: "DBOS", func_name: str, queue_name: str) -> N
             return
     if queue is None:
         return
-    # Read the cached field: the property would re-fetch a database-backed queue.
-    if queue._partition_queue:
+    # Read the cached fields: the properties would re-fetch a database-backed queue.
+    if queue._has_partition_limits():
         raise DBOSInitializationError(
             f"Error: Kafka consumer {func_name}'s queue {queue_name} is a "
             "partitioned queue, which a custom Kafka queue must not be; "

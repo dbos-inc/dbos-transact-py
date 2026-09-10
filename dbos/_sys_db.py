@@ -103,8 +103,6 @@ def queue_from_db_row(
         m["concurrency"],
         limiter,
         worker_concurrency=m["worker_concurrency"],
-        priority_enabled=bool(m["priority_enabled"]),
-        partition_queue=bool(m["partition_queue"]),
         partition_concurrency=m["partition_concurrency"],
         partition_worker_concurrency=m["partition_worker_concurrency"],
         partition_limiter=partition_limiter,
@@ -4441,18 +4439,17 @@ class SystemDatabase(ABC):
     ) -> List[str]:
         start_time_ms = int(time.time() * 1000)
         ws = SystemSchema.workflow_status
-        # Resolve from the queue's locally cached private state to avoid recursive DB reads
-        limits = queue._resolve_limits()
+        # Read the queue's cached private fields, not its accessors, which would re-fetch a database-backed queue. _concurrency is the queue-wide (global) limit.
         # Shares a concurrency or limiter budget with other executors
         has_shared_budget = (
-            limits.global_concurrency is not None
-            or limits.partition_concurrency is not None
-            or limits.limiter is not None
-            or limits.partition_limiter is not None
+            queue._concurrency is not None
+            or queue._partition_concurrency is not None
+            or queue._limiter is not None
+            or queue._partition_limiter is not None
         )
         # Shares a concurrency or limiter budget with other executors and other partitions
         has_write_skew = queue_partition_key is not None and (
-            limits.global_concurrency is not None or limits.limiter is not None
+            queue._concurrency is not None or queue._limiter is not None
         )
         with self.engine.begin() as c:
             # Otherwise READ COMMITTED
@@ -4509,53 +4506,53 @@ class SystemDatabase(ABC):
             # Compute max_tasks under every flow control limit enforced on this queue
             max_tasks = sys.maxsize
 
-            if limits.worker_concurrency is not None:
+            if queue._worker_concurrency is not None:
                 # Use the in-memory registry for this worker's running count — avoids a DB round trip.
                 max_tasks = min(
-                    max_tasks, max(0, limits.worker_concurrency - local_running_count)
+                    max_tasks, max(0, queue._worker_concurrency - local_running_count)
                 )
-            if limits.partition_worker_concurrency is not None:
+            if queue._partition_worker_concurrency is not None:
                 max_tasks = min(
                     max_tasks,
                     max(
                         0,
-                        limits.partition_worker_concurrency
+                        queue._partition_worker_concurrency
                         - partition_local_running_count,
                     ),
                 )
             if max_tasks <= 0:
                 return []
 
-            if limits.limiter is not None:
+            if queue._limiter is not None:
                 # Bound the claim by the limiter's remaining slots so a backlogged queue locks only what it can start.
-                max_tasks = min(max_tasks, rate_limit_remaining(limits.limiter, False))
-            if limits.partition_limiter is not None:
+                max_tasks = min(max_tasks, rate_limit_remaining(queue._limiter, False))
+            if queue._partition_limiter is not None:
                 max_tasks = min(
-                    max_tasks, rate_limit_remaining(limits.partition_limiter, True)
+                    max_tasks, rate_limit_remaining(queue._partition_limiter, True)
                 )
             if max_tasks <= 0:
                 return []
 
-            if limits.global_concurrency is not None:
+            if queue._concurrency is not None:
                 # Global concurrency still requires a DB query since other workers may be running workflows too.
                 global_pending_workflows = pending_count(False)
-                if global_pending_workflows > limits.global_concurrency:
+                if global_pending_workflows > queue._concurrency:
                     dbos_logger.warning(
-                        f"The total number of pending workflows ({global_pending_workflows}) on queue {queue.name} exceeds the global concurrency limit ({limits.global_concurrency})"
+                        f"The total number of pending workflows ({global_pending_workflows}) on queue {queue.name} exceeds the global concurrency limit ({queue._concurrency})"
                     )
                 max_tasks = min(
                     max_tasks,
-                    max(0, limits.global_concurrency - global_pending_workflows),
+                    max(0, queue._concurrency - global_pending_workflows),
                 )
-            if limits.partition_concurrency is not None:
+            if queue._partition_concurrency is not None:
                 partition_pending_workflows = pending_count(True)
-                if partition_pending_workflows > limits.partition_concurrency:
+                if partition_pending_workflows > queue._partition_concurrency:
                     dbos_logger.warning(
-                        f"The total number of pending workflows ({partition_pending_workflows}) on partition {queue_partition_key} of queue {queue.name} exceeds the partition concurrency limit ({limits.partition_concurrency})"
+                        f"The total number of pending workflows ({partition_pending_workflows}) on partition {queue_partition_key} of queue {queue.name} exceeds the partition concurrency limit ({queue._partition_concurrency})"
                     )
                 max_tasks = min(
                     max_tasks,
-                    max(0, limits.partition_concurrency - partition_pending_workflows),
+                    max(0, queue._partition_concurrency - partition_pending_workflows),
                 )
             if max_tasks <= 0:
                 return []
@@ -4659,8 +4656,8 @@ class SystemDatabase(ABC):
                         # Claim it, so the unclaimed partition drains as workflows run.
                         application_name=self.app_name,
                         started_at_epoch_ms=self._now_ms_sql(),
-                        rate_limited=limits.limiter is not None
-                        or limits.partition_limiter is not None,
+                        rate_limited=queue._limiter is not None
+                        or queue._partition_limiter is not None,
                         # Count this dispatch against the DLQ limit; no later insert does it.
                         recovery_attempts=SystemSchema.workflow_status.c.recovery_attempts
                         + 1,
@@ -4703,12 +4700,11 @@ class SystemDatabase(ABC):
         case where partition_concurrency=1. All other cases iterate and dequeue
         from each active partition successively.
         """
-        limits = queue._resolve_limits()
-        assert queue._partition_queue
-        assert limits.partition_concurrency == 1
-        assert limits.global_concurrency is None
-        assert limits.limiter is None
-        assert limits.partition_limiter is None
+        assert queue._has_partition_limits()
+        assert queue._partition_concurrency == 1
+        assert queue._concurrency is None
+        assert queue._limiter is None
+        assert queue._partition_limiter is None
         start_time_ms = int(time.time() * 1000)
         ws = SystemSchema.workflow_status
         with self.engine.begin() as c:
@@ -6735,8 +6731,6 @@ class SystemDatabase(ABC):
         worker_concurrency: Optional[int],
         rate_limit_max: Optional[int],
         rate_limit_period_sec: Optional[float],
-        priority_enabled: bool,
-        partition_queue: bool,
         polling_interval_sec: float,
         update_existing: bool,
         application_name: Optional[str] = None,
@@ -6755,10 +6749,10 @@ class SystemDatabase(ABC):
             "worker_concurrency": worker_concurrency,
             "rate_limit_max": rate_limit_max,
             "rate_limit_period_sec": rate_limit_period_sec,
-            "priority_enabled": priority_enabled,
-            # Any per-partition limit implies partitioning, whichever mode was used.
-            "partition_queue": partition_queue
-            or partition_concurrency is not None
+            # Legacy columns, still read by other SDKs. Every queue is a priority
+            # queue now, and any per-partition limit implies partitioning.
+            "priority_enabled": True,
+            "partition_queue": partition_concurrency is not None
             or partition_worker_concurrency is not None
             or partition_rate_limit_max is not None,
             "partition_concurrency": partition_concurrency,
