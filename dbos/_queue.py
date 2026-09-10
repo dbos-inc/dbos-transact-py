@@ -995,10 +995,9 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
         except Exception as e:
             dbos.logger.warning(f"Exception listing queues: {e}")
 
-        # Always listen to the internal queue, regardless of any listen_queues filter
+        # A user cannot name DBOS's own queues, so nothing else would ever dequeue them.
         current_queues[INTERNAL_QUEUE_NAME] = dbos._registry.get_internal_queue()
-        # Always poll the internal queues used by this process's pollers (e.g. Kafka)
-        for queue in dbos._registry.internal_poller_queues():
+        for queue in dbos._registry.internal_queues():
             current_queues[queue.name] = queue
 
         # Transition any DELAYED workflows whose delay has expired to ENQUEUED.
@@ -1088,7 +1087,7 @@ def log_queues(dbos: "DBOS", listening_queues: Optional[list[str]]) -> None:
     if listening_queues is not None:
         # Poller-fed internal queues are always listened to, so reflect them here.
         listening_set = set(listening_queues) | {
-            q.name for q in dbos._registry.internal_poller_queues()
+            q.name for q in dbos._registry.internal_queues()
         }
         queues = {n: q for n, q in queues.items() if n in listening_set}
 

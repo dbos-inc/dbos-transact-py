@@ -228,8 +228,6 @@ class DBOSRegistry:
         self.dbos: Optional[DBOS] = None
         # Kafka consumer registrations, for cross-consumer validation
         self.kafka_registrations: list[KafkaConsumerRegistration] = []
-        # Queues fed by this process's pollers (e.g. Kafka).
-        self.poller_queue_names: set[str] = set()
         # Polling interval for the internal Kafka queues, from DBOSConfig; None keeps the Queue default.
         self.kafka_queue_polling_interval_sec: Optional[float] = None
 
@@ -356,13 +354,11 @@ class DBOSRegistry:
             self.internal_queue_map[name] = queue
         return queue
 
-    def internal_poller_queues(self) -> list[Queue]:
-        """This process's poller-fed internal queues (e.g. the Kafka queues)."""
-        # Snapshot the names: a late poller may mutate the set.
-        found = (
-            self.internal_queue_map.get(name) for name in list(self.poller_queue_names)
-        )
-        return [q for q in found if q is not None]
+    def internal_queues(self) -> list[Queue]:
+        """DBOS's own queues: the internal queue plus the Kafka queues this
+        process's consumers need."""
+        # Snapshot: a consumer registered after launch may add to the map.
+        return list(self.internal_queue_map.values())
 
     def get_internal_queue(self) -> Queue:
         """

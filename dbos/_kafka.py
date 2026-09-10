@@ -461,9 +461,6 @@ def kafka_consumer(
                 partition_concurrency=1,
             ).name
 
-        # Record the queue this process feeds; only internal ones override a listen_queues filter.
-        dbosreg.poller_queue_names.add(consumer_queue_name)
-
         stop_event = threading.Event()
         dbosreg.register_poller(
             stop_event,

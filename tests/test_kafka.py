@@ -1484,11 +1484,10 @@ def test_kafka_partitioned_queue_name_rejected_when_launched(dbos: DBOS) -> None
             queue_name=queue_name,
         )(live_partitioned_queue_wf)
 
-    # The rejected consumer left no trace: no registration, no forced poll.
+    # The rejected consumer left no trace.
     assert all(
         reg.queue_name != queue_name for reg in dbos._registry.kafka_registrations
     )
-    assert queue_name not in dbos._registry.poller_queue_names
 
 
 def test_kafka_config_coercion(dbos: DBOS, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2085,8 +2084,6 @@ def test_kafka_custom_queue(dbos: DBOS) -> None:
             if len(processed) == num_messages:
                 event.set()
 
-    # The consumer's custom queue is recorded as one this process feeds.
-    assert queue_name in dbos._registry.poller_queue_names
     assert event.wait(timeout=60)
     assert processed == set(range(num_messages))
     assert max_active == 1  # concurrency=1 honored
