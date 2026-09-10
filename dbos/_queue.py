@@ -3,7 +3,6 @@ import copy
 import random
 import sys
 import threading
-from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -74,18 +73,6 @@ class QueueRateLimit(TypedDict):
 
     limit: int
     period: float
-
-
-@dataclass
-class ResolvedQueueLimits:
-    """A snapshot of a queue's limits, named by the scope each is enforced at."""
-
-    global_concurrency: Optional[int]
-    worker_concurrency: Optional[int]
-    limiter: Optional[QueueRateLimit]
-    partition_concurrency: Optional[int]
-    partition_worker_concurrency: Optional[int]
-    partition_limiter: Optional[QueueRateLimit]
 
 
 class Queue:
@@ -237,17 +224,6 @@ class Queue:
         }
         values.update(overrides)
         return any(value is not None for value in values.values())
-
-    def _resolve_limits(self) -> ResolvedQueueLimits:
-        """Snapshot every limit for the dequeue paths, named by its scope."""
-        return ResolvedQueueLimits(
-            global_concurrency=self._concurrency,
-            worker_concurrency=self._worker_concurrency,
-            limiter=self._limiter,
-            partition_concurrency=self._partition_concurrency,
-            partition_worker_concurrency=self._partition_worker_concurrency,
-            partition_limiter=self._partition_limiter,
-        )
 
     def _check_concurrency_bounds(self, value: Optional[int]) -> None:
         """Validate a new concurrency against the cached sibling limits."""
@@ -718,17 +694,17 @@ def queue_worker_thread(
             except Exception as e:
                 dbos.logger.error(f"Error executing workflow {id}: {e}")
 
-    def worker_budget(limits: ResolvedQueueLimits, running: int) -> int:
+    def worker_budget(q: Queue, running: int) -> int:
         """Room left under this worker's queue-wide concurrency limit, given how many of
         its workflows are already running or claimed."""
         if (
-            limits.partition_worker_concurrency is not None
-            and limits.partition_worker_concurrency <= 0
+            q._partition_worker_concurrency is not None
+            and q._partition_worker_concurrency <= 0
         ):
             return 0
-        if limits.worker_concurrency is None:
+        if q._worker_concurrency is None:
             return sys.maxsize
-        return max(0, limits.worker_concurrency - running)
+        return max(0, q._worker_concurrency - running)
 
     while not stop_event.is_set():
         # Reload database-backed queue config once per iteration so dynamic
@@ -760,7 +736,6 @@ def queue_worker_thread(
             return
 
         try:
-            limits = queue._resolve_limits()
             if not queue._has_partition_limits():
                 dequeued_workflows = dbos._sys_db.start_queued_workflows(
                     queue,
@@ -771,14 +746,14 @@ def queue_worker_thread(
                 )
                 start_dequeued_workflows(dequeued_workflows)
             elif (
-                limits.partition_concurrency == 1
-                and limits.global_concurrency is None
-                and limits.limiter is None
-                and limits.partition_limiter is None
+                queue._partition_concurrency == 1
+                and queue._concurrency is None
+                and queue._limiter is None
+                and queue._partition_limiter is None
             ):
                 # Optimization: Batch dequeue if partition concurrency is 1
                 max_tasks = worker_budget(
-                    limits, dbos._active_workflows_set.count_for_queue(queue.name)
+                    queue, dbos._active_workflows_set.count_for_queue(queue.name)
                 )
                 if max_tasks > 0:
                     dequeued_workflows = (
@@ -798,7 +773,7 @@ def queue_worker_thread(
                 running = dbos._active_workflows_set.count_for_queue(queue.name)
                 claimed = 0
                 for key in partition_keys:
-                    if worker_budget(limits, running + claimed) <= 0:
+                    if worker_budget(queue, running + claimed) <= 0:
                         break
                     try:
                         dequeued_workflows = dbos._sys_db.start_queued_workflows(
