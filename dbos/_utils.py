@@ -13,8 +13,6 @@ from sqlalchemy.exc import DBAPIError
 
 INTERNAL_QUEUE_NAME = "_dbos_internal_queue"
 
-request_id_header = "x-request-id"
-
 
 class LoopAwareEvent(threading.Event):
     """A ``threading.Event`` that async callers can also await.

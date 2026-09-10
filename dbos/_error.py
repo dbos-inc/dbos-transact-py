@@ -17,7 +17,6 @@ class DBOSException(Exception):
     def __init__(self, message: str, dbos_error_code: Optional[int] = None):
         self.message = message
         self.dbos_error_code = dbos_error_code
-        self.status_code: Optional[int] = None
         super().__init__(self.message)
 
     def __str__(self) -> str:
@@ -40,7 +39,6 @@ class DBOSBaseException(BaseException):
     def __init__(self, message: str, dbos_error_code: Optional[int] = None):
         self.message = message
         self.dbos_error_code = dbos_error_code
-        self.status_code: Optional[int] = None
         super().__init__(self.message)
 
     def __str__(self) -> str:
@@ -206,7 +204,6 @@ class DBOSNotAuthorizedError(DBOSException):
             msg,
             dbos_error_code=DBOSErrorCode.NotAuthorized.value,
         )
-        self.status_code = 403
 
     def __reduce__(self) -> Any:
         # Tell pickle how to reconstruct this object

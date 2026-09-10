@@ -38,12 +38,11 @@ from ._tracer import dbos_tracer
 
 # These are used to tag OTel traces
 class OperationType(Enum):
-    HANDLER = "handler"
     WORKFLOW = "workflow"
     STEP = "step"
 
 
-OperationTypes = Literal["handler", "workflow", "step"]
+OperationTypes = Literal["workflow", "step"]
 
 MaxPriority = 2**31 - 1  # 2,147,483,647
 MinPriority = 1
@@ -63,10 +62,6 @@ class TracedAttributes(TypedDict, total=False):
     name: str
     operationUUID: Optional[str]
     operationType: Optional[OperationTypes]
-    requestID: Optional[str]
-    requestIP: Optional[str]
-    requestURL: Optional[str]
-    requestMethod: Optional[str]
     applicationID: Optional[str]
     applicationVersion: Optional[str]
     executorID: Optional[str]
@@ -311,12 +306,6 @@ class DBOSContext:
 
     def end_async_ds_transaction(self) -> None:
         self.async_ds_session = None
-
-    def start_handler(self, attributes: TracedAttributes) -> None:
-        self._start_span(attributes)
-
-    def end_handler(self, exc_value: Optional[BaseException]) -> None:
-        self._end_span(exc_value)
 
     """ Return the current DBOS span if any. It must be a span created by DBOS."""
 
@@ -1022,35 +1011,6 @@ class EnterDBOSStepRetry:
         if ctx is not None and ctx.step_status is not None:
             ctx.step_status.current_attempt = None
             ctx.step_status.max_attempts = None
-        return False  # Did not handle
-
-
-class EnterDBOSHandler:
-    def __init__(self, attributes: TracedAttributes) -> None:
-        self.created_ctx = False
-        self.attributes = attributes
-
-    def __enter__(self) -> EnterDBOSHandler:
-        # Code to create a basic context
-        ctx = get_local_dbos_context()
-        if ctx is None:
-            self.created_ctx = True
-            _set_local_dbos_context(DBOSContext())
-        ctx = assert_current_dbos_context()
-        ctx.start_handler(self.attributes)
-        return self
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> Literal[False]:
-        ctx = assert_current_dbos_context()
-        ctx.end_handler(exc_value)
-        # Code to clean up the basic context if we created it
-        if self.created_ctx:
-            _clear_local_dbos_context()
         return False  # Did not handle
 
 
