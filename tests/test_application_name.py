@@ -10,7 +10,7 @@ import pytest
 import sqlalchemy as sa
 
 import dbos._conductor.protocol as p
-from dbos import DBOS, DBOSClient, Queue, WorkflowHandle
+from dbos import DBOS, DBOSClient, DBOSConfig, Queue, WorkflowHandle
 from dbos._error import DBOSException
 from dbos._queue import _INTERNAL_QUEUE_CONSTRUCTION
 from dbos._schemas.system_database import SystemSchema
@@ -167,12 +167,21 @@ def test_runtime_stamps_everything_it_writes(dbos: DBOS) -> None:
     ] == [APP_NAME]
 
 
-def test_destroy_clears_the_application_identity(dbos: DBOS) -> None:
-    """Identity is set at launch, so a relaunch under another name must not
-    inherit this one from the process."""
+def test_relaunch_replaces_the_application_identity(
+    dbos: DBOS, config: DBOSConfig
+) -> None:
+    """Identity is set at launch, so a relaunch under another name replaces this
+    one. Destroy leaves it alone: resetting it there raced checkpoints still in
+    flight, which then stamped workflows with an identity no executor recovers."""
     assert GlobalParams.app_name == APP_NAME
-    DBOS.destroy()
-    assert GlobalParams.app_name is None
+    DBOS.destroy(destroy_registry=True)
+    assert GlobalParams.app_name == APP_NAME
+    config["name"] = OTHER_APP
+    # Its own version: a version name belongs to one application.
+    config["application_version"] = "other-app-version"
+    DBOS(config=config)
+    DBOS.launch()
+    assert GlobalParams.app_name == OTHER_APP
 
 
 def test_explicit_application_name_wins(dbos: DBOS, client: DBOSClient) -> None:

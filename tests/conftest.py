@@ -42,6 +42,7 @@ from dbos._core import execute_dequeued_workflow
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 from dbos._sys_db_postgres import PostgresSystemDatabase
+from dbos._utils import GlobalParams
 
 if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle
@@ -124,6 +125,9 @@ def sqlite_path(tmp_path: Path) -> Path:
 
 @pytest.fixture()
 def config(sqlite_path: Path) -> DBOSConfig:
+    # Every test that builds a DBOS asks for this, so it is where the identity a
+    # preceding test launched with is cleared.
+    reset_global_params()
     return default_config(sqlite_path)
 
 
@@ -175,6 +179,16 @@ def _truncate_user_database(user_database_url: str) -> None:
         engine.dispose()
 
 
+def reset_global_params() -> None:
+    """Return the process identity to its pre-launch defaults.
+
+    DBOS.destroy leaves it alone, since resetting it raced checkpoints still in
+    flight during shutdown, so a test relaunching in-process resets it itself."""
+    GlobalParams.app_version = os.environ.get("DBOS__APPVERSION", "")
+    GlobalParams.executor_id = os.environ.get("DBOS__VMID", "local")
+    GlobalParams.app_name = None
+
+
 # Whether this session has dropped the shared databases yet.
 _databases_dropped = False
 
@@ -185,6 +199,7 @@ def _reset_test_databases(db_engine: sa.Engine, *, drop: bool) -> None:
     DBOS.destroy(destroy_registry=True)
     for var in ("DBOS__VMID", "DBOS__APPVERSION", "DBOS__APPID"):
         os.environ.pop(var, None)
+    reset_global_params()
 
     # SQLite needs no reset here: sqlite_path is a fresh file per test.
     if using_sqlite():

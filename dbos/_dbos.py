@@ -439,10 +439,9 @@ class DBOS:
         if destroy_registry:
             global _dbos_global_registry
             _dbos_global_registry = None
-        GlobalParams.app_version = os.environ.get("DBOS__APPVERSION", "")
-        GlobalParams.executor_id = os.environ.get("DBOS__VMID", "local")
-        # Set at launch from the config, so a relaunch under another name must not inherit this one.
-        GlobalParams.app_name = None
+        # GlobalParams are deliberately left as they are: launch sets each of them,
+        # while resetting them here races checkpoints still in flight during shutdown,
+        # which would then stamp workflows with an identity no executor recovers.
         dbos_logger.info("DBOS successfully shut down")
 
     def __init__(
