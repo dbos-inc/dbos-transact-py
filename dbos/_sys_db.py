@@ -6814,6 +6814,7 @@ class SystemDatabase(ABC):
             )
             return not existed
 
+    @db_retry()
     def get_latest_application_version(
         self, application_name: Optional[str] = None
     ) -> VersionInfo:

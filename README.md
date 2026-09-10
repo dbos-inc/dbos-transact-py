@@ -176,13 +176,20 @@ def process_kafka_alerts(msg):
 
 Schedule workflows using cron syntax, or use durable sleep to pause workflows for as long as you like (even days or weeks) before executing.
 
-You can schedule a workflow using a single annotation:
+You can schedule a workflow by registering it with a cron expression:
 
 ```python
-@DBOS.scheduled('* * * * *') # crontab syntax to run once every minute
 @DBOS.workflow()
-def example_scheduled_workflow(scheduled_time: datetime, actual_time: datetime):
+def example_scheduled_workflow(scheduled_time: datetime, context: Any):
     DBOS.logger.info("I am a workflow scheduled to run once a minute.")
+
+DBOS.launch()
+
+DBOS.apply_schedules([{
+    "schedule_name": "example-schedule",
+    "workflow_fn": example_scheduled_workflow,
+    "schedule": "* * * * *",  # crontab syntax to run once every minute
+}])
 ```
 
 You can add a durable sleep to any workflow with a single line of code.
