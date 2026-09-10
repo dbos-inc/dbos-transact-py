@@ -133,7 +133,6 @@ P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 F = TypeVar("F", bound=Callable[..., Any])
 
-TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 DEFAULT_POLLING_INTERVAL = 1.0
 
 

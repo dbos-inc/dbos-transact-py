@@ -52,7 +52,6 @@ from dbos._workflow_commands import fork_workflow
 from ._classproperty import classproperty
 from ._core import (
     DEFAULT_POLLING_INTERVAL,
-    TEMP_SEND_WF_NAME,
     ActiveWorkflowById,
     StepOptions,
     WorkflowHandleAsyncPolling,
@@ -262,12 +261,11 @@ class DBOSRegistry:
                         f"functions, {previous[0]} at {previous[1]} and "
                         f"{current[0]} at {current[1]}."
                     )
-            if name != TEMP_SEND_WF_NAME:
-                # Remove the `<temp>` prefix from the function name to avoid confusion
-                truncated_name = name.replace("<temp>.", "")
-                dbos_logger.warning(
-                    f"Duplicate registration of function '{truncated_name}'. A function named '{truncated_name}' has already been registered with DBOS. All functions registered with DBOS must have unique names."
-                )
+            # Remove the `<temp>` prefix from the function name to avoid confusion
+            truncated_name = name.replace("<temp>.", "")
+            dbos_logger.warning(
+                f"Duplicate registration of function '{truncated_name}'. A function named '{truncated_name}' has already been registered with DBOS. All functions registered with DBOS must have unique names."
+            )
         self.function_type_map[name] = functype
         self.workflow_info_map[name] = wrapped_func
 
@@ -545,15 +543,6 @@ class DBOS:
             from ._flask import setup_flask_middleware
 
             setup_flask_middleware(self.flask)
-
-        # Register send_temp_workflow for backwards compatibility only.
-        # Old workflow_status rows may reference TEMP_SEND_WF_NAME.
-        def send_temp_workflow(
-            destination_id: str, message: Any, topic: Optional[str]
-        ) -> None:
-            self.send(destination_id, message, topic)
-
-        decorate_workflow(self._registry, TEMP_SEND_WF_NAME, None)(send_temp_workflow)
 
         for handler in dbos_logger.handlers:
             handler.flush()
