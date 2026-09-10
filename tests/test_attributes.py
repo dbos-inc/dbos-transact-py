@@ -10,7 +10,6 @@ from dbos import (
     DBOSClient,
     Debouncer,
     EnqueueOptions,
-    Queue,
     SetWorkflowAttributes,
     SetWorkflowID,
     WorkflowHandle,
@@ -67,7 +66,7 @@ def test_attributes_start_workflow(dbos: DBOS) -> None:
 
 
 def test_attributes_enqueue(dbos: DBOS) -> None:
-    queue = Queue("test_attributes_queue")
+    queue = DBOS.register_queue("test_attributes_queue")
 
     @DBOS.workflow()
     def queued_workflow(x: int) -> int:
@@ -147,7 +146,7 @@ def test_attributes_list_queued(dbos: DBOS, skip_with_sqlite: None) -> None:
     start_event = threading.Event()
     blocking_event = threading.Event()
 
-    queue = Queue("attr_filter_queue")
+    queue = DBOS.register_queue("attr_filter_queue")
 
     @DBOS.workflow()
     def blocking_workflow() -> None:
@@ -171,7 +170,7 @@ async def test_attributes_list_async(dbos: DBOS, skip_with_sqlite: None) -> None
     start_event = threading.Event()
     blocking_event = threading.Event()
 
-    queue = Queue("attr_filter_queue_async")
+    queue = await DBOS.register_queue_async("attr_filter_queue_async")
 
     @DBOS.workflow()
     def blocking_workflow() -> None:

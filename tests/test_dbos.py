@@ -19,7 +19,6 @@ from dbos import (
     DBOS,
     DBOSConfig,
     EnqueueOptions,
-    Queue,
     SendMessage,
     SetWorkflowID,
     SetWorkflowTimeout,
@@ -3239,7 +3238,7 @@ async def test_workflow_wrapped_by_custom_decorator(
 
         return decorator
 
-    queue = Queue("wrapped_workflow_queue")
+    queue = await DBOS.register_queue_async("wrapped_workflow_queue")
 
     # @DBOS.workflow() on top: DBOS registers the task_meta wrapper, so the hooks
     # run both on direct invocation and on recovery.

@@ -7,9 +7,10 @@ from typing import Any, NoReturn, Optional
 import pytest
 from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 
-from dbos import DBOS, DBOSConfig, KafkaMessage, Queue
+from dbos import DBOS, DBOSConfig, KafkaMessage
 from dbos._kafka import _describe_kafka_error, _make_error_cb
 from dbos._logger import dbos_logger
+from tests.conftest import retry_until_success
 
 # These tests require local Kafka to run.
 # Without it, they're automatically skipped.
@@ -442,34 +443,29 @@ def test_kafka_listen_queues_still_polls_consumer(
     assert seen == set(range(NUM_EVENTS))
 
 
-def test_kafka_listen_queues_polls_db_backed_consumer_queue(
+def test_kafka_listen_queues_excludes_custom_consumer_queue(
     dbos: DBOS, config: DBOSConfig
 ) -> None:
-    # Regression (M1): a consumer's custom queue must be polled even when it is
-    # database-backed — i.e. absent from the in-memory registry — and listen_queues
-    # names only unrelated queues. The poller must resolve it from the DB, else its
-    # messages sit ENQUEUED forever.
+    # A consumer's custom queue is a user queue, so listen_queues governs it: this
+    # process consumes the messages and enqueues them, but dequeues nothing. Only
+    # the internal Kafka queues, which a user cannot name, override the filter.
     server = "localhost:9092"
     topic = f"dbos-kafka-dbq-{random.randrange(1_000_000_000)}"
 
     send_test_messages(server, topic)
 
-    # Persist a database-backed queue via the public API: it lives in the DB, not the
-    # in-memory registry. The fixture instance is launched, so _sys_db is available.
+    # Register the queue up front: the fixture instance is launched, so _sys_db is available.
     queue_name = f"dbos-test-kafka-dbq-{random.randrange(1_000_000_000)}"
-    registered = DBOS.register_queue(queue_name, concurrency=10)
-    assert registered.database_backed_queue is True
+    DBOS.register_queue(queue_name, concurrency=10)
 
     # Fresh, un-launched instance so we control decoration, listen_queues, and launch.
     # The queue row survives destroy (only connections are torn down).
     DBOS.destroy(destroy_registry=True)
     DBOS(config=config)
 
-    event = threading.Event()
     lock = threading.Lock()
     seen: set[int] = set()
 
-    # The queue is named, and nothing adds it to the in-memory registry, so the poller can only reach it by resolving it from the DB.
     @DBOS.kafka_consumer(
         {
             "bootstrap.servers": server,
@@ -481,18 +477,29 @@ def test_kafka_listen_queues_polls_db_backed_consumer_queue(
     )
     @DBOS.workflow()
     def db_queue_workflow(msg: KafkaMessage) -> None:
-        assert msg.value is not None
         with lock:
             seen.add(int(msg.value.decode().split()[-1]))  # type: ignore
-            if len(seen) == NUM_EVENTS:
-                event.set()
 
     # Listen only to an unrelated queue — deliberately NOT the consumer's queue.
     DBOS.listen_queues(["dbos-test-unrelated-queue"])
     DBOS.launch()
 
-    assert event.wait(timeout=30)
-    assert seen == set(range(NUM_EVENTS))
+    # The consumer runs and enqueues every message, which is what makes the
+    # absence of execution below attributable to the filter rather than to Kafka.
+    def all_enqueued() -> list[str]:
+        statuses: list[str] = [
+            w.status for w in DBOS.list_workflows(queue_name=queue_name)
+        ]
+        assert len(statuses) == NUM_EVENTS, statuses
+        return statuses
+
+    retry_until_success(all_enqueued, interval=1, max_attempts=30)
+    # Nothing dequeues them. Asserting an absence needs real time to pass: the
+    # queue manager rechecks every second and a worker polls every second, so
+    # several cycles go by. Were the filter ignored, all three would have run.
+    time.sleep(3)
+    assert all_enqueued() == ["ENQUEUED"] * NUM_EVENTS
+    assert seen == set()
 
 
 def test_kafka_throughput(
@@ -813,7 +820,7 @@ def test_kafka_queue_polling_interval(
         def late_consumer(msg: KafkaMessage) -> None:
             pass
 
-        queues = dbos._registry.queue_info_map
+        queues = dbos._registry.internal_queue_map
         # The late consumer's queue was created after the config was known.
         assert queues[KAFKA_QUEUE_NAME].polling_interval_sec == 7.5
         DBOS.launch()
@@ -849,7 +856,7 @@ def test_kafka_queue_polling_interval_default(
 
     dbos = DBOS(config=config)
     try:
-        queues = dbos._registry.queue_info_map
+        queues = dbos._registry.internal_queue_map
         assert queues[KAFKA_QUEUE_NAME].polling_interval_sec == 1.0
         DBOS.launch()
         assert queues[KAFKA_QUEUE_NAME].polling_interval_sec == 1.0
@@ -884,7 +891,8 @@ def test_kafka_queue_polling_interval_not_stale_across_reinit(
         dbos = DBOS(config=config)
         DBOS.launch()
         assert (
-            dbos._registry.queue_info_map[KAFKA_QUEUE_NAME].polling_interval_sec == 7.5
+            dbos._registry.internal_queue_map[KAFKA_QUEUE_NAME].polling_interval_sec
+            == 7.5
         )
 
         # Keep the registry, so the same Queue object carries 7.5 into the next run.
@@ -893,7 +901,8 @@ def test_kafka_queue_polling_interval_not_stale_across_reinit(
         dbos = DBOS(config=config)
         DBOS.launch()
         assert (
-            dbos._registry.queue_info_map[KAFKA_QUEUE_NAME].polling_interval_sec == 1.0
+            dbos._registry.internal_queue_map[KAFKA_QUEUE_NAME].polling_interval_sec
+            == 1.0
         )
     finally:
         DBOS.destroy(destroy_registry=True)
@@ -1454,34 +1463,6 @@ def test_kafka_partitioned_queue_name_rejected_at_launch(
         DBOS.launch()
 
 
-def test_kafka_partitioned_in_memory_queue_rejected_at_launch(
-    dbos: DBOS, config: DBOSConfig
-) -> None:
-    # Same rejection, but for an in-memory queue, which lives only in the registry and has no database row: this is the sole cover for resolving a named queue from queue_info_map rather than from the DB.
-    from dbos._error import DBOSInitializationError
-
-    DBOS.destroy(destroy_registry=True)
-    DBOS(config=config)
-
-    queue_name = f"dbos-test-kafka-partq-inmem-{random.randrange(1_000_000_000)}"
-    Queue(queue_name, partition_queue=True)
-
-    @DBOS.kafka_consumer(
-        {
-            "bootstrap.servers": "localhost:9092",
-            "group.id": f"partq-inmem-{random.randrange(1_000_000_000)}",
-        },
-        ["t"],
-        queue_name=queue_name,
-    )
-    @DBOS.workflow()
-    def in_memory_partitioned_queue_wf(msg: KafkaMessage) -> None:
-        pass
-
-    with pytest.raises(DBOSInitializationError, match="is a partitioned queue"):
-        DBOS.launch()
-
-
 def test_kafka_partitioned_queue_name_rejected_when_launched(dbos: DBOS) -> None:
     # Same check as above, but a consumer declared after launch can resolve its queue immediately, so the decorator itself must reject it.
     from dbos._error import DBOSInitializationError
@@ -1503,11 +1484,10 @@ def test_kafka_partitioned_queue_name_rejected_when_launched(dbos: DBOS) -> None
             queue_name=queue_name,
         )(live_partitioned_queue_wf)
 
-    # The rejected consumer left no trace: no registration, no forced poll.
+    # The rejected consumer left no trace.
     assert all(
         reg.queue_name != queue_name for reg in dbos._registry.kafka_registrations
     )
-    assert queue_name not in dbos._registry.poller_queue_names
 
 
 def test_kafka_config_coercion(dbos: DBOS, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2104,8 +2084,6 @@ def test_kafka_custom_queue(dbos: DBOS) -> None:
             if len(processed) == num_messages:
                 event.set()
 
-    # The consumer's custom queue is force-polled even under a listen_queues filter.
-    assert queue_name in dbos._registry.poller_queue_names
     assert event.wait(timeout=60)
     assert processed == set(range(num_messages))
     assert max_active == 1  # concurrency=1 honored

@@ -1,7 +1,7 @@
 import uuid
 from typing import Any
 
-from dbos import DBOS, Queue, SetWorkflowID
+from dbos import DBOS, SetWorkflowID
 
 
 def test_workflow(dbos: DBOS) -> None:
@@ -71,7 +71,7 @@ def test_events(dbos: DBOS) -> None:
 
 def test_queues(dbos: DBOS) -> None:
 
-    queue = Queue("test_queue")
+    queue = DBOS.register_queue("test_queue")
 
     @DBOS.step()
     def step_one(x: int) -> int:

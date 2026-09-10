@@ -10,7 +10,7 @@ from sqlalchemy import event as sa_event
 from sqlalchemy.exc import IntegrityError
 
 # Public API
-from dbos import DBOS, DBOSConfig, Queue, SetWorkflowID
+from dbos import DBOS, DBOSConfig, SetWorkflowID
 from dbos._client import DBOSClient
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
@@ -1411,7 +1411,7 @@ def test_workflow_read_stream_checkpointing(dbos: DBOS) -> None:
     # portable workflow reads a value with no portable form just as any other workflow does.
     portable_reader_id = str(uuid.uuid4())
     with SetWorkflowID(portable_reader_id):
-        handle = Queue("portable_reader_queue").enqueue(
+        handle = DBOS.register_queue("portable_reader_queue").enqueue(
             portable_reader_workflow, writer_id
         )
     assert handle.get_result() == len(test_values)

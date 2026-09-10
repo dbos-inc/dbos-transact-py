@@ -12,6 +12,7 @@ import sqlalchemy as sa
 import dbos._conductor.protocol as p
 from dbos import DBOS, DBOSClient, Queue, WorkflowHandle
 from dbos._error import DBOSException
+from dbos._queue import _INTERNAL_QUEUE_CONSTRUCTION
 from dbos._schemas.system_database import SystemSchema
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 
@@ -122,7 +123,7 @@ def insert_foreign_step(
 def test_runtime_stamps_everything_it_writes(dbos: DBOS) -> None:
     """Workflows, whatever queue they target, and the metadata rows that route them.
     Ownership never consults the queue, which for the internal one is shared."""
-    served = Queue("served-queue")
+    served = DBOS.register_queue("served-queue")
 
     @DBOS.workflow()
     def wf() -> int:
@@ -177,7 +178,7 @@ def test_destroy_clears_the_application_identity(dbos: DBOS) -> None:
 def test_explicit_application_name_wins(dbos: DBOS, client: DBOSClient) -> None:
     """Naming a target is the only way to enqueue across applications, from either
     the runtime or a client."""
-    Queue("override-queue")
+    DBOS.register_queue("override-queue")
 
     @DBOS.workflow()
     def wf() -> int:
@@ -201,7 +202,7 @@ def test_client_without_identity_writes_unclaimed_rows(
 ) -> None:
     """A nameless client writes unclaimed rows, which whichever application runs
     them then claims, so the unclaimed partition drains on its own."""
-    Queue("adopt-queue")
+    DBOS.register_queue("adopt-queue")
 
     @DBOS.workflow()
     def wf() -> int:
@@ -398,7 +399,7 @@ def test_observability_filters_include_unclaimed_rows(
 def test_claiming_skips_another_applications_workflows(dbos: DBOS) -> None:
     """Dequeue and recovery, the two ways a row gets picked up. Both collide across
     applications by default, so only ownership separates them."""
-    queue = Queue("shared-name-queue")
+    queue = DBOS.register_queue("shared-name-queue")
 
     @DBOS.workflow()
     def wf() -> int:
@@ -549,7 +550,10 @@ def test_unclaimed_rows_belong_to_every_application(
     }
 
     # A read-through handle picks up ownership along with the rest of the row.
-    handle = Queue("theirs-queue", database_backed_queue=True)
+    # Built directly, the way enqueue_workflow does, so nothing is read until asked.
+    handle = Queue(
+        "theirs-queue", database_backed_queue=True, token=_INTERNAL_QUEUE_CONSTRUCTION
+    )
     assert handle.application_name is None
     assert handle.concurrency is None
     assert handle.application_name == OTHER_APP
@@ -931,7 +935,7 @@ def test_two_applications_share_one_system_database(dbos: DBOS, config: Any) -> 
             assert application_name_of(dbos, handle.workflow_id) == name
 
         # Each application dequeues its own work and only its own.
-        internal = Queue(INTERNAL_QUEUE_NAME, database_backed_queue=True)
+        internal = dbos._registry.get_internal_queue()
         for name in names:
             dequeued = peers[name].start_queued_workflows(
                 internal, f"exec-{name}", f"version-{name}", None, 0

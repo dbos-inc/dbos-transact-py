@@ -79,6 +79,7 @@ from ._core import (
 from ._croniter import croniter  # type: ignore
 from ._enqueue_options import EnqueueOptions
 from ._queue import (
+    _INTERNAL_QUEUE_CONSTRUCTION,
     Queue,
     QueueConflictResolution,
     QueueRateLimit,
@@ -220,13 +221,13 @@ class DBOSRegistry:
         self.function_type_map: dict[str, str] = {}
         self.class_info_map: dict[str, type] = {}
         self.instance_info_map: dict[str, object] = {}
-        self.queue_info_map: dict[str, Queue] = {}
+        # DBOS's own in-memory queues (the internal queue, the Kafka queues).
+        # User queues are database-backed and live in the queues table.
+        self.internal_queue_map: dict[str, Queue] = {}
         self.pollers: list[RegisteredJob] = []
         self.dbos: Optional[DBOS] = None
         # Kafka consumer registrations, for cross-consumer validation
         self.kafka_registrations: list[KafkaConsumerRegistration] = []
-        # Queues fed by this process's pollers (e.g. Kafka); always polled, regardless of any listen_queues filter, so this process executes what it enqueues.
-        self.poller_queue_names: set[str] = set()
         # Polling interval for the internal Kafka queues, from DBOSConfig; None keeps the Queue default.
         self.kafka_queue_polling_interval_sec: Optional[float] = None
 
@@ -344,12 +345,27 @@ class DBOSRegistry:
             hasher.update(source.encode("utf-8"))
         return hasher.hexdigest()
 
+    def _register_internal_queue(self, name: str, **limits: Any) -> Queue:
+        """Get or create a DBOS-internal, in-memory queue. Internal only: user
+        queues are database-backed, registered with DBOS.register_queue."""
+        queue = self.internal_queue_map.get(name)
+        if queue is None:
+            queue = Queue(name, token=_INTERNAL_QUEUE_CONSTRUCTION, **limits)
+            self.internal_queue_map[name] = queue
+        return queue
+
+    def internal_queues(self) -> list[Queue]:
+        """DBOS's own queues: the internal queue plus the Kafka queues this
+        process's consumers need."""
+        # Snapshot: a consumer registered after launch may add to the map.
+        return list(self.internal_queue_map.values())
+
     def get_internal_queue(self) -> Queue:
         """
         Get or create the internal queue used for the DBOS scheduler, for Kafka, and for
         programmatic resuming and restarting of workflows.
         """
-        return Queue(INTERNAL_QUEUE_NAME)
+        return self._register_internal_queue(INTERNAL_QUEUE_NAME)
 
 
 class ScheduleInput(TypedDict, total=False):
@@ -1014,6 +1030,7 @@ class DBOS:
         """
         check_async("register_queue")
         Queue._validate_queue(
+            name=name,
             concurrency=concurrency,
             worker_concurrency=worker_concurrency,
             global_concurrency=global_concurrency,
@@ -1106,11 +1123,10 @@ class DBOS:
     @classmethod
     def retrieve_queue(cls, name: str) -> Optional[Queue]:
         """
-        Retrieve a database-backed queue by name.
+        Retrieve a queue by name.
 
         Returns None if no queue with the given name has been registered in the
-        system database. The returned Queue is not added to the in-memory queue
-        registry.
+        system database.
         """
         check_async("retrieve_queue")
         return _get_dbos_instance()._sys_db.get_queue(name)
@@ -1123,7 +1139,7 @@ class DBOS:
 
     @classmethod
     def delete_queue(cls, name: str) -> None:
-        """Delete a database-backed queue. Pending workflows on it are unrecoverable."""
+        """Delete a queue. Pending workflows on it are unrecoverable."""
         check_async("delete_queue")
         _get_dbos_instance()._sys_db.delete_queue(name)
 
@@ -1138,7 +1154,7 @@ class DBOS:
         cls, *, application_name: Optional[Union[str, List[str]]] = None
     ) -> List[Queue]:
         """
-        List database-backed queues registered in the system database.
+        List the queues registered in the system database.
 
         :param application_name: List only queues owned by these applications.
             By default, only list this application's queues.
@@ -1367,8 +1383,10 @@ class DBOS:
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
-        """Enqueue a workflow on a database-backed queue, returning a handle to the ongoing execution."""
-        queue = Queue(queue_name, database_backed_queue=True)
+        """Enqueue a workflow on a queue, returning a handle to the ongoing execution."""
+        queue = Queue(
+            queue_name, database_backed_queue=True, token=_INTERNAL_QUEUE_CONSTRUCTION
+        )
         return queue.enqueue(func, *args, **kwargs)
 
     @classmethod
@@ -1381,7 +1399,9 @@ class DBOS:
     ) -> WorkflowHandleAsync[R]:
         """Async version of :meth:`enqueue_workflow`."""
         await cls._configure_asyncio_thread_pool()
-        queue = Queue(queue_name, database_backed_queue=True)
+        queue = Queue(
+            queue_name, database_backed_queue=True, token=_INTERNAL_QUEUE_CONSTRUCTION
+        )
         return await queue.enqueue_async(func, *args, **kwargs)
 
     @classmethod
@@ -2887,7 +2907,7 @@ class DBOS:
         dbos = _get_dbos_instance()
         if (
             queue_name is not None
-            and queue_name not in dbos._registry.queue_info_map
+            and queue_name not in dbos._registry.internal_queue_map
             and dbos._sys_db.get_queue(queue_name) is None
         ):
             raise DBOSException(
@@ -3178,7 +3198,7 @@ class DBOS:
             entry_queue_name = entry.get("queue_name")
             if (
                 entry_queue_name is not None
-                and entry_queue_name not in dbos._registry.queue_info_map
+                and entry_queue_name not in dbos._registry.internal_queue_map
                 and dbos._sys_db.get_queue(entry_queue_name) is None
             ):
                 raise DBOSException(
@@ -3763,19 +3783,22 @@ class DBOS:
         return dbos_tracer
 
     @classmethod
-    def listen_queues(cls, queues: Sequence[Union[Queue, str]]) -> None:
+    def listen_queues(cls, queues: Sequence[str]) -> None:
         """
         Configure this DBOS process to only listen to (dequeue workflows from) specific queues.
 
+        Must be called before launch, so queues are named rather than passed as
+        objects: registering a queue requires a launched DBOS.
+
         Args:
-            queues: The queues to listen to, either as ``Queue`` objects or as queue names.
+            queues: The names of the queues to listen to.
         """
         dbos = _get_dbos_instance()
         if dbos._launched:
             raise DBOSException("listen_queues called after DBOS is launched")
         if dbos._listening_queues is not None:
             raise DBOSException("listen_queues called more than once")
-        dbos._listening_queues = [q if isinstance(q, str) else q.name for q in queues]
+        dbos._listening_queues = list(queues)
 
     @classmethod
     def alert_handler(

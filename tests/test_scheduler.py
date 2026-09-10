@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from dbos import DBOS, DBOSClient, DBOSConfig, DBOSConfiguredInstance, Queue
+from dbos import DBOS, DBOSClient, DBOSConfig, DBOSConfiguredInstance
 from dbos._error import DBOSException
 from dbos._serialization import DBOSPortableJSONSerializer
 from dbos._utils import INTERNAL_QUEUE_NAME

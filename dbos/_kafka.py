@@ -54,13 +54,11 @@ def safe_group_name(method_name: str, topics: list[str]) -> str:
 
 
 def _get_or_create_queue(dbosreg: "DBOSRegistry", name: str, **kwargs: Any) -> Queue:
-    queue = dbosreg.queue_info_map.get(name)
-    if queue is None:
+    if name not in dbosreg.internal_queue_map:
         # Only the internal Kafka queues are created here, so the configured interval always applies.
         if dbosreg.kafka_queue_polling_interval_sec is not None:
             kwargs["polling_interval_sec"] = dbosreg.kafka_queue_polling_interval_sec
-        queue = Queue(name, **kwargs)
-    return queue
+    return dbosreg._register_internal_queue(name, **kwargs)
 
 
 def configure_kafka_queues(dbos: "DBOS") -> None:
@@ -74,7 +72,7 @@ def configure_kafka_queues(dbos: "DBOS") -> None:
         or DEFAULT_QUEUE_POLLING_INTERVAL_SEC
     )
     for name in (KAFKA_QUEUE_NAME, KAFKA_ORDERED_QUEUE_NAME):
-        queue = dbos._registry.queue_info_map.get(name)
+        queue = dbos._registry.internal_queue_map.get(name)
         if queue is not None:
             # Assign directly: these in-memory queues have no database row to update, and this runs before the queue thread starts, so no worker has read it yet.
             queue._polling_interval_sec = interval
@@ -82,7 +80,7 @@ def configure_kafka_queues(dbos: "DBOS") -> None:
 
 def _validate_consumer_queue(dbos: "DBOS", func_name: str, queue_name: str) -> None:
     """Raise if a consumer's custom queue is partitioned: ordering="none" enqueues no partition key, which a partitioned queue never dequeues, so its workflows would sit ENQUEUED forever."""
-    queue = dbos._registry.queue_info_map.get(queue_name)
+    queue = dbos._registry.internal_queue_map.get(queue_name)
     if queue is None:
         try:
             queue = dbos._sys_db.get_queue(queue_name)
@@ -462,9 +460,6 @@ def kafka_consumer(
                 KAFKA_ORDERED_QUEUE_NAME,
                 partition_concurrency=1,
             ).name
-
-        # This process runs the poller and enqueues onto the consumer's queue, so it must poll it even under a listen_queues filter.
-        dbosreg.poller_queue_names.add(consumer_queue_name)
 
         stop_event = threading.Event()
         dbosreg.register_poller(

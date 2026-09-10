@@ -82,8 +82,8 @@ def queue_from_db_row(
     row: sa.Row[Any],
     client_system_database: Optional["SystemDatabase"] = None,
 ) -> "Queue":
-    """Build a database-backed Queue from a queues-table row."""
-    from ._queue import Queue
+    """Build a Queue from a queues-table row."""
+    from ._queue import _INTERNAL_QUEUE_CONSTRUCTION, Queue
 
     m = row._mapping
     limiter: Optional["QueueRateLimit"] = None
@@ -112,6 +112,7 @@ def queue_from_db_row(
         application_name=m["application_name"],
         database_backed_queue=True,
         client_system_database=client_system_database,
+        token=_INTERNAL_QUEUE_CONSTRUCTION,
     )
 
 
@@ -6707,14 +6708,14 @@ class SystemDatabase(ABC):
             ]
 
     def delete_queue(self, name: str) -> None:
-        """Delete a database-backed queue's row, if it exists."""
+        """Delete a queue's row, if it exists."""
         with self.engine.begin() as c:
             c.execute(
                 sa.delete(SystemSchema.queues).where(SystemSchema.queues.c.name == name)
             )
 
     def update_queue(self, name: str, fields: Dict[str, Any]) -> None:
-        """Apply a partial update to a database-backed queue's row."""
+        """Apply a partial update to a queue's row."""
         if not fields:
             return
         values = dict(fields)
