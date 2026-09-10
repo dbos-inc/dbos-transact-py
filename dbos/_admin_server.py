@@ -23,7 +23,6 @@ from ._utils import GlobalParams
 
 if TYPE_CHECKING:
     from ._dbos import DBOS
-    from ._queue import Queue
 
 _health_check_path = "/dbos-healthz"
 _workflow_recovery_path = "/dbos-workflow-recovery"
@@ -104,7 +103,8 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"status": True}).encode("utf-8"))
         elif self.path == _workflow_queues_metadata_path:
             queue_metadata_array = []
-            queues: dict[str, "Queue"] = {}
+            # Seeded with the internal queues, which this process polls but which have no row.
+            queues = dict(self.dbos._registry.internal_queue_map)
             try:
                 for q in self.dbos._sys_db.list_queues():
                     queues.setdefault(q.name, q)
