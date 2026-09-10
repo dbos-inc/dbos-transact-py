@@ -183,11 +183,13 @@ You can schedule a workflow by registering it with a cron expression:
 def example_scheduled_workflow(scheduled_time: datetime, context: Any):
     DBOS.logger.info("I am a workflow scheduled to run once a minute.")
 
-DBOS.create_schedule(
-    schedule_name="example-schedule",
-    workflow_fn=example_scheduled_workflow,
-    schedule="* * * * *",  # crontab syntax to run once every minute
-)
+DBOS.launch()
+
+DBOS.apply_schedules([{
+    "schedule_name": "example-schedule",
+    "workflow_fn": example_scheduled_workflow,
+    "schedule": "* * * * *",  # crontab syntax to run once every minute
+}])
 ```
 
 You can add a durable sleep to any workflow with a single line of code.

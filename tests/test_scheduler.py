@@ -1,11 +1,14 @@
 import sys
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 
 from dbos import DBOS, DBOSClient, DBOSConfig, DBOSConfiguredInstance
 from dbos._error import DBOSException
@@ -1895,3 +1898,162 @@ def test_scheduled_workflow_datetime_with_portable_serializer(
         DBOS.delete_schedule("portable-class-schedule")
     finally:
         DBOS.destroy(destroy_registry=True)
+
+
+def simulate_db_restart(engine: Engine, downtime: float) -> None:
+    # Get DB name
+    with engine.connect() as connection:
+        current_db = connection.execute(text("SELECT current_database()")).scalar()
+
+    # Goal here is to disable connections to the DB for a while.
+    #   Need a temp DB to do that and recover connectivity...
+    temp_db_name = "temp_database_for_maintenance"
+
+    # Retrieve the URL of the current engine
+    main_db_url = engine.url
+
+    # Modify the URL to point to the temporary database
+    temp_db_url = main_db_url.set(database=temp_db_name)
+
+    try:
+        with engine.connect().execution_options(
+            isolation_level="AUTOCOMMIT"
+        ) as connection:
+            # Create a temporary database
+            connection.execute(text(f"CREATE DATABASE {temp_db_name};"))
+    except Exception as e:
+        print("Could not create temp db: ", e)
+
+    temp_engine = create_engine(temp_db_url)
+    with temp_engine.connect().execution_options(
+        isolation_level="AUTOCOMMIT"
+    ) as temp_connection:
+        try:
+            # Disable new connections to the database
+            temp_connection.execute(
+                text(f"ALTER DATABASE {current_db} WITH ALLOW_CONNECTIONS false;")
+            )
+
+            # Terminate all connections except the current one
+            temp_connection.execute(
+                text(
+                    f"""
+                SELECT pg_terminate_backend(pid)
+                FROM pg_stat_activity
+                WHERE pid <> pg_backend_pid()
+                AND datname = '{current_db}';
+            """
+                )
+            )
+        except Exception as e:
+            print(f"Could not disable db {current_db}: ", e)
+
+        time.sleep(downtime)
+
+        # Re-enable new connections
+        try:
+            temp_connection.execute(
+                text(f"ALTER DATABASE {current_db} WITH ALLOW_CONNECTIONS true;")
+            )
+        except Exception as e:
+            print(f"Could not reenable db {current_db}: ", e)
+    temp_engine.dispose()
+
+    try:
+        with engine.connect().execution_options(
+            isolation_level="AUTOCOMMIT"
+        ) as connection:
+            # Clean up the temp DB
+            connection.execute(
+                text(
+                    f"""
+                SELECT pg_terminate_backend(pid)
+                FROM pg_stat_activity
+                WHERE pid <> pg_backend_pid()
+                AND datname = '{temp_db_name}';
+            """
+                )
+            )
+
+            # Drop temporary database
+            connection.execute(text(f"DROP DATABASE {temp_db_name};"))
+    except Exception as e:
+        print(f"Could not clean up temp db {temp_db_name}: ", e)
+
+
+def test_schedule_uses_latest_application_version(dbos: DBOS) -> None:
+    newer_version = f"newer-{uuid.uuid4()}"
+    dbos._sys_db.create_application_version(newer_version)
+    dbos._sys_db.update_application_version_timestamp(
+        newer_version, int(time.time() * 1000) + 1_000_000
+    )
+
+    @DBOS.workflow()
+    def versioned_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    DBOS.create_schedule(
+        schedule_name="latest-version-schedule",
+        workflow_fn=versioned_workflow,
+        schedule="* * * * * *",
+    )
+
+    def check_enqueued_on_latest_version() -> None:
+        workflows = DBOS.list_workflows(
+            workflow_id_prefix="sched-latest-version-schedule-",
+            load_input=False,
+            load_output=False,
+        )
+        assert len(workflows) >= 1
+        assert all(wf.app_version == newer_version for wf in workflows)
+
+    retry_until_success(check_enqueued_on_latest_version)
+
+
+def test_schedule_survives_sysdb_downtime(dbos: DBOS, skip_with_sqlite: None) -> None:
+    late_counter: int = 0
+
+    @DBOS.workflow()
+    def downtime_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    @DBOS.workflow()
+    def late_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        nonlocal late_counter
+        late_counter += 1
+
+    DBOS.create_schedule(
+        schedule_name="downtime-schedule",
+        workflow_fn=downtime_workflow,
+        schedule="* * * * * *",
+    )
+
+    # last_fired_at is stamped once per tick, so it tracks the schedule's own thread
+    def read_last_fired() -> datetime:
+        sched = DBOS.get_schedule("downtime-schedule")
+        assert sched is not None and sched["last_fired_at"] is not None
+        return datetime.fromisoformat(sched["last_fired_at"])
+
+    retry_until_success(read_last_fired)
+
+    simulate_db_restart(dbos._sys_db.engine, 2)
+
+    fired_after_restart = retry_until_success(read_last_fired)
+
+    # The schedule's thread must survive the outage and keep ticking
+    def check_still_ticking() -> None:
+        assert read_last_fired() > fired_after_restart
+
+    retry_until_success(check_still_ticking)
+
+    # The polling loop must survive too, so a schedule created after the outage is picked up
+    DBOS.create_schedule(
+        schedule_name="downtime-schedule-late",
+        workflow_fn=late_workflow,
+        schedule="* * * * * *",
+    )
+
+    def check_late_schedule_fired() -> None:
+        assert late_counter >= 1
+
+    retry_until_success(check_late_schedule_fired)
