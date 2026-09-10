@@ -2545,8 +2545,8 @@ def decorate_step(
         set_dbos_func_name(wrapped_wf, "<temp>." + step_name)
         dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf, "step")
         wrapper.__orig_func = temp_wf  # type: ignore
-        set_func_info(wrapped_wf, get_or_create_func_info(func))
-        set_func_info(temp_wf, get_or_create_func_info(func))
+        set_func_info(wrapped_wf, fi)
+        set_func_info(temp_wf, fi)
 
         return cast(Callable[P, R], wrapper)
 
