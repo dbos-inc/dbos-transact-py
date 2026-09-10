@@ -438,10 +438,6 @@ class DBOS:
         if destroy_registry:
             global _dbos_global_registry
             _dbos_global_registry = None
-        GlobalParams.app_version = os.environ.get("DBOS__APPVERSION", "")
-        GlobalParams.executor_id = os.environ.get("DBOS__VMID", "local")
-        # Set at launch from the config, so a relaunch under another name must not inherit this one.
-        GlobalParams.app_name = None
         dbos_logger.info("DBOS successfully shut down")
 
     def __init__(
@@ -502,7 +498,9 @@ class DBOS:
                     f"conductor_executor_metadata must be JSON-serializable: {e}"
                 )
 
-        # Globally set the application version and executor ID.
+        # Reset global configuration. If reconfigured, it is set at launch.
+        GlobalParams.app_version = os.environ.get("DBOS__APPVERSION", "")
+        GlobalParams.executor_id = os.environ.get("DBOS__VMID", "local")
         # In DBOS Cloud, instead use the values supplied through environment variables.
         if not os.environ.get("DBOS__CLOUD") == "true":
             if self.enable_patching:
