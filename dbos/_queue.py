@@ -78,7 +78,7 @@ class QueueRateLimit(TypedDict):
 
 @dataclass
 class ResolvedQueueLimits:
-    """A queue's limits, each resolved to the scope it is enforced at."""
+    """A snapshot of a queue's limits, named by the scope each is enforced at."""
 
     global_concurrency: Optional[int]
     worker_concurrency: Optional[int]
@@ -239,7 +239,7 @@ class Queue:
         return any(value is not None for value in values.values())
 
     def _resolve_limits(self) -> ResolvedQueueLimits:
-        """Resolve every limit to the scope it is enforced at."""
+        """Snapshot every limit for the dequeue paths, named by its scope."""
         return ResolvedQueueLimits(
             global_concurrency=self._concurrency,
             worker_concurrency=self._worker_concurrency,
@@ -358,13 +358,13 @@ class Queue:
                 "Queue.global_concurrency", "Queue.get_global_concurrency_async"
             )
             self._refresh_fields(self._read_from_db())
-        return self._resolve_limits().global_concurrency
+        return self._concurrency
 
     async def get_global_concurrency_async(self) -> Optional[int]:
         if self.database_backed_queue:
             await self._configure_thread_pool()
             self._refresh_fields(await asyncio.to_thread(self._read_from_db))
-        return self._resolve_limits().global_concurrency
+        return self._concurrency
 
     def set_global_concurrency(self, value: Optional[int]) -> None:
         self._require_database_backed()
@@ -387,13 +387,13 @@ class Queue:
                 "Queue.partition_concurrency", "Queue.get_partition_concurrency_async"
             )
             self._refresh_fields(self._read_from_db())
-        return self._resolve_limits().partition_concurrency
+        return self._partition_concurrency
 
     async def get_partition_concurrency_async(self) -> Optional[int]:
         if self.database_backed_queue:
             await self._configure_thread_pool()
             self._refresh_fields(await asyncio.to_thread(self._read_from_db))
-        return self._resolve_limits().partition_concurrency
+        return self._partition_concurrency
 
     def set_partition_concurrency(self, value: Optional[int]) -> None:
         self._require_database_backed()
@@ -438,13 +438,13 @@ class Queue:
                 "Queue.get_partition_worker_concurrency_async",
             )
             self._refresh_fields(self._read_from_db())
-        return self._resolve_limits().partition_worker_concurrency
+        return self._partition_worker_concurrency
 
     async def get_partition_worker_concurrency_async(self) -> Optional[int]:
         if self.database_backed_queue:
             await self._configure_thread_pool()
             self._refresh_fields(await asyncio.to_thread(self._read_from_db))
-        return self._resolve_limits().partition_worker_concurrency
+        return self._partition_worker_concurrency
 
     def set_partition_worker_concurrency(self, value: Optional[int]) -> None:
         self._require_database_backed()
@@ -497,13 +497,13 @@ class Queue:
                 "Queue.partition_limiter", "Queue.get_partition_limiter_async"
             )
             self._refresh_fields(self._read_from_db())
-        return self._resolve_limits().partition_limiter
+        return self._partition_limiter
 
     async def get_partition_limiter_async(self) -> Optional[QueueRateLimit]:
         if self.database_backed_queue:
             await self._configure_thread_pool()
             self._refresh_fields(await asyncio.to_thread(self._read_from_db))
-        return self._resolve_limits().partition_limiter
+        return self._partition_limiter
 
     def set_partition_limiter(self, value: Optional[QueueRateLimit]) -> None:
         self._require_database_backed()
@@ -538,13 +538,13 @@ class Queue:
                 "Queue.worker_concurrency", "Queue.get_worker_concurrency_async"
             )
             self._refresh_fields(self._read_from_db())
-        return self._resolve_limits().worker_concurrency
+        return self._worker_concurrency
 
     async def get_worker_concurrency_async(self) -> Optional[int]:
         if self.database_backed_queue:
             await self._configure_thread_pool()
             self._refresh_fields(await asyncio.to_thread(self._read_from_db))
-        return self._resolve_limits().worker_concurrency
+        return self._worker_concurrency
 
     def set_worker_concurrency(self, value: Optional[int]) -> None:
         self._require_database_backed()
@@ -580,13 +580,13 @@ class Queue:
                 "Queue.limiter", "Queue.get_limiter_async"
             )
             self._refresh_fields(self._read_from_db())
-        return self._resolve_limits().limiter
+        return self._limiter
 
     async def get_limiter_async(self) -> Optional[QueueRateLimit]:
         if self.database_backed_queue:
             await self._configure_thread_pool()
             self._refresh_fields(await asyncio.to_thread(self._read_from_db))
-        return self._resolve_limits().limiter
+        return self._limiter
 
     def set_limiter(self, value: Optional[QueueRateLimit]) -> None:
         self._require_database_backed()

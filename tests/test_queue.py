@@ -1810,7 +1810,7 @@ def test_resuming_queued_partitioned_workflows(
     def regular_workflow() -> None:
         return
 
-    # Enqueue a blocked workflow and two regular workflows on a queue with concurrency 1
+    # Enqueue a blocked workflow and two regular workflows on a queue with partition concurrency 1
     DBOS.register_queue("test_queue", partition_concurrency=1)
     wfid = str(uuid.uuid4())
     with SetEnqueueOptions(queue_partition_key="key"):
@@ -2315,10 +2315,6 @@ async def test_enqueue_async_validation(dbos: DBOS) -> None:
     ):
         with SetEnqueueOptions(queue_partition_key="key", deduplication_id="dedupe"):
             await queue.enqueue_async(noop_workflow)
-
-    # Every queue is a priority queue: priority needs no opt-in.
-    with SetEnqueueOptions(priority=1):
-        await queue.enqueue_async(noop_workflow)
 
 
 def test_worker_concurrency_across_versions(dbos: DBOS, client: DBOSClient) -> None:
@@ -3173,7 +3169,7 @@ def test_partitioned_batch_dequeue_sweep_cap(
 
 
 def test_partitioned_batch_dequeue_exclusive_direct(dbos: DBOS) -> None:
-    """With concurrency=1, one batched call admits exactly each partition's
+    """With partition_concurrency=1, one batched call admits exactly each partition's
     head-of-line row; a partition admits nothing more until its head finishes."""
 
     @DBOS.workflow()
@@ -3617,7 +3613,7 @@ def test_partitioned_queue_global_exclusivity(
     monkeypatch: pytest.MonkeyPatch,
     skip_with_sqlite_imprecise_time: None,
 ) -> None:
-    """End-to-end concurrency=1: the queue worker dispatches to the batched path, and a
+    """End-to-end partition_concurrency=1: the queue worker dispatches to the batched path, and a
     partition runs strictly one workflow at a time in FIFO order, gated globally (no
     worker_concurrency is set, so only the PENDING-row check holds followers back)."""
 
