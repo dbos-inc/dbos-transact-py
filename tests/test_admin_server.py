@@ -18,7 +18,7 @@ from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
-from tests.conftest import default_config
+from tests.conftest import default_config, retry_until_success
 
 
 @pytest.fixture()
@@ -88,9 +88,8 @@ def test_deactivate(dbos: DBOS, config: DBOSConfig) -> None:
 
     DBOS.register_queue("example-queue")
 
-    @DBOS.scheduled("* * * * * *")
     @DBOS.workflow()
-    def test_workflow(scheduled: datetime, actual: datetime) -> None:
+    def scheduled_workflow(scheduled_at: datetime, ctx: Any) -> None:
         nonlocal wf_counter
         wf_counter += 1
 
@@ -98,10 +97,18 @@ def test_deactivate(dbos: DBOS, config: DBOSConfig) -> None:
     def regular_workflow() -> int:
         return 5
 
+    DBOS.create_schedule(
+        schedule_name="deactivate-schedule",
+        workflow_fn=scheduled_workflow,
+        schedule="* * * * * *",
+    )
+
     # Let the scheduled workflow run
-    time.sleep(5)
+    def check_fired() -> None:
+        assert wf_counter > 0
+
+    retry_until_success(check_fired)
     val = wf_counter
-    assert val > 0
     # Deactivate--scheduled workflow should stop
     response = requests.get("http://localhost:3001/deactivate", timeout=5)
     assert response.status_code == 200
@@ -113,21 +120,17 @@ def test_deactivate(dbos: DBOS, config: DBOSConfig) -> None:
     # Enqueue a workflow, verify it still runs
     assert DBOS.enqueue_workflow("example-queue", regular_workflow).get_result() == 5
 
-    # Test deferred event receivers
+    # The schedule outlives this instance; drop it so the relaunch below has
+    # nothing to enqueue against an empty registry.
+    DBOS.delete_schedule("deactivate-schedule")
+
+    # Test that a relaunched executor's event receivers start, then stop on deactivate
     DBOS.destroy(destroy_registry=True)
     dbos = DBOS(config=config)
-
-    @DBOS.scheduled("* * * * * *")
-    @DBOS.workflow()
-    def deferred_workflow(scheduled: datetime, actual: datetime) -> None:
-        nonlocal wf_counter
-        wf_counter += 1
-
     DBOS.launch()
     assert len(dbos.poller_stop_events) > 0
     for event in dbos.poller_stop_events:
         assert not event.is_set()
-    # Deactivate--scheduled workflow should stop
     response = requests.get("http://localhost:3001/deactivate", timeout=5)
     assert response.status_code == 200
     for event in dbos.poller_stop_events:
