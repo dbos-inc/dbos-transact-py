@@ -28,7 +28,7 @@ _ONLINE_MIGRATIONS = {
     47,
     107,
     111,
-    115,
+    114,
 }
 
 # From this index on, every SDK defines the same migration at the same index.
