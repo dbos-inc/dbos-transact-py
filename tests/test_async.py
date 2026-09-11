@@ -4,7 +4,8 @@ import gc
 import threading
 import time
 import uuid
-from typing import Any, Dict, List, Optional, cast
+from pathlib import Path
+from typing import Any, AsyncGenerator, Dict, List, Optional, cast
 
 import pytest
 import sqlalchemy as sa
@@ -1371,6 +1372,58 @@ def test_destroy_from_adopted_main_loop_does_not_deadlock(
     )
     if scenario_error:
         raise scenario_error[0]
+
+
+@pytest.mark.parametrize("adopt_main_loop", [False, True], ids=["owned", "adopted"])
+def test_destroy_finalizes_only_owned_async_generators(
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+    tmp_path: Path,
+    adopt_main_loop: bool,
+) -> None:
+    resource = (tmp_path / "stream.txt").open("w")
+
+    async def source() -> AsyncGenerator[str, None]:
+        try:
+            yield "ready"
+        finally:
+            # Stream cleanup may need the event loop for another await.
+            await asyncio.sleep(0)
+            resource.close()
+
+    stream = source()
+
+    @DBOS.workflow()
+    async def consume_one() -> str:
+        # Keep the suspended stream alive so garbage collection cannot mask
+        # whether runtime shutdown actually finalizes it.
+        return await anext(stream)
+
+    DBOS(config=config)
+    try:
+        if adopt_main_loop:
+
+            async def scenario() -> None:
+                DBOS.launch()
+                handle = await DBOS.start_workflow_async(consume_one)
+                assert await handle.get_result() == "ready"
+                DBOS.destroy()
+                # An application-owned loop and its streams remain usable.
+                assert not resource.closed
+                await stream.aclose()
+
+            asyncio.run(scenario())
+        else:
+            DBOS.launch()
+            handle = cast(WorkflowHandle[str], DBOS.start_workflow(consume_one))
+            assert handle.get_result() == "ready"
+            assert not resource.closed
+            DBOS.destroy()
+            assert resource.closed
+    finally:
+        DBOS.destroy(destroy_registry=True)
+        asyncio.run(stream.aclose())
+        resource.close()
 
 
 @pytest.mark.asyncio
