@@ -7,6 +7,7 @@
 # First, let's do imports, create a FastAPI app, and initialize DBOS.
 
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -22,10 +23,12 @@ database_url = os.environ.get("DBOS_DATABASE_URL", "postgresql+psycopg://postgre
 
 # Launch DBOS from a FastAPI lifecycle manager
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     DBOS.launch()
-    yield
-    DBOS.destroy()
+    try:
+        yield
+    finally:
+        DBOS.destroy()
 
 
 app = FastAPI(lifespan=lifespan)

@@ -25,6 +25,7 @@ def test_roles_recovery(dbos: DBOS) -> None:
     assert [w.workflow_id for w in DBOS.list_workflows(user="admin")] == [
         handle.workflow_id
     ]
+    assert DBOS.list_workflows(user="notadmin") == []
 
     # Recover the workflow, verify roles are set right
     set_workflow_status(dbos._sys_db, handle.workflow_id, "PENDING")
