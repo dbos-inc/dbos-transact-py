@@ -73,6 +73,8 @@ class BackgroundEventLoop:
             task.cancel()
 
         await asyncio.gather(*tasks, return_exceptions=True)
+        # Suspended async generators are not tasks, but may still own resources.
+        await self._loop.shutdown_asyncgens()
         self._loop.stop()
 
     def set_main_loop(self) -> None:
