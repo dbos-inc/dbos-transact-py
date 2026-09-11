@@ -44,7 +44,6 @@ from ._context import (
     DuplicationPolicy,
     EnterDBOSStepCtx,
     EnterDBOSWorkflow,
-    OperationType,
     SetEnqueueOptions,
     SetWorkflowID,
     TracedAttributes,
@@ -133,7 +132,6 @@ P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 F = TypeVar("F", bound=Callable[..., Any])
 
-TEMP_SEND_WF_NAME = "<temp>.temp_send_workflow"
 DEFAULT_POLLING_INTERVAL = 1.0
 
 
@@ -1045,7 +1043,7 @@ def _execute_workflow_wthread(
 ) -> R:
     attributes: TracedAttributes = {
         "name": get_dbos_func_name(func),
-        "operationType": OperationType.WORKFLOW.value,
+        "operationType": "workflow",
         "queueName": status.get("queue_name"),
     }
     fi = get_func_info(func)
@@ -1111,7 +1109,7 @@ async def _execute_workflow_async(
 ) -> R:
     attributes: TracedAttributes = {
         "name": get_dbos_func_name(func),
-        "operationType": OperationType.WORKFLOW.value,
+        "operationType": "workflow",
         "queueName": status.get("queue_name"),
     }
     fi = get_func_info(func)
@@ -1914,7 +1912,7 @@ def workflow_wrapper(
         rr: Optional[str] = check_required_roles(func, fi)
         attributes: TracedAttributes = {
             "name": get_dbos_func_name(func),
-            "operationType": OperationType.WORKFLOW.value,
+            "operationType": "workflow",
         }
         inputs: WorkflowInputs = {
             "args": args,
@@ -2093,7 +2091,7 @@ def decorate_workflow(
         func_name = name if name is not None else func.__qualname__
         set_dbos_func_name(func, func_name)
         set_dbos_func_name(wrapped_func, func_name)
-        reg.register_wf_function(func_name, wrapped_func, "workflow")
+        reg.register_wf_function(func_name, wrapped_func)
         return wrapped_func
 
     return _workflow_decorator
@@ -2240,7 +2238,7 @@ def invoke_step(
 
     attributes: TracedAttributes = {
         "name": step_name,
-        "operationType": OperationType.STEP.value,
+        "operationType": "step",
     }
 
     step_start_time = int(time.time() * 1000)
@@ -2544,10 +2542,10 @@ def decorate_step(
         wrapped_wf = workflow_wrapper(dbosreg, temp_wf)
         set_dbos_func_name(temp_wf, "<temp>." + step_name)
         set_dbos_func_name(wrapped_wf, "<temp>." + step_name)
-        dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf, "step")
+        dbosreg.register_wf_function(get_dbos_func_name(temp_wf), wrapped_wf)
         wrapper.__orig_func = temp_wf  # type: ignore
-        set_func_info(wrapped_wf, get_or_create_func_info(func))
-        set_func_info(temp_wf, get_or_create_func_info(func))
+        set_func_info(wrapped_wf, fi)
+        set_func_info(temp_wf, fi)
 
         return cast(Callable[P, R], wrapper)
 

@@ -3,7 +3,7 @@ from dbos.cli.cli import _resolve_project_name_and_template
 
 
 def test_resolve_project_name_and_template() -> None:
-    git_templates = ["dbos-toolbox", "dbos-app-starter", "dbos-cron-starter"]
+    git_templates = ["dbos-toolbox", "dbos-app-starter"]
     templates_dir = get_templates_directory()
 
     # dbos init my-app -t dbos-toolbox

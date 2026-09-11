@@ -52,7 +52,6 @@ from dbos._workflow_commands import fork_workflow
 from ._classproperty import classproperty
 from ._core import (
     DEFAULT_POLLING_INTERVAL,
-    TEMP_SEND_WF_NAME,
     ActiveWorkflowById,
     StepOptions,
     WorkflowHandleAsyncPolling,
@@ -117,13 +116,11 @@ from ._sys_db import (
 from ._tracer import DBOSTracer, dbos_tracer
 
 if TYPE_CHECKING:
-    from fastapi import FastAPI
     from ._kafka import (
         KafkaConsumerRegistration,
         KafkaOrdering,
         _KafkaConsumerWorkflow,
     )
-    from flask import Flask
     from opentelemetry.trace import Span
 
 from typing import ParamSpec
@@ -146,7 +143,6 @@ from ._dbos_config import (
     translate_dbos_config_to_config_file,
 )
 from ._error import (
-    DBOSConflictingRegistrationError,
     DBOSException,
     DBOSNonExistentWorkflowError,
     DBOSPatchNondeterminismError,
@@ -217,7 +213,6 @@ RegisteredJob = Tuple[
 class DBOSRegistry:
     def __init__(self) -> None:
         self.workflow_info_map: dict[str, Callable[..., Any]] = {}
-        self.function_type_map: dict[str, str] = {}
         self.class_info_map: dict[str, type] = {}
         self.instance_info_map: dict[str, object] = {}
         # DBOS's own in-memory queues (the internal queue, the Kafka queues).
@@ -230,12 +225,10 @@ class DBOSRegistry:
         # Polling interval for the internal Kafka queues, from DBOSConfig; None keeps the Queue default.
         self.kafka_queue_polling_interval_sec: Optional[float] = None
 
-    def register_wf_function(self, name: str, wrapped_func: F, functype: str) -> None:
-        if name in self.function_type_map:
-            if self.function_type_map[name] != functype:
-                raise DBOSConflictingRegistrationError(name)
+    def register_wf_function(self, name: str, wrapped_func: F) -> None:
+        if name in self.workflow_info_map:
             # Error if a workflow is registered with the same name in different modules.
-            if functype == "workflow":
+            if not name.startswith("<temp>."):
 
                 def code_origin(fn: Any) -> Optional[Tuple[str, str]]:
                     """Where a function came from, as (module, real source path)."""
@@ -262,13 +255,11 @@ class DBOSRegistry:
                         f"functions, {previous[0]} at {previous[1]} and "
                         f"{current[0]} at {current[1]}."
                     )
-            if name != TEMP_SEND_WF_NAME:
-                # Remove the `<temp>` prefix from the function name to avoid confusion
-                truncated_name = name.replace("<temp>.", "")
-                dbos_logger.warning(
-                    f"Duplicate registration of function '{truncated_name}'. A function named '{truncated_name}' has already been registered with DBOS. All functions registered with DBOS must have unique names."
-                )
-        self.function_type_map[name] = functype
+            # Remove the `<temp>` prefix from the function name to avoid confusion
+            truncated_name = name.replace("<temp>.", "")
+            dbos_logger.warning(
+                f"Duplicate registration of function '{truncated_name}'. A function named '{truncated_name}' has already been registered with DBOS. All functions registered with DBOS must have unique names."
+            )
         self.workflow_info_map[name] = wrapped_func
 
     def register_class(self, cls: type, ci: DBOSClassInfo) -> None:
@@ -410,8 +401,6 @@ class DBOS:
         cls: Type[DBOS],
         *,
         config: DBOSConfig,
-        fastapi: Optional["FastAPI"] = None,
-        flask: Optional["Flask"] = None,
         conductor_url: Optional[str] = None,
         conductor_key: Optional[str] = None,
     ) -> DBOS:
@@ -419,7 +408,7 @@ class DBOS:
         global _dbos_global_registry
         if _dbos_global_instance is None:
             _dbos_global_instance = super().__new__(cls)
-            _dbos_global_instance.__init__(fastapi=fastapi, config=config, flask=flask, conductor_url=conductor_url, conductor_key=conductor_key)  # type: ignore
+            _dbos_global_instance.__init__(config=config, conductor_url=conductor_url, conductor_key=conductor_key)  # type: ignore
         return _dbos_global_instance
 
     @classmethod
@@ -444,8 +433,6 @@ class DBOS:
         self,
         *,
         config: DBOSConfig,
-        fastapi: Optional["FastAPI"] = None,
-        flask: Optional["Flask"] = None,
         conductor_url: Optional[str] = None,
         conductor_key: Optional[str] = None,
     ) -> None:
@@ -464,8 +451,6 @@ class DBOS:
         self.background_thread_stop_events: List[threading.Event] = []
         # Stop pollers (event receivers) that can create new workflows (scheduler, Kafka)
         self.poller_stop_events: List[threading.Event] = []
-        self.fastapi: Optional["FastAPI"] = fastapi
-        self.flask: Optional["Flask"] = flask
         self._executor_field: Optional[ThreadPoolExecutor] = None
         self._background_threads: List[threading.Thread] = []
         self._timeout_tasks: set[asyncio.Task[None]] = set()
@@ -534,27 +519,6 @@ class DBOS:
         dbos_tracer.config(self._config)
         dbos_logger.info(f"Initializing DBOS (v{GlobalParams.dbos_version})")
 
-        # If using FastAPI, set up middleware and lifecycle events
-        if self.fastapi is not None:
-            from ._fastapi import setup_fastapi_middleware
-
-            setup_fastapi_middleware(self.fastapi, _get_dbos_instance())
-
-        # If using Flask, set up middleware
-        if self.flask is not None:
-            from ._flask import setup_flask_middleware
-
-            setup_flask_middleware(self.flask)
-
-        # Register send_temp_workflow for backwards compatibility only.
-        # Old workflow_status rows may reference TEMP_SEND_WF_NAME.
-        def send_temp_workflow(
-            destination_id: str, message: Any, topic: Optional[str]
-        ) -> None:
-            self.send(destination_id, message, topic)
-
-        decorate_workflow(self._registry, TEMP_SEND_WF_NAME, None)(send_temp_workflow)
-
         for handler in dbos_logger.handlers:
             handler.flush()
 
@@ -581,8 +545,11 @@ class DBOS:
 
     @classmethod
     def launch(cls) -> None:
-        if _dbos_global_instance is not None:
-            _dbos_global_instance._launch()
+        if _dbos_global_instance is None:
+            raise DBOSException(
+                "DBOS.launch() was called without a DBOS instance. Construct DBOS(config=...) first; DBOS.destroy() discards the instance."
+            )
+        _dbos_global_instance._launch()
 
     def _launch(self) -> None:
         try:

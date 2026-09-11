@@ -26,9 +26,7 @@ OtelAttributeFormat = Literal["legacy", "semconv"]
 
 
 # Legacy DBOS attribute name -> OpenTelemetry semconv-style equivalent.
-# Keys MUST match the field names in `TracedAttributes` in `_context.py`,
-# plus the few attributes set ad-hoc (`responseCode`,
-# `authenticatedUser*`).
+# Keys MUST match the field names in `TracedAttributes` in `_context.py`.
 _LEGACY_TO_SEMCONV: dict[str, str] = {
     "operationUUID": "dbos.operation.workflow_id",
     "operationType": "dbos.operation.type",
@@ -39,11 +37,6 @@ _LEGACY_TO_SEMCONV: dict[str, str] = {
     "authenticatedUser": "dbos.user.name",
     "authenticatedUserRoles": "dbos.user.roles",
     "authenticatedUserAssumedRole": "dbos.user.assumed_role",
-    "requestID": "dbos.request.id",
-    "requestIP": "dbos.request.ip",
-    "requestURL": "dbos.request.url",
-    "requestMethod": "dbos.request.method",
-    "responseCode": "dbos.response.status_code",
 }
 
 

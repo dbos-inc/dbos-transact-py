@@ -7,6 +7,9 @@
 # First, let's do imports, create a FastAPI app, and initialize DBOS.
 
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
@@ -17,12 +20,23 @@ from .schema import dbos_hello
 
 database_url = os.environ.get("DBOS_DATABASE_URL", "postgresql+psycopg://postgres:dbos@localhost:5432/${default_db_name}?connect_timeout=5")
 
-app = FastAPI()
+
+# Launch DBOS from a FastAPI lifecycle manager
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    DBOS.launch()
+    try:
+        yield
+    finally:
+        DBOS.destroy()
+
+
+app = FastAPI(lifespan=lifespan)
 dbos_config: DBOSConfig = {
     "name": "${project_name}",
     "system_database_url": os.environ.get("DBOS_SYSTEM_DATABASE_URL"),
 }
-DBOS(fastapi=app, config=dbos_config)
+DBOS(config=dbos_config)
 db = SQLAlchemyDatasource.create(database_url)
 
 # Next, let's write a function that greets visitors.
@@ -80,8 +94,7 @@ def readme() -> HTMLResponse:
     return HTMLResponse(readme)
 
 
-# Finally, we'll launch DBOS then start the FastAPI server.
+# Finally, we'll start the FastAPI server. The lifespan above launches DBOS.
 
 if __name__ == "__main__":
-    DBOS.launch()
     uvicorn.run(app, host="0.0.0.0", port=8000)
