@@ -545,8 +545,11 @@ class DBOS:
 
     @classmethod
     def launch(cls) -> None:
-        if _dbos_global_instance is not None:
-            _dbos_global_instance._launch()
+        if _dbos_global_instance is None:
+            raise DBOSException(
+                "DBOS.launch() was called without a DBOS instance. Construct DBOS(config=...) first; DBOS.destroy() discards the instance."
+            )
+        _dbos_global_instance._launch()
 
     def _launch(self) -> None:
         try:
