@@ -125,7 +125,6 @@ if TYPE_CHECKING:
 
 from typing import ParamSpec
 
-from ._admin_server import AdminServer
 from ._context import (
     DBOSContext,
     EnterDBOSStepCtx,
@@ -446,7 +445,6 @@ class DBOS:
         self._registry: DBOSRegistry = _get_or_create_dbos_registry()
         self._registry.dbos = self
         self._listening_queues: Optional[List[str]] = None
-        self._admin_server_field: Optional[AdminServer] = None
         # Stop internal background threads (queue thread, timeout threads, etc.)
         self.background_thread_stop_events: List[threading.Event] = []
         # Stop pollers (event receivers) that can create new workflows (scheduler, Kafka)
@@ -534,13 +532,6 @@ class DBOS:
         if self._sys_db_field is None:
             raise DBOSException("System database accessed before DBOS was launched")
         rv: SystemDatabase = self._sys_db_field
-        return rv
-
-    @property
-    def _admin_server(self) -> AdminServer:
-        if self._admin_server_field is None:
-            raise DBOSException("Admin server accessed before DBOS was launched")
-        rv: AdminServer = self._admin_server_field
         return rv
 
     @classmethod
@@ -637,19 +628,6 @@ class DBOS:
 
                 validate_kafka_consumers(self)
                 configure_kafka_queues(self)
-
-            admin_port = self._config.get("runtimeConfig", {}).get("admin_port")
-            if admin_port is None:
-                admin_port = 3001
-            run_admin_server = self._config.get("runtimeConfig", {}).get(
-                "run_admin_server"
-            )
-            if run_admin_server:
-                try:
-                    dbos_logger.debug("Starting admin server")
-                    self._admin_server_field = AdminServer(dbos=self, port=admin_port)
-                except Exception as e:
-                    dbos_logger.warning(f"Failed to start admin server: {e}")
 
             # Recover local workflows if not using a recovery service
             if not self.conductor_key and not GlobalParams.dbos_cloud:
@@ -902,9 +880,6 @@ class DBOS:
                 except RuntimeError as e:
                     dbos_logger.warning(f"Exception cancelling timeout tasks: {e}")
         self._background_event_loop.stop()
-        if self._admin_server_field is not None:
-            self._admin_server_field.stop()
-            self._admin_server_field = None
         if self._executor_field is not None:
             self._executor_field.shutdown(wait=False, cancel_futures=True)
             self._executor_field = None
