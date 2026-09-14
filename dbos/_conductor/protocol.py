@@ -34,7 +34,6 @@ class MessageType(str, Enum):
     LIST_WORKFLOWS = "list_workflows"
     LIST_QUEUED_WORKFLOWS = "list_queued_workflows"
     RESUME = "resume"
-    RESTART = "restart"
     GET_WORKFLOW = "get_workflow"
     EXIST_PENDING_WORKFLOWS = "exist_pending_workflows"
     LIST_STEPS = "list_steps"
@@ -156,17 +155,6 @@ class ResumeRequest(BaseMessage):
 
 @dataclass
 class ResumeResponse(BaseMessage):
-    success: bool
-    error_message: Optional[str] = None
-
-
-@dataclass
-class RestartRequest(BaseMessage):
-    workflow_id: str
-
-
-@dataclass
-class RestartResponse(BaseMessage):
     success: bool
     error_message: Optional[str] = None
 

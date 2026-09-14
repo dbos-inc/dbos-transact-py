@@ -230,23 +230,6 @@ class ConductorWebsocket(threading.Thread):
                                 error_message=error_message,
                             )
                             websocket.send(resume_response.to_json())
-                        elif msg_type == p.MessageType.RESTART:
-                            # TODO: deprecate this message type in favor of Fork
-                            restart_message = p.RestartRequest.from_json(message)
-                            success = True
-                            try:
-                                self.dbos.fork_workflow(restart_message.workflow_id, 1)
-                            except Exception as e:
-                                error_message = f"Exception encountered when restarting workflow {restart_message.workflow_id}: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
-                                success = False
-                            restart_response = p.RestartResponse(
-                                type=p.MessageType.RESTART,
-                                request_id=base_message.request_id,
-                                success=success,
-                                error_message=error_message,
-                            )
-                            websocket.send(restart_response.to_json())
                         elif msg_type == p.MessageType.FORK_WORKFLOW:
                             fork_message = p.ForkWorkflowRequest.from_json(message)
                             new_workflow_id = fork_message.body["new_workflow_id"]
