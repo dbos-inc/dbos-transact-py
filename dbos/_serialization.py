@@ -78,11 +78,6 @@ class PortableWorkflowError(Exception):
         return self.message
 
 
-# --------- Notification (Message) and WF event ----------
-JsonMessage: TypeAlias = JsonValue
-JsonEvent: TypeAlias = JsonValue
-
-
 class Serializer(ABC):
 
     @abstractmethod
