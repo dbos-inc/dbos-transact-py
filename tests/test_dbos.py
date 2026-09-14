@@ -1646,15 +1646,15 @@ def test_nonserializable_values(dbos: DBOS) -> None:
 
     @DBOS.step()
     def test_ns_other_step(var2: str) -> str:
-        return invalid_return  #  type: ignore
+        return invalid_return  # type: ignore
 
     @DBOS.step()
     def test_ns_step(var: str) -> str:
-        return invalid_return  #  type: ignore
+        return invalid_return  # type: ignore
 
     @DBOS.workflow()
     def test_ns_wf(var: str) -> str:
-        return invalid_return  #  type: ignore
+        return invalid_return  # type: ignore
 
     @DBOS.step()
     def test_reg_other_step(var2: str) -> str:
@@ -2254,6 +2254,27 @@ def test_recovery_appversion(config: DBOSConfig) -> None:
 
     # Clean up the environment variable
     del os.environ["DBOS__VMID"]
+
+
+def test_conductor_key_keeps_cloud_executor_id(
+    config: DBOSConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DBOS__VMID", "cloud-vm")
+
+    # Off DBOS Cloud, Conductor assigns its own executor ID
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config, conductor_key="test-key", conductor_url="ws://127.0.0.1:1")
+    DBOS.launch()
+    assert DBOS.executor_id != "cloud-vm"
+    uuid.UUID(DBOS.executor_id)
+
+    # On DBOS Cloud the platform names the process, and a key passed in code is not used
+    monkeypatch.setattr(GlobalParams, "dbos_cloud", True)
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config, conductor_key="test-key", conductor_url="ws://127.0.0.1:1")
+    DBOS.launch()
+    assert DBOS.executor_id == "cloud-vm"
+    DBOS.destroy(destroy_registry=True)
 
 
 def test_workflow_timeout(dbos: DBOS) -> None:
