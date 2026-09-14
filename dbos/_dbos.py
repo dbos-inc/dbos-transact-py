@@ -483,7 +483,7 @@ class DBOS:
         GlobalParams.app_version = os.environ.get("DBOS__APPVERSION", "")
         GlobalParams.executor_id = os.environ.get("DBOS__VMID") or "local"
         # In DBOS Cloud, instead use the values supplied through environment variables.
-        if not os.environ.get("DBOS__CLOUD") == "true":
+        if not GlobalParams.dbos_cloud:
             if self.enable_patching:
                 GlobalParams.app_version = "PATCHING_ENABLED"
             if (
@@ -498,7 +498,7 @@ class DBOS:
 
         # Translate user provided config to an internal format
         unvalidated_config = translate_dbos_config_to_config_file(config)
-        if os.environ.get("DBOS__CLOUD") == "true":
+        if GlobalParams.dbos_cloud:
             unvalidated_config = overwrite_config(unvalidated_config)
 
         if unvalidated_config is not None:
@@ -741,7 +741,7 @@ class DBOS:
 
             dbos_logger.info("DBOS launched!")
 
-            if self.conductor_key is None and os.environ.get("DBOS__CLOUD") != "true":
+            if self.conductor_key is None and not GlobalParams.dbos_cloud:
                 # Hint the user to open the URL to register and set up Conductor
                 app_name = self._config["name"]
                 conductor_registration_url = (

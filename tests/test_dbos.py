@@ -2270,6 +2270,11 @@ def test_conductor_key_keeps_cloud_executor_id(
 
     # On DBOS Cloud the platform names the process, and a key passed in code is not used
     monkeypatch.setattr(GlobalParams, "dbos_cloud", True)
+    # DBOS Cloud always provides these; cloud mode takes the name and system database from them
+    monkeypatch.setenv("DBOS_APP_NAME", config["name"])
+    sys_db_url = config["system_database_url"]
+    assert sys_db_url is not None
+    monkeypatch.setenv("DBOS_SYSTEM_DATABASE_URL", sys_db_url)
     DBOS.destroy(destroy_registry=True)
     DBOS(config=config, conductor_key="test-key", conductor_url="ws://127.0.0.1:1")
     DBOS.launch()

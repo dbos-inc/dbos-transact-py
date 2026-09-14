@@ -55,7 +55,7 @@ def _resolve_db_url(*, system_database_url: Optional[str]) -> Optional[str]:
     Returns None if no URL can be resolved.
     """
     dbos_logger.setLevel(logging.WARNING)  # The CLI should not emit INFO logs
-    if os.environ.get("DBOS__CLOUD") == "true":
+    if GlobalParams.dbos_cloud:
         system_database_url = os.environ.get("DBOS_SYSTEM_DATABASE_URL")
         assert system_database_url
         return system_database_url
