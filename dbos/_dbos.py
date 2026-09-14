@@ -481,7 +481,7 @@ class DBOS:
 
         # Reset global configuration. If reconfigured, it is set at launch.
         GlobalParams.app_version = os.environ.get("DBOS__APPVERSION", "")
-        GlobalParams.executor_id = os.environ.get("DBOS__VMID", "local")
+        GlobalParams.executor_id = os.environ.get("DBOS__VMID") or "local"
         # In DBOS Cloud, instead use the values supplied through environment variables.
         if not os.environ.get("DBOS__CLOUD") == "true":
             if self.enable_patching:

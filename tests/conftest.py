@@ -180,7 +180,7 @@ def reset_global_params() -> None:
     Constructing a DBOS does this; a test that reads the identity without building
     one gets it from here, alongside the environment these are read from."""
     GlobalParams.app_version = os.environ.get("DBOS__APPVERSION", "")
-    GlobalParams.executor_id = os.environ.get("DBOS__VMID", "local")
+    GlobalParams.executor_id = os.environ.get("DBOS__VMID") or "local"
     GlobalParams.app_name = None
 
 

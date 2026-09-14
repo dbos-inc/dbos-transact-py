@@ -2071,6 +2071,16 @@ def test_app_version(
 
     del os.environ["DBOS__APPVERSION"]
 
+    # An exported but empty DBOS__VMID is an unset one: the executor ID is "local"
+    os.environ["DBOS__VMID"] = ""
+    DBOS.destroy(destroy_registry=True)
+    assert GlobalParams.executor_id == "local"
+    DBOS(config=config)
+    DBOS.launch()
+    assert DBOS.executor_id == "local"
+    created_versions.append(DBOS.application_version)
+    del os.environ["DBOS__VMID"]
+
     # Verify that version and executor ID can be overriden with a config parameter
     version_four = str(uuid.uuid4())
     executor_id = str(uuid.uuid4())

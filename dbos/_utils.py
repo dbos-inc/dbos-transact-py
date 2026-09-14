@@ -122,7 +122,7 @@ class PollingLimiter:
 
 class GlobalParams:
     app_version: str = os.environ.get("DBOS__APPVERSION", "")
-    executor_id: str = os.environ.get("DBOS__VMID", "local")
+    executor_id: str = os.environ.get("DBOS__VMID") or "local"
     # Set at launch from the configured application name; None outside an application.
     app_name: Optional[str] = None
     dbos_cloud: bool = os.environ.get("DBOS__CLOUD") == "true"
