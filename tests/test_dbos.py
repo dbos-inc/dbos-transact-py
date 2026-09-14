@@ -1837,6 +1837,36 @@ def test_destroy_semantics(dbos: DBOS, config: DBOSConfig) -> None:
     assert wf.get_result() == var
 
 
+def test_deferred_poller(config: DBOSConfig, cleanup_test_databases: None) -> None:
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+
+    poller_started = threading.Event()
+    deferred_stop = threading.Event()
+
+    def deferred_poller(stop_event: threading.Event) -> None:
+        poller_started.set()
+        stop_event.wait()
+
+    dbos._registry.register_poller(deferred_stop, deferred_poller, deferred_stop)
+    # Deferred, so it must not run until launch
+    assert not poller_started.is_set()
+
+    try:
+        DBOS.launch()
+        assert deferred_stop in dbos.background_thread_stop_events
+
+        def check_poller_started() -> None:
+            assert poller_started.is_set()
+
+        retry_until_success(check_poller_started)
+        assert not deferred_stop.is_set()
+    finally:
+        DBOS.destroy(destroy_registry=True)
+    # Destroy stops the deferred poller
+    assert deferred_stop.is_set()
+
+
 def test_destroy_preserves_the_process_identity(
     config: DBOSConfig, cleanup_test_databases: None
 ) -> None:

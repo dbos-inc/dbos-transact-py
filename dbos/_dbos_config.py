@@ -11,7 +11,6 @@ from dbos._serialization import Serializer
 
 from ._error import DBOSInitializationError
 from ._logger import dbos_logger
-from ._utils import GlobalParams
 
 DBOS_CONFIG_PATH = "dbos-config.yaml"
 
@@ -31,8 +30,6 @@ class DBOSConfig(TypedDict, total=False):
         console_log_level: Optional[str]: log level specficially for console logging; must be no less severe than log_level
         otlp_traces_endpoints: List[str]: OTLP traces endpoints
         otlp_logs_endpoints: List[str]: OTLP logs endpoints
-        admin_port (int): (DEPRECATED) Port of the DBOS admin server. Has no effect unless run_admin_server is True. The admin server is deprecated and will be removed in a future version of DBOS.
-        run_admin_server (bool): (DEPRECATED) Whether to run the DBOS admin server. Defaults to False (True in DBOS Cloud). The admin server is deprecated and will be removed in a future version of DBOS.
         otlp_attributes (dict[str, str]): A set of custom attributes to apply OTLP-exported logs and traces
         application_version (str): Application version
         executor_id (str): Executor ID, used to identify the application instance in distributed environments
@@ -67,8 +64,6 @@ class DBOSConfig(TypedDict, total=False):
     console_log_level: Optional[str]
     otlp_traces_endpoints: Optional[List[str]]
     otlp_logs_endpoints: Optional[List[str]]
-    admin_port: Optional[int]
-    run_admin_server: Optional[bool]
     otlp_attributes: Optional[dict[str, str]]
     application_version: Optional[str]
     executor_id: Optional[str]
@@ -94,8 +89,6 @@ class DBOSConfig(TypedDict, total=False):
 class RuntimeConfig(TypedDict, total=False):
     start: List[str]
     setup: Optional[List[str]]
-    admin_port: Optional[int]
-    run_admin_server: Optional[bool]
     max_executor_threads: Optional[int]
     notification_listener_polling_interval_sec: Optional[float]
     notification_coalesce_sec: Optional[float]
@@ -147,11 +140,6 @@ class ConfigFile(TypedDict, total=False):
     dbos_system_schema: Optional[str]
     use_listen_notify: bool
     run_migrations: bool
-
-
-def _default_run_admin_server() -> bool:
-    # The admin server is deprecated and off by default, except in DBOS Cloud, which depends on it.
-    return GlobalParams.dbos_cloud
 
 
 def _validate_observability_query_timeout_sec(value: Optional[float]) -> None:
@@ -206,15 +194,7 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         translated_config["dbos_system_schema"] = config.get("dbos_system_schema")
 
     # Runtime config
-    translated_config["runtimeConfig"] = {
-        "run_admin_server": _default_run_admin_server()
-    }
-    if "admin_port" in config:
-        translated_config["runtimeConfig"]["admin_port"] = config["admin_port"]
-    if "run_admin_server" in config:
-        translated_config["runtimeConfig"]["run_admin_server"] = config[
-            "run_admin_server"
-        ]
+    translated_config["runtimeConfig"] = {}
     if "max_executor_threads" in config:
         translated_config["runtimeConfig"]["max_executor_threads"] = config[
             "max_executor_threads"
@@ -426,14 +406,6 @@ def process_config(
     if logs.get("logLevel") is None:
         logs["logLevel"] = "INFO"
 
-    # Handle admin server config
-    if not data.get("runtimeConfig"):
-        data["runtimeConfig"] = {
-            "run_admin_server": _default_run_admin_server(),
-        }
-    elif "run_admin_server" not in data["runtimeConfig"]:
-        data["runtimeConfig"]["run_admin_server"] = _default_run_admin_server()
-
     # Ensure database dict exists
     data.setdefault("database", {})
     connect_timeout = None
@@ -555,8 +527,7 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # 1. The system database url provided by DBOS_SYSTEM_DATABASE_URL
     # 2. OTLP traces endpoints (add the config data to the provided config)
     # 3. Use the application name from the file. This is a defensive measure to ensure the application name is whatever it was registered with in the cloud
-    # 4. Remove admin_port is provided in code
-    # 5. Remove env vars if provided in code
+    # 4. Remove env vars if provided in code
     # Optimistically assume that expected fields in config_from_file are present
 
     config_from_file = load_config()
@@ -613,15 +584,6 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
             logsEndpoint = source_otlp.get("logsEndpoint")
             if logsEndpoint:
                 otlp_exporter["logsEndpoint"].extend(logsEndpoint)
-
-    # Runtime config
-    if "runtimeConfig" in provided_config:
-        if "admin_port" in provided_config["runtimeConfig"]:
-            del provided_config["runtimeConfig"][
-                "admin_port"
-            ]  # Admin port is expected to be 3001 (the default in dbos/_admin_server.py::__init__ ) by DBOS Cloud
-        if "run_admin_server" in provided_config["runtimeConfig"]:
-            del provided_config["runtimeConfig"]["run_admin_server"]
 
     # Env should be set from the hosting provider (e.g., DBOS Cloud)
     if "env" in provided_config:

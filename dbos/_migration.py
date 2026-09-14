@@ -286,9 +286,6 @@ def run_dbos_migrations(
 
 def get_dbos_migration_one(quoted_schema: str, use_listen_notify: bool) -> str:
     migration = f"""
--- Enable uuid extension for generating UUIDs
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
 CREATE TABLE {quoted_schema}.workflow_status (
     workflow_uuid TEXT PRIMARY KEY,
     status TEXT,

@@ -22,7 +22,6 @@ from dbos._dbos_config import (
 from dbos._error import DBOSException, DBOSInitializationError
 from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
-from dbos._utils import GlobalParams
 
 mock_filename = "dbos-config.yaml"
 original_open = __builtins__["open"]
@@ -82,7 +81,6 @@ def test_load_valid_config_file(mocker):
         runtimeConfig:
             start:
                 - "python3 main.py"
-            admin_port: 8001
         system_database_url: "postgres://user:dbos@localhost:5432/dbname_dbos_sys?connect_timeout=10&sslmode=require&sslrootcert=ca.pem"
         telemetry:
             OTLPExporter:
@@ -170,8 +168,6 @@ def test_process_config_full():
         },
         "runtimeConfig": {
             "start": ["python3 main.py"],
-            "admin_port": 8001,
-            "run_admin_server": False,
             "setup": ["echo 'hello'"],
         },
         "telemetry": {
@@ -204,8 +200,6 @@ def test_process_config_full():
         "connect_args": {"connect_timeout": 1, "application_name": "dbos_transact"},
     }
     assert configFile["runtimeConfig"]["start"] == ["python3 main.py"]
-    assert configFile["runtimeConfig"]["admin_port"] == 8001
-    assert configFile["runtimeConfig"]["run_admin_server"] == False
     assert configFile["runtimeConfig"]["setup"] == ["echo 'hello'"]
     assert configFile["telemetry"]["logs"]["logLevel"] == "DEBUG"
     assert configFile["telemetry"]["OTLPExporter"]["logsEndpoint"] == [
@@ -272,7 +266,6 @@ def test_process_config_load_defaults():
     assert processed_config["system_database_url"] == f"sqlite:///some_app.sqlite"
     assert processed_config["database"]["sys_db_engine_kwargs"] is not None
     assert processed_config["telemetry"]["logs"]["logLevel"] == "INFO"
-    assert processed_config["runtimeConfig"]["run_admin_server"] == False
 
 
 def test_process_config_load_default_with_None_system_database_url():
@@ -285,7 +278,6 @@ def test_process_config_load_default_with_None_system_database_url():
     assert processed_config["system_database_url"] == f"sqlite:///some_app.sqlite"
     assert processed_config["database"]["sys_db_engine_kwargs"] is not None
     assert processed_config["telemetry"]["logs"]["logLevel"] == "INFO"
-    assert processed_config["runtimeConfig"]["run_admin_server"] == False
 
 
 def test_process_config_load_default_with_empty_system_database_url():
@@ -298,7 +290,6 @@ def test_process_config_load_default_with_empty_system_database_url():
     assert processed_config["system_database_url"] == f"sqlite:///some_app.sqlite"
     assert processed_config["database"]["sys_db_engine_kwargs"] is not None
     assert processed_config["telemetry"]["logs"]["logLevel"] == "INFO"
-    assert processed_config["runtimeConfig"]["run_admin_server"] == False
 
 
 def test_config_missing_name():
@@ -538,8 +529,6 @@ def test_translate_dbosconfig_full_input():
         "db_engine_kwargs": {"key": "value"},
         "log_level": "DEBUG",
         "otlp_traces_endpoints": ["http://otel:7777", "notused"],
-        "admin_port": 8001,
-        "run_admin_server": False,
         "dbos_system_schema": "foobar",
     }
 
@@ -556,8 +545,6 @@ def test_translate_dbosconfig_full_input():
     ]
     assert translated_config["telemetry"]["OTLPExporter"]["logsEndpoint"] == []
     assert translated_config["telemetry"]["disable_otlp"] == True
-    assert translated_config["runtimeConfig"]["admin_port"] == 8001
-    assert translated_config["runtimeConfig"]["run_admin_server"] == False
     assert translated_config["dbos_system_schema"] == "foobar"
     assert translated_config["use_listen_notify"] == True
     assert translated_config["run_migrations"] == True
@@ -647,8 +634,6 @@ def test_translate_dbosconfig_minimal_input():
 
     assert translated_config["name"] == "test-app"
     assert translated_config["telemetry"]["logs"]["logLevel"] == "INFO"
-    assert translated_config["runtimeConfig"]["run_admin_server"] == False
-    assert "admin_port" not in translated_config["runtimeConfig"]
     assert "database" not in translated_config
     assert "env" not in translated_config
 
@@ -696,50 +681,6 @@ def test_translate_dbosconfig_just_db_engine_kwargs():
     assert translated_config["database"]["db_engine_kwargs"] == {"key": "value"}
     assert "sys_db_pool_size" not in translated_config["database"]
     assert "env" not in translated_config
-    assert "admin_port" not in translated_config["runtimeConfig"]
-
-
-def test_translate_dbosconfig_just_admin_port():
-    config: DBOSConfig = {
-        "name": "test-app",
-        "admin_port": 8001,
-    }
-    translated_config = translate_dbos_config_to_config_file(config)
-
-    # Setting a port does not enable the deprecated admin server; run_admin_server must be set explicitly.
-    assert translated_config["runtimeConfig"]["admin_port"] == 8001
-    assert translated_config["runtimeConfig"]["run_admin_server"] == False
-    assert "env" not in translated_config
-    assert "database" not in translated_config
-
-
-def test_translate_dbosconfig_just_run_admin_server():
-    config: DBOSConfig = {
-        "name": "test-app",
-        "run_admin_server": True,
-    }
-    translated_config = translate_dbos_config_to_config_file(config)
-
-    assert translated_config["name"] == "test-app"
-    assert translated_config["telemetry"]["logs"]["logLevel"] == "INFO"
-    assert translated_config["runtimeConfig"]["run_admin_server"] == True
-    assert "admin_port" not in translated_config["runtimeConfig"]
-    assert "env" not in translated_config
-    assert "database" not in translated_config
-
-
-def test_admin_server_defaults_on_in_dbos_cloud():
-    # The deprecated admin server is off by default everywhere except DBOS Cloud, which depends on it.
-    original = GlobalParams.dbos_cloud
-    GlobalParams.dbos_cloud = True
-    try:
-        translated_config = translate_dbos_config_to_config_file({"name": "test-app"})
-        assert translated_config["runtimeConfig"]["run_admin_server"] == True
-        # overwrite_config strips run_admin_server in DBOS Cloud, so process_config must default it back on.
-        processed_config = process_config(data={"name": "test-app"})
-        assert processed_config["runtimeConfig"]["run_admin_server"] == True
-    finally:
-        GlobalParams.dbos_cloud = original
 
 
 def test_translate_empty_otlp_traces_endpoints():
@@ -886,10 +827,6 @@ def test_overwrite_config(mocker):
                 "logLevel": "DEBUG",
             },
         },
-        "runtimeConfig": {
-            "admin_port": 8001,
-            "run_admin_server": True,
-        },
         "env": {
             "FOO": "BAR",
         },
@@ -912,8 +849,6 @@ def test_overwrite_config(mocker):
         "thelogsendpoint",
     ]
     assert config["telemetry"]["disable_otlp"] == False
-    assert "admin_port" not in config["runtimeConfig"]
-    assert "run_admin_server" not in config["runtimeConfig"]
     assert "env" not in config
 
     del os.environ["DBOS_SYSTEM_DATABASE_URL"]
