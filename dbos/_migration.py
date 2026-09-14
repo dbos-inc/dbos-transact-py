@@ -163,10 +163,7 @@ def get_sqlite_migration_versions(engine: sa.Engine) -> tuple[int, int]:
 
 
 def ensure_dbos_schema(engine: sa.Engine, schema: str) -> None:
-    """
-    True if using DBOS migrations (DBOS schema and migrations table already exist or were created)
-    False if using Alembic migrations (DBOS schema exists, but dbos_migrations table doesn't)
-    """
+    """Create the DBOS schema and its dbos_migrations table if they don't exist."""
     quoted_schema = quote_identifier(schema)
     with engine.begin() as conn:
         # Check if dbos schema exists

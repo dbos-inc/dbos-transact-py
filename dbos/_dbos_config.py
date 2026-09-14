@@ -10,7 +10,6 @@ from sqlalchemy import make_url
 from dbos._serialization import Serializer
 
 from ._error import DBOSInitializationError
-from ._logger import dbos_logger
 
 DBOS_CONFIG_PATH = "dbos-config.yaml"
 
@@ -135,7 +134,6 @@ class ConfigFile(TypedDict, total=False):
     database: DatabaseConfig
     system_database_url: Optional[str]
     telemetry: Optional[TelemetryConfig]
-    env: Dict[str, str]
     system_database_engine: Optional[sa.Engine]
     dbos_system_schema: Optional[str]
     use_listen_notify: bool
@@ -287,7 +285,7 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     return translated_config
 
 
-def _substitute_env_vars(content: str, silent: bool = False) -> str:
+def _substitute_env_vars(content: str) -> str:
 
     # Regex to match ${DOCKER_SECRET:SECRET_NAME} style placeholders for Docker secrets
     secret_regex = r"\$\{DOCKER_SECRET:([^}]+)\}"
@@ -295,15 +293,8 @@ def _substitute_env_vars(content: str, silent: bool = False) -> str:
     env_regex = r"\$\{(?!DOCKER_SECRET:)([^}]+)\}"
 
     def replace_env_func(match: re.Match[str]) -> str:
-        var_name = match.group(1)
-        value = os.environ.get(
-            var_name, ""
-        )  # If the env variable is not set, return an empty string
-        if value == "" and not silent:
-            dbos_logger.warning(
-                f"Variable {var_name} would be substituted from the process environment into dbos-config.yaml, but is not defined"
-            )
-        return value
+        # If the env variable is not set, return an empty string
+        return os.environ.get(match.group(1), "")
 
     def replace_secret_func(match: re.Match[str]) -> str:
         secret_name = match.group(1)
@@ -313,16 +304,8 @@ def _substitute_env_vars(content: str, silent: bool = False) -> str:
             if os.path.exists(secret_path):
                 with open(secret_path, "r") as f:
                     return f.read().strip()
-            elif not silent:
-                dbos_logger.warning(
-                    f"Docker secret {secret_name} would be substituted from /run/secrets/{secret_name}, but the file does not exist"
-                )
             return ""
-        except Exception as e:
-            if not silent:
-                dbos_logger.warning(
-                    f"Error reading Docker secret {secret_name}: {str(e)}"
-                )
+        except Exception:
             return ""
 
     # First replace Docker secrets
@@ -333,13 +316,9 @@ def _substitute_env_vars(content: str, silent: bool = False) -> str:
 
 def load_config(
     config_file_path: str = DBOS_CONFIG_PATH,
-    *,
-    silent: bool = False,
 ) -> ConfigFile:
     """
     Load the DBOS `ConfigFile` from the specified path (typically `dbos-config.yaml`).
-
-    The configuration is also validated against the configuration file schema.
 
     Args:
         config_file_path (str): The path to the yaml configuration file.
@@ -351,7 +330,7 @@ def load_config(
 
     with open(config_file_path, "r") as file:
         content = file.read()
-        substituted_content = _substitute_env_vars(content, silent=silent)
+        substituted_content = _substitute_env_vars(content)
         data = yaml.safe_load(substituted_content)
 
     if not isinstance(data, dict):
@@ -362,24 +341,12 @@ def load_config(
     for removed_key in REMOVED_DATABASE_URL_KEYS:
         data.pop(removed_key, None)
 
-    # Special case: convert logsEndpoint and tracesEndpoint from strings to lists of strings, if present
-    if "telemetry" in data and "OTLPExporter" in data["telemetry"]:
-        if "logsEndpoint" in data["telemetry"]["OTLPExporter"]:
-            data["telemetry"]["OTLPExporter"]["logsEndpoint"] = [
-                data["telemetry"]["OTLPExporter"]["logsEndpoint"]
-            ]
-        if "tracesEndpoint" in data["telemetry"]["OTLPExporter"]:
-            data["telemetry"]["OTLPExporter"]["tracesEndpoint"] = [
-                data["telemetry"]["OTLPExporter"]["tracesEndpoint"]
-            ]
-
     return cast(ConfigFile, data)
 
 
 def process_config(
     *,
     data: ConfigFile,
-    silent: bool = False,
 ) -> ConfigFile:
     """
     If a system_database_url is provided, pass it as is in the config.
@@ -527,7 +494,6 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     # 1. The application name from DBOS_APP_NAME, so it matches the name registered in the cloud
     # 2. The system database url provided by DBOS_SYSTEM_DATABASE_URL
     # 3. OTLP endpoints from DBOS__OTLP_TRACES_ENDPOINT and DBOS__OTLP_LOGS_ENDPOINT, added to any provided in code
-    # 4. Remove env vars if provided in code
 
     app_name = os.environ.get("DBOS_APP_NAME")
     if app_name is None:
@@ -569,9 +535,5 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
     logs_endpoint = os.environ.get("DBOS__OTLP_LOGS_ENDPOINT")
     if logs_endpoint:
         otlp_exporter["logsEndpoint"].append(logs_endpoint)
-
-    # Env should be set from the hosting provider (e.g., DBOS Cloud)
-    if "env" in provided_config:
-        del provided_config["env"]
 
     return provided_config

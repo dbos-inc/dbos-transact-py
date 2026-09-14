@@ -60,12 +60,10 @@ class TestDockerSecrets(unittest.TestCase):
                 self.assertEqual(result, "This is a secret_password test")
 
     def test_substitute_env_vars_with_missing_docker_secret(self) -> None:
-        # Test that a warning is logged when a Docker secret is missing
-        with patch("dbos._dbos_config.dbos_logger") as mock_logger:
-            content = "This is a ${DOCKER_SECRET:missing_secret} test"
-            result = _substitute_env_vars(content)
-            self.assertEqual(result, "This is a  test")
-            mock_logger.warning.assert_called_once()
+        # A missing Docker secret substitutes an empty string
+        content = "This is a ${DOCKER_SECRET:missing_secret} test"
+        result = _substitute_env_vars(content)
+        self.assertEqual(result, "This is a  test")
 
     def test_substitute_env_vars_with_both_env_vars_and_docker_secrets(self) -> None:
         # Test that both environment variables and Docker secrets are substituted
@@ -83,14 +81,6 @@ class TestDockerSecrets(unittest.TestCase):
                     self.assertEqual(
                         result, "This is a test_value and secret_password test"
                     )
-
-    def test_substitute_env_vars_with_silent_mode(self) -> None:
-        # Test that no warning is logged when silent mode is enabled
-        with patch("dbos._dbos_config.dbos_logger") as mock_logger:
-            content = "This is a ${DOCKER_SECRET:missing_secret} test"
-            result = _substitute_env_vars(content, silent=True)
-            self.assertEqual(result, "This is a  test")
-            mock_logger.warning.assert_not_called()
 
     def test_load_config_with_docker_secrets_in_database_url(self) -> None:
         # Create a mock configuration file with Docker secrets in the database URL

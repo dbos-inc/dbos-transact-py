@@ -82,10 +82,6 @@ def test_load_valid_config_file(mocker):
             start:
                 - "python3 main.py"
         system_database_url: "postgres://user:dbos@localhost:5432/dbname_dbos_sys?connect_timeout=10&sslmode=require&sslrootcert=ca.pem"
-        telemetry:
-            OTLPExporter:
-                logsEndpoint: 'fooLogs'
-                tracesEndpoint: 'fooTraces'
     """
     mocker.patch(
         "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
@@ -97,9 +93,6 @@ def test_load_valid_config_file(mocker):
         configFile["system_database_url"]
         == f"postgres://user:dbos@localhost:5432/dbname_dbos_sys?connect_timeout=10&sslmode=require&sslrootcert=ca.pem"
     )
-
-    assert configFile["telemetry"]["OTLPExporter"]["logsEndpoint"] == ["fooLogs"]
-    assert configFile["telemetry"]["OTLPExporter"]["tracesEndpoint"] == ["fooTraces"]
 
 
 def test_load_config_with_unset_database_url_env_var(mocker):
@@ -179,9 +172,6 @@ def test_process_config_full():
                 "tracesEndpoint": ["thetracesendpoint"],
             },
         },
-        "env": {
-            "FOO": "BAR",
-        },
     }
 
     configFile = process_config(data=config)
@@ -208,7 +198,6 @@ def test_process_config_full():
     assert configFile["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
         "thetracesendpoint"
     ]
-    assert configFile["env"]["FOO"] == "BAR"
 
 
 def test_process_config_system_database():
@@ -550,7 +539,6 @@ def test_translate_dbosconfig_full_input():
     assert translated_config["run_migrations"] == True
     assert "start" not in translated_config["runtimeConfig"]
     assert "setup" not in translated_config["runtimeConfig"]
-    assert "env" not in translated_config
 
 
 def test_translate_dbosconfig_notification_coalesce_sec():
@@ -635,7 +623,6 @@ def test_translate_dbosconfig_minimal_input():
     assert translated_config["name"] == "test-app"
     assert translated_config["telemetry"]["logs"]["logLevel"] == "INFO"
     assert "database" not in translated_config
-    assert "env" not in translated_config
 
 
 def test_translate_dbosconfig_just_sys_db_pool_size():
@@ -646,7 +633,6 @@ def test_translate_dbosconfig_just_sys_db_pool_size():
     translated_config = translate_dbos_config_to_config_file(config)
 
     assert translated_config["database"]["sys_db_pool_size"] == 27
-    assert "env" not in translated_config
 
 
 def test_translate_dbosconfig_sys_db_polling_concurrency():
@@ -680,7 +666,6 @@ def test_translate_dbosconfig_just_db_engine_kwargs():
 
     assert translated_config["database"]["db_engine_kwargs"] == {"key": "value"}
     assert "sys_db_pool_size" not in translated_config["database"]
-    assert "env" not in translated_config
 
 
 def test_translate_empty_otlp_traces_endpoints():
@@ -800,9 +785,6 @@ def test_overwrite_config(cloud_env: None) -> None:
                 "logLevel": "DEBUG",
             },
         },
-        "env": {
-            "FOO": "BAR",
-        },
     }
 
     config = overwrite_config(provided_config)
@@ -820,7 +802,6 @@ def test_overwrite_config(cloud_env: None) -> None:
         "thelogsendpoint",
     ]
     assert config["telemetry"]["disable_otlp"] == False
-    assert "env" not in config
 
 
 def test_overwrite_config_minimal(cloud_env: None) -> None:
@@ -839,7 +820,6 @@ def test_overwrite_config_minimal(cloud_env: None) -> None:
     ]
     assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == ["thelogsendpoint"]
     assert "runtimeConfig" not in config
-    assert "env" not in config
 
 
 def test_overwrite_config_has_telemetry(cloud_env: None) -> None:

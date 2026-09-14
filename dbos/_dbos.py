@@ -893,10 +893,6 @@ class DBOS:
             self._sys_db_field = None
 
     @classmethod
-    def register_instance(cls, inst: object) -> None:
-        return _get_or_create_dbos_registry().register_instance(inst)
-
-    @classmethod
     def register_queue(
         cls,
         name: str,
@@ -1219,7 +1215,6 @@ class DBOS:
         cls,
         config: dict[str, Any],
         topics: list[str],
-        in_order: bool = False,
         *,
         ordering: Optional[KafkaOrdering] = None,
         batch_size: int = 250,
@@ -1230,7 +1225,6 @@ class DBOS:
         Args:
             config: confluent-kafka consumer configuration.
             topics: Topics (or ^-prefixed regexes) to subscribe to.
-            in_order: Deprecated alias for ordering="topic".
             ordering: "none" (default) processes messages in parallel;
                 "partition" processes them serially per topic partition
                 (Kafka's delivery-order guarantee) and in parallel across
@@ -1253,7 +1247,6 @@ class DBOS:
                 _get_or_create_dbos_registry(),
                 config,
                 topics,
-                in_order,
                 ordering=ordering,
                 batch_size=batch_size,
                 queue_name=queue_name,
@@ -3828,4 +3821,4 @@ class DBOSConfiguredInstance:
 
     def __init__(self, config_name: str) -> None:
         self.config_name = config_name
-        DBOS.register_instance(self)
+        _get_or_create_dbos_registry().register_instance(self)

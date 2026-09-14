@@ -4,17 +4,10 @@ Debug trigger utility, for inserting code to replicate specific timing sequences
 
 from __future__ import annotations
 
-import inspect
 import time
 from dataclasses import dataclass, field
 from threading import Lock, Semaphore
 from typing import Callable, Dict, Optional
-
-
-@dataclass(frozen=True)
-class CallSiteInfo:
-    file_name: str
-    line_number: int
 
 
 @dataclass
@@ -24,18 +17,6 @@ class DebugAction:
     semaphore: Optional[Semaphore] = None
     exception_to_throw: Optional[BaseException] = None
     _lock: Lock = field(default_factory=Lock, repr=False)
-
-    def set_sleep_ms(self, sleep_ms: Optional[int]) -> "DebugAction":
-        self.sleep_ms = sleep_ms
-        return self
-
-    def set_callback(self, callback: Optional[Callable[[], None]]) -> "DebugAction":
-        self.callback = callback
-        return self
-
-    def set_semaphore(self, semaphore: Optional[Semaphore]) -> "DebugAction":
-        self.semaphore = semaphore
-        return self
 
     def set_exception_to_throw(self, exc: Optional[BaseException]) -> "DebugAction":
         self.exception_to_throw = exc
@@ -99,10 +80,3 @@ class DebugTriggers:
     def clear_debug_triggers(cls) -> None:
         with cls._triggers_lock:
             cls._point_triggers.clear()
-
-    @classmethod
-    def release_debug_trigger_semaphore(cls, name: str) -> None:
-        with cls._triggers_lock:
-            action = cls._point_triggers.get(name)
-        if action is not None and action.semaphore is not None:
-            action.semaphore.release()

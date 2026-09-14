@@ -702,11 +702,6 @@ class ApplicationVersionOutput:
 
 
 @dataclass
-class ListApplicationVersionsRequest(BaseMessage):
-    pass
-
-
-@dataclass
 class ListApplicationVersionsResponse(BaseMessage):
     output: List[ApplicationVersionOutput]
     error_message: Optional[str] = None

@@ -1,6 +1,5 @@
 import re
 import threading
-import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Literal, Optional, TypeVar
 
@@ -341,26 +340,13 @@ def kafka_consumer(
     dbosreg: "DBOSRegistry",
     config: dict[str, Any],
     topics: list[str],
-    in_order: bool = False,
     *,
     ordering: Optional[KafkaOrdering] = None,
     batch_size: int = 250,
     queue_name: Optional[str] = None,
 ) -> Callable[[_KafkaConsumerWorkflow], _KafkaConsumerWorkflow]:
-    if ordering is not None and in_order:
-        raise DBOSInitializationError(
-            "Error: specify either in_order or ordering, not both"
-        )
     resolved_ordering: KafkaOrdering
-    if in_order:
-        warnings.warn(
-            'in_order=True is deprecated; use ordering="partition" '
-            '(or ordering="topic" for the same per-topic serialization)',
-            DeprecationWarning,
-            stacklevel=3,
-        )
-        resolved_ordering = "topic"
-    elif ordering is None:
+    if ordering is None:
         resolved_ordering = "none"
     elif ordering in ("none", "partition", "topic"):
         resolved_ordering = ordering

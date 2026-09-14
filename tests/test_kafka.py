@@ -224,26 +224,24 @@ def test_kafka_in_order(dbos: DBOS) -> None:
 
     send_test_messages(server, topic)
 
-    with pytest.warns(DeprecationWarning):
-
-        @DBOS.kafka_consumer(
-            {
-                "bootstrap.servers": server,
-                "group.id": f"dbos-test-{random.randrange(1_000_000_000)}",
-                "auto.offset.reset": "earliest",
-            },
-            [topic],
-            in_order=True,
-        )
-        @DBOS.workflow()
-        def test_kafka_workflow(msg: KafkaMessage) -> None:
-            time.sleep(random.uniform(0, 2))
-            nonlocal kafka_count
-            kafka_count += 1
-            assert f"test message key {kafka_count - 1}".encode() == msg.key
-            print(msg)
-            if kafka_count == NUM_EVENTS:
-                event.set()
+    @DBOS.kafka_consumer(
+        {
+            "bootstrap.servers": server,
+            "group.id": f"dbos-test-{random.randrange(1_000_000_000)}",
+            "auto.offset.reset": "earliest",
+        },
+        [topic],
+        ordering="topic",
+    )
+    @DBOS.workflow()
+    def test_kafka_workflow(msg: KafkaMessage) -> None:
+        time.sleep(random.uniform(0, 2))
+        nonlocal kafka_count
+        kafka_count += 1
+        assert f"test message key {kafka_count - 1}".encode() == msg.key
+        print(msg)
+        if kafka_count == NUM_EVENTS:
+            event.set()
 
     wait = event.wait(timeout=45)
     assert wait
@@ -1404,8 +1402,6 @@ def test_kafka_validation_errors(dbos: DBOS) -> None:
             {"bootstrap.servers": "localhost:9092", "group.id": gid}, ["t"], **kwargs
         )
 
-    with pytest.raises(DBOSInitializationError, match="either in_order or ordering"):
-        consumer(gid=f"v1-{suffix}", in_order=True, ordering="topic")
     with pytest.raises(DBOSInitializationError, match="invalid Kafka ordering"):
         consumer(gid=f"v2-{suffix}", ordering="bogus")
     with pytest.raises(DBOSInitializationError, match="batch_size must be positive"):
