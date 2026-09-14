@@ -1854,7 +1854,7 @@ def test_deferred_poller(config: DBOSConfig, cleanup_test_databases: None) -> No
 
     try:
         DBOS.launch()
-        assert deferred_stop in dbos.poller_stop_events
+        assert deferred_stop in dbos.background_thread_stop_events
 
         def check_poller_started() -> None:
             assert poller_started.is_set()

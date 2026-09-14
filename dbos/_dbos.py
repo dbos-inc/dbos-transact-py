@@ -282,7 +282,7 @@ class DBOSRegistry:
         if self.dbos and self.dbos._launched:
             # Run on a tracked daemon thread (like the pre-launch pollers), not the
             # executor, so destroy() joins it and the consumer doesn't leak between runs.
-            self.dbos.poller_stop_events.append(evt)
+            self.dbos.background_thread_stop_events.append(evt)
             poller_thread = threading.Thread(
                 target=func, args=args, kwargs=kwargs, daemon=True
             )
@@ -445,10 +445,8 @@ class DBOS:
         self._registry: DBOSRegistry = _get_or_create_dbos_registry()
         self._registry.dbos = self
         self._listening_queues: Optional[List[str]] = None
-        # Stop internal background threads (queue thread, timeout threads, etc.)
+        # Stop background threads (queue thread, pollers like the scheduler and Kafka, etc.)
         self.background_thread_stop_events: List[threading.Event] = []
-        # Stop pollers (event receivers) that can create new workflows (scheduler, Kafka)
-        self.poller_stop_events: List[threading.Event] = []
         self._executor_field: Optional[ThreadPoolExecutor] = None
         self._background_threads: List[threading.Thread] = []
         self._timeout_tasks: set[asyncio.Task[None]] = set()
@@ -716,7 +714,7 @@ class DBOS:
             # Grab any pollers that were deferred and start them
             dbos_logger.debug("Starting event receivers")
             for evt, func, args, kwargs in self._registry.pollers:
-                self.poller_stop_events.append(evt)
+                self.background_thread_stop_events.append(evt)
                 poller_thread = threading.Thread(
                     target=func, args=args, kwargs=kwargs, daemon=True
                 )
@@ -732,7 +730,7 @@ class DBOS:
                 or 30.0
             )
             scheduler_evt = threading.Event()
-            self.poller_stop_events.append(scheduler_evt)
+            self.background_thread_stop_events.append(scheduler_evt)
             scheduler_thread = threading.Thread(
                 target=dynamic_scheduler_loop,
                 args=(scheduler_evt, scheduler_polling_interval_sec),
@@ -824,8 +822,6 @@ class DBOS:
 
     def _destroy(self, *, workflow_completion_timeout_sec: int) -> None:
         self._initialized = False
-        for event in self.poller_stop_events:
-            event.set()
         for event in self.background_thread_stop_events:
             event.set()
         if workflow_completion_timeout_sec > 0:
