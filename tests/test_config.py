@@ -755,28 +755,6 @@ def test_load_config_drops_removed_application_database_url(mocker, key, value):
 
 
 @pytest.mark.parametrize("key", ["database_url", "application_database_url"])
-def test_overwrite_config_ignores_removed_keys(mocker, key):
-    """The cloud path reaches the same drop through load_config, so a rewritten file
-    still resolves to the system database URL the environment supplies."""
-    mock_config = f"""
-    name: "stock-prices"
-    {key}: "postgres://user:pw@localhost:5432/shop"
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
-    )
-    exported_sys_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname_dbos_sys"
-    os.environ["DBOS_SYSTEM_DATABASE_URL"] = exported_sys_db_url
-    try:
-        config = overwrite_config({"name": "test-app"})
-    finally:
-        del os.environ["DBOS_SYSTEM_DATABASE_URL"]
-
-    assert config["system_database_url"] == exported_sys_db_url
-    assert key not in config
-
-
-@pytest.mark.parametrize("key", ["database_url", "application_database_url"])
 @pytest.mark.parametrize("value", [None, ""])
 def test_removed_application_database_url_ignored_when_empty(key, value):
     """A key left null meant "no application database" in 2.x and resolved exactly
@@ -793,28 +771,23 @@ def test_removed_application_database_url_ignored_when_empty(key, value):
 ####################
 
 
-def test_overwrite_config(mocker):
-    # Setup a typical dbos-config.yaml file
-    mock_config = """
-    name: "stock-prices"
-    language: "python"
-    database:
-        migrate:
-            - alembic upgrade head
-    telemetry:
-        logs:
-            logLevel: INFO
-        OTLPExporter:
-            logsEndpoint: thelogsendpoint
-            tracesEndpoint:  thetracesendpoint
-    runtimeConfig:
-        start:
-            - "a start command"
-    """
+CLOUD_SYS_DB_URL = "postgres://dbosadmin:pwd@hostname:1234/appdbname_dbos_sys?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
+
+
+@pytest.fixture()
+def cloud_env(mocker, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The variables DBOS Cloud exports; the config file must never be read.
+    monkeypatch.setenv("DBOS_APP_NAME", "stock-prices")
+    monkeypatch.setenv("DBOS_SYSTEM_DATABASE_URL", CLOUD_SYS_DB_URL)
+    monkeypatch.setenv("DBOS__OTLP_TRACES_ENDPOINT", "thetracesendpoint")
+    monkeypatch.setenv("DBOS__OTLP_LOGS_ENDPOINT", "thelogsendpoint")
     mocker.patch(
-        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
+        "dbos._dbos_config.load_config",
+        side_effect=AssertionError("overwrite_config must not read dbos-config.yaml"),
     )
 
+
+def test_overwrite_config(cloud_env: None) -> None:
     provided_config: ConfigFile = {
         "name": "test-app",
         "database": {},
@@ -831,13 +804,11 @@ def test_overwrite_config(mocker):
             "FOO": "BAR",
         },
     }
-    exported_sys_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname_dbos_sys?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
-    os.environ["DBOS_SYSTEM_DATABASE_URL"] = exported_sys_db_url
 
     config = overwrite_config(provided_config)
 
     assert config["name"] == "stock-prices"
-    assert config["system_database_url"] == exported_sys_db_url
+    assert config["system_database_url"] == CLOUD_SYS_DB_URL
     assert "sys_db_pool_size" not in config["database"]
     assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
@@ -851,42 +822,17 @@ def test_overwrite_config(mocker):
     assert config["telemetry"]["disable_otlp"] == False
     assert "env" not in config
 
-    del os.environ["DBOS_SYSTEM_DATABASE_URL"]
 
-
-def test_overwrite_config_minimal(mocker):
-    mock_config = """
-    name: "stock-prices"
-    language: "python"
-    database:
-        migrate:
-            - alembic upgrade head
-    telemetry:
-        OTLPExporter:
-            logsEndpoint: thelogsendpoint
-            tracesEndpoint:  thetracesendpoint
-    runtimeConfig:
-        start:
-            - "a start command"
-        setup:
-            - "echo 'hello'"
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
-    )
-
+def test_overwrite_config_minimal(cloud_env: None) -> None:
     provided_config: ConfigFile = {
         "name": "test-app",
         "dbos_system_schema": "foobar",
     }
 
-    exported_sys_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname_dbos_sys?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
-    os.environ["DBOS_SYSTEM_DATABASE_URL"] = exported_sys_db_url
-
     config = overwrite_config(provided_config)
 
     assert config["name"] == "stock-prices"
-    assert config["system_database_url"] == exported_sys_db_url
+    assert config["system_database_url"] == CLOUD_SYS_DB_URL
     assert config["dbos_system_schema"] == "dbos"
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
         "thetracesendpoint"
@@ -895,180 +841,86 @@ def test_overwrite_config_minimal(mocker):
     assert "runtimeConfig" not in config
     assert "env" not in config
 
-    del os.environ["DBOS_SYSTEM_DATABASE_URL"]
 
-
-def test_overwrite_config_has_telemetry(mocker):
-    mock_config = """
-    name: "stock-prices"
-    language: "python"
-    database:
-        migrate:
-            - alembic upgrade head
-    telemetry:
-        OTLPExporter:
-            logsEndpoint: thelogsendpoint
-            tracesEndpoint:  thetracesendpoint
-    runtimeConfig:
-        start:
-            - "a start command"
-        setup:
-            - "echo 'hello'"
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
-    )
-
+def test_overwrite_config_has_telemetry(cloud_env: None) -> None:
     provided_config: ConfigFile = {
         "name": "test-app",
         "telemetry": {"logs": {"logLevel": "DEBUG"}},
     }
 
-    exported_sys_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname_dbos_sys?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
-    os.environ["DBOS_SYSTEM_DATABASE_URL"] = exported_sys_db_url
-
     config = overwrite_config(provided_config)
 
     assert config["name"] == "stock-prices"
-    assert config["system_database_url"] == exported_sys_db_url
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
         "thetracesendpoint"
     ]
     assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == ["thelogsendpoint"]
     assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
-    assert "runtimeConfig" not in config
-    assert "env" not in config
-
-    del os.environ["DBOS_SYSTEM_DATABASE_URL"]
 
 
 # Not expected in practice, but exercise the code path
-def test_overwrite_config_no_telemetry_in_file(mocker):
-    mock_config = """
-    name: "stock-prices"
-    language: "python"
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
+def test_overwrite_config_no_otlp_env(
+    cloud_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DBOS__OTLP_TRACES_ENDPOINT")
+    monkeypatch.delenv("DBOS__OTLP_LOGS_ENDPOINT")
+
+    # Telemetry from provided_config is preserved, with no endpoints added
+    config = overwrite_config(
+        {"name": "test-app", "telemetry": {"logs": {"logLevel": "DEBUG"}}}
     )
-
-    provided_config: ConfigFile = {
-        "name": "test-app",
-        "telemetry": {"logs": {"logLevel": "DEBUG"}},
-    }
-
-    exported_sys_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname_dbos_sys?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
-    os.environ["DBOS_SYSTEM_DATABASE_URL"] = exported_sys_db_url
-
-    config = overwrite_config(provided_config)
-    # Test that telemetry from provided_config is preserved
-    assert config["system_database_url"] == exported_sys_db_url
     assert config["telemetry"]["logs"]["logLevel"] == "DEBUG"
     assert config["telemetry"]["OTLPExporter"] == {
         "tracesEndpoint": [],
         "logsEndpoint": [],
     }
 
-    del os.environ["DBOS_SYSTEM_DATABASE_URL"]
-
-
-# Not expected in practice, but exercise the code path
-def test_overwrite_config_no_otlp_in_file(mocker):
-    mock_config = """
-    name: "stock-prices"
-    language: "python"
-    telemetry:
-        logs:
-            logLevel: INFO
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
+    config = overwrite_config(
+        {
+            "name": "test-app",
+            "telemetry": {
+                "OTLPExporter": {
+                    "tracesEndpoint": ["original-trace"],
+                    "logsEndpoint": ["original-log"],
+                }
+            },
+        }
     )
-
-    provided_config: ConfigFile = {
-        "name": "test-app",
-        "telemetry": {
-            "OTLPExporter": {
-                "tracesEndpoint": ["original-trace"],
-                "logsEndpoint": ["original-log"],
-            }
-        },
-    }
-
-    exported_sys_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname_dbos_sys?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
-    os.environ["DBOS_SYSTEM_DATABASE_URL"] = exported_sys_db_url
-
-    config = overwrite_config(provided_config)
-    assert config["system_database_url"] == exported_sys_db_url
-    # Test that OTLPExporter from provided_config is preserved
     assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == ["original-trace"]
     assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == ["original-log"]
-    assert "logs" not in config["telemetry"]
-
-    del os.environ["DBOS_SYSTEM_DATABASE_URL"]
 
 
-def test_overwrite_config_with_provided_system_database_url(mocker):
-    mock_config = """
-    name: "stock-prices"
-    language: "python"
-    database:
-        migrate:
-            - alembic upgrade head
-    telemetry:
-        OTLPExporter:
-            logsEndpoint: thelogsendpoint
-            tracesEndpoint:  thetracesendpoint
-    runtimeConfig:
-        start:
-            - "a start command"
-        setup:
-            - "echo 'hello'"
-    """
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
-    )
-
+def test_overwrite_config_with_provided_system_database_url(cloud_env: None) -> None:
     provided_config: ConfigFile = {
         "name": "test-app",
         "system_database_url": "ignored",
     }
 
-    exported_sys_db_url = "postgres://dbosadmin:pwd@hostname:1234/appdbname_dbos_sys?connect_timeout=10000&sslmode=require&sslrootcert=cert.pem"
-    os.environ["DBOS_SYSTEM_DATABASE_URL"] = exported_sys_db_url
-
     config = overwrite_config(provided_config)
 
     assert config["name"] == "stock-prices"
-    assert config["system_database_url"] == exported_sys_db_url
-    assert config["telemetry"]["OTLPExporter"]["tracesEndpoint"] == [
-        "thetracesendpoint"
-    ]
-    assert config["telemetry"]["OTLPExporter"]["logsEndpoint"] == ["thelogsendpoint"]
-    assert "runtimeConfig" not in config
-    assert "env" not in config
-
-    del os.environ["DBOS_SYSTEM_DATABASE_URL"]
+    assert config["system_database_url"] == CLOUD_SYS_DB_URL
 
 
-def test_overwrite_config_missing_dbos_system_database_url(mocker):
-    mock_config = """
-    name: "stock-prices"
-    """
-
-    mocker.patch(
-        "builtins.open", side_effect=generate_mock_open("dbos-config.yaml", mock_config)
-    )
-
-    provided_config: ConfigFile = {
-        "name": "test-app",
-    }
+def test_overwrite_config_missing_dbos_system_database_url(
+    cloud_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DBOS_SYSTEM_DATABASE_URL")
     with pytest.raises(DBOSInitializationError) as exc_info:
-        overwrite_config(provided_config)
+        overwrite_config({"name": "test-app"})
     assert (
         "DBOS_SYSTEM_DATABASE_URL environment variable is not set. This is required to connect to the database."
         in str(exc_info.value)
     )
+
+
+def test_overwrite_config_missing_dbos_app_name(
+    cloud_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DBOS_APP_NAME")
+    with pytest.raises(DBOSInitializationError) as exc_info:
+        overwrite_config({"name": "test-app"})
+    assert "DBOS_APP_NAME environment variable is not set" in str(exc_info.value)
 
 
 ####################

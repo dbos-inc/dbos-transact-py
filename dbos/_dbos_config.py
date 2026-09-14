@@ -523,20 +523,18 @@ def _app_name_to_db_name(app_name: str) -> str:
 
 
 def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
-    # Load the DBOS configuration file and force the use of:
-    # 1. The system database url provided by DBOS_SYSTEM_DATABASE_URL
-    # 2. OTLP traces endpoints (add the config data to the provided config)
-    # 3. Use the application name from the file. This is a defensive measure to ensure the application name is whatever it was registered with in the cloud
+    # In DBOS Cloud, force the settings the platform exports as environment variables:
+    # 1. The application name from DBOS_APP_NAME, so it matches the name registered in the cloud
+    # 2. The system database url provided by DBOS_SYSTEM_DATABASE_URL
+    # 3. OTLP endpoints from DBOS__OTLP_TRACES_ENDPOINT and DBOS__OTLP_LOGS_ENDPOINT, added to any provided in code
     # 4. Remove env vars if provided in code
-    # Optimistically assume that expected fields in config_from_file are present
 
-    config_from_file = load_config()
-    # Be defensive
-    if config_from_file is None:
-        return provided_config
-
-    # Set the application name to the cloud app name
-    provided_config["name"] = config_from_file["name"]
+    app_name = os.environ.get("DBOS_APP_NAME")
+    if app_name is None:
+        raise DBOSInitializationError(
+            "DBOS_APP_NAME environment variable is not set. This is required to identify the application in DBOS Cloud."
+        )
+    provided_config["name"] = app_name
 
     # Use the DBOS Cloud system database URL
     system_db_url = os.environ.get("DBOS_SYSTEM_DATABASE_URL")
@@ -562,28 +560,15 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
                 "logsEndpoint": [],
             }
 
-    # This is a super messy from a typing perspective.
-    # Some of ConfigFile keys are optional -- but in practice they'll always be present in hosted environments
-    # So, for Mypy, we have to (1) check the keys are present in config_from_file and (2) cast telemetry/otlp_exporters to Dict[str, Any]
-    # (2) is required because, even tho we resolved these keys earlier, mypy doesn't remember that
-    if (
-        config_from_file.get("telemetry")
-        and config_from_file["telemetry"]
-        and config_from_file["telemetry"].get("OTLPExporter")
-    ):
-
-        telemetry = cast(Dict[str, Any], provided_config["telemetry"])
-        otlp_exporter = cast(Dict[str, Any], telemetry["OTLPExporter"])
-
-        # Merge the logsEndpoint and tracesEndpoint lists from the file with what we have
-        source_otlp = config_from_file["telemetry"]["OTLPExporter"]
-        if source_otlp:
-            tracesEndpoint = source_otlp.get("tracesEndpoint")
-            if tracesEndpoint:
-                otlp_exporter["tracesEndpoint"].extend(tracesEndpoint)
-            logsEndpoint = source_otlp.get("logsEndpoint")
-            if logsEndpoint:
-                otlp_exporter["logsEndpoint"].extend(logsEndpoint)
+    # Cast because mypy doesn't track that telemetry and OTLPExporter were resolved above
+    telemetry = cast(Dict[str, Any], provided_config["telemetry"])
+    otlp_exporter = cast(Dict[str, Any], telemetry["OTLPExporter"])
+    traces_endpoint = os.environ.get("DBOS__OTLP_TRACES_ENDPOINT")
+    if traces_endpoint:
+        otlp_exporter["tracesEndpoint"].append(traces_endpoint)
+    logs_endpoint = os.environ.get("DBOS__OTLP_LOGS_ENDPOINT")
+    if logs_endpoint:
+        otlp_exporter["logsEndpoint"].append(logs_endpoint)
 
     # Env should be set from the hosting provider (e.g., DBOS Cloud)
     if "env" in provided_config:
