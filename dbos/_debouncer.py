@@ -496,10 +496,10 @@ class DebouncerClient:
                 continue
 
     async def debounce_async(
-        self, deboucne_key: str, debounce_period_sec: float, *args: Any, **kwargs: Any
+        self, debounce_key: str, debounce_period_sec: float, *args: Any, **kwargs: Any
     ) -> "WorkflowHandleAsync[R]":
         handle: "WorkflowHandle[R]" = await asyncio.to_thread(
-            self.debounce, deboucne_key, debounce_period_sec, *args, **kwargs
+            self.debounce, debounce_key, debounce_period_sec, *args, **kwargs
         )
         return WorkflowHandleClientAsyncPolling[R](
             handle.workflow_id, self.client._sys_db
