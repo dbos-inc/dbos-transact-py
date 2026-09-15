@@ -109,6 +109,24 @@ def test_load_config_with_unset_database_url_env_var(mocker):
     assert configFile["name"] == "some-app"
 
 
+def test_load_config_substitutes_env_vars(mocker, monkeypatch):
+    monkeypatch.setenv("TEST_DB_PASSWORD", "secret")
+    mock_config = """
+    name: "some-app"
+    system_database_url: postgres://postgres:${TEST_DB_PASSWORD}@localhost:5432/some_app_dbos_sys
+    """
+
+    mocker.patch(
+        "builtins.open", side_effect=generate_mock_open(mock_filename, mock_config)
+    )
+
+    configFile = load_config(mock_filename)
+    assert (
+        configFile["system_database_url"]
+        == "postgres://postgres:secret@localhost:5432/some_app_dbos_sys"
+    )
+
+
 def test_load_config_file_open_error(mocker):
     """Test handling when the config file can't be opened."""
     mocker.patch("builtins.open", side_effect=FileNotFoundError("File not found"))

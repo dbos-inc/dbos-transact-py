@@ -286,31 +286,13 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
 
 
 def _substitute_env_vars(content: str) -> str:
-
-    # Regex to match ${DOCKER_SECRET:SECRET_NAME} style placeholders for Docker secrets
-    secret_regex = r"\$\{DOCKER_SECRET:([^}]+)\}"
     # Regex to match ${VAR_NAME} style placeholders for environment variables
-    env_regex = r"\$\{(?!DOCKER_SECRET:)([^}]+)\}"
+    env_regex = r"\$\{([^}]+)\}"
 
     def replace_env_func(match: re.Match[str]) -> str:
         # If the env variable is not set, return an empty string
         return os.environ.get(match.group(1), "")
 
-    def replace_secret_func(match: re.Match[str]) -> str:
-        secret_name = match.group(1)
-        try:
-            # Docker secrets are stored in /run/secrets/
-            secret_path = f"/run/secrets/{secret_name}"
-            if os.path.exists(secret_path):
-                with open(secret_path, "r") as f:
-                    return f.read().strip()
-            return ""
-        except Exception:
-            return ""
-
-    # First replace Docker secrets
-    content = re.sub(secret_regex, replace_secret_func, content)
-    # Then replace environment variables
     return re.sub(env_regex, replace_env_func, content)
 
 
