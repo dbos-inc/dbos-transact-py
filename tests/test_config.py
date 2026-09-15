@@ -734,9 +734,9 @@ def test_translate_rejects_removed_application_database_url(key):
 @pytest.mark.parametrize(
     "value", ['"postgres://user:pw@localhost:5432/shop"', "", None]
 )
-def test_load_config_drops_removed_application_database_url(mocker, key, value):
+def test_load_config_ignores_removed_application_database_url(mocker, key, value):
     """DBOS Cloud rewrites dbos-config.yaml to add a database URL, so rejecting the key
-    there would fail every cloud deploy, not just stale ones. It is dropped instead."""
+    there would fail every cloud deploy, not just stale ones. It is ignored instead."""
     rendered = "" if value is None else f" {value}"
     mock_config = f"""
     name: "some-app"
@@ -749,7 +749,6 @@ def test_load_config_drops_removed_application_database_url(mocker, key, value):
 
     config = load_config(mock_filename)
 
-    assert key not in config
     assert config["name"] == "some-app"
     assert (
         process_config(data=config)["system_database_url"]

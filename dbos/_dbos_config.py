@@ -148,8 +148,7 @@ def _validate_observability_query_timeout_sec(value: Optional[float]) -> None:
         )
 
 
-# Removed in DBOS 3.0 along with the application database. Rejected in DBOSConfig, but
-# only dropped from dbos-config.yaml, which DBOS Cloud rewrites to add a database URL.
+# Removed in DBOS 3.0 along with the application database.
 REMOVED_DATABASE_URL_KEYS = ("database_url", "application_database_url")
 
 
@@ -319,10 +318,6 @@ def load_config(
         raise DBOSInitializationError(
             f"dbos-config.yaml must contain a dictionary, not {type(data)}"
         )
-    data = cast(Dict[str, Any], data)
-    for removed_key in REMOVED_DATABASE_URL_KEYS:
-        data.pop(removed_key, None)
-
     return cast(ConfigFile, data)
 
 

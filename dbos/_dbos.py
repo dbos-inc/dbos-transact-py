@@ -23,7 +23,6 @@ from typing import (
     Generator,
     Generic,
     List,
-    Literal,
     Optional,
     Protocol,
     Sequence,
@@ -166,12 +165,6 @@ P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 T = TypeVar("T")
-
-IsolationLevel = Literal[
-    "SERIALIZABLE",
-    "REPEATABLE READ",
-    "READ COMMITTED",
-]
 
 _dbos_global_instance: Optional[DBOS] = None
 _dbos_global_registry: Optional[DBOSRegistry] = None
