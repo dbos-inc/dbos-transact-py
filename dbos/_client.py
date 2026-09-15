@@ -882,12 +882,14 @@ class DBOSClient:
         workflow_ids: List[str],
         *,
         start_steps: Optional[List[int]] = None,
+        application_version: Optional[str] = None,
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
     ) -> "List[WorkflowHandle[Any]]":
         self._sys_db.rewind_workflows(
             workflow_ids,
             start_steps if start_steps is not None else [1] * len(workflow_ids),
+            application_version=application_version,
             queue_name=queue_name,
             queue_partition_key=queue_partition_key,
         )
@@ -901,6 +903,7 @@ class DBOSClient:
         workflow_ids: List[str],
         *,
         start_steps: Optional[List[int]] = None,
+        application_version: Optional[str] = None,
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
     ) -> "List[WorkflowHandleAsync[Any]]":
@@ -908,6 +911,7 @@ class DBOSClient:
             self.rewind_workflows,
             workflow_ids,
             start_steps=start_steps,
+            application_version=application_version,
             queue_name=queue_name,
             queue_partition_key=queue_partition_key,
         )

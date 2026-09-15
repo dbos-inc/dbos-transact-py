@@ -1,5 +1,6 @@
 import contextlib
 import threading
+import time
 import uuid
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -411,6 +412,44 @@ def test_rewind_onto_a_queue_with_a_partition_key(dbos: DBOS) -> None:
     status = DBOS.retrieve_workflow(workflow_id).get_status()
     assert status.queue_name == INTERNAL_QUEUE_NAME
     assert status.queue_partition_key is None
+
+
+def test_rewind_onto_a_different_application_version(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def counter(name: str) -> int:
+        return run_count(name)
+
+    workflow_id = start(counter, "version")
+    running_version = status_row(dbos, workflow_id).application_version
+
+    # Dequeueing matches on application version, so a workflow restamped with a
+    # version nothing is running on stays enqueued instead of replaying.
+    dbos._sys_db.rewind_workflows(
+        [workflow_id], [1], application_version="not-this-deployment"
+    )
+    assert status_row(dbos, workflow_id).application_version == "not-this-deployment"
+    time.sleep(2.5)  # several queue polls, any of which would pick it up
+    assert status_row(dbos, workflow_id).status == WorkflowStatusString.ENQUEUED.value
+    assert runs["version"] == 1
+
+    # Getting out of that takes a cancel first: the workflow is ENQUEUED now, and
+    # only a terminal workflow can be rewound.
+    with pytest.raises(DBOSException, match="only a workflow in a terminal state"):
+        dbos._sys_db.rewind_workflows(
+            [workflow_id], [1], application_version=running_version
+        )
+    DBOS.cancel_workflow(workflow_id)
+
+    # Restamped with the version this executor is running, it replays
+    dbos._sys_db.rewind_workflows(
+        [workflow_id], [1], application_version=running_version
+    )
+    assert DBOS.retrieve_workflow(workflow_id).get_result() == 2
+
+    # Omitted, the workflow keeps the version it already had
+    dbos._sys_db.rewind_workflows([workflow_id], [1])
+    assert DBOS.retrieve_workflow(workflow_id).get_result() == 3
+    assert status_row(dbos, workflow_id).application_version == running_version
 
 
 def test_rewind_batch_is_all_or_nothing(dbos: DBOS) -> None:

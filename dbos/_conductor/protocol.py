@@ -467,6 +467,7 @@ class ForkFromFailureResponse(BaseMessage):
 class RewindWorkflowsBody(TypedDict, total=False):
     workflow_ids: List[str]
     start_steps: Optional[List[int]]
+    application_version: Optional[str]
     queue_name: Optional[str]
     queue_partition_key: Optional[str]
 

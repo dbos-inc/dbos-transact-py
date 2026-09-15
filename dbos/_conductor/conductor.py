@@ -345,6 +345,9 @@ class ConductorWebsocket(threading.Thread):
                                 self.dbos.rewind_workflows(
                                     rewind_ids,
                                     start_steps=rewind_body.get("start_steps"),
+                                    application_version=rewind_body.get(
+                                        "application_version"
+                                    ),
                                     queue_name=rewind_body.get("queue_name"),
                                     queue_partition_key=rewind_body.get(
                                         "queue_partition_key"
