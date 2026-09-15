@@ -304,6 +304,32 @@ class ConductorWebsocket(threading.Thread):
                                 error_message=error_message,
                             )
                             websocket.send(bulk_fork_response.to_json())
+                        elif msg_type == p.MessageType.REWIND_WORKFLOWS:
+                            rewind_message = p.RewindWorkflowsRequest.from_json(message)
+                            rewind_body = rewind_message.body
+                            rewind_ids = rewind_body["workflow_ids"]
+                            rewind_success = True
+                            try:
+                                self.dbos.rewind_workflows(
+                                    rewind_ids,
+                                    start_steps=rewind_body.get("start_steps"),
+                                    queue_name=rewind_body.get("queue_name"),
+                                    queue_partition_key=rewind_body.get(
+                                        "queue_partition_key"
+                                    ),
+                                )
+                            except Exception as e:
+                                error_message = f"Exception encountered when rewinding workflows {rewind_ids}: {traceback.format_exc()}"
+                                self.dbos.logger.error(error_message)
+                                rewind_success = False
+
+                            rewind_response = p.RewindWorkflowsResponse(
+                                type=p.MessageType.REWIND_WORKFLOWS,
+                                request_id=base_message.request_id,
+                                success=rewind_success,
+                                error_message=error_message,
+                            )
+                            websocket.send(rewind_response.to_json())
                         elif msg_type == p.MessageType.LIST_WORKFLOWS:
                             list_workflows_message = p.ListWorkflowsRequest.from_json(
                                 message
