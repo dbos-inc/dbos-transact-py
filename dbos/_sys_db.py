@@ -1442,6 +1442,7 @@ class SystemDatabase(ABC):
         workflow_ids: list[str],
         start_steps: list[int],
         *,
+        application_version: Optional[str] = None,
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
     ) -> None:
@@ -1627,6 +1628,11 @@ class SystemDatabase(ABC):
                     workflow_id
                 )
             rewound = 0
+            version_update = (
+                {"application_version": application_version}
+                if application_version is not None
+                else {}
+            )
             for status, ids in ids_by_status.items():
                 result = c.execute(
                     sa.update(SystemSchema.workflow_status)
@@ -1634,6 +1640,7 @@ class SystemDatabase(ABC):
                     .where(SystemSchema.workflow_status.c.status == status)
                     .values(
                         status=WorkflowStatusString.ENQUEUED.value,
+                        **version_update,
                         queue_name=(
                             queue_name
                             if queue_name is not None
