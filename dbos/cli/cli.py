@@ -55,7 +55,7 @@ def _resolve_db_url(*, system_database_url: Optional[str]) -> Optional[str]:
     Returns None if no URL can be resolved.
     """
     dbos_logger.setLevel(logging.WARNING)  # The CLI should not emit INFO logs
-    if os.environ.get("DBOS__CLOUD") == "true":
+    if GlobalParams.dbos_cloud:
         system_database_url = os.environ.get("DBOS_SYSTEM_DATABASE_URL")
         assert system_database_url
         return system_database_url
@@ -64,7 +64,7 @@ def _resolve_db_url(*, system_database_url: Optional[str]) -> Optional[str]:
     else:
         # Load from config file if present
         try:
-            config = load_config(silent=True)
+            config = load_config()
             configured_url = config.get("system_database_url")
             if configured_url:
                 return configured_url
@@ -136,7 +136,7 @@ def _on_windows() -> bool:
     help="Start your DBOS application using the start commands in 'dbos-config.yaml'"
 )
 def start() -> None:
-    config = load_config(silent=True)
+    config = load_config()
     start_commands = config["runtimeConfig"]["start"]
     click.echo("Executing start commands from 'dbos-config.yaml'")
     for command in start_commands:
@@ -322,7 +322,7 @@ def migrate(
     migrate_commands: List[str] = []
     if os.path.exists("dbos-config.yaml"):
         try:
-            config = load_config(silent=True)
+            config = load_config()
         except DBOSInitializationError as e:
             raise click.ClickException(str(e))
         database_config = config.get("database") or {}

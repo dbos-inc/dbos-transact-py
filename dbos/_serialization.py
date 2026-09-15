@@ -77,19 +77,6 @@ class PortableWorkflowError(Exception):
     def __str__(self) -> str:
         return self.message
 
-    def to_error_data(self) -> JsonWorkflowErrorData:
-        out: JsonWorkflowErrorData = {"name": self.name, "message": self.message}
-        if self.code is not None:
-            out["code"] = self.code
-        if self.data is not None:
-            out["data"] = self.data
-        return out
-
-
-# --------- Notification (Message) and WF event ----------
-JsonMessage: TypeAlias = JsonValue
-JsonEvent: TypeAlias = JsonValue
-
 
 class Serializer(ABC):
 

@@ -361,14 +361,6 @@ class DBOSContext:
     ) -> None:
         self.authenticated_user = user
         self.authenticated_roles = roles
-        if user is not None and len(self.context_spans) > 0:
-            self.context_spans[-1].span.set_attribute(
-                dbos_tracer._resolve_attribute_name("authenticatedUser"), user
-            )
-            self.context_spans[-1].span.set_attribute(
-                dbos_tracer._resolve_attribute_name("authenticatedUserRoles"),
-                json.dumps(roles) if roles is not None else "",
-            )
 
 
 ##############################################################

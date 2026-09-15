@@ -226,8 +226,6 @@ class WorkflowStatusInternal(TypedDict):
     authenticated_user: Optional[str]
     assumed_role: Optional[str]
     authenticated_roles: Optional[str]  # JSON list of roles
-    output: Optional[str]  # JSON (jsonpickle)
-    error: Optional[str]  # JSON (jsonpickle)
     created_at: Optional[int]  # Unix epoch timestamp in ms
     updated_at: Optional[int]  # Unix epoch timestamp in ms
     queue_name: Optional[str]
@@ -245,7 +243,6 @@ class WorkflowStatusInternal(TypedDict):
     parent_workflow_id: Optional[str]
     started_at_epoch_ms: Optional[int]
     serialization: Optional[str]
-    owner_xid: Optional[str]
     delay_until_epoch_ms: Optional[int]
     attributes: Optional[Dict[str, Any]]
     schedule_name: Optional[str]
@@ -1900,13 +1897,10 @@ class SystemDatabase(ABC):
                     .where(ws.c.workflow_uuid.in_(chunk))
                 ).fetchall()
             # Keyed by column name, not position, so adding a column above cannot
-            # silently shift every field. output/error/owner_xid are never selected.
+            # silently shift every field.
             return [
                 {
                     "workflow_uuid": m["workflow_uuid"],
-                    "output": None,
-                    "error": None,
-                    "owner_xid": None,
                     "status": m["status"],
                     "name": m["name"],
                     "recovery_attempts": m["recovery_attempts"],

@@ -7,7 +7,7 @@ import time
 import psycopg
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 
 def start_docker_pg() -> None:
@@ -71,11 +71,6 @@ def check_db_connectivity(config: Dict[str, Any]) -> Optional[Exception]:
     finally:
         if conn is not None:
             conn.close()
-
-
-def exec_sync(cmd: str) -> Tuple[str, str]:
-    result = subprocess.run(cmd, shell=True, text=True, capture_output=True, check=True)
-    return result.stdout, result.stderr
 
 
 def start_docker_postgres(pool_config: Dict[str, Any]) -> bool:

@@ -10,7 +10,6 @@ from sqlalchemy import make_url
 from dbos._serialization import Serializer
 
 from ._error import DBOSInitializationError
-from ._logger import dbos_logger
 
 DBOS_CONFIG_PATH = "dbos-config.yaml"
 
@@ -135,7 +134,6 @@ class ConfigFile(TypedDict, total=False):
     database: DatabaseConfig
     system_database_url: Optional[str]
     telemetry: Optional[TelemetryConfig]
-    env: Dict[str, str]
     system_database_engine: Optional[sa.Engine]
     dbos_system_schema: Optional[str]
     use_listen_notify: bool
@@ -150,8 +148,7 @@ def _validate_observability_query_timeout_sec(value: Optional[float]) -> None:
         )
 
 
-# Removed in DBOS 3.0 along with the application database. Rejected in DBOSConfig, but
-# only dropped from dbos-config.yaml, which DBOS Cloud rewrites to add a database URL.
+# Removed in DBOS 3.0 along with the application database.
 REMOVED_DATABASE_URL_KEYS = ("database_url", "application_database_url")
 
 
@@ -287,59 +284,22 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     return translated_config
 
 
-def _substitute_env_vars(content: str, silent: bool = False) -> str:
-
-    # Regex to match ${DOCKER_SECRET:SECRET_NAME} style placeholders for Docker secrets
-    secret_regex = r"\$\{DOCKER_SECRET:([^}]+)\}"
+def _substitute_env_vars(content: str) -> str:
     # Regex to match ${VAR_NAME} style placeholders for environment variables
-    env_regex = r"\$\{(?!DOCKER_SECRET:)([^}]+)\}"
+    env_regex = r"\$\{([^}]+)\}"
 
     def replace_env_func(match: re.Match[str]) -> str:
-        var_name = match.group(1)
-        value = os.environ.get(
-            var_name, ""
-        )  # If the env variable is not set, return an empty string
-        if value == "" and not silent:
-            dbos_logger.warning(
-                f"Variable {var_name} would be substituted from the process environment into dbos-config.yaml, but is not defined"
-            )
-        return value
+        # If the env variable is not set, return an empty string
+        return os.environ.get(match.group(1), "")
 
-    def replace_secret_func(match: re.Match[str]) -> str:
-        secret_name = match.group(1)
-        try:
-            # Docker secrets are stored in /run/secrets/
-            secret_path = f"/run/secrets/{secret_name}"
-            if os.path.exists(secret_path):
-                with open(secret_path, "r") as f:
-                    return f.read().strip()
-            elif not silent:
-                dbos_logger.warning(
-                    f"Docker secret {secret_name} would be substituted from /run/secrets/{secret_name}, but the file does not exist"
-                )
-            return ""
-        except Exception as e:
-            if not silent:
-                dbos_logger.warning(
-                    f"Error reading Docker secret {secret_name}: {str(e)}"
-                )
-            return ""
-
-    # First replace Docker secrets
-    content = re.sub(secret_regex, replace_secret_func, content)
-    # Then replace environment variables
     return re.sub(env_regex, replace_env_func, content)
 
 
 def load_config(
     config_file_path: str = DBOS_CONFIG_PATH,
-    *,
-    silent: bool = False,
 ) -> ConfigFile:
     """
     Load the DBOS `ConfigFile` from the specified path (typically `dbos-config.yaml`).
-
-    The configuration is also validated against the configuration file schema.
 
     Args:
         config_file_path (str): The path to the yaml configuration file.
@@ -351,35 +311,19 @@ def load_config(
 
     with open(config_file_path, "r") as file:
         content = file.read()
-        substituted_content = _substitute_env_vars(content, silent=silent)
+        substituted_content = _substitute_env_vars(content)
         data = yaml.safe_load(substituted_content)
 
     if not isinstance(data, dict):
         raise DBOSInitializationError(
             f"dbos-config.yaml must contain a dictionary, not {type(data)}"
         )
-    data = cast(Dict[str, Any], data)
-    for removed_key in REMOVED_DATABASE_URL_KEYS:
-        data.pop(removed_key, None)
-
-    # Special case: convert logsEndpoint and tracesEndpoint from strings to lists of strings, if present
-    if "telemetry" in data and "OTLPExporter" in data["telemetry"]:
-        if "logsEndpoint" in data["telemetry"]["OTLPExporter"]:
-            data["telemetry"]["OTLPExporter"]["logsEndpoint"] = [
-                data["telemetry"]["OTLPExporter"]["logsEndpoint"]
-            ]
-        if "tracesEndpoint" in data["telemetry"]["OTLPExporter"]:
-            data["telemetry"]["OTLPExporter"]["tracesEndpoint"] = [
-                data["telemetry"]["OTLPExporter"]["tracesEndpoint"]
-            ]
-
     return cast(ConfigFile, data)
 
 
 def process_config(
     *,
     data: ConfigFile,
-    silent: bool = False,
 ) -> ConfigFile:
     """
     If a system_database_url is provided, pass it as is in the config.
@@ -523,20 +467,17 @@ def _app_name_to_db_name(app_name: str) -> str:
 
 
 def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
-    # Load the DBOS configuration file and force the use of:
-    # 1. The system database url provided by DBOS_SYSTEM_DATABASE_URL
-    # 2. OTLP traces endpoints (add the config data to the provided config)
-    # 3. Use the application name from the file. This is a defensive measure to ensure the application name is whatever it was registered with in the cloud
-    # 4. Remove env vars if provided in code
-    # Optimistically assume that expected fields in config_from_file are present
+    # In DBOS Cloud, force the settings the platform exports as environment variables:
+    # 1. The application name from DBOS_APP_NAME, so it matches the name registered in the cloud
+    # 2. The system database url provided by DBOS_SYSTEM_DATABASE_URL
+    # 3. OTLP endpoints from DBOS__OTLP_TRACES_ENDPOINT and DBOS__OTLP_LOGS_ENDPOINT, added to any provided in code
 
-    config_from_file = load_config()
-    # Be defensive
-    if config_from_file is None:
-        return provided_config
-
-    # Set the application name to the cloud app name
-    provided_config["name"] = config_from_file["name"]
+    app_name = os.environ.get("DBOS_APP_NAME")
+    if app_name is None:
+        raise DBOSInitializationError(
+            "DBOS_APP_NAME environment variable is not set. This is required to identify the application in DBOS Cloud."
+        )
+    provided_config["name"] = app_name
 
     # Use the DBOS Cloud system database URL
     system_db_url = os.environ.get("DBOS_SYSTEM_DATABASE_URL")
@@ -562,31 +503,14 @@ def overwrite_config(provided_config: ConfigFile) -> ConfigFile:
                 "logsEndpoint": [],
             }
 
-    # This is a super messy from a typing perspective.
-    # Some of ConfigFile keys are optional -- but in practice they'll always be present in hosted environments
-    # So, for Mypy, we have to (1) check the keys are present in config_from_file and (2) cast telemetry/otlp_exporters to Dict[str, Any]
-    # (2) is required because, even tho we resolved these keys earlier, mypy doesn't remember that
-    if (
-        config_from_file.get("telemetry")
-        and config_from_file["telemetry"]
-        and config_from_file["telemetry"].get("OTLPExporter")
-    ):
-
-        telemetry = cast(Dict[str, Any], provided_config["telemetry"])
-        otlp_exporter = cast(Dict[str, Any], telemetry["OTLPExporter"])
-
-        # Merge the logsEndpoint and tracesEndpoint lists from the file with what we have
-        source_otlp = config_from_file["telemetry"]["OTLPExporter"]
-        if source_otlp:
-            tracesEndpoint = source_otlp.get("tracesEndpoint")
-            if tracesEndpoint:
-                otlp_exporter["tracesEndpoint"].extend(tracesEndpoint)
-            logsEndpoint = source_otlp.get("logsEndpoint")
-            if logsEndpoint:
-                otlp_exporter["logsEndpoint"].extend(logsEndpoint)
-
-    # Env should be set from the hosting provider (e.g., DBOS Cloud)
-    if "env" in provided_config:
-        del provided_config["env"]
+    # Cast because mypy doesn't track that telemetry and OTLPExporter were resolved above
+    telemetry = cast(Dict[str, Any], provided_config["telemetry"])
+    otlp_exporter = cast(Dict[str, Any], telemetry["OTLPExporter"])
+    traces_endpoint = os.environ.get("DBOS__OTLP_TRACES_ENDPOINT")
+    if traces_endpoint:
+        otlp_exporter["tracesEndpoint"].append(traces_endpoint)
+    logs_endpoint = os.environ.get("DBOS__OTLP_LOGS_ENDPOINT")
+    if logs_endpoint:
+        otlp_exporter["logsEndpoint"].append(logs_endpoint)
 
     return provided_config

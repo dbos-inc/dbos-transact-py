@@ -510,8 +510,6 @@ def _assemble_workflow_status(
         "name": wf_name,
         "class_name": class_name,
         "config_name": config_name,
-        "output": None,
-        "error": None,
         "app_id": ctx.app_id,
         "app_version": (
             enqueue_options["app_version"]
@@ -557,7 +555,6 @@ def _assemble_workflow_status(
             ctx.parent_workflow_id if len(ctx.parent_workflow_id) > 0 else None
         ),
         "started_at_epoch_ms": None,
-        "owner_xid": None,
         "serialization": serialization,
         "delay_until_epoch_ms": (
             enqueue_options["delay_until_epoch_ms"]

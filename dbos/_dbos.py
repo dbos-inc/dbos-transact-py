@@ -23,7 +23,6 @@ from typing import (
     Generator,
     Generic,
     List,
-    Literal,
     Optional,
     Protocol,
     Sequence,
@@ -166,12 +165,6 @@ P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 T = TypeVar("T")
-
-IsolationLevel = Literal[
-    "SERIALIZABLE",
-    "REPEATABLE READ",
-    "READ COMMITTED",
-]
 
 _dbos_global_instance: Optional[DBOS] = None
 _dbos_global_registry: Optional[DBOSRegistry] = None
@@ -483,7 +476,7 @@ class DBOS:
         GlobalParams.app_version = os.environ.get("DBOS__APPVERSION", "")
         GlobalParams.executor_id = os.environ.get("DBOS__VMID") or "local"
         # In DBOS Cloud, instead use the values supplied through environment variables.
-        if not os.environ.get("DBOS__CLOUD") == "true":
+        if not GlobalParams.dbos_cloud:
             if self.enable_patching:
                 GlobalParams.app_version = "PATCHING_ENABLED"
             if (
@@ -498,7 +491,7 @@ class DBOS:
 
         # Translate user provided config to an internal format
         unvalidated_config = translate_dbos_config_to_config_file(config)
-        if os.environ.get("DBOS__CLOUD") == "true":
+        if GlobalParams.dbos_cloud:
             unvalidated_config = overwrite_config(unvalidated_config)
 
         if unvalidated_config is not None:
@@ -741,7 +734,7 @@ class DBOS:
 
             dbos_logger.info("DBOS launched!")
 
-            if self.conductor_key is None and os.environ.get("DBOS__CLOUD") != "true":
+            if self.conductor_key is None and not GlobalParams.dbos_cloud:
                 # Hint the user to open the URL to register and set up Conductor
                 app_name = self._config["name"]
                 conductor_registration_url = (
@@ -891,10 +884,6 @@ class DBOS:
         if self._sys_db_field is not None:
             self._sys_db_field.destroy()
             self._sys_db_field = None
-
-    @classmethod
-    def register_instance(cls, inst: object) -> None:
-        return _get_or_create_dbos_registry().register_instance(inst)
 
     @classmethod
     def register_queue(
@@ -1219,7 +1208,6 @@ class DBOS:
         cls,
         config: dict[str, Any],
         topics: list[str],
-        in_order: bool = False,
         *,
         ordering: Optional[KafkaOrdering] = None,
         batch_size: int = 250,
@@ -1230,7 +1218,6 @@ class DBOS:
         Args:
             config: confluent-kafka consumer configuration.
             topics: Topics (or ^-prefixed regexes) to subscribe to.
-            in_order: Deprecated alias for ordering="topic".
             ordering: "none" (default) processes messages in parallel;
                 "partition" processes them serially per topic partition
                 (Kafka's delivery-order guarantee) and in parallel across
@@ -1253,7 +1240,6 @@ class DBOS:
                 _get_or_create_dbos_registry(),
                 config,
                 topics,
-                in_order,
                 ordering=ordering,
                 batch_size=batch_size,
                 queue_name=queue_name,
@@ -3828,4 +3814,4 @@ class DBOSConfiguredInstance:
 
     def __init__(self, config_name: str) -> None:
         self.config_name = config_name
-        DBOS.register_instance(self)
+        _get_or_create_dbos_registry().register_instance(self)

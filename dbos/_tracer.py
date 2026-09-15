@@ -3,7 +3,6 @@ from typing import TYPE_CHECKING, Literal, Optional
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
-    from opentelemetry.sdk.trace import TracerProvider
 
 from dbos._utils import GlobalParams
 
@@ -49,7 +48,6 @@ class DBOSTracer:
 
     def __init__(self) -> None:
         self.app_id = os.environ.get("DBOS__APPID", None)
-        self.provider: Optional[TracerProvider] = None
         self.disable_otlp: bool = False
         self.otel_attribute_format: OtelAttributeFormat = _DEFAULT_OTEL_ATTRIBUTE_FORMAT
 
@@ -70,10 +68,7 @@ class DBOSTracer:
             )
             from opentelemetry.sdk.resources import Resource
             from opentelemetry.sdk.trace import TracerProvider
-            from opentelemetry.sdk.trace.export import (
-                BatchSpanProcessor,
-                ConsoleSpanExporter,
-            )
+            from opentelemetry.sdk.trace.export import BatchSpanProcessor
             from opentelemetry.semconv.attributes.service_attributes import SERVICE_NAME
 
             tracer_provider = trace.get_tracer_provider()
@@ -89,9 +84,6 @@ class DBOSTracer:
                     )
 
                     tracer_provider = TracerProvider(resource=resource)
-                    if os.environ.get("DBOS__CONSOLE_TRACES", None) is not None:
-                        processor = BatchSpanProcessor(ConsoleSpanExporter())
-                        tracer_provider.add_span_processor(processor)
                     trace.set_tracer_provider(tracer_provider)
 
                 for e in otlp_traces_endpoints:
@@ -102,9 +94,6 @@ class DBOSTracer:
                 dbos_logger.warning(
                     "OTLP is enabled but tracer provider not set, skipping trace exporter setup."
                 )
-
-    def set_provider(self, provider: "Optional[TracerProvider]") -> None:
-        self.provider = provider
 
     def _resolve_attribute_name(self, key: str) -> str:
         """Map a legacy DBOS attribute name to the name that should be
@@ -119,11 +108,7 @@ class DBOSTracer:
     ) -> "Span":
         from opentelemetry import trace
 
-        tracer = (
-            self.provider.get_tracer("dbos-tracer")
-            if self.provider is not None
-            else trace.get_tracer("dbos-tracer")
-        )
+        tracer = trace.get_tracer("dbos-tracer")
         context = trace.set_span_in_context(parent) if parent else None
         span: Span = tracer.start_span(name=attributes["name"], context=context)
         attributes["applicationID"] = self.app_id

@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 
-from ._logger import dbos_logger
 from ._utils import quote_identifier
 
 

@@ -211,12 +211,8 @@ class Queue:
         ):
             raise ValueError("limiter must specify both 'limit' and 'period'")
 
-    def _has_partition_limits(self) -> bool:
-        """True when any per-partition limit is set, which is what partitions a queue."""
-        return self._partitioned_after()
-
-    def _partitioned_after(self, **overrides: Any) -> bool:
-        """Whether the queue is still partitioned once these fields take these values."""
+    def _has_partition_limits(self, **overrides: Any) -> bool:
+        """True when any per-partition limit is set, with these fields taking these values."""
         values: dict[str, Any] = {
             "_partition_concurrency": self._partition_concurrency,
             "_partition_worker_concurrency": self._partition_worker_concurrency,
@@ -309,18 +305,23 @@ class Queue:
             self._refresh_fields(await asyncio.to_thread(self._read_from_db))
         return self._concurrency
 
-    def set_concurrency(self, value: Optional[int]) -> None:
-        """Deprecated. Use set_global_concurrency."""
+    def _set_concurrency(
+        self, value: Optional[int], method_name: str, async_alternative: str
+    ) -> None:
         self._require_database_backed()
-        _warn_sync_db_call_in_async_context(
-            "Queue.set_concurrency", "Queue.set_concurrency_async"
-        )
+        _warn_sync_db_call_in_async_context(method_name, async_alternative)
         # Refresh the local cache so the cross-field check below validates
         # against the latest worker_concurrency stored in the database.
         self._refresh_fields(self._read_from_db())
         self._check_concurrency_bounds(value)
         self._write_to_db({"concurrency": value})
         self._concurrency = value
+
+    def set_concurrency(self, value: Optional[int]) -> None:
+        """Deprecated. Use set_global_concurrency."""
+        self._set_concurrency(
+            value, "Queue.set_concurrency", "Queue.set_concurrency_async"
+        )
 
     async def set_concurrency_async(self, value: Optional[int]) -> None:
         """Deprecated. Use set_global_concurrency_async."""
@@ -343,14 +344,9 @@ class Queue:
         return self._concurrency
 
     def set_global_concurrency(self, value: Optional[int]) -> None:
-        self._require_database_backed()
-        _warn_sync_db_call_in_async_context(
-            "Queue.set_global_concurrency", "Queue.set_global_concurrency_async"
+        self._set_concurrency(
+            value, "Queue.set_global_concurrency", "Queue.set_global_concurrency_async"
         )
-        self._refresh_fields(self._read_from_db())
-        self._check_concurrency_bounds(value)
-        self._write_to_db({"concurrency": value})
-        self._concurrency = value
 
     async def set_global_concurrency_async(self, value: Optional[int]) -> None:
         await self._configure_thread_pool()
@@ -395,7 +391,7 @@ class Queue:
             {
                 "partition_concurrency": value,
                 # Legacy column, still read by other SDKs: keep it in step with the limits.
-                "partition_queue": self._partitioned_after(
+                "partition_queue": self._has_partition_limits(
                     _partition_concurrency=value
                 ),
             }
@@ -453,7 +449,7 @@ class Queue:
         self._write_to_db(
             {
                 "partition_worker_concurrency": value,
-                "partition_queue": self._partitioned_after(
+                "partition_queue": self._has_partition_limits(
                     _partition_worker_concurrency=value
                 ),
             }
@@ -496,7 +492,7 @@ class Queue:
             {
                 "partition_rate_limit_max": value["limit"] if value else None,
                 "partition_rate_limit_period_sec": value["period"] if value else None,
-                "partition_queue": self._partitioned_after(_partition_limiter=value),
+                "partition_queue": self._has_partition_limits(_partition_limiter=value),
             }
         )
         self._partition_limiter = value
@@ -673,7 +669,6 @@ def queue_worker_thread(
 ) -> None:
     """Worker thread for processing a single queue."""
     polling_interval = queue._polling_interval_sec
-    max_polling_interval = max(queue._polling_interval_sec, 120.0)
 
     def start_dequeued_workflows(workflow_ids: List[str]) -> None:
         """Fetch the claimed workflows' statuses in one round trip, then dispatch each."""
