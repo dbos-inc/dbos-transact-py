@@ -1449,6 +1449,223 @@ class SystemDatabase(ABC):
                 )
             )
 
+    def rewind_workflows(
+        self,
+        workflow_ids: list[str],
+        start_steps: list[int],
+        *,
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
+    ) -> None:
+        """Drop each workflow's history from its start_step onwards and re-enqueue it
+        under the same workflow ID, so a replay re-executes everything from that step.
+
+        Unlike fork_workflow this writes no new workflow: peers keep addressing the same
+        ID, and the workflow's mailbox, events, and streams are not copied anywhere.
+        Unlike resume_workflows it applies only to workflows in a terminal state.
+
+        When a workflow is rewound, all events and state from the specified start_step
+        onwards are discarded, effectively rewinding the workflow to that point.
+
+        Messages the discarded run consumed are put back, so a replayed recv sees the
+        mailbox it saw the first time. One exception is not handled here and is the
+        caller's to reason about: a replayed send duplicates into its destination's
+        mailbox.
+
+        The batch is all-or-nothing: if any workflow is missing or not terminal, none
+        of them are rewound.
+        """
+        if not workflow_ids:
+            return
+        if len(workflow_ids) != len(start_steps):
+            raise ValueError("workflow_ids and start_steps must have the same length")
+        if len(set(workflow_ids)) != len(workflow_ids):
+            raise ValueError("workflow_ids must not contain duplicates")
+        for workflow_id, start_step in zip(workflow_ids, start_steps):
+            if start_step < 1:
+                raise ValueError(
+                    f"start_step must be >= 1, got {start_step} for workflow {workflow_id}"
+                )
+
+        weh = SystemSchema.workflow_events_history
+
+        # (workflow_id, start_step) pairs as a derived table, so every statement below
+        # is one round trip regardless of batch size.
+        mapping = sa.union_all(
+            *[
+                sa.select(
+                    sa.literal(workflow_id).label("workflow_id"),
+                    sa.literal(start_step, sa.Integer).label("start_step"),
+                )
+                for workflow_id, start_step in zip(workflow_ids, start_steps)
+            ]
+        ).subquery("rewind_mapping")
+
+        with self.engine.begin() as c:
+            # Check workflows exist and are in a terminal state
+            rows = c.execute(
+                sa.select(
+                    SystemSchema.workflow_status.c.workflow_uuid,
+                    SystemSchema.workflow_status.c.status,
+                ).where(SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids))
+            ).fetchall()
+            status_by_id = {row[0]: row[1] for row in rows}
+
+            missing = [wid for wid in workflow_ids if wid not in status_by_id]
+            if missing:
+                raise DBOSNonExistentWorkflowError("target", ", ".join(missing))
+            active = [
+                f"{wid} ({status_by_id[wid]})"
+                for wid in workflow_ids
+                if workflow_is_active(status_by_id[wid])
+            ]
+            if active:
+                raise DBOSException(
+                    f"Cannot rewind {', '.join(active)}: only a workflow in a terminal "
+                    "state can be rewound, so cancel it first"
+                )
+
+            # Rollback workflows events to the latest published value
+            # before the rewind, using the workflow_events_history as an undo log.
+            # Then rewind the workflow events history as well.
+            discarded = weh.alias("discarded")
+            discarded_mapping = mapping.alias("discarded_mapping")
+
+            # First delete all events published after the rewind point.
+            def published_past_cut(workflow_uuid: Any, key: Any) -> Any:
+                """Whether this workflow published this key at or past its cut."""
+                return (
+                    sa.select(sa.literal(1))
+                    .select_from(
+                        discarded.join(
+                            discarded_mapping,
+                            discarded_mapping.c.workflow_id
+                            == discarded.c.workflow_uuid,
+                        )
+                    )
+                    .where(
+                        (discarded.c.workflow_uuid == workflow_uuid)
+                        & (discarded.c.key == key)
+                        & (discarded.c.function_id >= discarded_mapping.c.start_step)
+                    )
+                    .exists()
+                )
+
+            c.execute(
+                sa.delete(SystemSchema.workflow_events).where(
+                    published_past_cut(
+                        SystemSchema.workflow_events.c.workflow_uuid,
+                        SystemSchema.workflow_events.c.key,
+                    )
+                )
+            )
+
+            # Then restore events, if any, as published before the rewind point.
+            surviving = (
+                sa.select(
+                    weh.c.workflow_uuid,
+                    weh.c.key,
+                    weh.c.value,
+                    weh.c.serialization,
+                    sa.func.row_number()
+                    .over(
+                        partition_by=[weh.c.workflow_uuid, weh.c.key],
+                        order_by=weh.c.function_id.desc(),
+                    )
+                    .label("rn"),
+                )
+                .select_from(
+                    weh.join(mapping, mapping.c.workflow_id == weh.c.workflow_uuid)
+                )
+                .where(
+                    (weh.c.function_id < mapping.c.start_step)
+                    & published_past_cut(weh.c.workflow_uuid, weh.c.key)
+                )
+                .subquery("surviving")
+            )
+            c.execute(
+                sa.insert(SystemSchema.workflow_events).from_select(
+                    ["workflow_uuid", "key", "value", "serialization"],
+                    sa.select(
+                        surviving.c.workflow_uuid,
+                        surviving.c.key,
+                        surviving.c.value,
+                        surviving.c.serialization,
+                    ).where(surviving.c.rn == 1),
+                )
+            )
+
+            # Discard steps, stream events, and workflow events history (safe to do now)
+            for table in (SystemSchema.operation_outputs, weh, SystemSchema.streams):
+                c.execute(
+                    sa.delete(table).where(
+                        sa.select(sa.literal(1))
+                        .select_from(mapping)
+                        .where(
+                            (mapping.c.workflow_id == table.c.workflow_uuid)
+                            & (table.c.function_id >= mapping.c.start_step)
+                        )
+                        .exists()
+                    )
+                )
+
+            # "Regurgitate" notifications. Keyed by destination, so the mapping matches
+            # on destination_uuid rather than workflow_uuid.
+            c.execute(
+                sa.update(SystemSchema.notifications)
+                .where(
+                    sa.select(sa.literal(1))
+                    .select_from(mapping)
+                    .where(
+                        (
+                            mapping.c.workflow_id
+                            == SystemSchema.notifications.c.destination_uuid
+                        )
+                        & (
+                            SystemSchema.notifications.c.consumed_by_function_id
+                            >= mapping.c.start_step
+                        )
+                    )
+                    .exists()
+                )
+                .values(consumed=False, consumed_by_function_id=None)
+            )
+
+            # Re-enqueue the workflows. Grouped by status so this
+            # is at most one statement per distinct terminal status, not per workflow.
+            ids_by_status: Dict[str, list[str]] = {}
+            for workflow_id in workflow_ids:
+                ids_by_status.setdefault(status_by_id[workflow_id], []).append(
+                    workflow_id
+                )
+            rewound = 0
+            for status, ids in ids_by_status.items():
+                result = c.execute(
+                    sa.update(SystemSchema.workflow_status)
+                    .where(SystemSchema.workflow_status.c.workflow_uuid.in_(ids))
+                    .where(SystemSchema.workflow_status.c.status == status)
+                    .values(
+                        status=WorkflowStatusString.ENQUEUED.value,
+                        queue_name=(
+                            queue_name
+                            if queue_name is not None
+                            else INTERNAL_QUEUE_NAME
+                        ),
+                        queue_partition_key=queue_partition_key,
+                        recovery_attempts=0,
+                        workflow_deadline_epoch_ms=None,
+                        deduplication_id=None,
+                        started_at_epoch_ms=None,
+                        updated_at=self._now_ms_sql(),
+                        completed_at=None,
+                    )
+                )
+                rewound += result.rowcount
+            if rewound != len(workflow_ids):
+                raise DBOSException(
+                    "A workflow changed status while being rewound; retry the rewind"
+                )
+
     def fork_workflow(
         self,
         original_workflow_ids: list[str],
@@ -3568,7 +3785,7 @@ class SystemDatabase(ABC):
                         .scalar_subquery()
                     ),
                 )
-                .values(consumed=True)
+                .values(consumed=True, consumed_by_function_id=function_id)
                 .returning(
                     SystemSchema.notifications.c.message,
                     SystemSchema.notifications.c.serialization,

@@ -1348,6 +1348,15 @@ def get_dbos_migration_hundredtwenty(quoted_schema: str, is_cockroach: bool) -> 
     return f'DROP INDEX {c} IF EXISTS {quoted_schema}."idx_operation_outputs_completed_at_function_name"'
 
 
+def get_dbos_migration_hundredtwentyone(quoted_schema: str) -> str:
+    # Records which recv consumed a notification, so rewinding past that step can
+    # un-consume exactly the rows that step took and no others.
+    return f"""
+ALTER TABLE {quoted_schema}."notifications"
+    ADD COLUMN IF NOT EXISTS "consumed_by_function_id" INTEGER;
+"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -1425,6 +1434,7 @@ def get_dbos_migrations(
         get_dbos_migration_hundredeighteen(quoted_schema, is_cockroach),
         get_dbos_migration_hundrednineteen(quoted_schema, is_cockroach),
         get_dbos_migration_hundredtwenty(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredtwentyone(quoted_schema),
     ]
 
 
@@ -1865,6 +1875,9 @@ sqlite_migration_hundrednineteen = 'CREATE INDEX IF NOT EXISTS "idx_operation_ou
 sqlite_migration_hundredtwenty = (
     'DROP INDEX IF EXISTS "idx_operation_outputs_completed_at_function_name"'
 )
+sqlite_migration_hundredtwentyone = """
+ALTER TABLE notifications ADD COLUMN consumed_by_function_id INTEGER;
+"""
 
 sqlite_migrations = [
     *_pad_to_shared_base(_sqlite_history),
@@ -1891,4 +1904,5 @@ sqlite_migrations = [
     sqlite_migration_hundredeighteen,
     sqlite_migration_hundrednineteen,
     sqlite_migration_hundredtwenty,
+    sqlite_migration_hundredtwentyone,
 ]
