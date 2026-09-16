@@ -224,9 +224,9 @@ def test_cockroachdb_rewind() -> None:
 
         for i, workflow_id in enumerate(ids):
             assert DBOS.retrieve_workflow(workflow_id).get_result() == "second"
-            # Published only past the cut and never re-set, so it stays as it was.
-            assert DBOS.get_event(workflow_id, "above") == "doomed"
-            # Overwritten by the replay.
+            # Published only past the cut, so unpublished and never re-set.
+            assert DBOS.get_event(workflow_id, "above", 1) is None
+            # Reverted below the cut, then republished by the replay.
             assert DBOS.get_event(workflow_id, "both") == "old"
             assert DBOS.get_event(workflow_id, "below") == "kept"
             # Stream entries keep their offsets, so the replay appends after them.
