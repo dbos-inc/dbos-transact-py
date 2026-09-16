@@ -855,6 +855,17 @@ class SystemDatabase(ABC):
         names = [value] if isinstance(value, str) else value
         return sa.or_(col.in_(names), col.is_(None))
 
+    @staticmethod
+    def _in_flight_status_prover() -> sa.ColumnElement[bool]:
+        """Redundant literal copy of the in-flight partial indexes' predicate: SQLite's
+        prover runs at prepare time, so a bound status = or IN never matches it."""
+        return SystemSchema.workflow_status.c.status.in_(
+            [
+                sa.literal_column(f"'{WorkflowStatusString.ENQUEUED.value}'"),
+                sa.literal_column(f"'{WorkflowStatusString.PENDING.value}'"),
+            ]
+        )
+
     @contextmanager
     def _observability_query(
         self, *, capped: bool = True
@@ -2616,6 +2627,12 @@ class SystemDatabase(ABC):
         # Apply filters
         if status:
             query = query.where(SystemSchema.workflow_status.c.status.in_(status))
+            # In-flight-only aggregates (the queues page) can then run index-only on idx_workflow_status_in_flight_v2.
+            if set(status) <= {
+                WorkflowStatusString.ENQUEUED.value,
+                WorkflowStatusString.PENDING.value,
+            }:
+                query = query.where(self._in_flight_status_prover())
         if start_time:
             query = query.where(
                 SystemSchema.workflow_status.c.created_at
@@ -4356,13 +4373,7 @@ class SystemDatabase(ABC):
         base_filter = sa.and_(
             ws.c.queue_name == queue_name,
             ws.c.status == WorkflowStatusString.ENQUEUED.value,
-            # Redundant literal IN mirroring the index's own predicate: SQLite's partial-index prover runs at prepare time, so it can't see bound params and can't derive IN membership from =.
-            ws.c.status.in_(
-                [
-                    sa.literal_column(f"'{WorkflowStatusString.ENQUEUED.value}'"),
-                    sa.literal_column(f"'{WorkflowStatusString.PENDING.value}'"),
-                ]
-            ),
+            self._in_flight_status_prover(),
             # Only partitions this application can actually dequeue from.
             self._name_filter(ws.c.application_name, self.app_name),
         )
@@ -4491,6 +4502,7 @@ class SystemDatabase(ABC):
                     .select_from(ws)
                     .where(ws.c.queue_name == queue.name)
                     .where(ws.c.status == WorkflowStatusString.PENDING.value)
+                    .where(self._in_flight_status_prover())
                     .where(self._name_filter(ws.c.application_name, self.app_name))
                 )
                 if partition_scoped:
@@ -4721,13 +4733,7 @@ class SystemDatabase(ABC):
                     ws.c.application_version == app_version,
                     ws.c.application_version.is_(None),
                 )
-            # Redundant literal IN mirroring idx_workflow_status_partition_dequeue_v2's predicate: SQLite's partial-index prover runs at prepare time, so it can't see bound params and can't derive IN membership from =.
-            status_prover = ws.c.status.in_(
-                [
-                    sa.literal_column(f"'{WorkflowStatusString.ENQUEUED.value}'"),
-                    sa.literal_column(f"'{WorkflowStatusString.PENDING.value}'"),
-                ]
-            )
+            status_prover = self._in_flight_status_prover()
             enq = sa.and_(
                 ws.c.queue_name == queue.name,
                 ws.c.status == WorkflowStatusString.ENQUEUED.value,

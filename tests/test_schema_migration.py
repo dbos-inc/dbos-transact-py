@@ -1010,8 +1010,8 @@ def test_runner_resumes_after_invalid_index(
 
     engine = dbos_dropped_databases._sys_db.engine
     schema = "dbos"
-    target_index = "idx_workflow_status_in_flight"
-    rewind_to_version = 31  # one before migration 32 which builds target_index
+    target_index = "idx_workflow_status_in_flight_v2"
+    rewind_to_version = 114  # one before migration 115 which builds target_index
     final_version = len(get_dbos_migrations(schema, True))
 
     # Drop the existing valid index, then plant an INVALID index of the same
@@ -1023,7 +1023,7 @@ def test_runner_resumes_after_invalid_index(
         conn.execute(
             sa.text(
                 f'CREATE INDEX "{target_index}" ON "{schema}"."workflow_status" '
-                "(queue_name, status, priority, created_at) "
+                "(queue_name, status, priority, created_at, application_name) "
                 "WHERE status IN ('ENQUEUED', 'PENDING')"
             )
         )
@@ -1044,14 +1044,14 @@ def test_runner_resumes_after_invalid_index(
         ).scalar()
         assert valid is False
 
-    # Rewind the version counter so the runner re-executes migration 32
+    # Rewind the version counter so the runner re-executes migration 115
     with engine.begin() as conn:
         conn.execute(
             sa.text(f'UPDATE "{schema}".dbos_migrations SET version = :v'),
             {"v": rewind_to_version},
         )
 
-    # Re-run migrations: cleanup should drop the invalid index, then 32+ rebuild
+    # Re-run migrations: cleanup should drop the invalid index, then 115+ rebuild
     run_dbos_migrations(engine, schema, use_listen_notify=True)
 
     # The index now exists and is valid, and the version is back at the latest

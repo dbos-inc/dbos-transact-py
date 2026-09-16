@@ -24,7 +24,12 @@ from dbos._serialization import DefaultSerializer
 from dbos._sys_db import OperationResultInternal, SystemDatabase
 from dbos._utils import GlobalParams
 
-from .conftest import postgres_urls, retry_until_success, set_workflow_status
+from .conftest import (
+    postgres_urls,
+    retry_until_success,
+    set_workflow_status,
+    using_sqlite,
+)
 
 
 def test_list_workflow(dbos: DBOS) -> None:
@@ -2251,6 +2256,89 @@ def test_get_workflow_aggregates_select_max_durations(
     # the row producing MAX(wait) has total >= its wait, and MAX(total)
     # is at least that row's total.
     assert queued_row["max_total_latency_ms"] >= queued_row["max_queue_wait_ms"]
+
+
+def test_get_workflow_aggregates_in_flight_query_plan(dbos: DBOS) -> None:
+    """The queues-page aggregate (app-scoped in-flight counts) must run index-only on
+    idx_workflow_status_in_flight_v2, not fetch the row of every in-flight workflow."""
+    ws = SystemSchema.workflow_status
+    now = int(time.time() * 1000)
+    statuses = ["ENQUEUED", "PENDING"] + ["SUCCESS"] * 18
+    # A tenth of the table is in flight, so the partial index is small relative to the heap.
+    rows = [
+        {
+            "workflow_uuid": f"agg-plan-{i}-{uuid.uuid4()}",
+            "name": "plan_probe",
+            "status": statuses[i % 20],
+            "created_at": now,
+            "updated_at": now,
+            "queue_name": f"agg-plan-q{i % 3}",
+            "application_name": dbos._sys_db.app_name,
+        }
+        for i in range(1000)
+    ]
+    with dbos._sys_db.engine.begin() as conn:
+        conn.execute(sa.insert(ws), rows)
+
+    def probe_total(results: List[Any]) -> int:
+        return sum(
+            r["count"]
+            for r in results
+            if (r["group"]["queue_name"] or "").startswith("agg-plan-q")
+        )
+
+    captured: List[Tuple[str, Any]] = []
+
+    def before_cursor_execute(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        if "GROUP BY" in statement:
+            captured.append((statement, parameters))
+
+    event.listen(dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute)
+    try:
+        in_flight = dbos._sys_db.get_workflow_aggregates(
+            group_by_queue_name=True,
+            group_by_status=True,
+            select_count=True,
+            status=["ENQUEUED", "PENDING"],
+        )
+    finally:
+        event.remove(
+            dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute
+        )
+    assert probe_total(in_flight) == 100
+    # A status outside the in-flight pair must not pick up the in-flight predicate.
+    mixed = dbos._sys_db.get_workflow_aggregates(
+        group_by_queue_name=True, select_count=True, status=["PENDING", "SUCCESS"]
+    )
+    assert probe_total(mixed) == 950
+
+    assert captured
+    statement, parameters = captured[0]
+    assert "application_name" in statement
+    with dbos._sys_db.engine.connect() as raw_conn:
+        conn = raw_conn.execution_options(isolation_level="AUTOCOMMIT")
+        if using_sqlite():
+            conn.exec_driver_sql("ANALYZE")
+            plan = conn.exec_driver_sql(
+                f"EXPLAIN QUERY PLAN {statement}", parameters
+            ).fetchall()
+            covered = "USING COVERING INDEX idx_workflow_status_in_flight_v2"
+        else:
+            # VACUUM sets the visibility map, without which an index-only scan costs no less than a plain one.
+            conn.exec_driver_sql(
+                f'VACUUM ANALYZE "{dbos._sys_db.schema}".workflow_status'
+            )
+            plan = conn.exec_driver_sql(f"EXPLAIN {statement}", parameters).fetchall()
+            covered = "Index Only Scan using idx_workflow_status_in_flight_v2"
+    details = [str(row[-1]) for row in plan]
+    assert any(covered in d for d in details), details
 
 
 def test_get_step_aggregates(dbos: DBOS) -> None:

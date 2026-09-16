@@ -3637,6 +3637,80 @@ def test_rate_limiter_query_plan(dbos: DBOS) -> None:
     assert not [d for d in details if d.startswith("SCAN") or "Seq Scan" in d]
 
 
+def test_pending_count_query_plan(dbos: DBOS) -> None:
+    """The global-concurrency PENDING count runs each poll, so it must run index-only on
+    idx_workflow_status_in_flight_v2 rather than fetch every running workflow's row."""
+
+    queue = unpolled_queue(f"pending-plan-{uuid.uuid4().hex[:8]}", concurrency=5)
+
+    captured: List[Any] = []
+
+    def before_cursor_execute(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        # With no limiter configured, the global PENDING count is the only count the sweep emits.
+        if statement.strip().startswith("SELECT count(*)"):
+            captured.append((statement, parameters))
+
+    from sqlalchemy import event
+
+    event.listen(dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute)
+    try:
+        assert (
+            dbos._sys_db.start_queued_workflows(
+                queue, GlobalParams.executor_id, GlobalParams.app_version, None
+            )
+            == []
+        )
+    finally:
+        event.remove(
+            dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute
+        )
+    assert captured
+    statement, parameters = captured[0]
+    assert "application_name" in statement
+
+    # Plan against a populated, freshly analyzed table, as test_rate_limiter_query_plan does.
+    ws = SystemSchema.workflow_status
+    now = int(time.time() * 1000)
+    rows = [
+        {
+            "workflow_uuid": f"pending-plan-{i}-{uuid.uuid4()}",
+            "name": "plan_probe",
+            "status": "PENDING" if i % 10 == 0 else "SUCCESS",
+            "created_at": now,
+            "updated_at": now,
+            "queue_name": queue.name if i % 10 == 0 else f"other-queue-{i % 7}",
+            "application_name": dbos._sys_db.app_name,
+        }
+        for i in range(1000)
+    ]
+    with dbos._sys_db.engine.begin() as conn:
+        conn.execute(sa.insert(ws), rows)
+    with dbos._sys_db.engine.connect() as raw_conn:
+        conn = raw_conn.execution_options(isolation_level="AUTOCOMMIT")
+        if using_sqlite():
+            conn.exec_driver_sql("ANALYZE")
+            plan = conn.exec_driver_sql(
+                f"EXPLAIN QUERY PLAN {statement}", parameters
+            ).fetchall()
+            covered = "USING COVERING INDEX idx_workflow_status_in_flight_v2"
+        else:
+            # VACUUM sets the visibility map, without which an index-only scan costs no less than a plain one.
+            conn.exec_driver_sql(
+                f'VACUUM ANALYZE "{dbos._sys_db.schema}".workflow_status'
+            )
+            plan = conn.exec_driver_sql(f"EXPLAIN {statement}", parameters).fetchall()
+            covered = "Index Only Scan using idx_workflow_status_in_flight_v2"
+    details = [str(row[-1]) for row in plan]
+    assert any(covered in d for d in details), details
+
+
 def test_partitioned_queue_global_exclusivity(
     dbos: DBOS,
     monkeypatch: pytest.MonkeyPatch,

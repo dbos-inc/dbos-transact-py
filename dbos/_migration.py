@@ -29,6 +29,8 @@ _ONLINE_MIGRATIONS = {
     107,
     111,
     114,
+    115,
+    116,
 }
 
 # From this index on, every SDK defines the same migration at the same index.
@@ -1306,6 +1308,18 @@ def get_dbos_migration_hundredfourteen(quoted_schema: str, is_cockroach: bool) -
     return f'DROP INDEX {c} IF EXISTS {quoted_schema}."idx_notifications"'
 
 
+def get_dbos_migration_hundredfifteen(quoted_schema: str, is_cockroach: bool) -> str:
+    # Trailing application_name lets app-scoped in-flight counts run index-only.
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_in_flight_v2" ON {quoted_schema}."workflow_status" ("queue_name", "status", "priority", "created_at", "application_name") WHERE "status" IN (\'ENQUEUED\', \'PENDING\')'
+
+
+def get_dbos_migration_hundredsixteen(quoted_schema: str, is_cockroach: bool) -> str:
+    # Superseded by idx_workflow_status_in_flight_v2
+    c = _concurrently(is_cockroach)
+    return f'DROP INDEX {c} IF EXISTS {quoted_schema}."idx_workflow_status_in_flight"'
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -1377,6 +1391,8 @@ def get_dbos_migrations(
         get_dbos_migration_hundredtwelve(quoted_schema),
         get_dbos_migration_hundredthirteen(quoted_schema, is_cockroach),
         get_dbos_migration_hundredfourteen(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredfifteen(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredsixteen(quoted_schema, is_cockroach),
     ]
 
 
@@ -1798,6 +1814,11 @@ sqlite_migration_hundredfourteen = """
 DROP INDEX IF EXISTS "idx_notifications";
 """
 
+sqlite_migration_hundredfifteen = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_in_flight_v2" ON "workflow_status" ("queue_name", "status", "priority", "created_at", "application_name") WHERE "status" IN (\'ENQUEUED\', \'PENDING\')'
+
+# Superseded by idx_workflow_status_in_flight_v2
+sqlite_migration_hundredsixteen = 'DROP INDEX IF EXISTS "idx_workflow_status_in_flight"'
+
 sqlite_migrations = [
     *_pad_to_shared_base(_sqlite_history),
     sqlite_migration_hundred,
@@ -1817,4 +1838,6 @@ sqlite_migrations = [
     # Postgres migration 113 rewrites a stored function; SQLite has none.
     "",
     sqlite_migration_hundredfourteen,
+    sqlite_migration_hundredfifteen,
+    sqlite_migration_hundredsixteen,
 ]
