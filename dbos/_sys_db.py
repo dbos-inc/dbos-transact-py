@@ -1457,9 +1457,11 @@ class SystemDatabase(ABC):
         onwards are discarded, effectively rewinding the workflow to that point.
 
         Messages the discarded run consumed are put back, so a replayed recv sees the
-        mailbox it saw the first time. One exception is not handled here and is the
-        caller's to reason about: a replayed send duplicates into its destination's
-        mailbox.
+        mailbox it saw the first time.
+
+        Stream entries written by the discarded run remain in place, to not mess
+        the offset sequence (unrelated to the function IDs and potentially incremented
+        by concurrent writers), with the exception of the close sentinel.
 
         The batch is all-or-nothing: if any workflow is missing or not terminal, none
         of them are rewound.
@@ -1584,8 +1586,33 @@ class SystemDatabase(ABC):
                 )
             )
 
-            # Discard steps, stream events, and workflow events history (safe to do now)
-            for table in (SystemSchema.operation_outputs, weh, SystemSchema.streams):
+            # Stream entries have to stay, because their offset doesn't necessarily
+            # match function IDs, and removing them can punch holes in the stream
+            # that'll force readers to stop reading.
+            #
+            # One exception: the close sentinel, otherwise values written after the
+            # rewind will never be read.
+            closed_value, closed_serialization = serialize_value(
+                _dbos_stream_closed_sentinel,
+                WorkflowSerializationFormat.PORTABLE,
+                self.serializer,
+            )
+            c.execute(
+                sa.delete(SystemSchema.streams).where(
+                    (SystemSchema.streams.c.value == closed_value)
+                    & (SystemSchema.streams.c.serialization == closed_serialization)
+                    & sa.select(sa.literal(1))
+                    .select_from(mapping)
+                    .where(
+                        (mapping.c.workflow_id == SystemSchema.streams.c.workflow_uuid)
+                        & (SystemSchema.streams.c.function_id >= mapping.c.start_step)
+                    )
+                    .exists()
+                )
+            )
+
+            # Discard steps and workflow events history
+            for table in (SystemSchema.operation_outputs, weh):
                 c.execute(
                     sa.delete(table).where(
                         sa.select(sa.literal(1))

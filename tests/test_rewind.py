@@ -108,6 +108,27 @@ def event_history_ids(dbos: DBOS, workflow_id: str) -> List[int]:
         )
 
 
+def stream_rows(dbos: DBOS, workflow_id: str, key: str) -> List[Any]:
+    """(offset, value) for a stream, including the close sentinel a reader stops at."""
+    with dbos._sys_db.engine.begin() as c:
+        rows = c.execute(
+            sa.select(
+                SystemSchema.streams.c.offset,
+                SystemSchema.streams.c.value,
+                SystemSchema.streams.c.serialization,
+            )
+            .where(
+                (SystemSchema.streams.c.workflow_uuid == workflow_id)
+                & (SystemSchema.streams.c.key == key)
+            )
+            .order_by(SystemSchema.streams.c.offset)
+        ).fetchall()
+    return [
+        (row[0], deserialize_value(row[1], row[2], dbos._sys_db.serializer))
+        for row in rows
+    ]
+
+
 def mailbox(dbos: DBOS, workflow_id: str) -> List[Any]:
     """(message, consumed, consumed_by_function_id) for a workflow, oldest first."""
     with dbos._sys_db.engine.begin() as c:
@@ -243,7 +264,7 @@ def test_rewind_unpublishes_events(dbos: DBOS) -> None:
 #######################################
 
 
-def test_rewind_discards_stream_entries(dbos: DBOS) -> None:
+def test_rewind_keeps_stream_entries(dbos: DBOS) -> None:
     @DBOS.workflow()
     def writer(name: str) -> str:
         run = run_count(name)
@@ -251,31 +272,40 @@ def test_rewind_discards_stream_entries(dbos: DBOS) -> None:
         DBOS.write_stream("log", f"b{run}")
         return f"run{run}"
 
-    workflow_id = start(writer, "stream-discard")
+    workflow_id = start(writer, "stream-keep")
     assert list(DBOS.read_stream(workflow_id, "log")) == ["a1", "b1"]
 
     dbos._sys_db.rewind_workflows([workflow_id], [1])
     assert DBOS.retrieve_workflow(workflow_id).get_result() == "run2"
 
-    # The discarded run's entries must not be spliced together with the replay's.
-    assert list(DBOS.read_stream(workflow_id, "log")) == ["a2", "b2"]
+    # Offsets are addresses peers read by, so the discarded run's entries keep
+    # theirs and the replay appends. Deleting would hand offset 0 a new value.
+    assert list(DBOS.read_stream(workflow_id, "log")) == ["a1", "b1", "a2", "b2"]
+    assert [row[0] for row in stream_rows(dbos, workflow_id, "log")] == [0, 1, 2, 3]
 
 
 def test_rewind_reopens_a_closed_stream(dbos: DBOS) -> None:
     @DBOS.workflow()
     def writer(name: str) -> str:
-        run = run_count(name)
-        DBOS.write_stream("out", f"v{run}")
+        DBOS.write_stream("out", f"v{run_count(name)}")
         DBOS.close_stream("out")
-        return f"run{run}"
+        return f"run{runs[name]}"
 
     workflow_id = start(writer, "stream-close")
     assert list(DBOS.read_stream(workflow_id, "out")) == ["v1"]
 
+    # The sentinel terminates every reader that reaches it, so one left over from
+    # the discarded run would hide the replay's entry with no error anywhere.
     dbos._sys_db.rewind_workflows([workflow_id], [1])
     assert DBOS.retrieve_workflow(workflow_id).get_result() == "run2"
+    assert list(DBOS.read_stream(workflow_id, "out")) == ["v1", "v2"]
 
-    assert list(DBOS.read_stream(workflow_id, "out")) == ["v2"]
+    # Cut above the close, the sentinel is not the discarded run's to undo: its
+    # step survives, so nothing replays it and it has to stay.
+    dbos._sys_db.rewind_workflows([workflow_id], [3])
+    assert DBOS.retrieve_workflow(workflow_id).get_result() == "run3"
+    rows = stream_rows(dbos, workflow_id, "out")
+    assert [row[1] for row in rows] == ["v1", "v2", "__DBOS_STREAM_CLOSED__"]
 
 
 #######################################

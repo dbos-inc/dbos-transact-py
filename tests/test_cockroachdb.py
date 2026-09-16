@@ -229,8 +229,8 @@ def test_cockroachdb_rewind() -> None:
             # Reverted below the cut, then republished by the replay.
             assert DBOS.get_event(workflow_id, "both") == "old"
             assert DBOS.get_event(workflow_id, "below") == "kept"
-            # The discarded run's stream entries are gone, not spliced in.
-            assert list(DBOS.read_stream(workflow_id, "log")) == ["a2"]
+            # Stream entries keep their offsets, so the replay appends after them.
+            assert list(DBOS.read_stream(workflow_id, "log")) == ["a1", "b1", "a2"]
             # Un-consumed by the rewind, then left alone since the replay never recvs.
             notifications = dbos._sys_db.get_all_notifications(workflow_id)
             assert [n["consumed"] for n in notifications] == [False]
