@@ -1313,9 +1313,9 @@ def get_dbos_migration_hundredfourteen(quoted_schema: str, is_cockroach: bool) -
 
 
 def get_dbos_migration_hundredfifteen(quoted_schema: str, is_cockroach: bool) -> str:
-    # Trailing application_name lets app-scoped in-flight counts run index-only.
+    # INCLUDE, not a key column: app-scoped counts run index-only, but the planner can't BitmapOr on application_name.
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_in_flight_v2" ON {quoted_schema}."workflow_status" ("queue_name", "status", "priority", "created_at", "application_name") WHERE "status" IN (\'ENQUEUED\', \'PENDING\')'
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_in_flight_v2" ON {quoted_schema}."workflow_status" ("queue_name", "status", "priority", "created_at") INCLUDE ("application_name") WHERE "status" IN (\'ENQUEUED\', \'PENDING\')'
 
 
 def get_dbos_migration_hundredsixteen(quoted_schema: str, is_cockroach: bool) -> str:
@@ -1327,7 +1327,7 @@ def get_dbos_migration_hundredsixteen(quoted_schema: str, is_cockroach: bool) ->
 def get_dbos_migration_hundredseventeen(quoted_schema: str, is_cockroach: bool) -> str:
     # Matching idx_workflow_status_in_flight_v2
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_partition_dequeue_v3" ON {quoted_schema}."workflow_status" ("queue_name", "status", "queue_partition_key", "priority", "created_at", "workflow_uuid", "application_name") WHERE "status" IN (\'ENQUEUED\', \'PENDING\') AND "queue_partition_key" IS NOT NULL'
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_partition_dequeue_v3" ON {quoted_schema}."workflow_status" ("queue_name", "status", "queue_partition_key", "priority", "created_at", "workflow_uuid") INCLUDE ("application_name") WHERE "status" IN (\'ENQUEUED\', \'PENDING\') AND "queue_partition_key" IS NOT NULL'
 
 
 def get_dbos_migration_hundredeighteen(quoted_schema: str, is_cockroach: bool) -> str:
@@ -1337,9 +1337,9 @@ def get_dbos_migration_hundredeighteen(quoted_schema: str, is_cockroach: bool) -
 
 
 def get_dbos_migration_hundrednineteen(quoted_schema: str, is_cockroach: bool) -> str:
-    # Trailing application_name lets app-scoped step metrics and aggregates run index-only.
+    # Matching idx_workflow_status_in_flight_v2
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} IF NOT EXISTS "idx_operation_outputs_completed_at_function_name_v2" ON {quoted_schema}."operation_outputs" ("completed_at_epoch_ms", "function_name", "application_name")'
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_operation_outputs_completed_at_function_name_v2" ON {quoted_schema}."operation_outputs" ("completed_at_epoch_ms", "function_name") INCLUDE ("application_name")'
 
 
 def get_dbos_migration_hundredtwenty(quoted_schema: str, is_cockroach: bool) -> str:
@@ -1846,6 +1846,7 @@ sqlite_migration_hundredfourteen = """
 DROP INDEX IF EXISTS "idx_notifications";
 """
 
+# SQLite has no INCLUDE, so 115, 117 and 119 trail the key with application_name instead.
 sqlite_migration_hundredfifteen = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_in_flight_v2" ON "workflow_status" ("queue_name", "status", "priority", "created_at", "application_name") WHERE "status" IN (\'ENQUEUED\', \'PENDING\')'
 
 # Superseded by idx_workflow_status_in_flight_v2

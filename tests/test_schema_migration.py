@@ -1023,7 +1023,7 @@ def test_runner_resumes_after_invalid_index(
         conn.execute(
             sa.text(
                 f'CREATE INDEX "{target_index}" ON "{schema}"."workflow_status" '
-                "(queue_name, status, priority, created_at, application_name) "
+                "(queue_name, status, priority, created_at) INCLUDE (application_name) "
                 "WHERE status IN ('ENQUEUED', 'PENDING')"
             )
         )
