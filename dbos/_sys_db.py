@@ -855,10 +855,11 @@ class SystemDatabase(ABC):
         names = [value] if isinstance(value, str) else value
         return sa.or_(col.in_(names), col.is_(None))
 
-    @staticmethod
-    def _in_flight_status_prover() -> sa.ColumnElement[bool]:
-        """Redundant literal copy of the in-flight partial indexes' predicate: SQLite's
-        prover runs at prepare time, so a bound status = or IN never matches it."""
+    def _in_flight_status_prover(self) -> sa.ColumnElement[bool]:
+        """SQLite only: a literal copy of the in-flight partial indexes' predicate for its
+        prepare-time prover. Omitted on Postgres, whose planner would count it twice."""
+        if self.engine.dialect.name != "sqlite":
+            return sa.true()
         return SystemSchema.workflow_status.c.status.in_(
             [
                 sa.literal_column(f"'{WorkflowStatusString.ENQUEUED.value}'"),
@@ -4601,6 +4602,7 @@ class SystemDatabase(ABC):
                     SystemSchema.workflow_status.c.status
                     == WorkflowStatusString.ENQUEUED.value
                 )
+                .where(self._in_flight_status_prover())
                 .where(version_predicate)
                 .where(
                     self._name_filter(
