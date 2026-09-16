@@ -49,7 +49,6 @@ class EnqueueOptions(_EnqueueOptionsRequired, total=False):
     # already holding the ID, discarding these arguments. Requires deduplication_id.
     duplication_policy: DuplicationPolicy
     priority: int
-    max_recovery_attempts: int
     queue_partition_key: str
     authenticated_user: str
     authenticated_roles: list[str]
