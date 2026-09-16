@@ -4367,7 +4367,7 @@ class SystemDatabase(ABC):
         # Recursive-CTE loose index scan: neither Postgres nor SQLite can skip to the
         # next distinct value inside a plain SELECT DISTINCT, which degenerates into a
         # scan of every ENQUEUED row. Each iteration here is instead one index seek on
-        # idx_workflow_status_partition_dequeue_v2, so cost scales with the number of
+        # idx_workflow_status_partition_dequeue_v3, so cost scales with the number of
         # partitions rather than the backlog depth.
         ws = SystemSchema.workflow_status
         base_filter = sa.and_(
@@ -4495,7 +4495,7 @@ class SystemDatabase(ABC):
                 """Workflows already running, which peer workers count against too.
 
                 Kept as its own query per scope: the partition-scoped predicate rides
-                idx_workflow_status_partition_dequeue_v2, which a queue-wide scan loses.
+                idx_workflow_status_partition_dequeue_v3, which a queue-wide scan loses.
                 """
                 query = (
                     sa.select(sa.func.count())
@@ -5040,7 +5040,7 @@ class SystemDatabase(ABC):
             return {}
         queue_names = {queue_name for queue_name, _ in keys}
         partition_keys = {partition_key for _, partition_key in keys}
-        # One arm per status so idx_workflow_status_partition_dequeue_v2 can seek: a status IN (...) matching that index's own predicate is dropped as redundant, leaving its status column unbound and blocking the seek on queue_partition_key.
+        # One arm per status so idx_workflow_status_partition_dequeue_v3 can seek: a status IN (...) matching that index's own predicate is dropped as redundant, leaving its status column unbound and blocking the seek on queue_partition_key.
         arms = [
             sa.select(
                 SystemSchema.workflow_status.c.queue_name,

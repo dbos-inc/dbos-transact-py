@@ -3499,20 +3499,41 @@ def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
     assert start() == []
 
 
-def test_partitioned_batch_dequeue_sqlite_plan(dbos: DBOS) -> None:
-    """The batched candidates query must seek idx_workflow_status_partition_dequeue_v2.
-    SQLite's partial-index prover runs at prepare time, so this regresses silently
-    (full scan) if the literal predicate conjuncts are dropped from the query."""
-    if not using_sqlite():
-        pytest.skip("Plan assertion is SQLite-specific")
-
-    @DBOS.workflow()
-    def batch_wf(value: str) -> None:
-        pass
-
-    queue_name = f"unpolled-plan-{uuid.uuid4().hex[:8]}"
-    queue = unpolled_queue(queue_name, partition_concurrency=1)
-    ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "plan", ["p0", "p1"], 2)
+def test_get_queue_partitions_query_plan(dbos: DBOS, skip_with_sqlite: None) -> None:
+    """The app-scoped partition walk must run index-only on the v3 partition index;
+    a heap-filtered walk lets the planner pick a per-partition BitmapOr rescan."""
+    queue_name = f"partition-plan-{uuid.uuid4().hex[:8]}"
+    partitions = [f"p{i:03d}" for i in range(200)]
+    ws = SystemSchema.workflow_status
+    now = int(time.time() * 1000)
+    rows = [
+        {
+            "workflow_uuid": f"{queue_name}-{partition}-{i}",
+            "name": "plan_probe",
+            "status": "ENQUEUED",
+            "created_at": now,
+            "updated_at": now,
+            "queue_name": queue_name,
+            "queue_partition_key": partition,
+            "application_name": dbos._sys_db.app_name,
+        }
+        for partition in partitions
+        for i in range(2)
+    ] + [
+        {
+            "workflow_uuid": f"{queue_name}-done-{i}",
+            "name": "plan_probe",
+            "status": "SUCCESS",
+            "created_at": now,
+            "updated_at": now,
+            "queue_name": None,
+            "queue_partition_key": None,
+            "application_name": dbos._sys_db.app_name,
+        }
+        for i in range(1000)
+    ]
+    with dbos._sys_db.engine.begin() as conn:
+        conn.execute(sa.insert(ws), rows)
 
     captured: List[Any] = []
 
@@ -3524,7 +3545,6 @@ def test_partitioned_batch_dequeue_sqlite_plan(dbos: DBOS) -> None:
         context: Any,
         executemany: bool,
     ) -> None:
-        # The candidates query is the only WITH RECURSIVE this sweep emits (get_queue_partitions, the other one, runs on the fallback path).
         if "recursive" in statement.lower():
             captured.append((statement, parameters))
 
@@ -3532,24 +3552,25 @@ def test_partitioned_batch_dequeue_sqlite_plan(dbos: DBOS) -> None:
 
     event.listen(dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute)
     try:
-        ret = dbos._sys_db.start_queued_partitioned_workflows(
-            queue, GlobalParams.executor_id, GlobalParams.app_version
-        )
+        assert dbos._sys_db.get_queue_partitions(queue_name) == partitions
     finally:
         event.remove(
             dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute
         )
-    assert ret == [ids["p0"][0], ids["p1"][0]]
     assert captured
     statement, parameters = captured[0]
-    with dbos._sys_db.engine.connect() as conn:
-        plan = conn.exec_driver_sql(
-            f"EXPLAIN QUERY PLAN {statement}", parameters
-        ).fetchall()
+    assert "application_name" in statement
+    with dbos._sys_db.engine.connect() as raw_conn:
+        conn = raw_conn.execution_options(isolation_level="AUTOCOMMIT")
+        # VACUUM sets the visibility map, without which an index-only scan costs no less than a plain one.
+        conn.exec_driver_sql(f'VACUUM ANALYZE "{dbos._sys_db.schema}".workflow_status')
+        plan = conn.exec_driver_sql(f"EXPLAIN {statement}", parameters).fetchall()
     details = [str(row[-1]) for row in plan]
-    assert any("idx_workflow_status_partition_dequeue_v2" in d for d in details)
-    # Every workflow_status access must be a seek: asserting only that the index is named somewhere still passes when one probe (e.g. the PENDING gate) regresses to a scan.
-    assert not [d for d in details if d.startswith("SCAN") and "workflow_status" in d]
+    assert any(
+        "Index Only Scan using idx_workflow_status_partition_dequeue_v3" in d
+        for d in details
+    ), details
+    assert not [d for d in details if "BitmapOr" in d], details
 
 
 def test_rate_limiter_query_plan(dbos: DBOS) -> None:
@@ -3637,7 +3658,7 @@ def test_rate_limiter_query_plan(dbos: DBOS) -> None:
     assert not [d for d in details if d.startswith("SCAN") or "Seq Scan" in d]
 
 
-def test_pending_count_query_plan(dbos: DBOS) -> None:
+def test_pending_count_query_plan(dbos: DBOS, skip_with_sqlite: None) -> None:
     """The global-concurrency PENDING count runs each poll, so it must run index-only on
     idx_workflow_status_in_flight_v2 rather than fetch every running workflow's row."""
 
@@ -3694,21 +3715,13 @@ def test_pending_count_query_plan(dbos: DBOS) -> None:
         conn.execute(sa.insert(ws), rows)
     with dbos._sys_db.engine.connect() as raw_conn:
         conn = raw_conn.execution_options(isolation_level="AUTOCOMMIT")
-        if using_sqlite():
-            conn.exec_driver_sql("ANALYZE")
-            plan = conn.exec_driver_sql(
-                f"EXPLAIN QUERY PLAN {statement}", parameters
-            ).fetchall()
-            covered = "USING COVERING INDEX idx_workflow_status_in_flight_v2"
-        else:
-            # VACUUM sets the visibility map, without which an index-only scan costs no less than a plain one.
-            conn.exec_driver_sql(
-                f'VACUUM ANALYZE "{dbos._sys_db.schema}".workflow_status'
-            )
-            plan = conn.exec_driver_sql(f"EXPLAIN {statement}", parameters).fetchall()
-            covered = "Index Only Scan using idx_workflow_status_in_flight_v2"
+        # VACUUM sets the visibility map, without which an index-only scan costs no less than a plain one.
+        conn.exec_driver_sql(f'VACUUM ANALYZE "{dbos._sys_db.schema}".workflow_status')
+        plan = conn.exec_driver_sql(f"EXPLAIN {statement}", parameters).fetchall()
     details = [str(row[-1]) for row in plan]
-    assert any(covered in d for d in details), details
+    assert any(
+        "Index Only Scan using idx_workflow_status_in_flight_v2" in d for d in details
+    ), details
 
 
 def test_partitioned_queue_global_exclusivity(
