@@ -207,7 +207,7 @@ def test_rewind_unconsumes_notifications(dbos: DBOS) -> None:
 #######################################
 
 
-def test_rewind_unpublishes_events(dbos: DBOS) -> None:
+def test_rewind_keeps_published_events(dbos: DBOS) -> None:
     @DBOS.workflow()
     def publisher(name: str) -> str:
         run = run_count(name)
@@ -229,34 +229,34 @@ def test_rewind_unpublishes_events(dbos: DBOS) -> None:
         "above": "doomed",
     }
 
-    # Cut just after the second set_event, so "below" and the first "both" survive.
+    # Cut at the third set_event, so the first two survive.
     cut = step_id_of(workflow_id, "DBOS.setEvent", occurrence=2)
 
     with paused_queue("rewind_events_gate"):
         dbos._sys_db.rewind_workflows(
             [workflow_id], [cut], queue_name="rewind_events_gate"
         )
+        # A published event is addressed by key, not by function ID, so a peer may
+        # already have read it: rewind leaves it exactly as the discarded run left it.
         assert events_of(dbos, workflow_id) == {
-            # Never touched past the cut, so left exactly as it was.
             "below": "kept",
-            # Reverted to its last value from below the cut, not deleted.
-            "both": "old",
-            # "above" was only ever published past the cut, so it is gone entirely.
+            "both": "new",
+            "above": "doomed",
         }
+        assert DBOS.get_event(workflow_id, "above", 1) == "doomed"
+        # The history is the step log, so it is cut like any other history.
         assert event_history_ids(dbos, workflow_id) == [1, 2]
-
-        # And that is what a peer reading by key sees, not the discarded values.
-        assert DBOS.get_event(workflow_id, "both", 1) == "old"
-        assert DBOS.get_event(workflow_id, "above", 1) is None
 
     assert DBOS.retrieve_workflow(workflow_id).get_result() == "second"
 
-    # The replay republishes over the reverted state with a new value, which is
-    # again what peers read. "above" stays gone: nothing sets it again.
-    assert events_of(dbos, workflow_id) == {"below": "kept", "both": "republished"}
-    assert DBOS.get_event(workflow_id, "both", 2) == "republished"
-    assert DBOS.get_event(workflow_id, "below", 2) == "kept"
-    assert DBOS.get_event(workflow_id, "above", 1) is None
+    # The replay overwrites what it republishes and nothing else: "above" is never
+    # set again, and stays at the value the discarded run gave it.
+    assert events_of(dbos, workflow_id) == {
+        "below": "kept",
+        "both": "republished",
+        "above": "doomed",
+    }
+    assert event_history_ids(dbos, workflow_id) == [1, 2, 3]
 
 
 #######################################
@@ -545,7 +545,7 @@ def test_database_state_between_rewind_and_replay(dbos: DBOS) -> None:
 
         assert step_ids(dbos, workflow_id) == []
         assert event_history_ids(dbos, workflow_id) == []
-        assert events_of(dbos, workflow_id) == {}
+        assert events_of(dbos, workflow_id) == {"phase": "run1"}
         assert [row[1] for row in mailbox(dbos, workflow_id)] == [False]
 
     assert DBOS.retrieve_workflow(workflow_id).get_result() == "run2"

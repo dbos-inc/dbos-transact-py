@@ -1465,15 +1465,12 @@ class SystemDatabase(ABC):
         ID, and the workflow's mailbox, events, and streams are not copied anywhere.
         Unlike resume_workflows it applies only to workflows in a terminal state.
 
-        When a workflow is rewound, all events and state from the specified start_step
-        onwards are discarded, effectively rewinding the workflow to that point.
+        When a workflow is rewound, its step history from the specified start_step
+        onwards is discarded, effectively rewinding the workflow to that point.
 
-        Messages the discarded run consumed are put back, so a replayed recv sees the
-        mailbox it saw the first time.
-
-        Stream entries written by the discarded run remain in place, to not mess
-        the offset sequence (unrelated to the function IDs and potentially incremented
-        by concurrent writers), with the exception of the close sentinel.
+        Messages the discarded run consumed are "unconsumed", so a replayed recv sees the
+        mailbox it saw the first time. Note that events/streams are not retracted, and
+        sent notifications are not pulled out of their recipients' inboxes.
 
         The batch is all-or-nothing: if any workflow is missing or not terminal, none
         of them are rewound.
@@ -1528,82 +1525,7 @@ class SystemDatabase(ABC):
                     "state can be rewound, so cancel it first"
                 )
 
-            # Rollback workflows events to the latest published value
-            # before the rewind, using the workflow_events_history as an undo log.
-            # Then rewind the workflow events history as well.
-            discarded = weh.alias("discarded")
-            discarded_mapping = mapping.alias("discarded_mapping")
-
-            # First delete all events published after the rewind point.
-            def published_past_cut(workflow_uuid: Any, key: Any) -> Any:
-                """Whether this workflow published this key at or past its cut."""
-                return (
-                    sa.select(sa.literal(1))
-                    .select_from(
-                        discarded.join(
-                            discarded_mapping,
-                            discarded_mapping.c.workflow_id
-                            == discarded.c.workflow_uuid,
-                        )
-                    )
-                    .where(
-                        (discarded.c.workflow_uuid == workflow_uuid)
-                        & (discarded.c.key == key)
-                        & (discarded.c.function_id >= discarded_mapping.c.start_step)
-                    )
-                    .exists()
-                )
-
-            c.execute(
-                sa.delete(SystemSchema.workflow_events).where(
-                    published_past_cut(
-                        SystemSchema.workflow_events.c.workflow_uuid,
-                        SystemSchema.workflow_events.c.key,
-                    )
-                )
-            )
-
-            # Then restore events, if any, as published before the rewind point.
-            surviving = (
-                sa.select(
-                    weh.c.workflow_uuid,
-                    weh.c.key,
-                    weh.c.value,
-                    weh.c.serialization,
-                    sa.func.row_number()
-                    .over(
-                        partition_by=[weh.c.workflow_uuid, weh.c.key],
-                        order_by=weh.c.function_id.desc(),
-                    )
-                    .label("rn"),
-                )
-                .select_from(
-                    weh.join(mapping, mapping.c.workflow_id == weh.c.workflow_uuid)
-                )
-                .where(
-                    (weh.c.function_id < mapping.c.start_step)
-                    & published_past_cut(weh.c.workflow_uuid, weh.c.key)
-                )
-                .subquery("surviving")
-            )
-            c.execute(
-                sa.insert(SystemSchema.workflow_events).from_select(
-                    ["workflow_uuid", "key", "value", "serialization"],
-                    sa.select(
-                        surviving.c.workflow_uuid,
-                        surviving.c.key,
-                        surviving.c.value,
-                        surviving.c.serialization,
-                    ).where(surviving.c.rn == 1),
-                )
-            )
-
-            # Stream entries have to stay, because their offset doesn't necessarily
-            # match function IDs, and removing them can punch holes in the stream
-            # that'll force readers to stop reading.
-            #
-            # One exception: the close sentinel, otherwise values written after the
-            # rewind will never be read.
+            # The stream close sentinel has to be removed otherwise values written after the rewind will never be read.
             closed_value, closed_serialization = serialize_value(
                 _dbos_stream_closed_sentinel,
                 WorkflowSerializationFormat.PORTABLE,
