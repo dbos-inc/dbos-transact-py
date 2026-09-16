@@ -2372,6 +2372,45 @@ class DBOS:
         )
 
     @classmethod
+    def rewind_workflow(
+        cls,
+        workflow_id: str,
+        *,
+        start_step: Optional[int] = None,
+        application_version: Optional[str] = None,
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
+    ) -> WorkflowHandle[Any]:
+        """Rewind a workflow by ID."""
+        return cls.rewind_workflows(
+            [workflow_id],
+            start_steps=None if start_step is None else [start_step],
+            application_version=application_version,
+            queue_name=queue_name,
+            queue_partition_key=queue_partition_key,
+        )[0]
+
+    @classmethod
+    async def rewind_workflow_async(
+        cls,
+        workflow_id: str,
+        *,
+        start_step: Optional[int] = None,
+        application_version: Optional[str] = None,
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
+    ) -> WorkflowHandleAsync[Any]:
+        """Rewind a workflow by ID."""
+        handles = await cls.rewind_workflows_async(
+            [workflow_id],
+            start_steps=None if start_step is None else [start_step],
+            application_version=application_version,
+            queue_name=queue_name,
+            queue_partition_key=queue_partition_key,
+        )
+        return handles[0]
+
+    @classmethod
     def rewind_workflows(
         cls,
         workflow_ids: List[str],
@@ -2381,8 +2420,8 @@ class DBOS:
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
     ) -> List[WorkflowHandle[Any]]:
-        """Rewind multiple workflows to the same step. All-or-nothing: if any is
-        missing or not terminal, none are rewound."""
+        """Rewind multiple workflows, each to its own step. All-or-nothing: if any
+        is missing or not terminal, none are rewound."""
         check_async("rewind_workflows")
 
         def fn() -> None:
@@ -2414,8 +2453,8 @@ class DBOS:
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
     ) -> List[WorkflowHandleAsync[Any]]:
-        """Rewind multiple workflows to the same step. All-or-nothing: if any is
-        missing or not terminal, none are rewound."""
+        """Rewind multiple workflows, each to its own step. All-or-nothing: if any
+        is missing or not terminal, none are rewound."""
         step_ctx_res = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
 

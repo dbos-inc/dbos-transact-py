@@ -877,6 +877,41 @@ class DBOSClient:
             for wfid in workflow_ids
         ]
 
+    def rewind_workflow(
+        self,
+        workflow_id: str,
+        *,
+        start_step: Optional[int] = None,
+        application_version: Optional[str] = None,
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
+    ) -> "WorkflowHandle[Any]":
+        return self.rewind_workflows(
+            [workflow_id],
+            start_steps=None if start_step is None else [start_step],
+            application_version=application_version,
+            queue_name=queue_name,
+            queue_partition_key=queue_partition_key,
+        )[0]
+
+    async def rewind_workflow_async(
+        self,
+        workflow_id: str,
+        *,
+        start_step: Optional[int] = None,
+        application_version: Optional[str] = None,
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
+    ) -> "WorkflowHandleAsync[Any]":
+        handles = await self.rewind_workflows_async(
+            [workflow_id],
+            start_steps=None if start_step is None else [start_step],
+            application_version=application_version,
+            queue_name=queue_name,
+            queue_partition_key=queue_partition_key,
+        )
+        return handles[0]
+
     def rewind_workflows(
         self,
         workflow_ids: List[str],

@@ -657,6 +657,14 @@ def test_public_rewind_api(dbos: DBOS, client: DBOSClient) -> None:
     ids = [start(counter, f"client{i}") for i in range(2)]
     assert [h.get_result() for h in client.rewind_workflows(ids)] == [2, 2]
 
+    # The singular form takes one ID and one start step, and hands back one handle.
+    workflow_id = start(counter, "single")
+    assert DBOS.rewind_workflow(workflow_id).get_result() == 2
+    assert DBOS.rewind_workflow(workflow_id, start_step=1).get_result() == 3
+
+    workflow_id = start(counter, "clientsingle")
+    assert client.rewind_workflow(workflow_id).get_result() == 2
+
 
 @pytest.mark.asyncio
 async def test_public_rewind_api_async(dbos: DBOS, client: DBOSClient) -> None:
@@ -671,6 +679,14 @@ async def test_public_rewind_api_async(dbos: DBOS, client: DBOSClient) -> None:
     ids = [start(counter, f"asyncclient{i}") for i in range(2)]
     client_handles = await client.rewind_workflows_async(ids)
     assert [await h.get_result() for h in client_handles] == [2, 2]
+
+    workflow_id = start(counter, "asyncsingle")
+    handle = await DBOS.rewind_workflow_async(workflow_id, start_step=1)
+    assert await handle.get_result() == 2
+
+    workflow_id = start(counter, "asyncclientsingle")
+    client_handle = await client.rewind_workflow_async(workflow_id)
+    assert await client_handle.get_result() == 2
 
 
 def test_rewind_from_inside_a_workflow_is_checkpointed(dbos: DBOS) -> None:
