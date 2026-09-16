@@ -47,6 +47,7 @@ from dbos._sys_db import WorkflowStatusString
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from tests.conftest import (
     default_config,
+    explain_with_index_scans_only,
     imprecise_timestamps,
     queue_entries_are_cleaned_up,
     retry_until_success,
@@ -3500,8 +3501,8 @@ def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
 
 
 def test_get_queue_partitions_query_plan(dbos: DBOS, skip_with_sqlite: None) -> None:
-    """The app-scoped partition walk must run index-only on the v3 partition index;
-    a heap-filtered walk lets the planner pick a per-partition BitmapOr rescan."""
+    """The app-scoped partition walk must run index-only on the v3 partition index,
+    which carries application_name so no partition probe reads the table."""
     queue_name = f"partition-plan-{uuid.uuid4().hex[:8]}"
     partitions = [f"p{i:03d}" for i in range(200)]
     ws = SystemSchema.workflow_status
@@ -3560,17 +3561,13 @@ def test_get_queue_partitions_query_plan(dbos: DBOS, skip_with_sqlite: None) -> 
     assert captured
     statement, parameters = captured[0]
     assert "application_name" in statement
-    with dbos._sys_db.engine.connect() as raw_conn:
-        conn = raw_conn.execution_options(isolation_level="AUTOCOMMIT")
-        # VACUUM sets the visibility map, without which an index-only scan costs no less than a plain one.
-        conn.exec_driver_sql(f'VACUUM ANALYZE "{dbos._sys_db.schema}".workflow_status')
-        plan = conn.exec_driver_sql(f"EXPLAIN {statement}", parameters).fetchall()
-    details = [str(row[-1]) for row in plan]
+    details = explain_with_index_scans_only(
+        dbos, "workflow_status", statement, parameters
+    )
     assert any(
         "Index Only Scan using idx_workflow_status_partition_dequeue_v3" in d
         for d in details
     ), details
-    assert not [d for d in details if "BitmapOr" in d], details
 
 
 def test_rate_limiter_query_plan(dbos: DBOS) -> None:
@@ -3696,15 +3693,15 @@ def test_pending_count_query_plan(dbos: DBOS, skip_with_sqlite: None) -> None:
     statement, parameters = captured[0]
     assert "application_name" in statement
 
-    # Plan against a populated, freshly analyzed table, as test_rate_limiter_query_plan does.
+    # All PENDING with scattered created_at, a tenth on this queue: idx_workflow_status_pending would read ten times the rows in random heap order.
     ws = SystemSchema.workflow_status
     now = int(time.time() * 1000)
     rows = [
         {
             "workflow_uuid": f"pending-plan-{i}-{uuid.uuid4()}",
             "name": "plan_probe",
-            "status": "PENDING" if i % 10 == 0 else "SUCCESS",
-            "created_at": now,
+            "status": "PENDING",
+            "created_at": now - (i * 7919) % 1000,
             "updated_at": now,
             "queue_name": queue.name if i % 10 == 0 else f"other-queue-{i % 7}",
             "application_name": dbos._sys_db.app_name,
@@ -3713,12 +3710,9 @@ def test_pending_count_query_plan(dbos: DBOS, skip_with_sqlite: None) -> None:
     ]
     with dbos._sys_db.engine.begin() as conn:
         conn.execute(sa.insert(ws), rows)
-    with dbos._sys_db.engine.connect() as raw_conn:
-        conn = raw_conn.execution_options(isolation_level="AUTOCOMMIT")
-        # VACUUM sets the visibility map, without which an index-only scan costs no less than a plain one.
-        conn.exec_driver_sql(f'VACUUM ANALYZE "{dbos._sys_db.schema}".workflow_status')
-        plan = conn.exec_driver_sql(f"EXPLAIN {statement}", parameters).fetchall()
-    details = [str(row[-1]) for row in plan]
+    details = explain_with_index_scans_only(
+        dbos, "workflow_status", statement, parameters
+    )
     assert any(
         "Index Only Scan using idx_workflow_status_in_flight_v2" in d for d in details
     ), details

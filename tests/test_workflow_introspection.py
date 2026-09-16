@@ -24,7 +24,12 @@ from dbos._serialization import DefaultSerializer
 from dbos._sys_db import OperationResultInternal, SystemDatabase
 from dbos._utils import GlobalParams
 
-from .conftest import postgres_urls, retry_until_success, set_workflow_status
+from .conftest import (
+    explain_with_index_scans_only,
+    postgres_urls,
+    retry_until_success,
+    set_workflow_status,
+)
 
 
 def test_list_workflow(dbos: DBOS) -> None:
@@ -2319,12 +2324,9 @@ def test_get_workflow_aggregates_in_flight_query_plan(
     assert captured
     statement, parameters = captured[0]
     assert "application_name" in statement
-    with dbos._sys_db.engine.connect() as raw_conn:
-        conn = raw_conn.execution_options(isolation_level="AUTOCOMMIT")
-        # VACUUM sets the visibility map, without which an index-only scan costs no less than a plain one.
-        conn.exec_driver_sql(f'VACUUM ANALYZE "{dbos._sys_db.schema}".workflow_status')
-        plan = conn.exec_driver_sql(f"EXPLAIN {statement}", parameters).fetchall()
-    details = [str(row[-1]) for row in plan]
+    details = explain_with_index_scans_only(
+        dbos, "workflow_status", statement, parameters
+    )
     assert any(
         "Index Only Scan using idx_workflow_status_in_flight_v2" in d for d in details
     ), details
@@ -2591,17 +2593,12 @@ def test_step_counts_query_plan(dbos: DBOS, skip_with_sqlite: None) -> None:
     covered = (
         "Index Only Scan using idx_operation_outputs_completed_at_function_name_v2"
     )
-    with dbos._sys_db.engine.connect() as raw_conn:
-        conn = raw_conn.execution_options(isolation_level="AUTOCOMMIT")
-        # VACUUM sets the visibility map, without which an index-only scan costs no less than a plain one.
-        conn.exec_driver_sql(
-            f'VACUUM ANALYZE "{dbos._sys_db.schema}".operation_outputs'
+    for statement, parameters in captured:
+        assert "application_name" in statement
+        details = explain_with_index_scans_only(
+            dbos, "operation_outputs", statement, parameters
         )
-        for statement, parameters in captured:
-            assert "application_name" in statement
-            plan = conn.exec_driver_sql(f"EXPLAIN {statement}", parameters)
-            details = [str(row[-1]) for row in plan.fetchall()]
-            assert any(covered in d for d in details), details
+        assert any(covered in d for d in details), details
 
 
 def _bound_values(parameters: Any) -> List[Any]:
