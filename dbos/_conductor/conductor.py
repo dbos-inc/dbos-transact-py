@@ -74,7 +74,6 @@ class ConductorWebsocket(threading.Thread):
         )
 
     def _report_exception(self, context: str) -> str:
-        """Log the active exception, then return the message Conductor may see: the same, or in metadata-only mode just its type, since a traceback can embed workflow data."""
         error_message = f"{context}: {traceback.format_exc()}"
         self.dbos.logger.error(error_message)
         if self.metadata_only_mode:
