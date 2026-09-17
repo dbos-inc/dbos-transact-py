@@ -2381,14 +2381,25 @@ class DBOS:
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
     ) -> WorkflowHandle[Any]:
-        """Rewind a workflow by ID."""
-        return cls.rewind_workflows(
-            [workflow_id],
-            start_steps=None if start_step is None else [start_step],
-            application_version=application_version,
-            queue_name=queue_name,
-            queue_partition_key=queue_partition_key,
-        )[0]
+        """Rewind a workflow to a step (default: the first). Only a workflow in a
+        terminal state can be rewound."""
+        check_async("rewind_workflow")
+        step = 1 if start_step is None else start_step
+
+        def fn() -> None:
+            dbos_logger.info(f"Rewinding workflow: {workflow_id} to step {step}")
+            _get_dbos_instance()._sys_db.rewind_workflows(
+                [workflow_id],
+                [step],
+                application_version=application_version,
+                queue_name=queue_name,
+                queue_partition_key=queue_partition_key,
+            )
+
+        _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.rewindWorkflow", snapshot_step_context(reserve_sleep_id=False)
+        )
+        return WorkflowHandlePolling(workflow_id, _get_dbos_instance())
 
     @classmethod
     async def rewind_workflow_async(
@@ -2400,71 +2411,17 @@ class DBOS:
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
     ) -> WorkflowHandleAsync[Any]:
-        """Rewind a workflow by ID."""
-        handles = await cls.rewind_workflows_async(
-            [workflow_id],
-            start_steps=None if start_step is None else [start_step],
-            application_version=application_version,
-            queue_name=queue_name,
-            queue_partition_key=queue_partition_key,
-        )
-        return handles[0]
-
-    @classmethod
-    def rewind_workflows(
-        cls,
-        workflow_ids: List[str],
-        *,
-        start_steps: Optional[List[int]] = None,
-        application_version: Optional[str] = None,
-        queue_name: Optional[str] = None,
-        queue_partition_key: Optional[str] = None,
-    ) -> List[WorkflowHandle[Any]]:
-        """Rewind multiple workflows, each to its own step. All-or-nothing: if any
-        is missing or not terminal, none are rewound."""
-        check_async("rewind_workflows")
-
-        def fn() -> None:
-            dbos_logger.info(
-                f"Rewinding workflows: {workflow_ids} to steps {start_steps}"
-            )
-            _get_dbos_instance()._sys_db.rewind_workflows(
-                workflow_ids,
-                start_steps if start_steps is not None else [1] * len(workflow_ids),
-                application_version=application_version,
-                queue_name=queue_name,
-                queue_partition_key=queue_partition_key,
-            )
-
-        _get_dbos_instance()._sys_db.call_function_as_step(
-            fn, "DBOS.rewindWorkflow", snapshot_step_context(reserve_sleep_id=False)
-        )
-        return [
-            WorkflowHandlePolling(wfid, _get_dbos_instance()) for wfid in workflow_ids
-        ]
-
-    @classmethod
-    async def rewind_workflows_async(
-        cls,
-        workflow_ids: List[str],
-        *,
-        start_steps: Optional[List[int]] = None,
-        application_version: Optional[str] = None,
-        queue_name: Optional[str] = None,
-        queue_partition_key: Optional[str] = None,
-    ) -> List[WorkflowHandleAsync[Any]]:
-        """Rewind multiple workflows, each to its own step. All-or-nothing: if any
-        is missing or not terminal, none are rewound."""
+        """Rewind a workflow to a step (default: the first). Only a workflow in a
+        terminal state can be rewound."""
         step_ctx_res = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
+        step = 1 if start_step is None else start_step
 
         def fnres() -> None:
-            dbos_logger.info(
-                f"Rewinding workflows: {workflow_ids} to steps {start_steps}"
-            )
+            dbos_logger.info(f"Rewinding workflow: {workflow_id} to step {step}")
             _get_dbos_instance()._sys_db.rewind_workflows(
-                workflow_ids,
-                start_steps if start_steps is not None else [1] * len(workflow_ids),
+                [workflow_id],
+                [step],
                 application_version=application_version,
                 queue_name=queue_name,
                 queue_partition_key=queue_partition_key,
@@ -2476,10 +2433,7 @@ class DBOS:
             "DBOS.rewindWorkflow",
             step_ctx_res,
         )
-        return [
-            WorkflowHandleAsyncPolling(wfid, _get_dbos_instance())
-            for wfid in workflow_ids
-        ]
+        return WorkflowHandleAsyncPolling(workflow_id, _get_dbos_instance())
 
     @classmethod
     def fork_workflow(

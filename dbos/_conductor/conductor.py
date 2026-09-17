@@ -342,9 +342,10 @@ class ConductorWebsocket(threading.Thread):
                             rewind_ids = rewind_body["workflow_ids"]
                             rewind_success = True
                             try:
-                                self.dbos.rewind_workflows(
+                                self.dbos._sys_db.rewind_workflows(
                                     rewind_ids,
-                                    start_steps=rewind_body.get("start_steps"),
+                                    rewind_body.get("start_steps")
+                                    or [1] * len(rewind_ids),
                                     application_version=rewind_body.get(
                                         "application_version"
                                     ),

@@ -645,25 +645,14 @@ def test_public_rewind_api(dbos: DBOS, client: DBOSClient) -> None:
     def counter(name: str) -> int:
         return run_count(name)
 
-    ids = [start(counter, f"public{i}") for i in range(2)]
-    assert [h.get_result() for h in DBOS.rewind_workflows(ids)] == [2, 2]
-
-    # start_steps defaults to the beginning for each workflow, and can be given
-    # per workflow.
-    ids = [start(counter, f"steps{i}") for i in range(2)]
-    handles = DBOS.rewind_workflows(ids, start_steps=[1, 1])
-    assert [h.get_result() for h in handles] == [2, 2]
-
-    ids = [start(counter, f"client{i}") for i in range(2)]
-    assert [h.get_result() for h in client.rewind_workflows(ids)] == [2, 2]
-
-    # The singular form takes one ID and one start step, and hands back one handle.
+    # start_step defaults to the beginning.
     workflow_id = start(counter, "single")
     assert DBOS.rewind_workflow(workflow_id).get_result() == 2
     assert DBOS.rewind_workflow(workflow_id, start_step=1).get_result() == 3
 
     workflow_id = start(counter, "clientsingle")
     assert client.rewind_workflow(workflow_id).get_result() == 2
+    assert client.rewind_workflow(workflow_id, start_step=1).get_result() == 3
 
 
 @pytest.mark.asyncio
@@ -671,14 +660,6 @@ async def test_public_rewind_api_async(dbos: DBOS, client: DBOSClient) -> None:
     @DBOS.workflow()
     def counter(name: str) -> int:
         return run_count(name)
-
-    ids = [start(counter, f"async{i}") for i in range(2)]
-    handles = await DBOS.rewind_workflows_async(ids)
-    assert [await h.get_result() for h in handles] == [2, 2]
-
-    ids = [start(counter, f"asyncclient{i}") for i in range(2)]
-    client_handles = await client.rewind_workflows_async(ids)
-    assert [await h.get_result() for h in client_handles] == [2, 2]
 
     workflow_id = start(counter, "asyncsingle")
     handle = await DBOS.rewind_workflow_async(workflow_id, start_step=1)
@@ -705,7 +686,7 @@ def test_rewind_from_inside_a_workflow_is_checkpointed(dbos: DBOS) -> None:
     @DBOS.workflow()
     def repairer(workflow_id: str) -> int:
         run_count("repairer")
-        result: int = DBOS.rewind_workflows([workflow_id])[0].get_result()
+        result: int = DBOS.rewind_workflow(workflow_id).get_result()
         return result
 
     target_id = start(target, "repaired")

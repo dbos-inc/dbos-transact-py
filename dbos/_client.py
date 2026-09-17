@@ -886,13 +886,14 @@ class DBOSClient:
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
     ) -> "WorkflowHandle[Any]":
-        return self.rewind_workflows(
+        self._sys_db.rewind_workflows(
             [workflow_id],
-            start_steps=None if start_step is None else [start_step],
+            [1 if start_step is None else start_step],
             application_version=application_version,
             queue_name=queue_name,
             queue_partition_key=queue_partition_key,
-        )[0]
+        )
+        return WorkflowHandleClientPolling[Any](workflow_id, self._sys_db)
 
     async def rewind_workflow_async(
         self,
@@ -903,57 +904,15 @@ class DBOSClient:
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
     ) -> "WorkflowHandleAsync[Any]":
-        handles = await self.rewind_workflows_async(
-            [workflow_id],
-            start_steps=None if start_step is None else [start_step],
-            application_version=application_version,
-            queue_name=queue_name,
-            queue_partition_key=queue_partition_key,
-        )
-        return handles[0]
-
-    def rewind_workflows(
-        self,
-        workflow_ids: List[str],
-        *,
-        start_steps: Optional[List[int]] = None,
-        application_version: Optional[str] = None,
-        queue_name: Optional[str] = None,
-        queue_partition_key: Optional[str] = None,
-    ) -> "List[WorkflowHandle[Any]]":
-        self._sys_db.rewind_workflows(
-            workflow_ids,
-            start_steps if start_steps is not None else [1] * len(workflow_ids),
-            application_version=application_version,
-            queue_name=queue_name,
-            queue_partition_key=queue_partition_key,
-        )
-        return [
-            WorkflowHandleClientPolling[Any](wfid, self._sys_db)
-            for wfid in workflow_ids
-        ]
-
-    async def rewind_workflows_async(
-        self,
-        workflow_ids: List[str],
-        *,
-        start_steps: Optional[List[int]] = None,
-        application_version: Optional[str] = None,
-        queue_name: Optional[str] = None,
-        queue_partition_key: Optional[str] = None,
-    ) -> "List[WorkflowHandleAsync[Any]]":
         await asyncio.to_thread(
-            self.rewind_workflows,
-            workflow_ids,
-            start_steps=start_steps,
+            self._sys_db.rewind_workflows,
+            [workflow_id],
+            [1 if start_step is None else start_step],
             application_version=application_version,
             queue_name=queue_name,
             queue_partition_key=queue_partition_key,
         )
-        return [
-            WorkflowHandleClientAsyncPolling[Any](wfid, self._sys_db)
-            for wfid in workflow_ids
-        ]
+        return WorkflowHandleClientAsyncPolling[Any](workflow_id, self._sys_db)
 
     def set_workflow_delay(
         self,
