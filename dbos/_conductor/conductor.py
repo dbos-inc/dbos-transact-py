@@ -75,7 +75,7 @@ class ConductorWebsocket(threading.Thread):
 
     def _report_exception(self, context: str) -> str:
         error_message = f"{context}: {traceback.format_exc()}"
-        self.dbos.logger.error(error_message)
+        self.dbos.logger.error(error_message, stacklevel=2)
         if self.metadata_only_mode:
             return f"{context}: {type(sys.exc_info()[1]).__name__} (details withheld in metadata-only mode)"
         return error_message
