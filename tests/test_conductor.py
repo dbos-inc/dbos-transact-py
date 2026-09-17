@@ -23,6 +23,9 @@ wait and only be torn down just before the system database is.
 Retention (test_conductor_retention_answers_at_once_and_still_collects): a round
 takes minutes, so the loop dispatches it to a thread and answers immediately.
 
+Metadata-only mode (test_conductor_metadata_only_mode): the executor never sends
+workflow data to Conductor, even when Conductor asks for it.
+
 Wire format (test_workflows_output_*, test_workflow_steps_*): every workflow and
 step field lands under its own key, and unset fields stay null.
 """
@@ -36,8 +39,9 @@ import struct
 import threading
 import time
 from dataclasses import asdict
+from datetime import datetime
 from importlib.metadata import version
-from typing import Any, Generator, List, Optional
+from typing import Any, Dict, Generator, List, Optional
 
 import pytest
 from websockets.sync import connection as ws_connection
@@ -183,6 +187,7 @@ class _StubDBOS:
         self._config = {"name": "regression-test-app"}
         self.logger = logger
         self._conductor_executor_metadata: Optional[dict[str, Any]] = None
+        self._conductor_metadata_only_mode = False
 
 
 class _ReconnectLogProbe(logging.Handler):
@@ -507,6 +512,204 @@ def test_conductor_retention_answers_at_once_and_still_collects(
         assert conductor is not None and conductor.is_alive()
     finally:
         DBOS.destroy()
+
+
+def _round_trip(stand_in: _ConductorStandIn, request: p.BaseMessage) -> Dict[str, Any]:
+    """Dispatch a command as Conductor would and return the executor's response."""
+    stand_in.send(request.to_json())
+
+    def answered() -> Dict[str, Any]:
+        with stand_in._lock:
+            messages: List[Dict[str, Any]] = [json.loads(m) for m in stand_in.received]
+        matches = [m for m in messages if m["request_id"] == request.request_id]
+        assert matches, f"no response to {request.request_id}"
+        return matches[0]
+
+    return retry_until_success(answered, interval=0.1, max_attempts=100)
+
+
+@pytest.mark.parametrize("metadata_only", [True, False])
+def test_conductor_metadata_only_mode(
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+    conductor_stand_in: _ConductorStandIn,
+    metadata_only: bool,
+) -> None:
+    DBOS.destroy(destroy_registry=True)
+    if metadata_only:
+        config["conductor_metadata_only_mode"] = True
+    DBOS(
+        config=config,
+        conductor_key="test-key",
+        conductor_url=f"ws://127.0.0.1:{conductor_stand_in.port}",
+    )
+
+    @DBOS.step()
+    def step(x: str) -> str:
+        return x + "-output"
+
+    @DBOS.workflow()
+    def workflow(x: str) -> str:
+        DBOS.set_event("event", x)
+        DBOS.write_stream("stream", x)
+        return step(x)
+
+    @DBOS.workflow()
+    def failing_workflow(x: str) -> None:
+        raise ValueError(x)
+
+    @DBOS.workflow()
+    def scheduled_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    DBOS.launch()
+    try:
+        assert conductor_stand_in.connected.wait(timeout=10)
+        DBOS.register_queue("metadata-only-queue")
+        handle = DBOS.enqueue_workflow("metadata-only-queue", workflow, "secret")
+        assert handle.get_result() == "secret-output"
+        failing_handle = DBOS.start_workflow(failing_workflow, "secret")
+        with pytest.raises(ValueError):
+            failing_handle.get_result()
+        DBOS.send(handle.workflow_id, "secret", topic="topic")
+        DBOS.create_schedule(
+            schedule_name="metadata-only-schedule",
+            workflow_fn=scheduled_workflow,
+            schedule="0 0 1 1 *",
+            context="secret",
+        )
+        wf_ids = [handle.workflow_id, failing_handle.workflow_id]
+        # Metadata always flows; data flows only when metadata-only mode is off.
+        sends_data = not metadata_only
+
+        # Conductor explicitly asks for data; metadata-only mode must override it.
+        listed = _round_trip(
+            conductor_stand_in,
+            p.ListWorkflowsRequest(
+                type=p.MessageType.LIST_WORKFLOWS,
+                request_id="list-workflows",
+                body={
+                    "workflow_uuids": wf_ids,
+                    "load_input": True,
+                    "load_output": True,
+                },
+            ),
+        )
+        assert listed["error_message"] is None
+        by_id = {wf["WorkflowUUID"]: wf for wf in listed["output"]}
+        assert by_id[handle.workflow_id]["Status"] == "SUCCESS"
+        assert by_id[failing_handle.workflow_id]["Status"] == "ERROR"
+        assert all((wf["Input"] is not None) == sends_data for wf in by_id.values())
+        assert (by_id[handle.workflow_id]["Output"] is not None) == sends_data
+        assert (by_id[failing_handle.workflow_id]["Error"] is not None) == sends_data
+
+        queued = _round_trip(
+            conductor_stand_in,
+            p.ListQueuedWorkflowsRequest(
+                type=p.MessageType.LIST_QUEUED_WORKFLOWS,
+                request_id="list-queued-workflows",
+                body={"status": "SUCCESS", "load_input": True, "load_output": True},
+            ),
+        )
+        assert [wf["WorkflowUUID"] for wf in queued["output"]] == [handle.workflow_id]
+        assert (queued["output"][0]["Input"] is not None) == sends_data
+        assert (queued["output"][0]["Output"] is not None) == sends_data
+
+        for wf_id, field in [
+            (handle.workflow_id, "Output"),
+            (failing_handle.workflow_id, "Error"),
+        ]:
+            got = _round_trip(
+                conductor_stand_in,
+                p.GetWorkflowRequest(
+                    type=p.MessageType.GET_WORKFLOW,
+                    request_id=f"get-workflow-{wf_id}",
+                    workflow_id=wf_id,
+                ),
+            )["output"]
+            assert got["WorkflowUUID"] == wf_id
+            assert (got["Input"] is not None) == sends_data
+            assert (got[field] is not None) == sends_data
+
+        steps = _round_trip(
+            conductor_stand_in,
+            p.ListStepsRequest(
+                type=p.MessageType.LIST_STEPS,
+                request_id="list-steps",
+                workflow_id=handle.workflow_id,
+            ),
+        )["output"]
+        assert step.__qualname__ in [s["function_name"] for s in steps]
+        assert any(s["output"] is not None for s in steps) == sends_data
+
+        schedules = _round_trip(
+            conductor_stand_in,
+            p.ListSchedulesRequest(
+                type=p.MessageType.LIST_SCHEDULES,
+                request_id="list-schedules",
+                body={"load_context": True},
+            ),
+        )["output"]
+        assert [s["schedule_name"] for s in schedules] == ["metadata-only-schedule"]
+        assert (schedules[0]["context"] is not None) == sends_data
+        schedule = _round_trip(
+            conductor_stand_in,
+            p.GetScheduleRequest(
+                type=p.MessageType.GET_SCHEDULE,
+                request_id="get-schedule",
+                schedule_name="metadata-only-schedule",
+            ),
+        )["output"]
+        assert schedule["schedule_name"] == "metadata-only-schedule"
+        assert (schedule["context"] is not None) == sends_data
+
+        # Commands that only move data are refused outright.
+        data_requests: List[p.BaseMessage] = [
+            p.GetWorkflowEventsRequest(
+                type=p.MessageType.GET_WORKFLOW_EVENTS,
+                request_id="events",
+                workflow_id=handle.workflow_id,
+            ),
+            p.GetWorkflowNotificationsRequest(
+                type=p.MessageType.GET_WORKFLOW_NOTIFICATIONS,
+                request_id="notifications",
+                workflow_id=handle.workflow_id,
+            ),
+            p.GetWorkflowStreamsRequest(
+                type=p.MessageType.GET_WORKFLOW_STREAMS,
+                request_id="streams",
+                workflow_id=handle.workflow_id,
+            ),
+            p.ExportWorkflowRequest(
+                type=p.MessageType.EXPORT_WORKFLOW,
+                request_id="export",
+                workflow_id=handle.workflow_id,
+                export_children=False,
+            ),
+            p.ImportWorkflowRequest(
+                type=p.MessageType.IMPORT_WORKFLOW,
+                request_id="import",
+                serialized_workflow="not-a-workflow",
+            ),
+        ]
+        responses = {
+            r.request_id: _round_trip(conductor_stand_in, r) for r in data_requests
+        }
+        for request in data_requests:
+            refused = (
+                f"{request.type.value} is not allowed in conductor metadata-only mode"
+            )
+            assert (
+                responses[request.request_id]["error_message"] == refused
+            ) == metadata_only
+        if metadata_only:
+            assert "events" not in responses["events"]
+        else:
+            assert responses["events"]["events"] == [
+                {"key": "event", "value": "secret"}
+            ]
+    finally:
+        DBOS.destroy(destroy_registry=True)
 
 
 def populated_workflow_status() -> WorkflowStatus:

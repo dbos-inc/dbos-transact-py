@@ -471,6 +471,9 @@ class DBOS:
                 raise DBOSException(
                     f"conductor_executor_metadata must be JSON-serializable: {e}"
                 )
+        self._conductor_metadata_only_mode = (
+            config.get("conductor_metadata_only_mode") == True
+        )
 
         # Reset global configuration. If reconfigured, it is set at launch.
         GlobalParams.app_version = os.environ.get("DBOS__APPVERSION", "")
