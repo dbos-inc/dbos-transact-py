@@ -32,6 +32,15 @@ if TYPE_CHECKING:
 ws_version = version("websockets")
 use_keepalive = ws_version < "15.0"
 
+# Commands that exist only to move workflow data, refused in metadata-only mode.
+DATA_MESSAGE_TYPES = (
+    p.MessageType.GET_WORKFLOW_EVENTS,
+    p.MessageType.GET_WORKFLOW_NOTIFICATIONS,
+    p.MessageType.GET_WORKFLOW_STREAMS,
+    p.MessageType.EXPORT_WORKFLOW,
+    p.MessageType.IMPORT_WORKFLOW,
+)
+
 
 class ConductorWebsocket(threading.Thread):
 
@@ -48,6 +57,7 @@ class ConductorWebsocket(threading.Thread):
         self.evt = evt
         self.dbos = dbos
         self.app_name = app_name
+        self.metadata_only_mode: bool = dbos._conductor_metadata_only_mode
         self.url = (
             conductor_url.rstrip("/") + f"/websocket/{self.app_name}/{conductor_key}"
         )
@@ -132,7 +142,15 @@ class ConductorWebsocket(threading.Thread):
                         base_message = p.BaseMessage.from_json(message)
                         msg_type = base_message.type
                         error_message = None
-                        if msg_type == p.MessageType.EXECUTOR_INFO:
+                        if self.metadata_only_mode and msg_type in DATA_MESSAGE_TYPES:
+                            websocket.send(
+                                p.BaseResponse(
+                                    type=msg_type,
+                                    request_id=base_message.request_id,
+                                    error_message=f"{msg_type} is not allowed in conductor metadata-only mode",
+                                ).to_json()
+                            )
+                        elif msg_type == p.MessageType.EXECUTOR_INFO:
                             info_response = p.ExecutorInfoResponse(
                                 type=p.MessageType.EXECUTOR_INFO,
                                 request_id=base_message.request_id,
@@ -335,8 +353,10 @@ class ConductorWebsocket(threading.Thread):
                                     workflow_id_prefix=body.get(
                                         "workflow_id_prefix", None
                                     ),
-                                    load_input=body.get("load_input", True),
-                                    load_output=body.get("load_output", True),
+                                    load_input=body.get("load_input", True)
+                                    and not self.metadata_only_mode,
+                                    load_output=body.get("load_output", True)
+                                    and not self.metadata_only_mode,
                                     executor_id=body.get("executor_id", None),
                                     queues_only=body.get("queues_only", False),
                                     was_forked_from=body.get("was_forked_from", None),
@@ -393,8 +413,10 @@ class ConductorWebsocket(threading.Thread):
                                     workflow_id_prefix=q_body.get(
                                         "workflow_id_prefix", None
                                     ),
-                                    load_input=q_body.get("load_input", True),
-                                    load_output=q_body.get("load_output", True),
+                                    load_input=q_body.get("load_input", True)
+                                    and not self.metadata_only_mode,
+                                    load_output=q_body.get("load_output", True)
+                                    and not self.metadata_only_mode,
                                     executor_id=q_body.get("executor_id", None),
                                     queues_only=True,
                                     was_forked_from=q_body.get("was_forked_from", None),
@@ -427,8 +449,10 @@ class ConductorWebsocket(threading.Thread):
                                 info = get_workflow(
                                     self.dbos._sys_db,
                                     get_workflow_message.workflow_id,
-                                    load_input=get_workflow_message.load_input,
-                                    load_output=get_workflow_message.load_output,
+                                    load_input=get_workflow_message.load_input
+                                    and not self.metadata_only_mode,
+                                    load_output=get_workflow_message.load_output
+                                    and not self.metadata_only_mode,
                                 )
                             except Exception as e:
                                 error_message = f"Exception encountered when getting workflow {get_workflow_message.workflow_id}: {traceback.format_exc()}"
@@ -549,7 +573,8 @@ class ConductorWebsocket(threading.Thread):
                             try:
                                 step_info = self.dbos._sys_db.list_workflow_steps(
                                     list_steps_message.workflow_id,
-                                    load_output=list_steps_message.load_output,
+                                    load_output=list_steps_message.load_output
+                                    and not self.metadata_only_mode,
                                     limit=list_steps_message.limit,
                                     offset=list_steps_message.offset,
                                 )
@@ -746,7 +771,10 @@ class ConductorWebsocket(threading.Thread):
                             sched_body = list_sched_msg.body
                             schedules: list[p.ScheduleOutput] = []
                             try:
-                                load_context = sched_body.get("load_context", True)
+                                load_context = (
+                                    sched_body.get("load_context", True)
+                                    and not self.metadata_only_mode
+                                )
                                 schedules = [
                                     p.ScheduleOutput.from_schedule(
                                         s,
@@ -788,7 +816,8 @@ class ConductorWebsocket(threading.Thread):
                                     output = p.ScheduleOutput.from_schedule(
                                         sched,
                                         self.dbos._sys_db.serializer,
-                                        load_context=get_sched_msg.load_context,
+                                        load_context=get_sched_msg.load_context
+                                        and not self.metadata_only_mode,
                                     )
                             except Exception:
                                 error_message = f"Exception encountered when getting schedule '{get_sched_msg.schedule_name}': {traceback.format_exc()}"
