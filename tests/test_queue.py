@@ -2656,33 +2656,44 @@ def test_queue_partitions(dbos: DBOS, client: DBOSClient) -> None:
     blocked_partition_key = "blocked"
     normal_partition_key = "normal"
 
-    # Enqueue a blocked workflow and a normal workflow on
-    # the blocked partition. Verify the blocked workflow starts
-    # but the normal workflow is stuck behind it.
+    # Enqueue a blocked workflow on the blocked partition and, once it holds the
+    # partition's only slot, a normal workflow behind it. Verify the normal
+    # workflow is stuck. Enqueued together, a created_at tie on a second-resolution
+    # clock (SQLite below 3.12) would leave their claim order to chance.
     with SetEnqueueOptions(queue_partition_key=blocked_partition_key):
         blocked_blocked_handle = DBOS.enqueue_workflow("queue", blocked_workflow)
-        blocked_normal_handle = DBOS.enqueue_workflow("queue", normal_workflow)
-
     waiting_event.wait()
-    assert (
-        blocked_blocked_handle.get_status().status == WorkflowStatusString.PENDING.value
-    )
-    assert (
-        blocked_normal_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
-    )
-    assert (
-        blocked_blocked_handle.get_status().queue_partition_key
-        == blocked_normal_handle.get_status().queue_partition_key
-        == blocked_partition_key
-    )
-    # Enqueue a normal workflow on the other partition and verify it runs normally
-    with SetEnqueueOptions(queue_partition_key=normal_partition_key):
-        normal_handle = DBOS.enqueue_workflow("queue", normal_workflow)
+    try:
+        with SetEnqueueOptions(queue_partition_key=blocked_partition_key):
+            blocked_normal_handle = DBOS.enqueue_workflow("queue", normal_workflow)
+        assert (
+            blocked_blocked_handle.get_status().status
+            == WorkflowStatusString.PENDING.value
+        )
+        assert (
+            blocked_normal_handle.get_status().status
+            == WorkflowStatusString.ENQUEUED.value
+        )
+        assert (
+            blocked_blocked_handle.get_status().queue_partition_key
+            == blocked_normal_handle.get_status().queue_partition_key
+            == blocked_partition_key
+        )
+        # Enqueue a normal workflow on the other partition and verify it runs normally
+        with SetEnqueueOptions(queue_partition_key=normal_partition_key):
+            normal_handle = DBOS.enqueue_workflow("queue", normal_workflow)
 
-    assert normal_handle.get_result()
+        assert normal_handle.get_result()
+        # The queue has polled since; the normal workflow is still stuck behind the blocked one.
+        assert (
+            blocked_normal_handle.get_status().status
+            == WorkflowStatusString.ENQUEUED.value
+        )
+    finally:
+        # Unblock the blocked partition; a failed assertion must not hang shutdown on it.
+        blocking_event.set()
 
-    # Unblock the blocked partition and verify its workflows complete
-    blocking_event.set()
+    # Verify the blocked partition's workflows complete
     assert blocked_blocked_handle.get_result()
     assert blocked_normal_handle.get_result()
 
