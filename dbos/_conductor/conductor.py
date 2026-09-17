@@ -2,6 +2,7 @@ import base64
 import gzip
 import pickle
 import socket
+import sys
 import threading
 import time
 import traceback
@@ -71,6 +72,14 @@ class ConductorWebsocket(threading.Thread):
         self.dbos.logger.debug(
             f"Connecting to conductor at {self.url} using websockets version {ws_version}"
         )
+
+    def _report_exception(self, context: str) -> str:
+        """Log the active exception, then return the message Conductor may see: the same, or in metadata-only mode just its type, since a traceback can embed workflow data."""
+        error_message = f"{context}: {traceback.format_exc()}"
+        self.dbos.logger.error(error_message)
+        if self.metadata_only_mode:
+            return f"{context}: {type(sys.exc_info()[1]).__name__} (details withheld in metadata-only mode)"
+        return error_message
 
     def keepalive(self) -> None:
         self.dbos.logger.debug("Starting keepalive thread")
@@ -171,8 +180,9 @@ class ConductorWebsocket(threading.Thread):
                                     recovery_message.executor_ids
                                 )
                             except Exception as e:
-                                error_message = f"Exception encountered when recovering workflows: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    "Exception encountered when recovering workflows"
+                                )
                                 success = False
                             recovery_response = p.RecoveryResponse(
                                 type=p.MessageType.RECOVERY,
@@ -193,8 +203,9 @@ class ConductorWebsocket(threading.Thread):
                                     cancel_children=cancel_message.cancel_children,
                                 )
                             except Exception as e:
-                                error_message = f"Exception encountered when cancelling workflow(s) {cancel_ids}: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    f"Exception encountered when cancelling workflow(s) {cancel_ids}"
+                                )
                                 success = False
                             cancel_response = p.CancelResponse(
                                 type=p.MessageType.CANCEL,
@@ -216,8 +227,9 @@ class ConductorWebsocket(threading.Thread):
                                     delete_children=delete_message.delete_children,
                                 )
                             except Exception as e:
-                                error_message = f"Exception encountered when deleting workflow(s) {delete_ids}: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    f"Exception encountered when deleting workflow(s) {delete_ids}"
+                                )
                                 success = False
                             delete_response = p.DeleteResponse(
                                 type=p.MessageType.DELETE,
@@ -238,8 +250,9 @@ class ConductorWebsocket(threading.Thread):
                                     queue_name=resume_message.queue_name,
                                 )
                             except Exception as e:
-                                error_message = f"Exception encountered when resuming workflow(s) {resume_ids}: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    f"Exception encountered when resuming workflow(s) {resume_ids}"
+                                )
                                 success = False
                             resume_response = p.ResumeResponse(
                                 type=p.MessageType.RESUME,
@@ -271,8 +284,9 @@ class ConductorWebsocket(threading.Thread):
                                     )
                                 new_workflow_id = new_handle.workflow_id
                             except Exception as e:
-                                error_message = f"Exception encountered when forking workflow {workflow_id} to new workflow {new_workflow_id} on step {start_step}, app version {app_version}: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    f"Exception encountered when forking workflow {workflow_id} to new workflow {new_workflow_id} on step {start_step}, app version {app_version}"
+                                )
                                 new_workflow_id = None
 
                             fork_response = p.ForkWorkflowResponse(
@@ -312,8 +326,9 @@ class ConductorWebsocket(threading.Thread):
                                     )
                                 )
                             except Exception as e:
-                                error_message = f"Exception encountered when bulk forking workflows: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    "Exception encountered when bulk forking workflows"
+                                )
 
                             bulk_fork_response = p.ForkFromFailureResponse(
                                 type=p.MessageType.FORK_FROM_FAILURE,
@@ -365,8 +380,9 @@ class ConductorWebsocket(threading.Thread):
                                     schedule_name=body.get("schedule_name", None),
                                 )
                             except Exception as e:
-                                error_message = f"Exception encountered when listing workflows: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    "Exception encountered when listing workflows"
+                                )
 
                             list_workflows_response = p.ListWorkflowsResponse(
                                 type=p.MessageType.LIST_WORKFLOWS,
@@ -425,8 +441,9 @@ class ConductorWebsocket(threading.Thread):
                                     schedule_name=q_body.get("schedule_name", None),
                                 )
                             except Exception as e:
-                                error_message = f"Exception encountered when listing queued workflows: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    "Exception encountered when listing queued workflows"
+                                )
 
                             list_queued_workflows_response = (
                                 p.ListQueuedWorkflowsResponse(
@@ -455,8 +472,9 @@ class ConductorWebsocket(threading.Thread):
                                     and not self.metadata_only_mode,
                                 )
                             except Exception as e:
-                                error_message = f"Exception encountered when getting workflow {get_workflow_message.workflow_id}: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    f"Exception encountered when getting workflow {get_workflow_message.workflow_id}"
+                                )
 
                             get_workflow_response = p.GetWorkflowResponse(
                                 type=p.MessageType.GET_WORKFLOW,
@@ -484,8 +502,9 @@ class ConductorWebsocket(threading.Thread):
                                     for k, v in raw_events.items()
                                 ]
                             except Exception as e:
-                                error_message = f"Exception encountered when getting events for workflow {events_message.workflow_id}: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    f"Exception encountered when getting events for workflow {events_message.workflow_id}"
+                                )
                             websocket.send(
                                 p.GetWorkflowEventsResponse(
                                     type=p.MessageType.GET_WORKFLOW_EVENTS,
@@ -509,8 +528,9 @@ class ConductorWebsocket(threading.Thread):
                                     for n in raw_notifs
                                 ]
                             except Exception as e:
-                                error_message = f"Exception encountered when getting notifications for workflow {notif_message.workflow_id}: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    f"Exception encountered when getting notifications for workflow {notif_message.workflow_id}"
+                                )
                             websocket.send(
                                 p.GetWorkflowNotificationsResponse(
                                     type=p.MessageType.GET_WORKFLOW_NOTIFICATIONS,
@@ -534,8 +554,9 @@ class ConductorWebsocket(threading.Thread):
                                     for k, v in raw_streams.items()
                                 ]
                             except Exception as e:
-                                error_message = f"Exception encountered when getting streams for workflow {streams_message.workflow_id}: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    f"Exception encountered when getting streams for workflow {streams_message.workflow_id}"
+                                )
                             websocket.send(
                                 p.GetWorkflowStreamsResponse(
                                     type=p.MessageType.GET_WORKFLOW_STREAMS,
@@ -555,8 +576,9 @@ class ConductorWebsocket(threading.Thread):
                                     exist_pending_workflows_message.application_version,
                                 )
                             except Exception as e:
-                                error_message = f"Exception encountered when checking for pending workflows: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    "Exception encountered when checking for pending workflows"
+                                )
 
                             exist_pending_workflows_response = (
                                 p.ExistPendingWorkflowsResponse(
@@ -579,8 +601,9 @@ class ConductorWebsocket(threading.Thread):
                                     offset=list_steps_message.offset,
                                 )
                             except Exception as e:
-                                error_message = f"Exception encountered when getting workflow {list_steps_message.workflow_id}: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    f"Exception encountered when getting workflow {list_steps_message.workflow_id}"
+                                )
 
                             list_steps_response = p.ListStepsResponse(
                                 type=p.MessageType.LIST_STEPS,
@@ -683,8 +706,9 @@ class ConductorWebsocket(threading.Thread):
                                         for m in sys_metrics
                                     ]
                                 except Exception as e:
-                                    error_message = f"Exception encountered when getting metrics: {traceback.format_exc()}"
-                                    self.dbos.logger.error(error_message)
+                                    error_message = self._report_exception(
+                                        "Exception encountered when getting metrics"
+                                    )
                             else:
                                 error_message = f"Unexpected metric class: {get_metrics_message.metric_class}"
                                 self.dbos.logger.warning(error_message)
@@ -710,8 +734,9 @@ class ConductorWebsocket(threading.Thread):
                                         f"Alert: {alert_message.name} | Message: {alert_message.message} | Metadata: {alert_message.metadata}"
                                     )
                             except Exception as e:
-                                error_message = f"Exception encountered when processing alert: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    "Exception encountered when processing alert"
+                                )
                                 success = False
                             alert_response = p.AlertResponse(
                                 type=p.MessageType.ALERT,
@@ -732,8 +757,9 @@ class ConductorWebsocket(threading.Thread):
                                     gzip.compress(pickle.dumps(exported))
                                 ).decode("utf-8")
                             except Exception:
-                                error_message = f"Exception encountered when exporting workflow {export_message.workflow_id}: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    f"Exception encountered when exporting workflow {export_message.workflow_id}"
+                                )
 
                             export_response = p.ExportWorkflowResponse(
                                 type=p.MessageType.EXPORT_WORKFLOW,
@@ -755,8 +781,9 @@ class ConductorWebsocket(threading.Thread):
                                 )
                                 self.dbos._sys_db.import_workflow(workflow)
                             except Exception:
-                                error_message = f"Exception encountered when importing workflow: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    "Exception encountered when importing workflow"
+                                )
                                 success = False
 
                             import_response = p.ImportWorkflowResponse(
@@ -795,8 +822,9 @@ class ConductorWebsocket(threading.Thread):
                                     )
                                 ]
                             except Exception:
-                                error_message = f"Exception encountered when listing schedules: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    "Exception encountered when listing schedules"
+                                )
                             websocket.send(
                                 p.ListSchedulesResponse(
                                     type=p.MessageType.LIST_SCHEDULES,
@@ -820,8 +848,9 @@ class ConductorWebsocket(threading.Thread):
                                         and not self.metadata_only_mode,
                                     )
                             except Exception:
-                                error_message = f"Exception encountered when getting schedule '{get_sched_msg.schedule_name}': {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    f"Exception encountered when getting schedule '{get_sched_msg.schedule_name}'"
+                                )
                             websocket.send(
                                 p.GetScheduleResponse(
                                     type=p.MessageType.GET_SCHEDULE,
@@ -838,8 +867,9 @@ class ConductorWebsocket(threading.Thread):
                                     pause_sched_msg.schedule_name
                                 )
                             except Exception:
-                                error_message = f"Exception encountered when pausing schedule '{pause_sched_msg.schedule_name}': {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    f"Exception encountered when pausing schedule '{pause_sched_msg.schedule_name}'"
+                                )
                                 success = False
                             websocket.send(
                                 p.PauseScheduleResponse(
@@ -859,8 +889,9 @@ class ConductorWebsocket(threading.Thread):
                                     resume_sched_msg.schedule_name
                                 )
                             except Exception:
-                                error_message = f"Exception encountered when resuming schedule '{resume_sched_msg.schedule_name}': {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    f"Exception encountered when resuming schedule '{resume_sched_msg.schedule_name}'"
+                                )
                                 success = False
                             websocket.send(
                                 p.ResumeScheduleResponse(
@@ -883,8 +914,9 @@ class ConductorWebsocket(threading.Thread):
                                     end,
                                 )
                             except Exception:
-                                error_message = f"Exception encountered when backfilling schedule '{backfill_msg.schedule_name}': {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    f"Exception encountered when backfilling schedule '{backfill_msg.schedule_name}'"
+                                )
                             websocket.send(
                                 p.BackfillScheduleResponse(
                                     type=p.MessageType.BACKFILL_SCHEDULE,
@@ -902,8 +934,9 @@ class ConductorWebsocket(threading.Thread):
                                     trigger_msg.schedule_name,
                                 )
                             except Exception:
-                                error_message = f"Exception encountered when triggering schedule '{trigger_msg.schedule_name}': {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    f"Exception encountered when triggering schedule '{trigger_msg.schedule_name}'"
+                                )
                             websocket.send(
                                 p.TriggerScheduleResponse(
                                     type=p.MessageType.TRIGGER_SCHEDULE,
@@ -920,8 +953,9 @@ class ConductorWebsocket(threading.Thread):
                                     for v in self.dbos._sys_db.list_application_versions()
                                 ]
                             except Exception:
-                                error_message = f"Exception encountered when listing application versions: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    "Exception encountered when listing application versions"
+                                )
                             websocket.send(
                                 p.ListApplicationVersionsResponse(
                                     type=p.MessageType.LIST_APPLICATION_VERSIONS,
@@ -941,8 +975,9 @@ class ConductorWebsocket(threading.Thread):
                                     int(time.time() * 1000),
                                 )
                             except Exception:
-                                error_message = f"Exception encountered when setting latest application version '{set_version_msg.version_name}': {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    f"Exception encountered when setting latest application version '{set_version_msg.version_name}'"
+                                )
                                 success = False
                             websocket.send(
                                 p.SetLatestApplicationVersionResponse(
@@ -1049,8 +1084,9 @@ class ConductorWebsocket(threading.Thread):
                                     for r in agg_rows
                                 ]
                             except Exception:
-                                error_message = f"Exception encountered when getting workflow aggregates: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    "Exception encountered when getting workflow aggregates"
+                                )
                             websocket.send(
                                 p.GetWorkflowAggregatesResponse(
                                     type=p.MessageType.GET_WORKFLOW_AGGREGATES,
@@ -1112,8 +1148,9 @@ class ConductorWebsocket(threading.Thread):
                                     for r in step_agg_rows
                                 ]
                             except Exception:
-                                error_message = f"Exception encountered when getting step aggregates: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    "Exception encountered when getting step aggregates"
+                                )
                             websocket.send(
                                 p.GetStepAggregatesResponse(
                                     type=p.MessageType.GET_STEP_AGGREGATES,
@@ -1136,11 +1173,9 @@ class ConductorWebsocket(threading.Thread):
                                     )
                                 ]
                             except Exception:
-                                error_message = (
-                                    f"Exception encountered when listing queues: "
-                                    f"{traceback.format_exc()}"
+                                error_message = self._report_exception(
+                                    "Exception encountered when listing queues"
                                 )
-                                self.dbos.logger.error(error_message)
                             websocket.send(
                                 p.ListQueuesResponse(
                                     type=p.MessageType.LIST_QUEUES,
@@ -1157,11 +1192,9 @@ class ConductorWebsocket(threading.Thread):
                                 if q is not None:
                                     queue_output = p.QueueOutput.from_queue(q)
                             except Exception:
-                                error_message = (
-                                    f"Exception encountered when getting queue "
-                                    f"'{get_queue_msg.name}': {traceback.format_exc()}"
+                                error_message = self._report_exception(
+                                    f"Exception encountered when getting queue '{get_queue_msg.name}'"
                                 )
-                                self.dbos.logger.error(error_message)
                             websocket.send(
                                 p.GetQueueResponse(
                                     type=p.MessageType.GET_QUEUE,
