@@ -102,6 +102,7 @@ from ._scheduler import (
     dynamic_scheduler_loop,
     trigger_schedule,
 )
+from ._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 from ._sys_db import (
     DEFAULT_NOTIFICATION_COALESCE_SEC,
     GetEventWorkflowContext,
@@ -111,11 +112,11 @@ from ._sys_db import (
     VersionInfo,
     WorkflowSchedule,
     WorkflowStatus,
+    workflow_is_active,
 )
 from ._tracer import DBOSTracer, dbos_tracer
 
 if TYPE_CHECKING:
-    from ._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
     from ._kafka import (
         KafkaConsumerRegistration,
         KafkaOrdering,
@@ -2384,6 +2385,40 @@ class DBOS:
             step_ctx,
         )
 
+    def _rewind_workflow(
+        self,
+        workflow_id: str,
+        start_step: int,
+        *,
+        application_version: Optional[str] = None,
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
+    ) -> None:
+        # A running workflow must keep its checkpoints, so refuse before touching
+        # anything outside the system database. The rewind below re-checks.
+        status = self._sys_db.get_workflow_status(workflow_id)
+        if status is None:
+            raise DBOSNonExistentWorkflowError("target", workflow_id)
+        if workflow_is_active(status["status"]):
+            raise DBOSException(
+                f"Cannot rewind {workflow_id} ({status['status']}): only a workflow "
+                "in a terminal state can be rewound, so cancel it first"
+            )
+        for ds in self._registry.datasources:
+            if isinstance(ds, AsyncSQLAlchemyDatasource):
+                self._background_event_loop.submit_coroutine(
+                    ds._delete_checkpoints(workflow_id, start_step)
+                )
+            else:
+                ds._delete_checkpoints(workflow_id, start_step)
+        self._sys_db.rewind_workflow(
+            workflow_id,
+            start_step,
+            application_version=application_version,
+            queue_name=queue_name,
+            queue_partition_key=queue_partition_key,
+        )
+
     @classmethod
     def rewind_workflow(
         cls,
@@ -2401,7 +2436,7 @@ class DBOS:
 
         def fn() -> None:
             dbos_logger.info(f"Rewinding workflow: {workflow_id} to step {step}")
-            _get_dbos_instance()._sys_db.rewind_workflow(
+            _get_dbos_instance()._rewind_workflow(
                 workflow_id,
                 step,
                 application_version=application_version,
@@ -2432,7 +2467,7 @@ class DBOS:
 
         def fnres() -> None:
             dbos_logger.info(f"Rewinding workflow: {workflow_id} to step {step}")
-            _get_dbos_instance()._sys_db.rewind_workflow(
+            _get_dbos_instance()._rewind_workflow(
                 workflow_id,
                 step,
                 application_version=application_version,

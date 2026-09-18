@@ -341,7 +341,7 @@ class ConductorWebsocket(threading.Thread):
                             rewind_body = rewind_message.body
                             rewind_success = True
                             try:
-                                self.dbos._sys_db.rewind_workflow(
+                                self.dbos._rewind_workflow(
                                     rewind_body["workflow_id"],
                                     rewind_body.get("start_step") or 1,
                                     application_version=rewind_body.get(

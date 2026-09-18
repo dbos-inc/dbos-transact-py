@@ -1471,9 +1471,9 @@ class SystemDatabase(ABC):
         Messages the discarded run consumed are deleted: they were delivered once, so
         a replayed recv waits for new ones rather than receiving them again.
 
-        Stream entries written by the discarded run remain in place, to not mess
-        the offset sequence (unrelated to the function IDs and potentially incremented
-        by concurrent writers), with the exception of the close sentinel.
+        Stream entries written by the discarded run remain in place,
+        with the exception of the close sentinel that has to be removed
+        so new entries can be appended.
         """
         if start_step < 1:
             raise ValueError(f"start_step must be >= 1, got {start_step}")
@@ -1554,12 +1554,7 @@ class SystemDatabase(ABC):
                 )
             )
 
-            # Stream entries have to stay, because their offset doesn't necessarily
-            # match function IDs, and removing them can punch holes in the stream
-            # that'll force readers to stop reading.
-            #
-            # One exception: the close sentinel, otherwise values written after the
-            # rewind will never be read.
+            # Clear streams' close sentinels
             closed_value, closed_serialization = serialize_value(
                 _dbos_stream_closed_sentinel,
                 WorkflowSerializationFormat.PORTABLE,
