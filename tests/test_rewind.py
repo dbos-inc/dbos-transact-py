@@ -2,7 +2,7 @@ import contextlib
 import threading
 import time
 import uuid
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, AsyncIterator, Dict, Iterator, List, Optional
 
 import pytest
 import sqlalchemy as sa
@@ -679,72 +679,133 @@ def datasource_checkpoints(engine: sa.Engine, workflow_id: str) -> List[int]:
         )
 
 
+async def datasource_checkpoints_async(engine: Any, workflow_id: str) -> List[int]:
+    async with engine.begin() as c:
+        result = await c.execute(
+            sa.select(DatasourceSchema.datasource_outputs.c.step_id).where(
+                DatasourceSchema.datasource_outputs.c.workflow_id == workflow_id
+            )
+        )
+        return sorted(result.scalars())
+
+
+def table_rows(engine: sa.Engine) -> List[str]:
+    with engine.begin() as c:
+        return sorted(c.execute(sa.text("SELECT v FROM rows")).scalars())
+
+
+async def table_rows_async(engine: Any) -> List[str]:
+    async with engine.begin() as c:
+        return sorted((await c.execute(sa.text("SELECT v FROM rows"))).scalars())
+
+
+@contextlib.contextmanager
+def launched_with_datasources(
+    config: DBOSConfig, tmp_path: Any, count: int
+) -> Iterator[Any]:
+    """DBOS launched with `count` sqlite datasources, each holding a `rows` table."""
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+    datasources = []
+    for i in range(count):
+        ds = SQLAlchemyDatasource.create(f"sqlite:///{tmp_path}/ds{i}.sqlite")
+        with ds.engine.begin() as c:
+            c.execute(sa.text("CREATE TABLE rows (v TEXT)"))
+        datasources.append(ds)
+    try:
+        DBOS.launch()
+        yield dbos, datasources
+    finally:
+        DBOS.destroy(destroy_registry=True)
+        for ds in datasources:
+            ds.engine.dispose()
+
+
+@contextlib.asynccontextmanager
+async def launched_with_async_datasources(
+    config: DBOSConfig, tmp_path: Any, count: int
+) -> AsyncIterator[Any]:
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+    datasources = []
+    for i in range(count):
+        ds = await AsyncSQLAlchemyDatasource.create(
+            f"sqlite+aiosqlite:///{tmp_path}/async_ds{i}.sqlite"
+        )
+        async with ds.engine.begin() as c:
+            await c.execute(sa.text("CREATE TABLE rows (v TEXT)"))
+        datasources.append(ds)
+    try:
+        DBOS.launch()
+        yield dbos, datasources
+    finally:
+        DBOS.destroy(destroy_registry=True)
+        for ds in datasources:
+            await ds.engine.dispose()
+
+
+def inserter(ds: SQLAlchemyDatasource) -> Any:
+    def insert_row(v: str) -> str:
+        ds.sql_session().execute(sa.text("INSERT INTO rows (v) VALUES (:v)"), {"v": v})
+        return v
+
+    return insert_row
+
+
 def test_rewind_drops_datasource_checkpoints(
     config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
 ) -> None:
-    """A datasource checkpoint past the cut would otherwise be replayed as the
-    transaction's result without running it."""
-    DBOS.destroy(destroy_registry=True)
-    dbos = DBOS(config=config)
-    ds = SQLAlchemyDatasource.create(f"sqlite:///{tmp_path}/rewind.sqlite")
-    with ds.engine.begin() as c:
-        c.execute(sa.text("CREATE TABLE rows (v TEXT)"))
-    try:
-        DBOS.launch()
-
-        def insert_row(v: str) -> str:
-            ds.sql_session().execute(
-                sa.text("INSERT INTO rows (v) VALUES (:v)"), {"v": v}
-            )
-            return v
+    """Every registered datasource is swept. A checkpoint left past the cut would
+    otherwise be replayed as the transaction's result without running it."""
+    with launched_with_datasources(config, tmp_path, 2) as (dbos, (first, second)):
+        insert_first, insert_second = inserter(first), inserter(second)
 
         @DBOS.workflow()
         def writer(name: str) -> int:
             run = run_count(name)
-            ds.run_tx_step(None, insert_row, "a")
-            ds.run_tx_step(None, insert_row, "b")
+            first.run_tx_step(None, insert_first, "a")
+            second.run_tx_step(None, insert_second, "b")
+            first.run_tx_step(None, insert_first, "c")
+            second.run_tx_step(None, insert_second, "d")
             return run
 
         workflow_id = start(writer, "datasource")
-        assert datasource_checkpoints(ds.engine, workflow_id) == [1, 2]
+        assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
+        assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
 
-        # Rewind to the second transaction.
+        # Cut at the third step: each datasource keeps one checkpoint, loses one.
         with paused_queue("rewind_datasource_gate"):
             DBOS.rewind_workflow(
-                workflow_id, start_step=2, queue_name="rewind_datasource_gate"
+                workflow_id, start_step=3, queue_name="rewind_datasource_gate"
             )
-            assert datasource_checkpoints(ds.engine, workflow_id) == [1]
+            assert datasource_checkpoints(first.engine, workflow_id) == [1]
+            assert datasource_checkpoints(second.engine, workflow_id) == [2]
 
         assert DBOS.retrieve_workflow(workflow_id).get_result() == 2
-        assert datasource_checkpoints(ds.engine, workflow_id) == [1, 2]
-        # The first transaction replayed off its checkpoint, the second ran again.
-        with ds.engine.begin() as c:
-            assert sorted(c.execute(sa.text("SELECT v FROM rows")).scalars()) == [
-                "a",
-                "b",
-                "b",
-            ]
-    finally:
-        DBOS.destroy(destroy_registry=True)
-        ds.engine.dispose()
+        assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
+        assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
+        # The first transaction on each datasource replayed, the second ran again.
+        assert table_rows(first.engine) == ["a", "c", "c"]
+        assert table_rows(second.engine) == ["b", "d", "d"]
 
 
 @pytest.mark.asyncio
 async def test_rewind_drops_async_datasource_checkpoints(
     config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
 ) -> None:
-    DBOS.destroy(destroy_registry=True)
-    dbos = DBOS(config=config)
-    ds = await AsyncSQLAlchemyDatasource.create(
-        f"sqlite+aiosqlite:///{tmp_path}/rewind_async.sqlite"
-    )
-    async with ds.engine.begin() as c:
-        await c.execute(sa.text("CREATE TABLE rows (v TEXT)"))
-    try:
-        DBOS.launch()
+    async with launched_with_async_datasources(config, tmp_path, 2) as (
+        dbos,
+        (first, second),
+    ):
 
-        async def insert_row(v: str) -> str:
-            await ds.sql_session().execute(
+        async def insert_first(v: str) -> str:
+            await first.sql_session().execute(
+                sa.text("INSERT INTO rows (v) VALUES (:v)"), {"v": v}
+            )
+            return v
+
+        async def insert_second(v: str) -> str:
+            await second.sql_session().execute(
                 sa.text("INSERT INTO rows (v) VALUES (:v)"), {"v": v}
             )
             return v
@@ -752,30 +813,79 @@ async def test_rewind_drops_async_datasource_checkpoints(
         @DBOS.workflow()
         async def writer(name: str) -> int:
             run = run_count(name)
-            await ds.run_tx_step_async(None, insert_row, "a")
-            await ds.run_tx_step_async(None, insert_row, "b")
+            await first.run_tx_step_async(None, insert_first, "a")
+            await second.run_tx_step_async(None, insert_second, "b")
+            await first.run_tx_step_async(None, insert_first, "c")
+            await second.run_tx_step_async(None, insert_second, "d")
             return run
 
         workflow_id = str(uuid.uuid4())
         with SetWorkflowID(workflow_id):
             assert await writer("async-datasource") == 1
-        # Rewind to the second transaction.
-        handle = await DBOS.rewind_workflow_async(workflow_id, start_step=2)
+        assert await datasource_checkpoints_async(first.engine, workflow_id) == [1, 3]
+        assert await datasource_checkpoints_async(second.engine, workflow_id) == [2, 4]
+
+        handle = await DBOS.rewind_workflow_async(workflow_id)
         assert await handle.get_result() == 2
-        async with ds.engine.begin() as c:
-            rows = sorted((await c.execute(sa.text("SELECT v FROM rows"))).scalars())
-            steps = sorted(
-                (
-                    await c.execute(
-                        sa.select(DatasourceSchema.datasource_outputs.c.step_id).where(
-                            DatasourceSchema.datasource_outputs.c.workflow_id
-                            == workflow_id
-                        )
-                    )
-                ).scalars()
-            )
-        assert rows == ["a", "b", "b"]
-        assert steps == [1, 2]
-    finally:
-        DBOS.destroy(destroy_registry=True)
-        await ds.engine.dispose()
+        assert await datasource_checkpoints_async(first.engine, workflow_id) == [1, 3]
+        assert await datasource_checkpoints_async(second.engine, workflow_id) == [2, 4]
+        # Everything ran again.
+        assert await table_rows_async(first.engine) == ["a", "a", "c", "c"]
+        assert await table_rows_async(second.engine) == ["b", "b", "d", "d"]
+
+
+def test_rewind_restores_datasource_checkpoints_when_the_rewind_fails(
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with launched_with_datasources(config, tmp_path, 2) as (dbos, (first, second)):
+        insert_first, insert_second = inserter(first), inserter(second)
+
+        @DBOS.workflow()
+        def writer(name: str) -> int:
+            run = run_count(name)
+            first.run_tx_step(None, insert_first, "a")
+            second.run_tx_step(None, insert_second, "b")
+            first.run_tx_step(None, insert_first, "c")
+            second.run_tx_step(None, insert_second, "d")
+            return run
+
+        workflow_id = start(writer, "compensation")
+        assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
+        assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
+
+        # The system database rewind fails after both datasources were swept:
+        # the rows come back and the workflow is left as it was.
+        real_rewind = dbos._sys_db.rewind_workflow
+
+        def failing_rewind(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("system database unavailable")
+
+        monkeypatch.setattr(dbos._sys_db, "rewind_workflow", failing_rewind)
+        with pytest.raises(RuntimeError, match="system database unavailable"):
+            DBOS.rewind_workflow(workflow_id)
+        assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
+        assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
+        assert DBOS.retrieve_workflow(workflow_id).get_status().status == "SUCCESS"
+        assert runs["compensation"] == 1
+
+        # One datasource fails mid-sweep: what the others already gave up is put back.
+        monkeypatch.setattr(dbos._sys_db, "rewind_workflow", real_rewind)
+
+        def failing_delete(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("datasource down")
+
+        monkeypatch.setattr(second, "_delete_checkpoints", failing_delete)
+        with pytest.raises(RuntimeError, match="datasource down"):
+            DBOS.rewind_workflow(workflow_id)
+        assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
+        assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
+        assert DBOS.retrieve_workflow(workflow_id).get_status().status == "SUCCESS"
+
+        # Restored checkpoints are real ones: a rewind cut above them replays them.
+        monkeypatch.undo()
+        assert DBOS.rewind_workflow(workflow_id, start_step=2).get_result() == 2
+        assert table_rows(first.engine) == ["a", "c", "c"]
+        assert table_rows(second.engine) == ["b", "b", "d", "d"]

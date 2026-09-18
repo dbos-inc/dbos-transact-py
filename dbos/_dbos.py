@@ -2404,20 +2404,45 @@ class DBOS:
                 f"Cannot rewind {workflow_id} ({status['status']}): only a workflow "
                 "in a terminal state can be rewound, so cancel it first"
             )
-        for ds in self._registry.datasources:
-            if isinstance(ds, AsyncSQLAlchemyDatasource):
-                self._background_event_loop.submit_coroutine(
-                    ds._delete_checkpoints(workflow_id, start_step)
-                )
-            else:
-                ds._delete_checkpoints(workflow_id, start_step)
-        self._sys_db.rewind_workflow(
-            workflow_id,
-            start_step,
-            application_version=application_version,
-            queue_name=queue_name,
-            queue_partition_key=queue_partition_key,
-        )
+        # Datasource checkpoints go first, so a failure past this point puts back
+        # what was deleted rather than leaving a rewound workflow with stale rows.
+        deleted: list[
+            tuple[
+                Union[SQLAlchemyDatasource, AsyncSQLAlchemyDatasource],
+                list[dict[str, Any]],
+            ]
+        ] = []
+        try:
+            for ds in self._registry.datasources:
+                if isinstance(ds, AsyncSQLAlchemyDatasource):
+                    rows = self._background_event_loop.submit_coroutine(
+                        ds._delete_checkpoints(workflow_id, start_step)
+                    )
+                else:
+                    rows = ds._delete_checkpoints(workflow_id, start_step)
+                deleted.append((ds, rows))
+            self._sys_db.rewind_workflow(
+                workflow_id,
+                start_step,
+                application_version=application_version,
+                queue_name=queue_name,
+                queue_partition_key=queue_partition_key,
+            )
+        except BaseException:
+            for ds, rows in deleted:
+                try:
+                    if isinstance(ds, AsyncSQLAlchemyDatasource):
+                        self._background_event_loop.submit_coroutine(
+                            ds._restore_checkpoints(rows)
+                        )
+                    else:
+                        ds._restore_checkpoints(rows)
+                except Exception as e:
+                    dbos_logger.error(
+                        f"Failed to restore {len(rows)} datasource checkpoints of "
+                        f"workflow {workflow_id} after a failed rewind: {e}"
+                    )
+            raise
 
     @classmethod
     def rewind_workflow(
