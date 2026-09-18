@@ -1468,8 +1468,8 @@ class SystemDatabase(ABC):
         When a workflow is rewound, all events and state from the specified start_step
         onwards are discarded, effectively rewinding the workflow to that point.
 
-        Messages the discarded run consumed are put back, so a replayed recv sees the
-        mailbox it saw the first time.
+        Messages the discarded run consumed are deleted: they were delivered once, so
+        a replayed recv waits for new ones rather than receiving them again.
 
         Stream entries written by the discarded run remain in place, to not mess
         the offset sequence (unrelated to the function IDs and potentially incremented
@@ -1637,11 +1637,10 @@ class SystemDatabase(ABC):
                     )
                 )
 
-            # "Regurgitate" notifications. Keyed by destination, so the mapping matches
-            # on destination_uuid rather than workflow_uuid.
+            # Delete the messages the discarded steps consumed. Keyed by destination,
+            # so the mapping matches on destination_uuid rather than workflow_uuid.
             c.execute(
-                sa.update(SystemSchema.notifications)
-                .where(
+                sa.delete(SystemSchema.notifications).where(
                     sa.select(sa.literal(1))
                     .select_from(mapping)
                     .where(
@@ -1656,7 +1655,6 @@ class SystemDatabase(ABC):
                     )
                     .exists()
                 )
-                .values(consumed=False, consumed_by_function_id=None)
             )
 
             # Re-enqueue the workflows. Grouped by status so this

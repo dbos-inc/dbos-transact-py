@@ -1349,8 +1349,7 @@ def get_dbos_migration_hundredtwenty(quoted_schema: str, is_cockroach: bool) -> 
 
 
 def get_dbos_migration_hundredtwentyone(quoted_schema: str) -> str:
-    # Records which recv consumed a notification, so rewinding past that step can
-    # un-consume exactly the rows that step took and no others.
+    # Records which recv consumed a notification.
     return f"""
 ALTER TABLE {quoted_schema}."notifications"
     ADD COLUMN IF NOT EXISTS "consumed_by_function_id" INTEGER;

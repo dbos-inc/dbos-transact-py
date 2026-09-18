@@ -157,7 +157,7 @@ def mailbox(dbos: DBOS, workflow_id: str) -> List[Any]:
 #######################################
 
 
-def test_rewind_unconsumes_notifications(dbos: DBOS) -> None:
+def test_rewind_deletes_consumed_notifications(dbos: DBOS) -> None:
     @DBOS.workflow()
     def receiver(name: str) -> str:
         run = run_count(name)
@@ -167,13 +167,13 @@ def test_rewind_unconsumes_notifications(dbos: DBOS) -> None:
 
     workflow_id = str(uuid.uuid4())
     with SetWorkflowID(workflow_id):
-        handle = DBOS.start_workflow(receiver, "partial-unconsume")
+        handle = DBOS.start_workflow(receiver, "partial-delete")
     DBOS.send(workflow_id, "a", "cmd")
     DBOS.send(workflow_id, "b", "cmd")
     assert handle.get_result() == "ab:1"
 
     # Each recv stamped the row it took with its own step, which is what lets the
-    # rewind put back exactly the messages the discarded steps consumed.
+    # rewind delete exactly the messages the discarded steps consumed.
     first_recv = step_id_of(workflow_id, "DBOS.recv")
     second_recv = step_id_of(workflow_id, "DBOS.recv", occurrence=1)
     assert first_recv != second_recv
@@ -182,23 +182,20 @@ def test_rewind_unconsumes_notifications(dbos: DBOS) -> None:
         ("b", True, second_recv),
     ]
 
-    with paused_queue("rewind_unconsume_gate"):
+    with paused_queue("rewind_delete_gate"):
         dbos._sys_db.rewind_workflows(
-            [workflow_id], [second_recv], queue_name="rewind_unconsume_gate"
+            [workflow_id], [second_recv], queue_name="rewind_delete_gate"
         )
-        # Only the message the discarded steps took comes back, and its stamp is
-        # cleared. The first recv's message stays consumed: its step survived the cut.
-        assert mailbox(dbos, workflow_id) == [
-            ("a", True, first_recv),
-            ("b", False, None),
-        ]
+        # Only the message the discarded steps took is gone. The first recv's
+        # message stays consumed: its step survived the cut.
+        assert mailbox(dbos, workflow_id) == [("a", True, first_recv)]
+        # A message that arrives after the cut is what the replayed recv gets.
+        DBOS.send(workflow_id, "c", "cmd")
 
-    # The replay re-consumes it rather than blocking on an empty mailbox, and
-    # re-stamps it with the same step.
-    assert DBOS.retrieve_workflow(workflow_id).get_result() == "ab:2"
+    assert DBOS.retrieve_workflow(workflow_id).get_result() == "ac:2"
     assert mailbox(dbos, workflow_id) == [
         ("a", True, first_recv),
-        ("b", True, second_recv),
+        ("c", True, second_recv),
     ]
 
 
@@ -546,7 +543,8 @@ def test_database_state_between_rewind_and_replay(dbos: DBOS) -> None:
         assert step_ids(dbos, workflow_id) == []
         assert event_history_ids(dbos, workflow_id) == []
         assert events_of(dbos, workflow_id) == {}
-        assert [row[1] for row in mailbox(dbos, workflow_id)] == [False]
+        assert mailbox(dbos, workflow_id) == []
+        DBOS.send(workflow_id, "go", "cmd")
 
     assert DBOS.retrieve_workflow(workflow_id).get_result() == "run2"
     assert events_of(dbos, workflow_id) == {"phase": "run2"}

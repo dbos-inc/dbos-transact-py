@@ -231,9 +231,8 @@ def test_cockroachdb_rewind() -> None:
             assert DBOS.get_event(workflow_id, "below") == "kept"
             # Stream entries keep their offsets, so the replay appends after them.
             assert list(DBOS.read_stream(workflow_id, "log")) == ["a1", "b1", "a2"]
-            # Un-consumed by the rewind, then left alone since the replay never recvs.
-            notifications = dbos._sys_db.get_all_notifications(workflow_id)
-            assert [n["consumed"] for n in notifications] == [False]
+            # Consumed past the cut, so deleted by the rewind.
+            assert dbos._sys_db.get_all_notifications(workflow_id) == []
 
         # Refusals and validation still apply.
         with pytest.raises(DBOSNonExistentWorkflowError):
