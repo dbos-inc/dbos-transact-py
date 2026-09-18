@@ -183,8 +183,8 @@ def test_rewind_deletes_consumed_notifications(dbos: DBOS) -> None:
     ]
 
     with paused_queue("rewind_delete_gate"):
-        dbos._sys_db.rewind_workflows(
-            [workflow_id], [second_recv], queue_name="rewind_delete_gate"
+        dbos._sys_db.rewind_workflow(
+            workflow_id, second_recv, queue_name="rewind_delete_gate"
         )
         # Only the message the discarded steps took is gone. The first recv's
         # message stays consumed: its step survived the cut.
@@ -230,9 +230,7 @@ def test_rewind_unpublishes_events(dbos: DBOS) -> None:
     cut = step_id_of(workflow_id, "DBOS.setEvent", occurrence=2)
 
     with paused_queue("rewind_events_gate"):
-        dbos._sys_db.rewind_workflows(
-            [workflow_id], [cut], queue_name="rewind_events_gate"
-        )
+        dbos._sys_db.rewind_workflow(workflow_id, cut, queue_name="rewind_events_gate")
         assert events_of(dbos, workflow_id) == {
             # Never touched past the cut, so left exactly as it was.
             "below": "kept",
@@ -272,7 +270,7 @@ def test_rewind_keeps_stream_entries(dbos: DBOS) -> None:
     workflow_id = start(writer, "stream-keep")
     assert list(DBOS.read_stream(workflow_id, "log")) == ["a1", "b1"]
 
-    dbos._sys_db.rewind_workflows([workflow_id], [1])
+    dbos._sys_db.rewind_workflow(workflow_id, 1)
     assert DBOS.retrieve_workflow(workflow_id).get_result() == "run2"
 
     # Offsets are addresses peers read by, so the discarded run's entries keep
@@ -293,13 +291,13 @@ def test_rewind_reopens_a_closed_stream(dbos: DBOS) -> None:
 
     # The sentinel terminates every reader that reaches it, so one left over from
     # the discarded run would hide the replay's entry with no error anywhere.
-    dbos._sys_db.rewind_workflows([workflow_id], [1])
+    dbos._sys_db.rewind_workflow(workflow_id, 1)
     assert DBOS.retrieve_workflow(workflow_id).get_result() == "run2"
     assert list(DBOS.read_stream(workflow_id, "out")) == ["v1", "v2"]
 
     # Cut above the close, the sentinel is not the discarded run's to undo: its
     # step survives, so nothing replays it and it has to stay.
-    dbos._sys_db.rewind_workflows([workflow_id], [3])
+    dbos._sys_db.rewind_workflow(workflow_id, 3)
     assert DBOS.retrieve_workflow(workflow_id).get_result() == "run3"
     rows = stream_rows(dbos, workflow_id, "out")
     assert [row[1] for row in rows] == ["v1", "v2", "__DBOS_STREAM_CLOSED__"]
@@ -331,7 +329,7 @@ def test_rewound_parent_adopts_its_existing_child(dbos: DBOS) -> None:
     child_id = f"{workflow_id}-1"
     assert DBOS.retrieve_workflow(child_id).get_result() == 42
 
-    dbos._sys_db.rewind_workflows([workflow_id], [1])
+    dbos._sys_db.rewind_workflow(workflow_id, 1)
     assert DBOS.retrieve_workflow(workflow_id).get_result() == 44
 
     assert len(child_runs) == 1
@@ -365,48 +363,20 @@ def test_rewind_child_then_parent_to_repair_a_failure(dbos: DBOS) -> None:
     assert DBOS.retrieve_workflow(workflow_id).get_status().status == "ERROR"
 
     # Repair the child on its own first.
-    dbos._sys_db.rewind_workflows([child_id], [1])
+    dbos._sys_db.rewind_workflow(child_id, 1)
     assert DBOS.retrieve_workflow(child_id).get_result() == 42
 
     # Then rewind the parent to the getResult that failed. The earlier step that
     # started the child survives, and the replay picks up the repaired result.
     get_result_step = step_id_of(workflow_id, "DBOS.getResult")
-    dbos._sys_db.rewind_workflows([workflow_id], [get_result_step])
+    dbos._sys_db.rewind_workflow(workflow_id, get_result_step)
     assert DBOS.retrieve_workflow(workflow_id).get_result() == 42
     assert len(child_runs) == 2
 
 
 #######################################
-## Batching, queues, partitions
+## Queues, partitions, versions
 #######################################
-
-
-def test_rewind_batch_with_per_workflow_steps(dbos: DBOS) -> None:
-    executed: List[str] = []
-
-    @DBOS.step()
-    def marker(name: str, label: str) -> str:
-        executed.append(f"{name}{label}")
-        return label
-
-    @DBOS.workflow()
-    def two_steps(name: str) -> str:
-        run = run_count(name)
-        return f"{marker(name, 'a')}{marker(name, 'b')}{run}"
-
-    ids = [start(two_steps, f"batch{i}") for i in range(2)]
-    assert sorted(executed) == ["batch0a", "batch0b", "batch1a", "batch1b"]
-    executed.clear()
-
-    # First workflow keeps its first step, second is rewound to the beginning.
-    dbos._sys_db.rewind_workflows(ids, [2, 1])
-    for workflow_id in ids:
-        assert DBOS.retrieve_workflow(workflow_id).get_result() == "ab2"
-
-    # batch0 re-ran only its second step while batch1 re-ran both.
-    assert sorted(executed) == ["batch0b", "batch1a", "batch1b"]
-    assert step_ids(dbos, ids[0]) == [1, 2]
-    assert step_ids(dbos, ids[1]) == [1, 2]
 
 
 def test_rewind_onto_a_queue_with_a_partition_key(dbos: DBOS) -> None:
@@ -422,9 +392,9 @@ def test_rewind_onto_a_queue_with_a_partition_key(dbos: DBOS) -> None:
             handle = DBOS.enqueue_workflow("rewind_partitioned", counter, "partition")
     assert handle.get_result() == 1
 
-    dbos._sys_db.rewind_workflows(
-        [workflow_id],
-        [1],
+    dbos._sys_db.rewind_workflow(
+        workflow_id,
+        1,
         queue_name="rewind_partitioned",
         queue_partition_key="repaired",
     )
@@ -434,7 +404,7 @@ def test_rewind_onto_a_queue_with_a_partition_key(dbos: DBOS) -> None:
     assert status.queue_partition_key == "repaired"
 
     # Omitting the key clears it, omitting the queue falls back to the internal queue
-    dbos._sys_db.rewind_workflows([workflow_id], [1])
+    dbos._sys_db.rewind_workflow(workflow_id, 1)
     assert DBOS.retrieve_workflow(workflow_id).get_result() == 3
     status = DBOS.retrieve_workflow(workflow_id).get_status()
     assert status.queue_name == INTERNAL_QUEUE_NAME
@@ -451,8 +421,8 @@ def test_rewind_onto_a_different_application_version(dbos: DBOS) -> None:
 
     # Dequeueing matches on application version, so a workflow restamped with a
     # version nothing is running on stays enqueued instead of replaying.
-    dbos._sys_db.rewind_workflows(
-        [workflow_id], [1], application_version="not-this-deployment"
+    dbos._sys_db.rewind_workflow(
+        workflow_id, 1, application_version="not-this-deployment"
     )
     assert status_row(dbos, workflow_id).application_version == "not-this-deployment"
     time.sleep(2.5)  # several queue polls, any of which would pick it up
@@ -462,38 +432,19 @@ def test_rewind_onto_a_different_application_version(dbos: DBOS) -> None:
     # Getting out of that takes a cancel first: the workflow is ENQUEUED now, and
     # only a terminal workflow can be rewound.
     with pytest.raises(DBOSException, match="only a workflow in a terminal state"):
-        dbos._sys_db.rewind_workflows(
-            [workflow_id], [1], application_version=running_version
+        dbos._sys_db.rewind_workflow(
+            workflow_id, 1, application_version=running_version
         )
     DBOS.cancel_workflow(workflow_id)
 
     # Restamped with the version this executor is running, it replays
-    dbos._sys_db.rewind_workflows(
-        [workflow_id], [1], application_version=running_version
-    )
+    dbos._sys_db.rewind_workflow(workflow_id, 1, application_version=running_version)
     assert DBOS.retrieve_workflow(workflow_id).get_result() == 2
 
     # Omitted, the workflow keeps the version it already had
-    dbos._sys_db.rewind_workflows([workflow_id], [1])
+    dbos._sys_db.rewind_workflow(workflow_id, 1)
     assert DBOS.retrieve_workflow(workflow_id).get_result() == 3
     assert status_row(dbos, workflow_id).application_version == running_version
-
-
-def test_rewind_batch_is_all_or_nothing(dbos: DBOS) -> None:
-    @DBOS.workflow()
-    def counter(name: str) -> int:
-        return run_count(name)
-
-    good = start(counter, "atomic")
-    missing = str(uuid.uuid4())
-
-    with pytest.raises(DBOSNonExistentWorkflowError):
-        dbos._sys_db.rewind_workflows([good, missing], [1, 1])
-
-    # The healthy workflow in the batch was not touched.
-    assert DBOS.retrieve_workflow(good).get_status().status == "SUCCESS"
-    assert DBOS.retrieve_workflow(good).get_result() == 1
-    assert runs["atomic"] == 1
 
 
 #######################################
@@ -523,8 +474,8 @@ def test_database_state_between_rewind_and_replay(dbos: DBOS) -> None:
     assert before.completed_at is not None
 
     with paused_queue("rewind_gate"):
-        dbos._sys_db.rewind_workflows(
-            [workflow_id], [1], queue_name="rewind_gate", queue_partition_key="pk"
+        dbos._sys_db.rewind_workflow(
+            workflow_id, 1, queue_name="rewind_gate", queue_partition_key="pk"
         )
 
         after = status_row(dbos, workflow_id)
@@ -568,14 +519,14 @@ def test_rewind_refuses_an_active_workflow(dbos: DBOS) -> None:
             == WorkflowStatusString.PENDING.value
         )
         with pytest.raises(DBOSException, match="terminal state"):
-            dbos._sys_db.rewind_workflows([held.workflow_id], [1])
+            dbos._sys_db.rewind_workflow(held.workflow_id, 1)
 
         queued = str(uuid.uuid4())
         with SetWorkflowID(queued):
             DBOS.enqueue_workflow("rewind_active", counter, "queued")
         assert status_row(dbos, queued).status == WorkflowStatusString.ENQUEUED.value
         with pytest.raises(DBOSException, match="terminal state"):
-            dbos._sys_db.rewind_workflows([queued], [1])
+            dbos._sys_db.rewind_workflow(queued, 1)
 
     assert DBOS.retrieve_workflow(queued).get_result() == 1
 
@@ -602,13 +553,13 @@ def test_rewind_a_cancelled_workflow(dbos: DBOS) -> None:
     released.set()
     assert status_row(dbos, workflow_id).status == WorkflowStatusString.CANCELLED.value
 
-    dbos._sys_db.rewind_workflows([workflow_id], [1])
+    dbos._sys_db.rewind_workflow(workflow_id, 1)
     assert DBOS.retrieve_workflow(workflow_id).get_result() == "run2"
 
 
 def test_rewind_refuses_a_missing_workflow(dbos: DBOS) -> None:
     with pytest.raises(DBOSNonExistentWorkflowError):
-        dbos._sys_db.rewind_workflows([str(uuid.uuid4())], [1])
+        dbos._sys_db.rewind_workflow(str(uuid.uuid4()), 1)
 
 
 def test_rewind_input_validation(dbos: DBOS) -> None:
@@ -618,17 +569,10 @@ def test_rewind_input_validation(dbos: DBOS) -> None:
 
     workflow_id = start(counter, "validation")
 
-    # An empty batch is a no-op, not an error.
-    dbos._sys_db.rewind_workflows([], [])
-
-    with pytest.raises(ValueError, match="same length"):
-        dbos._sys_db.rewind_workflows([workflow_id], [1, 2])
-    with pytest.raises(ValueError, match="duplicates"):
-        dbos._sys_db.rewind_workflows([workflow_id, workflow_id], [1, 1])
     with pytest.raises(ValueError, match="must be >= 1"):
-        dbos._sys_db.rewind_workflows([workflow_id], [0])
+        dbos._sys_db.rewind_workflow(workflow_id, 0)
 
-    # None of the above wrote anything.
+    # That wrote nothing.
     assert DBOS.retrieve_workflow(workflow_id).get_status().status == "SUCCESS"
     assert runs["validation"] == 1
 

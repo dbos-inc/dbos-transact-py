@@ -886,9 +886,9 @@ class DBOSClient:
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
     ) -> "WorkflowHandle[Any]":
-        self._sys_db.rewind_workflows(
-            [workflow_id],
-            [1 if start_step is None else start_step],
+        self._sys_db.rewind_workflow(
+            workflow_id,
+            1 if start_step is None else start_step,
             application_version=application_version,
             queue_name=queue_name,
             queue_partition_key=queue_partition_key,
@@ -905,9 +905,9 @@ class DBOSClient:
         queue_partition_key: Optional[str] = None,
     ) -> "WorkflowHandleAsync[Any]":
         await asyncio.to_thread(
-            self._sys_db.rewind_workflows,
-            [workflow_id],
-            [1 if start_step is None else start_step],
+            self._sys_db.rewind_workflow,
+            workflow_id,
+            1 if start_step is None else start_step,
             application_version=application_version,
             queue_name=queue_name,
             queue_partition_key=queue_partition_key,

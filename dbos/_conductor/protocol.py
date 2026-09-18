@@ -59,7 +59,7 @@ class MessageType(str, Enum):
     FORK_FROM_FAILURE = "fork_from_failure"
     LIST_QUEUES = "list_queues"
     GET_QUEUE = "get_queue"
-    REWIND_WORKFLOWS = "rewind_workflows"
+    REWIND_WORKFLOW = "rewind_workflow"
 
 
 T = TypeVar("T", bound="BaseMessage")
@@ -464,21 +464,21 @@ class ForkFromFailureResponse(BaseMessage):
     error_message: Optional[str] = None
 
 
-class RewindWorkflowsBody(TypedDict, total=False):
-    workflow_ids: List[str]
-    start_steps: Optional[List[int]]
+class RewindWorkflowBody(TypedDict, total=False):
+    workflow_id: str
+    start_step: Optional[int]
     application_version: Optional[str]
     queue_name: Optional[str]
     queue_partition_key: Optional[str]
 
 
 @dataclass
-class RewindWorkflowsRequest(BaseMessage):
-    body: RewindWorkflowsBody
+class RewindWorkflowRequest(BaseMessage):
+    body: RewindWorkflowBody
 
 
 @dataclass
-class RewindWorkflowsResponse(BaseMessage):
+class RewindWorkflowResponse(BaseMessage):
     success: bool
     error_message: Optional[str] = None
 

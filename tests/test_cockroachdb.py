@@ -218,9 +218,10 @@ def test_cockroachdb_rewind() -> None:
             notifications = dbos._sys_db.get_all_notifications(workflow_id)
             assert [n["consumed"] for n in notifications] == [True]
 
-        # Two different cuts in one batch, so the per-workflow mapping is real:
-        # the first keeps its first set_event, the second is rewound entirely.
-        dbos._sys_db.rewind_workflows(ids, [2, 1])
+        # Two different cuts: the first keeps its first set_event, the second is
+        # rewound entirely.
+        dbos._sys_db.rewind_workflow(ids[0], 2)
+        dbos._sys_db.rewind_workflow(ids[1], 1)
 
         for i, workflow_id in enumerate(ids):
             assert DBOS.retrieve_workflow(workflow_id).get_result() == "second"
@@ -236,9 +237,9 @@ def test_cockroachdb_rewind() -> None:
 
         # Refusals and validation still apply.
         with pytest.raises(DBOSNonExistentWorkflowError):
-            dbos._sys_db.rewind_workflows([str(uuid.uuid4())], [1])
-        with pytest.raises(ValueError, match="duplicates"):
-            dbos._sys_db.rewind_workflows([ids[0], ids[0]], [1, 1])
+            dbos._sys_db.rewind_workflow(str(uuid.uuid4()), 1)
+        with pytest.raises(ValueError, match="must be >= 1"):
+            dbos._sys_db.rewind_workflow(ids[0], 0)
     finally:
         DBOS.destroy(destroy_registry=True)
 

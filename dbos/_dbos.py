@@ -2388,9 +2388,9 @@ class DBOS:
 
         def fn() -> None:
             dbos_logger.info(f"Rewinding workflow: {workflow_id} to step {step}")
-            _get_dbos_instance()._sys_db.rewind_workflows(
-                [workflow_id],
-                [step],
+            _get_dbos_instance()._sys_db.rewind_workflow(
+                workflow_id,
+                step,
                 application_version=application_version,
                 queue_name=queue_name,
                 queue_partition_key=queue_partition_key,
@@ -2419,9 +2419,9 @@ class DBOS:
 
         def fnres() -> None:
             dbos_logger.info(f"Rewinding workflow: {workflow_id} to step {step}")
-            _get_dbos_instance()._sys_db.rewind_workflows(
-                [workflow_id],
-                [step],
+            _get_dbos_instance()._sys_db.rewind_workflow(
+                workflow_id,
+                step,
                 application_version=application_version,
                 queue_name=queue_name,
                 queue_partition_key=queue_partition_key,
