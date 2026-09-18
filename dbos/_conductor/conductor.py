@@ -353,8 +353,9 @@ class ConductorWebsocket(threading.Thread):
                                     ),
                                 )
                             except Exception as e:
-                                error_message = f"Exception encountered when rewinding workflows {rewind_ids}: {traceback.format_exc()}"
-                                self.dbos.logger.error(error_message)
+                                error_message = self._report_exception(
+                                    "Exception encountered when rewinding workflow"
+                                )
                                 rewind_success = False
 
                             rewind_response = p.RewindWorkflowResponse(
