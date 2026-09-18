@@ -115,6 +115,7 @@ from ._sys_db import (
 from ._tracer import DBOSTracer, dbos_tracer
 
 if TYPE_CHECKING:
+    from ._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
     from ._kafka import (
         KafkaConsumerRegistration,
         KafkaOrdering,
@@ -216,6 +217,18 @@ class DBOSRegistry:
         self.kafka_registrations: list[KafkaConsumerRegistration] = []
         # Polling interval for the internal Kafka queues, from DBOSConfig; None keeps the Queue default.
         self.kafka_queue_polling_interval_sec: Optional[float] = None
+        # Every datasource constructed in this process, so a rewind can drop the
+        # checkpoints they hold outside the system database.
+        self.datasources: list[
+            Union["SQLAlchemyDatasource", "AsyncSQLAlchemyDatasource"]
+        ] = []
+
+    def register_datasource(
+        self, ds: Union["SQLAlchemyDatasource", "AsyncSQLAlchemyDatasource"]
+    ) -> None:
+        if self.dbos is not None and self.dbos._launched:
+            raise DBOSException("Datasources must be created before DBOS.launch()")
+        self.datasources.append(ds)
 
     def register_wf_function(self, name: str, wrapped_func: F) -> None:
         if name in self.workflow_info_map:
