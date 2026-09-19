@@ -12,6 +12,7 @@ from typing import (
     List,
     Optional,
     TypeVar,
+    Sequence,
     Union,
 )
 from zoneinfo import ZoneInfo
@@ -70,7 +71,13 @@ from dbos._sys_db import (
     WorkflowStatus,
     WorkflowStatusInternal,
 )
-from dbos._workflow_commands import fork_workflow, get_workflow
+from dbos._workflow_commands import (
+    Datasource,
+    fork_workflow,
+    get_workflow,
+    rewind_workflow,
+    rewind_workflow_async,
+)
 
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
@@ -885,8 +892,17 @@ class DBOSClient:
         application_version: Optional[str] = None,
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
+        datasources: Optional[Sequence[Datasource]] = None,
     ) -> "WorkflowHandle[Any]":
-        self._sys_db.rewind_workflow(
+        """Rewind a workflow to a step (default: the first). Only a workflow in a
+        terminal state can be rewound. Works without a running application.
+
+        Checkpoints held in datasources are dropped only for the datasources passed
+        in; a workflow whose datasources are not listed replays their stale
+        checkpoints. Sync datasources only here; the async variant takes both."""
+        rewind_workflow(
+            self._sys_db,
+            datasources or [],
             workflow_id,
             1 if start_step is None else start_step,
             application_version=application_version,
@@ -903,9 +919,17 @@ class DBOSClient:
         application_version: Optional[str] = None,
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
+        datasources: Optional[Sequence[Datasource]] = None,
     ) -> "WorkflowHandleAsync[Any]":
-        await asyncio.to_thread(
-            self._sys_db.rewind_workflow,
+        """Rewind a workflow to a step (default: the first). Only a workflow in a
+        terminal state can be rewound. Works without a running application.
+
+        Checkpoints held in datasources are dropped only for the datasources passed
+        in; a workflow whose datasources are not listed replays their stale
+        checkpoints."""
+        await rewind_workflow_async(
+            self._sys_db,
+            datasources or [],
             workflow_id,
             1 if start_step is None else start_step,
             application_version=application_version,
