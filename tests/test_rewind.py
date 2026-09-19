@@ -607,7 +607,7 @@ def test_public_rewind_api(dbos: DBOS, client: DBOSClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_public_rewind_api_async(dbos: DBOS) -> None:
+async def test_public_rewind_api_async(dbos: DBOS, client: DBOSClient) -> None:
     @DBOS.workflow()
     def counter(name: str) -> int:
         return run_count(name)
@@ -615,6 +615,10 @@ async def test_public_rewind_api_async(dbos: DBOS) -> None:
     workflow_id = start(counter, "asyncsingle")
     handle = await DBOS.rewind_workflow_async(workflow_id, start_step=1)
     assert await handle.get_result() == 2
+
+    workflow_id = start(counter, "asyncclientsingle")
+    client_handle = await client.rewind_workflow_async(workflow_id)
+    assert await client_handle.get_result() == 2
 
 
 def test_rewind_from_inside_a_workflow_is_checkpointed(dbos: DBOS) -> None:
@@ -936,13 +940,22 @@ def test_client_rewind_clears_the_given_datasources(
 
 
 @pytest.mark.asyncio
-async def test_client_rewind_refuses_async_datasources(
+async def test_async_client_rewind_clears_the_given_datasources(
     config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
 ) -> None:
-    async with launched_with_async_datasources(config, tmp_path, 1) as (dbos, (ds,)):
+    async with launched_with_async_datasources(config, tmp_path, 2) as (
+        dbos,
+        (first, second),
+    ):
 
-        async def insert(v: str) -> str:
-            await ds.sql_session().execute(
+        async def insert_first(v: str) -> str:
+            await first.sql_session().execute(
+                sa.text("INSERT INTO rows (v) VALUES (:v)"), {"v": v}
+            )
+            return v
+
+        async def insert_second(v: str) -> str:
+            await second.sql_session().execute(
                 sa.text("INSERT INTO rows (v) VALUES (:v)"), {"v": v}
             )
             return v
@@ -950,7 +963,10 @@ async def test_client_rewind_refuses_async_datasources(
         @DBOS.workflow()
         async def writer(name: str) -> int:
             run = run_count(name)
-            await ds.run_tx_step_async(None, insert, "a")
+            await first.run_tx_step_async(None, insert_first, "a")
+            await second.run_tx_step_async(None, insert_second, "b")
+            await first.run_tx_step_async(None, insert_first, "c")
+            await second.run_tx_step_async(None, insert_second, "d")
             return run
 
         workflow_id = str(uuid.uuid4())
@@ -959,14 +975,28 @@ async def test_client_rewind_refuses_async_datasources(
         assert config["system_database_url"] is not None
         client = DBOSClient(system_database_url=config["system_database_url"])
         try:
-            # The client cannot drive an async datasource, and says so before
+            # The sync client cannot drive an async datasource, and says so before
             # touching anything.
             with pytest.raises(DBOSException, match="async rewind"):
-                client.rewind_workflow(workflow_id, datasources=[ds])
-            assert await datasource_checkpoints_async(ds.engine, workflow_id) == [1]
-            status = await (
-                await DBOS.retrieve_workflow_async(workflow_id)
-            ).get_status()
-            assert status.status == "SUCCESS"
+                client.rewind_workflow(workflow_id, datasources=[first])
+            assert await datasource_checkpoints_async(first.engine, workflow_id) == [
+                1,
+                3,
+            ]
+
+            handle = await client.rewind_workflow_async(
+                workflow_id, start_step=3, datasources=[first, second]
+            )
+            assert await handle.get_result() == 2
+            assert await datasource_checkpoints_async(first.engine, workflow_id) == [
+                1,
+                3,
+            ]
+            assert await datasource_checkpoints_async(second.engine, workflow_id) == [
+                2,
+                4,
+            ]
+            assert await table_rows_async(first.engine) == ["a", "c", "c"]
+            assert await table_rows_async(second.engine) == ["b", "d", "d"]
         finally:
             client.destroy()

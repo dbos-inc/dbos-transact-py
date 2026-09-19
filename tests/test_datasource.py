@@ -1842,12 +1842,18 @@ def test_sync_ds_delete_checkpoints(sync_ds: SQLAlchemyDatasource, dbos: DBOS) -
         my_workflow()
     assert _checkpoint_step_ids(sync_ds.engine, wfid) == [1, 2]
 
-    sync_ds._delete_checkpoints(wfid, 2)
+    deleted = sync_ds._delete_checkpoints(wfid, 2)
+    assert [row["step_id"] for row in deleted] == [2]
     assert _checkpoint_step_ids(sync_ds.engine, wfid) == [1]
-    sync_ds._delete_checkpoints(wfid, 1)
+    deleted += sync_ds._delete_checkpoints(wfid, 1)
     assert _checkpoint_step_ids(sync_ds.engine, wfid) == []
     # Other workflows are untouched.
     assert _checkpoint_step_ids(sync_ds.engine, other) == [1, 2]
+
+    # What was deleted can be put back, and putting it back twice is harmless.
+    sync_ds._restore_checkpoints(deleted)
+    sync_ds._restore_checkpoints(deleted)
+    assert _checkpoint_step_ids(sync_ds.engine, wfid) == [1, 2]
 
 
 @pytest.mark.asyncio
@@ -1876,7 +1882,12 @@ async def test_async_ds_delete_checkpoints(
         await my_workflow()
     assert await step_ids(wfid) == [1, 2]
 
-    await async_ds._delete_checkpoints(wfid, 2)
+    deleted = await async_ds._delete_checkpoints(wfid, 2)
+    assert [row["step_id"] for row in deleted] == [2]
     assert await step_ids(wfid) == [1]
-    await async_ds._delete_checkpoints(wfid, 1)
+    deleted += await async_ds._delete_checkpoints(wfid, 1)
     assert await step_ids(wfid) == []
+
+    await async_ds._restore_checkpoints(deleted)
+    await async_ds._restore_checkpoints(deleted)
+    assert await step_ids(wfid) == [1, 2]

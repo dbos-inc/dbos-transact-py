@@ -217,7 +217,8 @@ class DBOSRegistry:
         self.kafka_registrations: list[KafkaConsumerRegistration] = []
         # Polling interval for the internal Kafka queues, from DBOSConfig; None keeps the Queue default.
         self.kafka_queue_polling_interval_sec: Optional[float] = None
-        # Every datasource constructed in this process.
+        # Every datasource constructed in this process, so a rewind can drop the
+        # checkpoints they hold outside the system database.
         self.datasources: list[
             Union["SQLAlchemyDatasource", "AsyncSQLAlchemyDatasource"]
         ] = []
