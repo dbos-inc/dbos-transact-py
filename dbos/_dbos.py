@@ -75,6 +75,7 @@ from ._core import (
     write_stream,
 )
 from ._croniter import croniter  # type: ignore
+from ._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 from ._enqueue_options import EnqueueOptions
 from ._queue import (
     _INTERNAL_QUEUE_CONSTRUCTION,
@@ -102,7 +103,6 @@ from ._scheduler import (
     dynamic_scheduler_loop,
     trigger_schedule,
 )
-from ._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 from ._sys_db import (
     DEFAULT_NOTIFICATION_COALESCE_SEC,
     GetEventWorkflowContext,

@@ -11,8 +11,8 @@ from typing import (
     Generic,
     List,
     Optional,
-    TypeVar,
     Sequence,
+    TypeVar,
     Union,
 )
 from zoneinfo import ZoneInfo

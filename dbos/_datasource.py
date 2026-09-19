@@ -186,19 +186,8 @@ def _register_datasource(
 
 def _delete_checkpoints_sql(workflow_id: str, start_step: int) -> Any:
     t = DatasourceSchema.datasource_outputs
-    return (
-        sa.delete(t)
-        .where((t.c.workflow_id == workflow_id) & (t.c.step_id >= start_step))
-        .returning(*t.c)
-    )
-
-
-def _restore_checkpoints_sql(dialect: Any, rows: list[dict[str, Any]]) -> Any:
-    t = DatasourceSchema.datasource_outputs
-    return (
-        dialect.insert(t)
-        .values(rows)
-        .on_conflict_do_nothing(index_elements=[t.c.workflow_id, t.c.step_id])
+    return sa.delete(t).where(
+        (t.c.workflow_id == workflow_id) & (t.c.step_id >= start_step)
     )
 
 
@@ -290,22 +279,10 @@ class AsyncSQLAlchemyDatasource(ABC):
         """Return True if the error is a retryable serialization/concurrency error."""
         pass
 
-    async def _delete_checkpoints(
-        self, workflow_id: str, start_step: int
-    ) -> list[dict[str, Any]]:
-        """Delete this workflow's checkpoints from start_step on, returning them
-        for _restore_checkpoints."""
+    async def _delete_checkpoints(self, workflow_id: str, start_step: int) -> None:
+        """Delete this workflow's checkpoints from start_step on."""
         async with self.engine.begin() as conn:
-            result = await conn.execute(
-                _delete_checkpoints_sql(workflow_id, start_step)
-            )
-            return [dict(row) for row in result.mappings()]
-
-    async def _restore_checkpoints(self, rows: list[dict[str, Any]]) -> None:
-        if not rows:
-            return
-        async with self.engine.begin() as conn:
-            await conn.execute(_restore_checkpoints_sql(self.dialect, rows))
+            await conn.execute(_delete_checkpoints_sql(workflow_id, start_step))
 
     def sql_session(self) -> AsyncSession:
         ctx = get_local_dbos_context()
@@ -665,20 +642,10 @@ class SQLAlchemyDatasource(ABC):
         """Return True if the error is a retryable serialization/concurrency error."""
         pass
 
-    def _delete_checkpoints(
-        self, workflow_id: str, start_step: int
-    ) -> list[dict[str, Any]]:
-        """Delete this workflow's checkpoints from start_step on, returning them
-        for _restore_checkpoints."""
+    def _delete_checkpoints(self, workflow_id: str, start_step: int) -> None:
+        """Delete this workflow's checkpoints from start_step on."""
         with self.engine.begin() as conn:
-            result = conn.execute(_delete_checkpoints_sql(workflow_id, start_step))
-            return [dict(row) for row in result.mappings()]
-
-    def _restore_checkpoints(self, rows: list[dict[str, Any]]) -> None:
-        if not rows:
-            return
-        with self.engine.begin() as conn:
-            conn.execute(_restore_checkpoints_sql(self.dialect, rows))
+            conn.execute(_delete_checkpoints_sql(workflow_id, start_step))
 
     def sql_session(self) -> Session:
         ctx = get_local_dbos_context()

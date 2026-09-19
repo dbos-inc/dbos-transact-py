@@ -755,7 +755,7 @@ def inserter(ds: SQLAlchemyDatasource) -> Any:
 def test_rewind_drops_datasource_checkpoints(
     config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
 ) -> None:
-    """Every registered datasource is swept. A checkpoint left past the cut would
+    """Every registered datasource is cleared. A checkpoint left past the cut would
     otherwise be replayed as the transaction's result without running it."""
     with launched_with_datasources(config, tmp_path, 2) as (dbos, (first, second)):
         insert_first, insert_second = inserter(first), inserter(second)
@@ -834,12 +834,15 @@ async def test_rewind_drops_async_datasource_checkpoints(
         assert await table_rows_async(second.engine) == ["b", "b", "d", "d"]
 
 
-def test_rewind_restores_datasource_checkpoints_when_the_rewind_fails(
+def test_rewind_cancels_the_workflow_when_a_checkpoint_delete_fails(
     config: DBOSConfig,
     cleanup_test_databases: None,
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The system database is rewound first, then the datasources' checkpoints
+    are deleted. A checkpoint left behind by a failed delete would be replayed as a transaction's
+    result, so the workflow is cancelled instead; rewinding it again repairs it."""
     with launched_with_datasources(config, tmp_path, 2) as (dbos, (first, second)):
         insert_first, insert_second = inserter(first), inserter(second)
 
@@ -852,12 +855,11 @@ def test_rewind_restores_datasource_checkpoints_when_the_rewind_fails(
             second.run_tx_step(None, insert_second, "d")
             return run
 
-        workflow_id = start(writer, "compensation")
+        workflow_id = start(writer, "delete-failure")
         assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
         assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
 
-        # The system database rewind fails after both datasources were swept:
-        # the rows come back and the workflow is left as it was.
+        # The system database rewind fails: no datasource was touched.
         real_rewind = dbos._sys_db.rewind_workflow
 
         def failing_rewind(*args: Any, **kwargs: Any) -> None:
@@ -869,29 +871,37 @@ def test_rewind_restores_datasource_checkpoints_when_the_rewind_fails(
         assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
         assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
         assert DBOS.retrieve_workflow(workflow_id).get_status().status == "SUCCESS"
-        assert runs["compensation"] == 1
+        assert runs["delete-failure"] == 1
 
-        # One datasource fails mid-sweep: what the others already gave up is put back.
+        # One datasource's delete fails: the workflow is already re-enqueued and
+        # still holds that datasource's checkpoints, so it is cancelled.
         monkeypatch.setattr(dbos._sys_db, "rewind_workflow", real_rewind)
 
         def failing_delete(*args: Any, **kwargs: Any) -> None:
             raise RuntimeError("datasource down")
 
         monkeypatch.setattr(second, "_delete_checkpoints", failing_delete)
-        with pytest.raises(RuntimeError, match="datasource down"):
-            DBOS.rewind_workflow(workflow_id)
+        with paused_queue("rewind_delete_gate"):
+            with pytest.raises(DBOSException, match="datasource down") as excinfo:
+                DBOS.rewind_workflow(workflow_id, queue_name="rewind_delete_gate")
+            assert isinstance(excinfo.value.__cause__, RuntimeError)
+            status = DBOS.retrieve_workflow(workflow_id).get_status()
+            assert status.status == "CANCELLED"
+            assert status.queue_name is None
+            assert datasource_checkpoints(first.engine, workflow_id) == []
+            assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
+        assert runs["delete-failure"] == 1
+
+        # Rewinding the cancelled workflow deletes again and replays nothing stale.
+        monkeypatch.undo()
+        assert DBOS.rewind_workflow(workflow_id).get_result() == 2
         assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
         assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
-        assert DBOS.retrieve_workflow(workflow_id).get_status().status == "SUCCESS"
-
-        # Restored checkpoints are real ones: a rewind cut above them replays them.
-        monkeypatch.undo()
-        assert DBOS.rewind_workflow(workflow_id, start_step=2).get_result() == 2
-        assert table_rows(first.engine) == ["a", "c", "c"]
+        assert table_rows(first.engine) == ["a", "a", "c", "c"]
         assert table_rows(second.engine) == ["b", "b", "d", "d"]
 
 
-def test_client_rewind_sweeps_the_given_datasources(
+def test_client_rewind_clears_the_given_datasources(
     config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
 ) -> None:
     with launched_with_datasources(config, tmp_path, 2) as (dbos, (first, second)):
@@ -910,7 +920,7 @@ def test_client_rewind_sweeps_the_given_datasources(
         assert config["system_database_url"] is not None
         client = DBOSClient(system_database_url=config["system_database_url"])
         try:
-            # Given the datasources, the client sweeps them like the application does.
+            # Given the datasources, the client clears them like the application does.
             handle = client.rewind_workflow(
                 workflow_id, start_step=3, datasources=[first, second]
             )
@@ -930,7 +940,7 @@ def test_client_rewind_sweeps_the_given_datasources(
 
 
 @pytest.mark.asyncio
-async def test_async_client_rewind_sweeps_the_given_datasources(
+async def test_async_client_rewind_clears_the_given_datasources(
     config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
 ) -> None:
     async with launched_with_async_datasources(config, tmp_path, 2) as (

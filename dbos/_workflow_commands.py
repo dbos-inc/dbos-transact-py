@@ -3,16 +3,11 @@ from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, Sequence, 
 
 from dbos._context import get_local_dbos_context
 from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
-from dbos._error import DBOSException, DBOSNonExistentWorkflowError
+from dbos._error import DBOSException
 from dbos._logger import dbos_logger
 from dbos._utils import generate_uuid
 
-from ._sys_db import (
-    DEFAULT_GC_BATCH_SIZE,
-    SystemDatabase,
-    WorkflowStatus,
-    workflow_is_active,
-)
+from ._sys_db import DEFAULT_GC_BATCH_SIZE, SystemDatabase, WorkflowStatus
 
 if TYPE_CHECKING:
     from ._dbos import DBOS
@@ -125,24 +120,24 @@ def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:
 
 
 Datasource = Union[SQLAlchemyDatasource, AsyncSQLAlchemyDatasource]
-_Deleted = list[tuple[Datasource, list[dict[str, Any]]]]
 
 
-def _refuse_unless_terminal(sys_db: SystemDatabase, workflow_id: str) -> None:
-    status = sys_db.get_workflow_status(workflow_id)
-    if status is None:
-        raise DBOSNonExistentWorkflowError("target", workflow_id)
-    if workflow_is_active(status["status"]):
-        raise DBOSException(
-            f"Cannot rewind {workflow_id} ({status['status']}): only a workflow in a "
-            "terminal state can be rewound, so cancel it first"
+def _cancel_after_failed_rewind(
+    sys_db: SystemDatabase, workflow_id: str, ds: Datasource, e: Exception
+) -> DBOSException:
+    """The system database rewind is committed but a datasource still holds
+    checkpoints the replay would take as results, so cancel the workflow instead
+    of letting it run. This is a best effort solution."""
+    try:
+        sys_db.cancel_workflows([workflow_id])
+    except Exception as cancel_error:
+        dbos_logger.error(
+            f"Failed to cancel workflow {workflow_id} after its rewind failed to "
+            f"drop the checkpoints of datasource {ds.engine.url}: {cancel_error}"
         )
-
-
-def _log_restore_failure(workflow_id: str, rows: int, e: Exception) -> None:
-    dbos_logger.error(
-        f"Failed to restore {rows} datasource checkpoints of workflow "
-        f"{workflow_id} after a failed rewind: {e}"
+    return DBOSException(
+        f"Rewind of {workflow_id} failed to drop the checkpoints of datasource "
+        f"{ds.engine.url}, so the workflow was cancelled; rewind it again: {e}"
     )
 
 
@@ -157,41 +152,31 @@ def rewind_workflow(
     queue_partition_key: Optional[str] = None,
     run_coroutine: Optional[Callable[[Coroutine[Any, Any, Any]], Any]] = None,
 ) -> None:
-    """Drop the datasources' checkpoints from start_step on, then rewind the
-    workflow in the system database. If anything fails, the dropped checkpoints
-    are put back. An async datasource needs run_coroutine to bridge to a loop."""
-    _refuse_unless_terminal(sys_db, workflow_id)
-    deleted: _Deleted = []
-    try:
-        for ds in datasources:
+    """Rewind the workflow in the system database, then drop the datasources'
+    checkpoints from start_step on. If a delete fails the workflow is cancelled.
+    An async datasource needs run_coroutine to bridge to a loop."""
+    for ds in datasources:
+        if isinstance(ds, AsyncSQLAlchemyDatasource) and run_coroutine is None:
+            raise DBOSException(
+                "An async datasource cannot be rewound from sync code; "
+                "use the async rewind"
+            )
+    sys_db.rewind_workflow(
+        workflow_id,
+        start_step,
+        application_version=application_version,
+        queue_name=queue_name,
+        queue_partition_key=queue_partition_key,
+    )
+    for ds in datasources:
+        try:
             if isinstance(ds, AsyncSQLAlchemyDatasource):
-                if run_coroutine is None:
-                    raise DBOSException(
-                        "An async datasource cannot be rewound from sync code; "
-                        "use the async rewind"
-                    )
-                rows = run_coroutine(ds._delete_checkpoints(workflow_id, start_step))
+                assert run_coroutine is not None
+                run_coroutine(ds._delete_checkpoints(workflow_id, start_step))
             else:
-                rows = ds._delete_checkpoints(workflow_id, start_step)
-            deleted.append((ds, rows))
-        sys_db.rewind_workflow(
-            workflow_id,
-            start_step,
-            application_version=application_version,
-            queue_name=queue_name,
-            queue_partition_key=queue_partition_key,
-        )
-    except BaseException:
-        for ds, rows in deleted:
-            try:
-                if isinstance(ds, AsyncSQLAlchemyDatasource):
-                    assert run_coroutine is not None
-                    run_coroutine(ds._restore_checkpoints(rows))
-                else:
-                    ds._restore_checkpoints(rows)
-            except Exception as e:
-                _log_restore_failure(workflow_id, len(rows), e)
-        raise
+                ds._delete_checkpoints(workflow_id, start_step)
+        except Exception as e:
+            raise _cancel_after_failed_rewind(sys_db, workflow_id, ds, e) from e
 
 
 async def rewind_workflow_async(
@@ -206,32 +191,21 @@ async def rewind_workflow_async(
 ) -> None:
     """rewind_workflow on the current loop: async datasources are awaited here,
     sync ones and the system database run in a thread."""
-    await asyncio.to_thread(_refuse_unless_terminal, sys_db, workflow_id)
-    deleted: _Deleted = []
-    try:
-        for ds in datasources:
+    await asyncio.to_thread(
+        sys_db.rewind_workflow,
+        workflow_id,
+        start_step,
+        application_version=application_version,
+        queue_name=queue_name,
+        queue_partition_key=queue_partition_key,
+    )
+    for ds in datasources:
+        try:
             if isinstance(ds, AsyncSQLAlchemyDatasource):
-                rows = await ds._delete_checkpoints(workflow_id, start_step)
+                await ds._delete_checkpoints(workflow_id, start_step)
             else:
-                rows = await asyncio.to_thread(
-                    ds._delete_checkpoints, workflow_id, start_step
-                )
-            deleted.append((ds, rows))
-        await asyncio.to_thread(
-            sys_db.rewind_workflow,
-            workflow_id,
-            start_step,
-            application_version=application_version,
-            queue_name=queue_name,
-            queue_partition_key=queue_partition_key,
-        )
-    except BaseException:
-        for ds, rows in deleted:
-            try:
-                if isinstance(ds, AsyncSQLAlchemyDatasource):
-                    await ds._restore_checkpoints(rows)
-                else:
-                    await asyncio.to_thread(ds._restore_checkpoints, rows)
-            except Exception as e:
-                _log_restore_failure(workflow_id, len(rows), e)
-        raise
+                await asyncio.to_thread(ds._delete_checkpoints, workflow_id, start_step)
+        except Exception as e:
+            raise await asyncio.to_thread(
+                _cancel_after_failed_rewind, sys_db, workflow_id, ds, e
+            ) from e
