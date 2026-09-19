@@ -176,6 +176,21 @@ def _resolve_schema(database_url: str, schema: Optional[str]) -> Optional[str]:
     return None if database_url.startswith("sqlite") else (schema or "dbos")
 
 
+def _register_datasource(
+    ds: Union["SQLAlchemyDatasource", "AsyncSQLAlchemyDatasource"],
+) -> None:
+    from dbos._dbos import _get_or_create_dbos_registry
+
+    _get_or_create_dbos_registry().register_datasource(ds)
+
+
+def _delete_checkpoints_sql(workflow_id: str, start_step: int) -> Any:
+    t = DatasourceSchema.datasource_outputs
+    return sa.delete(t).where(
+        (t.c.workflow_id == workflow_id) & (t.c.step_id >= start_step)
+    )
+
+
 class DatasourceOptions(TypedDict, total=False):
     name: Optional[str]
     isolation_level: Optional[IsolationLevel]
@@ -212,6 +227,7 @@ class AsyncSQLAlchemyDatasource(ABC):
         )
         self.sessionmaker = async_sessionmaker(bind=self.engine)
         self.serializer = serializer
+        _register_datasource(self)
 
     @staticmethod
     async def create(
@@ -262,6 +278,11 @@ class AsyncSQLAlchemyDatasource(ABC):
     def _is_serialization_error(self, error: Exception) -> bool:
         """Return True if the error is a retryable serialization/concurrency error."""
         pass
+
+    async def _delete_checkpoints(self, workflow_id: str, start_step: int) -> None:
+        """Delete this workflow's checkpoints from start_step on."""
+        async with self.engine.begin() as conn:
+            await conn.execute(_delete_checkpoints_sql(workflow_id, start_step))
 
     def sql_session(self) -> AsyncSession:
         ctx = get_local_dbos_context()
@@ -569,6 +590,7 @@ class SQLAlchemyDatasource(ABC):
         )
         self.sessionmaker = sessionmaker(bind=self.engine)
         self.serializer = serializer
+        _register_datasource(self)
 
     @staticmethod
     def create(
@@ -619,6 +641,11 @@ class SQLAlchemyDatasource(ABC):
     def _is_serialization_error(self, error: Exception) -> bool:
         """Return True if the error is a retryable serialization/concurrency error."""
         pass
+
+    def _delete_checkpoints(self, workflow_id: str, start_step: int) -> None:
+        """Delete this workflow's checkpoints from start_step on."""
+        with self.engine.begin() as conn:
+            conn.execute(_delete_checkpoints_sql(workflow_id, start_step))
 
     def sql_session(self) -> Session:
         ctx = get_local_dbos_context()

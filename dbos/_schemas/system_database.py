@@ -145,6 +145,7 @@ class SystemSchema:
         ),
         Column("serialization", Text()),
         Column("consumed", Boolean, nullable=False, server_default="false"),
+        Column("consumed_by_function_id", Integer, nullable=True),
     )
 
     workflow_events = Table(

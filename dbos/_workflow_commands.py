@@ -1,6 +1,10 @@
-from typing import TYPE_CHECKING, Optional
+import asyncio
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, Sequence, Union
 
 from dbos._context import get_local_dbos_context
+from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
+from dbos._error import DBOSException
+from dbos._logger import dbos_logger
 from dbos._utils import generate_uuid
 
 from ._sys_db import DEFAULT_GC_BATCH_SIZE, SystemDatabase, WorkflowStatus
@@ -113,3 +117,95 @@ def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:
         cutoff_epoch_timestamp_ms
     ):
         dbos.cancel_workflow(workflow_id)
+
+
+Datasource = Union[SQLAlchemyDatasource, AsyncSQLAlchemyDatasource]
+
+
+def _cancel_after_failed_rewind(
+    sys_db: SystemDatabase, workflow_id: str, ds: Datasource, e: Exception
+) -> DBOSException:
+    """The system database rewind is committed but a datasource still holds
+    checkpoints the replay would take as results, so cancel the workflow instead
+    of letting it run. This is a best effort solution."""
+    try:
+        sys_db.cancel_workflows([workflow_id])
+    except Exception as cancel_error:
+        dbos_logger.error(
+            f"Failed to cancel workflow {workflow_id} after its rewind failed to "
+            f"drop the checkpoints of datasource {ds.engine.url}: {cancel_error}"
+        )
+    return DBOSException(
+        f"Rewind of {workflow_id} failed to drop the checkpoints of datasource "
+        f"{ds.engine.url}, so the workflow was cancelled; rewind it again: {e}"
+    )
+
+
+def rewind_workflow(
+    sys_db: SystemDatabase,
+    datasources: Sequence[Datasource],
+    workflow_id: str,
+    start_step: int,
+    *,
+    application_version: Optional[str] = None,
+    queue_name: Optional[str] = None,
+    queue_partition_key: Optional[str] = None,
+    run_coroutine: Optional[Callable[[Coroutine[Any, Any, Any]], Any]] = None,
+) -> None:
+    """Rewind the workflow in the system database, then drop the datasources'
+    checkpoints from start_step on. If a delete fails the workflow is cancelled.
+    An async datasource needs run_coroutine to bridge to a loop."""
+    for ds in datasources:
+        if isinstance(ds, AsyncSQLAlchemyDatasource) and run_coroutine is None:
+            raise DBOSException(
+                "An async datasource cannot be rewound from sync code; "
+                "use the async rewind"
+            )
+    sys_db.rewind_workflow(
+        workflow_id,
+        start_step,
+        application_version=application_version,
+        queue_name=queue_name,
+        queue_partition_key=queue_partition_key,
+    )
+    for ds in datasources:
+        try:
+            if isinstance(ds, AsyncSQLAlchemyDatasource):
+                assert run_coroutine is not None
+                run_coroutine(ds._delete_checkpoints(workflow_id, start_step))
+            else:
+                ds._delete_checkpoints(workflow_id, start_step)
+        except Exception as e:
+            raise _cancel_after_failed_rewind(sys_db, workflow_id, ds, e) from e
+
+
+async def rewind_workflow_async(
+    sys_db: SystemDatabase,
+    datasources: Sequence[Datasource],
+    workflow_id: str,
+    start_step: int,
+    *,
+    application_version: Optional[str] = None,
+    queue_name: Optional[str] = None,
+    queue_partition_key: Optional[str] = None,
+) -> None:
+    """rewind_workflow on the current loop: async datasources are awaited here,
+    sync ones and the system database run in a thread."""
+    await asyncio.to_thread(
+        sys_db.rewind_workflow,
+        workflow_id,
+        start_step,
+        application_version=application_version,
+        queue_name=queue_name,
+        queue_partition_key=queue_partition_key,
+    )
+    for ds in datasources:
+        try:
+            if isinstance(ds, AsyncSQLAlchemyDatasource):
+                await ds._delete_checkpoints(workflow_id, start_step)
+            else:
+                await asyncio.to_thread(ds._delete_checkpoints, workflow_id, start_step)
+        except Exception as e:
+            raise await asyncio.to_thread(
+                _cancel_after_failed_rewind, sys_db, workflow_id, ds, e
+            ) from e
