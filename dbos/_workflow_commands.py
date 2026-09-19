@@ -1,4 +1,3 @@
-import asyncio
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, Sequence, Union
 
 from dbos._context import get_local_dbos_context
@@ -177,35 +176,3 @@ def rewind_workflow(
                 ds._delete_checkpoints(workflow_id, start_step)
         except Exception as e:
             raise _cancel_after_failed_rewind(sys_db, workflow_id, ds, e) from e
-
-
-async def rewind_workflow_async(
-    sys_db: SystemDatabase,
-    datasources: Sequence[Datasource],
-    workflow_id: str,
-    start_step: int,
-    *,
-    application_version: Optional[str] = None,
-    queue_name: Optional[str] = None,
-    queue_partition_key: Optional[str] = None,
-) -> None:
-    """rewind_workflow on the current loop: async datasources are awaited here,
-    sync ones and the system database run in a thread."""
-    await asyncio.to_thread(
-        sys_db.rewind_workflow,
-        workflow_id,
-        start_step,
-        application_version=application_version,
-        queue_name=queue_name,
-        queue_partition_key=queue_partition_key,
-    )
-    for ds in datasources:
-        try:
-            if isinstance(ds, AsyncSQLAlchemyDatasource):
-                await ds._delete_checkpoints(workflow_id, start_step)
-            else:
-                await asyncio.to_thread(ds._delete_checkpoints, workflow_id, start_step)
-        except Exception as e:
-            raise await asyncio.to_thread(
-                _cancel_after_failed_rewind, sys_db, workflow_id, ds, e
-            ) from e
