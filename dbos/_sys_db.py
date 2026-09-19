@@ -1449,6 +1449,7 @@ class SystemDatabase(ABC):
                 )
             )
 
+    @db_retry()
     def rewind_workflow(
         self,
         workflow_id: str,
