@@ -6,6 +6,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Coroutine,
     Dict,
     Generator,
     Generic,
@@ -76,7 +77,6 @@ from dbos._workflow_commands import (
     fork_workflow,
     get_workflow,
     rewind_workflow,
-    rewind_workflow_async,
 )
 
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
@@ -927,7 +927,14 @@ class DBOSClient:
         Checkpoints held in datasources are dropped only for the datasources passed
         in; a workflow whose datasources are not listed replays their stale
         checkpoints."""
-        await rewind_workflow_async(
+
+        # bridge back async datasource deletion to the client's calling loop
+        loop = asyncio.get_running_loop()
+        def run_on_caller_loop(coro: Coroutine[Any, Any, Any]) -> Any:
+            return asyncio.run_coroutine_threadsafe(coro, loop).result()
+
+        await asyncio.to_thread(
+            rewind_workflow,
             self._sys_db,
             datasources or [],
             workflow_id,
@@ -935,6 +942,7 @@ class DBOSClient:
             application_version=application_version,
             queue_name=queue_name,
             queue_partition_key=queue_partition_key,
+            run_coroutine=run_on_caller_loop,
         )
         return WorkflowHandleClientAsyncPolling[Any](workflow_id, self._sys_db)
 
