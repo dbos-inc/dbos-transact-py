@@ -15,6 +15,7 @@ from dbos import (
     Debouncer,
     DebouncerClient,
     EnqueueOptions,
+    PortableWorkflowError,
     SetEnqueueOptions,
     SetWorkflowID,
     WorkflowHandle,
@@ -945,35 +946,49 @@ def test_init_child_workflow_is_atomic(dbos: DBOS) -> None:
     assert DBOS.get_workflow_status(other_id) is None
 
 
-def test_id_reuse_reject_portable_replay(dbos: DBOS) -> None:
-    _register_reuse_workflows()
+@pytest.mark.parametrize("via", ["start", "enqueue_options"])
+def test_id_reuse_reject_portable_replay(dbos: DBOS, via: str) -> None:
+    _register_queue()
 
     @DBOS.workflow(serialization_type=WorkflowSerializationFormat.PORTABLE)
     def portable_echo(input: str) -> str:
         return input
 
+    def start_portable(child_id: str, input: str) -> None:
+        with SetWorkflowID(child_id, workflow_id_reuse_policy="reject"):
+            if via == "start":
+                DBOS.start_workflow(portable_echo, input)
+            else:
+                options: EnqueueOptions = {
+                    "queue_name": QUEUE_NAME,
+                    "workflow_name": get_dbos_func_name(portable_echo),
+                    "serialization_type": WorkflowSerializationFormat.PORTABLE,
+                }
+                DBOS.enqueue_workflow_with_options(options, input)
+
     @DBOS.workflow()
     def parent(child_id: str) -> str:
-        with SetWorkflowID(child_id, workflow_id_reuse_policy="reject"):
-            DBOS.start_workflow(portable_echo, "first").get_result()
+        start_portable(child_id, "first")
+        DBOS.retrieve_workflow(child_id).get_result()
         try:
-            with SetWorkflowID(child_id, workflow_id_reuse_policy="reject"):
-                DBOS.start_workflow(portable_echo, "second")
+            start_portable(child_id, "second")
             return "attached"
-        except Exception as e:
-            return f"{is_workflow_id_in_use_error(e)}:{type(e).__name__}"
+        except DBOSWorkflowIDInUseError as e:
+            return f"rejected:{e.workflow_status}"
 
-    child_id = f"reuse-portable-child-{uuid.uuid4()}"
-    parent_id = f"reuse-portable-parent-{uuid.uuid4()}"
+    child_id = f"reuse-portable-child-{via}-{uuid.uuid4()}"
+    parent_id = f"reuse-portable-parent-{via}-{uuid.uuid4()}"
     with SetWorkflowID(parent_id):
-        assert (
-            DBOS.start_workflow(parent, child_id).get_result()
-            == "True:DBOSWorkflowIDInUseError"
-        )
-    # The rejection was checkpointed in the child's portable format, so replay raises its portable form.
-    assert (
-        reexecute_workflow_by_id(dbos, parent_id).get_result()
-        == "True:PortableWorkflowError"
+        assert DBOS.start_workflow(parent, child_id).get_result() == "rejected:SUCCESS"
+    # The rejection is a step result in the default format, so a plain except still catches its replay.
+    assert reexecute_workflow_by_id(dbos, parent_id).get_result() == "rejected:SUCCESS"
+    rejected = [s for s in DBOS.list_workflow_steps(parent_id) if s["error"]]
+    assert len(rejected) == 1
+    assert isinstance(rejected[0]["error"], DBOSWorkflowIDInUseError)
+
+    # Checkpoints written before the default format replay in portable form; the helper still matches them.
+    assert is_workflow_id_in_use_error(
+        PortableWorkflowError("in use", DBOSWorkflowIDInUseError.__name__)
     )
     # A custom serializer may rebuild a generic error that keeps only the code.
     assert is_workflow_id_in_use_error(

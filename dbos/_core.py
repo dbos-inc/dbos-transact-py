@@ -702,11 +702,8 @@ def _init_workflow(
                         )
                     return status, False, existing_id
                 continue
-            sererr, serialization = serialize_exception(
-                e,
-                status["serialization"],
-                dbos._serializer,
-            )
+            # A step result, so the default format: replay must rebuild the exact type a caller catches.
+            sererr, serialization = serialize_exception(e, None, dbos._serializer)
             if ctx.has_parent():
                 result: OperationResultInternal = {
                     "workflow_uuid": ctx.parent_workflow_id,
@@ -1841,11 +1838,8 @@ def _persist_enqueue_with_options(
                     workflow_id = existing_id
                     break
                 continue
-            sererr, serialization = serialize_exception(
-                e,
-                status["serialization"],
-                dbos._serializer,
-            )
+            # A step result, so the default format: replay must rebuild the exact type a caller catches.
+            sererr, serialization = serialize_exception(e, None, dbos._serializer)
             if new_wf_ctx.has_parent():
                 result: OperationResultInternal = {
                     "workflow_uuid": new_wf_ctx.parent_workflow_id,
