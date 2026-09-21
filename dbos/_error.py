@@ -327,10 +327,10 @@ class DBOSWorkflowIDInUseError(DBOSException):
 
 
 def is_workflow_id_in_use_error(e: BaseException) -> bool:
-    """True if `e` is a workflow-ID-in-use rejection, including its portable-serialization replay form."""
+    """True if `e` is a workflow-ID-in-use rejection, including replayed forms that lost the class."""
     from dbos._serialization import PortableWorkflowError
 
-    if isinstance(e, DBOSWorkflowIDInUseError):
+    if getattr(e, "dbos_error_code", None) == DBOSErrorCode.WorkflowIDInUse.value:
         return True
     return (
         isinstance(e, PortableWorkflowError)

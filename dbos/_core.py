@@ -1670,11 +1670,12 @@ def _build_enqueue_with_options(
     resolved = copy.copy(options)
     if resolved.get("workflow_id") is None and new_wf_ctx.id_assigned_for_next_workflow:
         resolved["workflow_id"] = new_wf_ctx.id_assigned_for_next_workflow
-    if (
-        resolved.get("workflow_id_reuse_policy") is None
-        and new_wf_ctx.workflow_id_reuse_policy is not None
-    ):
-        resolved["workflow_id_reuse_policy"] = new_wf_ctx.workflow_id_reuse_policy
+        # The ambient policy belongs to the ambient ID, so it applies only when that ID does.
+        if (
+            resolved.get("workflow_id_reuse_policy") is None
+            and new_wf_ctx.workflow_id_reuse_policy is not None
+        ):
+            resolved["workflow_id_reuse_policy"] = new_wf_ctx.workflow_id_reuse_policy
     if local_ctx is not None:
         if (
             resolved.get("deduplication_id") is None

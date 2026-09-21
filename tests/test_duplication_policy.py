@@ -11,6 +11,7 @@ from sqlalchemy.exc import OperationalError
 from dbos import (
     DBOS,
     DBOSClient,
+    DBOSContextEnsure,
     Debouncer,
     DebouncerClient,
     EnqueueOptions,
@@ -22,6 +23,7 @@ from dbos import (
 from dbos._dbos import WorkflowHandleAsync
 from dbos._debug_trigger import DebugAction, DebugTriggers
 from dbos._error import (
+    DBOSErrorCode,
     DBOSException,
     DBOSQueueDeduplicatedError,
     DBOSWorkflowConflictIDError,
@@ -258,13 +260,21 @@ def test_return_existing_in_parent_workflow(dbos: DBOS) -> None:
         return "after-attach"
 
     @DBOS.workflow()
-    def parent_workflow(child_input: str) -> str:
-        with SetEnqueueOptions(
-            deduplication_id=dedup_id, duplication_policy="return-existing"
-        ):
-            handle: WorkflowHandle[str] = DBOS.enqueue_workflow(
-                QUEUE_NAME, gated_workflow, child_input
-            )
+    def parent_workflow(child_input: str, with_options: bool) -> str:
+        handle: WorkflowHandle[str]
+        if with_options:
+            options: EnqueueOptions = {
+                "queue_name": QUEUE_NAME,
+                "workflow_name": get_dbos_func_name(gated_workflow),
+                "deduplication_id": dedup_id,
+                "duplication_policy": "return-existing",
+            }
+            handle = DBOS.enqueue_workflow_with_options(options, child_input)
+        else:
+            with SetEnqueueOptions(
+                deduplication_id=dedup_id, duplication_policy="return-existing"
+            ):
+                handle = DBOS.enqueue_workflow(QUEUE_NAME, gated_workflow, child_input)
         parent_attached.release()
         result = handle.get_result()
         marker_step()
@@ -291,13 +301,14 @@ def test_return_existing_in_parent_workflow(dbos: DBOS) -> None:
     # lookup misses and whose function IDs the assertions below cover.
     setattr(dbos._sys_db, "get_deduplicated_workflow", lookup_misses_once)
     try:
-        parent_a = DBOS.start_workflow(parent_workflow, "second")
+        parent_a = DBOS.start_workflow(parent_workflow, "second", False)
         assert parent_attached.acquire(timeout=30)
     finally:
         setattr(dbos._sys_db, "get_deduplicated_workflow", original)
     assert calls == 2
 
-    parent_b = DBOS.start_workflow(parent_workflow, "third")
+    # Parent B attaches through enqueue_workflow_with_options, which records the attach itself.
+    parent_b = DBOS.start_workflow(parent_workflow, "third", True)
     assert parent_attached.acquire(timeout=30)
 
     # Both parents are attached, so releasing the holder cannot let either start its own child.
@@ -327,6 +338,18 @@ def test_return_existing_in_parent_workflow(dbos: DBOS) -> None:
     assert len(forked_steps) == 3
     assert forked_steps[0]["child_workflow_id"] == child_handle.workflow_id
     assert [s["function_id"] for s in forked_steps] == [s["function_id"] for s in steps]
+
+    # Parent B recorded the same child, and replays it the same way.
+    steps_b = DBOS.list_workflow_steps(parent_b.workflow_id)
+    assert [s["function_id"] for s in steps_b] == [1, 2, 3]
+    assert steps_b[0]["child_workflow_id"] == child_handle.workflow_id
+    forked_b: WorkflowHandle[str] = DBOS.fork_workflow(parent_b.workflow_id, 4)
+    assert forked_b.get_result() == "first-done"
+    assert len(marker_step_runs) == 2
+    assert (
+        DBOS.list_workflow_steps(forked_b.workflow_id)[0]["child_workflow_id"]
+        == child_handle.workflow_id
+    )
 
 
 def test_return_existing_recovery(dbos: DBOS) -> None:
@@ -688,32 +711,55 @@ def test_id_reuse_invalid_policy(dbos: DBOS, client: DBOSClient) -> None:
         client.enqueue(options, "x")
 
 
-def test_id_reuse_reject_survives_retried_init_commit(dbos: DBOS) -> None:
+@pytest.mark.parametrize(
+    "via",
+    ["start", "client_enqueue", "enqueue_options"]
+    + [f"child_{via}" for via in REUSE_VIAS],
+)
+def test_id_reuse_reject_survives_retried_init_commit(
+    dbos: DBOS, client: DBOSClient, via: str
+) -> None:
     wf = _register_reuse_workflows()
+    armed: List[DebugAction] = []
 
     @DBOS.workflow()
-    def parent_with_glitch(child_id: str, via: str) -> str:
+    def parent_with_glitch(child_id: str, child_via: str) -> str:
         # Armed here, so the glitch lands on the child's combined insert.
-        _fail_next_init_commit()
-        return str(wf.run_echo(child_id, via, "from-parent"))
+        armed.append(_fail_next_init_commit())
+        return str(wf.run_echo(child_id, child_via, "from-parent"))
 
+    workflow_id = f"reuse-retry-{via}-{uuid.uuid4()}"
+    options: EnqueueOptions = {
+        "queue_name": QUEUE_NAME,
+        "workflow_name": get_dbos_func_name(wf.echo),
+        "workflow_id": workflow_id,
+        "workflow_id_reuse_policy": "reject",
+    }
     try:
-        action = _fail_next_init_commit()
-        workflow_id = f"reuse-retry-{uuid.uuid4()}"
-        with SetWorkflowID(workflow_id, workflow_id_reuse_policy="reject"):
-            handle = DBOS.start_workflow(wf.echo, "retried")
-        assert handle.get_result() == "retried"
-        assert action.exception_to_throw is None
-
-        for via in REUSE_VIAS:
-            child_id = f"reuse-retry-child-{via}-{uuid.uuid4()}"
+        if via.startswith("child_"):
             parent_id = f"reuse-retry-parent-{via}-{uuid.uuid4()}"
             with SetWorkflowID(parent_id):
-                parent = DBOS.start_workflow(parent_with_glitch, child_id, via)
+                parent = DBOS.start_workflow(
+                    parent_with_glitch, workflow_id, via.removeprefix("child_")
+                )
             assert parent.get_result() == "from-parent"
             steps = DBOS.list_workflow_steps(parent_id)
-            assert steps[0]["child_workflow_id"] == child_id
+            assert steps[0]["child_workflow_id"] == workflow_id
             assert steps[0]["error"] is None
+        else:
+            armed.append(_fail_next_init_commit())
+            handle: WorkflowHandle[str]
+            if via == "start":
+                with SetWorkflowID(workflow_id, workflow_id_reuse_policy="reject"):
+                    handle = DBOS.start_workflow(wf.echo, "retried")
+            elif via == "client_enqueue":
+                handle = client.enqueue(options, "retried")
+            else:
+                handle = DBOS.enqueue_workflow_with_options(options, "retried")
+            assert handle.get_result() == "retried"
+        # The glitch fired, so the insert was retried and recognized its own row.
+        assert len(armed) == 1
+        assert armed[0].exception_to_throw is None
     finally:
         DebugTriggers.clear_debug_triggers()
 
@@ -763,6 +809,15 @@ def test_id_reuse_reject_enqueue_with_options(dbos: DBOS) -> None:
     attach["workflow_id_reuse_policy"] = "return-existing"
     with SetWorkflowID(workflow_id, workflow_id_reuse_policy="reject"):
         handle = DBOS.enqueue_workflow_with_options(attach, "new")
+    assert handle.get_result() == "original"
+
+    # The ambient policy belongs to the ambient ID, so an explicit options ID attaches.
+    unset = options(workflow_id)
+    del unset["workflow_id_reuse_policy"]
+    with SetWorkflowID(
+        f"reuse-ewo-ambient-{uuid.uuid4()}", workflow_id_reuse_policy="reject"
+    ):
+        handle = DBOS.enqueue_workflow_with_options(unset, "new")
     assert handle.get_result() == "original"
 
 
@@ -919,15 +974,25 @@ def test_id_reuse_reject_portable_replay(dbos: DBOS) -> None:
         reexecute_workflow_by_id(dbos, parent_id).get_result()
         == "True:PortableWorkflowError"
     )
+    # A custom serializer may rebuild a generic error that keeps only the code.
+    assert is_workflow_id_in_use_error(
+        DBOSException("in use", dbos_error_code=DBOSErrorCode.WorkflowIDInUse.value)
+    )
+    assert not is_workflow_id_in_use_error(DBOSException("other"))
 
 
 def test_debouncer_rejects_reject_reuse_policy(dbos: DBOS, client: DBOSClient) -> None:
     wf = _register_reuse_workflows()
 
     debouncer = Debouncer.create(wf.echo, queue=QUEUE_NAME)
-    with pytest.raises(DBOSException, match="workflow_id_reuse_policy 'reject'"):
-        with SetWorkflowID(str(uuid.uuid4()), workflow_id_reuse_policy="reject"):
-            debouncer.debounce("key", 0.1, "first")
+    # An outer context survives the SetWorkflowID block, as a workflow's does.
+    with DBOSContextEnsure() as ctx:
+        with pytest.raises(DBOSException, match="workflow_id_reuse_policy 'reject'"):
+            with SetWorkflowID(str(uuid.uuid4()), workflow_id_reuse_policy="reject"):
+                debouncer.debounce("key", 0.1, "first")
+        # The rejected debounce consumed the pinned ID, so the next start cannot inherit it.
+        assert ctx.id_assigned_for_next_workflow == ""
+        assert ctx.workflow_id_reuse_policy is None
 
     client_debouncer = DebouncerClient(
         client,

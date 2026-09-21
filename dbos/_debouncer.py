@@ -29,6 +29,7 @@ from dbos._client import (
 from dbos._context import (
     EnterDBOSStepCtx,
     SetWorkflowDebounce,
+    WorkflowIDReusePolicy,
     get_local_dbos_context,
     snapshot_step_context,
 )
@@ -257,8 +258,19 @@ class Debouncer(Generic[P, R]):
 
         dbos = _get_dbos_instance()
 
-        # The caller must not set a deduplication_id, duplication policy, reject reuse policy, delay, priority, or partition key.
         ctx = get_local_dbos_context()
+
+        # Capture a SetWorkflowID-pinned ID once, before the option checks: it is re-applied on every enqueue attempt (a lost dedup race consumes it before raising) and must not stay armed for the caller's next workflow when a bounce coalesces, a conflict raises, or an option check rejects.
+        pinned_workflow_id: Optional[str] = None
+        pinned_reuse_policy: Optional[WorkflowIDReusePolicy] = None
+        if ctx is not None:
+            pinned_reuse_policy = ctx.workflow_id_reuse_policy
+            ctx.workflow_id_reuse_policy = None
+            if ctx.id_assigned_for_next_workflow:
+                pinned_workflow_id = ctx.id_assigned_for_next_workflow
+                ctx.id_assigned_for_next_workflow = ""
+
+        # The caller must not set a deduplication_id, duplication policy, reject reuse policy, delay, priority, or partition key.
         if ctx is not None:
             _reject_conflicting_options(
                 has_deduplication_id=ctx.deduplication_id is not None,
@@ -266,15 +278,8 @@ class Debouncer(Generic[P, R]):
                 has_priority=ctx.priority is not None,
                 has_partition_key=ctx.queue_partition_key is not None,
                 has_return_existing=ctx.duplication_policy == "return-existing",
-                has_reject_reuse_policy=ctx.workflow_id_reuse_policy == "reject",
+                has_reject_reuse_policy=pinned_reuse_policy == "reject",
             )
-
-        # Capture a SetWorkflowID-pinned ID once: it is re-applied on every enqueue attempt (a lost dedup race consumes it before raising) and must not stay armed for the caller's next workflow when a bounce coalesces or a conflict raises.
-        pinned_workflow_id: Optional[str] = None
-        if ctx is not None and ctx.id_assigned_for_next_workflow:
-            pinned_workflow_id = ctx.id_assigned_for_next_workflow
-            ctx.id_assigned_for_next_workflow = ""
-            ctx.workflow_id_reuse_policy = None
 
         # Resolve the queue the debounced workflow will run on.
         queue_name = self.options["queue_name"]

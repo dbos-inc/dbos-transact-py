@@ -952,6 +952,10 @@ class SystemDatabase(ABC):
         reuse_policy: Optional[WorkflowIDReusePolicy] = None,
     ) -> tuple[WorkflowStatuses, Optional[int], bool]:
         """Insert a workflow's status row, or return the existing row unchanged."""
+        # Without an owner_xid the check below cannot tell a fresh insert from an existing row.
+        assert (
+            reuse_policy != "reject" or owner_xid is not None
+        ), "workflow_id_reuse_policy 'reject' requires an owner_xid"
         wf_status: WorkflowStatuses = status["status"]
         workflow_deadline_epoch_ms: Optional[int] = status["workflow_deadline_epoch_ms"]
         should_execute = True
@@ -1016,11 +1020,8 @@ class SystemDatabase(ABC):
             )
             .on_conflict_do_nothing(index_elements=["workflow_uuid"])
         )
-        # Two statements, not a data-modifying CTE: at scale the CTE costs more
-        # than the round trip it saves.
         try:
             results = conn.execute(cmd)
-            conn.execute(inputs_insert)
         except DBAPIError as dbapi_error:
             # Unique constraint violation for the deduplication ID
             if self._is_unique_constraint_violation(dbapi_error):
@@ -1043,9 +1044,7 @@ class SystemDatabase(ABC):
             wf_status = m["status"]
             workflow_deadline_epoch_ms = m["workflow_deadline_epoch_ms"]
             # A row carrying another owner_xid was already there; a retried commit carries ours.
-            if reuse_policy == "reject" and (
-                owner_xid is None or m["owner_xid"] != owner_xid
-            ):
+            if reuse_policy == "reject" and m["owner_xid"] != owner_xid:
                 raise DBOSWorkflowIDInUseError(
                     status["workflow_uuid"], m["status"], m["name"]
                 )
@@ -1069,6 +1068,8 @@ class SystemDatabase(ABC):
 
             status["serialization"] = m["serialization"]
 
+        # After the checks above, so a rejected start writes no inputs.
+        conn.execute(inputs_insert)
         return wf_status, workflow_deadline_epoch_ms, should_execute
 
     @db_retry()
