@@ -980,13 +980,13 @@ def test_id_reuse_reject_portable_replay(dbos: DBOS, via: str) -> None:
     parent_id = f"reuse-portable-parent-{via}-{uuid.uuid4()}"
     with SetWorkflowID(parent_id):
         assert DBOS.start_workflow(parent, child_id).get_result() == "rejected:SUCCESS"
-    # The rejection is a step result in the default format, so a plain except still catches its replay.
+    # The rejection is saved in the default format, so a plain except catches its replay too.
     assert reexecute_workflow_by_id(dbos, parent_id).get_result() == "rejected:SUCCESS"
     rejected = [s for s in DBOS.list_workflow_steps(parent_id) if s["error"]]
     assert len(rejected) == 1
     assert isinstance(rejected[0]["error"], DBOSWorkflowIDInUseError)
 
-    # Checkpoints written before the default format replay in portable form; the helper still matches them.
+    # A checkpoint stored in portable form replays as PortableWorkflowError, which the helper matches.
     assert is_workflow_id_in_use_error(
         PortableWorkflowError("in use", DBOSWorkflowIDInUseError.__name__)
     )

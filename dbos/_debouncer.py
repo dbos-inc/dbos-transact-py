@@ -60,9 +60,8 @@ def _is_queue_deduplicated_error(e: BaseException) -> bool:
 
     When an in-workflow debounce's fresh enqueue loses the dedup race, the
     DBOSQueueDeduplicatedError is checkpointed at the parent's function ID. On
-    replay it is re-raised from that checkpoint, but one checkpointed in portable
-    (cross-language JSON) serialization, as dedup errors were before they were
-    recorded in the default format, deserializes to a PortableWorkflowError
+    replay it is re-raised from that checkpoint, but a checkpoint stored in portable
+    (cross-language JSON) serialization deserializes to a PortableWorkflowError
     (which carries the original type name), not the original type. Match both so
     the retry loop still recognizes the collision on replay instead of erroring.
     """
