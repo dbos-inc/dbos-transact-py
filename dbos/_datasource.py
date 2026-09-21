@@ -25,7 +25,6 @@ from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -222,7 +221,10 @@ class AsyncSQLAlchemyDatasource(ABC):
         else:
             base_engine = self._create_engine(database_url, engine_kwargs)
             self.created_engine = True
-        self.engine = self._with_schema(base_engine)
+        # Translate the placeholder schema to this instance's schema per-engine (None for SQLite = unqualified).
+        self.engine = base_engine.execution_options(
+            schema_translate_map={SCHEMA_PLACEHOLDER: self.schema}
+        )
         self.sessionmaker = async_sessionmaker(bind=self.engine)
         self.serializer = serializer
         _register_datasource(self)
@@ -277,31 +279,10 @@ class AsyncSQLAlchemyDatasource(ABC):
         """Return True if the error is a retryable serialization/concurrency error."""
         pass
 
-    def _with_schema(self, engine: AsyncEngine) -> AsyncEngine:
-        """Translate the placeholder schema to this instance's schema per-engine
-        (None for SQLite = unqualified). Every engine that runs DatasourceSchema
-        statements needs this, not just the long-lived one."""
-        return engine.execution_options(
-            schema_translate_map={SCHEMA_PLACEHOLDER: self.schema}
-        )
-
     async def _delete_checkpoints(self, workflow_id: str, start_step: int) -> None:
         """Delete this workflow's checkpoints from start_step on."""
         async with self.engine.begin() as conn:
             await conn.execute(_delete_checkpoints_sql(workflow_id, start_step))
-
-    async def _delete_checkpoints_unpooled(
-        self, workflow_id: str, start_step: int
-    ) -> None:
-        """As _delete_checkpoints, but on a throwaway copy of this engine, so it
-        runs on whichever loop calls it rather than the pool's."""
-        pool = self.engine.sync_engine.pool.recreate()
-        engine = self._with_schema(create_async_engine(self.engine.url, pool=pool))
-        try:
-            async with engine.begin() as conn:
-                await conn.execute(_delete_checkpoints_sql(workflow_id, start_step))
-        finally:
-            await engine.dispose()
 
     def sql_session(self) -> AsyncSession:
         ctx = get_local_dbos_context()

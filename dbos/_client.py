@@ -936,7 +936,6 @@ class DBOSClient:
             queue_name=queue_name,
             queue_partition_key=queue_partition_key,
             run_coroutine=asyncio.run,
-            unpooled_datasource_deletes=True,
         )
         return WorkflowHandleClientAsyncPolling[Any](workflow_id, self._sys_db)
 

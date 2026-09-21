@@ -149,15 +149,12 @@ def rewind_workflow(
     queue_name: Optional[str] = None,
     queue_partition_key: Optional[str] = None,
     run_coroutine: Optional[Callable[[Coroutine[Any, Any, Any]], Any]] = None,
-    unpooled_datasource_deletes: bool = False,
 ) -> None:
     """Drop the datasources' checkpoints from start_step on, then rewind the
     workflow in the system database. Best effort: if a step fails the workflow is
     left as it was and the rewind can be retried, which is safe because the
     system database checkpoints are touched last. An async datasource needs
-    run_coroutine to bridge to a loop; a caller that cannot know which loop the
-    datasource's pooled connections belong to also sets
-    unpooled_datasource_deletes, which deletes on a throwaway engine instead."""
+    run_coroutine to bridge to a loop."""
     for ds in datasources:
         if isinstance(ds, AsyncSQLAlchemyDatasource) and run_coroutine is None:
             raise DBOSException(
@@ -169,11 +166,7 @@ def rewind_workflow(
     for ds in datasources:
         if isinstance(ds, AsyncSQLAlchemyDatasource):
             assert run_coroutine is not None
-            run_coroutine(
-                ds._delete_checkpoints_unpooled(workflow_id, start_step)
-                if unpooled_datasource_deletes
-                else ds._delete_checkpoints(workflow_id, start_step)
-            )
+            run_coroutine(ds._delete_checkpoints(workflow_id, start_step))
         else:
             ds._delete_checkpoints(workflow_id, start_step)
     sys_db.rewind_workflow(
