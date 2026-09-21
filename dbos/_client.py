@@ -6,7 +6,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
-    Coroutine,
     Dict,
     Generator,
     Generic,
@@ -898,7 +897,8 @@ class DBOSClient:
         terminal state can be rewound.
 
         Checkpoints held in datasources are dropped only for the datasources passed
-        in. Sync datasources only, use the async variant for both sync and async datasources."""
+        in. Sync datasources only, use the async variant for both sync and async datasources.
+        """
         rewind_workflow(
             self._sys_db,
             datasources or [],
@@ -923,14 +923,9 @@ class DBOSClient:
         """Rewind a workflow to a step (default: the first). Only a workflow in a
         terminal state can be rewound. Works without a running application.
 
-        Checkpoints held in datasources are dropped only for the provideed datasources
+        Checkpoints held in datasources are dropped only for the datasources
+        passed in.
         """
-
-        # bridge back async datasource deletion to the client's calling loop
-        loop = asyncio.get_running_loop()
-        def run_on_caller_loop(coro: Coroutine[Any, Any, Any]) -> Any:
-            return asyncio.run_coroutine_threadsafe(coro, loop).result()
-
         await asyncio.to_thread(
             rewind_workflow,
             self._sys_db,
@@ -940,7 +935,8 @@ class DBOSClient:
             application_version=application_version,
             queue_name=queue_name,
             queue_partition_key=queue_partition_key,
-            run_coroutine=run_on_caller_loop,
+            run_coroutine=asyncio.run,
+            unpooled_datasource_deletes=True,
         )
         return WorkflowHandleClientAsyncPolling[Any](workflow_id, self._sys_db)
 
