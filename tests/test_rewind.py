@@ -834,15 +834,16 @@ async def test_rewind_drops_async_datasource_checkpoints(
         assert await table_rows_async(second.engine) == ["b", "b", "d", "d"]
 
 
-def test_rewind_cancels_the_workflow_when_a_checkpoint_delete_fails(
+def test_a_failed_rewind_leaves_the_workflow_untouched_and_can_be_retried(
     config: DBOSConfig,
     cleanup_test_databases: None,
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The system database is rewound first, then the datasources' checkpoints
-    are deleted. A checkpoint left behind by a failed delete would be replayed as a transaction's
-    result, so the workflow is cancelled instead; rewinding it again repairs it."""
+    """The datasources' checkpoints are deleted first and the system database is
+    rewound last, so whichever part fails the workflow keeps its terminal status
+    and nothing stale is ever replayed: a checkpoint delete is idempotent, so
+    rewinding again finishes the job."""
     with launched_with_datasources(config, tmp_path, 2) as (dbos, (first, second)):
         insert_first, insert_second = inserter(first), inserter(second)
 
@@ -859,8 +860,24 @@ def test_rewind_cancels_the_workflow_when_a_checkpoint_delete_fails(
         assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
         assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
 
-        # The system database rewind fails: no datasource was touched.
-        real_rewind = dbos._sys_db.rewind_workflow
+        # One datasource's delete fails: the system database is not rewound, so
+        # the workflow stays SUCCESS and is not re-enqueued. The datasource
+        # deleted before it is already cleared, which a retry tolerates.
+        def failing_delete(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("datasource down")
+
+        monkeypatch.setattr(second, "_delete_checkpoints", failing_delete)
+        with pytest.raises(RuntimeError, match="datasource down"):
+            DBOS.rewind_workflow(workflow_id)
+        status = DBOS.retrieve_workflow(workflow_id).get_status()
+        assert status.status == "SUCCESS"
+        assert datasource_checkpoints(first.engine, workflow_id) == []
+        assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
+        assert runs["delete-failure"] == 1
+
+        # The system database rewind fails: every checkpoint is already gone but
+        # the workflow stays SUCCESS, so nothing runs against the missing history.
+        monkeypatch.undo()
 
         def failing_rewind(*args: Any, **kwargs: Any) -> None:
             raise RuntimeError("system database unavailable")
@@ -868,37 +885,45 @@ def test_rewind_cancels_the_workflow_when_a_checkpoint_delete_fails(
         monkeypatch.setattr(dbos._sys_db, "rewind_workflow", failing_rewind)
         with pytest.raises(RuntimeError, match="system database unavailable"):
             DBOS.rewind_workflow(workflow_id)
-        assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
-        assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
         assert DBOS.retrieve_workflow(workflow_id).get_status().status == "SUCCESS"
+        assert datasource_checkpoints(first.engine, workflow_id) == []
+        assert datasource_checkpoints(second.engine, workflow_id) == []
         assert runs["delete-failure"] == 1
 
-        # One datasource's delete fails: the workflow is already re-enqueued and
-        # still holds that datasource's checkpoints, so it is cancelled.
-        monkeypatch.setattr(dbos._sys_db, "rewind_workflow", real_rewind)
-
-        def failing_delete(*args: Any, **kwargs: Any) -> None:
-            raise RuntimeError("datasource down")
-
-        monkeypatch.setattr(second, "_delete_checkpoints", failing_delete)
-        with paused_queue("rewind_delete_gate"):
-            with pytest.raises(DBOSException, match="datasource down") as excinfo:
-                DBOS.rewind_workflow(workflow_id, queue_name="rewind_delete_gate")
-            assert isinstance(excinfo.value.__cause__, RuntimeError)
-            status = DBOS.retrieve_workflow(workflow_id).get_status()
-            assert status.status == "CANCELLED"
-            assert status.queue_name is None
-            assert datasource_checkpoints(first.engine, workflow_id) == []
-            assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
-        assert runs["delete-failure"] == 1
-
-        # Rewinding the cancelled workflow deletes again and replays nothing stale.
+        # Retrying replays from scratch and repeats every transaction.
         monkeypatch.undo()
         assert DBOS.rewind_workflow(workflow_id).get_result() == 2
         assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
         assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
         assert table_rows(first.engine) == ["a", "a", "c", "c"]
         assert table_rows(second.engine) == ["b", "b", "d", "d"]
+
+
+def test_rewind_with_datasources_refuses_an_active_workflow(
+    config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
+) -> None:
+    """The checkpoints are deleted before the system database is rewound, so the
+    terminal-state check has to run first or a running workflow would lose them."""
+    with launched_with_datasources(config, tmp_path, 1) as (dbos, (ds,)):
+        insert = inserter(ds)
+        checkpointed, release = threading.Event(), threading.Event()
+
+        @DBOS.workflow()
+        def blocker() -> None:
+            ds.run_tx_step(None, insert, "a")
+            checkpointed.set()
+            release.wait()
+
+        handle = DBOS.start_workflow(blocker)
+        assert checkpointed.wait(10)
+        assert datasource_checkpoints(ds.engine, handle.workflow_id) == [1]
+        with pytest.raises(DBOSException, match="only a workflow in a terminal state"):
+            DBOS.rewind_workflow(handle.workflow_id)
+        assert datasource_checkpoints(ds.engine, handle.workflow_id) == [1]
+        release.set()
+        handle.get_result()
+        with pytest.raises(DBOSNonExistentWorkflowError):
+            DBOS.rewind_workflow("no-such-workflow")
 
 
 def test_client_rewind_clears_the_given_datasources(
