@@ -895,11 +895,10 @@ class DBOSClient:
         datasources: Optional[Sequence[Datasource]] = None,
     ) -> "WorkflowHandle[Any]":
         """Rewind a workflow to a step (default: the first). Only a workflow in a
-        terminal state can be rewound. Works without a running application.
+        terminal state can be rewound.
 
         Checkpoints held in datasources are dropped only for the datasources passed
-        in; a workflow whose datasources are not listed replays their stale
-        checkpoints. Sync datasources only here; the async variant takes both."""
+        in. Sync datasources only, use the async variant for both sync and async datasources."""
         rewind_workflow(
             self._sys_db,
             datasources or [],
@@ -924,9 +923,8 @@ class DBOSClient:
         """Rewind a workflow to a step (default: the first). Only a workflow in a
         terminal state can be rewound. Works without a running application.
 
-        Checkpoints held in datasources are dropped only for the datasources passed
-        in; a workflow whose datasources are not listed replays their stale
-        checkpoints."""
+        Checkpoints held in datasources are dropped only for the provideed datasources
+        """
 
         # bridge back async datasource deletion to the client's calling loop
         loop = asyncio.get_running_loop()

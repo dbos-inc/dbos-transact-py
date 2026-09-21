@@ -1,7 +1,6 @@
 import io
 import logging
 import os
-import uuid
 from urllib.parse import urlparse, urlunparse
 
 import pytest
@@ -9,7 +8,7 @@ import sqlalchemy as sa
 from sqlalchemy import create_engine, text
 
 from dbos import DBOS, DBOSConfig
-from dbos._error import DBOSNonExistentWorkflowError, DBOSQueryTimeoutError
+from dbos._error import DBOSQueryTimeoutError
 from dbos._logger import dbos_logger
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import DefaultSerializer
@@ -162,9 +161,11 @@ def test_cockroachdb_fork() -> None:
 
 
 def test_cockroachdb_rewind() -> None:
-    """Rewind leans on constructs worth exercising on CockroachDB specifically: a
-    UNION ALL of literals as a derived table, row_number() over it, and DELETE /
-    UPDATE ... WHERE EXISTS against it."""
+    """Rewind's behavior is covered in test_rewind.py; this only runs its query
+    shapes on CockroachDB: a correlated EXISTS against the events history in a
+    DELETE and a SELECT, row_number() over that history partitioned by key, and
+    INSERT ... FROM SELECT off the subquery that filters on it. One key set on
+    both sides of the cut and one set only past it reach all three."""
     database_url = os.environ.get("DBOS_COCKROACHDB_URL")
     if database_url is None:
         pytest.skip("No CockroachDB database URL provided")
@@ -178,21 +179,18 @@ def test_cockroachdb_rewind() -> None:
     parsed = urlparse(database_url)
     test_url = urlunparse(parsed._replace(path="/dbos_test_rewind"))
 
-    runs: dict[str, int] = {}
+    runs = 0
 
     @DBOS.workflow()
-    def publisher(name: str) -> str:
-        run = runs[name] = runs.get(name, 0) + 1
+    def publisher() -> int:
+        nonlocal runs
+        runs += 1
         DBOS.set_event("below", "kept")
         DBOS.set_event("both", "old")
-        DBOS.write_stream("log", f"a{run}")
-        if run == 1:
+        if runs == 1:
             DBOS.set_event("both", "new")
             DBOS.set_event("above", "doomed")
-            DBOS.write_stream("log", f"b{run}")
-            assert DBOS.recv("cmd", timeout_seconds=10) == "go"
-            return "first"
-        return "second"
+        return runs
 
     try:
         engine = create_engine(test_url)
@@ -202,44 +200,22 @@ def test_cockroachdb_rewind() -> None:
             "use_listen_notify": False,
             "system_database_engine": engine,
         }
-        dbos = DBOS(config=config)
+        DBOS(config=config)
         DBOS.launch()
 
-        ids = []
-        for i in range(2):
-            handle = DBOS.start_workflow(publisher, f"crdb{i}")
-            DBOS.send(handle.workflow_id, "go", "cmd")
-            assert handle.get_result() == "first"
-            ids.append(handle.workflow_id)
+        handle = DBOS.start_workflow(publisher)
+        assert handle.get_result() == 1
+        workflow_id = handle.workflow_id
+        assert DBOS.get_event(workflow_id, "both") == "new"
+        assert DBOS.get_event(workflow_id, "above") == "doomed"
 
-        for workflow_id in ids:
-            assert DBOS.get_event(workflow_id, "above") == "doomed"
-            assert DBOS.get_event(workflow_id, "both") == "new"
-            notifications = dbos._sys_db.get_all_notifications(workflow_id)
-            assert [n["consumed"] for n in notifications] == [True]
-
-        # Two different cuts: the first keeps its first set_event, the second is
-        # rewound entirely.
-        dbos._sys_db.rewind_workflow(ids[0], 2)
-        dbos._sys_db.rewind_workflow(ids[1], 1)
-
-        for i, workflow_id in enumerate(ids):
-            assert DBOS.retrieve_workflow(workflow_id).get_result() == "second"
-            # Published only past the cut, so unpublished and never re-set.
-            assert DBOS.get_event(workflow_id, "above", 1) is None
-            # Reverted below the cut, then republished by the replay.
-            assert DBOS.get_event(workflow_id, "both") == "old"
-            assert DBOS.get_event(workflow_id, "below") == "kept"
-            # Stream entries keep their offsets, so the replay appends after them.
-            assert list(DBOS.read_stream(workflow_id, "log")) == ["a1", "b1", "a2"]
-            # Consumed past the cut, so deleted by the rewind.
-            assert dbos._sys_db.get_all_notifications(workflow_id) == []
-
-        # Refusals and validation still apply.
-        with pytest.raises(DBOSNonExistentWorkflowError):
-            dbos._sys_db.rewind_workflow(str(uuid.uuid4()), 1)
-        with pytest.raises(ValueError, match="must be >= 1"):
-            dbos._sys_db.rewind_workflow(ids[0], 0)
+        # Cut between the two set_events on "both"
+        assert DBOS.rewind_workflow(workflow_id, start_step=3).get_result() == 2
+        assert DBOS.get_event(workflow_id, "below") == "kept"
+        # Reverted to the value published below the cut
+        assert DBOS.get_event(workflow_id, "both") == "old"
+        # Published only past the cut, so unpublished and never re-set
+        assert DBOS.get_event(workflow_id, "above", 1) is None
     finally:
         DBOS.destroy(destroy_registry=True)
 

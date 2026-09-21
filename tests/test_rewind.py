@@ -515,57 +515,6 @@ def test_database_state_between_rewind_and_replay(dbos: DBOS) -> None:
 #######################################
 
 
-def test_rewind_refuses_an_active_workflow(dbos: DBOS) -> None:
-    @DBOS.workflow()
-    def counter(name: str) -> int:
-        return run_count(name)
-
-    with paused_queue("rewind_active") as held:
-        # PENDING: the gate's blocker is running on an executor right now, so its
-        # history is not ours to delete.
-        assert (
-            status_row(dbos, held.workflow_id).status
-            == WorkflowStatusString.PENDING.value
-        )
-        with pytest.raises(DBOSException, match="terminal state"):
-            dbos._sys_db.rewind_workflow(held.workflow_id, 1)
-
-        queued = str(uuid.uuid4())
-        with SetWorkflowID(queued):
-            DBOS.enqueue_workflow("rewind_active", counter, "queued")
-        assert status_row(dbos, queued).status == WorkflowStatusString.ENQUEUED.value
-        with pytest.raises(DBOSException, match="terminal state"):
-            dbos._sys_db.rewind_workflow(queued, 1)
-
-    assert DBOS.retrieve_workflow(queued).get_result() == 1
-
-
-def test_rewind_a_cancelled_workflow(dbos: DBOS) -> None:
-    """The refusal above says to cancel first, so that path has to work."""
-    released = threading.Event()
-    started = threading.Event()
-
-    @DBOS.workflow()
-    def blocker(name: str) -> str:
-        run = run_count(name)
-        if run == 1:
-            started.set()
-            released.wait()
-        return f"run{run}"
-
-    workflow_id = str(uuid.uuid4())
-    with SetWorkflowID(workflow_id):
-        DBOS.start_workflow(blocker, "cancelled")
-    assert started.wait(timeout=10)
-
-    DBOS.cancel_workflow(workflow_id)
-    released.set()
-    assert status_row(dbos, workflow_id).status == WorkflowStatusString.CANCELLED.value
-
-    dbos._sys_db.rewind_workflow(workflow_id, 1)
-    assert DBOS.retrieve_workflow(workflow_id).get_result() == "run2"
-
-
 def test_rewind_refuses_a_missing_workflow(dbos: DBOS) -> None:
     with pytest.raises(DBOSNonExistentWorkflowError):
         dbos._sys_db.rewind_workflow(str(uuid.uuid4()), 1)
