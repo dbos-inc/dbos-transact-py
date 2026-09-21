@@ -78,6 +78,7 @@ def _reject_conflicting_options(
     has_priority: bool,
     has_partition_key: bool,
     has_return_existing: bool = False,
+    has_reject_reuse_policy: bool = False,
 ) -> None:
     """A debounce owns the workflow's deduplication ID (the debounce key) and its
     delay (the debounce period), so a caller must not also set them, nor a
@@ -108,6 +109,11 @@ def _reject_conflicting_options(
         raise DBOSException(
             "Cannot debounce a workflow with duplication_policy 'return-existing': "
             "a debounce owns the workflow's deduplication behavior."
+        )
+    if has_reject_reuse_policy:
+        raise DBOSException(
+            "Cannot debounce a workflow with workflow_id_reuse_policy 'reject': "
+            "a debounce owns how its workflow is started."
         )
 
 
@@ -251,7 +257,7 @@ class Debouncer(Generic[P, R]):
 
         dbos = _get_dbos_instance()
 
-        # The caller must not set a deduplication_id, duplication policy, delay, priority, or partition key.
+        # The caller must not set a deduplication_id, duplication policy, reject reuse policy, delay, priority, or partition key.
         ctx = get_local_dbos_context()
         if ctx is not None:
             _reject_conflicting_options(
@@ -260,6 +266,7 @@ class Debouncer(Generic[P, R]):
                 has_priority=ctx.priority is not None,
                 has_partition_key=ctx.queue_partition_key is not None,
                 has_return_existing=ctx.duplication_policy == "return-existing",
+                has_reject_reuse_policy=ctx.workflow_id_reuse_policy == "reject",
             )
 
         # Capture a SetWorkflowID-pinned ID once: it is re-applied on every enqueue attempt (a lost dedup race consumes it before raising) and must not stay armed for the caller's next workflow when a bounce coalesces or a conflict raises.
@@ -267,6 +274,7 @@ class Debouncer(Generic[P, R]):
         if ctx is not None and ctx.id_assigned_for_next_workflow:
             pinned_workflow_id = ctx.id_assigned_for_next_workflow
             ctx.id_assigned_for_next_workflow = ""
+            ctx.workflow_id_reuse_policy = None
 
         # Resolve the queue the debounced workflow will run on.
         queue_name = self.options["queue_name"]
@@ -411,7 +419,7 @@ class DebouncerClient:
     def debounce(
         self, debounce_key: str, debounce_period_sec: float, *args: Any, **kwargs: Any
     ) -> "WorkflowHandle[R]":
-        # The workflow options must not set a deduplication_id, duplication policy, delay, priority, or partition key.
+        # The workflow options must not set a deduplication_id, duplication policy, reject reuse policy, delay, priority, or partition key.
         _reject_conflicting_options(
             has_deduplication_id=self.workflow_options.get("deduplication_id")
             is not None,
@@ -421,6 +429,10 @@ class DebouncerClient:
             is not None,
             has_return_existing=self.workflow_options.get("duplication_policy")
             == "return-existing",
+            has_reject_reuse_policy=self.workflow_options.get(
+                "workflow_id_reuse_policy"
+            )
+            == "reject",
         )
 
         # Run on the debouncer's queue if one was given, else the queue named in the workflow options.

@@ -1468,7 +1468,7 @@ async def test_async_child_id_survives_concurrent_context_clear(dbos: DBOS) -> N
         return cast(List[int], await asyncio.gather(*[child(i) for i in range(n)]))
 
     real_check = dbos._sys_db.check_operation_execution
-    real_record = dbos._sys_db.record_child_workflow
+    real_init_child = dbos._sys_db.init_child_workflow
     fired: List[int] = []
 
     def check_and_clear(*args, **kwargs):  # type: ignore[no-untyped-def]
@@ -1481,10 +1481,10 @@ async def test_async_child_id_survives_concurrent_context_clear(dbos: DBOS) -> N
             fired.append(1)
         return result
 
-    def record_and_restore(*args, **kwargs):  # type: ignore[no-untyped-def]
+    def init_child_and_restore(*args, **kwargs):  # type: ignore[no-untyped-def]
         # Last sys-db call in init_wf; restore the id so the child's normal __exit__ stays consistent in this non-cancelled test.
         try:
-            return real_record(*args, **kwargs)
+            return real_init_child(*args, **kwargs)
         finally:
             ctx = get_local_dbos_context()
             saved = getattr(ctx, "_test_saved_wfid", "") if ctx is not None else ""
@@ -1492,13 +1492,13 @@ async def test_async_child_id_survives_concurrent_context_clear(dbos: DBOS) -> N
                 ctx.workflow_id = saved  # type: ignore[union-attr]
 
     dbos._sys_db.check_operation_execution = check_and_clear  # type: ignore[method-assign]
-    dbos._sys_db.record_child_workflow = record_and_restore  # type: ignore[method-assign]
+    dbos._sys_db.init_child_workflow = init_child_and_restore  # type: ignore[method-assign]
     try:
         fanout = 5
         assert (await parent(fanout)) == list(range(fanout))
     finally:
         dbos._sys_db.check_operation_execution = real_check  # type: ignore[method-assign]
-        dbos._sys_db.record_child_workflow = real_record  # type: ignore[method-assign]
+        dbos._sys_db.init_child_workflow = real_init_child  # type: ignore[method-assign]
 
     # The injection must have actually fired (otherwise the test proves nothing).
     assert len(fired) >= fanout
