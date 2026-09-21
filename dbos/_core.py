@@ -686,8 +686,20 @@ def _init_workflow(
             ):
                 existing_id = _deduplicated_workflow_id(dbos, status)
                 if existing_id is not None:
-                    # The caller records the parent->child mapping, so the error is
-                    # deliberately not checkpointed at the parent's function ID here.
+                    if ctx.has_parent():
+                        # Attached: record the holder as the parent's child, not the error.
+                        dbos._sys_db.record_operation_result(
+                            {
+                                "workflow_uuid": ctx.parent_workflow_id,
+                                "function_id": ctx.parent_workflow_fid,
+                                "function_name": wf_name,
+                                "output": None,
+                                "error": None,
+                                "serialization": None,
+                                "started_at_epoch_ms": started_at_epoch_ms,
+                                "child_workflow_id": existing_id,
+                            }
+                        )
                     return status, False, existing_id
                 continue
             sererr, serialization = serialize_exception(
@@ -704,6 +716,7 @@ def _init_workflow(
                     "error": sererr,
                     "serialization": serialization,
                     "started_at_epoch_ms": started_at_epoch_ms,
+                    "child_workflow_id": None,
                 }
                 dbos._sys_db.record_operation_result(result)
             raise
@@ -1470,8 +1483,8 @@ def start_workflow(
         workflow_id_reuse_policy=new_wf_ctx.workflow_id_reuse_policy,
     )
     if attached_workflow_id is not None:
-        # Attached to the workflow already holding this deduplication ID. It is
-        # recorded as this caller's child below, then polled like any other handle.
+        # Attached to the workflow already holding this deduplication ID (already
+        # recorded as this caller's child), then polled like any other handle.
         new_child_workflow_id = attached_workflow_id
 
     if status["serialization"] == DBOSPortableJSON.name():
@@ -1479,15 +1492,6 @@ def start_workflow(
     new_wf_ctx.serialization_type = serialization_type
 
     wf_status = status["status"]
-    if attached_workflow_id is not None and new_wf_ctx.has_parent():
-        dbos._sys_db.record_child_workflow(
-            new_wf_ctx.parent_workflow_id,
-            new_child_workflow_id,
-            new_wf_ctx.parent_workflow_fid,
-            get_dbos_func_name(func),
-            started_at_epoch_ms=child_start_time,
-        )
-
     if (
         not execute_workflow
         or not should_execute
@@ -1608,23 +1612,13 @@ async def start_workflow_async(
         workflow_id_reuse_policy=new_wf_ctx.workflow_id_reuse_policy,
     )
     if attached_workflow_id is not None:
-        # Attached to the workflow already holding this deduplication ID. It is
-        # recorded as this caller's child below, then polled like any other handle.
+        # Attached to the workflow already holding this deduplication ID (already
+        # recorded as this caller's child), then polled like any other handle.
         new_child_workflow_id = attached_workflow_id
 
     if status["serialization"] == DBOSPortableJSON.name():
         serialization_type = WorkflowSerializationFormat.PORTABLE
     new_wf_ctx.serialization_type = serialization_type
-
-    if attached_workflow_id is not None and new_wf_ctx.has_parent():
-        await asyncio.to_thread(
-            dbos._sys_db.record_child_workflow,
-            new_wf_ctx.parent_workflow_id,
-            new_child_workflow_id,
-            new_wf_ctx.parent_workflow_fid,
-            get_dbos_func_name(func),
-            started_at_epoch_ms=child_start_time,
-        )
 
     wf_status = status["status"]
 
@@ -1804,7 +1798,6 @@ def _persist_enqueue_with_options(
     reuse_policy = options.get("workflow_id_reuse_policy")
     # Generated once, so a retried insert recognizes a row it already committed.
     owner_xid = str(uuid.uuid4())
-    attached = False
     while True:
         try:
             if new_wf_ctx.has_parent():
@@ -1830,10 +1823,21 @@ def _persist_enqueue_with_options(
             ):
                 existing_id = _deduplicated_workflow_id(dbos, status)
                 if existing_id is not None:
-                    # Recorded as this caller's child below, so the error is
-                    # deliberately not checkpointed at the parent's function ID.
+                    if new_wf_ctx.has_parent():
+                        # Attached: record the holder as the parent's child, not the error.
+                        dbos._sys_db.record_operation_result(
+                            {
+                                "workflow_uuid": new_wf_ctx.parent_workflow_id,
+                                "function_id": new_wf_ctx.parent_workflow_fid,
+                                "function_name": wf_name,
+                                "output": None,
+                                "error": None,
+                                "serialization": None,
+                                "started_at_epoch_ms": child_start_time,
+                                "child_workflow_id": existing_id,
+                            }
+                        )
                     workflow_id = existing_id
-                    attached = True
                     break
                 continue
             sererr, serialization = serialize_exception(
@@ -1850,18 +1854,11 @@ def _persist_enqueue_with_options(
                     "error": sererr,
                     "serialization": serialization,
                     "started_at_epoch_ms": child_start_time,
+                    "child_workflow_id": None,
                 }
                 dbos._sys_db.record_operation_result(result)
             raise
 
-    if attached and new_wf_ctx.has_parent():
-        dbos._sys_db.record_child_workflow(
-            new_wf_ctx.parent_workflow_id,
-            workflow_id,
-            new_wf_ctx.parent_workflow_fid,
-            wf_name,
-            started_at_epoch_ms=child_start_time,
-        )
     return workflow_id
 
 
@@ -2312,6 +2309,7 @@ def invoke_step(
             "error": None,
             "serialization": None,
             "started_at_epoch_ms": step_start_time,
+            "child_workflow_id": None,
         }
 
         try:
@@ -2913,6 +2911,7 @@ class _StreamReadCheckpoint:
             "output": output,
             "serialization": serialization,
             "error": None,
+            "child_workflow_id": None,
         }
         self._sys_db.record_operation_result(result)
         self.end()
@@ -2936,6 +2935,7 @@ class _StreamReadCheckpoint:
             "output": None,
             "serialization": serialization,
             "error": serialized,
+            "child_workflow_id": None,
         }
         self._sys_db.record_operation_result(result)
         self.end()

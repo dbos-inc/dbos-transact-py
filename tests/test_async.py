@@ -21,11 +21,7 @@ from dbos import (
 )
 from dbos._context import assert_current_dbos_context, get_local_dbos_context
 from dbos._dbos import WorkflowHandle
-from dbos._error import (
-    DBOSAwaitedWorkflowCancelledError,
-    DBOSException,
-    DBOSPatchNondeterminismError,
-)
+from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSPatchNondeterminismError
 from dbos._event_loop import BackgroundEventLoop
 from dbos._schemas.system_database import SystemSchema
 from tests.conftest import retry_until_success, retry_until_success_async
@@ -1600,16 +1596,3 @@ def test_failed_dequeued_async_workflow_leaves_no_unretrieved_future(
         retry_until_success(control_detected, interval=0.1, max_attempts=50)
     finally:
         loop.set_exception_handler(previous_handler)
-
-
-def test_record_child_workflow_rejects_empty_id(dbos: DBOS) -> None:
-    """The persistence guard: an empty child id is never valid and must fail loudly
-    rather than silently corrupt operation_outputs."""
-    with pytest.raises(DBOSException):
-        dbos._sys_db.record_child_workflow(
-            "some-parent-id",
-            "",
-            0,
-            "some.func",
-            started_at_epoch_ms=int(time.time() * 1000),
-        )

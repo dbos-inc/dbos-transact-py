@@ -317,6 +317,8 @@ class OperationResultInternal(TypedDict):
     error: Optional[str]  # Serialized
     serialization: Optional[str]
     started_at_epoch_ms: int
+    # The child workflow this step started or attached to, if any.
+    child_workflow_id: Optional[str]
 
 
 class GetEventWorkflowContext(TypedDict):
@@ -2805,7 +2807,7 @@ class SystemDatabase(ABC):
             raise ValueError("time_bucket_size_ms must be > 0")
 
         # operation_outputs has no explicit status column; derive it from
-        # whether `error` is populated. Bookkeeping rows from record_child_workflow
+        # whether `error` is populated. Child-workflow bookkeeping rows
         # have NULL error and NULL output, so they appear as SUCCESS here —
         # callers can filter them by function_name.
         status_expr = sa.case(
@@ -2983,6 +2985,7 @@ class SystemDatabase(ABC):
                     completed_at_epoch_ms=completed_at_epoch_ms,
                     output=output,
                     error=error,
+                    child_workflow_id=result["child_workflow_id"],
                     serialization=result["serialization"],
                     # Mirrors the parent: only the running application records its steps.
                     application_name=self.app_name,
@@ -3083,69 +3086,6 @@ class SystemDatabase(ABC):
                 c.execute(sql)
 
         record()
-
-    def _child_workflow_output_values(
-        self,
-        parent_workflow_id: str,
-        child_workflow_id: str,
-        function_id: int,
-        function_name: str,
-        started_at_epoch_ms: int,
-    ) -> dict[str, Any]:
-        """The parent's operation_outputs row recording a child workflow's launch."""
-        # Spans the launch only: the parent does not wait for the child here.
-        return {
-            "workflow_uuid": parent_workflow_id,
-            "function_id": function_id,
-            "function_name": function_name,
-            "child_workflow_id": child_workflow_id,
-            "started_at_epoch_ms": started_at_epoch_ms,
-            "completed_at_epoch_ms": int(time.time() * 1000),
-            "retention_timestamp": self._now_ms_sql(),
-            "application_name": self.app_name,
-        }
-
-    @db_retry()
-    def record_child_workflow(
-        self,
-        parentUUID: str,
-        childUUID: str,
-        functionID: int,
-        functionName: str,
-        *,
-        started_at_epoch_ms: int,
-    ) -> None:
-        # An empty child id is never valid; fail loudly instead of silently wedging the parent on recovery.
-        if not childUUID:
-            raise DBOSException(
-                f"Attempted to record an empty child workflow ID for parent "
-                f"{parentUUID} (function {functionID}, {functionName})."
-            )
-        sql = sa.insert(SystemSchema.operation_outputs).values(
-            **self._child_workflow_output_values(
-                parentUUID, childUUID, functionID, functionName, started_at_epoch_ms
-            )
-        )
-        try:
-            with self.engine.begin() as c:
-                c.execute(sql)
-        except DBAPIError as dbapi_error:
-            if self._is_unique_constraint_violation(dbapi_error):
-                # Same child means an idempotent db_retry; a different child means nondeterminism (a real conflict).
-                with self.engine.begin() as c:
-                    existing = c.execute(
-                        sa.select(
-                            SystemSchema.operation_outputs.c.child_workflow_id
-                        ).where(
-                            SystemSchema.operation_outputs.c.workflow_uuid
-                            == parentUUID,
-                            SystemSchema.operation_outputs.c.function_id == functionID,
-                        )
-                    ).fetchone()
-                if existing is not None and existing[0] == childUUID:
-                    return
-                raise DBOSWorkflowConflictIDError(parentUUID)
-            raise
 
     @abstractmethod
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
@@ -3473,6 +3413,7 @@ class SystemDatabase(ABC):
                 "output": None,
                 "error": None,
                 "serialization": None,
+                "child_workflow_id": None,
             }
             self._record_operation_result_txn(
                 output, int(time.time() * 1000), conn=conn
@@ -3612,6 +3553,7 @@ class SystemDatabase(ABC):
                     "output": sermsg,
                     "serialization": serialization,
                     "error": None,
+                    "child_workflow_id": None,
                 },
                 int(time.time() * 1000),
                 conn=c,
@@ -3941,6 +3883,7 @@ class SystemDatabase(ABC):
                         "output": DBOSPortableJSON.serialize(end_time),
                         "error": None,
                         "serialization": DBOSPortableJSON.name(),
+                        "child_workflow_id": None,
                     },
                     completed_at_epoch_ms=(
                         int(end_time * 1000) if project_completion_time else None
@@ -4017,6 +3960,7 @@ class SystemDatabase(ABC):
                 "output": None,
                 "error": None,
                 "serialization": None,
+                "child_workflow_id": None,
             }
             self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
         # Notify only after commit, so a woken get_event sees the value.
@@ -4279,6 +4223,7 @@ class SystemDatabase(ABC):
                     "output": serval,
                     "serialization": serialization,
                     "error": None,
+                    "child_workflow_id": None,
                 }
             )
         return value
@@ -4978,6 +4923,7 @@ class SystemDatabase(ABC):
                     "output": serval,
                     "serialization": serialization,
                     "error": None,
+                    "child_workflow_id": None,
                 }
             )
         return result
@@ -5028,6 +4974,7 @@ class SystemDatabase(ABC):
                     "output": serval,
                     "serialization": serialization,
                     "error": None,
+                    "child_workflow_id": None,
                 },
             )
         return result
@@ -5079,13 +5026,15 @@ class SystemDatabase(ABC):
             inserted = conn.execute(
                 self.dialect.insert(SystemSchema.operation_outputs)
                 .values(
-                    **self._child_workflow_output_values(
-                        parent_workflow_id,
-                        child_workflow_id,
-                        parent_function_id,
-                        function_name,
-                        started_at_epoch_ms,
-                    )
+                    workflow_uuid=parent_workflow_id,
+                    function_id=parent_function_id,
+                    function_name=function_name,
+                    child_workflow_id=child_workflow_id,
+                    # Spans the launch only: the parent does not wait for the child here.
+                    started_at_epoch_ms=started_at_epoch_ms,
+                    completed_at_epoch_ms=int(time.time() * 1000),
+                    retention_timestamp=self._now_ms_sql(),
+                    application_name=self.app_name,
                 )
                 .on_conflict_do_nothing()
                 .returning(SystemSchema.operation_outputs.c.function_id)
@@ -5434,6 +5383,7 @@ class SystemDatabase(ABC):
                     "output": None,
                     "error": None,
                     "serialization": None,
+                    "child_workflow_id": None,
                 }
                 self._record_operation_result_txn(
                     output, int(time.time() * 1000), conn=c
@@ -5934,6 +5884,7 @@ class SystemDatabase(ABC):
                     "error": None,
                     "serialization": None,
                     "started_at_epoch_ms": int(time.time() * 1000),
+                    "child_workflow_id": None,
                 }
                 self._record_operation_result_txn(result, int(time.time() * 1000), c)
                 return True
@@ -7088,6 +7039,7 @@ class SystemDatabase(ABC):
                 "output": (self.serializer.serialize(result)),
                 "serialization": None,
                 "error": None,
+                "child_workflow_id": None,
             }
             self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
         DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT)

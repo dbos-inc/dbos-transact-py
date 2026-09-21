@@ -1856,6 +1856,7 @@ class DBOS:
                         "error": None,
                         "serialization": serialization,
                         "started_at_epoch_ms": start_time,
+                        "child_workflow_id": None,
                     },
                 )
                 return done, pending
