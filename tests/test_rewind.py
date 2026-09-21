@@ -166,7 +166,7 @@ def mailbox(dbos: DBOS, workflow_id: str) -> List[Any]:
 #######################################
 
 
-def test_rewind_deletes_consumed_notifications(dbos: DBOS) -> None:
+def test_rewind_deletes_notifications(dbos: DBOS) -> None:
     @DBOS.workflow()
     def receiver(name: str) -> str:
         run = run_count(name)
@@ -186,17 +186,20 @@ def test_rewind_deletes_consumed_notifications(dbos: DBOS) -> None:
     first_recv = step_id_of(workflow_id, "DBOS.recv")
     second_recv = step_id_of(workflow_id, "DBOS.recv", occurrence=1)
     assert first_recv != second_recv
+    # A message that arrives once the workflow is done sits unconsumed.
+    DBOS.send(workflow_id, "stray", "cmd")
     assert mailbox(dbos, workflow_id) == [
         ("a", True, first_recv),
         ("b", True, second_recv),
+        ("stray", False, None),
     ]
 
     with paused_queue("rewind_delete_gate"):
         dbos._sys_db.rewind_workflow(
             workflow_id, second_recv, queue_name="rewind_delete_gate"
         )
-        # Only the message the discarded steps took is gone. The first recv's
-        # message stays consumed: its step survived the cut.
+        # The message the discarded step took is gone, and so is the one still
+        # waiting. The first recv's message stays consumed: its step survived the cut.
         assert mailbox(dbos, workflow_id) == [("a", True, first_recv)]
         # A message that arrives after the cut is what the replayed recv gets.
         DBOS.send(workflow_id, "c", "cmd")

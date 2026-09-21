@@ -1469,8 +1469,8 @@ class SystemDatabase(ABC):
         When a workflow is rewound, all events and state from the specified start_step
         onwards are discarded, effectively rewinding the workflow to that point.
 
-        Messages the discarded run consumed are deleted: they were delivered once, so
-        a replayed recv waits for new ones rather than receiving them again.
+        Messages the discarded run consumed or received after the rewind point are
+        deleted.
 
         Stream entries written by the discarded run remain in place,
         with the exception of the close sentinel that has to be removed
@@ -1579,13 +1579,16 @@ class SystemDatabase(ABC):
                     )
                 )
 
-            # Delete the messages the discarded steps consumed.
+            # Delete messages consumed or received after the rewind point
             c.execute(
                 sa.delete(SystemSchema.notifications).where(
                     (SystemSchema.notifications.c.destination_uuid == workflow_id)
                     & (
-                        SystemSchema.notifications.c.consumed_by_function_id
-                        >= start_step
+                        (
+                            SystemSchema.notifications.c.consumed_by_function_id
+                            >= start_step
+                        )
+                        | (SystemSchema.notifications.c.consumed == False)
                     )
                 )
             )
