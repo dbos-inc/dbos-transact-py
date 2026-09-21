@@ -804,8 +804,9 @@ def test_id_reuse_reject_enqueue_with_options(dbos: DBOS) -> None:
     )
     assert fresh.get_result() == "fresh"
 
-    # An explicit option wins over the ambient policy.
+    # An explicit option wins over the ambient policy, with the ambient ID supplying the ID.
     attach = options(workflow_id)
+    del attach["workflow_id"]
     attach["workflow_id_reuse_policy"] = "return-existing"
     with SetWorkflowID(workflow_id, workflow_id_reuse_policy="reject"):
         handle = DBOS.enqueue_workflow_with_options(attach, "new")
