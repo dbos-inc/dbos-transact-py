@@ -47,6 +47,7 @@ class DBOSConfig(TypedDict, total=False):
         observability_query_timeout_sec (float): Statement timeout, in seconds, for read-only observability queries against the system database. Defaults to 30.0.
         scheduler_polling_interval_sec (float): Polling interval in seconds for the scheduler thread to detect new workflow schedules. Defaults to 30.0.
         kafka_queue_polling_interval_sec (float): Polling interval in seconds for the internal queues on which Kafka consumer workflows run (_dbos_kafka_queue and _dbos_kafka_ordered_queue). Defaults to 1.0. Minimum value is 0.001.
+        workflow_timeout_polling_interval_sec (float): Polling interval in seconds for the thread that cancels workflows past their timeout. Defaults to 1.0. Minimum value is 0.001.
         otel_attribute_format (Literal["legacy", "semconv"]): How span attribute names are emitted to OTLP.
             "legacy" (default) keeps DBOS's original names (e.g. operationUUID, applicationID) for backward
             compatibility with existing dashboards and the TypeScript Transact SDK. "semconv" emits the
@@ -84,6 +85,7 @@ class DBOSConfig(TypedDict, total=False):
     observability_query_timeout_sec: Optional[float]
     scheduler_polling_interval_sec: Optional[float]
     kafka_queue_polling_interval_sec: Optional[float]
+    workflow_timeout_polling_interval_sec: Optional[float]
     otel_attribute_format: Optional[Literal["legacy", "semconv"]]
 
 
@@ -96,6 +98,7 @@ class RuntimeConfig(TypedDict, total=False):
     observability_query_timeout_sec: Optional[float]
     scheduler_polling_interval_sec: Optional[float]
     kafka_queue_polling_interval_sec: Optional[float]
+    workflow_timeout_polling_interval_sec: Optional[float]
 
 
 class DatabaseConfig(TypedDict, total=False):
@@ -238,6 +241,18 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         translated_config["runtimeConfig"][
             "kafka_queue_polling_interval_sec"
         ] = kafka_interval
+    if "workflow_timeout_polling_interval_sec" in config:
+        timeout_interval = config["workflow_timeout_polling_interval_sec"]
+        # Reject NaN/inf too (they slip past a bare < 0.001) so the timeout thread's wait can't crash.
+        if timeout_interval is not None and (
+            not math.isfinite(timeout_interval) or timeout_interval < 0.001
+        ):
+            raise DBOSInitializationError(
+                f"workflow_timeout_polling_interval_sec must be a finite number at least 0.001 seconds, got {timeout_interval}"
+            )
+        translated_config["runtimeConfig"][
+            "workflow_timeout_polling_interval_sec"
+        ] = timeout_interval
 
     # Telemetry config
     enable_otlp = config.get("enable_otlp", None)

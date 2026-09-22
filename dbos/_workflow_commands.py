@@ -1,3 +1,4 @@
+import threading
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, Sequence, Union
 
 from dbos._context import get_local_dbos_context
@@ -121,6 +122,30 @@ def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:
         cutoff_epoch_timestamp_ms
     ):
         dbos.cancel_workflow(workflow_id)
+
+
+# Most workflows one sweep transaction cancels; a full batch sweeps again at once.
+_SWEEP_BATCH_SIZE = 1000
+
+WORKFLOW_TIMEOUT_THREAD_NAME = "dbos-workflow-timeout"
+
+
+def workflow_timeout_thread(
+    stop_event: threading.Event, dbos: "DBOS", polling_interval_sec: float
+) -> None:
+    """Cancel this application's active workflows once their deadline passes."""
+    while not stop_event.is_set():
+        try:
+            while not stop_event.is_set():
+                cancelled = dbos._sys_db.cancel_timed_out_workflows(_SWEEP_BATCH_SIZE)
+                for workflow_id in cancelled:
+                    dbos.logger.debug(f"Cancelled workflow {workflow_id}: timed out")
+                if len(cancelled) < _SWEEP_BATCH_SIZE:
+                    break
+        except Exception as e:
+            dbos.logger.warning(f"Exception cancelling timed-out workflows: {e}")
+        if stop_event.wait(timeout=polling_interval_sec):
+            break
 
 
 Datasource = Union[SQLAlchemyDatasource, AsyncSQLAlchemyDatasource]

@@ -584,29 +584,6 @@ def _assemble_workflow_status(
     return status
 
 
-def _schedule_workflow_timeout(
-    dbos: "DBOS", wfid: str, workflow_deadline_epoch_ms: Optional[int]
-) -> None:
-    """Cancel wfid once its deadline passes. A None deadline is a no-op."""
-    if workflow_deadline_epoch_ms is None:
-        return
-    deadline_ms = workflow_deadline_epoch_ms
-
-    async def timeout_func() -> None:
-        try:
-            time_to_wait_sec = (deadline_ms - (time.time() * 1000)) / 1000
-            if time_to_wait_sec > 0:
-                await asyncio.sleep(time_to_wait_sec)
-
-            await asyncio.to_thread(dbos._sys_db.cancel_workflows, [wfid])
-        except Exception as e:
-            dbos.logger.warning(f"Exception in timeout task for workflow {wfid}: {e}")
-
-    dbos._background_event_loop.submit_coroutine_nowait(
-        timeout_func(), task_set=dbos._timeout_tasks
-    )
-
-
 def _init_workflow(
     dbos: "DBOS",
     ctx: DBOSContext,
@@ -717,9 +694,6 @@ def _init_workflow(
                 }
                 dbos._sys_db.record_operation_result(result)
             raise
-
-    if should_execute:
-        _schedule_workflow_timeout(dbos, wfid, workflow_deadline_epoch_ms)
 
     ctx.workflow_deadline_epoch_ms = workflow_deadline_epoch_ms
     status["workflow_deadline_epoch_ms"] = workflow_deadline_epoch_ms
@@ -1344,9 +1318,6 @@ def execute_dequeued_workflow(
                 serialization_type = WorkflowSerializationFormat.PORTABLE
             ctx.serialization_type = serialization_type
             ctx.workflow_deadline_epoch_ms = status["workflow_deadline_epoch_ms"]
-            _schedule_workflow_timeout(
-                dbos, workflow_id, status["workflow_deadline_epoch_ms"]
-            )
 
             func = cast("Workflow[..., Any]", wf_func.__orig_func)  # type: ignore
             if inspect.iscoroutinefunction(func):

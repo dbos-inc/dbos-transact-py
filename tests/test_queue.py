@@ -1646,9 +1646,6 @@ def test_timeout_queue(dbos: DBOS) -> None:
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
 
-    # Verify all timeout tasks completed
-    assert len(dbos._timeout_tasks) == 0
-
 
 @pytest.mark.asyncio
 async def test_timeout_queue_async(dbos: DBOS, config: DBOSConfig) -> None:
@@ -1780,9 +1777,6 @@ async def test_timeout_queue_async(dbos: DBOS, config: DBOSConfig) -> None:
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
-
-    # Verify all timeout tasks completed
-    assert len(dbos._timeout_tasks) == 0
 
 
 def test_resuming_queued_workflows(dbos: DBOS) -> None:

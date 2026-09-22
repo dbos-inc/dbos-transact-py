@@ -1162,6 +1162,18 @@ class SystemDatabase(ABC):
             )
             return True
 
+    def _cancelled_values(self) -> dict[str, Any]:
+        """Column values that mark a workflow CANCELLED and remove it from its queue."""
+        now_ms = self._now_ms_sql()
+        return {
+            "status": WorkflowStatusString.CANCELLED.value,
+            "queue_name": None,
+            "deduplication_id": None,
+            "started_at_epoch_ms": None,
+            "updated_at": now_ms,
+            "completed_at": now_ms,
+        }
+
     def cancel_workflows(
         self,
         workflow_ids: list[str],
@@ -1169,7 +1181,6 @@ class SystemDatabase(ABC):
     ) -> None:
         def _cancel_workflows(ids: list[str]) -> None:
             with self.engine.begin() as c:
-                now_ms = self._now_ms_sql()
                 # Set the workflows' status to CANCELLED and remove them from any
                 # queue, but only if the workflow is not already complete.
                 c.execute(
@@ -1183,14 +1194,7 @@ class SystemDatabase(ABC):
                             ]
                         )
                     )
-                    .values(
-                        status=WorkflowStatusString.CANCELLED.value,
-                        queue_name=None,
-                        deduplication_id=None,
-                        started_at_epoch_ms=None,
-                        updated_at=now_ms,
-                        completed_at=now_ms,
-                    )
+                    .values(**self._cancelled_values())
                 )
 
         if not cancel_children:
@@ -4573,6 +4577,39 @@ class SystemDatabase(ABC):
                     ),
                 )
             )
+
+    def cancel_timed_out_workflows(self, limit: int) -> list[str]:
+        """Cancel up to limit of this application's active workflows whose deadline has passed.
+        Returns the IDs of the workflows cancelled."""
+        ws = SystemSchema.workflow_status
+        now_ms = int(time.time() * 1000)
+        timed_out = (
+            sa.select(ws.c.workflow_uuid)
+            .where(
+                # Literals, so SQLite's prover matches idx_workflow_status_deadline's IN predicate.
+                ws.c.status.in_(
+                    [
+                        sa.literal_column(f"'{WorkflowStatusString.ENQUEUED.value}'"),
+                        sa.literal_column(f"'{WorkflowStatusString.PENDING.value}'"),
+                        sa.literal_column(f"'{WorkflowStatusString.DELAYED.value}'"),
+                    ]
+                ),
+                ws.c.workflow_deadline_epoch_ms.isnot(None),
+                ws.c.workflow_deadline_epoch_ms <= now_ms,
+                self._name_filter(ws.c.application_name, self.app_name),
+            )
+            .limit(limit)
+            # A row a dequeue or a peer's sweep holds is left for the next sweep.
+            .with_for_update(skip_locked=True)
+        )
+        with self.engine.begin() as c:
+            rows = c.execute(
+                sa.update(ws)
+                .where(ws.c.workflow_uuid.in_(timed_out))
+                .values(**self._cancelled_values())
+                .returning(ws.c.workflow_uuid)
+            ).fetchall()
+        return [row[0] for row in rows]
 
     def start_queued_workflows(
         self,

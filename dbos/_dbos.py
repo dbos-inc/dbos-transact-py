@@ -154,7 +154,12 @@ from ._logger import (
     dbos_logger,
     init_logger,
 )
-from ._workflow_commands import delete_workflow, get_workflow
+from ._workflow_commands import (
+    WORKFLOW_TIMEOUT_THREAD_NAME,
+    delete_workflow,
+    get_workflow,
+    workflow_timeout_thread,
+)
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
 # There are cases where the parameters P and return value R should be separate
@@ -455,7 +460,8 @@ class DBOS:
         self.background_thread_stop_events: List[threading.Event] = []
         self._executor_field: Optional[ThreadPoolExecutor] = None
         self._background_threads: List[threading.Thread] = []
-        self._timeout_tasks: set[asyncio.Task[None]] = set()
+        # Set after the shutdown drain, so timeouts still fire while workflows finish.
+        self._workflow_timeout_stop_event = threading.Event()
         # Strong references to running async workflow tasks: the event loop
         # only keeps weak references, so without these a garbage-collection
         # pass can destroy a pending workflow task mid-execution (#710).
@@ -683,6 +689,26 @@ class DBOS:
             bg_queue_thread.start()
             self._background_threads.append(bg_queue_thread)
 
+            # Start the workflow timeout thread
+            workflow_timeout_polling_interval_sec: float = (
+                self._config.get("runtimeConfig", {}).get(
+                    "workflow_timeout_polling_interval_sec"
+                )
+                or 1.0
+            )
+            timeout_thread = threading.Thread(
+                target=workflow_timeout_thread,
+                args=(
+                    self._workflow_timeout_stop_event,
+                    self,
+                    workflow_timeout_polling_interval_sec,
+                ),
+                name=WORKFLOW_TIMEOUT_THREAD_NAME,
+                daemon=True,
+            )
+            timeout_thread.start()
+            self._background_threads.append(timeout_thread)
+
             # Start the conductor thread if requested
             if GlobalParams.dbos_cloud:
                 cloud_app_name = os.environ.get("DBOS__CONDUCTOR_APP_NAME")
@@ -844,6 +870,7 @@ class DBOS:
                     )
                 else:
                     break
+        self._workflow_timeout_stop_event.set()
         # Disconnect from Conductor only once the wait above is over, so the executor stays visibly alive to Conductor for its whole duration.
         if self.conductor_websocket is not None:
             self.conductor_websocket.evt.set()
@@ -857,33 +884,6 @@ class DBOS:
                 self.conductor_websocket.join(timeout=10.0)
                 if self.conductor_websocket.is_alive():
                     dbos_logger.warning("Conductor thread did not exit within timeout")
-        if self._timeout_tasks:
-            target_loop = self._background_event_loop.target_loop()
-            try:
-                current_loop: Optional[asyncio.AbstractEventLoop] = (
-                    asyncio.get_running_loop()
-                )
-            except RuntimeError:
-                current_loop = None
-
-            if current_loop is not None and current_loop is target_loop:
-                # destroy() is running on the loop that owns the timeout
-                # tasks, so cancel them directly.
-                for task in self._timeout_tasks:
-                    task.cancel()
-                self._timeout_tasks.clear()
-            else:
-
-                async def cancel_timeout_tasks() -> None:
-                    for task in self._timeout_tasks:
-                        task.cancel()
-                    await asyncio.gather(*self._timeout_tasks, return_exceptions=True)
-                    self._timeout_tasks.clear()
-
-                try:
-                    self._background_event_loop.submit_coroutine(cancel_timeout_tasks())
-                except RuntimeError as e:
-                    dbos_logger.warning(f"Exception cancelling timeout tasks: {e}")
         self._background_event_loop.stop()
         if self._executor_field is not None:
             self._executor_field.shutdown(wait=False, cancel_futures=True)

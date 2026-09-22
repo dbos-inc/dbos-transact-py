@@ -103,6 +103,8 @@ def default_config(sqlite_path: Path) -> DBOSConfig:
         # otherwise dominates every consumer test. Tests asserting on that default
         # pop this key.
         "kafka_queue_polling_interval_sec": 0.05,
+        # Timeout tests wait on the sweep, whose 1s default poll would dominate them.
+        "workflow_timeout_polling_interval_sec": 0.1,
     }
 
 

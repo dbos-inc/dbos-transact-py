@@ -24,7 +24,7 @@ from dbos._dbos import WorkflowHandle
 from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSPatchNondeterminismError
 from dbos._event_loop import BackgroundEventLoop
 from dbos._schemas.system_database import SystemSchema
-from tests.conftest import retry_until_success, retry_until_success_async
+from tests.conftest import retry_until_success
 
 
 @pytest.mark.asyncio
@@ -815,14 +815,6 @@ async def test_workflow_timeout_async(dbos: DBOS) -> None:
         await (await DBOS.retrieve_workflow_async(direct_child)).get_result()
     assert "was cancelled" in str(exc_info.value)
 
-    # Verify all timeout tasks complete. A task may still be finishing its
-    # (redundant) cancellation of an already-cancelled workflow, so allow it
-    # a moment to drain rather than asserting instantaneous emptiness.
-    deadline = time.time() + 30
-    while dbos._timeout_tasks and time.time() < deadline:
-        await asyncio.sleep(0.1)
-    assert len(dbos._timeout_tasks) == 0
-
 
 @pytest.mark.asyncio
 async def test_max_parallel_workflows(dbos: DBOS) -> None:
@@ -1300,21 +1292,10 @@ async def test_concurrent_patch_async(dbos: DBOS, config: DBOSConfig) -> None:
 def test_destroy_from_adopted_main_loop_does_not_deadlock(
     config: DBOSConfig, cleanup_test_databases: None
 ) -> None:
-    """Reproduce the DBOS.destroy() self-deadlock.
-
-    When DBOS.launch() runs inside a running event loop, DBOS adopts that loop
-    as its main loop. A workflow with a timeout parks a "timeout task" on that
-    loop. If destroy() is then called from that same loop's thread while a
-    timeout task is still pending, destroy() schedules a cancellation coroutine
-    onto the loop and blocks the calling thread on .result() -- but the loop is
-    the calling thread, so it can never run the coroutine. Permanent hang.
-
-    We run the whole launch + timeout + destroy scenario on a dedicated thread
-    with its own event loop, then join it with a timeout. Before the fix the
-    thread deadlocks (join times out); after the fix it completes promptly.
-    """
+    """DBOS.destroy() called from the thread of the loop DBOS adopted as its main loop
+    returns promptly, even with a workflow's timeout still outstanding."""
     DBOS.destroy(destroy_registry=True)
-    dbos = DBOS(config=config)
+    DBOS(config=config)
 
     @DBOS.workflow()
     def wf_with_timeout() -> str:
@@ -1330,23 +1311,9 @@ def test_destroy_from_adopted_main_loop_does_not_deadlock(
             # Launch from within the running loop so DBOS adopts it as main loop.
             DBOS.launch()
 
-            # The workflow returns immediately, but its timeout task stays parked
-            # in asyncio.sleep() on this loop, so it is still pending in
-            # dbos._timeout_tasks when we destroy.
             with SetWorkflowTimeout(30):
                 assert wf_with_timeout() == "done"
 
-            # Poll (don't sleep a fixed amount) until the loop has actually
-            # created the parked timeout task. The async retry yields to the loop
-            # between attempts, so the task gets a chance to be created.
-            def timeout_task_is_pending() -> None:
-                assert dbos._timeout_tasks, "expected a pending timeout task"
-
-            await retry_until_success_async(
-                timeout_task_is_pending, interval=0.2, max_attempts=50
-            )
-
-            # Called from the adopted main-loop thread -> deadlocks before the fix.
             DBOS.destroy(destroy_registry=True)
 
         try:
@@ -1362,10 +1329,9 @@ def test_destroy_from_adopted_main_loop_does_not_deadlock(
     worker.start()
     worker.join(timeout=20)
 
-    assert not worker.is_alive(), (
-        "DBOS.destroy() deadlocked: it was called from the adopted main-loop "
-        "thread while a timeout task was still pending."
-    )
+    assert (
+        not worker.is_alive()
+    ), "DBOS.destroy() deadlocked when called from the adopted main-loop thread."
     if scenario_error:
         raise scenario_error[0]
 
