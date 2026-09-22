@@ -1597,6 +1597,12 @@ class SystemDatabase(ABC):
                 )
             )
 
+            c.execute(
+                sa.delete(SystemSchema.workflow_output).where(
+                    SystemSchema.workflow_output.c.workflow_uuid == workflow_id
+                )
+            )
+
             # Re-enqueue the workflow
             version_update = (
                 {"application_version": application_version}
@@ -1620,6 +1626,8 @@ class SystemDatabase(ABC):
                     started_at_epoch_ms=None,
                     updated_at=self._now_ms_sql(),
                     completed_at=None,
+                    output=None,
+                    error=None,
                 )
             )
             if result.rowcount != 1:

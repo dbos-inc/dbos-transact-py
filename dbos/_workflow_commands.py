@@ -152,10 +152,14 @@ def workflow_timeout_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
 Datasource = Union[SQLAlchemyDatasource, AsyncSQLAlchemyDatasource]
 
 
-def _check_rewindable(sys_db: SystemDatabase, workflow_id: str) -> None:
+def _check_rewindable(
+    sys_db: SystemDatabase, workflow_id: str, start_step: int
+) -> None:
     """Refuse to touch a datasource's checkpoints for a workflow that is missing or
     still running. The system database rewind repeats this check under its own
     transaction; this one only keeps a running workflow's checkpoints intact."""
+    if start_step < 1:
+        raise ValueError(f"start_step must be >= 1, got {start_step}")
     status = sys_db.get_workflow_status(workflow_id)
     if status is None:
         raise DBOSNonExistentWorkflowError("target", workflow_id)
@@ -189,7 +193,7 @@ def rewind_workflow(
                 "use the async rewind"
             )
     if datasources:
-        _check_rewindable(sys_db, workflow_id)
+        _check_rewindable(sys_db, workflow_id, start_step)
     for ds in datasources:
         if isinstance(ds, AsyncSQLAlchemyDatasource):
             assert run_coroutine is not None
