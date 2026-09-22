@@ -127,12 +127,13 @@ def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:
 # Most workflows one sweep transaction cancels; a full batch sweeps again at once.
 _SWEEP_BATCH_SIZE = 1000
 
+# How often the timeout thread looks for workflows past their deadline.
+_SWEEP_POLLING_INTERVAL_SEC = 1.0
+
 WORKFLOW_TIMEOUT_THREAD_NAME = "dbos-workflow-timeout"
 
 
-def workflow_timeout_thread(
-    stop_event: threading.Event, dbos: "DBOS", polling_interval_sec: float
-) -> None:
+def workflow_timeout_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
     """Cancel this application's active workflows once their deadline passes."""
     while not stop_event.is_set():
         try:
@@ -144,7 +145,7 @@ def workflow_timeout_thread(
                     break
         except Exception as e:
             dbos.logger.warning(f"Exception cancelling timed-out workflows: {e}")
-        if stop_event.wait(timeout=polling_interval_sec):
+        if stop_event.wait(timeout=_SWEEP_POLLING_INTERVAL_SEC):
             break
 
 

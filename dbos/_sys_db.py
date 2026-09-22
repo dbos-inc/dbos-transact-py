@@ -1159,18 +1159,6 @@ class SystemDatabase(ABC):
             )
             return True
 
-    def _cancelled_values(self) -> dict[str, Any]:
-        """Column values that mark a workflow CANCELLED and remove it from its queue."""
-        now_ms = self._now_ms_sql()
-        return {
-            "status": WorkflowStatusString.CANCELLED.value,
-            "queue_name": None,
-            "deduplication_id": None,
-            "started_at_epoch_ms": None,
-            "updated_at": now_ms,
-            "completed_at": now_ms,
-        }
-
     def cancel_workflows(
         self,
         workflow_ids: list[str],
@@ -1178,6 +1166,7 @@ class SystemDatabase(ABC):
     ) -> None:
         def _cancel_workflows(ids: list[str]) -> None:
             with self.engine.begin() as c:
+                now_ms = self._now_ms_sql()
                 # Set the workflows' status to CANCELLED and remove them from any
                 # queue, but only if the workflow is not already complete.
                 c.execute(
@@ -1191,7 +1180,14 @@ class SystemDatabase(ABC):
                             ]
                         )
                     )
-                    .values(**self._cancelled_values())
+                    .values(
+                        status=WorkflowStatusString.CANCELLED.value,
+                        queue_name=None,
+                        deduplication_id=None,
+                        started_at_epoch_ms=None,
+                        updated_at=now_ms,
+                        completed_at=now_ms,
+                    )
                 )
 
         if not cancel_children:
@@ -4601,10 +4597,18 @@ class SystemDatabase(ABC):
             .with_for_update(skip_locked=True)
         )
         with self.engine.begin() as c:
+            cancelled_at = self._now_ms_sql()
             rows = c.execute(
                 sa.update(ws)
                 .where(ws.c.workflow_uuid.in_(timed_out))
-                .values(**self._cancelled_values())
+                .values(
+                    status=WorkflowStatusString.CANCELLED.value,
+                    queue_name=None,
+                    deduplication_id=None,
+                    started_at_epoch_ms=None,
+                    updated_at=cancelled_at,
+                    completed_at=cancelled_at,
+                )
                 .returning(ws.c.workflow_uuid)
             ).fetchall()
         return [row[0] for row in rows]

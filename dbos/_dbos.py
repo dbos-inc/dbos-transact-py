@@ -690,19 +690,9 @@ class DBOS:
             self._background_threads.append(bg_queue_thread)
 
             # Start the workflow timeout thread
-            workflow_timeout_polling_interval_sec: float = (
-                self._config.get("runtimeConfig", {}).get(
-                    "workflow_timeout_polling_interval_sec"
-                )
-                or 1.0
-            )
             timeout_thread = threading.Thread(
                 target=workflow_timeout_thread,
-                args=(
-                    self._workflow_timeout_stop_event,
-                    self,
-                    workflow_timeout_polling_interval_sec,
-                ),
+                args=(self._workflow_timeout_stop_event, self),
                 name=WORKFLOW_TIMEOUT_THREAD_NAME,
                 daemon=True,
             )
