@@ -950,14 +950,13 @@ class SystemDatabase(ABC):
         *,
         owner_xid: Optional[str],
         reuse_policy: Optional[WorkflowIDReusePolicy] = None,
-    ) -> tuple[WorkflowStatuses, Optional[int], bool]:
+    ) -> tuple[WorkflowStatuses, bool]:
         """Insert a workflow's status row, or return the existing row unchanged."""
         # Without an owner_xid the check below cannot tell a fresh insert from an existing row.
         assert (
             reuse_policy != "reject" or owner_xid is not None
         ), "workflow_id_reuse_policy 'reject' requires an owner_xid"
         wf_status: WorkflowStatuses = status["status"]
-        workflow_deadline_epoch_ms: Optional[int] = status["workflow_deadline_epoch_ms"]
         should_execute = True
         _enqueued_statuses = [
             WorkflowStatusString.ENQUEUED.value,
@@ -1003,7 +1002,6 @@ class SystemDatabase(ABC):
 
         cmd = cmd.returning(
             SystemSchema.workflow_status.c.status,
-            SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
             SystemSchema.workflow_status.c.name,
             SystemSchema.workflow_status.c.class_name,
             SystemSchema.workflow_status.c.config_name,
@@ -1042,7 +1040,6 @@ class SystemDatabase(ABC):
             # Check the started workflow matches the expected name, class_name, config_name, and queue_name
             # A mismatch indicates a workflow starting with the same UUID but different functions, which would throw an exception.
             wf_status = m["status"]
-            workflow_deadline_epoch_ms = m["workflow_deadline_epoch_ms"]
             # A row carrying another owner_xid was already there; a retried commit carries ours.
             if reuse_policy == "reject" and m["owner_xid"] != owner_xid:
                 raise DBOSWorkflowIDInUseError(
@@ -1070,7 +1067,7 @@ class SystemDatabase(ABC):
 
         # After the checks above, so a rejected start writes no inputs.
         conn.execute(inputs_insert)
-        return wf_status, workflow_deadline_epoch_ms, should_execute
+        return wf_status, should_execute
 
     @db_retry()
     def dead_letter_workflows(
@@ -5199,21 +5196,19 @@ class SystemDatabase(ABC):
         *,
         owner_xid: Optional[str],
         reuse_policy: Optional[WorkflowIDReusePolicy] = None,
-    ) -> tuple[WorkflowStatuses, Optional[int], bool]:
+    ) -> tuple[WorkflowStatuses, bool]:
         """
         Record the initial status and inputs for a workflow, and indicate if this is a new record
         """
         with self.engine.begin() as conn:
-            wf_status, workflow_deadline_epoch_ms, should_execute = (
-                self._insert_workflow_status(
-                    status,
-                    conn,
-                    owner_xid=owner_xid,
-                    reuse_policy=reuse_policy,
-                )
+            wf_status, should_execute = self._insert_workflow_status(
+                status,
+                conn,
+                owner_xid=owner_xid,
+                reuse_policy=reuse_policy,
             )
         DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_INITWF_COMMIT)
-        return wf_status, workflow_deadline_epoch_ms, should_execute
+        return wf_status, should_execute
 
     @db_retry()
     def init_child_workflow(
@@ -5226,7 +5221,7 @@ class SystemDatabase(ABC):
         function_name: str,
         started_at_epoch_ms: int,
         reuse_policy: Optional[WorkflowIDReusePolicy] = None,
-    ) -> tuple[WorkflowStatuses, Optional[int], bool]:
+    ) -> tuple[WorkflowStatuses, bool]:
         """Insert a child's status row and record it as the parent's step in one transaction, so a crash leaves both or neither."""
         child_workflow_id = status["workflow_uuid"]
         with self.engine.begin() as conn:
@@ -5436,7 +5431,7 @@ class SystemDatabase(ABC):
         *,
         owner_xid: Optional[str] = None,
         reuse_policy: Optional[WorkflowIDReusePolicy] = None,
-    ) -> tuple[WorkflowStatuses, Optional[int], bool]:
+    ) -> tuple[WorkflowStatuses, bool]:
         """
         Record the initial status and inputs for a workflow using a caller-owned
         SQLAlchemy Connection or ORM Session.

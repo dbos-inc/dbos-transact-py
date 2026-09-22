@@ -637,24 +637,20 @@ def _init_workflow(
     while True:
         try:
             if ctx.has_parent():
-                wf_status, workflow_deadline_epoch_ms, should_execute = (
-                    dbos._sys_db.init_child_workflow(
-                        status,
-                        owner_xid=owner_xid,
-                        parent_workflow_id=ctx.parent_workflow_id,
-                        parent_function_id=ctx.parent_workflow_fid,
-                        function_name=wf_name,
-                        started_at_epoch_ms=started_at_epoch_ms,
-                        reuse_policy=workflow_id_reuse_policy,
-                    )
+                wf_status, should_execute = dbos._sys_db.init_child_workflow(
+                    status,
+                    owner_xid=owner_xid,
+                    parent_workflow_id=ctx.parent_workflow_id,
+                    parent_function_id=ctx.parent_workflow_fid,
+                    function_name=wf_name,
+                    started_at_epoch_ms=started_at_epoch_ms,
+                    reuse_policy=workflow_id_reuse_policy,
                 )
             else:
-                wf_status, workflow_deadline_epoch_ms, should_execute = (
-                    dbos._sys_db.init_workflow(
-                        status,
-                        owner_xid=owner_xid,
-                        reuse_policy=workflow_id_reuse_policy,
-                    )
+                wf_status, should_execute = dbos._sys_db.init_workflow(
+                    status,
+                    owner_xid=owner_xid,
+                    reuse_policy=workflow_id_reuse_policy,
                 )
             break
         except (DBOSQueueDeduplicatedError, DBOSWorkflowIDInUseError) as e:
@@ -696,7 +692,6 @@ def _init_workflow(
             raise
 
     ctx.workflow_deadline_epoch_ms = workflow_deadline_epoch_ms
-    status["workflow_deadline_epoch_ms"] = workflow_deadline_epoch_ms
     status["status"] = wf_status
     return status, should_execute, None
 

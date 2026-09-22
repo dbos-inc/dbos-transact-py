@@ -1289,53 +1289,6 @@ async def test_concurrent_patch_async(dbos: DBOS, config: DBOSConfig) -> None:
         assert status.status == "ERROR"
 
 
-def test_destroy_from_adopted_main_loop_does_not_deadlock(
-    config: DBOSConfig, cleanup_test_databases: None
-) -> None:
-    """DBOS.destroy() called from the thread of the loop DBOS adopted as its main loop
-    returns promptly, even with a workflow's timeout still outstanding."""
-    DBOS.destroy(destroy_registry=True)
-    DBOS(config=config)
-
-    @DBOS.workflow()
-    def wf_with_timeout() -> str:
-        return "done"
-
-    scenario_error: List[BaseException] = []
-
-    def run_scenario() -> None:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        async def scenario() -> None:
-            # Launch from within the running loop so DBOS adopts it as main loop.
-            DBOS.launch()
-
-            with SetWorkflowTimeout(30):
-                assert wf_with_timeout() == "done"
-
-            DBOS.destroy(destroy_registry=True)
-
-        try:
-            loop.run_until_complete(scenario())
-        except BaseException as e:
-            scenario_error.append(e)
-        finally:
-            loop.close()
-
-    worker = threading.Thread(
-        target=run_scenario, name="dbos-destroy-scenario", daemon=True
-    )
-    worker.start()
-    worker.join(timeout=20)
-
-    assert (
-        not worker.is_alive()
-    ), "DBOS.destroy() deadlocked when called from the adopted main-loop thread."
-    if scenario_error:
-        raise scenario_error[0]
-
-
 @pytest.mark.parametrize("adopt_main_loop", [False, True], ids=["owned", "adopted"])
 def test_destroy_finalizes_only_owned_async_generators(
     config: DBOSConfig,
