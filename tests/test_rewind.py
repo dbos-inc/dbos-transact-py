@@ -91,6 +91,15 @@ def status_row(dbos: DBOS, workflow_id: str) -> Any:
         ).one()
 
 
+def output_row(dbos: DBOS, workflow_id: str) -> Any:
+    with dbos._sys_db.engine.begin() as c:
+        return c.execute(
+            sa.select(SystemSchema.workflow_output).where(
+                SystemSchema.workflow_output.c.workflow_uuid == workflow_id
+            )
+        ).one_or_none()
+
+
 def step_ids(dbos: DBOS, workflow_id: str) -> List[int]:
     with dbos._sys_db.engine.begin() as c:
         return sorted(
@@ -507,6 +516,9 @@ def test_database_state_between_rewind_and_replay(dbos: DBOS) -> None:
         assert event_history_ids(dbos, workflow_id) == []
         assert events_of(dbos, workflow_id) == {}
         assert mailbox(dbos, workflow_id) == []
+        assert output_row(dbos, workflow_id) is None
+        assert after.output is None
+        assert after.error is None
         DBOS.send(workflow_id, "go", "cmd")
 
     assert DBOS.retrieve_workflow(workflow_id).get_result() == "run2"
@@ -724,6 +736,14 @@ def test_rewind_drops_datasource_checkpoints(
         workflow_id = start(writer, "datasource")
         assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
         assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
+
+        # A start_step the system database would reject must not get as far as the
+        # checkpoints, which are deleted before it is ever consulted.
+        with pytest.raises(ValueError, match="must be >= 1"):
+            DBOS.rewind_workflow(workflow_id, start_step=0)
+        assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
+        assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
+        assert runs["datasource"] == 1
 
         # Cut at the third step: each datasource keeps one checkpoint, loses one.
         with paused_queue("rewind_datasource_gate"):
