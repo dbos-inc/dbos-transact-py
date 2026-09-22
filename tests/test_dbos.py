@@ -2385,15 +2385,8 @@ def test_workflow_timeout(dbos: DBOS) -> None:
 
 
 def test_timeout_cleanup_on_destroy(dbos: DBOS, config: DBOSConfig) -> None:
-    @DBOS.workflow()
-    def slow_workflow() -> None:
-        while True:
-            DBOS.sleep(0.1)
-
-    # Start a workflow with a long timeout so its deadline is still ahead at destroy time
-    with SetWorkflowTimeout(60):
-        DBOS.start_workflow(slow_workflow)
-
+    """The timeout thread stops on its own event, not the one the other background
+    threads share, so destroy has to set it."""
     timeout_threads = [
         t for t in dbos._background_threads if t.name == WORKFLOW_TIMEOUT_THREAD_NAME
     ]
