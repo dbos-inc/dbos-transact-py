@@ -336,6 +336,35 @@ class ConductorWebsocket(threading.Thread):
                                 error_message=error_message,
                             )
                             websocket.send(bulk_fork_response.to_json())
+                        elif msg_type == p.MessageType.REWIND_WORKFLOW:
+                            rewind_message = p.RewindWorkflowRequest.from_json(message)
+                            rewind_body = rewind_message.body
+                            rewind_success = True
+                            try:
+                                self.dbos._rewind_workflow(
+                                    rewind_body["workflow_id"],
+                                    rewind_body.get("start_step") or 1,
+                                    application_version=rewind_body.get(
+                                        "application_version"
+                                    ),
+                                    queue_name=rewind_body.get("queue_name"),
+                                    queue_partition_key=rewind_body.get(
+                                        "queue_partition_key"
+                                    ),
+                                )
+                            except Exception as e:
+                                error_message = self._report_exception(
+                                    "Exception encountered when rewinding workflow"
+                                )
+                                rewind_success = False
+
+                            rewind_response = p.RewindWorkflowResponse(
+                                type=p.MessageType.REWIND_WORKFLOW,
+                                request_id=base_message.request_id,
+                                success=rewind_success,
+                                error_message=error_message,
+                            )
+                            websocket.send(rewind_response.to_json())
                         elif msg_type == p.MessageType.LIST_WORKFLOWS:
                             list_workflows_message = p.ListWorkflowsRequest.from_json(
                                 message

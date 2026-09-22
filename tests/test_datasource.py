@@ -177,7 +177,7 @@ async def _async_check_both_tables(
 
 @pytest.fixture(params=["sqlite", "pg"])
 def sync_ds(
-    request: pytest.FixtureRequest, tmp_path: Any
+    request: pytest.FixtureRequest, tmp_path: Any, cleanup_test_databases: None
 ) -> Generator[SQLAlchemyDatasource, None, None]:
     if request.param == "sqlite":
         ds = SQLAlchemyDatasource.create(f"sqlite:///{tmp_path}/ds_test.sqlite")
@@ -203,7 +203,7 @@ def sync_ds(
 
 @pytest_asyncio.fixture(params=["sqlite", "pg"])
 async def async_ds(
-    request: pytest.FixtureRequest, tmp_path: Any
+    request: pytest.FixtureRequest, tmp_path: Any, cleanup_test_databases: None
 ) -> AsyncGenerator[AsyncSQLAlchemyDatasource, None]:
     if request.param == "sqlite":
         ds = await AsyncSQLAlchemyDatasource.create(
@@ -307,7 +307,7 @@ def test_sync_ds_transaction_decorator_rejects_coroutine(
 # ---------------------------------------------------------------------------
 
 
-def test_sync_ds_oaoo(dbos: DBOS, sync_ds: SQLAlchemyDatasource) -> None:
+def test_sync_ds_oaoo(sync_ds: SQLAlchemyDatasource, dbos: DBOS) -> None:
     """run_tx_step inside a workflow records the result and replays on retry."""
     call_count = {"n": 0}
 
@@ -332,7 +332,7 @@ def test_sync_ds_oaoo(dbos: DBOS, sync_ds: SQLAlchemyDatasource) -> None:
     assert call_count["n"] == 1
 
 
-def test_sync_ds_decorator_oaoo(dbos: DBOS, sync_ds: SQLAlchemyDatasource) -> None:
+def test_sync_ds_decorator_oaoo(sync_ds: SQLAlchemyDatasource, dbos: DBOS) -> None:
     """@ds.transaction inside a workflow records and replays the result."""
     call_count = {"n": 0}
 
@@ -358,7 +358,7 @@ def test_sync_ds_decorator_oaoo(dbos: DBOS, sync_ds: SQLAlchemyDatasource) -> No
     assert call_count["n"] == 1
 
 
-def test_sync_ds_error_oaoo(dbos: DBOS, sync_ds: SQLAlchemyDatasource) -> None:
+def test_sync_ds_error_oaoo(sync_ds: SQLAlchemyDatasource, dbos: DBOS) -> None:
     """When a datasource step raises, the error is recorded and replayed."""
     call_count = {"n": 0}
 
@@ -384,7 +384,7 @@ def test_sync_ds_error_oaoo(dbos: DBOS, sync_ds: SQLAlchemyDatasource) -> None:
 
 
 def test_sync_ds_retries_on_serialization_error(
-    dbos: DBOS, sync_ds: SQLAlchemyDatasource
+    sync_ds: SQLAlchemyDatasource, dbos: DBOS
 ) -> None:
     """A SQLSTATE 40001 raised inside the txn body must be retried, not recorded."""
     if not isinstance(sync_ds, PostgresSyncDatasource):
@@ -430,7 +430,7 @@ def test_sync_ds_retries_on_serialization_error(
 
 
 def test_sync_ds_retries_locked_precheck(
-    dbos: DBOS, sync_ds: SQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
+    sync_ds: SQLAlchemyDatasource, dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A 'database is locked' error on the OAOO pre-check read must be retried, not terminal (#761)."""
     if not isinstance(sync_ds, SqliteSyncDatasource):
@@ -483,7 +483,7 @@ def test_sync_ds_retries_locked_precheck(
 
 
 def test_sync_ds_multiple_steps_in_workflow(
-    dbos: DBOS, sync_ds: SQLAlchemyDatasource
+    sync_ds: SQLAlchemyDatasource, dbos: DBOS
 ) -> None:
     """Multiple datasource steps in one workflow each get their own step_id."""
     call_counts = {"a": 0, "b": 0}
@@ -515,7 +515,7 @@ def test_sync_ds_multiple_steps_in_workflow(
     assert call_counts["b"] == 1
 
 
-def test_sync_ds_writes_both_tables(dbos: DBOS, sync_ds: SQLAlchemyDatasource) -> None:
+def test_sync_ds_writes_both_tables(sync_ds: SQLAlchemyDatasource, dbos: DBOS) -> None:
     """Datasource step writes to both datasource_outputs and operation_outputs."""
 
     def step_fn() -> str:
@@ -533,7 +533,7 @@ def test_sync_ds_writes_both_tables(dbos: DBOS, sync_ds: SQLAlchemyDatasource) -
 
 
 def test_sync_ds_step_recorded_with_name(
-    dbos: DBOS, sync_ds: SQLAlchemyDatasource
+    sync_ds: SQLAlchemyDatasource, dbos: DBOS
 ) -> None:
     """Datasource step appears in list_workflow_steps with the right name and output."""
 
@@ -595,7 +595,7 @@ def test_sync_ds_step_recorded_with_name(
 
 
 def test_sync_ds_recovers_from_sysdb_loss(
-    dbos: DBOS, sync_ds: SQLAlchemyDatasource
+    sync_ds: SQLAlchemyDatasource, dbos: DBOS
 ) -> None:
     """datasource_outputs is the source of truth when the sysdb step record is lost.
 
@@ -634,7 +634,7 @@ def test_sync_ds_recovers_from_sysdb_loss(
 
 
 def test_sync_ds_conflicts_when_duplicate_execution_wins(
-    dbos: DBOS, sync_ds: SQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
+    sync_ds: SQLAlchemyDatasource, dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A duplicate execution that loses the witness-row race stops with a workflow
     conflict instead of surfacing the primary-key IntegrityError (#812) or carrying on
@@ -760,8 +760,8 @@ _LOST_ACK_ERRORS = [
 
 @pytest.mark.parametrize("lost_ack_message, expected_attempts", _LOST_ACK_ERRORS)
 def test_sync_ds_replays_its_own_lost_commit(
-    dbos: DBOS,
     sync_ds: SQLAlchemyDatasource,
+    dbos: DBOS,
     monkeypatch: pytest.MonkeyPatch,
     lost_ack_message: str,
     expected_attempts: int,
@@ -848,8 +848,8 @@ def test_sync_ds_replays_its_own_lost_commit(
     "winner_checkpoints, expected_emails, expected_replays", _LOST_RACE_CASES
 )
 def test_sync_ds_duplicate_execution_stops_at_the_lost_race(
-    dbos: DBOS,
     sync_ds: SQLAlchemyDatasource,
+    dbos: DBOS,
     monkeypatch: pytest.MonkeyPatch,
     winner_checkpoints: bool,
     expected_emails: int,
@@ -1067,7 +1067,7 @@ async def test_async_ds_transaction_decorator_rejects_sync(
 
 
 @pytest.mark.asyncio
-async def test_async_ds_oaoo(dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource) -> None:
+async def test_async_ds_oaoo(async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS) -> None:
     """run_tx_step_async inside a workflow records the result and replays on retry."""
     call_count = {"n": 0}
 
@@ -1096,7 +1096,7 @@ async def test_async_ds_oaoo(dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource) ->
 
 @pytest.mark.asyncio
 async def test_async_ds_decorator_oaoo(
-    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource
+    async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS
 ) -> None:
     """@ds.transaction inside a workflow records and replays the result."""
     call_count = {"n": 0}
@@ -1125,7 +1125,7 @@ async def test_async_ds_decorator_oaoo(
 
 @pytest.mark.asyncio
 async def test_async_ds_error_oaoo(
-    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource
+    async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS
 ) -> None:
     """Async datasource step error is recorded and replayed without re-executing."""
     call_count = {"n": 0}
@@ -1153,7 +1153,7 @@ async def test_async_ds_error_oaoo(
 
 @pytest.mark.asyncio
 async def test_async_ds_retries_on_serialization_error(
-    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource
+    async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS
 ) -> None:
     """A SQLSTATE 40001 raised inside the async txn body must be retried, not recorded."""
     if not isinstance(async_ds, PostgresAsyncDatasource):
@@ -1199,7 +1199,7 @@ async def test_async_ds_retries_on_serialization_error(
 
 @pytest.mark.asyncio
 async def test_async_ds_retries_locked_precheck(
-    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
+    async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A 'database is locked' error on the async OAOO pre-check read must be retried, not terminal (#761)."""
     if not isinstance(async_ds, SqliteAsyncDatasource):
@@ -1253,7 +1253,7 @@ async def test_async_ds_retries_locked_precheck(
 
 @pytest.mark.asyncio
 async def test_async_ds_non_retryable_error_records_and_replays(
-    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource
+    async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS
 ) -> None:
     """A DBAPIError that is not a serialization failure must be recorded, not retried."""
     if not isinstance(async_ds, PostgresAsyncDatasource):
@@ -1286,7 +1286,7 @@ async def test_async_ds_non_retryable_error_records_and_replays(
 
 @pytest.mark.asyncio
 async def test_async_ds_multiple_steps_in_workflow(
-    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource
+    async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS
 ) -> None:
     """Multiple async datasource steps in one workflow each get their own step_id."""
     call_counts = {"a": 0, "b": 0}
@@ -1320,7 +1320,7 @@ async def test_async_ds_multiple_steps_in_workflow(
 
 @pytest.mark.asyncio
 async def test_async_ds_writes_both_tables(
-    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource
+    async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS
 ) -> None:
     """Async datasource step writes to both datasource_outputs and operation_outputs."""
 
@@ -1340,7 +1340,7 @@ async def test_async_ds_writes_both_tables(
 
 @pytest.mark.asyncio
 async def test_async_ds_step_recorded_with_name(
-    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource
+    async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS
 ) -> None:
     """Async datasource step appears in list_workflow_steps with the right name and output."""
 
@@ -1409,7 +1409,7 @@ async def test_async_ds_step_recorded_with_name(
 
 @pytest.mark.asyncio
 async def test_async_ds_recovers_from_sysdb_loss(
-    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource
+    async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS
 ) -> None:
     """datasource_outputs is the source of truth when the sysdb step record is lost.
 
@@ -1449,7 +1449,7 @@ async def test_async_ds_recovers_from_sysdb_loss(
 
 @pytest.mark.asyncio
 async def test_async_ds_conflicts_when_duplicate_execution_wins(
-    dbos: DBOS, async_ds: AsyncSQLAlchemyDatasource, monkeypatch: pytest.MonkeyPatch
+    async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A duplicate execution that loses the witness-row race stops with a workflow
     conflict instead of surfacing the primary-key IntegrityError (#812) or carrying on
@@ -1578,8 +1578,8 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
     "winner_checkpoints, expected_emails, expected_replays", _LOST_RACE_CASES
 )
 async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
-    dbos: DBOS,
     async_ds: AsyncSQLAlchemyDatasource,
+    dbos: DBOS,
     monkeypatch: pytest.MonkeyPatch,
     winner_checkpoints: bool,
     expected_emails: int,
@@ -1713,8 +1713,8 @@ async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("lost_ack_message, expected_attempts", _LOST_ACK_ERRORS)
 async def test_async_ds_replays_its_own_lost_commit(
-    dbos: DBOS,
     async_ds: AsyncSQLAlchemyDatasource,
+    dbos: DBOS,
     monkeypatch: pytest.MonkeyPatch,
     lost_ack_message: str,
     expected_attempts: int,
@@ -1796,3 +1796,87 @@ async def test_async_ds_replays_its_own_lost_commit(
         deserialize_value(ds_row.output, ds_row.serialization, async_ds.serializer)
         == "result-1"
     )
+
+
+# ---------------------------------------------------------------------------
+# Registry and checkpoint deletion
+# ---------------------------------------------------------------------------
+
+
+def _checkpoint_step_ids(engine: sa.Engine, wfid: str) -> list[int]:
+    with engine.begin() as conn:
+        return sorted(
+            conn.execute(
+                sa.select(DatasourceSchema.datasource_outputs.c.step_id).where(
+                    DatasourceSchema.datasource_outputs.c.workflow_id == wfid
+                )
+            ).scalars()
+        )
+
+
+def test_datasource_registers_itself(sync_ds: SQLAlchemyDatasource) -> None:
+    from dbos._dbos import _get_or_create_dbos_registry
+
+    assert sync_ds in _get_or_create_dbos_registry().datasources
+
+
+def test_datasource_must_be_created_before_launch(dbos: DBOS, tmp_path: Any) -> None:
+    with pytest.raises(DBOSException, match="before DBOS.launch"):
+        SQLAlchemyDatasource.create(f"sqlite:///{tmp_path}/late.sqlite")
+
+
+def test_sync_ds_delete_checkpoints(sync_ds: SQLAlchemyDatasource, dbos: DBOS) -> None:
+    def step(value: str) -> str:
+        return value
+
+    @DBOS.workflow()
+    def my_workflow() -> None:
+        sync_ds.run_tx_step(None, step, "a")
+        sync_ds.run_tx_step(None, step, "b")
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        my_workflow()
+    other = str(uuid.uuid4())
+    with SetWorkflowID(other):
+        my_workflow()
+    assert _checkpoint_step_ids(sync_ds.engine, wfid) == [1, 2]
+
+    sync_ds._delete_checkpoints(wfid, 2)
+    assert _checkpoint_step_ids(sync_ds.engine, wfid) == [1]
+    sync_ds._delete_checkpoints(wfid, 1)
+    assert _checkpoint_step_ids(sync_ds.engine, wfid) == []
+    # Other workflows are untouched.
+    assert _checkpoint_step_ids(sync_ds.engine, other) == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_async_ds_delete_checkpoints(
+    async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS
+) -> None:
+    async def step(value: str) -> str:
+        return value
+
+    @DBOS.workflow()
+    async def my_workflow() -> None:
+        await async_ds.run_tx_step_async(None, step, "a")
+        await async_ds.run_tx_step_async(None, step, "b")
+
+    async def step_ids(wfid: str) -> list[int]:
+        async with async_ds.engine.begin() as conn:
+            result = await conn.execute(
+                sa.select(DatasourceSchema.datasource_outputs.c.step_id).where(
+                    DatasourceSchema.datasource_outputs.c.workflow_id == wfid
+                )
+            )
+            return sorted(result.scalars())
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        await my_workflow()
+    assert await step_ids(wfid) == [1, 2]
+
+    await async_ds._delete_checkpoints(wfid, 2)
+    assert await step_ids(wfid) == [1]
+    await async_ds._delete_checkpoints(wfid, 1)
+    assert await step_ids(wfid) == []

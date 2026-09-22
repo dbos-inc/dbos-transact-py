@@ -1,9 +1,16 @@
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, Sequence, Union
 
 from dbos._context import get_local_dbos_context
+from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
+from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 from dbos._utils import generate_uuid
 
-from ._sys_db import DEFAULT_GC_BATCH_SIZE, SystemDatabase, WorkflowStatus
+from ._sys_db import (
+    DEFAULT_GC_BATCH_SIZE,
+    SystemDatabase,
+    WorkflowStatus,
+    workflow_is_active,
+)
 
 if TYPE_CHECKING:
     from ._dbos import DBOS
@@ -114,3 +121,59 @@ def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:
         cutoff_epoch_timestamp_ms
     ):
         dbos.cancel_workflow(workflow_id)
+
+
+Datasource = Union[SQLAlchemyDatasource, AsyncSQLAlchemyDatasource]
+
+
+def _check_rewindable(sys_db: SystemDatabase, workflow_id: str) -> None:
+    """Refuse to touch a datasource's checkpoints for a workflow that is missing or
+    still running. The system database rewind repeats this check under its own
+    transaction; this one only keeps a running workflow's checkpoints intact."""
+    status = sys_db.get_workflow_status(workflow_id)
+    if status is None:
+        raise DBOSNonExistentWorkflowError("target", workflow_id)
+    if workflow_is_active(status["status"]):
+        raise DBOSException(
+            f"Cannot rewind {workflow_id} ({status['status']}): only a workflow in a "
+            "terminal state can be rewound, so cancel it first"
+        )
+
+
+def rewind_workflow(
+    sys_db: SystemDatabase,
+    datasources: Sequence[Datasource],
+    workflow_id: str,
+    start_step: int,
+    *,
+    application_version: Optional[str] = None,
+    queue_name: Optional[str] = None,
+    queue_partition_key: Optional[str] = None,
+    run_coroutine: Optional[Callable[[Coroutine[Any, Any, Any]], Any]] = None,
+) -> None:
+    """Drop the datasources' checkpoints from start_step on, then rewind the
+    workflow in the system database. Best effort: if a step fails the workflow is
+    left as it was and the rewind can be retried, which is safe because the
+    system database checkpoints are touched last. An async datasource needs
+    run_coroutine to bridge to a loop."""
+    for ds in datasources:
+        if isinstance(ds, AsyncSQLAlchemyDatasource) and run_coroutine is None:
+            raise DBOSException(
+                "An async datasource cannot be rewound from sync code; "
+                "use the async rewind"
+            )
+    if datasources:
+        _check_rewindable(sys_db, workflow_id)
+    for ds in datasources:
+        if isinstance(ds, AsyncSQLAlchemyDatasource):
+            assert run_coroutine is not None
+            run_coroutine(ds._delete_checkpoints(workflow_id, start_step))
+        else:
+            ds._delete_checkpoints(workflow_id, start_step)
+    sys_db.rewind_workflow(
+        workflow_id,
+        start_step,
+        application_version=application_version,
+        queue_name=queue_name,
+        queue_partition_key=queue_partition_key,
+    )
