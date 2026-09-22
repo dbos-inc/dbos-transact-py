@@ -23,7 +23,6 @@ from dbos._error import (
     DBOSQueueDeduplicatedError,
     DBOSStepTimeoutError,
     DBOSUnexpectedStepError,
-    DBOSWorkflowConflictIDError,
 )
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._schemas.system_database import SystemSchema
@@ -996,53 +995,6 @@ def test_recv_consume_idempotent_on_timeout(dbos: DBOS) -> None:
             )
         ).fetchall()
     assert len(unconsumed) == 1
-
-
-def test_record_child_workflow_idempotent_on_db_retry(dbos: DBOS) -> None:
-    """record_child_workflow is wrapped in db_retry. If a prior attempt
-    committed and the connection then dropped, the re-run hits a unique
-    violation; recording the *same* child is an idempotent replay (return),
-    while a *different* child is real nondeterminism (conflict)."""
-    parent_id = str(uuid.uuid4())
-    _make_status_row(dbos, parent_id)
-
-    child_id = str(uuid.uuid4())
-    function_id = 1
-    function_name = "test_child"
-
-    start_time = int(time.time() * 1000)
-    dbos._sys_db.record_child_workflow(
-        parent_id,
-        child_id,
-        function_id,
-        function_name,
-        started_at_epoch_ms=start_time,
-    )
-
-    # Re-recording the same child at the same function_id is idempotent.
-    dbos._sys_db.record_child_workflow(
-        parent_id,
-        child_id,
-        function_id,
-        function_name,
-        started_at_epoch_ms=start_time,
-    )
-
-    # A different child at the same function_id is a genuine conflict.
-    with pytest.raises(DBOSWorkflowConflictIDError):
-        dbos._sys_db.record_child_workflow(
-            parent_id,
-            str(uuid.uuid4()),
-            function_id,
-            function_name,
-            started_at_epoch_ms=start_time,
-        )
-
-    # An empty child id is rejected loudly rather than silently wedging recovery.
-    with pytest.raises(DBOSException):
-        dbos._sys_db.record_child_workflow(
-            parent_id, "", 2, function_name, started_at_epoch_ms=start_time
-        )
 
 
 class _RetryOnceEngine:

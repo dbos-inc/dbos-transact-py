@@ -267,11 +267,14 @@ class DBOSClient:
     def _enqueue(self, options: EnqueueOptions, *args: Any, **kwargs: Any) -> str:
         workflow_id, status = self._build_enqueue_status(options, *args, **kwargs)
         return_existing = options.get("duplication_policy") == "return-existing"
+        # Generated once, so a retried insert recognizes a row it already committed.
+        owner_xid = generate_uuid()
         while True:
             try:
                 self._sys_db.init_workflow(
                     status,
-                    owner_xid=None,
+                    owner_xid=owner_xid,
+                    reuse_policy=options.get("workflow_id_reuse_policy"),
                 )
                 return workflow_id
             except DBOSQueueDeduplicatedError:
@@ -305,7 +308,8 @@ class DBOSClient:
         self._sys_db.init_workflow_with_connection(
             status,
             conn_or_session,
-            owner_xid=None,
+            owner_xid=generate_uuid(),
+            reuse_policy=options.get("workflow_id_reuse_policy"),
         )
         return workflow_id
 

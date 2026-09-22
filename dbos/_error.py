@@ -67,6 +67,7 @@ class DBOSErrorCode(Enum):
     StreamNondeterminism = 17
     StepTimeout = 18
     QueryTimeout = 26
+    WorkflowIDInUse = 27
 
 
 #######################################
@@ -302,6 +303,39 @@ class DBOSQueueDeduplicatedError(DBOSException):
             self.__class__,
             (self.workflow_id, self.queue_name, self.deduplication_id),
         )
+
+
+class DBOSWorkflowIDInUseError(DBOSException):
+    """Exception raised when a workflow_id_reuse_policy 'reject' start finds its workflow ID in use."""
+
+    def __init__(self, workflow_id: str, workflow_status: str, workflow_name: str):
+        self.workflow_id = workflow_id
+        # Not named `status`: portable serialization would record it as the error's code.
+        self.workflow_status = workflow_status
+        self.workflow_name = workflow_name
+        super().__init__(
+            f"Workflow ID {workflow_id} is already in use by workflow {workflow_name} with status {workflow_status}.",
+            dbos_error_code=DBOSErrorCode.WorkflowIDInUse.value,
+        )
+
+    def __reduce__(self) -> Any:
+        # Tell pickle how to reconstruct this object
+        return (
+            self.__class__,
+            (self.workflow_id, self.workflow_status, self.workflow_name),
+        )
+
+
+def is_workflow_id_in_use_error(e: BaseException) -> bool:
+    """True if `e` is a workflow-ID-in-use rejection, including replayed forms that lost the class."""
+    from dbos._serialization import PortableWorkflowError
+
+    if getattr(e, "dbos_error_code", None) == DBOSErrorCode.WorkflowIDInUse.value:
+        return True
+    return (
+        isinstance(e, PortableWorkflowError)
+        and e.name == DBOSWorkflowIDInUseError.__name__
+    )
 
 
 class DBOSAwaitedWorkflowCancelledError(DBOSException):

@@ -4268,7 +4268,9 @@ def test_enqueue_with_options_unknown_workflow(dbos: DBOS) -> None:
     DBOS.cancel_workflow(handle.get_workflow_id())
 
 
-def test_enqueue_with_options_child(dbos: DBOS) -> None:
+def test_enqueue_with_options_child(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
     child_counter: int = 0
 
     @DBOS.workflow(name="with_options_child")
@@ -4317,17 +4319,28 @@ def test_enqueue_with_options_child(dbos: DBOS) -> None:
         assert child_status.workflow_deadline_epoch_ms == parent_deadline
 
     # On recovery the parent re-runs but returns the recorded children, not new ones.
-    # A re-attempted enqueue would rebuild the same deterministic ID and upsert
-    # over the finished child, so watch updated_at: only a replay leaves it alone.
-    child_updated_at = DBOS.retrieve_workflow(f"{wfid}-1").get_status().updated_at
+    # A re-attempted enqueue silently re-inits the same child ID, so spy on init.
+    initialized: List[str] = []
+    real_init = dbos._sys_db.init_workflow
+    real_init_child = dbos._sys_db.init_child_workflow
+
+    def spying_init(status: Any, *args: Any, **kwargs: Any) -> Any:
+        initialized.append(status["workflow_uuid"])
+        return real_init(status, *args, **kwargs)
+
+    def spying_init_child(status: Any, *args: Any, **kwargs: Any) -> Any:
+        initialized.append(status["workflow_uuid"])
+        return real_init_child(status, *args, **kwargs)
+
+    monkeypatch.setattr(dbos._sys_db, "init_workflow", spying_init)
+    monkeypatch.setattr(dbos._sys_db, "init_child_workflow", spying_init_child)
     set_workflow_status(dbos._sys_db, wfid, "PENDING")
     handles = DBOS._recover_pending_workflows()
     assert len(handles) == 1
     assert handles[0].get_result() == 14
     assert child_counter == 2
-    assert (
-        DBOS.retrieve_workflow(f"{wfid}-1").get_status().updated_at == child_updated_at
-    )
+    assert f"{wfid}-1" not in initialized
+    assert f"{wfid}-2" not in initialized
 
 
 @pytest.mark.asyncio

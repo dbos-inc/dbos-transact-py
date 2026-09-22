@@ -46,6 +46,9 @@ MinPriority = 1
 # colliding caller's arguments.
 DuplicationPolicy = Literal["reject", "return-existing"]
 
+# On a workflow ID already in use: "return-existing" (default) attaches to it; "reject" raises DBOSWorkflowIDInUseError.
+WorkflowIDReusePolicy = Literal["return-existing", "reject"]
+
 # Reserved workflow attribute holding the trace carrier set by PropagateOtelContext.
 OTEL_CARRIER_ATTRIBUTE = "dbos.otelContext"
 
@@ -103,6 +106,8 @@ class DBOSContext:
         self.logger = dbos_logger
 
         self.id_assigned_for_next_workflow: str = ""
+        # Reuse policy for id_assigned_for_next_workflow, consumed along with it.
+        self.workflow_id_reuse_policy: Optional[WorkflowIDReusePolicy] = None
         self.is_within_set_workflow_id_block: bool = False
 
         self.parent_workflow_id: str = ""
@@ -159,6 +164,8 @@ class DBOSContext:
         if is_for_workflow:
             rv.id_assigned_for_next_workflow = self.id_assigned_for_next_workflow
             self.id_assigned_for_next_workflow = ""
+            rv.workflow_id_reuse_policy = self.workflow_id_reuse_policy
+            self.workflow_id_reuse_policy = None
             # Copy so later mutation of the caller's dict cannot affect the child
             rv.workflow_attributes = (
                 dict(self.workflow_attributes)
@@ -255,6 +262,7 @@ class DBOSContext:
         if wfid is None or len(wfid) == 0:
             wfid = self.assign_workflow_id()
             self.id_assigned_for_next_workflow = ""
+            self.workflow_id_reuse_policy = None
         self.workflow_id = wfid
         self.function_id = 0
         self.active_stream_reads = 0
@@ -437,6 +445,19 @@ def validate_workflow_id(workflow_id: Optional[str]) -> None:
         )
 
 
+def validate_workflow_id_reuse_policy(
+    workflow_id_reuse_policy: Optional[WorkflowIDReusePolicy],
+) -> None:
+    if workflow_id_reuse_policy is not None and workflow_id_reuse_policy not in (
+        "return-existing",
+        "reject",
+    ):
+        raise DBOSException(
+            f"Invalid workflow_id_reuse_policy {workflow_id_reuse_policy}. "
+            "Must be either 'return-existing' or 'reject'."
+        )
+
+
 class SetWorkflowID:
     """
     Set the workflow ID to be used for the enclosed workflow invocation. Note: Only the first workflow will be started with the specified workflow ID within a `with SetWorkflowID` block.
@@ -454,10 +475,17 @@ class SetWorkflowID:
         ```
     """
 
-    def __init__(self, wfid: str) -> None:
+    def __init__(
+        self,
+        wfid: str,
+        *,
+        workflow_id_reuse_policy: Optional[WorkflowIDReusePolicy] = None,
+    ) -> None:
         validate_workflow_id(wfid)
+        validate_workflow_id_reuse_policy(workflow_id_reuse_policy)
         self.created_ctx = False
         self.wfid = wfid
+        self.workflow_id_reuse_policy = workflow_id_reuse_policy
 
     def __enter__(self) -> SetWorkflowID:
         # Code to create a basic context
@@ -467,6 +495,7 @@ class SetWorkflowID:
             _set_local_dbos_context(DBOSContext())
         ctx = assert_current_dbos_context()
         ctx.id_assigned_for_next_workflow = self.wfid
+        ctx.workflow_id_reuse_policy = self.workflow_id_reuse_policy
         ctx.is_within_set_workflow_id_block = True
         return self
 

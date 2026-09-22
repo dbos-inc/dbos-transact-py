@@ -43,7 +43,12 @@ from dbos._utils import (
     retriable_sqlite_exception,
 )
 
-from ._context import DBOSContext, get_local_dbos_context, validate_workflow_attributes
+from ._context import (
+    DBOSContext,
+    WorkflowIDReusePolicy,
+    get_local_dbos_context,
+    validate_workflow_attributes,
+)
 from ._dbos_config import _validate_observability_query_timeout_sec
 from ._error import (
     DBOSAwaitedWorkflowCancelledError,
@@ -57,6 +62,7 @@ from ._error import (
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
+    DBOSWorkflowIDInUseError,
 )
 from ._logger import dbos_logger
 from ._outcome import NoResult
@@ -311,6 +317,8 @@ class OperationResultInternal(TypedDict):
     error: Optional[str]  # Serialized
     serialization: Optional[str]
     started_at_epoch_ms: int
+    # The child workflow this step started or attached to, if any.
+    child_workflow_id: Optional[str]
 
 
 class GetEventWorkflowContext(TypedDict):
@@ -941,8 +949,13 @@ class SystemDatabase(ABC):
         conn: Union[sa.Connection, Session],
         *,
         owner_xid: Optional[str],
+        reuse_policy: Optional[WorkflowIDReusePolicy] = None,
     ) -> tuple[WorkflowStatuses, Optional[int], bool]:
-        """Insert or update workflow status using PostgreSQL upsert operations."""
+        """Insert a workflow's status row, or return the existing row unchanged."""
+        # Without an owner_xid the check below cannot tell a fresh insert from an existing row.
+        assert (
+            reuse_policy != "reject" or owner_xid is not None
+        ), "workflow_id_reuse_policy 'reject' requires an owner_xid"
         wf_status: WorkflowStatuses = status["status"]
         workflow_deadline_epoch_ms: Optional[int] = status["workflow_deadline_epoch_ms"]
         should_execute = True
@@ -951,18 +964,8 @@ class SystemDatabase(ABC):
             WorkflowStatusString.DELAYED.value,
         ]
 
-        # Values to update when a row already exists for this workflow.
-        # recovery_attempts is absent by design: only the queue's claim counts a dispatch.
-        update_values: dict[str, Any] = {
-            "updated_at": self._now_ms_sql(),
-        }
-        # Don't update an existing executor ID when enqueueing a workflow.
-        if wf_status not in _enqueued_statuses:
-            update_values["executor_id"] = status["executor_id"]
-
         cmd = (
-            self.dialect.insert(SystemSchema.workflow_status)
-            .values(
+            self.dialect.insert(SystemSchema.workflow_status).values(
                 workflow_uuid=status["workflow_uuid"],
                 status=status["status"],
                 name=status["name"],
@@ -989,12 +992,12 @@ class SystemDatabase(ABC):
                 schedule_name=status["schedule_name"],
                 debounce_deadline_epoch_ms=status["debounce_deadline_epoch_ms"],
                 is_debounced=status["is_debounced"],
-                # Absent from update_values: a re-enqueue must not re-own a claimed row.
                 application_name=status["application_name"],
             )
+            # A no-op update, so an existing row comes back unchanged for the caller to inspect.
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
-                set_=update_values,
+                set_={"owner_xid": SystemSchema.workflow_status.c.owner_xid},
             )
         )
 
@@ -1017,11 +1020,8 @@ class SystemDatabase(ABC):
             )
             .on_conflict_do_nothing(index_elements=["workflow_uuid"])
         )
-        # Two statements, not a data-modifying CTE: at scale the CTE costs more
-        # than the round trip it saves.
         try:
             results = conn.execute(cmd)
-            conn.execute(inputs_insert)
         except DBAPIError as dbapi_error:
             # Unique constraint violation for the deduplication ID
             if self._is_unique_constraint_violation(dbapi_error):
@@ -1043,6 +1043,11 @@ class SystemDatabase(ABC):
             # A mismatch indicates a workflow starting with the same UUID but different functions, which would throw an exception.
             wf_status = m["status"]
             workflow_deadline_epoch_ms = m["workflow_deadline_epoch_ms"]
+            # A row carrying another owner_xid was already there; a retried commit carries ours.
+            if reuse_policy == "reject" and m["owner_xid"] != owner_xid:
+                raise DBOSWorkflowIDInUseError(
+                    status["workflow_uuid"], m["status"], m["name"]
+                )
             err_msg: Optional[str] = None
             if m["name"] != status["name"]:
                 err_msg = f"Workflow already exists with a different function name: {m['name']}, but the provided function name is: {status['name']}"
@@ -1063,6 +1068,8 @@ class SystemDatabase(ABC):
 
             status["serialization"] = m["serialization"]
 
+        # After the checks above, so a rejected start writes no inputs.
+        conn.execute(inputs_insert)
         return wf_status, workflow_deadline_epoch_ms, should_execute
 
     @db_retry()
@@ -2976,7 +2983,7 @@ class SystemDatabase(ABC):
             raise ValueError("time_bucket_size_ms must be > 0")
 
         # operation_outputs has no explicit status column; derive it from
-        # whether `error` is populated. Bookkeeping rows from record_child_workflow
+        # whether `error` is populated. Child-workflow bookkeeping rows
         # have NULL error and NULL output, so they appear as SUCCESS here —
         # callers can filter them by function_name.
         status_expr = sa.case(
@@ -3154,6 +3161,7 @@ class SystemDatabase(ABC):
                     completed_at_epoch_ms=completed_at_epoch_ms,
                     output=output,
                     error=error,
+                    child_workflow_id=result["child_workflow_id"],
                     serialization=result["serialization"],
                     # Mirrors the parent: only the running application records its steps.
                     application_name=self.app_name,
@@ -3254,54 +3262,6 @@ class SystemDatabase(ABC):
                 c.execute(sql)
 
         record()
-
-    @db_retry()
-    def record_child_workflow(
-        self,
-        parentUUID: str,
-        childUUID: str,
-        functionID: int,
-        functionName: str,
-        *,
-        started_at_epoch_ms: int,
-    ) -> None:
-        # An empty child id is never valid; fail loudly instead of silently wedging the parent on recovery.
-        if not childUUID:
-            raise DBOSException(
-                f"Attempted to record an empty child workflow ID for parent "
-                f"{parentUUID} (function {functionID}, {functionName})."
-            )
-        # Spans the launch only: the parent does not wait for the child here.
-        sql = sa.insert(SystemSchema.operation_outputs).values(
-            workflow_uuid=parentUUID,
-            function_id=functionID,
-            function_name=functionName,
-            child_workflow_id=childUUID,
-            started_at_epoch_ms=started_at_epoch_ms,
-            completed_at_epoch_ms=int(time.time() * 1000),
-            retention_timestamp=self._now_ms_sql(),
-            application_name=self.app_name,
-        )
-        try:
-            with self.engine.begin() as c:
-                c.execute(sql)
-        except DBAPIError as dbapi_error:
-            if self._is_unique_constraint_violation(dbapi_error):
-                # Same child means an idempotent db_retry; a different child means nondeterminism (a real conflict).
-                with self.engine.begin() as c:
-                    existing = c.execute(
-                        sa.select(
-                            SystemSchema.operation_outputs.c.child_workflow_id
-                        ).where(
-                            SystemSchema.operation_outputs.c.workflow_uuid
-                            == parentUUID,
-                            SystemSchema.operation_outputs.c.function_id == functionID,
-                        )
-                    ).fetchone()
-                if existing is not None and existing[0] == childUUID:
-                    return
-                raise DBOSWorkflowConflictIDError(parentUUID)
-            raise
 
     @abstractmethod
     def _is_unique_constraint_violation(self, dbapi_error: DBAPIError) -> bool:
@@ -3629,6 +3589,7 @@ class SystemDatabase(ABC):
                 "output": None,
                 "error": None,
                 "serialization": None,
+                "child_workflow_id": None,
             }
             self._record_operation_result_txn(
                 output, int(time.time() * 1000), conn=conn
@@ -3768,6 +3729,7 @@ class SystemDatabase(ABC):
                     "output": sermsg,
                     "serialization": serialization,
                     "error": None,
+                    "child_workflow_id": None,
                 },
                 int(time.time() * 1000),
                 conn=c,
@@ -4097,6 +4059,7 @@ class SystemDatabase(ABC):
                         "output": DBOSPortableJSON.serialize(end_time),
                         "error": None,
                         "serialization": DBOSPortableJSON.name(),
+                        "child_workflow_id": None,
                     },
                     completed_at_epoch_ms=(
                         int(end_time * 1000) if project_completion_time else None
@@ -4173,6 +4136,7 @@ class SystemDatabase(ABC):
                 "output": None,
                 "error": None,
                 "serialization": None,
+                "child_workflow_id": None,
             }
             self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
         # Notify only after commit, so a woken get_event sees the value.
@@ -4435,6 +4399,7 @@ class SystemDatabase(ABC):
                     "output": serval,
                     "serialization": serialization,
                     "error": None,
+                    "child_workflow_id": None,
                 }
             )
         return value
@@ -5134,6 +5099,7 @@ class SystemDatabase(ABC):
                     "output": serval,
                     "serialization": serialization,
                     "error": None,
+                    "child_workflow_id": None,
                 }
             )
         return result
@@ -5184,6 +5150,7 @@ class SystemDatabase(ABC):
                     "output": serval,
                     "serialization": serialization,
                     "error": None,
+                    "child_workflow_id": None,
                 },
             )
         return result
@@ -5194,6 +5161,7 @@ class SystemDatabase(ABC):
         status: WorkflowStatusInternal,
         *,
         owner_xid: Optional[str],
+        reuse_policy: Optional[WorkflowIDReusePolicy] = None,
     ) -> tuple[WorkflowStatuses, Optional[int], bool]:
         """
         Record the initial status and inputs for a workflow, and indicate if this is a new record
@@ -5204,10 +5172,63 @@ class SystemDatabase(ABC):
                     status,
                     conn,
                     owner_xid=owner_xid,
+                    reuse_policy=reuse_policy,
                 )
             )
         DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_INITWF_COMMIT)
         return wf_status, workflow_deadline_epoch_ms, should_execute
+
+    @db_retry()
+    def init_child_workflow(
+        self,
+        status: WorkflowStatusInternal,
+        *,
+        owner_xid: str,
+        parent_workflow_id: str,
+        parent_function_id: int,
+        function_name: str,
+        started_at_epoch_ms: int,
+        reuse_policy: Optional[WorkflowIDReusePolicy] = None,
+    ) -> tuple[WorkflowStatuses, Optional[int], bool]:
+        """Insert a child's status row and record it as the parent's step in one transaction, so a crash leaves both or neither."""
+        child_workflow_id = status["workflow_uuid"]
+        with self.engine.begin() as conn:
+            result = self._insert_workflow_status(
+                status,
+                conn,
+                owner_xid=owner_xid,
+                reuse_policy=reuse_policy,
+            )
+            inserted = conn.execute(
+                self.dialect.insert(SystemSchema.operation_outputs)
+                .values(
+                    workflow_uuid=parent_workflow_id,
+                    function_id=parent_function_id,
+                    function_name=function_name,
+                    child_workflow_id=child_workflow_id,
+                    # Spans the launch only: the parent does not wait for the child here.
+                    started_at_epoch_ms=started_at_epoch_ms,
+                    completed_at_epoch_ms=int(time.time() * 1000),
+                    retention_timestamp=self._now_ms_sql(),
+                    application_name=self.app_name,
+                )
+                .on_conflict_do_nothing()
+                .returning(SystemSchema.operation_outputs.c.function_id)
+            ).fetchone()
+            if inserted is None:
+                existing = conn.execute(
+                    sa.select(SystemSchema.operation_outputs.c.child_workflow_id).where(
+                        SystemSchema.operation_outputs.c.workflow_uuid
+                        == parent_workflow_id,
+                        SystemSchema.operation_outputs.c.function_id
+                        == parent_function_id,
+                    )
+                ).fetchone()
+                # Same child means an idempotent db_retry; a different child means nondeterminism.
+                if existing is None or existing[0] != child_workflow_id:
+                    raise DBOSWorkflowConflictIDError(parent_workflow_id)
+        DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_INITWF_COMMIT)
+        return result
 
     def _max_partition_key_created_at(
         self, keys: List[Tuple[Optional[str], str]]
@@ -5377,6 +5398,7 @@ class SystemDatabase(ABC):
         conn: Union[sa.Connection, Session],
         *,
         owner_xid: Optional[str] = None,
+        reuse_policy: Optional[WorkflowIDReusePolicy] = None,
     ) -> tuple[WorkflowStatuses, Optional[int], bool]:
         """
         Record the initial status and inputs for a workflow using a caller-owned
@@ -5391,6 +5413,7 @@ class SystemDatabase(ABC):
             status,
             conn,
             owner_xid=owner_xid,
+            reuse_policy=reuse_policy,
         )
 
     def check_connection(self) -> None:
@@ -5536,6 +5559,7 @@ class SystemDatabase(ABC):
                     "output": None,
                     "error": None,
                     "serialization": None,
+                    "child_workflow_id": None,
                 }
                 self._record_operation_result_txn(
                     output, int(time.time() * 1000), conn=c
@@ -6036,6 +6060,7 @@ class SystemDatabase(ABC):
                     "error": None,
                     "serialization": None,
                     "started_at_epoch_ms": int(time.time() * 1000),
+                    "child_workflow_id": None,
                 }
                 self._record_operation_result_txn(result, int(time.time() * 1000), c)
                 return True
@@ -7190,6 +7215,7 @@ class SystemDatabase(ABC):
                 "output": (self.serializer.serialize(result)),
                 "serialization": None,
                 "error": None,
+                "child_workflow_id": None,
             }
             self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
         DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT)

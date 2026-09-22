@@ -9,6 +9,7 @@ from ._context import (
     SetWorkflowAttributes,
     SetWorkflowID,
     SetWorkflowTimeout,
+    WorkflowIDReusePolicy,
 )
 from ._core import StepOptions
 from ._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
@@ -64,6 +65,7 @@ __all__ = [
     "StepOptions",
     "WorkflowHandle",
     "WorkflowHandleAsync",
+    "WorkflowIDReusePolicy",
     "WorkflowSerializationFormat",
     "WorkflowSchedule",
     "ClientScheduleInput",

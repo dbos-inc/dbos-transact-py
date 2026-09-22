@@ -56,6 +56,7 @@ def fork_workflow(
     if ctx is not None and len(ctx.id_assigned_for_next_workflow) > 0:
         forked_workflow_id = ctx.id_assigned_for_next_workflow
         ctx.id_assigned_for_next_workflow = ""
+        ctx.workflow_id_reuse_policy = None
     else:
         forked_workflow_id = generate_uuid()
     sys_db.fork_workflow(

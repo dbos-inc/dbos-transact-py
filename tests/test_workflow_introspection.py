@@ -1686,12 +1686,17 @@ def _completed_workflow_id(dbos: DBOS) -> str:
 def test_step_conflict_over_child_workflow_row(dbos: DBOS) -> None:
     workflow_id = _completed_workflow_id(dbos)
 
-    dbos._sys_db.record_child_workflow(
-        workflow_id,
-        str(uuid.uuid4()),
-        10,
-        "child.wf",
-        started_at_epoch_ms=int(time.time() * 1000),
+    dbos._sys_db.record_operation_result(
+        {
+            "workflow_uuid": workflow_id,
+            "function_id": 10,
+            "function_name": "child.wf",
+            "output": None,
+            "error": None,
+            "serialization": None,
+            "started_at_epoch_ms": int(time.time() * 1000),
+            "child_workflow_id": str(uuid.uuid4()),
+        }
     )
 
     result: OperationResultInternal = {
@@ -1702,6 +1707,7 @@ def test_step_conflict_over_child_workflow_row(dbos: DBOS) -> None:
         "error": None,
         "serialization": None,
         "started_at_epoch_ms": int(time.time() * 1000),
+        "child_workflow_id": None,
     }
     with pytest.raises(DBOSWorkflowConflictIDError):
         # Explicit far-future completion time so it can't equal the child row's same-millisecond completed_at.
@@ -1732,6 +1738,7 @@ def test_step_conflict_over_row_without_completion(dbos: DBOS) -> None:
         "error": None,
         "serialization": None,
         "started_at_epoch_ms": int(time.time() * 1000),
+        "child_workflow_id": None,
     }
     with pytest.raises(DBOSWorkflowConflictIDError):
         dbos._sys_db.record_operation_result(result)
