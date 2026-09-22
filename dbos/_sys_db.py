@@ -1600,16 +1600,11 @@ class SystemDatabase(ABC):
                 )
             )
 
-            # Only a run that reached an outcome wrote a payload row to drop.
-            if status in (
-                WorkflowStatusString.SUCCESS.value,
-                WorkflowStatusString.ERROR.value,
-            ):
-                c.execute(
-                    sa.delete(SystemSchema.workflow_output).where(
-                        SystemSchema.workflow_output.c.workflow_uuid == workflow_id
-                    )
+            c.execute(
+                sa.delete(SystemSchema.workflow_output).where(
+                    SystemSchema.workflow_output.c.workflow_uuid == workflow_id
                 )
+            )
 
             # Re-enqueue the workflow
             version_update = (
