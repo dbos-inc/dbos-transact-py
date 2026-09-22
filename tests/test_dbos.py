@@ -9,7 +9,7 @@ import threading
 import time
 import uuid
 from functools import wraps
-from typing import Any, Callable, Optional, Set, TypeVar, cast
+from typing import Any, Callable, List, Optional, Set, TypeVar, cast
 
 import pytest
 import sqlalchemy as sa
@@ -2311,16 +2311,28 @@ def test_workflow_timeout(dbos: DBOS) -> None:
         with pytest.raises(DBOSAwaitedWorkflowCancelledError):
             handle.get_result()
 
-    # Change the workflow status to pending
+    # Change the workflow status to pending. Its deadline goes far enough ahead that
+    # the timeout sweep cannot cancel the row before recovery claims it.
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.update(SystemSchema.workflow_status)
-            .values({"status": "PENDING"})
+            .values(
+                {
+                    "status": "PENDING",
+                    "workflow_deadline_epoch_ms": int(time.time() * 1000) + 10000,
+                }
+            )
             .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
         )
     # Recover the workflow, verify it still times out
     handles = DBOS._recover_pending_workflows()
     assert len(handles) == 1
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"workflow_deadline_epoch_ms": int(time.time() * 1000)})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+        )
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         handles[0].get_result()
 
@@ -2396,64 +2408,87 @@ def test_timeout_cleanup_on_destroy(dbos: DBOS, config: DBOSConfig) -> None:
 
 
 def test_timeout_sweep_cancels_unowned_workflows(dbos: DBOS) -> None:
-    """The sweep cancels any expired workflow of this application, including ones
-    no local runner holds, and leaves other applications' workflows alone."""
+    """The sweep cancels every expired workflow of this application, whatever its
+    active status and whether or not a local runner holds it, and leaves other
+    applications' workflows alone."""
 
     @DBOS.workflow()
     def noop_workflow() -> None:
         pass
 
-    own_id, unclaimed_id, other_app_id, unexpired_id = (
-        str(uuid.uuid4()) for _ in range(4)
+    own_id, unclaimed_id, other_app_id, unexpired_id, enqueued_id, delayed_id = (
+        str(uuid.uuid4()) for _ in range(6)
     )
-    for wfid in (own_id, unclaimed_id, other_app_id, unexpired_id):
+    ids = [own_id, unclaimed_id, other_app_id, unexpired_id, enqueued_id, delayed_id]
+    for wfid in ids:
         with SetWorkflowID(wfid):
             noop_workflow()
 
-    # Rewrite the finished rows into PENDING workflows of a dead executor.
+    # A sweep that raises must not kill the thread: the rows below still get cancelled.
+    real_sweep = dbos._sys_db.cancel_timed_out_workflows
+    injected = threading.Event()
+
+    def sweep_failing_once(limit: int) -> List[str]:
+        if not injected.is_set():
+            injected.set()
+            raise Exception("injected sweep failure")
+        return real_sweep(limit)
+
+    dbos._sys_db.cancel_timed_out_workflows = sweep_failing_once  # type: ignore[method-assign]
+
+    # Rewrite the finished rows into active workflows of a dead executor. The
+    # enqueued and delayed rows stand in for children carrying a parent's deadline,
+    # on a queue no worker polls so only the sweep can touch them.
     app_name = dbos._sys_db.app_name
     assert app_name
     past = int(time.time() * 1000) - 1000
+    hour_ahead = past + 3_600_000
     ws = SystemSchema.workflow_status
     with dbos._sys_db.engine.begin() as c:
-        for wfid, owner, deadline in [
-            (own_id, app_name, past),
-            (unclaimed_id, None, past),
-            (other_app_id, f"{app_name}-other", past),
-            (unexpired_id, app_name, past + 3_600_000),
+        for wfid, status, owner, deadline, queue, delay in [
+            (own_id, "PENDING", app_name, past, None, None),
+            (unclaimed_id, "PENDING", None, past, None, None),
+            (other_app_id, "PENDING", f"{app_name}-other", past, None, None),
+            (unexpired_id, "PENDING", app_name, hour_ahead, None, None),
+            (enqueued_id, "ENQUEUED", app_name, past, "unpolled-queue", None),
+            (delayed_id, "DELAYED", app_name, past, "unpolled-queue", hour_ahead),
         ]:
             c.execute(
                 sa.update(ws)
                 .where(ws.c.workflow_uuid == wfid)
                 .values(
-                    status="PENDING",
+                    status=status,
                     executor_id="dead-executor",
                     application_name=owner,
                     workflow_deadline_epoch_ms=deadline,
+                    queue_name=queue,
+                    delay_until_epoch_ms=delay,
                 )
             )
 
-    def statuses() -> dict[str, str]:
+    def rows() -> dict[str, Any]:
         with dbos._sys_db.engine.begin() as c:
-            rows = c.execute(
-                sa.select(ws.c.workflow_uuid, ws.c.status).where(
-                    ws.c.workflow_uuid.in_(
-                        [own_id, unclaimed_id, other_app_id, unexpired_id]
-                    )
+            fetched = c.execute(
+                sa.select(ws.c.workflow_uuid, ws.c.status, ws.c.queue_name).where(
+                    ws.c.workflow_uuid.in_(ids)
                 )
             ).fetchall()
-        return {row[0]: row[1] for row in rows}
+        return {row[0]: row for row in fetched}
 
     def expired_cancelled() -> None:
-        current = statuses()
-        assert current[own_id] == "CANCELLED"
-        assert current[unclaimed_id] == "CANCELLED"
+        current = rows()
+        for wfid in (own_id, unclaimed_id, enqueued_id, delayed_id):
+            assert current[wfid][1] == "CANCELLED"
 
     retry_until_success(expired_cancelled, interval=0.1, max_attempts=50)
-    # One sweep cancelled both, so it would have taken the other app's row too.
-    current = statuses()
-    assert current[other_app_id] == "PENDING"
-    assert current[unexpired_id] == "PENDING"
+    assert injected.is_set(), "expected the injected sweep failure to have fired"
+    # One sweep cancelled them all, so it would have taken the other app's row too.
+    current = rows()
+    assert current[other_app_id][1] == "PENDING"
+    assert current[unexpired_id][1] == "PENDING"
+    # Cancelling takes a workflow off its queue.
+    assert current[enqueued_id][2] is None and current[delayed_id][2] is None
+    dbos._sys_db.cancel_timed_out_workflows = real_sweep  # type: ignore[method-assign]
 
 
 def test_timeout_sweep_query_plan(dbos: DBOS) -> None:
