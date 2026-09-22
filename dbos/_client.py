@@ -11,6 +11,7 @@ from typing import (
     Generic,
     List,
     Optional,
+    Sequence,
     TypeVar,
     Union,
 )
@@ -70,7 +71,12 @@ from dbos._sys_db import (
     WorkflowStatus,
     WorkflowStatusInternal,
 )
-from dbos._workflow_commands import fork_workflow, get_workflow
+from dbos._workflow_commands import (
+    Datasource,
+    fork_workflow,
+    get_workflow,
+    rewind_workflow,
+)
 
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
@@ -876,6 +882,62 @@ class DBOSClient:
             WorkflowHandleClientAsyncPolling[Any](wfid, self._sys_db)
             for wfid in workflow_ids
         ]
+
+    def rewind_workflow(
+        self,
+        workflow_id: str,
+        *,
+        start_step: Optional[int] = None,
+        application_version: Optional[str] = None,
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
+        datasources: Optional[Sequence[Datasource]] = None,
+    ) -> "WorkflowHandle[Any]":
+        """Rewind a workflow to a step (default: the first). Only a workflow in a
+        terminal state can be rewound.
+
+        Checkpoints held in datasources are dropped only for the datasources passed
+        in. Sync datasources only, use the async variant for both sync and async datasources.
+        """
+        rewind_workflow(
+            self._sys_db,
+            datasources or [],
+            workflow_id,
+            1 if start_step is None else start_step,
+            application_version=application_version,
+            queue_name=queue_name,
+            queue_partition_key=queue_partition_key,
+        )
+        return WorkflowHandleClientPolling[Any](workflow_id, self._sys_db)
+
+    async def rewind_workflow_async(
+        self,
+        workflow_id: str,
+        *,
+        start_step: Optional[int] = None,
+        application_version: Optional[str] = None,
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
+        datasources: Optional[Sequence[Datasource]] = None,
+    ) -> "WorkflowHandleAsync[Any]":
+        """Rewind a workflow to a step (default: the first). Only a workflow in a
+        terminal state can be rewound. Works without a running application.
+
+        Checkpoints held in datasources are dropped only for the datasources
+        passed in.
+        """
+        await asyncio.to_thread(
+            rewind_workflow,
+            self._sys_db,
+            datasources or [],
+            workflow_id,
+            1 if start_step is None else start_step,
+            application_version=application_version,
+            queue_name=queue_name,
+            queue_partition_key=queue_partition_key,
+            run_coroutine=asyncio.run,
+        )
+        return WorkflowHandleClientAsyncPolling[Any](workflow_id, self._sys_db)
 
     def set_workflow_delay(
         self,

@@ -46,7 +46,7 @@ from dbos._serialization import (
 )
 from dbos._sys_db import SystemDatabase, WorkflowStatus
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, generate_uuid
-from dbos._workflow_commands import fork_workflow
+from dbos._workflow_commands import fork_workflow, rewind_workflow
 
 from ._classproperty import classproperty
 from ._core import (
@@ -75,6 +75,7 @@ from ._core import (
     write_stream,
 )
 from ._croniter import croniter  # type: ignore
+from ._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 from ._enqueue_options import EnqueueOptions
 from ._queue import (
     _INTERNAL_QUEUE_CONSTRUCTION,
@@ -216,6 +217,18 @@ class DBOSRegistry:
         self.kafka_registrations: list[KafkaConsumerRegistration] = []
         # Polling interval for the internal Kafka queues, from DBOSConfig; None keeps the Queue default.
         self.kafka_queue_polling_interval_sec: Optional[float] = None
+        # Every datasource constructed in this process, so a rewind can drop the
+        # checkpoints they hold outside the system database.
+        self.datasources: list[
+            Union["SQLAlchemyDatasource", "AsyncSQLAlchemyDatasource"]
+        ] = []
+
+    def register_datasource(
+        self, ds: Union["SQLAlchemyDatasource", "AsyncSQLAlchemyDatasource"]
+    ) -> None:
+        if self.dbos is not None and self.dbos._launched:
+            raise DBOSException("Datasources must be created before DBOS.launch()")
+        self.datasources.append(ds)
 
     def register_wf_function(self, name: str, wrapped_func: F) -> None:
         if name in self.workflow_info_map:
@@ -2370,6 +2383,90 @@ class DBOS:
             "DBOS.setWorkflowDelay",
             step_ctx,
         )
+
+    def _rewind_workflow(
+        self,
+        workflow_id: str,
+        start_step: int,
+        *,
+        application_version: Optional[str] = None,
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
+    ) -> None:
+        rewind_workflow(
+            self._sys_db,
+            self._registry.datasources,
+            workflow_id,
+            start_step,
+            application_version=application_version,
+            queue_name=queue_name,
+            queue_partition_key=queue_partition_key,
+            run_coroutine=self._background_event_loop.submit_coroutine,
+        )
+
+    @classmethod
+    def rewind_workflow(
+        cls,
+        workflow_id: str,
+        *,
+        start_step: Optional[int] = None,
+        application_version: Optional[str] = None,
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
+    ) -> WorkflowHandle[Any]:
+        """Rewind a workflow to a step (default: the first). Only a workflow in a
+        terminal state can be rewound."""
+        check_async("rewind_workflow")
+        step = 1 if start_step is None else start_step
+
+        def fn() -> None:
+            dbos_logger.info(f"Rewinding workflow: {workflow_id} to step {step}")
+            _get_dbos_instance()._rewind_workflow(
+                workflow_id,
+                step,
+                application_version=application_version,
+                queue_name=queue_name,
+                queue_partition_key=queue_partition_key,
+            )
+
+        _get_dbos_instance()._sys_db.call_function_as_step(
+            fn, "DBOS.rewindWorkflow", snapshot_step_context(reserve_sleep_id=False)
+        )
+        return WorkflowHandlePolling(workflow_id, _get_dbos_instance())
+
+    @classmethod
+    async def rewind_workflow_async(
+        cls,
+        workflow_id: str,
+        *,
+        start_step: Optional[int] = None,
+        application_version: Optional[str] = None,
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
+    ) -> WorkflowHandleAsync[Any]:
+        """Rewind a workflow to a step (default: the first). Only a workflow in a
+        terminal state can be rewound."""
+        step_ctx_res = snapshot_step_context(reserve_sleep_id=False)
+        await cls._configure_asyncio_thread_pool()
+        step = 1 if start_step is None else start_step
+
+        def fnres() -> None:
+            dbos_logger.info(f"Rewinding workflow: {workflow_id} to step {step}")
+            _get_dbos_instance()._rewind_workflow(
+                workflow_id,
+                step,
+                application_version=application_version,
+                queue_name=queue_name,
+                queue_partition_key=queue_partition_key,
+            )
+
+        await asyncio.to_thread(
+            _get_dbos_instance()._sys_db.call_function_as_step,
+            fnres,
+            "DBOS.rewindWorkflow",
+            step_ctx_res,
+        )
+        return WorkflowHandleAsyncPolling(workflow_id, _get_dbos_instance())
 
     @classmethod
     def fork_workflow(

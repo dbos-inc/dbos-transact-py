@@ -160,6 +160,66 @@ def test_cockroachdb_fork() -> None:
         DBOS.destroy(destroy_registry=True)
 
 
+def test_cockroachdb_rewind() -> None:
+    """Rewind's behavior is covered in test_rewind.py; this only runs its query
+    shapes on CockroachDB: a correlated EXISTS against the events history in a
+    DELETE and a SELECT, row_number() over that history partitioned by key, and
+    INSERT ... FROM SELECT off the subquery that filters on it. One key set on
+    both sides of the cut and one set only past it reach all three."""
+    database_url = os.environ.get("DBOS_COCKROACHDB_URL")
+    if database_url is None:
+        pytest.skip("No CockroachDB database URL provided")
+
+    default_engine = create_engine(database_url, isolation_level="AUTOCOMMIT")
+    with default_engine.connect() as conn:
+        conn.execute(text("DROP DATABASE IF EXISTS dbos_test_rewind CASCADE"))
+        conn.execute(text("CREATE DATABASE dbos_test_rewind"))
+    default_engine.dispose()
+
+    parsed = urlparse(database_url)
+    test_url = urlunparse(parsed._replace(path="/dbos_test_rewind"))
+
+    runs = 0
+
+    @DBOS.workflow()
+    def publisher() -> int:
+        nonlocal runs
+        runs += 1
+        DBOS.set_event("below", "kept")
+        DBOS.set_event("both", "old")
+        if runs == 1:
+            DBOS.set_event("both", "new")
+            DBOS.set_event("above", "doomed")
+        return runs
+
+    try:
+        engine = create_engine(test_url)
+        config: DBOSConfig = {
+            "name": "cockroachdb-rewind-test",
+            "system_database_url": test_url,
+            "use_listen_notify": False,
+            "system_database_engine": engine,
+        }
+        DBOS(config=config)
+        DBOS.launch()
+
+        handle = DBOS.start_workflow(publisher)
+        assert handle.get_result() == 1
+        workflow_id = handle.workflow_id
+        assert DBOS.get_event(workflow_id, "both") == "new"
+        assert DBOS.get_event(workflow_id, "above") == "doomed"
+
+        # Cut between the two set_events on "both"
+        assert DBOS.rewind_workflow(workflow_id, start_step=3).get_result() == 2
+        assert DBOS.get_event(workflow_id, "below") == "kept"
+        # Reverted to the value published below the cut
+        assert DBOS.get_event(workflow_id, "both") == "old"
+        # Published only past the cut, so unpublished and never re-set
+        assert DBOS.get_event(workflow_id, "above", 1) is None
+    finally:
+        DBOS.destroy(destroy_registry=True)
+
+
 def test_cockroachdb_reset_truncate() -> None:
     database_url = os.environ.get("DBOS_COCKROACHDB_URL")
     if database_url is None:
