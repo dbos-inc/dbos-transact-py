@@ -4595,6 +4595,7 @@ class SystemDatabase(ABC):
                 ws.c.workflow_deadline_epoch_ms <= now_ms,
                 self._name_filter(ws.c.application_name, self.app_name),
             )
+            .order_by(ws.c.workflow_deadline_epoch_ms)
             .limit(limit)
             # A row a dequeue or a peer's sweep holds is left for the next sweep.
             .with_for_update(skip_locked=True)

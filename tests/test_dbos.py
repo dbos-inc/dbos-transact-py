@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import logging
 import os
+import random
 import threading
 import time
 import uuid
@@ -35,12 +36,7 @@ from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import _dbos_null_topic
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from dbos._workflow_commands import WORKFLOW_TIMEOUT_THREAD_NAME
-from tests.conftest import (
-    explain_with_index_scans_only,
-    retry_until_success,
-    set_workflow_status,
-    using_sqlite,
-)
+from tests.conftest import retry_until_success, set_workflow_status, using_sqlite
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -2465,6 +2461,7 @@ def test_timeout_sweep_query_plan(dbos: DBOS) -> None:
     from sqlalchemy import event
 
     captured: list[Any] = []
+    test_thread = threading.current_thread()
 
     def before_cursor_execute(
         conn: Any,
@@ -2474,15 +2471,18 @@ def test_timeout_sweep_query_plan(dbos: DBOS) -> None:
         context: Any,
         executemany: bool,
     ) -> None:
+        # The background timeout thread runs the same sweep on this engine.
         if (
-            statement.strip().startswith("UPDATE")
+            threading.current_thread() is test_thread
+            and statement.strip().startswith("UPDATE")
             and "deadline_epoch_ms <=" in statement
         ):
             captured.append((statement, parameters))
 
     event.listen(dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute)
     try:
-        dbos._sys_db.cancel_timed_out_workflows(1000)
+        # A batch smaller than the rows the planner expects to match tempts it into a scan that stops early.
+        dbos._sys_db.cancel_timed_out_workflows(10)
     finally:
         event.remove(
             dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute
@@ -2490,7 +2490,7 @@ def test_timeout_sweep_query_plan(dbos: DBOS) -> None:
     assert captured
     statement, parameters = captured[0]
 
-    # Plan against a populated table: a few active workflows with future deadlines among many finished ones.
+    # Finished workflows keep their past deadlines, so the planner expects many rows to match.
     ws = SystemSchema.workflow_status
     now = int(time.time() * 1000)
     rows = [
@@ -2501,10 +2501,14 @@ def test_timeout_sweep_query_plan(dbos: DBOS) -> None:
             "created_at": now,
             "updated_at": now,
             "priority": 0,
-            "workflow_deadline_epoch_ms": now + 3_600_000 + i,
+            "workflow_deadline_epoch_ms": (
+                now + 3_600_000 + i if i % 20 == 0 else now - 60_000 - i
+            ),
         }
-        for i in range(1000)
+        for i in range(5000)
     ]
+    # Deadlines uncorrelated with heap order, as in production, make index fetches look costly.
+    random.Random(0).shuffle(rows)
     with dbos._sys_db.engine.begin() as conn:
         conn.execute(sa.insert(ws), rows)
     if using_sqlite():
@@ -2520,9 +2524,10 @@ def test_timeout_sweep_query_plan(dbos: DBOS) -> None:
         ), details
         assert not [d for d in details if d.startswith("SCAN")], details
     else:
-        details = explain_with_index_scans_only(
-            dbos, "workflow_status", statement, parameters
-        )
+        with dbos._sys_db.engine.begin() as conn:
+            conn.exec_driver_sql(f'ANALYZE "{dbos._sys_db.schema}".workflow_status')
+            plan = conn.exec_driver_sql(f"EXPLAIN {statement}", parameters).fetchall()
+        details = [str(row[0]) for row in plan]
         assert any("idx_workflow_status_deadline" in d for d in details), details
         # The deadline bound rides the index as a condition, not a filter over every active row.
         assert any(
