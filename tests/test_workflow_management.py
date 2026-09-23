@@ -116,13 +116,20 @@ def test_active_id_released_before_outcome_write(dbos: DBOS) -> None:
     parked_once = threading.Event()
 
     def parking_update_outcome(
-        workflow_id: str, status: Any, *, output: Any = None, error: Any = None
+        workflow_id: str,
+        status: Any,
+        *,
+        output: Any = None,
+        error: Any = None,
+        owner_xid: Any = None,
     ) -> bool:
         if workflow_id == wfid and not parked_once.is_set():
             parked_once.set()
             parked.set()
             assert release_stale_write.wait(timeout=30)
-        return original_update_outcome(workflow_id, status, output=output, error=error)
+        return original_update_outcome(
+            workflow_id, status, output=output, error=error, owner_xid=owner_xid
+        )
 
     dbos._sys_db.update_workflow_outcome = parking_update_outcome  # type: ignore[method-assign]
 
