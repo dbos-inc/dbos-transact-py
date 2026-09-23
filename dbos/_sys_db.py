@@ -464,22 +464,36 @@ class SendMessage:
     idempotency_key: Optional[str] = None
 
 
-class EventCount(TypedDict):
-    event: LoopAwareEvent
-    count: int
-    components: Tuple[str, str]
+class KeySignal:
+    """Fans one key's wake out to every waiter registered under it."""
+
+    def __init__(self, components: Tuple[str, str]) -> None:
+        self.components = components
+        self._waiters: Set[LoopAwareEvent] = set()
+        self._lock = threading.Lock()
+
+    def set(self) -> None:
+        with self._lock:
+            waiters = list(self._waiters)
+        # Signalled outside the lock, so a waiter's callbacks cannot deadlock against it.
+        for event in waiters:
+            event.set()
+
+    def waiter_count(self) -> int:
+        with self._lock:
+            return len(self._waiters)
 
 
 class ThreadSafeEventDict:
+    """Waiters by key. Each waiter keeps its own event, so one waiter's wake or clear never affects another."""
+
     def __init__(self) -> None:
-        self._dict: Dict[str, EventCount] = {}
+        self._dict: Dict[str, KeySignal] = {}
         self._lock = threading.Lock()
 
-    def get(self, key: str) -> Optional[LoopAwareEvent]:
+    def get(self, key: str) -> Optional[KeySignal]:
         with self._lock:
-            if key not in self._dict:
-                return None
-            return self._dict[key]["event"]
+            return self._dict.get(key)
 
     def set(
         self,
@@ -487,36 +501,34 @@ class ThreadSafeEventDict:
         value: LoopAwareEvent,
         components: Tuple[str, str],
     ) -> tuple[bool, LoopAwareEvent]:
+        """Register value as a waiter on key; returns whether it is the key's first waiter, and value."""
         with self._lock:
-            if key in self._dict:
-                # Key already exists: share it and increment the wait count.
-                ec = self._dict[key]
-                ec["count"] += 1
-                if ec["event"].is_set():
-                    # A wake delivered to the earlier waiters must not satisfy this one, or it
-                    # would skip waiting; callers check the database right after registering,
-                    # so nothing that already arrived is lost.
-                    ec["event"] = value
-                return False, ec["event"]
-            self._dict[key] = EventCount(event=value, count=1, components=components)
-            return True, value
+            signal = self._dict.get(key)
+            first = signal is None
+            if signal is None:
+                signal = KeySignal(components)
+                self._dict[key] = signal
+            with signal._lock:
+                signal._waiters.add(value)
+        return first, value
 
-    def pop(self, key: str) -> None:
+    def pop(self, key: str, event: LoopAwareEvent) -> None:
+        """Unregister one waiter, dropping the key with its last waiter."""
         with self._lock:
-            if key in self._dict:
-                ec = self._dict[key]
-                ec["count"] -= 1
-                if ec["count"] == 0:
-                    del self._dict[key]
-            else:
+            signal = self._dict.get(key)
+            if signal is None:
                 dbos_logger.warning(f"Key {key} not found in event dictionary.")
+                return
+            with signal._lock:
+                signal._waiters.discard(event)
+                empty = not signal._waiters
+            if empty:
+                del self._dict[key]
 
-    def snapshot(self) -> List[Tuple[str, Tuple[str, str], LoopAwareEvent]]:
-        """Return a snapshot of (key, components, event) for every entry."""
+    def snapshot(self) -> List[Tuple[str, Tuple[str, str], KeySignal]]:
+        """Return a snapshot of (key, components, signal) for every entry."""
         with self._lock:
-            return [
-                (key, ec["components"], ec["event"]) for key, ec in self._dict.items()
-            ]
+            return [(key, s.components, s) for key, s in self._dict.items()]
 
 
 # Return type of the recv/get_event setup phases: either a cached result
@@ -3718,7 +3730,7 @@ class SystemDatabase(ABC):
         payload = f"{workflow_uuid}::{topic}"
         event = LoopAwareEvent()
         # A stale local execution may already wait here; both wake, and its consume fails the ownership check.
-        _, event = self.notifications_map.set(payload, event, (workflow_uuid, topic))
+        self.notifications_map.set(payload, event, (workflow_uuid, topic))
 
         try:
             # Check if an unconsumed message is already in the database.
@@ -3729,7 +3741,7 @@ class SystemDatabase(ABC):
                 workflow_uuid, timeout_function_id, timeout_seconds
             )
         except:
-            self.notifications_map.pop(payload)
+            self.notifications_map.pop(payload, event)
             raise
 
         return False, event, actual_timeout, payload, start_time
@@ -3898,7 +3910,7 @@ class SystemDatabase(ABC):
                     self.recv_check(workflow_uuid, topic, event)
             return self.recv_consume(workflow_uuid, function_id, topic, start_time)
         finally:
-            self.notifications_map.pop(payload)
+            self.notifications_map.pop(payload, event)
 
     async def _run_event_setup_async(
         self,
@@ -3932,7 +3944,7 @@ class SystemDatabase(ABC):
                     return
                 result = task.result()
                 if not result[0]:
-                    event_map.pop(result[3])
+                    event_map.pop(result[3], result[1])
 
             # Wait for the thread to finish, then undo its registration. A
             # second cancellation lands in the except below; an exception from
@@ -3991,7 +4003,7 @@ class SystemDatabase(ABC):
                 start_time,
             )
         finally:
-            self.notifications_map.pop(payload)
+            self.notifications_map.pop(payload, event)
 
     @abstractmethod
     def _notification_listener(self) -> None:
@@ -4406,12 +4418,7 @@ class SystemDatabase(ABC):
 
         payload = f"{target_uuid}::{key}"
         event = LoopAwareEvent()
-        success, existing_event = self.workflow_events_map.set(
-            payload, event, (target_uuid, key)
-        )
-        if not success:
-            # Key already exists, wait on the existing event
-            event = existing_event
+        self.workflow_events_map.set(payload, event, (target_uuid, key))
 
         try:
             # Check if the key is already in the database
@@ -4426,7 +4433,7 @@ class SystemDatabase(ABC):
                     timeout_seconds,
                 )
         except:
-            self.workflow_events_map.pop(payload)
+            self.workflow_events_map.pop(payload, event)
             raise
 
         return False, event, actual_timeout, payload, start_time
@@ -4526,7 +4533,7 @@ class SystemDatabase(ABC):
                     self.get_event_check(target_uuid, key, event)
             return self.get_event_consume(target_uuid, key, start_time, caller_ctx)
         finally:
-            self.workflow_events_map.pop(payload)
+            self.workflow_events_map.pop(payload, event)
 
     async def get_event_async(
         self,
@@ -4567,7 +4574,7 @@ class SystemDatabase(ABC):
                 caller_ctx,
             )
         finally:
-            self.workflow_events_map.pop(payload)
+            self.workflow_events_map.pop(payload, event)
 
     @db_retry()
     def get_queue_partitions(self, queue_name: str) -> List[str]:
@@ -5735,12 +5742,13 @@ class SystemDatabase(ABC):
         and the wait is not lost.
         """
         payload = f"{workflow_uuid}::{key}"
-        _, event = self.streams_map.set(payload, LoopAwareEvent(), (workflow_uuid, key))
+        event = LoopAwareEvent()
+        self.streams_map.set(payload, event, (workflow_uuid, key))
         return event, payload
 
-    def unregister_stream_listener(self, payload: str) -> None:
+    def unregister_stream_listener(self, payload: str, event: LoopAwareEvent) -> None:
         """Drop a previously registered stream listener event."""
-        self.streams_map.pop(payload)
+        self.streams_map.pop(payload, event)
 
     @db_retry()
     def read_stream_value(

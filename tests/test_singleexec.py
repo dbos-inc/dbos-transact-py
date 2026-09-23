@@ -412,24 +412,31 @@ def test_handoff_parks_live_execution(dbos: DBOS, handoff: str) -> None:
         release.set()
 
 
-def test_shared_waiter_does_not_leak_a_stale_wake() -> None:
-    """A waiter that joins after the shared event was set gets a fresh, unset event."""
+def test_waiters_keep_their_own_events() -> None:
+    """Each waiter on a key keeps its own event: one waiter's wake or clear never affects another."""
     registry = ThreadSafeEventDict()
     first, first_event = registry.set("wf::topic", LoopAwareEvent(), ("wf", "topic"))
     assert first
     first_event.set()
 
+    # A waiter joining after an earlier one was woken starts unset.
     second, second_event = registry.set("wf::topic", LoopAwareEvent(), ("wf", "topic"))
     assert not second
     assert second_event is not first_event and not second_event.is_set()
-    # The entry now carries the fresh event, so the listener wakes the live waiter.
-    assert registry.get("wf::topic") is second_event
-    # An unset event is still shared as before.
-    _, third_event = registry.set("wf::topic", LoopAwareEvent(), ("wf", "topic"))
-    assert third_event is second_event
 
-    for _ in range(3):
-        registry.pop("wf::topic")
+    # A signal wakes every waiter, and clearing one leaves the others set.
+    first_event.clear()
+    signal = registry.get("wf::topic")
+    assert signal is not None
+    signal.set()
+    assert first_event.is_set() and second_event.is_set()
+    first_event.clear()
+    assert second_event.is_set()
+
+    # The key stays registered until its last waiter leaves.
+    registry.pop("wf::topic", first_event)
+    assert registry.get("wf::topic") is signal
+    registry.pop("wf::topic", second_event)
     assert registry.get("wf::topic") is None
 
 
@@ -451,14 +458,14 @@ def test_recv_ignores_a_stale_waiters_wake(dbos: DBOS) -> None:
             handle = DBOS.start_workflow(recv_workflow)
 
         def joined() -> None:
-            live = dbos._sys_db.notifications_map.get(payload)
-            assert live is not None and live is not stale_event
+            signal = dbos._sys_db.notifications_map.get(payload)
+            assert signal is not None and signal.waiter_count() == 2
 
         retry_until_success(joined, interval=0.1, max_attempts=100)
         DBOS.send(wfid, "hello", "topic")
         assert handle.get_result() == "hello"
     finally:
-        dbos._sys_db.notifications_map.pop(payload)
+        dbos._sys_db.notifications_map.pop(payload, stale_event)
 
 
 def test_active_entries_release_their_own_bucket() -> None:

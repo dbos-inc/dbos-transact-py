@@ -3035,7 +3035,7 @@ def read_stream(
     finally:
         # Release the reserved step if the read was abandoned or raised mid-flight.
         recorder.end()
-        sys_db.unregister_stream_listener(payload)
+        sys_db.unregister_stream_listener(payload, event)
 
 
 async def read_stream_async(
@@ -3129,7 +3129,7 @@ async def read_stream_async(
     finally:
         # Release the reserved step if the read was abandoned or raised mid-flight.
         recorder.end()
-        sys_db.unregister_stream_listener(payload)
+        sys_db.unregister_stream_listener(payload, event)
 
 
 def _validate_enqueue_only_options(
