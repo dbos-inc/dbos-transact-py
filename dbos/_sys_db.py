@@ -1148,12 +1148,16 @@ class SystemDatabase(ABC):
     ) -> bool:
         """Record a workflow's terminal outcome, reporting whether the write landed.
 
-        The write applies only to a PENDING row still owned by execution_xid (when given).
+        The write applies only to a PENDING row still owned by execution_xid, which
+        defaults to the calling execution's token; a caller outside the workflow's
+        context passes it explicitly or goes unchecked.
 
         Returning False means the row was CANCELLED, dead-lettered, already
         terminal, handed to another execution (e.g. by a concurrent resume or
         recovery), or gone entirely.
         """
+        if execution_xid is None:
+            execution_xid = current_execution_xid(workflow_id)
         with self.engine.begin() as c:
             now_ms = self._now_ms_sql()
             update = (

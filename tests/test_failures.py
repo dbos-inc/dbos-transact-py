@@ -1037,7 +1037,9 @@ def test_record_get_result_increments_function_id_once_on_db_retry(
     ctx = DBOSContext()
     ctx.workflow_id = workflow_id
     ctx.function_id = 0
-    assert ctx.is_workflow()
+    # The completed row keeps its token, so this stand-in execution can own it.
+    ctx.execution_xid = dbos._sys_db.get_workflow_owner(workflow_id)
+    assert ctx.is_workflow() and ctx.execution_xid is not None
 
     real_engine = dbos._sys_db.engine
     proxy = _RetryOnceEngine(real_engine, threading.get_ident())

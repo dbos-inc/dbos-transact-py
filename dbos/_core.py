@@ -788,8 +788,6 @@ def _get_wf_invoke_func(
     release_active: Callable[[], None] = lambda: None,
 ) -> Callable[[Callable[[], R]], R]:
     def persist(func: Callable[[], R]) -> R:
-        execution_xid = current_execution_xid(status["workflow_uuid"])
-
         def adopt_recorded_outcome(warning: str) -> R:
             # This execution no longer owns the workflow: "park" it and poll for
             # the outcome the owning execution records. Released first, so it
@@ -848,7 +846,6 @@ def _get_wf_invoke_func(
                 status["workflow_uuid"],
                 WorkflowStatusString.ERROR.value,
                 error=error_str,
-                execution_xid=execution_xid,
             ):
                 # We couldn't update the workflow status: park the execution.
                 return adopt_recorded_outcome(not_recorded_warning())
@@ -857,7 +854,6 @@ def _get_wf_invoke_func(
             status["workflow_uuid"],
             WorkflowStatusString.SUCCESS.value,
             output=serval,
-            execution_xid=execution_xid,
         ):
             # We couldn't update the workflow status: park the execution.
             return adopt_recorded_outcome(not_recorded_warning())
@@ -970,7 +966,6 @@ def _check_required_roles_or_finalize_error(
             error=_serialize_exception_for_persistence(
                 role_error, status["serialization"], dbos._serializer
             ),
-            execution_xid=current_execution_xid(status["workflow_uuid"]),
         )
         raise
 

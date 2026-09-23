@@ -399,10 +399,10 @@ class DBOSWorkflowCancelledError(DBOSBaseException):
 
 
 class DBOSWorkflowConflictIDError(DBOSBaseException):
-    """BaseException raised when a workflow database record already exists."""
+    """BaseException raised when an execution no longer owns its workflow, so it must stop and adopt the owner's outcome."""
 
     def __init__(self, workflow_id: str):
         super().__init__(
-            f"Conflicting workflow ID {workflow_id}",
+            f"Workflow {workflow_id} is no longer owned by this execution",
             dbos_error_code=DBOSErrorCode.ConflictingIDError.value,
         )

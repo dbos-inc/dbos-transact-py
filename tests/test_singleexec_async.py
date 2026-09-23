@@ -81,16 +81,23 @@ async def test_simple_workflow(dbos: DBOS) -> None:
         set_workflow_status(dbos._sys_db, wfid, "PENDING")
         for handle in DBOS._recover_pending_workflows():
             handle.get_result()
-        # Two dequeue dispatches of one ID race: only the active-workflow guard stops a double run.
-        wfh1r = reexecute_workflow_by_id(dbos, wfid)
-        wfh2r = reexecute_workflow_by_id(dbos, wfid)
-        wfh1r.get_result()
-        wfh2r.get_result()
 
     await asyncio.to_thread(recover_in_thread)
 
     assert TryConcExec.max_conc == 1
     assert TryConcExec.max_wf == 1
+
+    # Two dequeue dispatches of one ID: each takes ownership in turn, so the first
+    # stops at its checkpoint and adopts the second's outcome. Their bodies may overlap.
+    def redispatch_in_thread() -> None:
+        wfh1r = reexecute_workflow_by_id(dbos, wfid)
+        wfh2r = reexecute_workflow_by_id(dbos, wfid)
+        wfh1r.get_result()
+        wfh2r.get_result()
+
+    await asyncio.to_thread(redispatch_in_thread)
+    steps = await DBOS.list_workflow_steps_async(wfid)
+    assert len([s for s in steps if "testConcStep" in s["function_name"]]) == 1
 
 
 @pytest.mark.asyncio

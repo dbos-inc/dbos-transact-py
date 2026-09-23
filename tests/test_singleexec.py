@@ -67,15 +67,6 @@ def test_simple_workflow(dbos: DBOS) -> None:
     assert TryConcExec.max_conc == 1
     assert TryConcExec.max_wf == 1
 
-    # Two dequeue dispatches of one ID race: only the active-workflow guard stops a double run.
-    wfh1r = reexecute_workflow_by_id(dbos, wfid)
-    wfh2r = reexecute_workflow_by_id(dbos, wfid)
-    wfh1r.get_result()
-    wfh2r.get_result()
-
-    assert TryConcExec.max_conc == 1
-    assert TryConcExec.max_wf == 1
-
     # Direct exec part
     def run(wfid: str) -> None:
         with SetWorkflowID(wfid):
@@ -91,6 +82,23 @@ def test_simple_workflow(dbos: DBOS) -> None:
 
     assert TryConcExec.max_conc == 1
     assert TryConcExec.max_wf == 1
+
+    # Two dequeue dispatches of one ID: each takes ownership in turn, so the first
+    # stops at its checkpoint and adopts the second's outcome. Their bodies may overlap.
+    wfh1r = reexecute_workflow_by_id(dbos, wfid)
+    wfh2r = reexecute_workflow_by_id(dbos, wfid)
+    wfh1r.get_result()
+    wfh2r.get_result()
+    assert (
+        len(
+            [
+                s
+                for s in DBOS.list_workflow_steps(wfid)
+                if "testConcStep" in s["function_name"]
+            ]
+        )
+        == 1
+    )
 
 
 def test_step_undoredo(dbos: DBOS) -> None:

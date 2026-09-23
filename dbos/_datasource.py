@@ -28,7 +28,11 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import Session, sessionmaker
 
-from dbos._context import DBOSContextEnsure, get_local_dbos_context
+from dbos._context import (
+    DBOSContextEnsure,
+    current_execution_xid,
+    get_local_dbos_context,
+)
 from dbos._error import DBOSException, DBOSWorkflowConflictIDError
 from dbos._schemas import SCHEMA_PLACEHOLDER
 from dbos._schemas.datasource_database import DatasourceSchema
@@ -92,8 +96,9 @@ def _parse_ds_options(
     return name, isolation_level
 
 
-def _still_owns(workflow_id: str, execution_xid: Optional[str]) -> bool:
-    """Whether this execution still owns the workflow; one without a token cannot tell and assumes so."""
+def _still_owns(workflow_id: str) -> bool:
+    """Whether the calling execution still owns the workflow; with no token to check, it assumes so."""
+    execution_xid = current_execution_xid(workflow_id)
     if execution_xid is None:
         return True
     from dbos._dbos import _get_dbos_instance
@@ -366,14 +371,12 @@ class AsyncSQLAlchemyDatasource(ABC):
         async def _body() -> R:
             workflow_id: str = ""
             step_id: int = -1
-            execution_xid: Optional[str] = None
 
             if in_wf:
                 inner_ctx = get_local_dbos_context()
                 assert inner_ctx is not None
                 workflow_id = inner_ctx.workflow_id
                 step_id = inner_ctx.curr_step_function_id
-                execution_xid = inner_ctx.execution_xid
                 recorded = await self._check_execution_with_retry(workflow_id, step_id)
                 if recorded is not None:
                     return cast(R, _replay_recorded(recorded, self.serializer))
@@ -448,7 +451,7 @@ class AsyncSQLAlchemyDatasource(ABC):
 
             # Outside the except block, so the internal signal stays out of the traceback chain.
             if conflicted:
-                if not await asyncio.to_thread(_still_owns, workflow_id, execution_xid):
+                if not await asyncio.to_thread(_still_owns, workflow_id):
                     # Another execution owns the workflow: stop, as an ordinary step's loser does.
                     raise DBOSWorkflowConflictIDError(workflow_id)
                 # Still the owner: the recorded row is our own ambiguous commit or a stale execution's, and either is this step's result.
@@ -723,14 +726,12 @@ class SQLAlchemyDatasource(ABC):
         def _body() -> R:
             workflow_id: str = ""
             step_id: int = -1
-            execution_xid: Optional[str] = None
 
             if in_wf:
                 inner_ctx = get_local_dbos_context()
                 assert inner_ctx is not None
                 workflow_id = inner_ctx.workflow_id
                 step_id = inner_ctx.curr_step_function_id
-                execution_xid = inner_ctx.execution_xid
                 recorded = self._check_execution_with_retry(workflow_id, step_id)
                 if recorded is not None:
                     return cast(R, _replay_recorded(recorded, self.serializer))
@@ -805,7 +806,7 @@ class SQLAlchemyDatasource(ABC):
 
             # Outside the except block, so the internal signal stays out of the traceback chain.
             if conflicted:
-                if not _still_owns(workflow_id, execution_xid):
+                if not _still_owns(workflow_id):
                     # Another execution owns the workflow: stop, as an ordinary step's loser does.
                     raise DBOSWorkflowConflictIDError(workflow_id)
                 # Still the owner: the recorded row is our own ambiguous commit or a stale execution's, and either is this step's result.
