@@ -68,6 +68,7 @@ class DBOSErrorCode(Enum):
     StepTimeout = 18
     QueryTimeout = 26
     WorkflowIDInUse = 27
+    StepNondeterminism = 28
 
 
 #######################################
@@ -255,6 +256,24 @@ class DBOSUnexpectedStepError(DBOSException):
         super().__init__(
             f"During execution of workflow {workflow_id} step {step_id}, function {recorded_name} was recorded when {expected_name} was expected. Check that your workflow is deterministic.",
             dbos_error_code=DBOSErrorCode.UnexpectedStep.value,
+        )
+
+    def __reduce__(self) -> Any:
+        # Tell pickle how to reconstruct this object
+        return (
+            self.__class__,
+            self.inputs,
+        )
+
+
+class DBOSStepNondeterminismError(DBOSException):
+    """Exception raised when an execution records a step ID that it already recorded differently."""
+
+    def __init__(self, workflow_id: str, step_id: int) -> None:
+        self.inputs = (workflow_id, step_id)
+        super().__init__(
+            f"Step {step_id} of workflow {workflow_id} was recorded twice by the same execution with different results. Check that your workflow is deterministic.",
+            dbos_error_code=DBOSErrorCode.StepNondeterminism.value,
         )
 
     def __reduce__(self) -> Any:

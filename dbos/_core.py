@@ -791,9 +791,10 @@ def _get_wf_invoke_func(
         execution_xid = current_execution_xid(status["workflow_uuid"])
 
         def adopt_recorded_outcome(warning: str) -> R:
-            # If a duplicate workflow execution was detected, "park"
-            # this execution and poll for the outcome of the winning
-            # execution.
+            # This execution no longer owns the workflow: "park" it and poll for
+            # the outcome the owning execution records. Released first, so it
+            # stops counting toward the local concurrency a re-dispatch needs.
+            release_active()
             dbos.logger.warning(warning)
             return cast(
                 R,
@@ -829,18 +830,13 @@ def _get_wf_invoke_func(
             serval, _serialization = serialize_value_as(
                 output, status["serialization"], dbos._serializer
             )
-            # Release the active-workflow-ID entry before the outcome becomes
-            # durable, so the queue's local count is exact once a resume can see it.
-            release_active()
         except DBOSWorkflowConflictIDError:
             # This execution lost ownership of the workflow.
-            release_active()
             return adopt_recorded_outcome(
                 f"Aborting duplicate execution of workflow {status['workflow_uuid']}."
             )
         except DBOSWorkflowCancelledError:
             # The run observed its own cancellation. Park the execution.
-            release_active()
             return adopt_recorded_outcome(
                 f"Workflow {status['workflow_uuid']} was cancelled during execution. Waiting for the recorded outcome"
             )
@@ -848,7 +844,6 @@ def _get_wf_invoke_func(
             error_str = _serialize_exception_for_persistence(
                 error, status["serialization"], dbos._serializer
             )
-            release_active()
             if not dbos._sys_db.update_workflow_outcome(
                 status["workflow_uuid"],
                 WorkflowStatusString.ERROR.value,
@@ -871,11 +866,26 @@ def _get_wf_invoke_func(
     return persist
 
 
+class ActiveWorkflowEntry:
+    """One execution's registration; release is idempotent, so it can run both before a park and in a finally."""
+
+    def __init__(self, active: "ActiveWorkflowById", key: str) -> None:
+        self._active = active
+        self._key = key
+        self._released = False
+
+    def release(self) -> None:
+        if not self._released:
+            self._released = True
+            self._active._remove(self._key)
+
+
 class ActiveWorkflowById:
     """Executions running in this process, by workflow ID.
 
     A refcount, not a lock: a workflow re-dispatched here (a resume of one still running)
-    runs alongside the stale execution, which parks at its next write.
+    runs alongside the stale execution, which parks at its next write. A parked execution
+    releases its entry first, or it would hold a worker slot the re-dispatch needs.
     """
 
     def __init__(self) -> None:
@@ -888,13 +898,14 @@ class ActiveWorkflowById:
         key: str,
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
-    ) -> None:
+    ) -> ActiveWorkflowEntry:
         with self._lock:
             self._m.setdefault(key, []).append(
                 (queue_name, queue_partition_key) if queue_name is not None else None
             )
+        return ActiveWorkflowEntry(self, key)
 
-    def remove(self, key: str) -> None:
+    def _remove(self, key: str) -> None:
         with self._lock:
             buckets = self._m[key]
             buckets.pop()
@@ -1063,25 +1074,14 @@ def _execute_workflow_wthread(
             dbos, status, func, fi
         )
         with DBOSAssumeRole(rr):
-            dbos._active_workflows_set.add(
+            entry = dbos._active_workflows_set.add(
                 status["workflow_uuid"],
                 status.get("queue_name"),
                 status.get("queue_partition_key"),
             )
-            # release_active is called both by persist (before the outcome
-            # write) and by the finally below; the guard makes the second call
-            # a no-op, so another execution's entry is never removed.
-            released = False
-
-            def release_active() -> None:
-                nonlocal released
-                if not released:
-                    released = True
-                    dbos._active_workflows_set.remove(status["workflow_uuid"])
-
             try:
                 return Immediate[R](functools.partial(func, *args, **kwargs)).then(
-                    _get_wf_invoke_func(dbos, status, release_active)
+                    _get_wf_invoke_func(dbos, status, entry.release)
                 )()
             except Exception as e:
                 # This path runs on the executor thread pool, not the event loop.
@@ -1090,7 +1090,7 @@ def _execute_workflow_wthread(
                 )
                 raise
             finally:
-                release_active()
+                entry.release()
 
 
 async def _execute_workflow_async(
@@ -1116,25 +1116,14 @@ async def _execute_workflow_async(
             dbos, status, func, fi
         )
         with DBOSAssumeRole(rr):
-            dbos._active_workflows_set.add(
+            entry = dbos._active_workflows_set.add(
                 status["workflow_uuid"],
                 status.get("queue_name"),
                 status.get("queue_partition_key"),
             )
-            # release_active is called both by persist (before the outcome
-            # write) and by the finally below; the guard makes the second call
-            # a no-op, so another execution's entry is never removed.
-            released = False
-
-            def release_active() -> None:
-                nonlocal released
-                if not released:
-                    released = True
-                    dbos._active_workflows_set.remove(status["workflow_uuid"])
-
             try:
                 result = Pending[R](functools.partial(func, *args, **kwargs)).then(
-                    _get_wf_invoke_func(dbos, status, release_active)
+                    _get_wf_invoke_func(dbos, status, entry.release)
                 )
                 return await result()
             except Exception as e:
@@ -1143,7 +1132,7 @@ async def _execute_workflow_async(
                 )
                 raise
             finally:
-                release_active()
+                entry.release()
 
 
 def execute_dequeued_workflow(

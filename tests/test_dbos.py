@@ -505,10 +505,8 @@ def test_recovery_reenqueue_is_ownership_conditional(dbos: DBOS) -> None:
 def test_duplicate_recovery_does_not_rerun_running_workflow(dbos: DBOS) -> None:
     """Recovery hands a running workflow back to the queue, and each sweep yields exactly one dequeue.
 
-    This pins the mechanism this PR introduced rather than the pre-existing
-    in-process ownership guard: a workflow that was never enqueued acquires the
-    internal queue's name and is restarted by the queue, where before the sweep
-    executed it directly and the row's queue_name stayed None.
+    A workflow that was never enqueued acquires the internal queue's name and is
+    restarted by the queue, which takes ownership from the still-running execution.
     """
     start_count = 0
     blocker = threading.Event()
@@ -558,15 +556,22 @@ def test_duplicate_recovery_does_not_rerun_running_workflow(dbos: DBOS) -> None:
                 assert status.status == WorkflowStatusString.PENDING.value
 
             retry_until_success(dequeued)
-            assert start_count == 1
+
+            # The dequeue runs the workflow again alongside the stale execution,
+            # which loses ownership and parks at its next write.
+            def redispatched(expected: int = expected_attempts) -> None:
+                assert start_count == expected
+
+            retry_until_success(redispatched)
     finally:
         blocker.set()
 
-    # The guard holds only while this execution owns the workflow, so a dispatch still in flight when ownership is released may re-enter the body: harmless, since its steps replay and its outcome write is rejected once the row leaves PENDING.
+    # Only the last dispatch owns the workflow: the earlier ones have their outcome
+    # writes rejected and adopt its result.
     assert handle.get_result() == "done"
     # Bounded by the dispatches that exist: the original plus the two recovery sweeps
     # above. Anything more means a sweep restarted the workflow it should have skipped.
-    assert start_count <= 3
+    assert start_count == 3
     final = DBOS.get_workflow_status(wfuuid)
     assert final is not None
     assert final.status == WorkflowStatusString.SUCCESS.value

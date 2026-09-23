@@ -27,7 +27,7 @@ from dbos._error import (
     DBOSErrorCode,
     DBOSException,
     DBOSQueueDeduplicatedError,
-    DBOSWorkflowConflictIDError,
+    DBOSStepNondeterminismError,
     DBOSWorkflowIDInUseError,
     is_workflow_id_in_use_error,
 )
@@ -941,7 +941,7 @@ def test_init_child_workflow_is_atomic(dbos: DBOS) -> None:
     init_child(child_id)
     # A different child at the same step conflicts, and its status row rolls back with the step.
     other_id = f"reuse-atomic-other-{uuid.uuid4()}"
-    with pytest.raises(DBOSWorkflowConflictIDError):
+    with pytest.raises(DBOSStepNondeterminismError):
         init_child(other_id)
     assert DBOS.get_workflow_status(other_id) is None
 

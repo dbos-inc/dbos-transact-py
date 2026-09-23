@@ -63,6 +63,7 @@ from ._error import (
     DBOSNonExistentWorkflowError,
     DBOSQueryTimeoutError,
     DBOSQueueDeduplicatedError,
+    DBOSStepNondeterminismError,
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
@@ -3159,7 +3160,10 @@ class SystemDatabase(ABC):
     def _check_owner_txn(
         self, conn: Union[sa.Connection, Session], workflow_id: str, execution_xid: str
     ) -> None:
-        """Raise DBOSWorkflowConflictIDError unless execution_xid still owns the workflow, locking its row until commit."""
+        """Raise DBOSWorkflowConflictIDError unless execution_xid still owns the workflow.
+
+        The row stays locked until commit, so a hand-off (cancel, resume, recovery) cannot land between this check and the write.
+        """
         current = conn.execute(
             sa.select(SystemSchema.workflow_status.c.execution_xid)
             .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
@@ -3179,34 +3183,11 @@ class SystemDatabase(ABC):
         assert error is None or output is None, "Only one of error or output can be set"
 
         execution_xid = current_execution_xid(result["workflow_uuid"])
-        owner_query = sa.select(
-            SystemSchema.workflow_status.c.executor_id,
-            SystemSchema.workflow_status.c.execution_xid,
-        ).where(SystemSchema.workflow_status.c.workflow_uuid == result["workflow_uuid"])
         if execution_xid is not None:
-            # Locked so a hand-off (cancel, resume, recovery) cannot commit between this check and the insert.
-            owner_query = owner_query.with_for_update(key_share=True)
-        wf_executor_id_row = conn.execute(owner_query).fetchone()
-        assert wf_executor_id_row is not None
-        wf_executor_id = wf_executor_id_row[0]
-        if execution_xid is not None and wf_executor_id_row[1] != execution_xid:
-            raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
-        # Check if the executor ID belong to another process.
-        # Reset it to this process's executor ID if so.
-        if self.executor_id is not None and wf_executor_id != self.executor_id:
-            dbos_logger.debug(
-                f'Resetting executor_id from {wf_executor_id} to {self.executor_id} for workflow {result["workflow_uuid"]}'
-            )
-            conn.execute(
-                sa.update(SystemSchema.workflow_status)
-                .values(executor_id=self.executor_id)
-                .where(
-                    SystemSchema.workflow_status.c.workflow_uuid
-                    == result["workflow_uuid"]
-                )
-            )
+            self._check_owner_txn(conn, result["workflow_uuid"], execution_xid)
 
-        # Record the outcome, throwing DBOSWorkflowConflictIDError if it is already present
+        # Record the outcome. A row already there with another completion time is this
+        # execution's own doing (a retry carries the same time), so it is nondeterminism, not a duplicate.
         try:
             stmt = (
                 self.dialect.insert(SystemSchema.operation_outputs)
@@ -3246,11 +3227,15 @@ class SystemDatabase(ABC):
                     existing_completed_at is None
                     or int(existing_completed_at) != completed_at_epoch_ms
                 ):
-                    raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
+                    raise DBOSStepNondeterminismError(
+                        result["workflow_uuid"], result["function_id"]
+                    )
 
         except DBAPIError as dbapi_error:
             if self._is_unique_constraint_violation(dbapi_error):
-                raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
+                raise DBOSStepNondeterminismError(
+                    result["workflow_uuid"], result["function_id"]
+                )
             raise
 
     @db_retry()
@@ -5343,7 +5328,9 @@ class SystemDatabase(ABC):
                 ).fetchone()
                 # Same child means an idempotent db_retry; a different child means nondeterminism.
                 if existing is None or existing[0] != child_workflow_id:
-                    raise DBOSWorkflowConflictIDError(parent_workflow_id)
+                    raise DBOSStepNondeterminismError(
+                        parent_workflow_id, parent_function_id
+                    )
         DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_INITWF_COMMIT)
         return result
 
