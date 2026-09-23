@@ -81,20 +81,20 @@ def _winner_step_row(conn: Any, wfid: str, step_name: str) -> dict[str, Any]:
     return dict(row.one())
 
 
-def _set_owner(dbos: DBOS, wfid: str, owner_xid: Optional[str]) -> None:
+def _set_owner(dbos: DBOS, wfid: str, execution_xid: Optional[str]) -> None:
     with dbos._sys_db.engine.begin() as conn:
         conn.execute(
             sa.update(SystemSchema.workflow_status)
             .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
-            .values(owner_xid=owner_xid)
+            .values(execution_xid=execution_xid)
         )
 
 
 def _reclaim_ownership(dbos: DBOS) -> None:
     """Hand the workflow back to the running execution, so its outcome write lands."""
     ctx = get_local_dbos_context()
-    assert ctx is not None and ctx.owner_xid is not None
-    _set_owner(dbos, ctx.workflow_id, ctx.owner_xid)
+    assert ctx is not None and ctx.execution_xid is not None
+    _set_owner(dbos, ctx.workflow_id, ctx.execution_xid)
 
 
 def _checkpointed_steps(conn: Any, wfid: str) -> list[str]:

@@ -49,7 +49,7 @@ from ._context import (
     TracedAttributes,
     WorkflowIDReusePolicy,
     assert_current_dbos_context,
-    current_owner_xid,
+    current_execution_xid,
     extract_trace_context,
     get_local_dbos_context,
     otel_carrier_from_attributes,
@@ -693,7 +693,8 @@ def _init_workflow(
             raise
 
     if should_execute:
-        ctx.owner_xid = owner_xid
+        # A direct start's insert makes its token the execution token too.
+        ctx.execution_xid = owner_xid
     ctx.workflow_deadline_epoch_ms = workflow_deadline_epoch_ms
     status["status"] = wf_status
     return status, should_execute, None
@@ -787,7 +788,7 @@ def _get_wf_invoke_func(
     release_active: Callable[[], None] = lambda: None,
 ) -> Callable[[Callable[[], R]], R]:
     def persist(func: Callable[[], R]) -> R:
-        owner_xid = current_owner_xid(status["workflow_uuid"])
+        execution_xid = current_execution_xid(status["workflow_uuid"])
 
         def adopt_recorded_outcome(warning: str) -> R:
             # If a duplicate workflow execution was detected, "park"
@@ -852,7 +853,7 @@ def _get_wf_invoke_func(
                 status["workflow_uuid"],
                 WorkflowStatusString.ERROR.value,
                 error=error_str,
-                owner_xid=owner_xid,
+                execution_xid=execution_xid,
             ):
                 # We couldn't update the workflow status: park the execution.
                 return adopt_recorded_outcome(not_recorded_warning())
@@ -861,7 +862,7 @@ def _get_wf_invoke_func(
             status["workflow_uuid"],
             WorkflowStatusString.SUCCESS.value,
             output=serval,
-            owner_xid=owner_xid,
+            execution_xid=execution_xid,
         ):
             # We couldn't update the workflow status: park the execution.
             return adopt_recorded_outcome(not_recorded_warning())
@@ -975,7 +976,7 @@ def _check_required_roles_or_finalize_error(
             error=_serialize_exception_for_persistence(
                 role_error, status["serialization"], dbos._serializer
             ),
-            owner_xid=current_owner_xid(status["workflow_uuid"]),
+            execution_xid=current_execution_xid(status["workflow_uuid"]),
         )
         raise
 
@@ -1196,11 +1197,11 @@ async def _execute_workflow_async(
 
 
 def execute_dequeued_workflow(
-    dbos: "DBOS", status: WorkflowStatusInternal, owner_xid: str
+    dbos: "DBOS", status: WorkflowStatusInternal, execution_xid: str
 ) -> "WorkflowHandle[Any]":
     """Run a workflow the queue has just claimed, from its persisted status.
 
-    owner_xid is the token the claim wrote, never re-read from the row: a later claim's token there is not ours.
+    execution_xid is the token the claim wrote, never re-read from the row: a later claim's token there is not ours.
 
     Deliberately skips _init_workflow: the claim already wrote everything it would
     (PENDING, executor, deadline, recovery_attempts) and this status was read back
@@ -1219,7 +1220,7 @@ def execute_dequeued_workflow(
             workflow_id,
             WorkflowStatusString.ERROR.value,
             error=error_str,
-            owner_xid=owner_xid,
+            execution_xid=execution_xid,
         )
         raise recovery_error
     try:
@@ -1235,7 +1236,7 @@ def execute_dequeued_workflow(
             workflow_id,
             WorkflowStatusString.ERROR.value,
             error=error_str,
-            owner_xid=owner_xid,
+            execution_xid=execution_xid,
         )
         raise
     wf_func = dbos._registry.workflow_info_map.get(status["name"], None)
@@ -1287,7 +1288,7 @@ def execute_dequeued_workflow(
                 workflow_id,
                 WorkflowStatusString.ERROR.value,
                 error=error_str,
-                owner_xid=owner_xid,
+                execution_xid=execution_xid,
             )
             raise
     # Restore authentication context from the saved workflow status
@@ -1335,7 +1336,7 @@ def execute_dequeued_workflow(
             # Same context start_workflow builds: create_start_workflow_child consumes the
             # ambient SetWorkflowID, so the run adopts the claimed row's ID.
             ctx = DBOSContext.create_start_workflow_child(get_local_dbos_context())
-            ctx.owner_xid = owner_xid
+            ctx.execution_xid = execution_xid
             # Consume the restored carrier so workflows started inside this one do not inherit it.
             ctx.workflow_attributes = None
             ctx.otel_carrier = None

@@ -397,16 +397,16 @@ def set_workflow_status(sys_db: SystemDatabase, workflow_id: str, status: str) -
 
 def reexecute_workflow_by_id(dbos: DBOS, wfid: str) -> "WorkflowHandle[Any]":
     """Dispatch a workflow off its persisted row, exactly as a queue claim does, taking ownership of it."""
-    owner_xid = str(uuid.uuid4())
+    execution_xid = str(uuid.uuid4())
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.update(SystemSchema.workflow_status)
-            .values(status="PENDING", owner_xid=owner_xid)
+            .values(status="PENDING", execution_xid=execution_xid)
             .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
         )
     status = dbos._sys_db.get_workflow_status(wfid)
     assert status is not None
-    return execute_dequeued_workflow(dbos, status, owner_xid)
+    return execute_dequeued_workflow(dbos, status, execution_xid)
 
 
 def queue_entries_are_cleaned_up(dbos: DBOS) -> bool:

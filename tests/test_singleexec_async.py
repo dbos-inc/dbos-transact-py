@@ -370,13 +370,13 @@ async def test_parked_duplicate_does_not_hold_a_thread(
         *,
         output: Optional[str] = None,
         error: Optional[str] = None,
-        owner_xid: Optional[str] = None,
+        execution_xid: Optional[str] = None,
     ) -> bool:
         # What a run whose row moved on sees: its terminal write does not land.
         if workflow_id in lost_ids:
             return False
         return original_update(
-            workflow_id, status, output=output, error=error, owner_xid=owner_xid
+            workflow_id, status, output=output, error=error, execution_xid=execution_xid
         )
 
     original_check = dbos._sys_db.check_workflow_result
