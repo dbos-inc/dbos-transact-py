@@ -495,22 +495,20 @@ class ThreadSafeEventDict:
         with self._lock:
             return self._dict.get(key)
 
-    def set(
+    def add(
         self,
         key: str,
-        value: LoopAwareEvent,
+        event: LoopAwareEvent,
         components: Tuple[str, str],
-    ) -> tuple[bool, LoopAwareEvent]:
-        """Register value as a waiter on key; returns whether it is the key's first waiter, and value."""
+    ) -> None:
+        """Register event as a waiter on key."""
         with self._lock:
             signal = self._dict.get(key)
-            first = signal is None
             if signal is None:
                 signal = KeySignal(components)
                 self._dict[key] = signal
             with signal._lock:
-                signal._waiters.add(value)
-        return first, value
+                signal._waiters.add(event)
 
     def pop(self, key: str, event: LoopAwareEvent) -> None:
         """Unregister one waiter, dropping the key with its last waiter."""
@@ -3730,7 +3728,7 @@ class SystemDatabase(ABC):
         payload = f"{workflow_uuid}::{topic}"
         event = LoopAwareEvent()
         # A stale local execution may already wait here; both wake, and its consume fails the ownership check.
-        self.notifications_map.set(payload, event, (workflow_uuid, topic))
+        self.notifications_map.add(payload, event, (workflow_uuid, topic))
 
         try:
             # Check if an unconsumed message is already in the database.
@@ -3924,13 +3922,12 @@ class SystemDatabase(ABC):
 
         The worker thread cannot be cancelled, so it finishes registering in
         event_map even after cancellation abandons the coroutine before its
-        try/finally cleanup is in place. A leftover entry would leak and keep
-        its key registered for every later waiter. So on cancellation, wait for the thread inline
-        and undo its registration *before* re-raising CancelledError: once the
-        cancelled call returns, no stale entry remains, so there is no window
-        for a concurrent recv to trip over. If a further cancellation
-        interrupts that wait, fall back to deferred cleanup via a done-callback
-        so an impatient caller is not blocked on the thread.
+        try/finally cleanup is in place, and that waiter would leak. So on
+        cancellation, wait for the thread inline and undo its registration
+        *before* re-raising CancelledError. Cleaning up inline rather than in a
+        done-callback means it cannot be skipped by an event loop that shuts
+        down first. If a further cancellation interrupts that wait, fall back
+        to a done-callback so an impatient caller is not blocked on the thread.
         """
         setup_task = asyncio.create_task(asyncio.to_thread(setup_fn, *args))
         try:
@@ -4418,7 +4415,7 @@ class SystemDatabase(ABC):
 
         payload = f"{target_uuid}::{key}"
         event = LoopAwareEvent()
-        self.workflow_events_map.set(payload, event, (target_uuid, key))
+        self.workflow_events_map.add(payload, event, (target_uuid, key))
 
         try:
             # Check if the key is already in the database
@@ -5743,7 +5740,7 @@ class SystemDatabase(ABC):
         """
         payload = f"{workflow_uuid}::{key}"
         event = LoopAwareEvent()
-        self.streams_map.set(payload, event, (workflow_uuid, key))
+        self.streams_map.add(payload, event, (workflow_uuid, key))
         return event, payload
 
     def unregister_stream_listener(self, payload: str, event: LoopAwareEvent) -> None:

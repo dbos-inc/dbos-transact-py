@@ -273,10 +273,8 @@ async def test_send_recv_async(dbos: DBOS) -> None:
 @pytest.mark.asyncio
 async def test_recv_async_cancelled_during_setup(dbos: DBOS) -> None:
     """Cancelling recv_async while its setup phase runs in a worker thread
-    must not leave a notifications_map registration behind. Cleanup is
-    synchronous: the moment the cancelled call returns, the entry is gone, so
-    there is no window in which the next recv on the same workflow and topic
-    raises a spurious DBOSWorkflowConflictIDError."""
+    must not leave a notifications_map registration behind, and cleanup must
+    complete synchronously before CancelledError propagates."""
 
     @DBOS.workflow()
     async def noop_workflow() -> None:
@@ -313,13 +311,12 @@ async def test_recv_async_cancelled_during_setup(dbos: DBOS) -> None:
         release_setup.set()
         with pytest.raises(asyncio.CancelledError):
             await recv_task
-        # Cleanup happened before CancelledError propagated -- no polling
-        # window for a concurrent recv to trip over a stale entry.
+        # Cleanup finished before CancelledError propagated.
         assert sys_db.notifications_map.get(payload) is None
     finally:
         sys_db.recv_check = original_recv_check  # type: ignore[method-assign]
 
-    # A later recv on the same workflow and topic must not see a stale entry.
+    # A later recv on the same workflow and topic still works and cleans up.
     message = await sys_db.recv_async(wfid, 102, 103, topic, timeout_seconds=0.1)
     assert message is None
     assert sys_db.notifications_map.get(payload) is None
