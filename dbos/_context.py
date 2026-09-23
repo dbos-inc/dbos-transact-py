@@ -405,11 +405,10 @@ def current_execution_xid(
         ctx = get_local_dbos_context()
     if ctx is None or ctx.workflow_id != workflow_id:
         return None
-    if ctx.execution_xid is None:
-        # Every execution path sets a token, so this write cannot be checked; surface it rather than hide it.
-        dbos_logger.warning(
-            f"Workflow {workflow_id} is writing without an execution token; ownership is not checked"
-        )
+    # Every execution path sets a token before its workflow runs; a context without one is a bug.
+    assert (
+        ctx.execution_xid is not None
+    ), f"Workflow {workflow_id} is writing without an execution token"
     return ctx.execution_xid
 
 
