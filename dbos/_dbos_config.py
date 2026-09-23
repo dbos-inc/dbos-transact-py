@@ -24,6 +24,7 @@ class DBOSConfig(TypedDict, total=False):
         sys_db_pool_size (int): System database pool size
         sys_db_polling_concurrency (int): Maximum number of DB-backed polling reads (from wait operations such as get_result, recv, get_event, and read_stream) that may run concurrently against the system database pool. This keeps high-fan-out polling from checking out every pool connection and starving control-plane operations such as enqueue/dequeue, status writes, recovery, and cancellation. Defaults to half the system database pool size (minimum 1). Set to a non-positive value to disable the limiter.
         db_engine_kwargs (Dict[str, Any]): SQLAlchemy engine kwargs for the system database engine (See https://docs.sqlalchemy.org/en/20/core/engines.html#sqlalchemy.create_engine)
+        sys_db_idle_transaction_timeout_sec (float): Postgres idle_in_transaction_session_timeout, in seconds, for system database connections DBOS creates. Postgres ends a session left idle inside an open transaction for longer than this, releasing its locks. Defaults to 60.0. Set to a non-positive value to leave the server's setting in place. Not applied to a custom system_database_engine or when db_engine_kwargs already sets the parameter.
         log_level (str): Log level
         otlp_log_level: Optional[str]: log level specficially for OTLP logging (if enabled); must be no less severe than log_level
         console_log_level: Optional[str]: log level specficially for console logging; must be no less severe than log_level
@@ -59,6 +60,7 @@ class DBOSConfig(TypedDict, total=False):
     sys_db_pool_size: Optional[int]
     sys_db_polling_concurrency: Optional[int]
     db_engine_kwargs: Optional[Dict[str, Any]]
+    sys_db_idle_transaction_timeout_sec: Optional[float]
     log_level: Optional[str]
     otlp_log_level: Optional[str]
     console_log_level: Optional[str]
@@ -103,6 +105,7 @@ class DatabaseConfig(TypedDict, total=False):
     sys_db_polling_concurrency: Optional[int]
     db_engine_kwargs: Optional[Dict[str, Any]]
     sys_db_engine_kwargs: Optional[Dict[str, Any]]
+    sys_db_idle_transaction_timeout_sec: Optional[float]
     migrate: Optional[List[str]]
 
 
@@ -140,6 +143,14 @@ class ConfigFile(TypedDict, total=False):
     dbos_system_schema: Optional[str]
     use_listen_notify: bool
     run_migrations: bool
+
+
+def _validate_idle_transaction_timeout_sec(value: Optional[float]) -> None:
+    # Reject NaN/inf: the timeout becomes an integer number of milliseconds.
+    if value is not None and not math.isfinite(value):
+        raise DBOSInitializationError(
+            f"sys_db_idle_transaction_timeout_sec must be a finite number, got {value}"
+        )
 
 
 def _validate_observability_query_timeout_sec(value: Optional[float]) -> None:
@@ -183,6 +194,10 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         )
     if "db_engine_kwargs" in config:
         db_config["db_engine_kwargs"] = config.get("db_engine_kwargs")
+    if "sys_db_idle_transaction_timeout_sec" in config:
+        idle_timeout = config["sys_db_idle_transaction_timeout_sec"]
+        _validate_idle_transaction_timeout_sec(idle_timeout)
+        db_config["sys_db_idle_transaction_timeout_sec"] = idle_timeout
     if db_config:
         translated_config["database"] = db_config
 

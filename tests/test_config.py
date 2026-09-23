@@ -607,6 +607,36 @@ def test_translate_dbosconfig_observability_query_timeout_sec():
         assert "observability_query_timeout_sec" in str(exc_info.value)
 
 
+def test_translate_dbosconfig_idle_transaction_timeout_sec():
+    # A valid value is threaded into the database config, including a non-positive one, which disables it.
+    for ok_value in [5.0, 0]:
+        ok: DBOSConfig = {
+            "name": "test-app",
+            "sys_db_idle_transaction_timeout_sec": ok_value,
+        }
+        translated = translate_dbos_config_to_config_file(ok)
+        assert translated["database"]["sys_db_idle_transaction_timeout_sec"] == ok_value
+
+    for bad in [float("nan"), float("inf")]:
+        with pytest.raises(DBOSInitializationError) as exc_info:
+            translate_dbos_config_to_config_file(
+                {"name": "test-app", "sys_db_idle_transaction_timeout_sec": bad}
+            )
+        assert "sys_db_idle_transaction_timeout_sec" in str(exc_info.value)
+
+        with pytest.raises(DBOSInitializationError) as exc_info:
+            SystemDatabase.create(
+                system_database_url="sqlite:///dbos.sqlite",
+                engine_kwargs={},
+                engine=None,
+                schema=None,
+                serializer=DefaultSerializer(),
+                executor_id=None,
+                idle_transaction_timeout_sec=bad,
+            )
+        assert "sys_db_idle_transaction_timeout_sec" in str(exc_info.value)
+
+
 def test_translate_dbosconfig_run_migrations():
     # Defaults to True, and an explicit setting survives translation.
     assert (

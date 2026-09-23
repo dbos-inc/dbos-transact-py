@@ -50,7 +50,10 @@ from ._context import (
     get_local_dbos_context,
     validate_workflow_attributes,
 )
-from ._dbos_config import _validate_observability_query_timeout_sec
+from ._dbos_config import (
+    _validate_idle_transaction_timeout_sec,
+    _validate_observability_query_timeout_sec,
+)
 from ._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
@@ -593,6 +596,8 @@ DEFAULT_NOTIFICATION_COALESCE_SEC = 0.01
 # Statement timeout for read-only introspection queries (workflow listings, aggregates, metrics).
 # One of those scanning a huge table for minutes holds back xmin, which stalls autovacuum database-wide.
 DEFAULT_OBSERVABILITY_QUERY_TIMEOUT_SEC = 30.0
+# Bounds how long a frozen or unreachable client can hold system database locks.
+DEFAULT_IDLE_TRANSACTION_TIMEOUT_SEC = 60.0
 
 
 class SystemDatabase(ABC):
@@ -612,6 +617,7 @@ class SystemDatabase(ABC):
         app_name: Optional[str] = None,
         retry_connection_errors: bool = True,
         observability_query_timeout_sec: Optional[float] = None,
+        idle_transaction_timeout_sec: Optional[float] = None,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
         if system_database_url.startswith("sqlite"):
@@ -631,6 +637,7 @@ class SystemDatabase(ABC):
                 app_name=app_name,
                 retry_connection_errors=retry_connection_errors,
                 observability_query_timeout_sec=observability_query_timeout_sec,
+                idle_transaction_timeout_sec=idle_transaction_timeout_sec,
             )
         else:
             from ._sys_db_postgres import PostgresSystemDatabase
@@ -649,6 +656,7 @@ class SystemDatabase(ABC):
                 app_name=app_name,
                 retry_connection_errors=retry_connection_errors,
                 observability_query_timeout_sec=observability_query_timeout_sec,
+                idle_transaction_timeout_sec=idle_transaction_timeout_sec,
             )
 
     def __init__(
@@ -667,6 +675,7 @@ class SystemDatabase(ABC):
         app_name: Optional[str] = None,
         retry_connection_errors: bool = True,
         observability_query_timeout_sec: Optional[float] = None,
+        idle_transaction_timeout_sec: Optional[float] = None,
     ):
         import sqlalchemy.dialects.postgresql as pg
         import sqlalchemy.dialects.sqlite as sq
@@ -720,6 +729,20 @@ class SystemDatabase(ABC):
             self.schema = None
         else:
             self.schema = schema if schema else "dbos"
+
+        # Set before _create_engine, which applies it to each new connection. None disables it.
+        _validate_idle_transaction_timeout_sec(idle_transaction_timeout_sec)
+        idle_sec = (
+            idle_transaction_timeout_sec
+            if idle_transaction_timeout_sec is not None
+            else DEFAULT_IDLE_TRANSACTION_TIMEOUT_SEC
+        )
+        self._idle_transaction_timeout_ms: Optional[int] = (
+            # Floor at 1ms: PostgreSQL reads 0 as "no timeout".
+            max(1, int(idle_sec * 1000))
+            if idle_sec > 0
+            else None
+        )
 
         if engine:
             base_engine = engine
