@@ -3173,11 +3173,23 @@ class SystemDatabase(ABC):
 
         The row stays locked until commit, so a hand-off (cancel, resume, recovery) cannot land between this check and the write.
         """
-        current = conn.execute(
-            sa.select(SystemSchema.workflow_status.c.execution_xid)
-            .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
-            .with_for_update(key_share=True)
-        ).scalar()
+        ws = SystemSchema.workflow_status
+        stmt: sa.Executable
+        if self._is_sqlite:
+            # A write, so pysqlite opens BEGIN IMMEDIATE here; a SELECT would run in autocommit.
+            stmt = (
+                sa.update(ws)
+                .where(ws.c.workflow_uuid == workflow_id)
+                .values(execution_xid=ws.c.execution_xid)
+                .returning(ws.c.execution_xid)
+            )
+        else:
+            stmt = (
+                sa.select(ws.c.execution_xid)
+                .where(ws.c.workflow_uuid == workflow_id)
+                .with_for_update(key_share=True)
+            )
+        current = conn.execute(stmt).scalar()
         if current != execution_xid:
             raise DBOSWorkflowConflictIDError(workflow_id)
 

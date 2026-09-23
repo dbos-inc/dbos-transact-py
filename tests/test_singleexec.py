@@ -653,6 +653,38 @@ def test_cancel_refuses_running_step_result(dbos: DBOS) -> None:
         release.set()
 
 
+def test_owner_check_blocks_hand_off_until_commit(dbos: DBOS) -> None:
+    """A hand-off waits for an open ownership check's transaction, so it cannot land before the write."""
+
+    @DBOS.workflow()
+    def owned_workflow() -> str:
+        return "done"
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        owned_workflow()
+    # PENDING again, keeping the finished execution's token.
+    set_workflow_status(dbos._sys_db, wfid, "PENDING")
+    token = dbos._sys_db.get_workflow_owner(wfid)
+    assert token is not None
+
+    handed_off = threading.Event()
+
+    def hand_off() -> None:
+        dbos._sys_db.cancel_workflows([wfid])
+        handed_off.set()
+
+    with dbos._sys_db.engine.begin() as c:
+        dbos._sys_db._check_owner_txn(c, wfid, token)
+        thread = threading.Thread(target=hand_off)
+        thread.start()
+        # Negative check: the hand-off must still be waiting on the open check.
+        assert not handed_off.wait(0.5)
+    thread.join(timeout=30)
+    assert handed_off.is_set()
+    assert dbos._sys_db.get_workflow_owner(wfid) is None
+
+
 def test_stale_owner_cannot_write_outcome(
     dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
