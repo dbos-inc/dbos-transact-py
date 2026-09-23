@@ -370,11 +370,14 @@ async def test_parked_duplicate_does_not_hold_a_thread(
         *,
         output: Optional[str] = None,
         error: Optional[str] = None,
+        owner_xid: Optional[str] = None,
     ) -> bool:
         # What a run whose row moved on sees: its terminal write does not land.
         if workflow_id in lost_ids:
             return False
-        return original_update(workflow_id, status, output=output, error=error)
+        return original_update(
+            workflow_id, status, output=output, error=error, owner_xid=owner_xid
+        )
 
     original_check = dbos._sys_db.check_workflow_result
 
@@ -468,3 +471,52 @@ async def test_parked_duplicate_does_not_hold_a_thread(
 
     for run in runs:
         assert await asyncio.wait_for(run, timeout=15) == "owner outcome"
+
+
+@pytest.mark.asyncio
+async def test_handoff_parks_live_execution_async(dbos: DBOS) -> None:
+    """Async sibling of test_handoff_parks_live_execution: the resumed dispatch waits
+    for the stale execution to let go, then finishes the workflow."""
+    release = asyncio.Event()
+    calls = {"blocked": 0, "after": 0}
+
+    @DBOS.step()
+    async def blocked_step() -> str:
+        calls["blocked"] += 1
+        await release.wait()
+        return "blocked"
+
+    @DBOS.step()
+    async def after_step() -> str:
+        calls["after"] += 1
+        return "after"
+
+    @DBOS.workflow()
+    async def handed_off_workflow() -> str:
+        return await blocked_step() + await after_step()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(handed_off_workflow)
+
+    def blocked() -> None:
+        assert calls["blocked"] == 1
+
+    await retry_until_success_async(blocked, interval=0.1, max_attempts=100)
+    first_owner = dbos._sys_db.get_workflow_owner(wfid)
+    assert first_owner is not None
+
+    await DBOS.resume_workflow_async(wfid)
+
+    def reclaimed() -> None:
+        owner = dbos._sys_db.get_workflow_owner(wfid)
+        assert owner is not None and owner != first_owner
+
+    await retry_until_success_async(reclaimed, interval=0.1, max_attempts=100)
+    release.set()
+
+    assert await handle.get_result() == "blockedafter"
+    retrieved: WorkflowHandleAsync[str] = await DBOS.retrieve_workflow_async(wfid)
+    assert await retrieved.get_result() == "blockedafter"
+    assert calls == {"blocked": 2, "after": 1}
+    assert len(await DBOS.list_workflow_steps_async(wfid)) == 2

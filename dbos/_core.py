@@ -49,6 +49,7 @@ from ._context import (
     TracedAttributes,
     WorkflowIDReusePolicy,
     assert_current_dbos_context,
+    current_owner_xid,
     extract_trace_context,
     get_local_dbos_context,
     otel_carrier_from_attributes,
@@ -691,6 +692,8 @@ def _init_workflow(
                 dbos._sys_db.record_operation_result(result)
             raise
 
+    if should_execute:
+        ctx.owner_xid = owner_xid
     ctx.workflow_deadline_epoch_ms = workflow_deadline_epoch_ms
     status["status"] = wf_status
     return status, should_execute, None
@@ -784,6 +787,8 @@ def _get_wf_invoke_func(
     release_active: Callable[[], None] = lambda: None,
 ) -> Callable[[Callable[[], R]], R]:
     def persist(func: Callable[[], R]) -> R:
+        owner_xid = current_owner_xid(status["workflow_uuid"])
+
         def adopt_recorded_outcome(warning: str) -> R:
             # If a duplicate workflow execution was detected, "park"
             # this execution and poll for the outcome of the winning
@@ -824,12 +829,10 @@ def _get_wf_invoke_func(
                 output, status["serialization"], dbos._serializer
             )
             # Release the active-workflow-ID entry before the outcome becomes
-            # durable: once it is visible, a resume can re-dispatch this
-            # workflow to this executor, and a stale entry would send that
-            # dispatch down the non-owner path to wait forever.
+            # durable, so a re-dispatch to this executor need not wait on it.
             release_active()
         except DBOSWorkflowConflictIDError:
-            # Another execution owns this workflow's step checkpoints.
+            # This execution lost ownership of the workflow.
             release_active()
             return adopt_recorded_outcome(
                 f"Aborting duplicate execution of workflow {status['workflow_uuid']}."
@@ -849,6 +852,7 @@ def _get_wf_invoke_func(
                 status["workflow_uuid"],
                 WorkflowStatusString.ERROR.value,
                 error=error_str,
+                owner_xid=owner_xid,
             ):
                 # We couldn't update the workflow status: park the execution.
                 return adopt_recorded_outcome(not_recorded_warning())
@@ -857,6 +861,7 @@ def _get_wf_invoke_func(
             status["workflow_uuid"],
             WorkflowStatusString.SUCCESS.value,
             output=serval,
+            owner_xid=owner_xid,
         ):
             # We couldn't update the workflow status: park the execution.
             return adopt_recorded_outcome(not_recorded_warning())
@@ -868,6 +873,7 @@ def _get_wf_invoke_func(
 class ActiveWorkflowById:
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._released = threading.Condition(self._lock)
         # Value is the queue bucket (queue_name, queue_partition_key)
         self._m: dict[str, Optional[Tuple[str, Optional[str]]]] = {}
 
@@ -881,12 +887,30 @@ class ActiveWorkflowById:
         Returns is_owner
         """
         with self._lock:
-            if key in self._m:
-                return False
-            self._m[key] = (
-                (queue_name, queue_partition_key) if queue_name is not None else None
-            )
-            return True
+            return self._acquire_locked(key, queue_name, queue_partition_key)
+
+    def _acquire_locked(
+        self, key: str, queue_name: Optional[str], queue_partition_key: Optional[str]
+    ) -> bool:
+        if key in self._m:
+            return False
+        self._m[key] = (
+            (queue_name, queue_partition_key) if queue_name is not None else None
+        )
+        return True
+
+    def wait_acquire(
+        self,
+        key: str,
+        queue_name: Optional[str],
+        queue_partition_key: Optional[str],
+        *,
+        timeout: float,
+    ) -> bool:
+        """Acquire key, waiting up to timeout for its current holder to release it."""
+        with self._lock:
+            self._released.wait_for(lambda: key not in self._m, timeout=timeout)
+            return self._acquire_locked(key, queue_name, queue_partition_key)
 
     def release(
         self,
@@ -897,6 +921,7 @@ class ActiveWorkflowById:
         """
         with self._lock:
             del self._m[key]
+            self._released.notify_all()
 
     def activeList(self) -> List[str]:
         with self._lock:
@@ -950,6 +975,7 @@ def _check_required_roles_or_finalize_error(
             error=_serialize_exception_for_persistence(
                 role_error, status["serialization"], dbos._serializer
             ),
+            owner_xid=current_owner_xid(status["workflow_uuid"]),
         )
         raise
 
@@ -1071,21 +1097,22 @@ def _execute_workflow_wthread(
                     dbos._active_workflows_set.release(status["workflow_uuid"])
 
             try:
-                if owned:
-                    return Immediate[R](functools.partial(func, *args, **kwargs)).then(
-                        _get_wf_invoke_func(dbos, status, release_active)
-                    )()
-                else:
-                    # Parked on the concurrent execution that owns the active
-                    # entry. The row is known to exist (this dispatch inserted
-                    # or read it), so a missing row means it was deleted: fail
-                    # fast rather than polling forever.
-                    output: R = dbos._sys_db.await_workflow_result(
-                        status["workflow_uuid"],
-                        polling_interval=DEFAULT_POLLING_INTERVAL,
-                        fail_if_missing=True,
+                while not owned:
+                    # A stale local execution holds the ID; it lets go at its next write, which our claim makes fail.
+                    result = dbos._sys_db.check_workflow_result(
+                        status["workflow_uuid"], fail_if_missing=True
                     )
-                    return output
+                    if not isinstance(result, NoResult):
+                        return cast(R, result)
+                    owned = dbos._active_workflows_set.wait_acquire(
+                        status["workflow_uuid"],
+                        status.get("queue_name"),
+                        status.get("queue_partition_key"),
+                        timeout=DEFAULT_POLLING_INTERVAL,
+                    )
+                return Immediate[R](functools.partial(func, *args, **kwargs)).then(
+                    _get_wf_invoke_func(dbos, status, release_active)
+                )()
             except Exception as e:
                 # This path runs on the executor thread pool, not the event loop.
                 dbos.logger.error(
@@ -1138,25 +1165,26 @@ async def _execute_workflow_async(
                     dbos._active_workflows_set.release(status["workflow_uuid"])
 
             try:
-                if owned:
-                    result = Pending[R](functools.partial(func, *args, **kwargs)).then(
-                        _get_wf_invoke_func(dbos, status, release_active)
+                while not owned:
+                    # A stale local execution holds the ID; it lets go at its next write, which our claim makes fail.
+                    existing = await asyncio.to_thread(
+                        dbos._sys_db.check_workflow_result,
+                        status["workflow_uuid"],
+                        fail_if_missing=True,
                     )
-                    return await result()
-                else:
-                    # Wait on the event loop rather than pinning a to_thread worker in a blocking poll.
-                    # Parked on the concurrent execution that owns the active
-                    # entry. The row is known to exist (this dispatch inserted
-                    # or read it), so a missing row means it was deleted: fail
-                    # fast rather than polling forever.
-                    return cast(
-                        R,
-                        await dbos._sys_db.await_workflow_result_async(
-                            status["workflow_uuid"],
-                            polling_interval=DEFAULT_POLLING_INTERVAL,
-                            fail_if_missing=True,
-                        ),
+                    if not isinstance(existing, NoResult):
+                        return cast(R, existing)
+                    # Sleep on the event loop rather than pinning a to_thread worker.
+                    await asyncio.sleep(DEFAULT_POLLING_INTERVAL)
+                    owned = dbos._active_workflows_set.acquire(
+                        status["workflow_uuid"],
+                        status.get("queue_name"),
+                        status.get("queue_partition_key"),
                     )
+                result = Pending[R](functools.partial(func, *args, **kwargs)).then(
+                    _get_wf_invoke_func(dbos, status, release_active)
+                )
+                return await result()
             except Exception as e:
                 dbos.logger.error(
                     f"Exception encountered in asynchronous workflow:", exc_info=e
@@ -1168,9 +1196,11 @@ async def _execute_workflow_async(
 
 
 def execute_dequeued_workflow(
-    dbos: "DBOS", status: WorkflowStatusInternal
+    dbos: "DBOS", status: WorkflowStatusInternal, owner_xid: str
 ) -> "WorkflowHandle[Any]":
     """Run a workflow the queue has just claimed, from its persisted status.
+
+    owner_xid is the token the claim wrote, never re-read from the row: a later claim's token there is not ours.
 
     Deliberately skips _init_workflow: the claim already wrote everything it would
     (PENDING, executor, deadline, recovery_attempts) and this status was read back
@@ -1189,6 +1219,7 @@ def execute_dequeued_workflow(
             workflow_id,
             WorkflowStatusString.ERROR.value,
             error=error_str,
+            owner_xid=owner_xid,
         )
         raise recovery_error
     try:
@@ -1204,6 +1235,7 @@ def execute_dequeued_workflow(
             workflow_id,
             WorkflowStatusString.ERROR.value,
             error=error_str,
+            owner_xid=owner_xid,
         )
         raise
     wf_func = dbos._registry.workflow_info_map.get(status["name"], None)
@@ -1255,6 +1287,7 @@ def execute_dequeued_workflow(
                 workflow_id,
                 WorkflowStatusString.ERROR.value,
                 error=error_str,
+                owner_xid=owner_xid,
             )
             raise
     # Restore authentication context from the saved workflow status
@@ -1302,6 +1335,7 @@ def execute_dequeued_workflow(
             # Same context start_workflow builds: create_start_workflow_child consumes the
             # ambient SetWorkflowID, so the run adopts the claimed row's ID.
             ctx = DBOSContext.create_start_workflow_child(get_local_dbos_context())
+            ctx.owner_xid = owner_xid
             # Consume the restored carrier so workflows started inside this one do not inherit it.
             ctx.workflow_attributes = None
             ctx.otel_carrier = None

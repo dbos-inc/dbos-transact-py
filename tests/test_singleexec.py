@@ -1,12 +1,23 @@
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, wait
 from time import sleep
+from typing import Any, List
 
+import pytest
+import sqlalchemy as sa
 from sqlalchemy.exc import OperationalError
 
 from dbos import DBOS, SetWorkflowID
 from dbos._debug_trigger import DebugAction, DebugTriggers
-from tests.conftest import reexecute_workflow_by_id, set_workflow_status
+from dbos._error import DBOSAwaitedWorkflowCancelledError
+from dbos._schemas.system_database import SystemSchema
+from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
+from tests.conftest import (
+    reexecute_workflow_by_id,
+    retry_until_success,
+    set_workflow_status,
+)
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -322,3 +333,145 @@ def test_status_wf(dbos: DBOS) -> None:
     status_workflow(status="Starting")
     DBOS.start_workflow(status_workflow).get_result()
     DBOS.start_workflow(status_workflow, status="Ending").get_result()
+
+
+def _step_names(wfid: str) -> List[str]:
+    return [step["function_name"] for step in DBOS.list_workflow_steps(wfid)]
+
+
+@pytest.mark.parametrize("handoff", ["resume", "recovery"])
+def test_handoff_parks_live_execution(dbos: DBOS, handoff: str) -> None:
+    """A running execution whose workflow is handed to another stops at its next
+    checkpoint, and the new owner finishes the workflow in the same process."""
+    release = threading.Event()
+    calls = {"blocked": 0, "after": 0}
+
+    @DBOS.step()
+    def blocked_step() -> str:
+        calls["blocked"] += 1
+        release.wait()
+        return "blocked"
+
+    @DBOS.step()
+    def after_step() -> str:
+        calls["after"] += 1
+        return "after"
+
+    @DBOS.workflow()
+    def handed_off_workflow() -> str:
+        return blocked_step() + after_step()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(handed_off_workflow)
+
+    def blocked() -> None:
+        assert calls["blocked"] == 1
+
+    retry_until_success(blocked, interval=0.1, max_attempts=100)
+    first_owner = dbos._sys_db.get_workflow_owner(wfid)
+    assert first_owner is not None
+
+    if handoff == "resume":
+        DBOS.resume_workflow(wfid)
+    else:
+        assert dbos._sys_db.reenqueue_for_recovery(
+            wfid, [GlobalParams.executor_id], INTERNAL_QUEUE_NAME
+        )
+
+    def reclaimed() -> None:
+        owner = dbos._sys_db.get_workflow_owner(wfid)
+        assert owner is not None and owner != first_owner
+
+    retry_until_success(reclaimed, interval=0.1, max_attempts=100)
+    release.set()
+
+    assert handle.get_result() == "blockedafter"
+    assert DBOS.retrieve_workflow(wfid).get_result() == "blockedafter"
+    # The stale execution's step result was refused, and it never ran on past it.
+    assert calls == {"blocked": 2, "after": 1}
+    assert len(_step_names(wfid)) == 2
+
+
+def test_cancel_refuses_running_step_result(dbos: DBOS) -> None:
+    """A step that finishes after its workflow is cancelled records nothing, so a
+    resume re-runs it."""
+    release = threading.Event()
+    calls = {"blocked": 0}
+
+    @DBOS.step()
+    def blocked_step() -> str:
+        calls["blocked"] += 1
+        release.wait()
+        return "blocked"
+
+    @DBOS.workflow()
+    def cancelled_workflow() -> str:
+        return blocked_step()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(cancelled_workflow)
+
+    def blocked() -> None:
+        assert calls["blocked"] == 1
+
+    retry_until_success(blocked, interval=0.1, max_attempts=100)
+    DBOS.cancel_workflow(wfid)
+    assert dbos._sys_db.get_workflow_owner(wfid) is None
+    release.set()
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        handle.get_result()
+    assert _step_names(wfid) == []
+
+    DBOS.resume_workflow(wfid)
+    assert DBOS.retrieve_workflow(wfid).get_result() == "blocked"
+    assert calls["blocked"] == 2
+
+
+def test_stale_owner_cannot_write_outcome(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An execution that lost ownership after its last step cannot record the outcome."""
+    release = threading.Event()
+    started = threading.Event()
+
+    @DBOS.workflow()
+    def outcome_workflow() -> str:
+        started.set()
+        release.wait()
+        return "done"
+
+    writes: List[bool] = []
+    real_update = dbos._sys_db.update_workflow_outcome
+
+    def tracking_update(*args: Any, **kwargs: Any) -> bool:
+        landed = real_update(*args, **kwargs)
+        writes.append(landed)
+        return landed
+
+    monkeypatch.setattr(dbos._sys_db, "update_workflow_outcome", tracking_update)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(outcome_workflow)
+    assert started.wait(10)
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+            .values(owner_xid="another-execution")
+        )
+    release.set()
+
+    def refused() -> None:
+        assert writes == [False]
+
+    retry_until_success(refused, interval=0.1, max_attempts=100)
+    status = DBOS.get_workflow_status(wfid)
+    assert status is not None and status.status == "PENDING"
+
+    # Release the parked execution, which waits on an outcome nobody else will write.
+    DBOS.cancel_workflow(wfid)
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        handle.get_result()

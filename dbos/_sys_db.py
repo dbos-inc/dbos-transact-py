@@ -46,6 +46,7 @@ from dbos._utils import (
 from ._context import (
     DBOSContext,
     WorkflowIDReusePolicy,
+    current_owner_xid,
     get_local_dbos_context,
     validate_workflow_attributes,
 )
@@ -1096,6 +1097,7 @@ class SystemDatabase(ABC):
                 )
                 .values(
                     status=WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value,
+                    owner_xid=None,
                     deduplication_id=None,
                     started_at_epoch_ms=None,
                     queue_name=None,
@@ -1112,22 +1114,19 @@ class SystemDatabase(ABC):
         *,
         output: Optional[str] = None,
         error: Optional[str] = None,
+        owner_xid: Optional[str] = None,
     ) -> bool:
         """Record a workflow's terminal outcome, reporting whether the write landed.
 
-        The write applies only to a PENDING row: a run owns its workflow's
-        outcome exactly as long as the row says that run is what the workflow
-        is doing. (Note: this does not prevent a write when another concurrent
-        execution is already running and the status is PENDING. However, both
-        executions should be deterministic and idempotent.)
+        The write applies only to a PENDING row still owned by owner_xid (when given).
 
         Returning False means the row was CANCELLED, dead-lettered, already
-        terminal, handed to another execution (ENQUEUED/DELAYED, e.g. by a
-        concurrent resume), or gone entirely.
+        terminal, handed to another execution (e.g. by a concurrent resume or
+        recovery), or gone entirely.
         """
         with self.engine.begin() as c:
             now_ms = self._now_ms_sql()
-            result = c.execute(
+            update = (
                 sa.update(SystemSchema.workflow_status)
                 .values(
                     status=status,
@@ -1142,6 +1141,11 @@ class SystemDatabase(ABC):
                     == WorkflowStatusString.PENDING.value
                 )
             )
+            if owner_xid is not None:
+                update = update.where(
+                    SystemSchema.workflow_status.c.owner_xid == owner_xid
+                )
+            result = c.execute(update)
             if result.rowcount == 0:
                 # The outcome was not ours to write, so leave no orphan payload.
                 return False
@@ -1182,6 +1186,7 @@ class SystemDatabase(ABC):
                     )
                     .values(
                         status=WorkflowStatusString.CANCELLED.value,
+                        owner_xid=None,
                         queue_name=None,
                         deduplication_id=None,
                         started_at_epoch_ms=None,
@@ -1236,6 +1241,7 @@ class SystemDatabase(ABC):
                 )
                 .values(
                     status=WorkflowStatusString.ENQUEUED.value,
+                    owner_xid=None,
                     queue_name=(
                         queue_name if queue_name is not None else INTERNAL_QUEUE_NAME
                     ),
@@ -1615,6 +1621,7 @@ class SystemDatabase(ABC):
                 .where(SystemSchema.workflow_status.c.status == status)
                 .values(
                     status=WorkflowStatusString.ENQUEUED.value,
+                    owner_xid=None,
                     **version_update,
                     queue_name=(
                         queue_name if queue_name is not None else INTERNAL_QUEUE_NAME
@@ -3120,6 +3127,18 @@ class SystemDatabase(ABC):
             )
         return results
 
+    def _check_owner_txn(
+        self, conn: Union[sa.Connection, Session], workflow_id: str, owner_xid: str
+    ) -> None:
+        """Raise DBOSWorkflowConflictIDError unless owner_xid still owns the workflow, locking its row until commit."""
+        current = conn.execute(
+            sa.select(SystemSchema.workflow_status.c.owner_xid)
+            .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+            .with_for_update(key_share=True)
+        ).scalar()
+        if current != owner_xid:
+            raise DBOSWorkflowConflictIDError(workflow_id)
+
     def _record_operation_result_txn(
         self,
         result: OperationResultInternal,
@@ -3130,17 +3149,21 @@ class SystemDatabase(ABC):
         output = result["output"]
         assert error is None or output is None, "Only one of error or output can be set"
 
-        # Check if the executor ID belong to another process.
-        # Reset it to this process's executor ID if so.
-        wf_executor_id_row = conn.execute(
-            sa.select(
-                SystemSchema.workflow_status.c.executor_id,
-            ).where(
-                SystemSchema.workflow_status.c.workflow_uuid == result["workflow_uuid"]
-            )
-        ).fetchone()
+        owner_xid = current_owner_xid(result["workflow_uuid"])
+        owner_query = sa.select(
+            SystemSchema.workflow_status.c.executor_id,
+            SystemSchema.workflow_status.c.owner_xid,
+        ).where(SystemSchema.workflow_status.c.workflow_uuid == result["workflow_uuid"])
+        if owner_xid is not None:
+            # Locked so a hand-off (cancel, resume, recovery) cannot commit between this check and the insert.
+            owner_query = owner_query.with_for_update(key_share=True)
+        wf_executor_id_row = conn.execute(owner_query).fetchone()
         assert wf_executor_id_row is not None
         wf_executor_id = wf_executor_id_row[0]
+        if owner_xid is not None and wf_executor_id_row[1] != owner_xid:
+            raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
+        # Check if the executor ID belong to another process.
+        # Reset it to this process's executor ID if so.
         if self.executor_id is not None and wf_executor_id != self.executor_id:
             dbos_logger.debug(
                 f'Resetting executor_id from {wf_executor_id} to {self.executor_id} for workflow {result["workflow_uuid"]}'
@@ -3201,6 +3224,16 @@ class SystemDatabase(ABC):
                 raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
             raise
 
+    @db_retry()
+    def get_workflow_owner(self, workflow_id: str) -> Optional[str]:
+        """The workflow's current ownership token; None if unowned or missing."""
+        with self.engine.begin() as c:
+            return c.execute(
+                sa.select(SystemSchema.workflow_status.c.owner_xid).where(
+                    SystemSchema.workflow_status.c.workflow_uuid == workflow_id
+                )
+            ).scalar()
+
     def record_operation_result(
         self,
         result: OperationResultInternal,
@@ -3241,6 +3274,7 @@ class SystemDatabase(ABC):
         # Capture ids outside the retry: db_retry may re-run its body, but function_id must increment only once.
         workflow_id = ctx.workflow_id
         function_id = ctx.function_id
+        owner_xid = current_owner_xid(workflow_id, ctx)
 
         @db_retry(sys_db=self)
         def record() -> None:
@@ -3264,6 +3298,8 @@ class SystemDatabase(ABC):
                 .on_conflict_do_nothing()
             )
             with self.engine.begin() as c:
+                if owner_xid is not None:
+                    self._check_owner_txn(c, workflow_id, owner_xid)
                 c.execute(sql)
 
         record()
@@ -4611,6 +4647,7 @@ class SystemDatabase(ABC):
                 .where(ws.c.workflow_uuid.in_(timed_out))
                 .values(
                     status=WorkflowStatusString.CANCELLED.value,
+                    owner_xid=None,
                     queue_name=None,
                     deduplication_id=None,
                     started_at_epoch_ms=None,
@@ -4629,6 +4666,8 @@ class SystemDatabase(ABC):
         queue_partition_key: Optional[str],
         local_running_count: int = 0,
         partition_local_running_count: int = 0,
+        *,
+        owner_xid: Optional[str] = None,
     ) -> List[str]:
         start_time_ms = int(time.time() * 1000)
         ws = SystemSchema.workflow_status
@@ -4846,6 +4885,7 @@ class SystemDatabase(ABC):
                     )
                     .values(
                         status=WorkflowStatusString.PENDING.value,
+                        owner_xid=owner_xid,
                         application_version=app_version,
                         executor_id=executor_id,
                         # Claim it, so the unclaimed partition drains as workflows run.
@@ -4890,6 +4930,8 @@ class SystemDatabase(ABC):
         executor_id: str,
         app_version: str,
         max_tasks: int = sys.maxsize,
+        *,
+        owner_xid: Optional[str] = None,
     ) -> List[str]:
         """Batch dequeue from a partitioned queue, optimized for the specific
         case where partition_concurrency=1. All other cases iterate and dequeue
@@ -5039,6 +5081,7 @@ class SystemDatabase(ABC):
                 .where(claim_guard)
                 .values(
                     status=WorkflowStatusString.PENDING.value,
+                    owner_xid=owner_xid,
                     application_version=app_version,
                     executor_id=executor_id,
                     # Claim the row, as the unpartitioned dequeue does.
@@ -5095,6 +5138,7 @@ class SystemDatabase(ABC):
                 .where(SystemSchema.workflow_status.c.executor_id.in_(executor_ids))
                 .values(
                     status=WorkflowStatusString.ENQUEUED.value,
+                    owner_xid=None,
                     started_at_epoch_ms=None,
                     updated_at=self._now_ms_sql(),
                     queue_name=sa.func.coalesce(
@@ -5237,7 +5281,10 @@ class SystemDatabase(ABC):
     ) -> tuple[WorkflowStatuses, bool]:
         """Insert a child's status row and record it as the parent's step in one transaction, so a crash leaves both or neither."""
         child_workflow_id = status["workflow_uuid"]
+        parent_owner_xid = current_owner_xid(parent_workflow_id)
         with self.engine.begin() as conn:
+            if parent_owner_xid is not None:
+                self._check_owner_txn(conn, parent_workflow_id, parent_owner_xid)
             result = self._insert_workflow_status(
                 status,
                 conn,
