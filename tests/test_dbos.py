@@ -2429,6 +2429,12 @@ def test_timeout_sweep_cancels_unowned_workflows(dbos: DBOS) -> None:
 
     dbos._sys_db.cancel_timed_out_workflows = sweep_failing_once  # type: ignore[method-assign]
 
+    # Rewrite rows only after the failure, so a pre-patch sweep can't cancel them first.
+    def failure_injected() -> None:
+        assert injected.is_set()
+
+    retry_until_success(failure_injected, interval=0.1, max_attempts=50)
+
     # Rewrite the finished rows into active workflows of a dead executor. The
     # enqueued and delayed rows stand in for children carrying a parent's deadline,
     # on a queue no worker polls so only the sweep can touch them.
@@ -2474,7 +2480,6 @@ def test_timeout_sweep_cancels_unowned_workflows(dbos: DBOS) -> None:
             assert current[wfid][1] == "CANCELLED"
 
     retry_until_success(expired_cancelled, interval=0.1, max_attempts=50)
-    assert injected.is_set(), "expected the injected sweep failure to have fired"
     # One sweep cancelled them all, so it would have taken the other app's row too.
     current = rows()
     assert current[other_app_id][1] == "PENDING"
