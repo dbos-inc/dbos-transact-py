@@ -342,7 +342,7 @@ def _step_names(wfid: str) -> List[str]:
 @pytest.mark.parametrize("handoff", ["resume", "recovery"])
 def test_handoff_parks_live_execution(dbos: DBOS, handoff: str) -> None:
     """A running execution whose workflow is handed to another stops at its next
-    checkpoint, and the new owner finishes the workflow in the same process."""
+    checkpoint, and the new owner runs alongside it in the same process and finishes."""
     release = threading.Event()
     calls = {"blocked": 0, "after": 0}
 
@@ -384,6 +384,12 @@ def test_handoff_parks_live_execution(dbos: DBOS, handoff: str) -> None:
         assert owner is not None and owner != first_owner
 
     retry_until_success(reclaimed, interval=0.1, max_attempts=100)
+
+    def redispatched() -> None:
+        # The new owner started without waiting for the stale execution to let go.
+        assert calls["blocked"] == 2
+
+    retry_until_success(redispatched, interval=0.1, max_attempts=100)
     release.set()
 
     assert handle.get_result() == "blockedafter"
@@ -391,6 +397,42 @@ def test_handoff_parks_live_execution(dbos: DBOS, handoff: str) -> None:
     # The stale execution's step result was refused, and it never ran on past it.
     assert calls == {"blocked": 2, "after": 1}
     assert len(_step_names(wfid)) == 2
+
+
+def test_handoff_while_waiting_in_recv(dbos: DBOS) -> None:
+    """A stale execution blocked in recv shares the topic's waiter with its
+    replacement; the message goes to the owner, and the stale execution parks."""
+    calls = {"recv": 0}
+
+    @DBOS.workflow()
+    def recv_workflow() -> str:
+        calls["recv"] += 1
+        message = DBOS.recv("topic", timeout_seconds=30)
+        return str(message)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(recv_workflow)
+
+    def waiting() -> None:
+        assert calls["recv"] == 1
+        assert dbos._sys_db.notifications_map.get(f"{wfid}::topic") is not None
+
+    retry_until_success(waiting, interval=0.1, max_attempts=100)
+    first_owner = dbos._sys_db.get_workflow_owner(wfid)
+    DBOS.resume_workflow(wfid)
+
+    def redispatched() -> None:
+        assert dbos._sys_db.get_workflow_owner(wfid) not in (None, first_owner)
+        assert calls["recv"] == 2
+
+    retry_until_success(redispatched, interval=0.1, max_attempts=100)
+    DBOS.send(wfid, "hello", "topic")
+
+    assert handle.get_result() == "hello"
+    assert DBOS.retrieve_workflow(wfid).get_result() == "hello"
+    # Exactly one recv checkpoint: the stale execution's consume was rolled back.
+    assert [name for name in _step_names(wfid) if "recv" in name] == ["DBOS.recv"]
 
 
 def test_cancel_refuses_running_step_result(dbos: DBOS) -> None:

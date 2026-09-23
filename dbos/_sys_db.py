@@ -3702,12 +3702,8 @@ class SystemDatabase(ABC):
         # Insert an event to the notifications map, so the listener can signal it when a message is received.
         payload = f"{workflow_uuid}::{topic}"
         event = LoopAwareEvent()
-        success, _ = self.notifications_map.set(payload, event, (workflow_uuid, topic))
-        if not success:
-            # This should not happen, but if it does, it means the workflow is executed concurrently.
-            # set() incremented the existing entry's count, so undo that before raising.
-            self.notifications_map.pop(payload)
-            raise DBOSWorkflowConflictIDError(workflow_uuid)
+        # A stale local execution may already wait here; both wake, and its consume fails the ownership check.
+        _, event = self.notifications_map.set(payload, event, (workflow_uuid, topic))
 
         try:
             # Check if an unconsumed message is already in the database.

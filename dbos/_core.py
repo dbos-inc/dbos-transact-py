@@ -830,7 +830,7 @@ def _get_wf_invoke_func(
                 output, status["serialization"], dbos._serializer
             )
             # Release the active-workflow-ID entry before the outcome becomes
-            # durable, so a re-dispatch to this executor need not wait on it.
+            # durable, so the queue's local count is exact once a resume can see it.
             release_active()
         except DBOSWorkflowConflictIDError:
             # This execution lost ownership of the workflow.
@@ -872,57 +872,34 @@ def _get_wf_invoke_func(
 
 
 class ActiveWorkflowById:
+    """Executions running in this process, by workflow ID.
+
+    A refcount, not a lock: a workflow re-dispatched here (a resume of one still running)
+    runs alongside the stale execution, which parks at its next write.
+    """
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._released = threading.Condition(self._lock)
-        # Value is the queue bucket (queue_name, queue_partition_key)
-        self._m: dict[str, Optional[Tuple[str, Optional[str]]]] = {}
+        # One queue bucket (queue_name, queue_partition_key) per running execution of the ID.
+        self._m: dict[str, List[Optional[Tuple[str, Optional[str]]]]] = {}
 
-    def acquire(
+    def add(
         self,
         key: str,
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
-    ) -> bool:
-        """
-        Returns is_owner
-        """
-        with self._lock:
-            return self._acquire_locked(key, queue_name, queue_partition_key)
-
-    def _acquire_locked(
-        self, key: str, queue_name: Optional[str], queue_partition_key: Optional[str]
-    ) -> bool:
-        if key in self._m:
-            return False
-        self._m[key] = (
-            (queue_name, queue_partition_key) if queue_name is not None else None
-        )
-        return True
-
-    def wait_acquire(
-        self,
-        key: str,
-        queue_name: Optional[str],
-        queue_partition_key: Optional[str],
-        *,
-        timeout: float,
-    ) -> bool:
-        """Acquire key, waiting up to timeout for its current holder to release it."""
-        with self._lock:
-            self._released.wait_for(lambda: key not in self._m, timeout=timeout)
-            return self._acquire_locked(key, queue_name, queue_partition_key)
-
-    def release(
-        self,
-        key: str,
     ) -> None:
-        """
-        Removes the key when work done
-        """
         with self._lock:
-            del self._m[key]
-            self._released.notify_all()
+            self._m.setdefault(key, []).append(
+                (queue_name, queue_partition_key) if queue_name is not None else None
+            )
+
+    def remove(self, key: str) -> None:
+        with self._lock:
+            buckets = self._m[key]
+            buckets.pop()
+            if not buckets:
+                del self._m[key]
 
     def activeList(self) -> List[str]:
         with self._lock:
@@ -936,7 +913,8 @@ class ActiveWorkflowById:
         with self._lock:
             return sum(
                 1
-                for bucket in self._m.values()
+                for buckets in self._m.values()
+                for bucket in buckets
                 if bucket is not None and bucket[0] == queue_name
             )
 
@@ -949,7 +927,12 @@ class ActiveWorkflowById:
         """
         target = (queue_name, queue_partition_key)
         with self._lock:
-            return sum(1 for bucket in self._m.values() if bucket == target)
+            return sum(
+                1
+                for buckets in self._m.values()
+                for bucket in buckets
+                if bucket == target
+            )
 
 
 def _check_required_roles_or_finalize_error(
@@ -1080,37 +1063,23 @@ def _execute_workflow_wthread(
             dbos, status, func, fi
         )
         with DBOSAssumeRole(rr):
-            owned = dbos._active_workflows_set.acquire(
+            dbos._active_workflows_set.add(
                 status["workflow_uuid"],
                 status.get("queue_name"),
                 status.get("queue_partition_key"),
             )
             # release_active is called both by persist (before the outcome
-            # write) and by the finally below. The guard makes the second call
-            # a no-op: between the two, a resumed execution of this workflow
-            # may have re-acquired the ID, and its entry must not be removed.
+            # write) and by the finally below; the guard makes the second call
+            # a no-op, so another execution's entry is never removed.
             released = False
 
             def release_active() -> None:
                 nonlocal released
                 if not released:
                     released = True
-                    dbos._active_workflows_set.release(status["workflow_uuid"])
+                    dbos._active_workflows_set.remove(status["workflow_uuid"])
 
             try:
-                while not owned:
-                    # A stale local execution holds the ID; it lets go at its next write, which our claim makes fail.
-                    result = dbos._sys_db.check_workflow_result(
-                        status["workflow_uuid"], fail_if_missing=True
-                    )
-                    if not isinstance(result, NoResult):
-                        return cast(R, result)
-                    owned = dbos._active_workflows_set.wait_acquire(
-                        status["workflow_uuid"],
-                        status.get("queue_name"),
-                        status.get("queue_partition_key"),
-                        timeout=DEFAULT_POLLING_INTERVAL,
-                    )
                 return Immediate[R](functools.partial(func, *args, **kwargs)).then(
                     _get_wf_invoke_func(dbos, status, release_active)
                 )()
@@ -1121,8 +1090,7 @@ def _execute_workflow_wthread(
                 )
                 raise
             finally:
-                if owned:
-                    release_active()
+                release_active()
 
 
 async def _execute_workflow_async(
@@ -1148,40 +1116,23 @@ async def _execute_workflow_async(
             dbos, status, func, fi
         )
         with DBOSAssumeRole(rr):
-            owned = dbos._active_workflows_set.acquire(
+            dbos._active_workflows_set.add(
                 status["workflow_uuid"],
                 status.get("queue_name"),
                 status.get("queue_partition_key"),
             )
             # release_active is called both by persist (before the outcome
-            # write) and by the finally below. The guard makes the second call
-            # a no-op: between the two, a resumed execution of this workflow
-            # may have re-acquired the ID, and its entry must not be removed.
+            # write) and by the finally below; the guard makes the second call
+            # a no-op, so another execution's entry is never removed.
             released = False
 
             def release_active() -> None:
                 nonlocal released
                 if not released:
                     released = True
-                    dbos._active_workflows_set.release(status["workflow_uuid"])
+                    dbos._active_workflows_set.remove(status["workflow_uuid"])
 
             try:
-                while not owned:
-                    # A stale local execution holds the ID; it lets go at its next write, which our claim makes fail.
-                    existing = await asyncio.to_thread(
-                        dbos._sys_db.check_workflow_result,
-                        status["workflow_uuid"],
-                        fail_if_missing=True,
-                    )
-                    if not isinstance(existing, NoResult):
-                        return cast(R, existing)
-                    # Sleep on the event loop rather than pinning a to_thread worker.
-                    await asyncio.sleep(DEFAULT_POLLING_INTERVAL)
-                    owned = dbos._active_workflows_set.acquire(
-                        status["workflow_uuid"],
-                        status.get("queue_name"),
-                        status.get("queue_partition_key"),
-                    )
                 result = Pending[R](functools.partial(func, *args, **kwargs)).then(
                     _get_wf_invoke_func(dbos, status, release_active)
                 )
@@ -1192,8 +1143,7 @@ async def _execute_workflow_async(
                 )
                 raise
             finally:
-                if owned:
-                    release_active()
+                release_active()
 
 
 def execute_dequeued_workflow(
@@ -1365,7 +1315,7 @@ def execute_dequeued_workflow(
                     task.add_done_callback(retrieve_future_exception)
 
                 # Onto the event loop. Blocks only until the task is created, so a stopped
-                # loop surfaces here; the local concurrency count lags until it acquires.
+                # loop surfaces here; the local concurrency count lags until it registers.
                 dbos._background_event_loop.submit_coroutine(start_workflow_task())
                 return WorkflowHandlePolling(workflow_id, dbos)
             else:

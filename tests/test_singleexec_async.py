@@ -475,15 +475,17 @@ async def test_parked_duplicate_does_not_hold_a_thread(
 
 @pytest.mark.asyncio
 async def test_handoff_parks_live_execution_async(dbos: DBOS) -> None:
-    """Async sibling of test_handoff_parks_live_execution: the resumed dispatch waits
-    for the stale execution to let go, then finishes the workflow."""
-    release = asyncio.Event()
+    """Async sibling of test_handoff_parks_live_execution: the resumed dispatch runs
+    alongside the stale execution and finishes the workflow."""
+    # A threading.Event, polled: the re-dispatch runs on the background loop, not this one.
+    release = threading.Event()
     calls = {"blocked": 0, "after": 0}
 
     @DBOS.step()
     async def blocked_step() -> str:
         calls["blocked"] += 1
-        await release.wait()
+        while not release.is_set():
+            await asyncio.sleep(0.05)
         return "blocked"
 
     @DBOS.step()
@@ -513,6 +515,11 @@ async def test_handoff_parks_live_execution_async(dbos: DBOS) -> None:
         assert owner is not None and owner != first_owner
 
     await retry_until_success_async(reclaimed, interval=0.1, max_attempts=100)
+
+    def redispatched() -> None:
+        assert calls["blocked"] == 2
+
+    await retry_until_success_async(redispatched, interval=0.1, max_attempts=100)
     release.set()
 
     assert await handle.get_result() == "blockedafter"
