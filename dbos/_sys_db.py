@@ -3194,6 +3194,7 @@ class SystemDatabase(ABC):
                 .returning(ws.c.execution_xid)
             )
         else:
+            # FOR NO KEY UPDATE
             stmt = (
                 sa.select(ws.c.execution_xid)
                 .where(ws.c.workflow_uuid == workflow_id)
