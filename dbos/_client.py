@@ -149,6 +149,7 @@ class DBOSClient:
         lazy: bool = False,
         retry_connection_errors: bool = True,
         observability_query_timeout_sec: Optional[float] = None,
+        sys_db_idle_transaction_timeout_sec: Optional[float] = None,
     ):
         """Create a client for interacting with a DBOS application from outside it.
 
@@ -173,6 +174,7 @@ class DBOSClient:
             lazy (bool): Whether to defer connecting until the client is first used. Defaults to False, meaning the connection is checked on construction. Call check_connection() or check_connection_async() to check it explicitly. Cannot be combined with use_listen_notify, whose listener connects immediately.
             retry_connection_errors (bool): Whether an operation that loses its database connection blocks and retries until the connection recovers. Defaults to True. Set to False to raise instead, so an unreachable database surfaces as an error rather than a wait.
             observability_query_timeout_sec (float): Statement timeout, in seconds, for read-only observability queries against the system database. Defaults to 30.0.
+            sys_db_idle_transaction_timeout_sec (float): Postgres idle_in_transaction_session_timeout, in seconds, for the system database connections this client creates. Defaults to 60.0. Set to a non-positive value to leave the server's setting in place. Not applied to a custom system_database_engine.
 
         Raises:
             Exception: If the system database cannot be reached, unless lazy is True.
@@ -217,6 +219,7 @@ class DBOSClient:
             app_name=application_name,
             retry_connection_errors=retry_connection_errors,
             observability_query_timeout_sec=observability_query_timeout_sec,
+            idle_transaction_timeout_sec=sys_db_idle_transaction_timeout_sec,
         )
         self._notification_listener_thread: Optional[threading.Thread] = None
         if not lazy:

@@ -602,6 +602,7 @@ def _init_workflow(
     child_start_time_ms: Optional[int] = None,
     duplication_policy: Optional[DuplicationPolicy] = None,
     workflow_id_reuse_policy: Optional[WorkflowIDReusePolicy] = None,
+    parent_execution_xid: Optional[str] = None,
 ) -> tuple[WorkflowStatusInternal, bool, Optional[str]]:
     """Persist this workflow's initial status row, and for a child its parent's step, in one transaction.
 
@@ -646,6 +647,7 @@ def _init_workflow(
                     function_name=wf_name,
                     started_at_epoch_ms=started_at_epoch_ms,
                     reuse_policy=workflow_id_reuse_policy,
+                    parent_execution_xid=parent_execution_xid,
                 )
             else:
                 wf_status, should_execute = dbos._sys_db.init_workflow(
@@ -672,7 +674,8 @@ def _init_workflow(
                                 "serialization": None,
                                 "started_at_epoch_ms": started_at_epoch_ms,
                                 "child_workflow_id": existing_id,
-                            }
+                            },
+                            execution_xid=parent_execution_xid,
                         )
                     return status, False, existing_id
                 continue
@@ -689,7 +692,9 @@ def _init_workflow(
                     "started_at_epoch_ms": started_at_epoch_ms,
                     "child_workflow_id": None,
                 }
-                dbos._sys_db.record_operation_result(result)
+                dbos._sys_db.record_operation_result(
+                    result, execution_xid=parent_execution_xid
+                )
             raise
 
     if should_execute:
@@ -862,18 +867,24 @@ def _get_wf_invoke_func(
     return persist
 
 
+QueueBucket = Optional[Tuple[str, Optional[str]]]
+
+
 class ActiveWorkflowEntry:
     """One execution's registration; release is idempotent, so it can run both before a park and in a finally."""
 
-    def __init__(self, active: "ActiveWorkflowById", key: str) -> None:
+    def __init__(
+        self, active: "ActiveWorkflowById", key: str, bucket: QueueBucket
+    ) -> None:
         self._active = active
         self._key = key
+        self._bucket = bucket
         self._released = False
 
     def release(self) -> None:
         if not self._released:
             self._released = True
-            self._active._remove(self._key)
+            self._active._remove(self._key, self._bucket)
 
 
 class ActiveWorkflowById:
@@ -887,7 +898,7 @@ class ActiveWorkflowById:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         # One queue bucket (queue_name, queue_partition_key) per running execution of the ID.
-        self._m: dict[str, List[Optional[Tuple[str, Optional[str]]]]] = {}
+        self._m: dict[str, List[QueueBucket]] = {}
 
     def add(
         self,
@@ -895,16 +906,18 @@ class ActiveWorkflowById:
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
     ) -> ActiveWorkflowEntry:
+        bucket: QueueBucket = (
+            (queue_name, queue_partition_key) if queue_name is not None else None
+        )
         with self._lock:
-            self._m.setdefault(key, []).append(
-                (queue_name, queue_partition_key) if queue_name is not None else None
-            )
-        return ActiveWorkflowEntry(self, key)
+            self._m.setdefault(key, []).append(bucket)
+        return ActiveWorkflowEntry(self, key, bucket)
 
-    def _remove(self, key: str) -> None:
+    def _remove(self, key: str, bucket: QueueBucket) -> None:
+        # The entry's own bucket: a resumed workflow's executions can sit in different queues.
         with self._lock:
             buckets = self._m[key]
-            buckets.pop()
+            buckets.remove(bucket)
             if not buckets:
                 del self._m[key]
 
@@ -1897,8 +1910,11 @@ def workflow_wrapper(
         parent_wfid = newwfctx.parent_workflow_id
         parent_fid = newwfctx.parent_workflow_fid
         resctx: Optional[DBOSContext] = None
+        # Captured now: check_and_init runs inside the child's context, where the parent's token is not ambient.
+        parent_execution_xid: Optional[str] = None
         if cctx is not None and cctx.is_workflow():
             resctx = cctx.snapshot_step_ctx(reserve_sleep_id=False)
+            parent_execution_xid = current_execution_xid(parent_wfid, cctx)
         workflow_timeout_ms, workflow_deadline_epoch_ms = _get_timeout_deadline(
             cctx, queue=None
         )
@@ -1945,6 +1961,7 @@ def workflow_wrapper(
                 child_workflow_id=child_wfid,
                 child_start_time_ms=child_start_time,
                 workflow_id_reuse_policy=reuse_policy,
+                parent_execution_xid=parent_execution_xid,
             )
 
             # The body writes events, streams, and messages in this format; without it a directly

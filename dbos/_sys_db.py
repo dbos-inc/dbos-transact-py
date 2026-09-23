@@ -3186,12 +3186,18 @@ class SystemDatabase(ABC):
         result: OperationResultInternal,
         completed_at_epoch_ms: int,
         conn: Union[sa.Connection, Session],
+        *,
+        execution_xid: Optional[str] = None,
     ) -> None:
+        """Insert the step row. execution_xid defaults to the calling execution's token; a caller
+        writing on another workflow's behalf from inside a different context passes it.
+        """
         error = result["error"]
         output = result["output"]
         assert error is None or output is None, "Only one of error or output can be set"
 
-        execution_xid = current_execution_xid(result["workflow_uuid"])
+        if execution_xid is None:
+            execution_xid = current_execution_xid(result["workflow_uuid"])
         if execution_xid is not None:
             self._check_owner_txn(conn, result["workflow_uuid"], execution_xid)
 
@@ -3262,6 +3268,7 @@ class SystemDatabase(ABC):
         result: OperationResultInternal,
         *,
         completed_at_epoch_ms: Optional[int] = None,
+        execution_xid: Optional[str] = None,
     ) -> None:
         # Outside the retry: the conflict check compares the stored completion to ours.
         completed_at = (
@@ -3273,7 +3280,9 @@ class SystemDatabase(ABC):
         @db_retry(sys_db=self)
         def record_operation_result_retry() -> None:
             with self.engine.begin() as c:
-                self._record_operation_result_txn(result, completed_at, c)
+                self._record_operation_result_txn(
+                    result, completed_at, c, execution_xid=execution_xid
+                )
             DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT)
 
         record_operation_result_retry()
@@ -4106,24 +4115,21 @@ class SystemDatabase(ABC):
         else:
             dbos_logger.debug(f"Running sleep, id: {function_id}, seconds: {seconds}")
             end_time = time.time() + seconds
-            try:
-                self.record_operation_result(
-                    {
-                        "workflow_uuid": workflow_uuid,
-                        "function_id": function_id,
-                        "function_name": function_name,
-                        "started_at_epoch_ms": start_time,
-                        "output": DBOSPortableJSON.serialize(end_time),
-                        "error": None,
-                        "serialization": DBOSPortableJSON.name(),
-                        "child_workflow_id": None,
-                    },
-                    completed_at_epoch_ms=(
-                        int(end_time * 1000) if project_completion_time else None
-                    ),
-                )
-            except DBOSWorkflowConflictIDError:
-                pass
+            self.record_operation_result(
+                {
+                    "workflow_uuid": workflow_uuid,
+                    "function_id": function_id,
+                    "function_name": function_name,
+                    "started_at_epoch_ms": start_time,
+                    "output": DBOSPortableJSON.serialize(end_time),
+                    "error": None,
+                    "serialization": DBOSPortableJSON.name(),
+                    "child_workflow_id": None,
+                },
+                completed_at_epoch_ms=(
+                    int(end_time * 1000) if project_completion_time else None
+                ),
+            )
         return max(0, end_time - time.time())
 
     @db_retry()
@@ -5294,10 +5300,15 @@ class SystemDatabase(ABC):
         function_name: str,
         started_at_epoch_ms: int,
         reuse_policy: Optional[WorkflowIDReusePolicy] = None,
+        parent_execution_xid: Optional[str] = None,
     ) -> tuple[WorkflowStatuses, bool]:
-        """Insert a child's status row and record it as the parent's step in one transaction, so a crash leaves both or neither."""
+        """Insert a child's status row and record it as the parent's step in one transaction, so a crash leaves both or neither.
+
+        parent_execution_xid defaults to the ambient context's token; the inline child path passes
+        the parent's, since it runs inside the child's context."""
         child_workflow_id = status["workflow_uuid"]
-        parent_execution_xid = current_execution_xid(parent_workflow_id)
+        if parent_execution_xid is None:
+            parent_execution_xid = current_execution_xid(parent_workflow_id)
         with self.engine.begin() as conn:
             if parent_execution_xid is not None:
                 self._check_owner_txn(conn, parent_workflow_id, parent_execution_xid)

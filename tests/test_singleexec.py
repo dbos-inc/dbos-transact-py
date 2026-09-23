@@ -1,4 +1,5 @@
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, wait
 from time import sleep
@@ -9,6 +10,7 @@ import sqlalchemy as sa
 from sqlalchemy.exc import OperationalError
 
 from dbos import DBOS, SetWorkflowID
+from dbos._core import ActiveWorkflowById
 from dbos._debug_trigger import DebugAction, DebugTriggers
 from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.system_database import SystemSchema
@@ -455,6 +457,107 @@ def test_recv_ignores_a_stale_waiters_wake(dbos: DBOS) -> None:
         assert handle.get_result() == "hello"
     finally:
         dbos._sys_db.notifications_map.pop(payload)
+
+
+def test_active_entries_release_their_own_bucket() -> None:
+    """A resumed workflow's executions can sit in different queues; each release removes its own."""
+    active = ActiveWorkflowById()
+    first = active.add("wf", "A", None)
+    second = active.add("wf", "B", None)
+    second.release()
+    second.release()  # idempotent
+    assert active.count_for_queue("A") == 1
+    assert active.count_for_queue("B") == 0
+    assert active.activeList() == ["wf"]
+    first.release()
+    assert active.activeList() == []
+
+
+def _steal_ownership(dbos: DBOS, wfid: str) -> None:
+    """Hand the workflow to another execution without changing its status, as a resume's claim does."""
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+            .values(execution_xid="another-execution")
+        )
+
+
+def test_lost_ownership_parks_at_a_sleep(dbos: DBOS) -> None:
+    """A stale execution reaching DBOS.sleep parks there instead of sleeping the full duration."""
+    release = threading.Event()
+    started = threading.Event()
+
+    @DBOS.workflow()
+    def sleeping_workflow() -> str:
+        started.set()
+        assert release.wait(30)
+        DBOS.sleep(20)
+        return "slept"
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(sleeping_workflow)
+    try:
+        assert started.wait(10)
+        _steal_ownership(dbos, wfid)
+        release.set()
+
+        def parked() -> None:
+            # Released before parking: the stale execution gave up at the sleep's refused checkpoint.
+            assert wfid not in dbos._active_workflows_set.activeList()
+
+        # Well inside the 20s it would otherwise sleep.
+        retry_until_success(parked, interval=0.1, max_attempts=100)
+        assert _step_names(wfid) == []
+    finally:
+        release.set()
+        # Nobody else will write an outcome: cancel so the parked execution returns.
+        DBOS.cancel_workflow(wfid)
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        handle.get_result()
+
+
+def test_stale_parent_cannot_start_an_inline_child(dbos: DBOS) -> None:
+    """A parent that lost ownership cannot insert or run a directly invoked child."""
+    release = threading.Event()
+    started = threading.Event()
+    child_calls = {"n": 0}
+    child_id = str(uuid.uuid4())
+
+    @DBOS.workflow()
+    def child_workflow() -> str:
+        child_calls["n"] += 1
+        return "child"
+
+    @DBOS.workflow()
+    def parent_workflow() -> str:
+        started.set()
+        assert release.wait(30)
+        with SetWorkflowID(child_id):
+            return child_workflow()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(parent_workflow)
+    try:
+        assert started.wait(10)
+        _steal_ownership(dbos, wfid)
+        release.set()
+
+        def parked() -> None:
+            assert wfid not in dbos._active_workflows_set.activeList()
+
+        retry_until_success(parked, interval=0.1, max_attempts=100)
+        # Refused at the child's insert: no child row, no child run, no parent step.
+        assert child_calls["n"] == 0
+        assert DBOS.get_workflow_status(child_id) is None
+        assert _step_names(wfid) == []
+    finally:
+        release.set()
+        DBOS.cancel_workflow(wfid)
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        handle.get_result()
 
 
 def test_handoff_while_waiting_in_recv(dbos: DBOS) -> None:

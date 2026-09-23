@@ -14,7 +14,7 @@ from sqlalchemy import NullPool, event
 from sqlalchemy.exc import DBAPIError, OperationalError
 
 # Public API
-from dbos import DBOS, SetWorkflowID
+from dbos import DBOS, DBOSClient, SetWorkflowID
 from dbos._dbos_config import (
     ConfigFile,
     DBOSConfig,
@@ -713,6 +713,18 @@ def test_user_setting_takes_precedence(skip_with_sqlite: None) -> None:
         assert _settings(sys_db.engine) == ["7s", "7s"]
     finally:
         sys_db.destroy()
+
+
+def test_client_configures_idle_transaction_timeout(skip_with_sqlite: None) -> None:
+    client = DBOSClient(
+        system_database_url=postgres_urls()[1],
+        system_database_pool_size=1,
+        sys_db_idle_transaction_timeout_sec=5,
+    )
+    try:
+        assert _settings(client._sys_db.engine) == ["5s", "5s"]
+    finally:
+        client.destroy()
 
 
 def test_custom_engine_is_untouched(skip_with_sqlite: None) -> None:
