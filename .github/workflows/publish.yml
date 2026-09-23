@@ -2,9 +2,48 @@ name: Publish to PyPI
 
 on:
     workflow_dispatch:
+    # Publish a preview after each merge to main, once its tests pass.
+    workflow_run:
+      workflows: ['Run Unit Tests']
+      types: [completed]
+      branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
+    steps:
+    - id: check
+      env:
+        EVENT: ${{ github.event_name }}
+        CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        RUN_EVENT: ${{ github.event.workflow_run.event }}
+        HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        if [ "$EVENT" = "workflow_dispatch" ]; then
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        # Skip if main has moved on, so an older run never publishes over a newer one.
+        MAIN_SHA=$(gh api "repos/${{ github.repository }}/commits/main" --jq .sha)
+        if [ "$CONCLUSION" = "success" ] && [ "$RUN_EVENT" = "push" ] && [ "$HEAD_SHA" = "$MAIN_SHA" ]; then
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "Skipping: conclusion=$CONCLUSION event=$RUN_EVENT head=$HEAD_SHA main=$MAIN_SHA"
+          echo "publish=false" >> "$GITHUB_OUTPUT"
+        fi
+
   deploy:
+    needs: gate
+    if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -15,6 +54,12 @@ jobs:
       with:
         fetch-depth: 0
         fetch-tags: true
+        ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+    # The version is derived from the branch name, so leave the tested commit on a local main rather than a detached HEAD.
+    - name: Check out tested commit as main
+      if: github.event_name == 'workflow_run'
+      run: git checkout -B main
 
     - name: Setup PDM
       uses: pdm-project/setup-pdm@v4
@@ -33,3 +78,4 @@ jobs:
       with:
         packages-dir: dist/
         verbose: true
+        skip-existing: true
