@@ -354,6 +354,8 @@ def test_list_workflow_end_times_positive(
     time_1 = (now - timedelta(seconds=20)).isoformat()
     simple_workflow()
     time_2 = datetime.now().isoformat()
+    # created_at is ms-granular, so keep the second workflow out of time_2's millisecond.
+    time.sleep(0.01)
     simple_workflow()
     time_3 = datetime.now().isoformat()
 
