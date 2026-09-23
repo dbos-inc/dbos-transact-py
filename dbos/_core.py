@@ -836,7 +836,7 @@ def _get_wf_invoke_func(
         except DBOSWorkflowConflictIDError:
             # This execution lost ownership of the workflow.
             return adopt_recorded_outcome(
-                f"Aborting duplicate execution of workflow {status['workflow_uuid']}."
+                f"Workflow {status['workflow_uuid']} is no longer owned by this execution. Waiting for the owner's recorded outcome"
             )
         except DBOSWorkflowCancelledError:
             # The run observed its own cancellation. Park the execution.

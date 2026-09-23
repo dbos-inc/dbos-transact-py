@@ -3310,8 +3310,8 @@ class SystemDatabase(ABC):
 
         @db_retry(sys_db=self)
         def record() -> None:
-            # Because there's no corresponding check, we do nothing on conflict
-            # and do not raise a DBOSWorkflowConflictIDError
+            # A duplicate row is a retry of this same record, so do nothing on conflict.
+            # Lost ownership still raises DBOSWorkflowConflictIDError from the check below.
             sql = (
                 self.dialect.insert(SystemSchema.operation_outputs)
                 .values(

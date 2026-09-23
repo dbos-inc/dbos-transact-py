@@ -8,10 +8,11 @@ from typing import Any, List
 from unittest.mock import mock_open
 from urllib.parse import quote
 
+import psycopg
 import pytest
 import sqlalchemy as sa
 from sqlalchemy import NullPool, event
-from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import DBAPIError, InternalError, OperationalError
 
 # Public API
 from dbos import DBOS, DBOSClient, SetWorkflowID
@@ -28,6 +29,7 @@ from dbos._error import DBOSException, DBOSInitializationError
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
+from dbos._utils import retriable_postgres_exception
 from tests.conftest import postgres_urls, retry_until_success
 
 mock_filename = "dbos-config.yaml"
@@ -694,6 +696,10 @@ def test_custom_and_disabled_timeout(skip_with_sqlite: None) -> None:
         sys_db.destroy()
 
     server_default = _server_default()
+    if server_default == "1min":
+        pytest.skip(
+            "the server default equals DBOS's, so disabling cannot be told apart"
+        )
     sys_db = _make_sysdb(idle_transaction_timeout_sec=0)
     try:
         assert _settings(sys_db.engine) == [server_default, server_default]
@@ -715,6 +721,16 @@ def test_user_setting_takes_precedence(skip_with_sqlite: None) -> None:
         sys_db.destroy()
 
 
+def test_idle_transaction_kill_is_retriable() -> None:
+    """The server's idle-in-transaction kill is retried even when the connection is not flagged invalidated."""
+    orig = psycopg.errors.lookup("25P03")(
+        "terminating connection due to idle-in-transaction timeout"
+    )
+    error = InternalError("SELECT 1", {}, orig)
+    assert not error.connection_invalidated
+    assert retriable_postgres_exception(error)
+
+
 def test_client_configures_idle_transaction_timeout(skip_with_sqlite: None) -> None:
     client = DBOSClient(
         system_database_url=postgres_urls()[1],
@@ -732,6 +748,10 @@ def test_custom_engine_is_untouched(skip_with_sqlite: None) -> None:
     sys_db = _make_sysdb(engine=engine, engine_kwargs={})
     try:
         server_default = _server_default()
+        if server_default == "1min":
+            pytest.skip(
+                "the server default equals DBOS's, so an untouched engine cannot be told apart"
+            )
         assert _settings(sys_db.engine) == [server_default, server_default]
     finally:
         sys_db.destroy()

@@ -33,10 +33,12 @@ async def test_simple_workflow(dbos: DBOS) -> None:
 
         conc_wf = 0
         max_wf = 0
+        step_runs = 0
 
         @staticmethod
         @DBOS.step()
         async def testConcStep() -> None:
+            TryConcExec.step_runs += 1
             TryConcExec.conc_exec += 1
             TryConcExec.max_conc = max(TryConcExec.conc_exec, TryConcExec.max_conc)
             await asyncio.sleep(1)
@@ -95,9 +97,12 @@ async def test_simple_workflow(dbos: DBOS) -> None:
         wfh1r.get_result()
         wfh2r.get_result()
 
+    step_runs_before = TryConcExec.step_runs
     await asyncio.to_thread(redispatch_in_thread)
-    steps = await DBOS.list_workflow_steps_async(wfid)
-    assert len([s for s in steps if "testConcStep" in s["function_name"]]) == 1
+    # The step was already checkpointed, so neither dispatch runs its body again.
+    assert TryConcExec.step_runs == step_runs_before
+    status = await DBOS.get_workflow_status_async(wfid)
+    assert status is not None and status.status == "SUCCESS"
 
 
 @pytest.mark.asyncio

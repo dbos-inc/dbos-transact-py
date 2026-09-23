@@ -9,7 +9,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.exc import OperationalError
 
-from dbos import DBOS, SetWorkflowID
+from dbos import DBOS, SendMessage, SetWorkflowID
 from dbos._core import ActiveWorkflowById
 from dbos._debug_trigger import DebugAction, DebugTriggers
 from dbos._error import DBOSAwaitedWorkflowCancelledError
@@ -31,10 +31,12 @@ def test_simple_workflow(dbos: DBOS) -> None:
 
         conc_wf = 0
         max_wf = 0
+        step_runs = 0
 
         @DBOS.step()
         @staticmethod
         def testConcStep() -> None:
+            TryConcExec.step_runs += 1
             TryConcExec.conc_exec += 1
             TryConcExec.max_conc = max(TryConcExec.conc_exec, TryConcExec.max_conc)
             sleep(1)
@@ -88,20 +90,15 @@ def test_simple_workflow(dbos: DBOS) -> None:
 
     # Two dequeue dispatches of one ID: each takes ownership in turn, so the first
     # stops at its checkpoint and adopts the second's outcome. Their bodies may overlap.
+    step_runs_before = TryConcExec.step_runs
     wfh1r = reexecute_workflow_by_id(dbos, wfid)
     wfh2r = reexecute_workflow_by_id(dbos, wfid)
-    wfh1r.get_result()
-    wfh2r.get_result()
-    assert (
-        len(
-            [
-                s
-                for s in DBOS.list_workflow_steps(wfid)
-                if "testConcStep" in s["function_name"]
-            ]
-        )
-        == 1
-    )
+    assert wfh1r.get_result() is None
+    assert wfh2r.get_result() is None
+    # The step was already checkpointed, so neither dispatch runs its body again.
+    assert TryConcExec.step_runs == step_runs_before
+    status = DBOS.get_workflow_status(wfid)
+    assert status is not None and status.status == "SUCCESS"
 
 
 def test_step_undoredo(dbos: DBOS) -> None:
@@ -360,7 +357,7 @@ def test_handoff_parks_live_execution(dbos: DBOS, handoff: str) -> None:
     @DBOS.step()
     def blocked_step() -> str:
         calls["blocked"] += 1
-        release.wait()
+        assert release.wait(30)
         return "blocked"
 
     @DBOS.step()
@@ -376,38 +373,43 @@ def test_handoff_parks_live_execution(dbos: DBOS, handoff: str) -> None:
     with SetWorkflowID(wfid):
         handle = DBOS.start_workflow(handed_off_workflow)
 
-    def blocked() -> None:
-        assert calls["blocked"] == 1
+    try:
 
-    retry_until_success(blocked, interval=0.1, max_attempts=100)
-    first_owner = dbos._sys_db.get_workflow_owner(wfid)
-    assert first_owner is not None
+        def blocked() -> None:
+            assert calls["blocked"] == 1
 
-    if handoff == "resume":
-        DBOS.resume_workflow(wfid)
-    else:
-        assert dbos._sys_db.reenqueue_for_recovery(
-            wfid, [GlobalParams.executor_id], INTERNAL_QUEUE_NAME
-        )
+        retry_until_success(blocked, interval=0.1, max_attempts=100)
+        first_owner = dbos._sys_db.get_workflow_owner(wfid)
+        assert first_owner is not None
 
-    def reclaimed() -> None:
-        owner = dbos._sys_db.get_workflow_owner(wfid)
-        assert owner is not None and owner != first_owner
+        if handoff == "resume":
+            DBOS.resume_workflow(wfid)
+        else:
+            assert dbos._sys_db.reenqueue_for_recovery(
+                wfid, [GlobalParams.executor_id], INTERNAL_QUEUE_NAME
+            )
 
-    retry_until_success(reclaimed, interval=0.1, max_attempts=100)
+        def reclaimed() -> None:
+            owner = dbos._sys_db.get_workflow_owner(wfid)
+            assert owner is not None and owner != first_owner
 
-    def redispatched() -> None:
-        # The new owner started without waiting for the stale execution to let go.
-        assert calls["blocked"] == 2
+        retry_until_success(reclaimed, interval=0.1, max_attempts=100)
 
-    retry_until_success(redispatched, interval=0.1, max_attempts=100)
-    release.set()
+        def redispatched() -> None:
+            # The new owner started without waiting for the stale execution to let go.
+            assert calls["blocked"] == 2
 
-    assert handle.get_result() == "blockedafter"
-    assert DBOS.retrieve_workflow(wfid).get_result() == "blockedafter"
-    # The stale execution's step result was refused, and it never ran on past it.
-    assert calls == {"blocked": 2, "after": 1}
-    assert len(_step_names(wfid)) == 2
+        retry_until_success(redispatched, interval=0.1, max_attempts=100)
+        release.set()
+
+        assert handle.get_result() == "blockedafter"
+        assert DBOS.retrieve_workflow(wfid).get_result() == "blockedafter"
+        # The stale execution's step result was refused, and it never ran on past it.
+        assert calls == {"blocked": 2, "after": 1}
+        assert len(_step_names(wfid)) == 2
+    finally:
+        # A failed assertion must not leave the step blocked, which wedges shutdown.
+        release.set()
 
 
 def test_shared_waiter_does_not_leak_a_stale_wake() -> None:
@@ -464,12 +466,13 @@ def test_active_entries_release_their_own_bucket() -> None:
     active = ActiveWorkflowById()
     first = active.add("wf", "A", None)
     second = active.add("wf", "B", None)
-    second.release()
-    second.release()  # idempotent
-    assert active.count_for_queue("A") == 1
-    assert active.count_for_queue("B") == 0
-    assert active.activeList() == ["wf"]
+    # The older entry first: removing the most recent bucket instead would drop B.
     first.release()
+    first.release()  # idempotent
+    assert active.count_for_queue("A") == 0
+    assert active.count_for_queue("B") == 1
+    assert active.activeList() == ["wf"]
+    second.release()
     assert active.activeList() == []
 
 
@@ -588,12 +591,26 @@ def test_handoff_while_waiting_in_recv(dbos: DBOS) -> None:
         assert calls["recv"] == 2
 
     retry_until_success(redispatched, interval=0.1, max_attempts=100)
-    DBOS.send(wfid, "hello", "topic")
+    # Two messages in one transaction, so whichever execution consumes second finds one.
+    DBOS.send_bulk(
+        [
+            SendMessage(destination_id=wfid, message="hello", topic="topic"),
+            SendMessage(destination_id=wfid, message="second", topic="topic"),
+        ]
+    )
 
     assert handle.get_result() == "hello"
     assert DBOS.retrieve_workflow(wfid).get_result() == "hello"
-    # Exactly one recv checkpoint: the stale execution's consume was rolled back.
-    assert [name for name in _step_names(wfid) if "recv" in name] == ["DBOS.recv"]
+    # The stale execution's consume rolled back with its refused checkpoint, so the
+    # second message is still waiting; a leaked consume would have taken it.
+    with dbos._sys_db.engine.connect() as c:
+        unconsumed = c.execute(
+            sa.select(SystemSchema.notifications.c.message).where(
+                SystemSchema.notifications.c.destination_uuid == wfid,
+                SystemSchema.notifications.c.consumed == False,
+            )
+        ).all()
+    assert len(unconsumed) == 1
 
 
 def test_cancel_refuses_running_step_result(dbos: DBOS) -> None:
@@ -605,7 +622,7 @@ def test_cancel_refuses_running_step_result(dbos: DBOS) -> None:
     @DBOS.step()
     def blocked_step() -> str:
         calls["blocked"] += 1
-        release.wait()
+        assert release.wait(30)
         return "blocked"
 
     @DBOS.workflow()
@@ -616,20 +633,24 @@ def test_cancel_refuses_running_step_result(dbos: DBOS) -> None:
     with SetWorkflowID(wfid):
         handle = DBOS.start_workflow(cancelled_workflow)
 
-    def blocked() -> None:
-        assert calls["blocked"] == 1
+    try:
 
-    retry_until_success(blocked, interval=0.1, max_attempts=100)
-    DBOS.cancel_workflow(wfid)
-    assert dbos._sys_db.get_workflow_owner(wfid) is None
-    release.set()
-    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
-        handle.get_result()
-    assert _step_names(wfid) == []
+        def blocked() -> None:
+            assert calls["blocked"] == 1
 
-    DBOS.resume_workflow(wfid)
-    assert DBOS.retrieve_workflow(wfid).get_result() == "blocked"
-    assert calls["blocked"] == 2
+        retry_until_success(blocked, interval=0.1, max_attempts=100)
+        DBOS.cancel_workflow(wfid)
+        assert dbos._sys_db.get_workflow_owner(wfid) is None
+        release.set()
+        with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+            handle.get_result()
+        assert _step_names(wfid) == []
+
+        DBOS.resume_workflow(wfid)
+        assert DBOS.retrieve_workflow(wfid).get_result() == "blocked"
+        assert calls["blocked"] == 2
+    finally:
+        release.set()
 
 
 def test_stale_owner_cannot_write_outcome(
@@ -642,7 +663,7 @@ def test_stale_owner_cannot_write_outcome(
     @DBOS.workflow()
     def outcome_workflow() -> str:
         started.set()
-        release.wait()
+        assert release.wait(30)
         return "done"
 
     writes: List[bool] = []
@@ -658,23 +679,29 @@ def test_stale_owner_cannot_write_outcome(
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         handle = DBOS.start_workflow(outcome_workflow)
-    assert started.wait(10)
-    with dbos._sys_db.engine.begin() as c:
-        c.execute(
-            sa.update(SystemSchema.workflow_status)
-            .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
-            .values(execution_xid="another-execution")
-        )
-    release.set()
 
-    def refused() -> None:
-        assert writes == [False]
+    try:
+        assert started.wait(10)
+        with dbos._sys_db.engine.begin() as c:
+            c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+                .values(execution_xid="another-execution")
+            )
+        release.set()
 
-    retry_until_success(refused, interval=0.1, max_attempts=100)
-    status = DBOS.get_workflow_status(wfid)
-    assert status is not None and status.status == "PENDING"
+        def refused() -> None:
+            assert writes == [False]
 
-    # Release the parked execution, which waits on an outcome nobody else will write.
-    DBOS.cancel_workflow(wfid)
-    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
-        handle.get_result()
+        retry_until_success(refused, interval=0.1, max_attempts=100)
+        status = DBOS.get_workflow_status(wfid)
+        assert status is not None and status.status == "PENDING"
+
+        # Release the parked execution, which waits on an outcome nobody else will write.
+        DBOS.cancel_workflow(wfid)
+        with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+            handle.get_result()
+    finally:
+        release.set()
+        # The parked execution waits on an outcome nobody else writes; cancelling is a no-op once terminal.
+        DBOS.cancel_workflow(wfid)

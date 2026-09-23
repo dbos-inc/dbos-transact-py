@@ -502,7 +502,7 @@ def test_recovery_reenqueue_is_ownership_conditional(dbos: DBOS) -> None:
     assert handle.get_result() == "bob"
 
 
-def test_duplicate_recovery_does_not_rerun_running_workflow(dbos: DBOS) -> None:
+def test_recovery_redispatches_running_workflow_once_per_sweep(dbos: DBOS) -> None:
     """Recovery hands a running workflow back to the queue, and each sweep yields exactly one dequeue.
 
     A workflow that was never enqueued acquires the internal queue's name and is

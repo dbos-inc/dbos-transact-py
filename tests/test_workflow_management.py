@@ -84,12 +84,9 @@ def test_cancel_resume(dbos: DBOS) -> None:
 
 
 def test_active_id_released_before_outcome_write(dbos: DBOS) -> None:
-    # The executor's active-workflow-ID entry must be released BEFORE the
-    # terminal outcome write becomes durable. Otherwise: run 1's stale write is
-    # in flight, a client observes CANCELLED and resumes, this same executor
-    # dequeues the resumed workflow, but the dispatch finds the stale active-ID
-    # entry, takes the non-owner path, and waits forever on a row nobody is
-    # executing.
+    # A resume that lands while run 1's stale outcome write is still in flight:
+    # this same executor dequeues the resumed workflow and must run it to
+    # completion alongside the stale run, which parks once its write is refused.
     runs = 0
     entered = threading.Event()
     release_workflow = threading.Event()
@@ -140,8 +137,7 @@ def test_active_id_released_before_outcome_write(dbos: DBOS) -> None:
 
         DBOS.cancel_workflow(wfid)
 
-        # Run 1 returns; its stale outcome write parks. The active-ID entry
-        # must already be released at this point.
+        # Run 1 returns; its stale outcome write is held in flight here.
         release_workflow.set()
         assert parked.wait(timeout=15)
         assert DBOS.get_workflow_status(wfid).status == "CANCELLED"  # type: ignore[union-attr]
