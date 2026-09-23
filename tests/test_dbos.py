@@ -4,11 +4,12 @@ import asyncio
 import datetime
 import logging
 import os
+import random
 import threading
 import time
 import uuid
 from functools import wraps
-from typing import Any, Callable, Optional, Set, TypeVar, cast
+from typing import Any, Callable, List, Optional, Set, TypeVar, cast
 
 import pytest
 import sqlalchemy as sa
@@ -34,6 +35,7 @@ from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSException
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import _dbos_null_topic
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
+from dbos._workflow_commands import WORKFLOW_TIMEOUT_THREAD_NAME
 from tests.conftest import retry_until_success, set_workflow_status, using_sqlite
 
 
@@ -2309,16 +2311,28 @@ def test_workflow_timeout(dbos: DBOS) -> None:
         with pytest.raises(DBOSAwaitedWorkflowCancelledError):
             handle.get_result()
 
-    # Change the workflow status to pending
+    # Change the workflow status to pending. Its deadline goes far enough ahead that
+    # the timeout sweep cannot cancel the row before recovery claims it.
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.update(SystemSchema.workflow_status)
-            .values({"status": "PENDING"})
+            .values(
+                {
+                    "status": "PENDING",
+                    "workflow_deadline_epoch_ms": int(time.time() * 1000) + 10000,
+                }
+            )
             .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
         )
     # Recover the workflow, verify it still times out
     handles = DBOS._recover_pending_workflows()
     assert len(handles) == 1
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"workflow_deadline_epoch_ms": int(time.time() * 1000)})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+        )
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         handles[0].get_result()
 
@@ -2369,40 +2383,190 @@ def test_workflow_timeout(dbos: DBOS) -> None:
         assert assert_current_dbos_context().workflow_timeout_ms == 1000
     assert get_local_dbos_context() is None
 
-    # Verify all timeout tasks completed. Tasks remove themselves from the set via
-    # an add_done_callback, which is scheduled on the background event loop rather
-    # than running synchronously, so poll briefly instead of asserting immediately.
-    def assert_timeout_tasks_empty() -> None:
-        assert len(dbos._timeout_tasks) == 0
-
-    retry_until_success(assert_timeout_tasks_empty, interval=0.1, max_attempts=50)
-
 
 def test_timeout_cleanup_on_destroy(dbos: DBOS, config: DBOSConfig) -> None:
-    @DBOS.workflow()
-    def slow_workflow() -> None:
-        while True:
-            DBOS.sleep(0.1)
+    """The timeout thread stops on its own event, not the one the other background
+    threads share, so destroy has to set it."""
+    timeout_threads = [
+        t for t in dbos._background_threads if t.name == WORKFLOW_TIMEOUT_THREAD_NAME
+    ]
+    assert len(timeout_threads) == 1 and timeout_threads[0].is_alive()
 
-    # Start a workflow with a long timeout so the timeout task is still live at destroy time
-    with SetWorkflowTimeout(60):
-        handle = DBOS.start_workflow(slow_workflow)
-
-    # Verify a timeout task was created (scheduled asynchronously on the event loop)
-    def check_timeout_task() -> None:
-        assert len(dbos._timeout_tasks) == 1
-
-    retry_until_success(check_timeout_task, interval=0.05, max_attempts=20)
-
-    # Destroy DBOS while the timeout task is still pending
     DBOS.destroy(destroy_registry=True)
-
-    # Verify the timeout task was cancelled and cleaned up
-    assert len(dbos._timeout_tasks) == 0
+    assert not timeout_threads[0].is_alive()
 
     # Re-initialize for fixture teardown
     dbos = DBOS(config=config)
     DBOS.launch()
+
+
+def test_timeout_sweep_cancels_unowned_workflows(dbos: DBOS) -> None:
+    """The sweep cancels every expired workflow of this application, whatever its
+    active status and whether or not a local runner holds it, and leaves other
+    applications' workflows alone."""
+
+    @DBOS.workflow()
+    def noop_workflow() -> None:
+        pass
+
+    own_id, unclaimed_id, other_app_id, unexpired_id, enqueued_id, delayed_id = (
+        str(uuid.uuid4()) for _ in range(6)
+    )
+    ids = [own_id, unclaimed_id, other_app_id, unexpired_id, enqueued_id, delayed_id]
+    for wfid in ids:
+        with SetWorkflowID(wfid):
+            noop_workflow()
+
+    # A sweep that raises must not kill the thread: the rows below still get cancelled.
+    real_sweep = dbos._sys_db.cancel_timed_out_workflows
+    injected = threading.Event()
+
+    def sweep_failing_once(limit: int) -> List[str]:
+        if not injected.is_set():
+            injected.set()
+            raise Exception("injected sweep failure")
+        return real_sweep(limit)
+
+    dbos._sys_db.cancel_timed_out_workflows = sweep_failing_once  # type: ignore[method-assign]
+
+    # Rewrite rows only after the failure, so a pre-patch sweep can't cancel them first.
+    def failure_injected() -> None:
+        assert injected.is_set()
+
+    retry_until_success(failure_injected, interval=0.1, max_attempts=50)
+
+    # Rewrite the finished rows into active workflows of a dead executor. The
+    # enqueued and delayed rows stand in for children carrying a parent's deadline,
+    # on a queue no worker polls so only the sweep can touch them.
+    app_name = dbos._sys_db.app_name
+    assert app_name
+    past = int(time.time() * 1000) - 1000
+    hour_ahead = past + 3_600_000
+    ws = SystemSchema.workflow_status
+    with dbos._sys_db.engine.begin() as c:
+        for wfid, status, owner, deadline, queue, delay in [
+            (own_id, "PENDING", app_name, past, None, None),
+            (unclaimed_id, "PENDING", None, past, None, None),
+            (other_app_id, "PENDING", f"{app_name}-other", past, None, None),
+            (unexpired_id, "PENDING", app_name, hour_ahead, None, None),
+            (enqueued_id, "ENQUEUED", app_name, past, "unpolled-queue", None),
+            (delayed_id, "DELAYED", app_name, past, "unpolled-queue", hour_ahead),
+        ]:
+            c.execute(
+                sa.update(ws)
+                .where(ws.c.workflow_uuid == wfid)
+                .values(
+                    status=status,
+                    executor_id="dead-executor",
+                    application_name=owner,
+                    workflow_deadline_epoch_ms=deadline,
+                    queue_name=queue,
+                    delay_until_epoch_ms=delay,
+                )
+            )
+
+    def rows() -> dict[str, Any]:
+        with dbos._sys_db.engine.begin() as c:
+            fetched = c.execute(
+                sa.select(ws.c.workflow_uuid, ws.c.status, ws.c.queue_name).where(
+                    ws.c.workflow_uuid.in_(ids)
+                )
+            ).fetchall()
+        return {row[0]: row for row in fetched}
+
+    def expired_cancelled() -> None:
+        current = rows()
+        for wfid in (own_id, unclaimed_id, enqueued_id, delayed_id):
+            assert current[wfid][1] == "CANCELLED"
+
+    retry_until_success(expired_cancelled, interval=0.1, max_attempts=50)
+    # One sweep cancelled them all, so it would have taken the other app's row too.
+    current = rows()
+    assert current[other_app_id][1] == "PENDING"
+    assert current[unexpired_id][1] == "PENDING"
+    # Cancelling takes a workflow off its queue.
+    assert current[enqueued_id][2] is None and current[delayed_id][2] is None
+    dbos._sys_db.cancel_timed_out_workflows = real_sweep  # type: ignore[method-assign]
+
+
+def test_timeout_sweep_query_plan(dbos: DBOS) -> None:
+    """The sweep runs every poll, so it must reach expired rows through idx_workflow_status_deadline."""
+    from sqlalchemy import event
+
+    captured: list[Any] = []
+    test_thread = threading.current_thread()
+
+    def before_cursor_execute(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        # The background timeout thread runs the same sweep on this engine.
+        if (
+            threading.current_thread() is test_thread
+            and statement.strip().startswith("UPDATE")
+            and "deadline_epoch_ms <=" in statement
+        ):
+            captured.append((statement, parameters))
+
+    event.listen(dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute)
+    try:
+        # A batch smaller than the rows the planner expects to match tempts it into a scan that stops early.
+        dbos._sys_db.cancel_timed_out_workflows(10)
+    finally:
+        event.remove(
+            dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute
+        )
+    assert captured
+    statement, parameters = captured[0]
+
+    # Finished workflows keep their past deadlines, so the planner expects many rows to match.
+    ws = SystemSchema.workflow_status
+    now = int(time.time() * 1000)
+    rows = [
+        {
+            "workflow_uuid": f"deadline-plan-{i}-{uuid.uuid4()}",
+            "name": "plan_probe",
+            "status": "PENDING" if i % 20 == 0 else "SUCCESS",
+            "created_at": now,
+            "updated_at": now,
+            "priority": 0,
+            "workflow_deadline_epoch_ms": (
+                now + 3_600_000 + i if i % 20 == 0 else now - 60_000 - i
+            ),
+        }
+        for i in range(5000)
+    ]
+    # Deadlines uncorrelated with heap order, as in production, make index fetches look costly.
+    random.Random(0).shuffle(rows)
+    with dbos._sys_db.engine.begin() as conn:
+        conn.execute(sa.insert(ws), rows)
+    if using_sqlite():
+        with dbos._sys_db.engine.begin() as conn:
+            conn.exec_driver_sql("ANALYZE")
+            plan = conn.exec_driver_sql(
+                f"EXPLAIN QUERY PLAN {statement}", parameters
+            ).fetchall()
+        details = [str(row[-1]) for row in plan]
+        assert any(
+            "idx_workflow_status_deadline" in d and "workflow_deadline_epoch_ms<" in d
+            for d in details
+        ), details
+        assert not [d for d in details if d.startswith("SCAN")], details
+    else:
+        with dbos._sys_db.engine.begin() as conn:
+            conn.exec_driver_sql(f'ANALYZE "{dbos._sys_db.schema}".workflow_status')
+            plan = conn.exec_driver_sql(f"EXPLAIN {statement}", parameters).fetchall()
+        details = [str(row[0]) for row in plan]
+        assert any("idx_workflow_status_deadline" in d for d in details), details
+        # The deadline bound rides the index as a condition, not a filter over every active row.
+        assert any(
+            "Index Cond" in d and "workflow_deadline_epoch_ms" in d for d in details
+        ), details
+        assert not [d for d in details if "Seq Scan" in d], details
 
 
 def test_custom_names(dbos: DBOS) -> None:

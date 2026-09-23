@@ -1646,9 +1646,6 @@ def test_timeout_queue(dbos: DBOS) -> None:
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
 
-    # Verify all timeout tasks completed
-    assert len(dbos._timeout_tasks) == 0
-
 
 @pytest.mark.asyncio
 async def test_timeout_queue_async(dbos: DBOS, config: DBOSConfig) -> None:
@@ -1780,9 +1777,6 @@ async def test_timeout_queue_async(dbos: DBOS, config: DBOSConfig) -> None:
 
     # Verify all queue entries eventually get cleaned up.
     assert queue_entries_are_cleaned_up(dbos)
-
-    # Verify all timeout tasks completed
-    assert len(dbos._timeout_tasks) == 0
 
 
 def test_resuming_queued_workflows(dbos: DBOS) -> None:
@@ -2406,11 +2400,18 @@ def test_timeout_queue_recovery(dbos: DBOS) -> None:
 
     # Reset the workflow to PENDING so it can be recovered. (update_workflow_outcome
     # cannot be used here: it will not move a workflow out of the terminal
-    # CANCELLED state.)
+    # CANCELLED state.) Its deadline goes far enough ahead that the timeout sweep
+    # cannot cancel the row before recovery claims it.
+    recovery_deadline = int(time.time() * 1000) + 10000
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.update(SystemSchema.workflow_status)
-            .values({"status": "PENDING"})
+            .values(
+                {
+                    "status": "PENDING",
+                    "workflow_deadline_epoch_ms": recovery_deadline,
+                }
+            )
             .where(
                 SystemSchema.workflow_status.c.workflow_uuid
                 == original_handle.workflow_id
@@ -2422,11 +2423,18 @@ def test_timeout_queue_recovery(dbos: DBOS) -> None:
     recovered_handle = handles[0]
     recovered_status = recovered_handle.get_status()
     assert recovered_status.workflow_timeout_ms == timeout * 1000
-    assert (
-        recovered_status.workflow_deadline_epoch_ms
-        == original_status.workflow_deadline_epoch_ms
-    )
+    assert recovered_status.workflow_deadline_epoch_ms == recovery_deadline
 
+    # Expire the deadline recovery preserved: the sweep cancels the recovered run.
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"workflow_deadline_epoch_ms": int(time.time() * 1000)})
+            .where(
+                SystemSchema.workflow_status.c.workflow_uuid
+                == original_handle.workflow_id
+            )
+        )
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         recovered_handle.get_result()
 

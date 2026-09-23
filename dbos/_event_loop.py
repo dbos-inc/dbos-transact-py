@@ -117,32 +117,6 @@ class BackgroundEventLoop:
             raise RuntimeError(
                 "submit_coroutine was called from within its own event loop "
                 "thread, which would deadlock. Schedule the coroutine without "
-                "blocking (e.g. submit_coroutine_nowait) instead."
+                "blocking instead."
             )
         return asyncio.run_coroutine_threadsafe(coro, loop).result()
-
-    def submit_coroutine_nowait(
-        self,
-        coro: Coroutine[Any, Any, Any],
-        task_set: Optional[set["asyncio.Task[Any]"]] = None,
-    ) -> None:
-        """Submit a coroutine to the background event loop without waiting.
-
-        Nothing can await the result, so the task's exception is marked retrieved to
-        keep asyncio from reporting it at GC. Callers that care must log it themselves.
-        If task_set is provided, the created task is added to it and
-        automatically removed when the task completes.
-        """
-        loop = self.target_loop()
-        if loop is None:
-            coro.close()
-            raise RuntimeError("Event loop not started")
-
-        def _create_task() -> None:
-            task = loop.create_task(coro)
-            task.add_done_callback(retrieve_future_exception)
-            if task_set is not None:
-                task_set.add(task)
-                task.add_done_callback(task_set.discard)
-
-        loop.call_soon_threadsafe(_create_task)

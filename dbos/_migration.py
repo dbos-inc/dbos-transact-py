@@ -35,6 +35,7 @@ _ONLINE_MIGRATIONS = {
     118,
     119,
     120,
+    122,
 }
 
 # From this index on, every SDK defines the same migration at the same index.
@@ -1356,6 +1357,12 @@ ALTER TABLE {quoted_schema}."notifications"
 """
 
 
+def get_dbos_migration_hundredtwentytwo(quoted_schema: str, is_cockroach: bool) -> str:
+    # Holds only active workflows with a deadline, so the timeout sweep reads just the expired ones.
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_deadline" ON {quoted_schema}."workflow_status" ("workflow_deadline_epoch_ms") WHERE "status" IN (\'ENQUEUED\', \'PENDING\', \'DELAYED\') AND "workflow_deadline_epoch_ms" IS NOT NULL'
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -1434,6 +1441,7 @@ def get_dbos_migrations(
         get_dbos_migration_hundrednineteen(quoted_schema, is_cockroach),
         get_dbos_migration_hundredtwenty(quoted_schema, is_cockroach),
         get_dbos_migration_hundredtwentyone(quoted_schema),
+        get_dbos_migration_hundredtwentytwo(quoted_schema, is_cockroach),
     ]
 
 
@@ -1878,6 +1886,8 @@ sqlite_migration_hundredtwentyone = """
 ALTER TABLE notifications ADD COLUMN consumed_by_function_id INTEGER;
 """
 
+sqlite_migration_hundredtwentytwo = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_deadline" ON "workflow_status" ("workflow_deadline_epoch_ms") WHERE "status" IN (\'ENQUEUED\', \'PENDING\', \'DELAYED\') AND "workflow_deadline_epoch_ms" IS NOT NULL'
+
 sqlite_migrations = [
     *_pad_to_shared_base(_sqlite_history),
     sqlite_migration_hundred,
@@ -1904,4 +1914,5 @@ sqlite_migrations = [
     sqlite_migration_hundrednineteen,
     sqlite_migration_hundredtwenty,
     sqlite_migration_hundredtwentyone,
+    sqlite_migration_hundredtwentytwo,
 ]
