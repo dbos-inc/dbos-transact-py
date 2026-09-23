@@ -6286,10 +6286,9 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.debounce_deadline_epoch_ms,
                         SystemSchema.workflow_status.c.is_debounced,
                         SystemSchema.workflow_status.c.application_name,
-                        # owner_xid is intentionally omitted: it is a transient
-                        # transaction-ownership token, not logical workflow state
-                        # (get_workflow_status also returns None for it), and a
-                        # source database's xid is meaningless in the target.
+                        # owner_xid and execution_xid are intentionally omitted: they
+                        # are transient ownership tokens, not logical workflow state,
+                        # and a source database's tokens are meaningless in the target.
                     )
                     .select_from(
                         SystemSchema.workflow_status.outerjoin(
