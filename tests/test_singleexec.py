@@ -12,7 +12,8 @@ from dbos import DBOS, SetWorkflowID
 from dbos._debug_trigger import DebugAction, DebugTriggers
 from dbos._error import DBOSAwaitedWorkflowCancelledError
 from dbos._schemas.system_database import SystemSchema
-from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
+from dbos._sys_db import ThreadSafeEventDict
+from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, LoopAwareEvent
 from tests.conftest import (
     reexecute_workflow_by_id,
     retry_until_success,
@@ -405,6 +406,55 @@ def test_handoff_parks_live_execution(dbos: DBOS, handoff: str) -> None:
     # The stale execution's step result was refused, and it never ran on past it.
     assert calls == {"blocked": 2, "after": 1}
     assert len(_step_names(wfid)) == 2
+
+
+def test_shared_waiter_does_not_leak_a_stale_wake() -> None:
+    """A waiter that joins after the shared event was set gets a fresh, unset event."""
+    registry = ThreadSafeEventDict()
+    first, first_event = registry.set("wf::topic", LoopAwareEvent(), ("wf", "topic"))
+    assert first
+    first_event.set()
+
+    second, second_event = registry.set("wf::topic", LoopAwareEvent(), ("wf", "topic"))
+    assert not second
+    assert second_event is not first_event and not second_event.is_set()
+    # The entry now carries the fresh event, so the listener wakes the live waiter.
+    assert registry.get("wf::topic") is second_event
+    # An unset event is still shared as before.
+    _, third_event = registry.set("wf::topic", LoopAwareEvent(), ("wf", "topic"))
+    assert third_event is second_event
+
+    for _ in range(3):
+        registry.pop("wf::topic")
+    assert registry.get("wf::topic") is None
+
+
+def test_recv_ignores_a_stale_waiters_wake(dbos: DBOS) -> None:
+    """A recv that joins a leftover, already-woken waiter still waits for its message."""
+
+    @DBOS.workflow()
+    def recv_workflow() -> str:
+        return str(DBOS.recv("topic", timeout_seconds=30))
+
+    wfid = str(uuid.uuid4())
+    payload = f"{wfid}::topic"
+    # What a stale execution leaves behind between its wake and its cleanup.
+    stale_event = LoopAwareEvent()
+    stale_event.set()
+    dbos._sys_db.notifications_map.set(payload, stale_event, (wfid, "topic"))
+    try:
+        with SetWorkflowID(wfid):
+            handle = DBOS.start_workflow(recv_workflow)
+
+        def joined() -> None:
+            live = dbos._sys_db.notifications_map.get(payload)
+            assert live is not None and live is not stale_event
+
+        retry_until_success(joined, interval=0.1, max_attempts=100)
+        DBOS.send(wfid, "hello", "topic")
+        assert handle.get_result() == "hello"
+    finally:
+        dbos._sys_db.notifications_map.pop(payload)
 
 
 def test_handoff_while_waiting_in_recv(dbos: DBOS) -> None:

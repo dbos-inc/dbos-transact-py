@@ -489,9 +489,14 @@ class ThreadSafeEventDict:
     ) -> tuple[bool, LoopAwareEvent]:
         with self._lock:
             if key in self._dict:
-                # Key already exists, do not overwrite. Increment the wait count.
+                # Key already exists: share it and increment the wait count.
                 ec = self._dict[key]
                 ec["count"] += 1
+                if ec["event"].is_set():
+                    # A wake delivered to the earlier waiters must not satisfy this one, or it
+                    # would skip waiting; callers check the database right after registering,
+                    # so nothing that already arrived is lost.
+                    ec["event"] = value
                 return False, ec["event"]
             self._dict[key] = EventCount(event=value, count=1, components=components)
             return True, value
@@ -3886,11 +3891,8 @@ class SystemDatabase(ABC):
 
         The worker thread cannot be cancelled, so it finishes registering in
         event_map even after cancellation abandons the coroutine before its
-        try/finally cleanup is in place. A leftover recv entry makes the next
-        recv on the same workflow and topic fail with
-        DBOSWorkflowConflictIDError -- a spurious "duplicate execution" that
-        parks the caller in await_workflow_result forever; a leftover
-        get_event entry leaks. So on cancellation, wait for the thread inline
+        try/finally cleanup is in place. A leftover entry would leak and keep
+        its key registered for every later waiter. So on cancellation, wait for the thread inline
         and undo its registration *before* re-raising CancelledError: once the
         cancelled call returns, no stale entry remains, so there is no window
         for a concurrent recv to trip over. If a further cancellation
