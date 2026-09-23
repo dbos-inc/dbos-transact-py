@@ -54,7 +54,7 @@ jobs:
       with:
         fetch-depth: 0
         fetch-tags: true
-        ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+        ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
     # The version is derived from the branch name, so leave the tested commit on a local main rather than a detached HEAD.
     - name: Check out tested commit as main
@@ -78,4 +78,3 @@ jobs:
       with:
         packages-dir: dist/
         verbose: true
-        skip-existing: true
