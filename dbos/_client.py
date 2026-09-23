@@ -11,7 +11,6 @@ from typing import (
     Generic,
     List,
     Optional,
-    Sequence,
     TypeVar,
     Union,
 )
@@ -72,7 +71,6 @@ from dbos._sys_db import (
     WorkflowStatusInternal,
 )
 from dbos._workflow_commands import (
-    Datasource,
     fork_workflow,
     get_workflow,
     rewind_workflow,
@@ -895,17 +893,12 @@ class DBOSClient:
         application_version: Optional[str] = None,
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
-        datasources: Optional[Sequence[Datasource]] = None,
     ) -> "WorkflowHandle[Any]":
         """Rewind a workflow to a step (default: the first). Only a workflow in a
-        terminal state can be rewound.
-
-        Checkpoints held in datasources are dropped only for the datasources passed
-        in. Sync datasources only, use the async variant for both sync and async datasources.
-        """
+        terminal state can be rewound."""
         rewind_workflow(
             self._sys_db,
-            datasources or [],
+            [],
             workflow_id,
             1 if start_step is None else start_step,
             application_version=application_version,
@@ -922,24 +915,18 @@ class DBOSClient:
         application_version: Optional[str] = None,
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
-        datasources: Optional[Sequence[Datasource]] = None,
     ) -> "WorkflowHandleAsync[Any]":
         """Rewind a workflow to a step (default: the first). Only a workflow in a
-        terminal state can be rewound. Works without a running application.
-
-        Checkpoints held in datasources are dropped only for the datasources
-        passed in.
-        """
+        terminal state can be rewound."""
         await asyncio.to_thread(
             rewind_workflow,
             self._sys_db,
-            datasources or [],
+            [],
             workflow_id,
             1 if start_step is None else start_step,
             application_version=application_version,
             queue_name=queue_name,
             queue_partition_key=queue_partition_key,
-            run_coroutine=asyncio.run,
         )
         return WorkflowHandleClientAsyncPolling[Any](workflow_id, self._sys_db)
 
