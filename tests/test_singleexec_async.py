@@ -33,10 +33,12 @@ async def test_simple_workflow(dbos: DBOS) -> None:
 
         conc_wf = 0
         max_wf = 0
+        step_runs = 0
 
         @staticmethod
         @DBOS.step()
         async def testConcStep() -> None:
+            TryConcExec.step_runs += 1
             TryConcExec.conc_exec += 1
             TryConcExec.max_conc = max(TryConcExec.conc_exec, TryConcExec.max_conc)
             await asyncio.sleep(1)
@@ -81,16 +83,26 @@ async def test_simple_workflow(dbos: DBOS) -> None:
         set_workflow_status(dbos._sys_db, wfid, "PENDING")
         for handle in DBOS._recover_pending_workflows():
             handle.get_result()
-        # Two dequeue dispatches of one ID race: only the active-workflow guard stops a double run.
-        wfh1r = reexecute_workflow_by_id(dbos, wfid)
-        wfh2r = reexecute_workflow_by_id(dbos, wfid)
-        wfh1r.get_result()
-        wfh2r.get_result()
 
     await asyncio.to_thread(recover_in_thread)
 
     assert TryConcExec.max_conc == 1
     assert TryConcExec.max_wf == 1
+
+    # Two dequeue dispatches of one ID: each takes ownership in turn, so the first
+    # stops at its checkpoint and adopts the second's outcome. Their bodies may overlap.
+    def redispatch_in_thread() -> None:
+        wfh1r = reexecute_workflow_by_id(dbos, wfid)
+        wfh2r = reexecute_workflow_by_id(dbos, wfid)
+        wfh1r.get_result()
+        wfh2r.get_result()
+
+    step_runs_before = TryConcExec.step_runs
+    await asyncio.to_thread(redispatch_in_thread)
+    # The step was already checkpointed, so neither dispatch runs its body again.
+    assert TryConcExec.step_runs == step_runs_before
+    status = await DBOS.get_workflow_status_async(wfid)
+    assert status is not None and status.status == "SUCCESS"
 
 
 @pytest.mark.asyncio
@@ -356,11 +368,16 @@ async def test_parked_duplicate_does_not_hold_a_thread(
         result: OperationResultInternal,
         *,
         completed_at_epoch_ms: Optional[int] = None,
+        owner_xid: Optional[str] = None,
     ) -> None:
         # What the loser of a checkpoint race sees: the owner's row is already there.
         if result["workflow_uuid"] in lost_ids:
             raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
-        original_record(result, completed_at_epoch_ms=completed_at_epoch_ms)
+        original_record(
+            result,
+            completed_at_epoch_ms=completed_at_epoch_ms,
+            owner_xid=owner_xid,
+        )
 
     original_update = dbos._sys_db.update_workflow_outcome
 
@@ -370,11 +387,14 @@ async def test_parked_duplicate_does_not_hold_a_thread(
         *,
         output: Optional[str] = None,
         error: Optional[str] = None,
+        owner_xid: Optional[str] = None,
     ) -> bool:
         # What a run whose row moved on sees: its terminal write does not land.
         if workflow_id in lost_ids:
             return False
-        return original_update(workflow_id, status, output=output, error=error)
+        return original_update(
+            workflow_id, status, output=output, error=error, owner_xid=owner_xid
+        )
 
     original_check = dbos._sys_db.check_workflow_result
 
@@ -468,3 +488,59 @@ async def test_parked_duplicate_does_not_hold_a_thread(
 
     for run in runs:
         assert await asyncio.wait_for(run, timeout=15) == "owner outcome"
+
+
+@pytest.mark.asyncio
+async def test_handoff_parks_live_execution_async(dbos: DBOS) -> None:
+    """Async sibling of test_handoff_parks_live_execution: the resumed dispatch runs
+    alongside the stale execution and finishes the workflow."""
+    # A threading.Event, polled: the re-dispatch runs on the background loop, not this one.
+    release = threading.Event()
+    calls = {"blocked": 0, "after": 0}
+
+    @DBOS.step()
+    async def blocked_step() -> str:
+        calls["blocked"] += 1
+        while not release.is_set():
+            await asyncio.sleep(0.05)
+        return "blocked"
+
+    @DBOS.step()
+    async def after_step() -> str:
+        calls["after"] += 1
+        return "after"
+
+    @DBOS.workflow()
+    async def handed_off_workflow() -> str:
+        return await blocked_step() + await after_step()
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(handed_off_workflow)
+
+    def blocked() -> None:
+        assert calls["blocked"] == 1
+
+    await retry_until_success_async(blocked, interval=0.1, max_attempts=100)
+    first_owner = dbos._sys_db.get_workflow_owner(wfid)
+    assert first_owner is not None
+
+    await DBOS.resume_workflow_async(wfid)
+
+    def reclaimed() -> None:
+        owner = dbos._sys_db.get_workflow_owner(wfid)
+        assert owner is not None and owner != first_owner
+
+    await retry_until_success_async(reclaimed, interval=0.1, max_attempts=100)
+
+    def redispatched() -> None:
+        assert calls["blocked"] == 2
+
+    await retry_until_success_async(redispatched, interval=0.1, max_attempts=100)
+    release.set()
+
+    assert await handle.get_result() == "blockedafter"
+    retrieved: WorkflowHandleAsync[str] = await DBOS.retrieve_workflow_async(wfid)
+    assert await retrieved.get_result() == "blockedafter"
+    assert calls == {"blocked": 2, "after": 1}
+    assert len(await DBOS.list_workflow_steps_async(wfid)) == 2

@@ -46,10 +46,14 @@ from dbos._utils import (
 from ._context import (
     DBOSContext,
     WorkflowIDReusePolicy,
+    current_owner_xid,
     get_local_dbos_context,
     validate_workflow_attributes,
 )
-from ._dbos_config import _validate_observability_query_timeout_sec
+from ._dbos_config import (
+    _validate_idle_transaction_timeout_sec,
+    _validate_observability_query_timeout_sec,
+)
 from ._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
@@ -59,6 +63,7 @@ from ._error import (
     DBOSNonExistentWorkflowError,
     DBOSQueryTimeoutError,
     DBOSQueueDeduplicatedError,
+    DBOSStepNondeterminismError,
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
@@ -459,54 +464,69 @@ class SendMessage:
     idempotency_key: Optional[str] = None
 
 
-class EventCount(TypedDict):
-    event: LoopAwareEvent
-    count: int
-    components: Tuple[str, str]
+class KeySignal:
+    """Fans one key's wake out to every waiter registered under it."""
+
+    def __init__(self, components: Tuple[str, str]) -> None:
+        self.components = components
+        self._waiters: Set[LoopAwareEvent] = set()
+        self._lock = threading.Lock()
+
+    def set(self) -> None:
+        with self._lock:
+            waiters = list(self._waiters)
+        # Signalled outside the lock, so a waiter's callbacks cannot deadlock against it.
+        for event in waiters:
+            event.set()
+
+    def waiter_count(self) -> int:
+        with self._lock:
+            return len(self._waiters)
 
 
 class ThreadSafeEventDict:
+    """Waiters by key. Each waiter keeps its own event, so one waiter's wake or clear never affects another."""
+
     def __init__(self) -> None:
-        self._dict: Dict[str, EventCount] = {}
+        self._dict: Dict[str, KeySignal] = {}
         self._lock = threading.Lock()
 
-    def get(self, key: str) -> Optional[LoopAwareEvent]:
+    def get(self, key: str) -> Optional[KeySignal]:
         with self._lock:
-            if key not in self._dict:
-                return None
-            return self._dict[key]["event"]
+            return self._dict.get(key)
 
-    def set(
+    def add(
         self,
         key: str,
-        value: LoopAwareEvent,
+        event: LoopAwareEvent,
         components: Tuple[str, str],
-    ) -> tuple[bool, LoopAwareEvent]:
+    ) -> None:
+        """Register event as a waiter on key."""
         with self._lock:
-            if key in self._dict:
-                # Key already exists, do not overwrite. Increment the wait count.
-                ec = self._dict[key]
-                ec["count"] += 1
-                return False, ec["event"]
-            self._dict[key] = EventCount(event=value, count=1, components=components)
-            return True, value
+            signal = self._dict.get(key)
+            if signal is None:
+                signal = KeySignal(components)
+                self._dict[key] = signal
+            with signal._lock:
+                signal._waiters.add(event)
 
-    def pop(self, key: str) -> None:
+    def pop(self, key: str, event: LoopAwareEvent) -> None:
+        """Unregister one waiter, dropping the key with its last waiter."""
         with self._lock:
-            if key in self._dict:
-                ec = self._dict[key]
-                ec["count"] -= 1
-                if ec["count"] == 0:
-                    del self._dict[key]
-            else:
+            signal = self._dict.get(key)
+            if signal is None:
                 dbos_logger.warning(f"Key {key} not found in event dictionary.")
+                return
+            with signal._lock:
+                signal._waiters.discard(event)
+                empty = not signal._waiters
+            if empty:
+                del self._dict[key]
 
-    def snapshot(self) -> List[Tuple[str, Tuple[str, str], LoopAwareEvent]]:
-        """Return a snapshot of (key, components, event) for every entry."""
+    def snapshot(self) -> List[Tuple[str, Tuple[str, str], KeySignal]]:
+        """Return a snapshot of (key, components, signal) for every entry."""
         with self._lock:
-            return [
-                (key, ec["components"], ec["event"]) for key, ec in self._dict.items()
-            ]
+            return [(key, s.components, s) for key, s in self._dict.items()]
 
 
 # Return type of the recv/get_event setup phases: either a cached result
@@ -592,6 +612,8 @@ DEFAULT_NOTIFICATION_COALESCE_SEC = 0.01
 # Statement timeout for read-only introspection queries (workflow listings, aggregates, metrics).
 # One of those scanning a huge table for minutes holds back xmin, which stalls autovacuum database-wide.
 DEFAULT_OBSERVABILITY_QUERY_TIMEOUT_SEC = 30.0
+# Bounds how long a frozen or unreachable client can hold system database locks.
+DEFAULT_IDLE_TRANSACTION_TIMEOUT_SEC = 60.0
 
 
 class SystemDatabase(ABC):
@@ -611,6 +633,7 @@ class SystemDatabase(ABC):
         app_name: Optional[str] = None,
         retry_connection_errors: bool = True,
         observability_query_timeout_sec: Optional[float] = None,
+        idle_transaction_timeout_sec: Optional[float] = None,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
         if system_database_url.startswith("sqlite"):
@@ -630,6 +653,7 @@ class SystemDatabase(ABC):
                 app_name=app_name,
                 retry_connection_errors=retry_connection_errors,
                 observability_query_timeout_sec=observability_query_timeout_sec,
+                idle_transaction_timeout_sec=idle_transaction_timeout_sec,
             )
         else:
             from ._sys_db_postgres import PostgresSystemDatabase
@@ -648,6 +672,7 @@ class SystemDatabase(ABC):
                 app_name=app_name,
                 retry_connection_errors=retry_connection_errors,
                 observability_query_timeout_sec=observability_query_timeout_sec,
+                idle_transaction_timeout_sec=idle_transaction_timeout_sec,
             )
 
     def __init__(
@@ -666,6 +691,7 @@ class SystemDatabase(ABC):
         app_name: Optional[str] = None,
         retry_connection_errors: bool = True,
         observability_query_timeout_sec: Optional[float] = None,
+        idle_transaction_timeout_sec: Optional[float] = None,
     ):
         import sqlalchemy.dialects.postgresql as pg
         import sqlalchemy.dialects.sqlite as sq
@@ -719,6 +745,20 @@ class SystemDatabase(ABC):
             self.schema = None
         else:
             self.schema = schema if schema else "dbos"
+
+        # Set before _create_engine, which applies it to each new connection. None disables it.
+        _validate_idle_transaction_timeout_sec(idle_transaction_timeout_sec)
+        idle_sec = (
+            idle_transaction_timeout_sec
+            if idle_transaction_timeout_sec is not None
+            else DEFAULT_IDLE_TRANSACTION_TIMEOUT_SEC
+        )
+        self._idle_transaction_timeout_ms: Optional[int] = (
+            # Floor at 1ms: PostgreSQL reads 0 as "no timeout".
+            max(1, int(idle_sec * 1000))
+            if idle_sec > 0
+            else None
+        )
 
         if engine:
             base_engine = engine
@@ -948,14 +988,14 @@ class SystemDatabase(ABC):
         status: WorkflowStatusInternal,
         conn: Union[sa.Connection, Session],
         *,
-        owner_xid: Optional[str],
+        creator_xid: Optional[str],
         reuse_policy: Optional[WorkflowIDReusePolicy] = None,
     ) -> tuple[WorkflowStatuses, bool]:
         """Insert a workflow's status row, or return the existing row unchanged."""
-        # Without an owner_xid the check below cannot tell a fresh insert from an existing row.
+        # Without a creator_xid the check below cannot tell a fresh insert from an existing row.
         assert (
-            reuse_policy != "reject" or owner_xid is not None
-        ), "workflow_id_reuse_policy 'reject' requires an owner_xid"
+            reuse_policy != "reject" or creator_xid is not None
+        ), "workflow_id_reuse_policy 'reject' requires a creator_xid"
         wf_status: WorkflowStatuses = status["status"]
         should_execute = True
         _enqueued_statuses = [
@@ -985,7 +1025,13 @@ class SystemDatabase(ABC):
                 serialization=status["serialization"],
                 queue_partition_key=status["queue_partition_key"],
                 parent_workflow_id=status["parent_workflow_id"],
-                owner_xid=owner_xid,
+                creator_xid=creator_xid,
+                # A direct start runs at once, so its creator token also owns the execution.
+                owner_xid=(
+                    creator_xid
+                    if wf_status == WorkflowStatusString.PENDING.value
+                    else None
+                ),
                 delay_until_epoch_ms=status["delay_until_epoch_ms"],
                 attributes=status["attributes"],
                 schedule_name=status["schedule_name"],
@@ -996,7 +1042,7 @@ class SystemDatabase(ABC):
             # A no-op update, so an existing row comes back unchanged for the caller to inspect.
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
-                set_={"owner_xid": SystemSchema.workflow_status.c.owner_xid},
+                set_={"creator_xid": SystemSchema.workflow_status.c.creator_xid},
             )
         )
 
@@ -1006,7 +1052,7 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.class_name,
             SystemSchema.workflow_status.c.config_name,
             SystemSchema.workflow_status.c.queue_name,
-            SystemSchema.workflow_status.c.owner_xid,
+            SystemSchema.workflow_status.c.creator_xid,
             SystemSchema.workflow_status.c.serialization,
         )
 
@@ -1040,8 +1086,8 @@ class SystemDatabase(ABC):
             # Check the started workflow matches the expected name, class_name, config_name, and queue_name
             # A mismatch indicates a workflow starting with the same UUID but different functions, which would throw an exception.
             wf_status = m["status"]
-            # A row carrying another owner_xid was already there; a retried commit carries ours.
-            if reuse_policy == "reject" and m["owner_xid"] != owner_xid:
+            # A row carrying another creator_xid was already there; a retried commit carries ours.
+            if reuse_policy == "reject" and m["creator_xid"] != creator_xid:
                 raise DBOSWorkflowIDInUseError(
                     status["workflow_uuid"], m["status"], m["name"]
                 )
@@ -1060,7 +1106,7 @@ class SystemDatabase(ABC):
             if err_msg is not None:
                 raise DBOSConflictingWorkflowError(status["workflow_uuid"], err_msg)
 
-            if owner_xid != m["owner_xid"]:
+            if creator_xid != m["creator_xid"]:
                 should_execute = False
 
             status["serialization"] = m["serialization"]
@@ -1096,6 +1142,7 @@ class SystemDatabase(ABC):
                 )
                 .values(
                     status=WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value,
+                    owner_xid=None,
                     deduplication_id=None,
                     started_at_epoch_ms=None,
                     queue_name=None,
@@ -1112,27 +1159,30 @@ class SystemDatabase(ABC):
         *,
         output: Optional[str] = None,
         error: Optional[str] = None,
+        owner_xid: Optional[str] = None,
     ) -> bool:
         """Record a workflow's terminal outcome, reporting whether the write landed.
 
-        The write applies only to a PENDING row: a run owns its workflow's
-        outcome exactly as long as the row says that run is what the workflow
-        is doing. (Note: this does not prevent a write when another concurrent
-        execution is already running and the status is PENDING. However, both
-        executions should be deterministic and idempotent.)
+        The write applies only to a PENDING row still owned by owner_xid, which
+        defaults to the calling execution's token; a caller outside the workflow's
+        context passes it explicitly or goes unchecked.
 
         Returning False means the row was CANCELLED, dead-lettered, already
-        terminal, handed to another execution (ENQUEUED/DELAYED, e.g. by a
-        concurrent resume), or gone entirely.
+        terminal, handed to another execution (e.g. by a concurrent resume or
+        recovery), or gone entirely.
         """
+        if owner_xid is None:
+            owner_xid = current_owner_xid(workflow_id)
         with self.engine.begin() as c:
             now_ms = self._now_ms_sql()
-            result = c.execute(
+            update = (
                 sa.update(SystemSchema.workflow_status)
                 .values(
                     status=status,
                     # As the workflow is complete, remove its deduplication ID
                     deduplication_id=None,
+                    # A finished workflow has no owner.
+                    owner_xid=None,
                     updated_at=now_ms,
                     completed_at=now_ms,
                 )
@@ -1142,6 +1192,11 @@ class SystemDatabase(ABC):
                     == WorkflowStatusString.PENDING.value
                 )
             )
+            if owner_xid is not None:
+                update = update.where(
+                    SystemSchema.workflow_status.c.owner_xid == owner_xid
+                )
+            result = c.execute(update)
             if result.rowcount == 0:
                 # The outcome was not ours to write, so leave no orphan payload.
                 return False
@@ -1182,6 +1237,7 @@ class SystemDatabase(ABC):
                     )
                     .values(
                         status=WorkflowStatusString.CANCELLED.value,
+                        owner_xid=None,
                         queue_name=None,
                         deduplication_id=None,
                         started_at_epoch_ms=None,
@@ -1236,6 +1292,7 @@ class SystemDatabase(ABC):
                 )
                 .values(
                     status=WorkflowStatusString.ENQUEUED.value,
+                    owner_xid=None,
                     queue_name=(
                         queue_name if queue_name is not None else INTERNAL_QUEUE_NAME
                     ),
@@ -1615,6 +1672,7 @@ class SystemDatabase(ABC):
                 .where(SystemSchema.workflow_status.c.status == status)
                 .values(
                     status=WorkflowStatusString.ENQUEUED.value,
+                    owner_xid=None,
                     **version_update,
                     queue_name=(
                         queue_name if queue_name is not None else INTERNAL_QUEUE_NAME
@@ -3120,41 +3178,56 @@ class SystemDatabase(ABC):
             )
         return results
 
+    def _check_owner_txn(
+        self, conn: Union[sa.Connection, Session], workflow_id: str, owner_xid: str
+    ) -> None:
+        """Raise DBOSWorkflowConflictIDError unless owner_xid still owns the workflow.
+
+        The row stays locked until commit, so a hand-off (cancel, resume, recovery) cannot land between this check and the write.
+        """
+        ws = SystemSchema.workflow_status
+        stmt: sa.Executable
+        if self._is_sqlite:
+            # A write, so pysqlite opens BEGIN IMMEDIATE here; a SELECT would run in autocommit.
+            stmt = (
+                sa.update(ws)
+                .where(ws.c.workflow_uuid == workflow_id)
+                .values(owner_xid=ws.c.owner_xid)
+                .returning(ws.c.owner_xid)
+            )
+        else:
+            # FOR NO KEY UPDATE
+            stmt = (
+                sa.select(ws.c.owner_xid)
+                .where(ws.c.workflow_uuid == workflow_id)
+                .with_for_update(key_share=True)
+            )
+        current = conn.execute(stmt).scalar()
+        if current != owner_xid:
+            raise DBOSWorkflowConflictIDError(workflow_id)
+
     def _record_operation_result_txn(
         self,
         result: OperationResultInternal,
         completed_at_epoch_ms: int,
         conn: Union[sa.Connection, Session],
+        *,
+        owner_xid: Optional[str] = None,
     ) -> None:
+        """Insert the step row. owner_xid defaults to the calling execution's token; a caller
+        writing on another workflow's behalf from inside a different context passes it.
+        """
         error = result["error"]
         output = result["output"]
         assert error is None or output is None, "Only one of error or output can be set"
 
-        # Check if the executor ID belong to another process.
-        # Reset it to this process's executor ID if so.
-        wf_executor_id_row = conn.execute(
-            sa.select(
-                SystemSchema.workflow_status.c.executor_id,
-            ).where(
-                SystemSchema.workflow_status.c.workflow_uuid == result["workflow_uuid"]
-            )
-        ).fetchone()
-        assert wf_executor_id_row is not None
-        wf_executor_id = wf_executor_id_row[0]
-        if self.executor_id is not None and wf_executor_id != self.executor_id:
-            dbos_logger.debug(
-                f'Resetting executor_id from {wf_executor_id} to {self.executor_id} for workflow {result["workflow_uuid"]}'
-            )
-            conn.execute(
-                sa.update(SystemSchema.workflow_status)
-                .values(executor_id=self.executor_id)
-                .where(
-                    SystemSchema.workflow_status.c.workflow_uuid
-                    == result["workflow_uuid"]
-                )
-            )
+        if owner_xid is None:
+            owner_xid = current_owner_xid(result["workflow_uuid"])
+        if owner_xid is not None:
+            self._check_owner_txn(conn, result["workflow_uuid"], owner_xid)
 
-        # Record the outcome, throwing DBOSWorkflowConflictIDError if it is already present
+        # Record the outcome. A row already there with another completion time is this
+        # execution's own doing (a retry carries the same time), so it is nondeterminism, not a duplicate.
         try:
             stmt = (
                 self.dialect.insert(SystemSchema.operation_outputs)
@@ -3194,18 +3267,33 @@ class SystemDatabase(ABC):
                     existing_completed_at is None
                     or int(existing_completed_at) != completed_at_epoch_ms
                 ):
-                    raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
+                    raise DBOSStepNondeterminismError(
+                        result["workflow_uuid"], result["function_id"]
+                    )
 
         except DBAPIError as dbapi_error:
             if self._is_unique_constraint_violation(dbapi_error):
-                raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
+                raise DBOSStepNondeterminismError(
+                    result["workflow_uuid"], result["function_id"]
+                )
             raise
+
+    @db_retry()
+    def get_workflow_owner(self, workflow_id: str) -> Optional[str]:
+        """The workflow's current ownership token; None if unowned or missing."""
+        with self.engine.begin() as c:
+            return c.execute(
+                sa.select(SystemSchema.workflow_status.c.owner_xid).where(
+                    SystemSchema.workflow_status.c.workflow_uuid == workflow_id
+                )
+            ).scalar()
 
     def record_operation_result(
         self,
         result: OperationResultInternal,
         *,
         completed_at_epoch_ms: Optional[int] = None,
+        owner_xid: Optional[str] = None,
     ) -> None:
         # Outside the retry: the conflict check compares the stored completion to ours.
         completed_at = (
@@ -3217,7 +3305,9 @@ class SystemDatabase(ABC):
         @db_retry(sys_db=self)
         def record_operation_result_retry() -> None:
             with self.engine.begin() as c:
-                self._record_operation_result_txn(result, completed_at, c)
+                self._record_operation_result_txn(
+                    result, completed_at, c, owner_xid=owner_xid
+                )
             DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT)
 
         record_operation_result_retry()
@@ -3241,11 +3331,12 @@ class SystemDatabase(ABC):
         # Capture ids outside the retry: db_retry may re-run its body, but function_id must increment only once.
         workflow_id = ctx.workflow_id
         function_id = ctx.function_id
+        owner_xid = current_owner_xid(workflow_id, ctx)
 
         @db_retry(sys_db=self)
         def record() -> None:
-            # Because there's no corresponding check, we do nothing on conflict
-            # and do not raise a DBOSWorkflowConflictIDError
+            # A duplicate row is a retry of this same record, so do nothing on conflict.
+            # Lost ownership still raises DBOSWorkflowConflictIDError from the check below.
             sql = (
                 self.dialect.insert(SystemSchema.operation_outputs)
                 .values(
@@ -3264,6 +3355,8 @@ class SystemDatabase(ABC):
                 .on_conflict_do_nothing()
             )
             with self.engine.begin() as c:
+                if owner_xid is not None:
+                    self._check_owner_txn(c, workflow_id, owner_xid)
                 c.execute(sql)
 
         record()
@@ -3428,6 +3521,7 @@ class SystemDatabase(ABC):
         function_id: Optional[int],
         function_name: str,
         send_to_forks: bool,
+        step_workflow_id: Optional[str] = None,
     ) -> None:
         """Send one or more messages in a single transaction.
 
@@ -3438,6 +3532,9 @@ class SystemDatabase(ABC):
         `function_name` is the name recorded for that step. Each message also
         provides its own idempotency via the primary key constraint on
         `message_uuid`.
+
+        When called from inside a step, `step_workflow_id` names the enclosing workflow:
+        no step is recorded, but the send lands only while the caller still owns it.
 
         When `send_to_forks` is set, every message is delivered not only to its
         `destination_id` but also to every workflow recursively forked from it
@@ -3452,6 +3549,7 @@ class SystemDatabase(ABC):
                 function_id=function_id,
                 function_name=function_name,
                 send_to_forks=send_to_forks,
+                step_workflow_id=step_workflow_id,
             )
 
     def send_bulk_with_connection(
@@ -3492,6 +3590,7 @@ class SystemDatabase(ABC):
         function_id: Optional[int],
         function_name: str,
         send_to_forks: bool,
+        step_workflow_id: Optional[str] = None,
     ) -> None:
         start_time = int(time.time() * 1000)
 
@@ -3599,6 +3698,11 @@ class SystemDatabase(ABC):
             self._record_operation_result_txn(
                 output, int(time.time() * 1000), conn=conn
             )
+        elif step_workflow_id is not None:
+            # After the insert, in the order the recorded send locks, so they cannot deadlock.
+            owner_xid = current_owner_xid(step_workflow_id)
+            if owner_xid is not None:
+                self._check_owner_txn(conn, step_workflow_id, owner_xid)
 
     @db_retry()
     def recv_setup(
@@ -3637,12 +3741,8 @@ class SystemDatabase(ABC):
         # Insert an event to the notifications map, so the listener can signal it when a message is received.
         payload = f"{workflow_uuid}::{topic}"
         event = LoopAwareEvent()
-        success, _ = self.notifications_map.set(payload, event, (workflow_uuid, topic))
-        if not success:
-            # This should not happen, but if it does, it means the workflow is executed concurrently.
-            # set() incremented the existing entry's count, so undo that before raising.
-            self.notifications_map.pop(payload)
-            raise DBOSWorkflowConflictIDError(workflow_uuid)
+        # A stale local execution may already wait here; both wake, and its consume fails the ownership check.
+        self.notifications_map.add(payload, event, (workflow_uuid, topic))
 
         try:
             # Check if an unconsumed message is already in the database.
@@ -3653,7 +3753,7 @@ class SystemDatabase(ABC):
                 workflow_uuid, timeout_function_id, timeout_seconds
             )
         except:
-            self.notifications_map.pop(payload)
+            self.notifications_map.pop(payload, event)
             raise
 
         return False, event, actual_timeout, payload, start_time
@@ -3822,7 +3922,7 @@ class SystemDatabase(ABC):
                     self.recv_check(workflow_uuid, topic, event)
             return self.recv_consume(workflow_uuid, function_id, topic, start_time)
         finally:
-            self.notifications_map.pop(payload)
+            self.notifications_map.pop(payload, event)
 
     async def _run_event_setup_async(
         self,
@@ -3836,16 +3936,12 @@ class SystemDatabase(ABC):
 
         The worker thread cannot be cancelled, so it finishes registering in
         event_map even after cancellation abandons the coroutine before its
-        try/finally cleanup is in place. A leftover recv entry makes the next
-        recv on the same workflow and topic fail with
-        DBOSWorkflowConflictIDError -- a spurious "duplicate execution" that
-        parks the caller in await_workflow_result forever; a leftover
-        get_event entry leaks. So on cancellation, wait for the thread inline
-        and undo its registration *before* re-raising CancelledError: once the
-        cancelled call returns, no stale entry remains, so there is no window
-        for a concurrent recv to trip over. If a further cancellation
-        interrupts that wait, fall back to deferred cleanup via a done-callback
-        so an impatient caller is not blocked on the thread.
+        try/finally cleanup is in place, and that waiter would leak. So on
+        cancellation, wait for the thread inline and undo its registration
+        *before* re-raising CancelledError. Cleaning up inline rather than in a
+        done-callback means it cannot be skipped by an event loop that shuts
+        down first. If a further cancellation interrupts that wait, fall back
+        to a done-callback so an impatient caller is not blocked on the thread.
         """
         setup_task = asyncio.create_task(asyncio.to_thread(setup_fn, *args))
         try:
@@ -3859,7 +3955,7 @@ class SystemDatabase(ABC):
                     return
                 result = task.result()
                 if not result[0]:
-                    event_map.pop(result[3])
+                    event_map.pop(result[3], result[1])
 
             # Wait for the thread to finish, then undo its registration. A
             # second cancellation lands in the except below; an exception from
@@ -3918,7 +4014,7 @@ class SystemDatabase(ABC):
                 start_time,
             )
         finally:
-            self.notifications_map.pop(payload)
+            self.notifications_map.pop(payload, event)
 
     @abstractmethod
     def _notification_listener(self) -> None:
@@ -4054,24 +4150,21 @@ class SystemDatabase(ABC):
         else:
             dbos_logger.debug(f"Running sleep, id: {function_id}, seconds: {seconds}")
             end_time = time.time() + seconds
-            try:
-                self.record_operation_result(
-                    {
-                        "workflow_uuid": workflow_uuid,
-                        "function_id": function_id,
-                        "function_name": function_name,
-                        "started_at_epoch_ms": start_time,
-                        "output": DBOSPortableJSON.serialize(end_time),
-                        "error": None,
-                        "serialization": DBOSPortableJSON.name(),
-                        "child_workflow_id": None,
-                    },
-                    completed_at_epoch_ms=(
-                        int(end_time * 1000) if project_completion_time else None
-                    ),
-                )
-            except DBOSWorkflowConflictIDError:
-                pass
+            self.record_operation_result(
+                {
+                    "workflow_uuid": workflow_uuid,
+                    "function_id": function_id,
+                    "function_name": function_name,
+                    "started_at_epoch_ms": start_time,
+                    "output": DBOSPortableJSON.serialize(end_time),
+                    "error": None,
+                    "serialization": DBOSPortableJSON.name(),
+                    "child_workflow_id": None,
+                },
+                completed_at_epoch_ms=(
+                    int(end_time * 1000) if project_completion_time else None
+                ),
+            )
         return max(0, end_time - time.time())
 
     @db_retry()
@@ -4163,6 +4256,7 @@ class SystemDatabase(ABC):
             serialization_type,
             self.serializer,
         )
+        owner_xid = current_owner_xid(workflow_uuid)
 
         with self.engine.begin() as c:
             c.execute(
@@ -4198,6 +4292,9 @@ class SystemDatabase(ABC):
                     },
                 )
             )
+            # After the writes, in the order the workflow-level writes lock, so they cannot deadlock.
+            if owner_xid is not None:
+                self._check_owner_txn(c, workflow_uuid, owner_xid)
         # Notify only after commit, so a woken get_event sees the value.
         self._signal_notification(
             _dbos_workflow_events_channel, f"{workflow_uuid}::{key}"
@@ -4336,12 +4433,7 @@ class SystemDatabase(ABC):
 
         payload = f"{target_uuid}::{key}"
         event = LoopAwareEvent()
-        success, existing_event = self.workflow_events_map.set(
-            payload, event, (target_uuid, key)
-        )
-        if not success:
-            # Key already exists, wait on the existing event
-            event = existing_event
+        self.workflow_events_map.add(payload, event, (target_uuid, key))
 
         try:
             # Check if the key is already in the database
@@ -4356,7 +4448,7 @@ class SystemDatabase(ABC):
                     timeout_seconds,
                 )
         except:
-            self.workflow_events_map.pop(payload)
+            self.workflow_events_map.pop(payload, event)
             raise
 
         return False, event, actual_timeout, payload, start_time
@@ -4456,7 +4548,7 @@ class SystemDatabase(ABC):
                     self.get_event_check(target_uuid, key, event)
             return self.get_event_consume(target_uuid, key, start_time, caller_ctx)
         finally:
-            self.workflow_events_map.pop(payload)
+            self.workflow_events_map.pop(payload, event)
 
     async def get_event_async(
         self,
@@ -4497,7 +4589,7 @@ class SystemDatabase(ABC):
                 caller_ctx,
             )
         finally:
-            self.workflow_events_map.pop(payload)
+            self.workflow_events_map.pop(payload, event)
 
     @db_retry()
     def get_queue_partitions(self, queue_name: str) -> List[str]:
@@ -4611,6 +4703,7 @@ class SystemDatabase(ABC):
                 .where(ws.c.workflow_uuid.in_(timed_out))
                 .values(
                     status=WorkflowStatusString.CANCELLED.value,
+                    owner_xid=None,
                     queue_name=None,
                     deduplication_id=None,
                     started_at_epoch_ms=None,
@@ -4629,6 +4722,8 @@ class SystemDatabase(ABC):
         queue_partition_key: Optional[str],
         local_running_count: int = 0,
         partition_local_running_count: int = 0,
+        *,
+        owner_xid: Optional[str] = None,
     ) -> List[str]:
         start_time_ms = int(time.time() * 1000)
         ws = SystemSchema.workflow_status
@@ -4846,6 +4941,7 @@ class SystemDatabase(ABC):
                     )
                     .values(
                         status=WorkflowStatusString.PENDING.value,
+                        owner_xid=owner_xid,
                         application_version=app_version,
                         executor_id=executor_id,
                         # Claim it, so the unclaimed partition drains as workflows run.
@@ -4890,6 +4986,8 @@ class SystemDatabase(ABC):
         executor_id: str,
         app_version: str,
         max_tasks: int = sys.maxsize,
+        *,
+        owner_xid: Optional[str] = None,
     ) -> List[str]:
         """Batch dequeue from a partitioned queue, optimized for the specific
         case where partition_concurrency=1. All other cases iterate and dequeue
@@ -5039,6 +5137,7 @@ class SystemDatabase(ABC):
                 .where(claim_guard)
                 .values(
                     status=WorkflowStatusString.PENDING.value,
+                    owner_xid=owner_xid,
                     application_version=app_version,
                     executor_id=executor_id,
                     # Claim the row, as the unpartitioned dequeue does.
@@ -5095,6 +5194,7 @@ class SystemDatabase(ABC):
                 .where(SystemSchema.workflow_status.c.executor_id.in_(executor_ids))
                 .values(
                     status=WorkflowStatusString.ENQUEUED.value,
+                    owner_xid=None,
                     started_at_epoch_ms=None,
                     updated_at=self._now_ms_sql(),
                     queue_name=sa.func.coalesce(
@@ -5207,7 +5307,7 @@ class SystemDatabase(ABC):
         self,
         status: WorkflowStatusInternal,
         *,
-        owner_xid: Optional[str],
+        creator_xid: Optional[str],
         reuse_policy: Optional[WorkflowIDReusePolicy] = None,
     ) -> tuple[WorkflowStatuses, bool]:
         """
@@ -5217,7 +5317,7 @@ class SystemDatabase(ABC):
             wf_status, should_execute = self._insert_workflow_status(
                 status,
                 conn,
-                owner_xid=owner_xid,
+                creator_xid=creator_xid,
                 reuse_policy=reuse_policy,
             )
         DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_INITWF_COMMIT)
@@ -5228,20 +5328,28 @@ class SystemDatabase(ABC):
         self,
         status: WorkflowStatusInternal,
         *,
-        owner_xid: str,
+        creator_xid: str,
         parent_workflow_id: str,
         parent_function_id: int,
         function_name: str,
         started_at_epoch_ms: int,
         reuse_policy: Optional[WorkflowIDReusePolicy] = None,
+        parent_owner_xid: Optional[str] = None,
     ) -> tuple[WorkflowStatuses, bool]:
-        """Insert a child's status row and record it as the parent's step in one transaction, so a crash leaves both or neither."""
+        """Insert a child's status row and record it as the parent's step in one transaction, so a crash leaves both or neither.
+
+        parent_owner_xid defaults to the ambient context's token; the inline child path passes
+        the parent's, since it runs inside the child's context."""
         child_workflow_id = status["workflow_uuid"]
+        if parent_owner_xid is None:
+            parent_owner_xid = current_owner_xid(parent_workflow_id)
         with self.engine.begin() as conn:
+            if parent_owner_xid is not None:
+                self._check_owner_txn(conn, parent_workflow_id, parent_owner_xid)
             result = self._insert_workflow_status(
                 status,
                 conn,
-                owner_xid=owner_xid,
+                creator_xid=creator_xid,
                 reuse_policy=reuse_policy,
             )
             inserted = conn.execute(
@@ -5271,7 +5379,9 @@ class SystemDatabase(ABC):
                 ).fetchone()
                 # Same child means an idempotent db_retry; a different child means nondeterminism.
                 if existing is None or existing[0] != child_workflow_id:
-                    raise DBOSWorkflowConflictIDError(parent_workflow_id)
+                    raise DBOSStepNondeterminismError(
+                        parent_workflow_id, parent_function_id
+                    )
         DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_INITWF_COMMIT)
         return result
 
@@ -5387,7 +5497,7 @@ class SystemDatabase(ABC):
                     "serialization": status["serialization"],
                     "queue_partition_key": status["queue_partition_key"],
                     "parent_workflow_id": status["parent_workflow_id"],
-                    "owner_xid": None,
+                    "creator_xid": None,
                     "delay_until_epoch_ms": status["delay_until_epoch_ms"],
                     "attributes": status["attributes"],
                     "schedule_name": status["schedule_name"],
@@ -5442,7 +5552,7 @@ class SystemDatabase(ABC):
         status: WorkflowStatusInternal,
         conn: Union[sa.Connection, Session],
         *,
-        owner_xid: Optional[str] = None,
+        creator_xid: Optional[str] = None,
         reuse_policy: Optional[WorkflowIDReusePolicy] = None,
     ) -> tuple[WorkflowStatuses, bool]:
         """
@@ -5457,7 +5567,7 @@ class SystemDatabase(ABC):
         return self._insert_workflow_status(
             status,
             conn,
-            owner_xid=owner_xid,
+            creator_xid=creator_xid,
             reuse_policy=reuse_policy,
         )
 
@@ -5525,11 +5635,15 @@ class SystemDatabase(ABC):
         stmt = self._stream_insert_stmt(
             workflow_uuid, function_id, key, serialized_value, serialization
         )
+        owner_xid = current_owner_xid(workflow_uuid)
 
         while True:
             try:
                 with self.engine.begin() as c:
                     c.execute(stmt)
+                    # After the insert, in the order the workflow-level writes lock, so they cannot deadlock.
+                    if owner_xid is not None:
+                        self._check_owner_txn(c, workflow_uuid, owner_xid)
                 self._signal_notification(
                     _dbos_streams_channel, f"{workflow_uuid}::{key}"
                 )
@@ -5647,12 +5761,13 @@ class SystemDatabase(ABC):
         and the wait is not lost.
         """
         payload = f"{workflow_uuid}::{key}"
-        _, event = self.streams_map.set(payload, LoopAwareEvent(), (workflow_uuid, key))
+        event = LoopAwareEvent()
+        self.streams_map.add(payload, event, (workflow_uuid, key))
         return event, payload
 
-    def unregister_stream_listener(self, payload: str) -> None:
+    def unregister_stream_listener(self, payload: str, event: LoopAwareEvent) -> None:
         """Drop a previously registered stream listener event."""
-        self.streams_map.pop(payload)
+        self.streams_map.pop(payload, event)
 
     @db_retry()
     def read_stream_value(
@@ -6233,10 +6348,9 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.debounce_deadline_epoch_ms,
                         SystemSchema.workflow_status.c.is_debounced,
                         SystemSchema.workflow_status.c.application_name,
-                        # owner_xid is intentionally omitted: it is a transient
-                        # transaction-ownership token, not logical workflow state
-                        # (get_workflow_status also returns None for it), and a
-                        # source database's xid is meaningless in the target.
+                        # creator_xid and owner_xid are intentionally omitted: they
+                        # are transient tokens, not logical workflow state,
+                        # and a source database's tokens are meaningless in the target.
                     )
                     .select_from(
                         SystemSchema.workflow_status.outerjoin(

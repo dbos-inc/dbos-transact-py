@@ -18,7 +18,7 @@ from dbos import (
     SetWorkflowID,
     WorkflowStatusString,
 )
-from dbos._error import DBOSQueryTimeoutError, DBOSWorkflowConflictIDError
+from dbos._error import DBOSQueryTimeoutError, DBOSStepNondeterminismError
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import DefaultSerializer
 from dbos._sys_db import OperationResultInternal, SystemDatabase
@@ -1711,7 +1711,7 @@ def test_step_conflict_over_child_workflow_row(dbos: DBOS) -> None:
         "started_at_epoch_ms": int(time.time() * 1000),
         "child_workflow_id": None,
     }
-    with pytest.raises(DBOSWorkflowConflictIDError):
+    with pytest.raises(DBOSStepNondeterminismError):
         # Explicit far-future completion time so it can't equal the child row's same-millisecond completed_at.
         dbos._sys_db.record_operation_result(
             result, completed_at_epoch_ms=int(time.time() * 1000) + 3_600_000
@@ -1742,7 +1742,7 @@ def test_step_conflict_over_row_without_completion(dbos: DBOS) -> None:
         "started_at_epoch_ms": int(time.time() * 1000),
         "child_workflow_id": None,
     }
-    with pytest.raises(DBOSWorkflowConflictIDError):
+    with pytest.raises(DBOSStepNondeterminismError):
         dbos._sys_db.record_operation_result(result)
 
 

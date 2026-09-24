@@ -17,6 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
 from dbos import DBOS, AsyncSQLAlchemyDatasource, SetWorkflowID, SQLAlchemyDatasource
+from dbos._context import get_local_dbos_context
 from dbos._datasource import RecordedResult
 from dbos._datasource_postgres import PostgresAsyncDatasource, PostgresSyncDatasource
 from dbos._datasource_sqlite import SqliteAsyncDatasource, SqliteSyncDatasource
@@ -38,9 +39,8 @@ from tests.conftest import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-# A winner that checkpoints its step keeps the workflow, so the loser parks at the lost
-# race without ever adopting its result; one that vanishes before checkpointing leaves
-# nobody to finish it, so the loser must replay and carry on instead.
+# A winner that took ownership keeps the workflow, so the loser parks at the lost race
+# without ever adopting its result; if the loser still owns it, it replays and carries on.
 _LOST_RACE_CASES = [
     pytest.param(True, 1, 0, id="winner-alive"),
     pytest.param(False, 2, 1, id="winner-gone"),
@@ -79,6 +79,22 @@ def _winner_step_row(conn: Any, wfid: str, step_name: str) -> dict[str, Any]:
         )
     ).mappings()
     return dict(row.one())
+
+
+def _set_owner(dbos: DBOS, wfid: str, owner_xid: Optional[str]) -> None:
+    with dbos._sys_db.engine.begin() as conn:
+        conn.execute(
+            sa.update(SystemSchema.workflow_status)
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+            .values(owner_xid=owner_xid)
+        )
+
+
+def _reclaim_ownership(dbos: DBOS) -> None:
+    """Hand the workflow back to the running execution, so its outcome write lands."""
+    ctx = get_local_dbos_context()
+    assert ctx is not None and ctx.owner_xid is not None
+    _set_owner(dbos, ctx.workflow_id, ctx.owner_xid)
 
 
 def _checkpointed_steps(conn: Any, wfid: str) -> list[str]:
@@ -638,22 +654,17 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
 ) -> None:
     """A duplicate execution that loses the witness-row race stops with a workflow
     conflict instead of surfacing the primary-key IntegrityError (#812) or carrying on
-    with the winner's result (#818). It replays only when the conflicting row may be
-    its own, from an attempt whose commit was ambiguously lost."""
+    with the winner's result (#818) once it no longer owns the workflow."""
     _race_side_effects.create(sync_ds.engine, checkfirst=True)
     call_count = {"n": 0}
     should_fail = {"v": False}
-    winner_step: dict[str, Any] = {}
+    steal = {"v": False}
 
     def step_fn() -> str:
         call_count["n"] += 1
-        # Populated after the winning run: the live duplicate's step checkpoint, planted
-        # mid-transaction because that is what tells a loser someone else owns the workflow.
-        if winner_step:
-            with dbos._sys_db.engine.begin() as conn:
-                conn.execute(
-                    sa.insert(SystemSchema.operation_outputs).values(**winner_step)
-                )
+        # Set after the winning run: another execution takes the workflow mid-transaction.
+        if steal["v"]:
+            _set_owner(dbos, wfid, "another-execution")
         sync_ds.sql_session().execute(
             _race_side_effects.insert().values(tag=f"run-{call_count['n']}")
         )
@@ -666,7 +677,8 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
         try:
             return sync_ds.run_tx_step(None, step_fn)
         except DBOSWorkflowConflictIDError:
-            # A real duplicate parks here instead; caught to keep the assertion local.
+            # A real duplicate parks here instead; caught and reclaimed to keep the assertion local.
+            _reclaim_ownership(dbos)
             return "conflicted"
 
     wfid = str(uuid.uuid4())
@@ -707,8 +719,7 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
     with SetWorkflowID(wfid):
         assert my_workflow() == "result-1"
     assert call_count["n"] == 1
-    with dbos._sys_db.engine.connect() as conn:
-        winner_step.update(_winner_step_row(conn, wfid, step_fn.__qualname__))
+    steal["v"] = True
 
     # A loser whose body succeeds: the collision happens on the result-recording insert.
     forget_workflow()
@@ -857,17 +868,17 @@ def test_sync_ds_duplicate_execution_stops_at_the_lost_race(
 ) -> None:
     """A duplicate execution that loses the datasource race parks where an ordinary
     step's loser parks, instead of replaying the winner's result and going on to run
-    the workflow's next step with it (#818) -- but only while a winner is still there
-    to finish the workflow, which its step checkpoint is the evidence of."""
+    the workflow's next step with it (#818) -- but only once the winner owns the workflow.
+    """
     reserve_calls = {"n": 0}
     emails_sent = {"n": 0}
     winner_step: dict[str, Any] = {}
 
     def reserve() -> str:
         reserve_calls["n"] += 1
-        # The winner checkpoints while the loser's transaction is open: the instant that
-        # hands it the workflow, so recovery reaches the loser's park.
+        # The winner takes the workflow and checkpoints while the loser's transaction is open.
         if reserve_calls["n"] > 1 and winner_checkpoints:
+            _set_owner(dbos, wfid, "another-execution")
             with dbos._sys_db.engine.begin() as conn:
                 conn.execute(
                     sa.insert(SystemSchema.operation_outputs).values(**winner_step)
@@ -1453,23 +1464,18 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
 ) -> None:
     """A duplicate execution that loses the witness-row race stops with a workflow
     conflict instead of surfacing the primary-key IntegrityError (#812) or carrying on
-    with the winner's result (#818). It replays only when the conflicting row may be
-    its own, from an attempt whose commit was ambiguously lost."""
+    with the winner's result (#818) once it no longer owns the workflow."""
     async with async_ds.engine.begin() as conn:
         await conn.run_sync(_race_side_effects.create, checkfirst=True)
     call_count = {"n": 0}
     should_fail = {"v": False}
-    winner_step: dict[str, Any] = {}
+    steal = {"v": False}
 
     async def step_fn() -> str:
         call_count["n"] += 1
-        # Populated after the winning run: the live duplicate's step checkpoint, planted
-        # mid-transaction because that is what tells a loser someone else owns the workflow.
-        if winner_step:
-            with dbos._sys_db.engine.begin() as conn:
-                conn.execute(
-                    sa.insert(SystemSchema.operation_outputs).values(**winner_step)
-                )
+        # Set after the winning run: another execution takes the workflow mid-transaction.
+        if steal["v"]:
+            _set_owner(dbos, wfid, "another-execution")
         await async_ds.sql_session().execute(
             _race_side_effects.insert().values(tag=f"run-{call_count['n']}")
         )
@@ -1482,7 +1488,8 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
         try:
             return await async_ds.run_tx_step_async(None, step_fn)
         except DBOSWorkflowConflictIDError:
-            # A real duplicate parks here instead; caught to keep the assertion local.
+            # A real duplicate parks here instead; caught and reclaimed to keep the assertion local.
+            _reclaim_ownership(dbos)
             return "conflicted"
 
     wfid = str(uuid.uuid4())
@@ -1525,8 +1532,7 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
     with SetWorkflowID(wfid):
         assert await my_workflow() == "result-1"
     assert call_count["n"] == 1
-    with dbos._sys_db.engine.connect() as sys_conn:
-        winner_step.update(_winner_step_row(sys_conn, wfid, step_fn.__qualname__))
+    steal["v"] = True
 
     # A loser whose body succeeds: the collision happens on the result-recording insert.
     forget_workflow()
@@ -1592,9 +1598,9 @@ async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
 
     async def reserve() -> str:
         reserve_calls["n"] += 1
-        # The winner checkpoints while the loser's transaction is open: the instant that
-        # hands it the workflow, so recovery reaches the loser's park.
+        # The winner takes the workflow and checkpoints while the loser's transaction is open.
         if reserve_calls["n"] > 1 and winner_checkpoints:
+            _set_owner(dbos, wfid, "another-execution")
             with dbos._sys_db.engine.begin() as conn:
                 conn.execute(
                     sa.insert(SystemSchema.operation_outputs).values(**winner_step)

@@ -68,6 +68,7 @@ class DBOSErrorCode(Enum):
     StepTimeout = 18
     QueryTimeout = 26
     WorkflowIDInUse = 27
+    StepNondeterminism = 28
 
 
 #######################################
@@ -265,6 +266,24 @@ class DBOSUnexpectedStepError(DBOSException):
         )
 
 
+class DBOSStepNondeterminismError(DBOSException):
+    """Exception raised when an execution records a step ID that it already recorded differently."""
+
+    def __init__(self, workflow_id: str, step_id: int) -> None:
+        self.inputs = (workflow_id, step_id)
+        super().__init__(
+            f"Step {step_id} of workflow {workflow_id} was recorded twice by the same execution with different results. Check that your workflow is deterministic.",
+            dbos_error_code=DBOSErrorCode.StepNondeterminism.value,
+        )
+
+    def __reduce__(self) -> Any:
+        # Tell pickle how to reconstruct this object
+        return (
+            self.__class__,
+            self.inputs,
+        )
+
+
 class DBOSPatchNondeterminismError(DBOSException):
     """Exception raised when patching detects a non-deterministic workflow execution."""
 
@@ -380,10 +399,10 @@ class DBOSWorkflowCancelledError(DBOSBaseException):
 
 
 class DBOSWorkflowConflictIDError(DBOSBaseException):
-    """BaseException raised when a workflow database record already exists."""
+    """BaseException raised when an execution no longer owns its workflow, so it must stop and adopt the owner's outcome."""
 
     def __init__(self, workflow_id: str):
         super().__init__(
-            f"Conflicting workflow ID {workflow_id}",
+            f"Workflow {workflow_id} is no longer owned by this execution",
             dbos_error_code=DBOSErrorCode.ConflictingIDError.value,
         )

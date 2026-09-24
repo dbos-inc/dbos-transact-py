@@ -1,15 +1,21 @@
 # type: ignore
 
 import os
+import threading
+import time
+import uuid
+from typing import Any, List
 from unittest.mock import mock_open
 from urllib.parse import quote
 
+import psycopg
 import pytest
+import sqlalchemy as sa
 from sqlalchemy import NullPool, event
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DBAPIError, InternalError, OperationalError
 
 # Public API
-from dbos import DBOS
+from dbos import DBOS, DBOSClient, SetWorkflowID
 from dbos._dbos_config import (
     ConfigFile,
     DBOSConfig,
@@ -20,8 +26,11 @@ from dbos._dbos_config import (
     translate_dbos_config_to_config_file,
 )
 from dbos._error import DBOSException, DBOSInitializationError
+from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
+from dbos._utils import retriable_postgres_exception
+from tests.conftest import postgres_urls, retry_until_success
 
 mock_filename = "dbos-config.yaml"
 original_open = __builtins__["open"]
@@ -605,6 +614,204 @@ def test_translate_dbosconfig_observability_query_timeout_sec():
                 observability_query_timeout_sec=bad,
             )
         assert "observability_query_timeout_sec" in str(exc_info.value)
+
+
+def test_translate_dbosconfig_idle_transaction_timeout_sec():
+    # A valid value is threaded into the database config, including a non-positive one, which disables it.
+    for ok_value in [5.0, 0]:
+        ok: DBOSConfig = {
+            "name": "test-app",
+            "sys_db_idle_transaction_timeout_sec": ok_value,
+        }
+        translated = translate_dbos_config_to_config_file(ok)
+        assert translated["database"]["sys_db_idle_transaction_timeout_sec"] == ok_value
+
+    for bad in [float("nan"), float("inf")]:
+        with pytest.raises(DBOSInitializationError) as exc_info:
+            translate_dbos_config_to_config_file(
+                {"name": "test-app", "sys_db_idle_transaction_timeout_sec": bad}
+            )
+        assert "sys_db_idle_transaction_timeout_sec" in str(exc_info.value)
+
+        with pytest.raises(DBOSInitializationError) as exc_info:
+            SystemDatabase.create(
+                system_database_url="sqlite:///dbos.sqlite",
+                engine_kwargs={},
+                engine=None,
+                schema=None,
+                serializer=DefaultSerializer(),
+                executor_id=None,
+                idle_transaction_timeout_sec=bad,
+            )
+        assert "sys_db_idle_transaction_timeout_sec" in str(exc_info.value)
+
+
+SETTING = "SHOW idle_in_transaction_session_timeout"
+
+
+def _make_sysdb(**kwargs: Any) -> SystemDatabase:
+    kwargs.setdefault("engine_kwargs", {"pool_size": 1, "max_overflow": 0})
+    return SystemDatabase.create(
+        system_database_url=postgres_urls()[1],
+        engine=kwargs.pop("engine", None),
+        schema="dbos",
+        serializer=DefaultSerializer(),
+        executor_id=None,
+        **kwargs,
+    )
+
+
+def _settings(engine: sa.Engine, checkouts: int = 2) -> List[str]:
+    """The setting as seen by consecutive checkouts of the same pooled connection."""
+    seen = []
+    for _ in range(checkouts):
+        with engine.connect() as c:
+            seen.append(str(c.execute(sa.text(SETTING)).scalar()))
+    return seen
+
+
+def _server_default() -> str:
+    engine = sa.create_engine(postgres_urls()[1])
+    try:
+        with engine.connect() as c:
+            return str(c.execute(sa.text(SETTING)).scalar())
+    finally:
+        engine.dispose()
+
+
+def test_default_timeout_survives_pool_reuse(skip_with_sqlite: None) -> None:
+    # A bare SET in the connect hook is undone by the pool's rollback on return.
+    sys_db = _make_sysdb()
+    try:
+        assert _settings(sys_db.engine) == ["1min", "1min"]
+    finally:
+        sys_db.destroy()
+
+
+def test_custom_and_disabled_timeout(skip_with_sqlite: None) -> None:
+    sys_db = _make_sysdb(idle_transaction_timeout_sec=5)
+    try:
+        assert _settings(sys_db.engine) == ["5s", "5s"]
+    finally:
+        sys_db.destroy()
+
+    server_default = _server_default()
+    if server_default == "1min":
+        pytest.skip(
+            "the server default equals DBOS's, so disabling cannot be told apart"
+        )
+    sys_db = _make_sysdb(idle_transaction_timeout_sec=0)
+    try:
+        assert _settings(sys_db.engine) == [server_default, server_default]
+    finally:
+        sys_db.destroy()
+
+
+def test_user_setting_takes_precedence(skip_with_sqlite: None) -> None:
+    sys_db = _make_sysdb(
+        engine_kwargs={
+            "pool_size": 1,
+            "max_overflow": 0,
+            "connect_args": {"options": "-c idle_in_transaction_session_timeout=7000"},
+        },
+    )
+    try:
+        assert _settings(sys_db.engine) == ["7s", "7s"]
+    finally:
+        sys_db.destroy()
+
+
+def test_idle_transaction_kill_is_retriable() -> None:
+    """The server's idle-in-transaction kill is retried even when the connection is not flagged invalidated."""
+    orig = psycopg.errors.lookup("25P03")(
+        "terminating connection due to idle-in-transaction timeout"
+    )
+    error = InternalError("SELECT 1", {}, orig)
+    assert not error.connection_invalidated
+    assert retriable_postgres_exception(error)
+
+
+def test_client_configures_idle_transaction_timeout(skip_with_sqlite: None) -> None:
+    client = DBOSClient(
+        system_database_url=postgres_urls()[1],
+        system_database_pool_size=1,
+        sys_db_idle_transaction_timeout_sec=5,
+    )
+    try:
+        assert _settings(client._sys_db.engine) == ["5s", "5s"]
+    finally:
+        client.destroy()
+
+
+def test_custom_engine_is_untouched(skip_with_sqlite: None) -> None:
+    engine = sa.create_engine(postgres_urls()[1], pool_size=1, max_overflow=0)
+    sys_db = _make_sysdb(engine=engine, engine_kwargs={})
+    try:
+        server_default = _server_default()
+        if server_default == "1min":
+            pytest.skip(
+                "the server default equals DBOS's, so an untouched engine cannot be told apart"
+            )
+        assert _settings(sys_db.engine) == [server_default, server_default]
+    finally:
+        sys_db.destroy()
+        engine.dispose()
+
+
+def test_stranded_lock_does_not_block_cancel(
+    skip_with_sqlite: None, dbos: DBOS, config: DBOSConfig
+) -> None:
+    """A session frozen inside a transaction that holds a workflow's status row is
+    ended by the server, so cancelling that workflow returns instead of hanging."""
+    config["sys_db_idle_transaction_timeout_sec"] = 1
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+    release = threading.Event()
+    started = threading.Event()
+
+    @DBOS.workflow()
+    def blocked_workflow() -> None:
+        started.set()
+        release.wait()
+
+    DBOS.launch()
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        DBOS.start_workflow(blocked_workflow)
+    assert started.wait(10)
+
+    # The frozen client: it locks the row, then never sends another statement.
+    holder = dbos._sys_db.engine.connect()
+    holder.begin()
+    holder.execute(
+        sa.select(SystemSchema.workflow_status.c.workflow_uuid)
+        .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+        .with_for_update()
+    )
+    try:
+        begin = time.monotonic()
+        DBOS.cancel_workflow(wfid)
+        elapsed = time.monotonic() - begin
+        # Waited on the stranded lock, and was released by the timeout, not by the holder.
+        assert 0.5 < elapsed < 15, elapsed
+
+        def cancelled() -> None:
+            status = DBOS.get_workflow_status(wfid)
+            assert status is not None and status.status == "CANCELLED"
+
+        retry_until_success(cancelled, interval=0.1, max_attempts=50)
+
+        # The holder's session is gone; its next statement fails as a lost connection.
+        with pytest.raises(DBAPIError) as exc_info:
+            holder.execute(sa.text("SELECT 1"))
+        assert exc_info.value.connection_invalidated
+    finally:
+        holder.close()
+        release.set()
+
+    # The pool replaces the killed connection.
+    with dbos._sys_db.engine.begin() as c:
+        assert c.execute(sa.text("SELECT 1")).scalar() == 1
 
 
 def test_translate_dbosconfig_run_migrations():

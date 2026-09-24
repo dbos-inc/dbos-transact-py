@@ -596,7 +596,43 @@ def test_stream_notifier_drops_unsendable_payload(
             timeout=10
         ), "notifier stopped delivering after a poison batch"
     finally:
-        sys_db.unregister_stream_listener(payload_key)
+        sys_db.unregister_stream_listener(payload_key, event)
+
+
+def test_stream_reader_keeps_notifications_after_another_joins(dbos: DBOS) -> None:
+    """A reader that joins while an earlier reader's event is set must not detach the earlier reader."""
+    sys_db = dbos._sys_db
+    wfid = str(uuid.uuid4())
+    key = "shared"
+    first_event, payload = sys_db.register_stream_listener(wfid, key)
+    second_event: Any = None
+    try:
+
+        def signal() -> None:
+            # What the listener and poller do on a write: look the key up and set it.
+            entry = sys_db.streams_map.get(payload)
+            assert entry is not None
+            entry.set()
+
+        signal()
+        assert first_event.is_set()
+        # The second reader joins before the first clears its wake.
+        second_event, _ = sys_db.register_stream_listener(wfid, key)
+        assert not second_event.is_set()
+
+        # The first reader's loop clears and waits again; the next write must reach it.
+        first_event.clear()
+        signal()
+        assert first_event.is_set() and second_event.is_set()
+
+        # Clearing one reader's event does not swallow the other's wake.
+        first_event.clear()
+        assert second_event.is_set()
+    finally:
+        sys_db.unregister_stream_listener(payload, first_event)
+        if second_event is not None:
+            sys_db.unregister_stream_listener(payload, second_event)
+    assert sys_db.streams_map.get(payload) is None
 
 
 def test_stream_notifier_survives_flush_error(
@@ -637,7 +673,7 @@ def test_stream_notifier_survives_flush_error(
             timeout=10
         ), "notifier did not resume delivering after a flush error"
     finally:
-        sys_db.unregister_stream_listener(payload_key)
+        sys_db.unregister_stream_listener(payload_key, event)
 
 
 def test_stream_multiple_keys(dbos: DBOS) -> None:
