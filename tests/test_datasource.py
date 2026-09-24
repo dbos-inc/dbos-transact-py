@@ -6,7 +6,7 @@ import inspect
 import pickle
 import sqlite3
 import uuid
-from typing import Any, AsyncGenerator, Generator, Optional
+from typing import Any, AsyncGenerator, Generator, Optional, Union
 
 import psycopg
 import pytest
@@ -16,13 +16,17 @@ from psycopg.errors import SerializationFailure
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
-from dbos import DBOS, AsyncSQLAlchemyDatasource, SetWorkflowID, SQLAlchemyDatasource
+from dbos import (
+    DBOS,
+    AsyncSQLAlchemyDatasource,
+    DBOSConfig,
+    SetWorkflowID,
+    SQLAlchemyDatasource,
+)
 from dbos._datasource import RecordedResult
 from dbos._datasource_postgres import PostgresAsyncDatasource, PostgresSyncDatasource
 from dbos._datasource_sqlite import SqliteAsyncDatasource, SqliteSyncDatasource
 from dbos._error import DBOSException, DBOSWorkflowConflictIDError
-from dbos._schemas import SCHEMA_PLACEHOLDER
-from dbos._schemas.datasource_database import DatasourceSchema
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import deserialize_value
 from dbos._sys_db import WorkflowStatusString
@@ -92,11 +96,12 @@ def _checkpointed_steps(conn: Any, wfid: str) -> list[str]:
 
 
 # Application table used to prove a losing duplicate execution's writes are rolled back.
-_race_side_effects = sa.Table(
-    "race_side_effects",
-    sa.MetaData(schema=SCHEMA_PLACEHOLDER),
-    sa.Column("tag", sa.Text),
-)
+def _race_table(ds: Union[SQLAlchemyDatasource, AsyncSQLAlchemyDatasource]) -> sa.Table:
+    return sa.Table(
+        "race_side_effects",
+        sa.MetaData(schema=ds.schema),
+        sa.Column("tag", sa.Text),
+    )
 
 
 def _skip_if_pg_unreachable(raw_pg_url: str) -> None:
@@ -122,9 +127,9 @@ def _check_both_tables(
     with ds.engine.connect() as conn:
         ds_row = conn.execute(
             sa.select(
-                DatasourceSchema.datasource_outputs.c.step_id,
-                DatasourceSchema.datasource_outputs.c.output,
-            ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+                ds._outputs_table.c.step_id,
+                ds._outputs_table.c.output,
+            ).where(ds._outputs_table.c.workflow_id == wfid)
         ).first()
     assert ds_row is not None, "datasource_outputs row missing"
     assert ds_row.step_id == 1
@@ -149,9 +154,9 @@ async def _async_check_both_tables(
         ds_row = (
             await conn.execute(
                 sa.select(
-                    DatasourceSchema.datasource_outputs.c.step_id,
-                    DatasourceSchema.datasource_outputs.c.output,
-                ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+                    ds._outputs_table.c.step_id,
+                    ds._outputs_table.c.output,
+                ).where(ds._outputs_table.c.workflow_id == wfid)
             )
         ).first()
     assert ds_row is not None, "datasource_outputs row missing"
@@ -415,9 +420,9 @@ def test_sync_ds_retries_on_serialization_error(
     with sync_ds.engine.connect() as conn:
         row = conn.execute(
             sa.select(
-                DatasourceSchema.datasource_outputs.c.output,
-                DatasourceSchema.datasource_outputs.c.error,
-            ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+                sync_ds._outputs_table.c.output,
+                sync_ds._outputs_table.c.error,
+            ).where(sync_ds._outputs_table.c.workflow_id == wfid)
         ).first()
     assert row is not None
     assert row.error is None
@@ -473,13 +478,56 @@ def test_sync_ds_retries_locked_precheck(
     with sync_ds.engine.connect() as conn:
         row = conn.execute(
             sa.select(
-                DatasourceSchema.datasource_outputs.c.output,
-                DatasourceSchema.datasource_outputs.c.error,
-            ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+                sync_ds._outputs_table.c.output,
+                sync_ds._outputs_table.c.error,
+            ).where(sync_ds._outputs_table.c.workflow_id == wfid)
         ).first()
     assert row is not None
     assert row.error is None
     assert row.output is not None
+
+
+def test_sync_ds_keeps_caller_engine_schema_translate_map(
+    sync_ds: SQLAlchemyDatasource, config: DBOSConfig
+) -> None:
+    """A caller engine's own schema_translate_map survives, alongside DBOS's checkpoints."""
+    app_rows = sa.Table("app_rows", sa.MetaData(schema="app"), sa.Column("v", sa.Text))
+    engine = sync_ds.engine.execution_options(
+        schema_translate_map={"app": sync_ds.schema}
+    )
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+    try:
+        ds = SQLAlchemyDatasource.create(
+            sync_ds.engine.url.render_as_string(hide_password=False),
+            engine=engine,
+            schema=sync_ds.schema,
+        )
+        assert ds.engine is engine
+        app_rows.create(ds.engine)
+
+        @ds.transaction
+        def insert_row(v: str) -> str:
+            ds.sql_session().execute(app_rows.insert().values(v=v))
+            return v
+
+        @DBOS.workflow()
+        def wf() -> str:
+            return insert_row("x")
+
+        DBOS.launch()
+        wfid = str(uuid.uuid4())
+        with SetWorkflowID(wfid):
+            assert wf() == "x"
+        with ds.engine.connect() as conn:
+            assert conn.execute(sa.select(app_rows.c.v)).scalars().all() == ["x"]
+            assert conn.execute(
+                sa.select(ds._outputs_table.c.step_id).where(
+                    ds._outputs_table.c.workflow_id == wfid
+                )
+            ).scalars().all() == [1]
+    finally:
+        DBOS.destroy(destroy_registry=True)
 
 
 def test_sync_ds_multiple_steps_in_workflow(
@@ -574,13 +622,13 @@ def test_sync_ds_step_recorded_with_name(
     with sync_ds.engine.connect() as conn:
         ds_rows = conn.execute(
             sa.select(
-                DatasourceSchema.datasource_outputs.c.step_id,
-                DatasourceSchema.datasource_outputs.c.output,
-                DatasourceSchema.datasource_outputs.c.error,
-                DatasourceSchema.datasource_outputs.c.serialization,
+                sync_ds._outputs_table.c.step_id,
+                sync_ds._outputs_table.c.output,
+                sync_ds._outputs_table.c.error,
+                sync_ds._outputs_table.c.serialization,
             )
-            .where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
-            .order_by(DatasourceSchema.datasource_outputs.c.step_id)
+            .where(sync_ds._outputs_table.c.workflow_id == wfid)
+            .order_by(sync_ds._outputs_table.c.step_id)
         ).fetchall()
     assert len(ds_rows) == 3
     for row in ds_rows:
@@ -640,7 +688,8 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
     conflict instead of surfacing the primary-key IntegrityError (#812) or carrying on
     with the winner's result (#818). It replays only when the conflicting row may be
     its own, from an attempt whose commit was ambiguously lost."""
-    _race_side_effects.create(sync_ds.engine, checkfirst=True)
+    race = _race_table(sync_ds)
+    race.create(sync_ds.engine, checkfirst=True)
     call_count = {"n": 0}
     should_fail = {"v": False}
     winner_step: dict[str, Any] = {}
@@ -655,7 +704,7 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
                     sa.insert(SystemSchema.operation_outputs).values(**winner_step)
                 )
         sync_ds.sql_session().execute(
-            _race_side_effects.insert().values(tag=f"run-{call_count['n']}")
+            race.insert().values(tag=f"run-{call_count['n']}")
         )
         if should_fail["v"]:
             raise ValueError("loser's own failure")
@@ -734,13 +783,13 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
 
     # The succeeding loser's writes were discarded and the winner's record still stands.
     with sync_ds.engine.connect() as conn:
-        tags = [row.tag for row in conn.execute(sa.select(_race_side_effects.c.tag))]
+        tags = [row.tag for row in conn.execute(sa.select(race.c.tag))]
         ds_row = conn.execute(
             sa.select(
-                DatasourceSchema.datasource_outputs.c.output,
-                DatasourceSchema.datasource_outputs.c.error,
-                DatasourceSchema.datasource_outputs.c.serialization,
-            ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+                sync_ds._outputs_table.c.output,
+                sync_ds._outputs_table.c.error,
+                sync_ds._outputs_table.c.serialization,
+            ).where(sync_ds._outputs_table.c.workflow_id == wfid)
         ).one()
     assert tags == ["run-1"]
     assert ds_row.error is None  # no loser error was ever recorded
@@ -771,15 +820,16 @@ def test_sync_ds_replays_its_own_lost_commit(
 
     A retriable error meets the row on the retry's result insert; a non-retriable one
     meets it on the error insert. Neither is a duplicate, so both replay."""
+    race = _race_table(sync_ds)
     if sync_ds.engine.dialect.name != "postgresql":
         pytest.skip("only a Postgres-style connection error makes a commit ambiguous")
-    _race_side_effects.create(sync_ds.engine, checkfirst=True)
+    race.create(sync_ds.engine, checkfirst=True)
     call_count = {"n": 0}
 
     def step_fn() -> str:
         call_count["n"] += 1
         sync_ds.sql_session().execute(
-            _race_side_effects.insert().values(tag=f"run-{call_count['n']}")
+            race.insert().values(tag=f"run-{call_count['n']}")
         )
         return f"result-{call_count['n']}"
 
@@ -828,13 +878,13 @@ def test_sync_ds_replays_its_own_lost_commit(
     assert call_count["n"] == expected_attempts
 
     with sync_ds.engine.connect() as conn:
-        tags = [row.tag for row in conn.execute(sa.select(_race_side_effects.c.tag))]
+        tags = [row.tag for row in conn.execute(sa.select(race.c.tag))]
         ds_row = conn.execute(
             sa.select(
-                DatasourceSchema.datasource_outputs.c.output,
-                DatasourceSchema.datasource_outputs.c.error,
-                DatasourceSchema.datasource_outputs.c.serialization,
-            ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+                sync_ds._outputs_table.c.output,
+                sync_ds._outputs_table.c.error,
+                sync_ds._outputs_table.c.serialization,
+            ).where(sync_ds._outputs_table.c.workflow_id == wfid)
         ).one()
     assert tags == ["run-1"]  # only the committed attempt's write survives
     assert ds_row.error is None
@@ -1183,9 +1233,9 @@ async def test_async_ds_retries_on_serialization_error(
         row = (
             await conn.execute(
                 sa.select(
-                    DatasourceSchema.datasource_outputs.c.output,
-                    DatasourceSchema.datasource_outputs.c.error,
-                ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+                    async_ds._outputs_table.c.output,
+                    async_ds._outputs_table.c.error,
+                ).where(async_ds._outputs_table.c.workflow_id == wfid)
             )
         ).first()
     assert row is not None
@@ -1241,9 +1291,9 @@ async def test_async_ds_retries_locked_precheck(
         row = (
             await conn.execute(
                 sa.select(
-                    DatasourceSchema.datasource_outputs.c.output,
-                    DatasourceSchema.datasource_outputs.c.error,
-                ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+                    async_ds._outputs_table.c.output,
+                    async_ds._outputs_table.c.error,
+                ).where(async_ds._outputs_table.c.workflow_id == wfid)
             )
         ).first()
     assert row is not None
@@ -1386,13 +1436,13 @@ async def test_async_ds_step_recorded_with_name(
         ds_rows = (
             await conn.execute(
                 sa.select(
-                    DatasourceSchema.datasource_outputs.c.step_id,
-                    DatasourceSchema.datasource_outputs.c.output,
-                    DatasourceSchema.datasource_outputs.c.error,
-                    DatasourceSchema.datasource_outputs.c.serialization,
+                    async_ds._outputs_table.c.step_id,
+                    async_ds._outputs_table.c.output,
+                    async_ds._outputs_table.c.error,
+                    async_ds._outputs_table.c.serialization,
                 )
-                .where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
-                .order_by(DatasourceSchema.datasource_outputs.c.step_id)
+                .where(async_ds._outputs_table.c.workflow_id == wfid)
+                .order_by(async_ds._outputs_table.c.step_id)
             )
         ).fetchall()
     assert len(ds_rows) == 3
@@ -1455,8 +1505,9 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
     conflict instead of surfacing the primary-key IntegrityError (#812) or carrying on
     with the winner's result (#818). It replays only when the conflicting row may be
     its own, from an attempt whose commit was ambiguously lost."""
+    race = _race_table(async_ds)
     async with async_ds.engine.begin() as conn:
-        await conn.run_sync(_race_side_effects.create, checkfirst=True)
+        await conn.run_sync(race.create, checkfirst=True)
     call_count = {"n": 0}
     should_fail = {"v": False}
     winner_step: dict[str, Any] = {}
@@ -1471,7 +1522,7 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
                     sa.insert(SystemSchema.operation_outputs).values(**winner_step)
                 )
         await async_ds.sql_session().execute(
-            _race_side_effects.insert().values(tag=f"run-{call_count['n']}")
+            race.insert().values(tag=f"run-{call_count['n']}")
         )
         if should_fail["v"]:
             raise ValueError("loser's own failure")
@@ -1552,16 +1603,14 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
 
     # The succeeding loser's writes were discarded and the winner's record still stands.
     async with async_ds.engine.connect() as conn:
-        tags = [
-            row.tag for row in (await conn.execute(sa.select(_race_side_effects.c.tag)))
-        ]
+        tags = [row.tag for row in (await conn.execute(sa.select(race.c.tag)))]
         ds_row = (
             await conn.execute(
                 sa.select(
-                    DatasourceSchema.datasource_outputs.c.output,
-                    DatasourceSchema.datasource_outputs.c.error,
-                    DatasourceSchema.datasource_outputs.c.serialization,
-                ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+                    async_ds._outputs_table.c.output,
+                    async_ds._outputs_table.c.error,
+                    async_ds._outputs_table.c.serialization,
+                ).where(async_ds._outputs_table.c.workflow_id == wfid)
             )
         ).one()
     assert tags == ["run-1"]
@@ -1720,16 +1769,17 @@ async def test_async_ds_replays_its_own_lost_commit(
     expected_attempts: int,
 ) -> None:
     """Async sibling of test_sync_ds_replays_its_own_lost_commit."""
+    race = _race_table(async_ds)
     if async_ds.engine.dialect.name != "postgresql":
         pytest.skip("only a Postgres-style connection error makes a commit ambiguous")
     async with async_ds.engine.begin() as conn:
-        await conn.run_sync(_race_side_effects.create, checkfirst=True)
+        await conn.run_sync(race.create, checkfirst=True)
     call_count = {"n": 0}
 
     async def step_fn() -> str:
         call_count["n"] += 1
         await async_ds.sql_session().execute(
-            _race_side_effects.insert().values(tag=f"run-{call_count['n']}")
+            race.insert().values(tag=f"run-{call_count['n']}")
         )
         return f"result-{call_count['n']}"
 
@@ -1778,16 +1828,14 @@ async def test_async_ds_replays_its_own_lost_commit(
     assert call_count["n"] == expected_attempts
 
     async with async_ds.engine.connect() as conn:
-        tags = [
-            row.tag for row in (await conn.execute(sa.select(_race_side_effects.c.tag)))
-        ]
+        tags = [row.tag for row in (await conn.execute(sa.select(race.c.tag)))]
         ds_row = (
             await conn.execute(
                 sa.select(
-                    DatasourceSchema.datasource_outputs.c.output,
-                    DatasourceSchema.datasource_outputs.c.error,
-                    DatasourceSchema.datasource_outputs.c.serialization,
-                ).where(DatasourceSchema.datasource_outputs.c.workflow_id == wfid)
+                    async_ds._outputs_table.c.output,
+                    async_ds._outputs_table.c.error,
+                    async_ds._outputs_table.c.serialization,
+                ).where(async_ds._outputs_table.c.workflow_id == wfid)
             )
         ).one()
     assert tags == ["run-1"]  # only the committed attempt's write survives
@@ -1803,12 +1851,12 @@ async def test_async_ds_replays_its_own_lost_commit(
 # ---------------------------------------------------------------------------
 
 
-def _checkpoint_step_ids(engine: sa.Engine, wfid: str) -> list[int]:
-    with engine.begin() as conn:
+def _checkpoint_step_ids(ds: SQLAlchemyDatasource, wfid: str) -> list[int]:
+    with ds.engine.begin() as conn:
         return sorted(
             conn.execute(
-                sa.select(DatasourceSchema.datasource_outputs.c.step_id).where(
-                    DatasourceSchema.datasource_outputs.c.workflow_id == wfid
+                sa.select(ds._outputs_table.c.step_id).where(
+                    ds._outputs_table.c.workflow_id == wfid
                 )
             ).scalars()
         )
@@ -1840,14 +1888,14 @@ def test_sync_ds_delete_checkpoints(sync_ds: SQLAlchemyDatasource, dbos: DBOS) -
     other = str(uuid.uuid4())
     with SetWorkflowID(other):
         my_workflow()
-    assert _checkpoint_step_ids(sync_ds.engine, wfid) == [1, 2]
+    assert _checkpoint_step_ids(sync_ds, wfid) == [1, 2]
 
     sync_ds._delete_checkpoints(wfid, 2)
-    assert _checkpoint_step_ids(sync_ds.engine, wfid) == [1]
+    assert _checkpoint_step_ids(sync_ds, wfid) == [1]
     sync_ds._delete_checkpoints(wfid, 1)
-    assert _checkpoint_step_ids(sync_ds.engine, wfid) == []
+    assert _checkpoint_step_ids(sync_ds, wfid) == []
     # Other workflows are untouched.
-    assert _checkpoint_step_ids(sync_ds.engine, other) == [1, 2]
+    assert _checkpoint_step_ids(sync_ds, other) == [1, 2]
 
 
 @pytest.mark.asyncio
@@ -1865,8 +1913,8 @@ async def test_async_ds_delete_checkpoints(
     async def step_ids(wfid: str) -> list[int]:
         async with async_ds.engine.begin() as conn:
             result = await conn.execute(
-                sa.select(DatasourceSchema.datasource_outputs.c.step_id).where(
-                    DatasourceSchema.datasource_outputs.c.workflow_id == wfid
+                sa.select(async_ds._outputs_table.c.step_id).where(
+                    async_ds._outputs_table.c.workflow_id == wfid
                 )
             )
             return sorted(result.scalars())

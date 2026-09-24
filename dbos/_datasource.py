@@ -30,8 +30,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from dbos._context import DBOSContextEnsure, get_local_dbos_context
 from dbos._error import DBOSException, DBOSWorkflowConflictIDError
-from dbos._schemas import SCHEMA_PLACEHOLDER
-from dbos._schemas.datasource_database import DatasourceSchema
+from dbos._schemas.datasource_database import datasource_outputs_table
 from dbos._serialization import (
     DBOSDefaultSerializer,
     Serializer,
@@ -184,8 +183,7 @@ def _register_datasource(
     _get_or_create_dbos_registry().register_datasource(ds)
 
 
-def _delete_checkpoints_sql(workflow_id: str, start_step: int) -> Any:
-    t = DatasourceSchema.datasource_outputs
+def _delete_checkpoints_sql(t: sa.Table, workflow_id: str, start_step: int) -> Any:
     return sa.delete(t).where(
         (t.c.workflow_id == workflow_id) & (t.c.step_id >= start_step)
     )
@@ -216,15 +214,12 @@ class AsyncSQLAlchemyDatasource(ABC):
         self.dialect = sq if database_url.startswith("sqlite") else pg
         self.schema = _resolve_schema(database_url, schema)
         if engine:
-            base_engine = engine
+            self.engine = engine
             self.created_engine = False
         else:
-            base_engine = self._create_engine(database_url, engine_kwargs)
+            self.engine = self._create_engine(database_url, engine_kwargs)
             self.created_engine = True
-        # Translate the placeholder schema to this instance's schema per-engine (None for SQLite = unqualified).
-        self.engine = base_engine.execution_options(
-            schema_translate_map={SCHEMA_PLACEHOLDER: self.schema}
-        )
+        self._outputs_table = datasource_outputs_table(self.schema)
         self.sessionmaker = async_sessionmaker(bind=self.engine)
         self.serializer = serializer
         _register_datasource(self)
@@ -282,7 +277,9 @@ class AsyncSQLAlchemyDatasource(ABC):
     async def _delete_checkpoints(self, workflow_id: str, start_step: int) -> None:
         """Delete this workflow's checkpoints from start_step on."""
         async with self.engine.begin() as conn:
-            await conn.execute(_delete_checkpoints_sql(workflow_id, start_step))
+            await conn.execute(
+                _delete_checkpoints_sql(self._outputs_table, workflow_id, start_step)
+            )
 
     def sql_session(self) -> AsyncSession:
         ctx = get_local_dbos_context()
@@ -297,12 +294,12 @@ class AsyncSQLAlchemyDatasource(ABC):
         async with self.engine.connect() as conn:
             result = await conn.execute(
                 sa.select(
-                    DatasourceSchema.datasource_outputs.c.output,
-                    DatasourceSchema.datasource_outputs.c.error,
-                    DatasourceSchema.datasource_outputs.c.serialization,
+                    self._outputs_table.c.output,
+                    self._outputs_table.c.error,
+                    self._outputs_table.c.serialization,
                 ).where(
-                    DatasourceSchema.datasource_outputs.c.workflow_id == workflow_id,
-                    DatasourceSchema.datasource_outputs.c.step_id == step_id,
+                    self._outputs_table.c.workflow_id == workflow_id,
+                    self._outputs_table.c.step_id == step_id,
                 )
             )
             return _row_to_result(result.first())
@@ -349,7 +346,7 @@ class AsyncSQLAlchemyDatasource(ABC):
     ) -> None:
         """Record this step's outcome, raising _StepAlreadyRecorded if a concurrent execution beat us to it."""
         result = await conn.execute(
-            self.dialect.insert(DatasourceSchema.datasource_outputs)
+            self.dialect.insert(self._outputs_table)
             .values(
                 workflow_id=workflow_id,
                 step_id=step_id,
@@ -359,14 +356,14 @@ class AsyncSQLAlchemyDatasource(ABC):
             )
             .on_conflict_do_nothing(
                 index_elements=[
-                    DatasourceSchema.datasource_outputs.c.workflow_id,
-                    DatasourceSchema.datasource_outputs.c.step_id,
+                    self._outputs_table.c.workflow_id,
+                    self._outputs_table.c.step_id,
                 ]
             )
             # No row back means a concurrent execution's row was already visible to this
             # snapshot. Above READ COMMITTED it can instead surface as a serialization
             # error, which the caller's retry loop converges to this case.
-            .returning(DatasourceSchema.datasource_outputs.c.workflow_id)
+            .returning(self._outputs_table.c.workflow_id)
         )
         if result.first() is None:
             raise _StepAlreadyRecorded()
@@ -579,15 +576,12 @@ class SQLAlchemyDatasource(ABC):
         self.dialect = sq if database_url.startswith("sqlite") else pg
         self.schema = _resolve_schema(database_url, schema)
         if engine:
-            base_engine = engine
+            self.engine = engine
             self.created_engine = False
         else:
-            base_engine = self._create_engine(database_url, engine_kwargs)
+            self.engine = self._create_engine(database_url, engine_kwargs)
             self.created_engine = True
-        # Translate the placeholder schema to this instance's schema per-engine (None for SQLite = unqualified).
-        self.engine = base_engine.execution_options(
-            schema_translate_map={SCHEMA_PLACEHOLDER: self.schema}
-        )
+        self._outputs_table = datasource_outputs_table(self.schema)
         self.sessionmaker = sessionmaker(bind=self.engine)
         self.serializer = serializer
         _register_datasource(self)
@@ -645,7 +639,9 @@ class SQLAlchemyDatasource(ABC):
     def _delete_checkpoints(self, workflow_id: str, start_step: int) -> None:
         """Delete this workflow's checkpoints from start_step on."""
         with self.engine.begin() as conn:
-            conn.execute(_delete_checkpoints_sql(workflow_id, start_step))
+            conn.execute(
+                _delete_checkpoints_sql(self._outputs_table, workflow_id, start_step)
+            )
 
     def sql_session(self) -> Session:
         ctx = get_local_dbos_context()
@@ -660,12 +656,12 @@ class SQLAlchemyDatasource(ABC):
         with self.engine.connect() as conn:
             result = conn.execute(
                 sa.select(
-                    DatasourceSchema.datasource_outputs.c.output,
-                    DatasourceSchema.datasource_outputs.c.error,
-                    DatasourceSchema.datasource_outputs.c.serialization,
+                    self._outputs_table.c.output,
+                    self._outputs_table.c.error,
+                    self._outputs_table.c.serialization,
                 ).where(
-                    DatasourceSchema.datasource_outputs.c.workflow_id == workflow_id,
-                    DatasourceSchema.datasource_outputs.c.step_id == step_id,
+                    self._outputs_table.c.workflow_id == workflow_id,
+                    self._outputs_table.c.step_id == step_id,
                 )
             )
             return _row_to_result(result.first())
@@ -710,7 +706,7 @@ class SQLAlchemyDatasource(ABC):
     ) -> None:
         """Record this step's outcome, raising _StepAlreadyRecorded if a concurrent execution beat us to it."""
         result = conn.execute(
-            self.dialect.insert(DatasourceSchema.datasource_outputs)
+            self.dialect.insert(self._outputs_table)
             .values(
                 workflow_id=workflow_id,
                 step_id=step_id,
@@ -720,14 +716,14 @@ class SQLAlchemyDatasource(ABC):
             )
             .on_conflict_do_nothing(
                 index_elements=[
-                    DatasourceSchema.datasource_outputs.c.workflow_id,
-                    DatasourceSchema.datasource_outputs.c.step_id,
+                    self._outputs_table.c.workflow_id,
+                    self._outputs_table.c.step_id,
                 ]
             )
             # No row back means a concurrent execution's row was already visible to this
             # snapshot. Above READ COMMITTED it can instead surface as a serialization
             # error, which the caller's retry loop converges to this case.
-            .returning(DatasourceSchema.datasource_outputs.c.workflow_id)
+            .returning(self._outputs_table.c.workflow_id)
         )
         if result.first() is None:
             raise _StepAlreadyRecorded()

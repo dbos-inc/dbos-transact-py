@@ -1,3 +1,5 @@
+from typing import Optional
+
 from sqlalchemy import (
     BigInteger,
     Column,
@@ -8,16 +10,12 @@ from sqlalchemy import (
     Text,
 )
 
-from . import SCHEMA_PLACEHOLDER
 
-
-class DatasourceSchema:
-    # Real schema is applied per-engine via schema_translate_map.
-    metadata_obj = MetaData(schema=SCHEMA_PLACEHOLDER)
-
-    datasource_outputs = Table(
+def datasource_outputs_table(schema: Optional[str]) -> Table:
+    # Built per datasource, so each instance targets its own schema (None = unqualified).
+    return Table(
         "datasource_outputs",
-        metadata_obj,
+        MetaData(schema=schema),
         Column("workflow_id", Text),
         Column("step_id", Integer),
         Column("output", Text, nullable=True),
