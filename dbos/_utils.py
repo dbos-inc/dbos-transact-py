@@ -154,6 +154,9 @@ def retriable_postgres_exception(e: Exception) -> bool:
         return False
     if e.connection_invalidated:
         return True
+    # The server ended a session left idle in a transaction; the transaction rolled back, so rerun it.
+    if getattr(e.orig, "sqlstate", None) == "25P03":
+        return True
     if isinstance(e.orig, psycopg.OperationalError):
         driver_error: psycopg.OperationalError = e.orig
         pgcode = driver_error.sqlstate or ""
@@ -174,6 +177,9 @@ def retriable_postgres_exception(e: Exception) -> bool:
             return True
         # Operator intervention
         elif pgcode.startswith("57"):
+            return True
+        # Deadlock detected; the transaction rolled back, so rerun it
+        elif pgcode == "40P01":
             return True
         else:
             return False

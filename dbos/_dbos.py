@@ -614,6 +614,9 @@ class DBOS:
                 observability_query_timeout_sec=self._config.get(
                     "runtimeConfig", {}
                 ).get("observability_query_timeout_sec"),
+                idle_transaction_timeout_sec=self._config["database"].get(
+                    "sys_db_idle_transaction_timeout_sec"
+                ),
             )
 
             # Run migrations for the system database

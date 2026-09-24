@@ -1037,6 +1037,14 @@ def test_record_get_result_increments_function_id_once_on_db_retry(
     ctx = DBOSContext()
     ctx.workflow_id = workflow_id
     ctx.function_id = 0
+    # A stand-in execution takes ownership of the completed row.
+    ctx.owner_xid = str(uuid.uuid4())
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+            .values(owner_xid=ctx.owner_xid)
+        )
     assert ctx.is_workflow()
 
     real_engine = dbos._sys_db.engine

@@ -70,11 +70,7 @@ from dbos._sys_db import (
     WorkflowStatus,
     WorkflowStatusInternal,
 )
-from dbos._workflow_commands import (
-    fork_workflow,
-    get_workflow,
-    rewind_workflow,
-)
+from dbos._workflow_commands import fork_workflow, get_workflow, rewind_workflow
 
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
@@ -147,6 +143,7 @@ class DBOSClient:
         lazy: bool = False,
         retry_connection_errors: bool = True,
         observability_query_timeout_sec: Optional[float] = None,
+        sys_db_idle_transaction_timeout_sec: Optional[float] = None,
     ):
         """Create a client for interacting with a DBOS application from outside it.
 
@@ -171,6 +168,7 @@ class DBOSClient:
             lazy (bool): Whether to defer connecting until the client is first used. Defaults to False, meaning the connection is checked on construction. Call check_connection() or check_connection_async() to check it explicitly. Cannot be combined with use_listen_notify, whose listener connects immediately.
             retry_connection_errors (bool): Whether an operation that loses its database connection blocks and retries until the connection recovers. Defaults to True. Set to False to raise instead, so an unreachable database surfaces as an error rather than a wait.
             observability_query_timeout_sec (float): Statement timeout, in seconds, for read-only observability queries against the system database. Defaults to 30.0.
+            sys_db_idle_transaction_timeout_sec (float): Postgres idle_in_transaction_session_timeout, in seconds, for the system database connections this client creates. Defaults to 60.0. Set to a non-positive value to leave the server's setting in place. Not applied to a custom system_database_engine.
 
         Raises:
             Exception: If the system database cannot be reached, unless lazy is True.
@@ -215,6 +213,7 @@ class DBOSClient:
             app_name=application_name,
             retry_connection_errors=retry_connection_errors,
             observability_query_timeout_sec=observability_query_timeout_sec,
+            idle_transaction_timeout_sec=sys_db_idle_transaction_timeout_sec,
         )
         self._notification_listener_thread: Optional[threading.Thread] = None
         if not lazy:
@@ -266,12 +265,12 @@ class DBOSClient:
         workflow_id, status = self._build_enqueue_status(options, *args, **kwargs)
         return_existing = options.get("duplication_policy") == "return-existing"
         # Generated once, so a retried insert recognizes a row it already committed.
-        owner_xid = generate_uuid()
+        creator_xid = generate_uuid()
         while True:
             try:
                 self._sys_db.init_workflow(
                     status,
-                    owner_xid=owner_xid,
+                    creator_xid=creator_xid,
                     reuse_policy=options.get("workflow_id_reuse_policy"),
                 )
                 return workflow_id
@@ -306,7 +305,7 @@ class DBOSClient:
         self._sys_db.init_workflow_with_connection(
             status,
             conn_or_session,
-            owner_xid=generate_uuid(),
+            creator_xid=generate_uuid(),
             reuse_policy=options.get("workflow_id_reuse_policy"),
         )
         return workflow_id
@@ -328,7 +327,7 @@ class DBOSClient:
         status["is_debounced"] = True
         self._sys_db.init_workflow(
             status,
-            owner_xid=None,
+            creator_xid=None,
         )
         return workflow_id
 
