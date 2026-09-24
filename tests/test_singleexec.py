@@ -529,7 +529,7 @@ def test_lost_ownership_parks_at_a_sleep(dbos: DBOS) -> None:
 
 
 @pytest.mark.parametrize("write", ["set_event", "write_stream", "close_stream", "send"])
-def test_stale_step_cannot_write_events_or_streams(dbos: DBOS, write: str) -> None:
+def test_stale_step_writes_are_refused(dbos: DBOS, write: str) -> None:
     """A step of an execution that lost ownership cannot set events, write streams, or send messages."""
     release = threading.Event()
     started = threading.Event()
@@ -543,7 +543,7 @@ def test_stale_step_cannot_write_events_or_streams(dbos: DBOS, write: str) -> No
         elif write == "write_stream":
             DBOS.write_stream("key", "stale")
         elif write == "send":
-            DBOS.send(DBOS.workflow_id, "stale", "topic")
+            DBOS.send(wfid, "stale", "topic")
         else:
             DBOS.close_stream("key")
 

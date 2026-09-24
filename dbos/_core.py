@@ -2574,7 +2574,7 @@ def send_bulk(
                 send_to_forks=send_to_forks,
             )
     elif cur_ctx and cur_ctx.is_step():
-        # Not a step of its own, but fenced on the enclosing workflow's ownership like set_event.
+        # Inside a step: not recorded, but fenced on the enclosing workflow's ownership.
         dbos._sys_db.send_bulk(
             messages,
             serialization_type=serialization_type,
