@@ -762,6 +762,60 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
     )
 
 
+def test_sync_ds_rolls_back_once_ownership_moves(
+    sync_ds: SQLAlchemyDatasource, dbos: DBOS
+) -> None:
+    """An execution that loses the workflow mid-transaction rolls back rather than
+    commit, so a stale execution cannot apply a step the new owner also runs."""
+    _race_side_effects.create(sync_ds.engine, checkfirst=True)
+
+    def step_fn() -> str:
+        sync_ds.sql_session().execute(_race_side_effects.insert().values(tag="stale"))
+        _set_owner(dbos, wfid, "another-execution")
+        return "stale"
+
+    @DBOS.workflow()
+    def my_workflow() -> str:
+        try:
+            return sync_ds.run_tx_step(None, step_fn)
+        except DBOSWorkflowConflictIDError:
+            # A real duplicate parks here instead; caught and reclaimed to keep the assertion local.
+            _reclaim_ownership(dbos)
+            return "conflicted"
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "conflicted"
+
+    with sync_ds.engine.connect() as conn:
+        tags = list(conn.execute(sa.select(_race_side_effects.c.tag)).scalars())
+        ds_rows = conn.execute(
+            sa.select(DatasourceSchema.datasource_outputs.c.error).where(
+                DatasourceSchema.datasource_outputs.c.workflow_id == wfid
+            )
+        ).all()
+    assert tags == []
+    assert ds_rows == [], "the stale execution left a checkpoint or an error row"
+    with dbos._sys_db.engine.connect() as conn:
+        assert _checkpointed_steps(conn, wfid) == []
+
+
+def test_sync_ds_bare_run_skips_the_ownership_check(
+    sync_ds: SQLAlchemyDatasource,
+) -> None:
+    _race_side_effects.create(sync_ds.engine, checkfirst=True)
+
+    def step_fn() -> str:
+        sync_ds.sql_session().execute(_race_side_effects.insert().values(tag="bare"))
+        return "bare"
+
+    assert sync_ds.run_tx_step(None, step_fn) == "bare"
+    with sync_ds.engine.connect() as conn:
+        assert list(conn.execute(sa.select(_race_side_effects.c.tag)).scalars()) == [
+            "bare"
+        ]
+
+
 # Whether a lost acknowledgement is retriable decides how the row is met, not whose it is.
 _LOST_ACK_ERRORS = [
     pytest.param("server closed the connection unexpectedly", 2, id="retriable"),
@@ -1577,6 +1631,50 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
         deserialize_value(ds_row.output, ds_row.serialization, async_ds.serializer)
         == "result-1"
     )
+
+
+@pytest.mark.asyncio
+async def test_async_ds_rolls_back_once_ownership_moves(
+    async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS
+) -> None:
+    """An execution that loses the workflow mid-transaction rolls back rather than
+    commit, so a stale execution cannot apply a step the new owner also runs."""
+    async with async_ds.engine.begin() as conn:
+        await conn.run_sync(_race_side_effects.create, checkfirst=True)
+
+    async def step_fn() -> str:
+        await async_ds.sql_session().execute(
+            _race_side_effects.insert().values(tag="stale")
+        )
+        _set_owner(dbos, wfid, "another-execution")
+        return "stale"
+
+    @DBOS.workflow()
+    async def my_workflow() -> str:
+        try:
+            return await async_ds.run_tx_step_async(None, step_fn)
+        except DBOSWorkflowConflictIDError:
+            # A real duplicate parks here instead; caught and reclaimed to keep the assertion local.
+            _reclaim_ownership(dbos)
+            return "conflicted"
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "conflicted"
+
+    async with async_ds.engine.connect() as conn:
+        tags = list((await conn.execute(sa.select(_race_side_effects.c.tag))).scalars())
+        ds_rows = (
+            await conn.execute(
+                sa.select(DatasourceSchema.datasource_outputs.c.error).where(
+                    DatasourceSchema.datasource_outputs.c.workflow_id == wfid
+                )
+            )
+        ).all()
+    assert tags == []
+    assert ds_rows == [], "the stale execution left a checkpoint or an error row"
+    with dbos._sys_db.engine.connect() as sys_conn:
+        assert _checkpointed_steps(sys_conn, wfid) == []
 
 
 @pytest.mark.asyncio

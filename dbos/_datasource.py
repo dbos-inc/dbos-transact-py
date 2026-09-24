@@ -405,9 +405,16 @@ class AsyncSQLAlchemyDatasource(ABC):
                                             None,
                                             serialization,
                                         )
+                                        # Holding this step's row, so a later owner's insert waits on our commit.
+                                        if not await asyncio.to_thread(
+                                            _still_owns, workflow_id
+                                        ):
+                                            raise DBOSWorkflowConflictIDError(
+                                                workflow_id
+                                            )
                                 break
-                            except _StepAlreadyRecorded:
-                                raise  # the recorded result wins; don't record an error over it
+                            except (_StepAlreadyRecorded, DBOSWorkflowConflictIDError):
+                                raise  # the recorded result or the new owner wins; don't record an error over it
                             except Exception as e:
                                 if _is_retriable_db_error(
                                     e, self._is_serialization_error
@@ -760,9 +767,14 @@ class SQLAlchemyDatasource(ABC):
                                             None,
                                             serialization,
                                         )
+                                        # Holding this step's row, so a later owner's insert waits on our commit.
+                                        if not _still_owns(workflow_id):
+                                            raise DBOSWorkflowConflictIDError(
+                                                workflow_id
+                                            )
                                 break
-                            except _StepAlreadyRecorded:
-                                raise  # the recorded result wins; don't record an error over it
+                            except (_StepAlreadyRecorded, DBOSWorkflowConflictIDError):
+                                raise  # the recorded result or the new owner wins; don't record an error over it
                             except Exception as e:
                                 if _is_retriable_db_error(
                                     e, self._is_serialization_error

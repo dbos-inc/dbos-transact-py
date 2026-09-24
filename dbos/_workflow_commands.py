@@ -170,6 +170,35 @@ def _check_rewindable(
         )
 
 
+def _delete_datasource_checkpoints(
+    ds: Datasource,
+    workflow_id: str,
+    start_step: int,
+    run_coroutine: Optional[Callable[[Coroutine[Any, Any, Any]], Any]],
+) -> None:
+    if isinstance(ds, AsyncSQLAlchemyDatasource):
+        assert run_coroutine is not None
+        run_coroutine(ds._delete_checkpoints(workflow_id, start_step))
+    else:
+        ds._delete_checkpoints(workflow_id, start_step)
+
+
+def delete_completed_datasource_checkpoints(
+    dbos: "DBOS",
+    workflow_id: str,
+    run_coroutine: Callable[[Coroutine[Any, Any, Any]], Any],
+) -> None:
+    """Drop a finishing workflow's datasource checkpoints, now covered by its step
+    checkpoints. Best effort: a leftover one is harmless, so failures only warn."""
+    for ds in dbos._registry.datasources:
+        try:
+            _delete_datasource_checkpoints(ds, workflow_id, 1, run_coroutine)
+        except Exception as e:
+            dbos.logger.warning(
+                f"Failed to delete datasource checkpoints of workflow {workflow_id}: {e}"
+            )
+
+
 def rewind_workflow(
     sys_db: SystemDatabase,
     datasources: Sequence[Datasource],
@@ -195,11 +224,7 @@ def rewind_workflow(
     if datasources:
         _check_rewindable(sys_db, workflow_id, start_step)
     for ds in datasources:
-        if isinstance(ds, AsyncSQLAlchemyDatasource):
-            assert run_coroutine is not None
-            run_coroutine(ds._delete_checkpoints(workflow_id, start_step))
-        else:
-            ds._delete_checkpoints(workflow_id, start_step)
+        _delete_datasource_checkpoints(ds, workflow_id, start_step, run_coroutine)
     sys_db.rewind_workflow(
         workflow_id,
         start_step,
