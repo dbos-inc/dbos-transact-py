@@ -272,13 +272,24 @@ def test_sync_ds_runs_outside_workflow(sync_ds: SQLAlchemyDatasource) -> None:
 
 
 def test_sync_ds_rejects_misuse(tmp_path: Any) -> None:
-    """Misuse fails fast: wrong sessionmaker, coroutine functions, session outside a transaction."""
+    """Misuse fails fast: wrong or rebinding sessionmaker, coroutine functions, session outside a transaction."""
     with pytest.raises(DBOSException, match="sessionmaker"):
         SQLAlchemyDatasource.create(
             f"sqlite:///{tmp_path}/bad.sqlite",
             sessionmaker=async_sessionmaker(),  # type: ignore[arg-type]
         )
-    ds = SQLAlchemyDatasource.create(f"sqlite:///{tmp_path}/ds.sqlite")
+    # Per-mapper binds would route writes away from the checkpoint's engine.
+    other = sa.create_engine("sqlite://")
+    with pytest.raises(DBOSException, match="binds="):
+        SQLAlchemyDatasource.create(
+            f"sqlite:///{tmp_path}/bad.sqlite",
+            sessionmaker=sessionmaker(binds={_ExpireBase: other}),
+        )
+    other.dispose()
+    # An empty binds map routes nothing, so it is accepted.
+    ds = SQLAlchemyDatasource.create(
+        f"sqlite:///{tmp_path}/ds.sqlite", sessionmaker=sessionmaker(binds={})
+    )
     try:
         with pytest.raises(AssertionError):
             ds.sql_session()
@@ -964,14 +975,24 @@ async def test_async_ds_runs_outside_workflow(
 
 @pytest.mark.asyncio
 async def test_async_ds_rejects_misuse(tmp_path: Any) -> None:
-    """Misuse fails fast: wrong sessionmaker, sync functions, session outside a transaction."""
+    """Misuse fails fast: wrong or rebinding sessionmaker, sync functions, session outside a transaction."""
     with pytest.raises(DBOSException, match="sessionmaker"):
         await AsyncSQLAlchemyDatasource.create(
             f"sqlite+aiosqlite:///{tmp_path}/bad.sqlite",
             sessionmaker=sessionmaker(),  # type: ignore[arg-type]
         )
+    # Per-mapper binds would route writes away from the checkpoint's engine.
+    other = create_async_engine("sqlite+aiosqlite://")
+    with pytest.raises(DBOSException, match="binds="):
+        await AsyncSQLAlchemyDatasource.create(
+            f"sqlite+aiosqlite:///{tmp_path}/bad.sqlite",
+            sessionmaker=async_sessionmaker(binds={_ExpireBase: other}),
+        )
+    await other.dispose()
+    # An empty binds map routes nothing, so it is accepted.
     ds = await AsyncSQLAlchemyDatasource.create(
-        f"sqlite+aiosqlite:///{tmp_path}/ds.sqlite"
+        f"sqlite+aiosqlite:///{tmp_path}/ds.sqlite",
+        sessionmaker=async_sessionmaker(binds={}),
     )
     try:
         with pytest.raises(AssertionError):

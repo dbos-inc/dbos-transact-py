@@ -102,6 +102,16 @@ def _still_owns(workflow_id: str) -> bool:
     return _get_dbos_instance()._sys_db.get_workflow_owner(workflow_id) == owner_xid
 
 
+def _reject_session_binds(session_kw: Dict[str, Any]) -> None:
+    # Per-mapper binds outrank bind=self.engine, which would split user writes from the checkpoint.
+    if session_kw.get("binds"):
+        raise DBOSException(
+            "A datasource sessionmaker must not set binds=: every statement in a datasource "
+            "transaction must use the datasource's engine so it commits atomically with the "
+            "step checkpoint"
+        )
+
+
 def _replay_recorded(recorded: "RecordedResult", serializer: "Serializer") -> Any:
     if recorded["error"]:
         raise deserialize_exception(
@@ -182,6 +192,8 @@ class AsyncSQLAlchemyDatasource(ABC):
             raise DBOSException(
                 "AsyncSQLAlchemyDatasource requires an async_sessionmaker"
             )
+        if sessionmaker is not None:
+            _reject_session_binds(sessionmaker.kw)
         _log_datasource_init(
             "AsyncDatasource", database_url, engine_kwargs, bool(engine)
         )
@@ -552,6 +564,8 @@ class SQLAlchemyDatasource(ABC):
             raise DBOSException(
                 "SQLAlchemyDatasource requires a sqlalchemy.orm.sessionmaker"
             )
+        if sessionmaker is not None:
+            _reject_session_binds(sessionmaker.kw)
         _log_datasource_init(
             "SyncDatasource", database_url, engine_kwargs, bool(engine)
         )
