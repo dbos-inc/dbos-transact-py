@@ -15,6 +15,8 @@ import sqlalchemy as sa
 from psycopg.errors import SerializationFailure
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from dbos import (
     DBOS,
@@ -530,6 +532,85 @@ def test_sync_ds_keeps_caller_engine_schema_translate_map(
         DBOS.destroy(destroy_registry=True)
 
 
+class _TenantSession(Session):
+    pass
+
+
+@sa.event.listens_for(_TenantSession, "after_begin")
+def _set_tenant(session: Session, transaction: Any, connection: sa.Connection) -> None:
+    session.info["began"] = session.info.get("began", 0) + 1
+    if connection.dialect.name == "postgresql":
+        connection.execute(
+            sa.text("SELECT set_config('app.tenant', :t, true)"),
+            {"t": session.info["tenant"]},
+        )
+
+
+def test_sync_ds_custom_sessionmaker(
+    sync_ds: SQLAlchemyDatasource, config: DBOSConfig
+) -> None:
+    """A caller sessionmaker's class, options, and hooks are used; its bind is not."""
+    # Bound to an unrelated database: checkpoints only land if DBOS overrides the bind.
+    foreign = sa.create_engine("sqlite://")
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+    try:
+        ds = SQLAlchemyDatasource.create(
+            sync_ds.engine.url.render_as_string(hide_password=False),
+            engine=sync_ds.engine,
+            schema=sync_ds.schema,
+            sessionmaker=sessionmaker(
+                bind=foreign, class_=_TenantSession, info={"tenant": "t1"}
+            ),
+        )
+        calls = {"n": 0}
+
+        @ds.transaction
+        def read_tenant() -> str:
+            calls["n"] += 1
+            session = ds.sql_session()
+            assert isinstance(session, _TenantSession)
+            assert session.info["began"] == 1
+            if sync_ds.engine.dialect.name == "postgresql":
+                return str(
+                    session.execute(
+                        sa.text("SELECT current_setting('app.tenant', true)")
+                    ).scalar()
+                )
+            return str(session.info["tenant"])
+
+        @DBOS.workflow()
+        def wf() -> str:
+            return read_tenant()
+
+        DBOS.launch()
+        wfid = str(uuid.uuid4())
+        with SetWorkflowID(wfid):
+            assert wf() == "t1"
+        # Simulate losing the step's sysdb record: only the datasource checkpoint remains.
+        dbos._sys_db.delete_workflows([wfid])
+        with SetWorkflowID(wfid):
+            assert wf() == "t1"
+        assert calls["n"] == 1  # replayed from the checkpoint, not re-run
+        with ds.engine.connect() as conn:
+            assert conn.execute(
+                sa.select(ds._outputs_table.c.step_id).where(
+                    ds._outputs_table.c.workflow_id == wfid
+                )
+            ).scalars().all() == [1]
+    finally:
+        DBOS.destroy(destroy_registry=True)
+        foreign.dispose()
+
+
+def test_sync_ds_rejects_async_sessionmaker(tmp_path: Any) -> None:
+    with pytest.raises(DBOSException, match="sessionmaker"):
+        SQLAlchemyDatasource.create(
+            f"sqlite:///{tmp_path}/ds.sqlite",
+            sessionmaker=async_sessionmaker(),  # type: ignore[arg-type]
+        )
+
+
 def test_sync_ds_multiple_steps_in_workflow(
     sync_ds: SQLAlchemyDatasource, dbos: DBOS
 ) -> None:
@@ -854,8 +935,8 @@ def test_sync_ds_replays_its_own_lost_commit(
                 )
             return handled
 
-    def flaky_sessionmaker() -> Any:
-        session = real_sessionmaker()
+    def flaky_sessionmaker(**kw: Any) -> Any:
+        session = real_sessionmaker(**kw)
         real_begin = session.begin
         # setattr: the proxy only has to satisfy the `with` protocol, not the type.
         setattr(session, "begin", lambda: _LostAck(real_begin()))
@@ -1334,6 +1415,80 @@ async def test_async_ds_non_retryable_error_records_and_replays(
     assert call_count["n"] == 1
 
 
+class _AsyncTenantSession(AsyncSession):
+    sync_session_class = _TenantSession
+
+
+@pytest.mark.asyncio
+async def test_async_ds_custom_sessionmaker(
+    async_ds: AsyncSQLAlchemyDatasource, config: DBOSConfig
+) -> None:
+    """A caller async_sessionmaker's class, options, and hooks are used; its bind is not."""
+    # Bound to an unrelated database: checkpoints only land if DBOS overrides the bind.
+    foreign = create_async_engine("sqlite+aiosqlite://")
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+    try:
+        ds = await AsyncSQLAlchemyDatasource.create(
+            async_ds.engine.url.render_as_string(hide_password=False),
+            engine=async_ds.engine,
+            schema=async_ds.schema,
+            sessionmaker=async_sessionmaker(
+                bind=foreign, class_=_AsyncTenantSession, info={"tenant": "t1"}
+            ),
+        )
+        calls = {"n": 0}
+
+        @ds.transaction
+        async def read_tenant() -> str:
+            calls["n"] += 1
+            session = ds.sql_session()
+            assert isinstance(session, _AsyncTenantSession)
+            assert session.info["began"] == 1
+            if async_ds.engine.dialect.name == "postgresql":
+                return str(
+                    (
+                        await session.execute(
+                            sa.text("SELECT current_setting('app.tenant', true)")
+                        )
+                    ).scalar()
+                )
+            return str(session.info["tenant"])
+
+        @DBOS.workflow()
+        async def wf() -> str:
+            return await read_tenant()
+
+        DBOS.launch()
+        wfid = str(uuid.uuid4())
+        with SetWorkflowID(wfid):
+            assert await wf() == "t1"
+        # Simulate losing the step's sysdb record: only the datasource checkpoint remains.
+        dbos._sys_db.delete_workflows([wfid])
+        with SetWorkflowID(wfid):
+            assert await wf() == "t1"
+        assert calls["n"] == 1  # replayed from the checkpoint, not re-run
+        async with ds.engine.connect() as conn:
+            result = await conn.execute(
+                sa.select(ds._outputs_table.c.step_id).where(
+                    ds._outputs_table.c.workflow_id == wfid
+                )
+            )
+            assert result.scalars().all() == [1]
+    finally:
+        DBOS.destroy(destroy_registry=True)
+        await foreign.dispose()
+
+
+@pytest.mark.asyncio
+async def test_async_ds_rejects_sync_sessionmaker(tmp_path: Any) -> None:
+    with pytest.raises(DBOSException, match="sessionmaker"):
+        await AsyncSQLAlchemyDatasource.create(
+            f"sqlite+aiosqlite:///{tmp_path}/ds.sqlite",
+            sessionmaker=sessionmaker(),  # type: ignore[arg-type]
+        )
+
+
 @pytest.mark.asyncio
 async def test_async_ds_multiple_steps_in_workflow(
     async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS
@@ -1804,8 +1959,8 @@ async def test_async_ds_replays_its_own_lost_commit(
                 )
             return handled
 
-    def flaky_sessionmaker() -> Any:
-        session = real_sessionmaker()
+    def flaky_sessionmaker(**kw: Any) -> Any:
+        session = real_sessionmaker(**kw)
         real_begin = session.begin
         # setattr: the proxy only has to satisfy the `with` protocol, not the type.
         setattr(session, "begin", lambda: _LostAck(real_begin()))

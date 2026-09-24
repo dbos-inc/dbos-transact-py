@@ -26,7 +26,8 @@ from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
 )
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
+from sqlalchemy.orm import sessionmaker as SyncSessionmaker
 
 from dbos._context import DBOSContextEnsure, get_local_dbos_context
 from dbos._error import DBOSException, DBOSWorkflowConflictIDError
@@ -204,10 +205,17 @@ class AsyncSQLAlchemyDatasource(ABC):
         engine: Optional[AsyncEngine],
         schema: Optional[str],
         serializer: Serializer,
+        sessionmaker: Optional[async_sessionmaker[Any]] = None,
     ):
         import sqlalchemy.dialects.postgresql as pg
         import sqlalchemy.dialects.sqlite as sq
 
+        if sessionmaker is not None and not isinstance(
+            sessionmaker, async_sessionmaker
+        ):
+            raise DBOSException(
+                "AsyncSQLAlchemyDatasource requires an async_sessionmaker"
+            )
         _log_datasource_init(
             "AsyncDatasource", database_url, engine_kwargs, bool(engine)
         )
@@ -220,7 +228,10 @@ class AsyncSQLAlchemyDatasource(ABC):
             self.engine = self._create_engine(database_url, engine_kwargs)
             self.created_engine = True
         self._outputs_table = datasource_outputs_table(self.schema)
-        self.sessionmaker = async_sessionmaker(bind=self.engine)
+        # Sessions are always opened with bind=self.engine, so checkpoints share the engine that reads them.
+        self.sessionmaker: async_sessionmaker[Any] = (
+            sessionmaker if sessionmaker is not None else async_sessionmaker()
+        )
         self.serializer = serializer
         _register_datasource(self)
 
@@ -231,6 +242,7 @@ class AsyncSQLAlchemyDatasource(ABC):
         engine: Optional[AsyncEngine] = None,
         schema: Optional[str] = None,
         serializer: Optional[Serializer] = None,
+        sessionmaker: Optional[async_sessionmaker[Any]] = None,
     ) -> "AsyncSQLAlchemyDatasource ":
         if serializer is None:
             serializer = DBOSDefaultSerializer
@@ -245,6 +257,7 @@ class AsyncSQLAlchemyDatasource(ABC):
                 engine=engine,
                 schema=schema,
                 serializer=serializer,
+                sessionmaker=sessionmaker,
             )
         else:
             from ._datasource_postgres import PostgresAsyncDatasource
@@ -255,6 +268,7 @@ class AsyncSQLAlchemyDatasource(ABC):
                 engine=engine,
                 schema=schema,
                 serializer=serializer,
+                sessionmaker=sessionmaker,
             )
         await instance.run_migrations()
         return instance
@@ -416,7 +430,7 @@ class AsyncSQLAlchemyDatasource(ABC):
             try:
                 with DBOSContextEnsure() as exec_ctx:
                     while True:
-                        async with self.sessionmaker() as session:
+                        async with self.sessionmaker(bind=self.engine) as session:
                             exec_ctx.start_async_ds_transaction(session)
                             try:
                                 async with session.begin():
@@ -566,10 +580,15 @@ class SQLAlchemyDatasource(ABC):
         engine: Optional[sa.Engine],
         schema: Optional[str],
         serializer: Serializer,
+        sessionmaker: Optional[SyncSessionmaker[Any]] = None,
     ):
         import sqlalchemy.dialects.postgresql as pg
         import sqlalchemy.dialects.sqlite as sq
 
+        if sessionmaker is not None and not isinstance(sessionmaker, SyncSessionmaker):
+            raise DBOSException(
+                "SQLAlchemyDatasource requires a sqlalchemy.orm.sessionmaker"
+            )
         _log_datasource_init(
             "SyncDatasource", database_url, engine_kwargs, bool(engine)
         )
@@ -582,7 +601,10 @@ class SQLAlchemyDatasource(ABC):
             self.engine = self._create_engine(database_url, engine_kwargs)
             self.created_engine = True
         self._outputs_table = datasource_outputs_table(self.schema)
-        self.sessionmaker = sessionmaker(bind=self.engine)
+        # Sessions are always opened with bind=self.engine, so checkpoints share the engine that reads them.
+        self.sessionmaker: SyncSessionmaker[Any] = (
+            sessionmaker if sessionmaker is not None else SyncSessionmaker()
+        )
         self.serializer = serializer
         _register_datasource(self)
 
@@ -593,6 +615,7 @@ class SQLAlchemyDatasource(ABC):
         engine: Optional[sa.Engine] = None,
         schema: Optional[str] = None,
         serializer: Optional[Serializer] = None,
+        sessionmaker: Optional[SyncSessionmaker[Any]] = None,
     ) -> "SQLAlchemyDatasource ":
         if serializer is None:
             serializer = DBOSDefaultSerializer
@@ -607,6 +630,7 @@ class SQLAlchemyDatasource(ABC):
                 engine=engine,
                 schema=schema,
                 serializer=serializer,
+                sessionmaker=sessionmaker,
             )
         else:
             from ._datasource_postgres import PostgresSyncDatasource
@@ -617,6 +641,7 @@ class SQLAlchemyDatasource(ABC):
                 engine=engine,
                 schema=schema,
                 serializer=serializer,
+                sessionmaker=sessionmaker,
             )
         instance.run_migrations()
         return instance
@@ -776,7 +801,7 @@ class SQLAlchemyDatasource(ABC):
             try:
                 with DBOSContextEnsure() as exec_ctx:
                     while True:
-                        with self.sessionmaker() as session:
+                        with self.sessionmaker(bind=self.engine) as session:
                             exec_ctx.start_sync_ds_transaction(session)
                             try:
                                 with session.begin():
