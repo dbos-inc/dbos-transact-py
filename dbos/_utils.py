@@ -178,6 +178,9 @@ def retriable_postgres_exception(e: Exception) -> bool:
         # Operator intervention
         elif pgcode.startswith("57"):
             return True
+        # Deadlock detected; the transaction rolled back, so rerun it
+        elif pgcode == "40P01":
+            return True
         else:
             return False
     else:
