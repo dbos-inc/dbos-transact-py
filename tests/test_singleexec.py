@@ -528,9 +528,9 @@ def test_lost_ownership_parks_at_a_sleep(dbos: DBOS) -> None:
         handle.get_result()
 
 
-@pytest.mark.parametrize("write", ["set_event", "write_stream", "close_stream"])
+@pytest.mark.parametrize("write", ["set_event", "write_stream", "close_stream", "send"])
 def test_stale_step_cannot_write_events_or_streams(dbos: DBOS, write: str) -> None:
-    """A step of an execution that lost ownership cannot set events or write streams."""
+    """A step of an execution that lost ownership cannot set events, write streams, or send messages."""
     release = threading.Event()
     started = threading.Event()
 
@@ -542,6 +542,8 @@ def test_stale_step_cannot_write_events_or_streams(dbos: DBOS, write: str) -> No
             DBOS.set_event("key", "stale")
         elif write == "write_stream":
             DBOS.write_stream("key", "stale")
+        elif write == "send":
+            DBOS.send(DBOS.workflow_id, "stale", "topic")
         else:
             DBOS.close_stream("key")
 
@@ -570,6 +572,13 @@ def test_stale_step_cannot_write_events_or_streams(dbos: DBOS, write: str) -> No
                 .where(SystemSchema.streams.c.workflow_uuid == wfid)
             ).scalar()
         assert streamed == 0
+        with dbos._sys_db.engine.begin() as c:
+            sent = c.execute(
+                sa.select(sa.func.count())
+                .select_from(SystemSchema.notifications)
+                .where(SystemSchema.notifications.c.destination_uuid == wfid)
+            ).scalar()
+        assert sent == 0
         assert _step_names(wfid) == []
     finally:
         release.set()

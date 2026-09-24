@@ -2573,6 +2573,17 @@ def send_bulk(
                 function_name=function_name,
                 send_to_forks=send_to_forks,
             )
+    elif cur_ctx and cur_ctx.is_step():
+        # Not a step of its own, but fenced on the enclosing workflow's ownership like set_event.
+        dbos._sys_db.send_bulk(
+            messages,
+            serialization_type=serialization_type,
+            workflow_id=None,
+            function_id=None,
+            function_name=function_name,
+            send_to_forks=send_to_forks,
+            step_workflow_id=cur_ctx.workflow_id,
+        )
     else:
         dbos._sys_db.send_bulk(
             messages,

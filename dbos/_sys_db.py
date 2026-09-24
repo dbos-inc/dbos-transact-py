@@ -3521,6 +3521,7 @@ class SystemDatabase(ABC):
         function_id: Optional[int],
         function_name: str,
         send_to_forks: bool,
+        step_workflow_id: Optional[str] = None,
     ) -> None:
         """Send one or more messages in a single transaction.
 
@@ -3531,6 +3532,10 @@ class SystemDatabase(ABC):
         `function_name` is the name recorded for that step. Each message also
         provides its own idempotency via the primary key constraint on
         `message_uuid`.
+
+        When called from inside a step, `step_workflow_id` names the enclosing
+        workflow: no step is recorded, but the send only lands while the calling
+        execution still owns that workflow.
 
         When `send_to_forks` is set, every message is delivered not only to its
         `destination_id` but also to every workflow recursively forked from it
@@ -3545,6 +3550,7 @@ class SystemDatabase(ABC):
                 function_id=function_id,
                 function_name=function_name,
                 send_to_forks=send_to_forks,
+                step_workflow_id=step_workflow_id,
             )
 
     def send_bulk_with_connection(
@@ -3585,8 +3591,14 @@ class SystemDatabase(ABC):
         function_id: Optional[int],
         function_name: str,
         send_to_forks: bool,
+        step_workflow_id: Optional[str] = None,
     ) -> None:
         start_time = int(time.time() * 1000)
+        step_owner_xid = (
+            current_owner_xid(step_workflow_id)
+            if step_workflow_id is not None
+            else None
+        )
 
         # Reject duplicate idempotency keys
         provided_keys = [m.idempotency_key for m in messages if m.idempotency_key]
@@ -3692,6 +3704,9 @@ class SystemDatabase(ABC):
             self._record_operation_result_txn(
                 output, int(time.time() * 1000), conn=conn
             )
+        elif step_workflow_id is not None and step_owner_xid is not None:
+            # After the insert, in the order the workflow-level send locks, so they cannot deadlock.
+            self._check_owner_txn(conn, step_workflow_id, step_owner_xid)
 
     @db_retry()
     def recv_setup(
