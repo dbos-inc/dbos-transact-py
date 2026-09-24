@@ -16,7 +16,7 @@ from psycopg.errors import SerializationFailure
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from dbos import (
     DBOS,
@@ -609,6 +609,49 @@ def test_sync_ds_rejects_async_sessionmaker(tmp_path: Any) -> None:
             f"sqlite:///{tmp_path}/ds.sqlite",
             sessionmaker=async_sessionmaker(),  # type: ignore[arg-type]
         )
+
+
+class _ExpireBase(DeclarativeBase):
+    pass
+
+
+# Module-level so the returned object pickles; unqualified, created and dropped per test.
+class _ExpireItem(_ExpireBase):
+    __tablename__ = "ds_expire_items"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str]
+
+
+def test_sync_ds_returns_loaded_orm_objects(
+    sync_ds: SQLAlchemyDatasource, dbos: DBOS
+) -> None:
+    """ORM objects returned by a transaction stay loaded after commit, and on replay."""
+    _ExpireBase.metadata.create_all(sync_ds.engine)
+    try:
+
+        @sync_ds.transaction
+        def add_item(name: str) -> _ExpireItem:
+            item = _ExpireItem(name=name)
+            session = sync_ds.sql_session()
+            session.add(item)
+            session.flush()
+            return item
+
+        @DBOS.workflow()
+        def wf(name: str) -> _ExpireItem:
+            item = add_item(name)
+            assert item.name == name
+            return item
+
+        wfid = str(uuid.uuid4())
+        with SetWorkflowID(wfid):
+            first = wf("a")
+        with SetWorkflowID(wfid):
+            replayed = wf("a")
+        assert (first.id, first.name) == (replayed.id, replayed.name)
+        assert first.name == "a"
+    finally:
+        _ExpireBase.metadata.drop_all(sync_ds.engine)
 
 
 def test_sync_ds_multiple_steps_in_workflow(
@@ -1487,6 +1530,41 @@ async def test_async_ds_rejects_sync_sessionmaker(tmp_path: Any) -> None:
             f"sqlite+aiosqlite:///{tmp_path}/ds.sqlite",
             sessionmaker=sessionmaker(),  # type: ignore[arg-type]
         )
+
+
+@pytest.mark.asyncio
+async def test_async_ds_returns_loaded_orm_objects(
+    async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS
+) -> None:
+    """ORM objects returned by a transaction stay loaded after commit, and on replay."""
+    async with async_ds.engine.begin() as conn:
+        await conn.run_sync(_ExpireBase.metadata.create_all)
+    try:
+
+        @async_ds.transaction
+        async def add_item(name: str) -> _ExpireItem:
+            item = _ExpireItem(name=name)
+            session = async_ds.sql_session()
+            session.add(item)
+            await session.flush()
+            return item
+
+        @DBOS.workflow()
+        async def wf(name: str) -> _ExpireItem:
+            item = await add_item(name)
+            assert item.name == name
+            return item
+
+        wfid = str(uuid.uuid4())
+        with SetWorkflowID(wfid):
+            first = await wf("a")
+        with SetWorkflowID(wfid):
+            replayed = await wf("a")
+        assert (first.id, first.name) == (replayed.id, replayed.name)
+        assert first.name == "a"
+    finally:
+        async with async_ds.engine.begin() as conn:
+            await conn.run_sync(_ExpireBase.metadata.drop_all)
 
 
 @pytest.mark.asyncio

@@ -229,8 +229,11 @@ class AsyncSQLAlchemyDatasource(ABC):
             self.created_engine = True
         self._outputs_table = datasource_outputs_table(self.schema)
         # Sessions are always opened with bind=self.engine, so checkpoints share the engine that reads them.
+        # No expiry by default: returned ORM objects outlive the session and are checkpointed after commit.
         self.sessionmaker: async_sessionmaker[Any] = (
-            sessionmaker if sessionmaker is not None else async_sessionmaker()
+            sessionmaker
+            if sessionmaker is not None
+            else async_sessionmaker(expire_on_commit=False)
         )
         self.serializer = serializer
         _register_datasource(self)
@@ -602,8 +605,11 @@ class SQLAlchemyDatasource(ABC):
             self.created_engine = True
         self._outputs_table = datasource_outputs_table(self.schema)
         # Sessions are always opened with bind=self.engine, so checkpoints share the engine that reads them.
+        # No expiry by default: returned ORM objects outlive the session and are checkpointed after commit.
         self.sessionmaker: SyncSessionmaker[Any] = (
-            sessionmaker if sessionmaker is not None else SyncSessionmaker()
+            sessionmaker
+            if sessionmaker is not None
+            else SyncSessionmaker(expire_on_commit=False)
         )
         self.serializer = serializer
         _register_datasource(self)
