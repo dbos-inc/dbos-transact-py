@@ -7,6 +7,7 @@ from typing import Any, AsyncIterator, Dict, Iterator, List, Optional
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.exc import OperationalError
 
 import dbos._workflow_commands as workflow_commands
 from dbos import (
@@ -1113,10 +1114,10 @@ def test_database_error_keeps_datasource_checkpoints(
         @DBOS.workflow()
         def failer() -> None:
             ds.run_tx_step(None, insert, "a")
-            raise sa.exc.OperationalError("SELECT 1", {}, Exception("connection lost"))
+            raise OperationalError("SELECT 1", {}, Exception("connection lost"))
 
         workflow_id = str(uuid.uuid4())
-        with SetWorkflowID(workflow_id), pytest.raises(sa.exc.OperationalError):
+        with SetWorkflowID(workflow_id), pytest.raises(OperationalError):
             failer()
         assert DBOS.retrieve_workflow(workflow_id).get_status().status == "ERROR"
         assert datasource_checkpoints(ds.engine, workflow_id) == [1]
