@@ -4246,8 +4246,6 @@ class SystemDatabase(ABC):
         execution_xid = current_execution_xid(workflow_uuid)
 
         with self.engine.begin() as c:
-            if execution_xid is not None:
-                self._check_owner_txn(c, workflow_uuid, execution_xid)
             c.execute(
                 self.dialect.insert(SystemSchema.workflow_events)
                 .values(
@@ -4281,6 +4279,9 @@ class SystemDatabase(ABC):
                     },
                 )
             )
+            # After the writes, in the order the workflow-level writes lock, so they cannot deadlock.
+            if execution_xid is not None:
+                self._check_owner_txn(c, workflow_uuid, execution_xid)
         # Notify only after commit, so a woken get_event sees the value.
         self._signal_notification(
             _dbos_workflow_events_channel, f"{workflow_uuid}::{key}"
@@ -5626,9 +5627,10 @@ class SystemDatabase(ABC):
         while True:
             try:
                 with self.engine.begin() as c:
+                    c.execute(stmt)
+                    # After the insert, in the order the workflow-level writes lock, so they cannot deadlock.
                     if execution_xid is not None:
                         self._check_owner_txn(c, workflow_uuid, execution_xid)
-                    c.execute(stmt)
                 self._signal_notification(
                     _dbos_streams_channel, f"{workflow_uuid}::{key}"
                 )
