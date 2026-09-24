@@ -13,7 +13,7 @@ import pytest
 import pytest_asyncio
 import sqlalchemy as sa
 from psycopg.errors import SerializationFailure
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
@@ -485,7 +485,7 @@ class _TenantSession(Session):
     pass
 
 
-@sa.event.listens_for(_TenantSession, "after_begin")
+@event.listens_for(_TenantSession, "after_begin")
 def _set_tenant(session: Session, transaction: Any, connection: sa.Connection) -> None:
     session.info["began"] = session.info.get("began", 0) + 1
     if connection.dialect.name == "postgresql":
