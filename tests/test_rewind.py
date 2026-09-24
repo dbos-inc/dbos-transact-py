@@ -29,7 +29,11 @@ from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import deserialize_value
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import INTERNAL_QUEUE_NAME
-from tests.conftest import retry_until_success, set_workflow_status
+from tests.conftest import (
+    retry_until_success,
+    retry_until_success_async,
+    set_workflow_status,
+)
 
 runs: Dict[str, int] = {}
 
@@ -1190,10 +1194,117 @@ def test_a_failed_cleanup_still_records_the_outcome(
         def failing_delete(*args: Any, **kwargs: Any) -> None:
             raise RuntimeError("datasource down")
 
-        monkeypatch.setattr(first, "_delete_checkpoints", failing_delete)
+        monkeypatch.setattr(first, "_delete_checkpoints_if_owner", failing_delete)
         workflow_id = str(uuid.uuid4())
         with SetWorkflowID(workflow_id):
             assert writer() == "done"
         assert DBOS.retrieve_workflow(workflow_id).get_status().status == "SUCCESS"
         assert datasource_checkpoints(first.engine, workflow_id) == [1]
         assert datasource_checkpoints(second.engine, workflow_id) == []
+
+
+def hand_off(dbos: DBOS, workflow_id: str) -> None:
+    """Give the workflow to another execution, as a recovery or resume would."""
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+            .values(owner_xid="another-execution")
+        )
+
+
+def record_cleanups(
+    ds: Any, results: List[bool], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_delete = ds._delete_checkpoints_if_owner
+
+    if isinstance(ds, AsyncSQLAlchemyDatasource):
+
+        async def recording_delete_async(workflow_id: str, owner_xid: str) -> bool:
+            results.append(await real_delete(workflow_id, owner_xid))
+            return results[-1]
+
+        monkeypatch.setattr(ds, "_delete_checkpoints_if_owner", recording_delete_async)
+        return
+
+    def recording_delete(workflow_id: str, owner_xid: str) -> bool:
+        results.append(real_delete(workflow_id, owner_xid))
+        return results[-1]
+
+    monkeypatch.setattr(ds, "_delete_checkpoints_if_owner", recording_delete)
+
+
+def test_a_stale_execution_keeps_datasource_checkpoints(
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An execution that lost the workflow before completing rolls its delete back,
+    since the checkpoints may be the new owner's only record of a transaction."""
+    with launched_with_datasources(config, tmp_path, 2) as (dbos, (first, second)):
+        insert_first, insert_second = inserter(first), inserter(second)
+        cleanups: List[bool] = []
+        record_cleanups(first, cleanups, monkeypatch)
+        record_cleanups(second, cleanups, monkeypatch)
+
+        @DBOS.workflow()
+        def writer() -> str:
+            first.run_tx_step(None, insert_first, "a")
+            second.run_tx_step(None, insert_second, "b")
+            hand_off(dbos, DBOS.workflow_id or "")
+            return "done"
+
+        handle = DBOS.start_workflow(writer)
+        workflow_id = handle.workflow_id
+
+        def cleanup_ran() -> None:
+            assert cleanups
+
+        retry_until_success(cleanup_ran, interval=0.1, max_attempts=100)
+        # Rolled back on the first datasource, which stops the cleanup there.
+        assert cleanups == [False]
+        assert datasource_checkpoints(first.engine, workflow_id) == [1]
+        assert datasource_checkpoints(second.engine, workflow_id) == [2]
+        # Release the parked execution.
+        DBOS.cancel_workflow(workflow_id)
+        with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+            handle.get_result()
+
+
+@pytest.mark.asyncio
+async def test_a_stale_execution_keeps_async_datasource_checkpoints(
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with launched_with_async_datasources(config, tmp_path, 1) as (dbos, (ds,)):
+
+        async def insert(v: str) -> str:
+            await ds.sql_session().execute(
+                sa.text("INSERT INTO rows (v) VALUES (:v)"), {"v": v}
+            )
+            return v
+
+        cleanups: List[bool] = []
+        record_cleanups(ds, cleanups, monkeypatch)
+
+        @DBOS.workflow()
+        async def writer() -> str:
+            await ds.run_tx_step_async(None, insert, "a")
+            hand_off(dbos, DBOS.workflow_id or "")
+            return "done"
+
+        handle = await DBOS.start_workflow_async(writer)
+        workflow_id = handle.workflow_id
+
+        def cleanup_ran() -> None:
+            assert cleanups
+
+        await retry_until_success_async(cleanup_ran, interval=0.1, max_attempts=100)
+        assert cleanups == [False]
+        assert await datasource_checkpoints_async(ds.engine, workflow_id) == [1]
+        await DBOS.cancel_workflow_async(workflow_id)
+        with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+            await handle.get_result()

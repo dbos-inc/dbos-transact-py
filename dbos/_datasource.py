@@ -92,9 +92,11 @@ def _parse_ds_options(
     return name, isolation_level
 
 
-def _still_owns(workflow_id: str) -> bool:
-    """Whether the calling execution still owns the workflow; with no token to check, it assumes so."""
-    owner_xid = current_owner_xid(workflow_id)
+def _still_owns(workflow_id: str, owner_xid: Optional[str] = None) -> bool:
+    """Whether owner_xid (default: the caller's token) still owns the workflow.
+    With no token to check, it assumes so."""
+    if owner_xid is None:
+        owner_xid = current_owner_xid(workflow_id)
     if owner_xid is None:
         return True
     from dbos._dbos import _get_dbos_instance
@@ -249,6 +251,19 @@ class AsyncSQLAlchemyDatasource(ABC):
         """Delete this workflow's checkpoints from start_step on."""
         async with self.engine.begin() as conn:
             await conn.execute(_delete_checkpoints_sql(workflow_id, start_step))
+
+    async def _delete_checkpoints_if_owner(
+        self, workflow_id: str, owner_xid: str
+    ) -> bool:
+        """Delete the workflow's checkpoints; commit only while owner_xid owns it."""
+        async with self.engine.connect() as conn:
+            async with conn.begin() as txn:
+                await conn.execute(_delete_checkpoints_sql(workflow_id, 1))
+                # Delete, then check: every removed row predates any later owner's.
+                if not await asyncio.to_thread(_still_owns, workflow_id, owner_xid):
+                    await txn.rollback()
+                    return False
+        return True
 
     def sql_session(self) -> AsyncSession:
         ctx = get_local_dbos_context()
@@ -613,6 +628,17 @@ class SQLAlchemyDatasource(ABC):
         """Delete this workflow's checkpoints from start_step on."""
         with self.engine.begin() as conn:
             conn.execute(_delete_checkpoints_sql(workflow_id, start_step))
+
+    def _delete_checkpoints_if_owner(self, workflow_id: str, owner_xid: str) -> bool:
+        """Delete the workflow's checkpoints; commit only while owner_xid owns it."""
+        with self.engine.connect() as conn:
+            with conn.begin() as txn:
+                conn.execute(_delete_checkpoints_sql(workflow_id, 1))
+                # Delete, then check: every removed row predates any later owner's.
+                if not _still_owns(workflow_id, owner_xid):
+                    txn.rollback()
+                    return False
+        return True
 
     def sql_session(self) -> Session:
         ctx = get_local_dbos_context()

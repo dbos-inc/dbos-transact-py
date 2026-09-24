@@ -810,13 +810,15 @@ def _get_wf_invoke_func(
             return f"Workflow {status['workflow_uuid']} outcome was not recorded: the workflow is no longer owned by this execution. Waiting for the recorded outcome"
 
         def delete_datasource_checkpoints() -> None:
-            # Still PENDING, so no rewind can interleave; the step checkpoints now cover every transaction.
-            if dbos._registry.datasources:
+            # Step checkpoints cover every transaction; commits only while still the owner.
+            owner_xid = current_owner_xid(status["workflow_uuid"])
+            if dbos._registry.datasources and owner_xid is not None:
                 from ._workflow_commands import delete_completed_datasource_checkpoints
 
                 delete_completed_datasource_checkpoints(
                     dbos,
                     status["workflow_uuid"],
+                    owner_xid,
                     dbos._background_event_loop.submit_coroutine,
                 )
 
