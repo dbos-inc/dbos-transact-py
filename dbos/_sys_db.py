@@ -4243,8 +4243,11 @@ class SystemDatabase(ABC):
             serialization_type,
             self.serializer,
         )
+        execution_xid = current_execution_xid(workflow_uuid)
 
         with self.engine.begin() as c:
+            if execution_xid is not None:
+                self._check_owner_txn(c, workflow_uuid, execution_xid)
             c.execute(
                 self.dialect.insert(SystemSchema.workflow_events)
                 .values(
@@ -5618,10 +5621,13 @@ class SystemDatabase(ABC):
         stmt = self._stream_insert_stmt(
             workflow_uuid, function_id, key, serialized_value, serialization
         )
+        execution_xid = current_execution_xid(workflow_uuid)
 
         while True:
             try:
                 with self.engine.begin() as c:
+                    if execution_xid is not None:
+                        self._check_owner_txn(c, workflow_uuid, execution_xid)
                     c.execute(stmt)
                 self._signal_notification(
                     _dbos_streams_channel, f"{workflow_uuid}::{key}"

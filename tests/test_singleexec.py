@@ -528,6 +528,57 @@ def test_lost_ownership_parks_at_a_sleep(dbos: DBOS) -> None:
         handle.get_result()
 
 
+@pytest.mark.parametrize("write", ["set_event", "write_stream", "close_stream"])
+def test_stale_step_cannot_write_events_or_streams(dbos: DBOS, write: str) -> None:
+    """A step of an execution that lost ownership cannot set events or write streams."""
+    release = threading.Event()
+    started = threading.Event()
+
+    @DBOS.step()
+    def writing_step() -> None:
+        started.set()
+        assert release.wait(30)
+        if write == "set_event":
+            DBOS.set_event("key", "stale")
+        elif write == "write_stream":
+            DBOS.write_stream("key", "stale")
+        else:
+            DBOS.close_stream("key")
+
+    @DBOS.workflow()
+    def writing_workflow() -> str:
+        writing_step()
+        return "done"
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(writing_workflow)
+    try:
+        assert started.wait(10)
+        _steal_ownership(dbos, wfid)
+        release.set()
+
+        def parked() -> None:
+            assert wfid not in dbos._active_workflows_set.activeList()
+
+        retry_until_success(parked, interval=0.1, max_attempts=100)
+        assert dbos._sys_db.get_all_events(wfid) == {}
+        with dbos._sys_db.engine.begin() as c:
+            streamed = c.execute(
+                sa.select(sa.func.count())
+                .select_from(SystemSchema.streams)
+                .where(SystemSchema.streams.c.workflow_uuid == wfid)
+            ).scalar()
+        assert streamed == 0
+        assert _step_names(wfid) == []
+    finally:
+        release.set()
+        # Nobody else will write an outcome: cancel so the parked execution returns.
+        DBOS.cancel_workflow(wfid)
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        handle.get_result()
+
+
 def test_stale_parent_cannot_start_an_inline_child(dbos: DBOS) -> None:
     """A parent that lost ownership cannot insert or run a directly invoked child."""
     release = threading.Event()
