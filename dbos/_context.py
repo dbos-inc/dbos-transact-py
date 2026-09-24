@@ -114,8 +114,8 @@ class DBOSContext:
         self.parent_workflow_fid: int = -1
         self.workflow_id: str = ""
         self.function_id: int = -1
-        # Token this execution wrote to the row's execution_xid; checkpoints land only while it still matches.
-        self.execution_xid: Optional[str] = None
+        # Token this execution wrote to the row's owner_xid; checkpoints land only while it still matches.
+        self.owner_xid: Optional[str] = None
 
         self.curr_step_function_id: int = -1
         # Checkpointed stream reads that have reserved a step but not yet recorded it.
@@ -197,7 +197,7 @@ class DBOSContext:
         rv.app_id = self.app_id
         rv.app_version = self.app_version
         rv.workflow_id = self.workflow_id
-        rv.execution_xid = self.execution_xid
+        rv.owner_xid = self.owner_xid
         rv.workflow_deadline_epoch_ms = self.workflow_deadline_epoch_ms
         rv.workflow_timeout_ms = self.workflow_timeout_ms
         rv.deduplication_id = self.deduplication_id
@@ -274,7 +274,7 @@ class DBOSContext:
     def end_workflow(self, exc_value: Optional[BaseException]) -> None:
         self.workflow_id = ""
         self.function_id = -1
-        self.execution_xid = None
+        self.owner_xid = None
         self._end_span(exc_value)
 
     def is_within_workflow(self) -> bool:
@@ -397,7 +397,7 @@ def get_local_dbos_context() -> Optional[DBOSContext]:
     return _dbos_context_var.get()
 
 
-def current_execution_xid(
+def current_owner_xid(
     workflow_id: str, ctx: Optional[DBOSContext] = None
 ) -> Optional[str]:
     """The ownership token of the execution writing for workflow_id, or None when there is nothing to check."""
@@ -407,9 +407,9 @@ def current_execution_xid(
         return None
     # Every execution path sets a token before its workflow runs; a context without one is a bug.
     assert (
-        ctx.execution_xid is not None
+        ctx.owner_xid is not None
     ), f"Workflow {workflow_id} is writing without an execution token"
-    return ctx.execution_xid
+    return ctx.owner_xid
 
 
 def assert_current_dbos_context() -> DBOSContext:

@@ -670,7 +670,7 @@ def queue_worker_thread(
     """Worker thread for processing a single queue."""
     polling_interval = queue._polling_interval_sec
 
-    def start_dequeued_workflows(workflow_ids: List[str], execution_xid: str) -> None:
+    def start_dequeued_workflows(workflow_ids: List[str], owner_xid: str) -> None:
         """Fetch the claimed workflows' statuses in one round trip, then dispatch each."""
         try:
             found = {
@@ -685,7 +685,7 @@ def queue_worker_thread(
                 status = found.get(id) or dbos._sys_db.get_workflow_status(id)
                 if status is None:
                     raise DBOSRecoveryError(id, "Workflow status not found")
-                execute_dequeued_workflow(dbos, status, execution_xid)
+                execute_dequeued_workflow(dbos, status, owner_xid)
             except Exception as e:
                 dbos.logger.error(f"Error executing workflow {id}: {e}")
 
@@ -732,16 +732,16 @@ def queue_worker_thread(
 
         try:
             if not queue._has_partition_limits():
-                execution_xid = generate_uuid()
+                owner_xid = generate_uuid()
                 dequeued_workflows = dbos._sys_db.start_queued_workflows(
                     queue,
                     GlobalParams.executor_id,
                     GlobalParams.app_version,
                     None,
                     dbos._active_workflows_set.count_for_queue(queue.name),
-                    execution_xid=execution_xid,
+                    owner_xid=owner_xid,
                 )
-                start_dequeued_workflows(dequeued_workflows, execution_xid)
+                start_dequeued_workflows(dequeued_workflows, owner_xid)
             elif (
                 queue._partition_concurrency == 1
                 and queue._concurrency is None
@@ -753,17 +753,17 @@ def queue_worker_thread(
                     queue, dbos._active_workflows_set.count_for_queue(queue.name)
                 )
                 if max_tasks > 0:
-                    execution_xid = generate_uuid()
+                    owner_xid = generate_uuid()
                     dequeued_workflows = (
                         dbos._sys_db.start_queued_partitioned_workflows(
                             queue,
                             GlobalParams.executor_id,
                             GlobalParams.app_version,
                             max_tasks,
-                            execution_xid=execution_xid,
+                            owner_xid=owner_xid,
                         )
                     )
-                    start_dequeued_workflows(dequeued_workflows, execution_xid)
+                    start_dequeued_workflows(dequeued_workflows, owner_xid)
             else:
                 # Iterate through partitions one at a time in random order to prevent starvation.
                 partition_keys = dbos._sys_db.get_queue_partitions(queue.name)
@@ -774,7 +774,7 @@ def queue_worker_thread(
                 for key in partition_keys:
                     if worker_budget(queue, running + claimed) <= 0:
                         break
-                    execution_xid = generate_uuid()
+                    owner_xid = generate_uuid()
                     try:
                         dequeued_workflows = dbos._sys_db.start_queued_workflows(
                             queue,
@@ -785,7 +785,7 @@ def queue_worker_thread(
                             dbos._active_workflows_set.count_for_partition(
                                 queue.name, key
                             ),
-                            execution_xid=execution_xid,
+                            owner_xid=owner_xid,
                         )
                     except OperationalError as e:
                         # Lock held or claim raced by another worker: skip just this partition, no queue-wide backoff.
@@ -796,7 +796,7 @@ def queue_worker_thread(
                             continue
                         raise
                     claimed += len(dequeued_workflows)
-                    start_dequeued_workflows(dequeued_workflows, execution_xid)
+                    start_dequeued_workflows(dequeued_workflows, owner_xid)
         except OperationalError as e:
             if isinstance(e.orig, errors.LockNotAvailable):
                 # Another worker is dequeueing this queue right now; retry next

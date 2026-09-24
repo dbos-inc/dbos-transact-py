@@ -28,11 +28,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import Session, sessionmaker
 
-from dbos._context import (
-    DBOSContextEnsure,
-    current_execution_xid,
-    get_local_dbos_context,
-)
+from dbos._context import DBOSContextEnsure, current_owner_xid, get_local_dbos_context
 from dbos._error import DBOSException, DBOSWorkflowConflictIDError
 from dbos._schemas import SCHEMA_PLACEHOLDER
 from dbos._schemas.datasource_database import DatasourceSchema
@@ -98,12 +94,12 @@ def _parse_ds_options(
 
 def _still_owns(workflow_id: str) -> bool:
     """Whether the calling execution still owns the workflow; with no token to check, it assumes so."""
-    execution_xid = current_execution_xid(workflow_id)
-    if execution_xid is None:
+    owner_xid = current_owner_xid(workflow_id)
+    if owner_xid is None:
         return True
     from dbos._dbos import _get_dbos_instance
 
-    return _get_dbos_instance()._sys_db.get_workflow_owner(workflow_id) == execution_xid
+    return _get_dbos_instance()._sys_db.get_workflow_owner(workflow_id) == owner_xid
 
 
 def _replay_recorded(recorded: "RecordedResult", serializer: "Serializer") -> Any:

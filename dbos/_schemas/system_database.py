@@ -66,9 +66,10 @@ class SystemSchema:
         Column("queue_partition_key", Text()),
         Column("forked_from", Text()),
         Column("was_forked_from", Boolean, nullable=False, server_default="false"),
-        Column("owner_xid", Text()),
         # Token of the execution that currently owns the workflow; NULL when none does.
-        Column("execution_xid", Text()),
+        Column("owner_xid", Text()),
+        # Token of the insert that created the row.
+        Column("creator_xid", Text()),
         Column("parent_workflow_id", Text()),
         Column("serialization", Text()),
         Column("delay_until_epoch_ms", BigInteger, nullable=True),

@@ -1364,7 +1364,7 @@ def get_dbos_migration_hundredtwentytwo(quoted_schema: str, is_cockroach: bool) 
 
 
 def get_dbos_migration_hundredtwentythree(quoted_schema: str) -> str:
-    return f"""ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN IF NOT EXISTS "execution_xid" TEXT DEFAULT NULL;"""
+    return f"""ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN IF NOT EXISTS "creator_xid" TEXT DEFAULT NULL;"""
 
 
 def get_dbos_migrations(
@@ -1894,7 +1894,7 @@ ALTER TABLE notifications ADD COLUMN consumed_by_function_id INTEGER;
 sqlite_migration_hundredtwentytwo = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_deadline" ON "workflow_status" ("workflow_deadline_epoch_ms") WHERE "status" IN (\'ENQUEUED\', \'PENDING\', \'DELAYED\') AND "workflow_deadline_epoch_ms" IS NOT NULL'
 
 sqlite_migration_hundredtwentythree = (
-    """ALTER TABLE workflow_status ADD COLUMN "execution_xid" TEXT DEFAULT NULL;"""
+    """ALTER TABLE workflow_status ADD COLUMN "creator_xid" TEXT DEFAULT NULL;"""
 )
 
 sqlite_migrations = [

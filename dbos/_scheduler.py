@@ -166,7 +166,7 @@ def _enqueue_scheduled_workflow(
     }
     sys_db.init_workflow(
         status,
-        owner_xid=None,
+        creator_xid=None,
     )
 
 

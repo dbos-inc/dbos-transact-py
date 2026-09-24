@@ -49,7 +49,7 @@ from ._context import (
     TracedAttributes,
     WorkflowIDReusePolicy,
     assert_current_dbos_context,
-    current_execution_xid,
+    current_owner_xid,
     extract_trace_context,
     get_local_dbos_context,
     otel_carrier_from_attributes,
@@ -602,7 +602,7 @@ def _init_workflow(
     child_start_time_ms: Optional[int] = None,
     duplication_policy: Optional[DuplicationPolicy] = None,
     workflow_id_reuse_policy: Optional[WorkflowIDReusePolicy] = None,
-    parent_execution_xid: Optional[str] = None,
+    parent_owner_xid: Optional[str] = None,
 ) -> tuple[WorkflowStatusInternal, bool, Optional[str]]:
     """Persist this workflow's initial status row, and for a child its parent's step, in one transaction.
 
@@ -633,7 +633,7 @@ def _init_workflow(
         else int(time.time() * 1000)
     )
     # Generated once, so a retried insert recognizes a row it already committed.
-    owner_xid = str(uuid.uuid4())
+    creator_xid = str(uuid.uuid4())
 
     # Synchronously record the status and inputs for workflows
     while True:
@@ -641,18 +641,18 @@ def _init_workflow(
             if ctx.has_parent():
                 wf_status, should_execute = dbos._sys_db.init_child_workflow(
                     status,
-                    owner_xid=owner_xid,
+                    creator_xid=creator_xid,
                     parent_workflow_id=ctx.parent_workflow_id,
                     parent_function_id=ctx.parent_workflow_fid,
                     function_name=wf_name,
                     started_at_epoch_ms=started_at_epoch_ms,
                     reuse_policy=workflow_id_reuse_policy,
-                    parent_execution_xid=parent_execution_xid,
+                    parent_owner_xid=parent_owner_xid,
                 )
             else:
                 wf_status, should_execute = dbos._sys_db.init_workflow(
                     status,
-                    owner_xid=owner_xid,
+                    creator_xid=creator_xid,
                     reuse_policy=workflow_id_reuse_policy,
                 )
             break
@@ -675,7 +675,7 @@ def _init_workflow(
                                 "started_at_epoch_ms": started_at_epoch_ms,
                                 "child_workflow_id": existing_id,
                             },
-                            execution_xid=parent_execution_xid,
+                            owner_xid=parent_owner_xid,
                         )
                     return status, False, existing_id
                 continue
@@ -692,14 +692,12 @@ def _init_workflow(
                     "started_at_epoch_ms": started_at_epoch_ms,
                     "child_workflow_id": None,
                 }
-                dbos._sys_db.record_operation_result(
-                    result, execution_xid=parent_execution_xid
-                )
+                dbos._sys_db.record_operation_result(result, owner_xid=parent_owner_xid)
             raise
 
     if should_execute:
         # A direct start's insert makes its token the execution token too.
-        ctx.execution_xid = owner_xid
+        ctx.owner_xid = creator_xid
     ctx.workflow_deadline_epoch_ms = workflow_deadline_epoch_ms
     status["status"] = wf_status
     return status, should_execute, None
@@ -1144,11 +1142,11 @@ async def _execute_workflow_async(
 
 
 def execute_dequeued_workflow(
-    dbos: "DBOS", status: WorkflowStatusInternal, execution_xid: str
+    dbos: "DBOS", status: WorkflowStatusInternal, owner_xid: str
 ) -> "WorkflowHandle[Any]":
     """Run a workflow the queue has just claimed, from its persisted status.
 
-    execution_xid is the token the claim wrote, never re-read from the row: a later claim's token there is not ours.
+    owner_xid is the token the claim wrote, never re-read from the row: a later claim's token there is not ours.
 
     Deliberately skips _init_workflow: the claim already wrote everything it would
     (PENDING, executor, deadline, recovery_attempts) and this status was read back
@@ -1167,7 +1165,7 @@ def execute_dequeued_workflow(
             workflow_id,
             WorkflowStatusString.ERROR.value,
             error=error_str,
-            execution_xid=execution_xid,
+            owner_xid=owner_xid,
         )
         raise recovery_error
     try:
@@ -1183,7 +1181,7 @@ def execute_dequeued_workflow(
             workflow_id,
             WorkflowStatusString.ERROR.value,
             error=error_str,
-            execution_xid=execution_xid,
+            owner_xid=owner_xid,
         )
         raise
     wf_func = dbos._registry.workflow_info_map.get(status["name"], None)
@@ -1235,7 +1233,7 @@ def execute_dequeued_workflow(
                 workflow_id,
                 WorkflowStatusString.ERROR.value,
                 error=error_str,
-                execution_xid=execution_xid,
+                owner_xid=owner_xid,
             )
             raise
     # Restore authentication context from the saved workflow status
@@ -1283,7 +1281,7 @@ def execute_dequeued_workflow(
             # Same context start_workflow builds: create_start_workflow_child consumes the
             # ambient SetWorkflowID, so the run adopts the claimed row's ID.
             ctx = DBOSContext.create_start_workflow_child(get_local_dbos_context())
-            ctx.execution_xid = execution_xid
+            ctx.owner_xid = owner_xid
             # Consume the restored carrier so workflows started inside this one do not inherit it.
             ctx.workflow_attributes = None
             ctx.otel_carrier = None
@@ -1743,13 +1741,13 @@ def _persist_enqueue_with_options(
     duplication_policy = options.get("duplication_policy")
     reuse_policy = options.get("workflow_id_reuse_policy")
     # Generated once, so a retried insert recognizes a row it already committed.
-    owner_xid = str(uuid.uuid4())
+    creator_xid = str(uuid.uuid4())
     while True:
         try:
             if new_wf_ctx.has_parent():
                 dbos._sys_db.init_child_workflow(
                     status,
-                    owner_xid=owner_xid,
+                    creator_xid=creator_xid,
                     parent_workflow_id=new_wf_ctx.parent_workflow_id,
                     parent_function_id=new_wf_ctx.parent_workflow_fid,
                     function_name=wf_name,
@@ -1759,7 +1757,7 @@ def _persist_enqueue_with_options(
             else:
                 dbos._sys_db.init_workflow(
                     status,
-                    owner_xid=owner_xid,
+                    creator_xid=creator_xid,
                     reuse_policy=reuse_policy,
                 )
             break
@@ -1911,10 +1909,10 @@ def workflow_wrapper(
         parent_fid = newwfctx.parent_workflow_fid
         resctx: Optional[DBOSContext] = None
         # Captured now: check_and_init runs inside the child's context, where the parent's token is not ambient.
-        parent_execution_xid: Optional[str] = None
+        parent_owner_xid: Optional[str] = None
         if cctx is not None and cctx.is_workflow():
             resctx = cctx.snapshot_step_ctx(reserve_sleep_id=False)
-            parent_execution_xid = current_execution_xid(parent_wfid, cctx)
+            parent_owner_xid = current_owner_xid(parent_wfid, cctx)
         workflow_timeout_ms, workflow_deadline_epoch_ms = _get_timeout_deadline(
             cctx, queue=None
         )
@@ -1961,7 +1959,7 @@ def workflow_wrapper(
                 child_workflow_id=child_wfid,
                 child_start_time_ms=child_start_time,
                 workflow_id_reuse_policy=reuse_policy,
-                parent_execution_xid=parent_execution_xid,
+                parent_owner_xid=parent_owner_xid,
             )
 
             # The body writes events, streams, and messages in this format; without it a directly

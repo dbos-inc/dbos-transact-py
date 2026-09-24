@@ -489,7 +489,7 @@ def _steal_ownership(dbos: DBOS, wfid: str) -> None:
         c.execute(
             sa.update(SystemSchema.workflow_status)
             .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
-            .values(execution_xid="another-execution")
+            .values(owner_xid="another-execution")
         )
 
 
@@ -776,7 +776,7 @@ def test_stale_owner_cannot_write_outcome(
             c.execute(
                 sa.update(SystemSchema.workflow_status)
                 .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
-                .values(execution_xid="another-execution")
+                .values(owner_xid="another-execution")
             )
         release.set()
 

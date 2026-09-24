@@ -70,11 +70,7 @@ from dbos._sys_db import (
     WorkflowStatus,
     WorkflowStatusInternal,
 )
-from dbos._workflow_commands import (
-    fork_workflow,
-    get_workflow,
-    rewind_workflow,
-)
+from dbos._workflow_commands import fork_workflow, get_workflow, rewind_workflow
 
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
@@ -269,12 +265,12 @@ class DBOSClient:
         workflow_id, status = self._build_enqueue_status(options, *args, **kwargs)
         return_existing = options.get("duplication_policy") == "return-existing"
         # Generated once, so a retried insert recognizes a row it already committed.
-        owner_xid = generate_uuid()
+        creator_xid = generate_uuid()
         while True:
             try:
                 self._sys_db.init_workflow(
                     status,
-                    owner_xid=owner_xid,
+                    creator_xid=creator_xid,
                     reuse_policy=options.get("workflow_id_reuse_policy"),
                 )
                 return workflow_id
@@ -309,7 +305,7 @@ class DBOSClient:
         self._sys_db.init_workflow_with_connection(
             status,
             conn_or_session,
-            owner_xid=generate_uuid(),
+            creator_xid=generate_uuid(),
             reuse_policy=options.get("workflow_id_reuse_policy"),
         )
         return workflow_id
@@ -331,7 +327,7 @@ class DBOSClient:
         status["is_debounced"] = True
         self._sys_db.init_workflow(
             status,
-            owner_xid=None,
+            creator_xid=None,
         )
         return workflow_id
 

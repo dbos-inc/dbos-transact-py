@@ -930,7 +930,7 @@ def test_init_child_workflow_is_atomic(dbos: DBOS) -> None:
         child_status["workflow_uuid"] = workflow_id
         dbos._sys_db.init_child_workflow(
             child_status,
-            owner_xid=str(uuid.uuid4()),
+            creator_xid=str(uuid.uuid4()),
             parent_workflow_id=parent_id,
             parent_function_id=1,
             function_name=child_status["name"],

@@ -46,7 +46,7 @@ from dbos._utils import (
 from ._context import (
     DBOSContext,
     WorkflowIDReusePolicy,
-    current_execution_xid,
+    current_owner_xid,
     get_local_dbos_context,
     validate_workflow_attributes,
 )
@@ -988,14 +988,14 @@ class SystemDatabase(ABC):
         status: WorkflowStatusInternal,
         conn: Union[sa.Connection, Session],
         *,
-        owner_xid: Optional[str],
+        creator_xid: Optional[str],
         reuse_policy: Optional[WorkflowIDReusePolicy] = None,
     ) -> tuple[WorkflowStatuses, bool]:
         """Insert a workflow's status row, or return the existing row unchanged."""
-        # Without an owner_xid the check below cannot tell a fresh insert from an existing row.
+        # Without a creator_xid the check below cannot tell a fresh insert from an existing row.
         assert (
-            reuse_policy != "reject" or owner_xid is not None
-        ), "workflow_id_reuse_policy 'reject' requires an owner_xid"
+            reuse_policy != "reject" or creator_xid is not None
+        ), "workflow_id_reuse_policy 'reject' requires a creator_xid"
         wf_status: WorkflowStatuses = status["status"]
         should_execute = True
         _enqueued_statuses = [
@@ -1025,10 +1025,10 @@ class SystemDatabase(ABC):
                 serialization=status["serialization"],
                 queue_partition_key=status["queue_partition_key"],
                 parent_workflow_id=status["parent_workflow_id"],
-                owner_xid=owner_xid,
+                creator_xid=creator_xid,
                 # A direct start runs at once, so its insert token also owns the execution.
-                execution_xid=(
-                    owner_xid
+                owner_xid=(
+                    creator_xid
                     if wf_status == WorkflowStatusString.PENDING.value
                     else None
                 ),
@@ -1042,7 +1042,7 @@ class SystemDatabase(ABC):
             # A no-op update, so an existing row comes back unchanged for the caller to inspect.
             .on_conflict_do_update(
                 index_elements=["workflow_uuid"],
-                set_={"owner_xid": SystemSchema.workflow_status.c.owner_xid},
+                set_={"creator_xid": SystemSchema.workflow_status.c.creator_xid},
             )
         )
 
@@ -1052,7 +1052,7 @@ class SystemDatabase(ABC):
             SystemSchema.workflow_status.c.class_name,
             SystemSchema.workflow_status.c.config_name,
             SystemSchema.workflow_status.c.queue_name,
-            SystemSchema.workflow_status.c.owner_xid,
+            SystemSchema.workflow_status.c.creator_xid,
             SystemSchema.workflow_status.c.serialization,
         )
 
@@ -1086,8 +1086,8 @@ class SystemDatabase(ABC):
             # Check the started workflow matches the expected name, class_name, config_name, and queue_name
             # A mismatch indicates a workflow starting with the same UUID but different functions, which would throw an exception.
             wf_status = m["status"]
-            # A row carrying another owner_xid was already there; a retried commit carries ours.
-            if reuse_policy == "reject" and m["owner_xid"] != owner_xid:
+            # A row carrying another creator_xid was already there; a retried commit carries ours.
+            if reuse_policy == "reject" and m["creator_xid"] != creator_xid:
                 raise DBOSWorkflowIDInUseError(
                     status["workflow_uuid"], m["status"], m["name"]
                 )
@@ -1106,7 +1106,7 @@ class SystemDatabase(ABC):
             if err_msg is not None:
                 raise DBOSConflictingWorkflowError(status["workflow_uuid"], err_msg)
 
-            if owner_xid != m["owner_xid"]:
+            if creator_xid != m["creator_xid"]:
                 should_execute = False
 
             status["serialization"] = m["serialization"]
@@ -1142,7 +1142,7 @@ class SystemDatabase(ABC):
                 )
                 .values(
                     status=WorkflowStatusString.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value,
-                    execution_xid=None,
+                    owner_xid=None,
                     deduplication_id=None,
                     started_at_epoch_ms=None,
                     queue_name=None,
@@ -1159,11 +1159,11 @@ class SystemDatabase(ABC):
         *,
         output: Optional[str] = None,
         error: Optional[str] = None,
-        execution_xid: Optional[str] = None,
+        owner_xid: Optional[str] = None,
     ) -> bool:
         """Record a workflow's terminal outcome, reporting whether the write landed.
 
-        The write applies only to a PENDING row still owned by execution_xid, which
+        The write applies only to a PENDING row still owned by owner_xid, which
         defaults to the calling execution's token; a caller outside the workflow's
         context passes it explicitly or goes unchecked.
 
@@ -1171,8 +1171,8 @@ class SystemDatabase(ABC):
         terminal, handed to another execution (e.g. by a concurrent resume or
         recovery), or gone entirely.
         """
-        if execution_xid is None:
-            execution_xid = current_execution_xid(workflow_id)
+        if owner_xid is None:
+            owner_xid = current_owner_xid(workflow_id)
         with self.engine.begin() as c:
             now_ms = self._now_ms_sql()
             update = (
@@ -1190,9 +1190,9 @@ class SystemDatabase(ABC):
                     == WorkflowStatusString.PENDING.value
                 )
             )
-            if execution_xid is not None:
+            if owner_xid is not None:
                 update = update.where(
-                    SystemSchema.workflow_status.c.execution_xid == execution_xid
+                    SystemSchema.workflow_status.c.owner_xid == owner_xid
                 )
             result = c.execute(update)
             if result.rowcount == 0:
@@ -1235,7 +1235,7 @@ class SystemDatabase(ABC):
                     )
                     .values(
                         status=WorkflowStatusString.CANCELLED.value,
-                        execution_xid=None,
+                        owner_xid=None,
                         queue_name=None,
                         deduplication_id=None,
                         started_at_epoch_ms=None,
@@ -1290,7 +1290,7 @@ class SystemDatabase(ABC):
                 )
                 .values(
                     status=WorkflowStatusString.ENQUEUED.value,
-                    execution_xid=None,
+                    owner_xid=None,
                     queue_name=(
                         queue_name if queue_name is not None else INTERNAL_QUEUE_NAME
                     ),
@@ -1670,7 +1670,7 @@ class SystemDatabase(ABC):
                 .where(SystemSchema.workflow_status.c.status == status)
                 .values(
                     status=WorkflowStatusString.ENQUEUED.value,
-                    execution_xid=None,
+                    owner_xid=None,
                     **version_update,
                     queue_name=(
                         queue_name if queue_name is not None else INTERNAL_QUEUE_NAME
@@ -3177,9 +3177,9 @@ class SystemDatabase(ABC):
         return results
 
     def _check_owner_txn(
-        self, conn: Union[sa.Connection, Session], workflow_id: str, execution_xid: str
+        self, conn: Union[sa.Connection, Session], workflow_id: str, owner_xid: str
     ) -> None:
-        """Raise DBOSWorkflowConflictIDError unless execution_xid still owns the workflow.
+        """Raise DBOSWorkflowConflictIDError unless owner_xid still owns the workflow.
 
         The row stays locked until commit, so a hand-off (cancel, resume, recovery) cannot land between this check and the write.
         """
@@ -3190,18 +3190,18 @@ class SystemDatabase(ABC):
             stmt = (
                 sa.update(ws)
                 .where(ws.c.workflow_uuid == workflow_id)
-                .values(execution_xid=ws.c.execution_xid)
-                .returning(ws.c.execution_xid)
+                .values(owner_xid=ws.c.owner_xid)
+                .returning(ws.c.owner_xid)
             )
         else:
             # FOR NO KEY UPDATE
             stmt = (
-                sa.select(ws.c.execution_xid)
+                sa.select(ws.c.owner_xid)
                 .where(ws.c.workflow_uuid == workflow_id)
                 .with_for_update(key_share=True)
             )
         current = conn.execute(stmt).scalar()
-        if current != execution_xid:
+        if current != owner_xid:
             raise DBOSWorkflowConflictIDError(workflow_id)
 
     def _record_operation_result_txn(
@@ -3210,19 +3210,19 @@ class SystemDatabase(ABC):
         completed_at_epoch_ms: int,
         conn: Union[sa.Connection, Session],
         *,
-        execution_xid: Optional[str] = None,
+        owner_xid: Optional[str] = None,
     ) -> None:
-        """Insert the step row. execution_xid defaults to the calling execution's token; a caller
+        """Insert the step row. owner_xid defaults to the calling execution's token; a caller
         writing on another workflow's behalf from inside a different context passes it.
         """
         error = result["error"]
         output = result["output"]
         assert error is None or output is None, "Only one of error or output can be set"
 
-        if execution_xid is None:
-            execution_xid = current_execution_xid(result["workflow_uuid"])
-        if execution_xid is not None:
-            self._check_owner_txn(conn, result["workflow_uuid"], execution_xid)
+        if owner_xid is None:
+            owner_xid = current_owner_xid(result["workflow_uuid"])
+        if owner_xid is not None:
+            self._check_owner_txn(conn, result["workflow_uuid"], owner_xid)
 
         # Record the outcome. A row already there with another completion time is this
         # execution's own doing (a retry carries the same time), so it is nondeterminism, not a duplicate.
@@ -3281,7 +3281,7 @@ class SystemDatabase(ABC):
         """The workflow's current ownership token; None if unowned or missing."""
         with self.engine.begin() as c:
             return c.execute(
-                sa.select(SystemSchema.workflow_status.c.execution_xid).where(
+                sa.select(SystemSchema.workflow_status.c.owner_xid).where(
                     SystemSchema.workflow_status.c.workflow_uuid == workflow_id
                 )
             ).scalar()
@@ -3291,7 +3291,7 @@ class SystemDatabase(ABC):
         result: OperationResultInternal,
         *,
         completed_at_epoch_ms: Optional[int] = None,
-        execution_xid: Optional[str] = None,
+        owner_xid: Optional[str] = None,
     ) -> None:
         # Outside the retry: the conflict check compares the stored completion to ours.
         completed_at = (
@@ -3304,7 +3304,7 @@ class SystemDatabase(ABC):
         def record_operation_result_retry() -> None:
             with self.engine.begin() as c:
                 self._record_operation_result_txn(
-                    result, completed_at, c, execution_xid=execution_xid
+                    result, completed_at, c, owner_xid=owner_xid
                 )
             DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT)
 
@@ -3329,7 +3329,7 @@ class SystemDatabase(ABC):
         # Capture ids outside the retry: db_retry may re-run its body, but function_id must increment only once.
         workflow_id = ctx.workflow_id
         function_id = ctx.function_id
-        execution_xid = current_execution_xid(workflow_id, ctx)
+        owner_xid = current_owner_xid(workflow_id, ctx)
 
         @db_retry(sys_db=self)
         def record() -> None:
@@ -3353,8 +3353,8 @@ class SystemDatabase(ABC):
                 .on_conflict_do_nothing()
             )
             with self.engine.begin() as c:
-                if execution_xid is not None:
-                    self._check_owner_txn(c, workflow_id, execution_xid)
+                if owner_xid is not None:
+                    self._check_owner_txn(c, workflow_id, owner_xid)
                 c.execute(sql)
 
         record()
@@ -4243,7 +4243,7 @@ class SystemDatabase(ABC):
             serialization_type,
             self.serializer,
         )
-        execution_xid = current_execution_xid(workflow_uuid)
+        owner_xid = current_owner_xid(workflow_uuid)
 
         with self.engine.begin() as c:
             c.execute(
@@ -4280,8 +4280,8 @@ class SystemDatabase(ABC):
                 )
             )
             # After the writes, in the order the workflow-level writes lock, so they cannot deadlock.
-            if execution_xid is not None:
-                self._check_owner_txn(c, workflow_uuid, execution_xid)
+            if owner_xid is not None:
+                self._check_owner_txn(c, workflow_uuid, owner_xid)
         # Notify only after commit, so a woken get_event sees the value.
         self._signal_notification(
             _dbos_workflow_events_channel, f"{workflow_uuid}::{key}"
@@ -4690,7 +4690,7 @@ class SystemDatabase(ABC):
                 .where(ws.c.workflow_uuid.in_(timed_out))
                 .values(
                     status=WorkflowStatusString.CANCELLED.value,
-                    execution_xid=None,
+                    owner_xid=None,
                     queue_name=None,
                     deduplication_id=None,
                     started_at_epoch_ms=None,
@@ -4710,7 +4710,7 @@ class SystemDatabase(ABC):
         local_running_count: int = 0,
         partition_local_running_count: int = 0,
         *,
-        execution_xid: Optional[str] = None,
+        owner_xid: Optional[str] = None,
     ) -> List[str]:
         start_time_ms = int(time.time() * 1000)
         ws = SystemSchema.workflow_status
@@ -4928,7 +4928,7 @@ class SystemDatabase(ABC):
                     )
                     .values(
                         status=WorkflowStatusString.PENDING.value,
-                        execution_xid=execution_xid,
+                        owner_xid=owner_xid,
                         application_version=app_version,
                         executor_id=executor_id,
                         # Claim it, so the unclaimed partition drains as workflows run.
@@ -4974,7 +4974,7 @@ class SystemDatabase(ABC):
         app_version: str,
         max_tasks: int = sys.maxsize,
         *,
-        execution_xid: Optional[str] = None,
+        owner_xid: Optional[str] = None,
     ) -> List[str]:
         """Batch dequeue from a partitioned queue, optimized for the specific
         case where partition_concurrency=1. All other cases iterate and dequeue
@@ -5124,7 +5124,7 @@ class SystemDatabase(ABC):
                 .where(claim_guard)
                 .values(
                     status=WorkflowStatusString.PENDING.value,
-                    execution_xid=execution_xid,
+                    owner_xid=owner_xid,
                     application_version=app_version,
                     executor_id=executor_id,
                     # Claim the row, as the unpartitioned dequeue does.
@@ -5181,7 +5181,7 @@ class SystemDatabase(ABC):
                 .where(SystemSchema.workflow_status.c.executor_id.in_(executor_ids))
                 .values(
                     status=WorkflowStatusString.ENQUEUED.value,
-                    execution_xid=None,
+                    owner_xid=None,
                     started_at_epoch_ms=None,
                     updated_at=self._now_ms_sql(),
                     queue_name=sa.func.coalesce(
@@ -5294,7 +5294,7 @@ class SystemDatabase(ABC):
         self,
         status: WorkflowStatusInternal,
         *,
-        owner_xid: Optional[str],
+        creator_xid: Optional[str],
         reuse_policy: Optional[WorkflowIDReusePolicy] = None,
     ) -> tuple[WorkflowStatuses, bool]:
         """
@@ -5304,7 +5304,7 @@ class SystemDatabase(ABC):
             wf_status, should_execute = self._insert_workflow_status(
                 status,
                 conn,
-                owner_xid=owner_xid,
+                creator_xid=creator_xid,
                 reuse_policy=reuse_policy,
             )
         DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_INITWF_COMMIT)
@@ -5315,28 +5315,28 @@ class SystemDatabase(ABC):
         self,
         status: WorkflowStatusInternal,
         *,
-        owner_xid: str,
+        creator_xid: str,
         parent_workflow_id: str,
         parent_function_id: int,
         function_name: str,
         started_at_epoch_ms: int,
         reuse_policy: Optional[WorkflowIDReusePolicy] = None,
-        parent_execution_xid: Optional[str] = None,
+        parent_owner_xid: Optional[str] = None,
     ) -> tuple[WorkflowStatuses, bool]:
         """Insert a child's status row and record it as the parent's step in one transaction, so a crash leaves both or neither.
 
-        parent_execution_xid defaults to the ambient context's token; the inline child path passes
+        parent_owner_xid defaults to the ambient context's token; the inline child path passes
         the parent's, since it runs inside the child's context."""
         child_workflow_id = status["workflow_uuid"]
-        if parent_execution_xid is None:
-            parent_execution_xid = current_execution_xid(parent_workflow_id)
+        if parent_owner_xid is None:
+            parent_owner_xid = current_owner_xid(parent_workflow_id)
         with self.engine.begin() as conn:
-            if parent_execution_xid is not None:
-                self._check_owner_txn(conn, parent_workflow_id, parent_execution_xid)
+            if parent_owner_xid is not None:
+                self._check_owner_txn(conn, parent_workflow_id, parent_owner_xid)
             result = self._insert_workflow_status(
                 status,
                 conn,
-                owner_xid=owner_xid,
+                creator_xid=creator_xid,
                 reuse_policy=reuse_policy,
             )
             inserted = conn.execute(
@@ -5484,7 +5484,7 @@ class SystemDatabase(ABC):
                     "serialization": status["serialization"],
                     "queue_partition_key": status["queue_partition_key"],
                     "parent_workflow_id": status["parent_workflow_id"],
-                    "owner_xid": None,
+                    "creator_xid": None,
                     "delay_until_epoch_ms": status["delay_until_epoch_ms"],
                     "attributes": status["attributes"],
                     "schedule_name": status["schedule_name"],
@@ -5539,7 +5539,7 @@ class SystemDatabase(ABC):
         status: WorkflowStatusInternal,
         conn: Union[sa.Connection, Session],
         *,
-        owner_xid: Optional[str] = None,
+        creator_xid: Optional[str] = None,
         reuse_policy: Optional[WorkflowIDReusePolicy] = None,
     ) -> tuple[WorkflowStatuses, bool]:
         """
@@ -5554,7 +5554,7 @@ class SystemDatabase(ABC):
         return self._insert_workflow_status(
             status,
             conn,
-            owner_xid=owner_xid,
+            creator_xid=creator_xid,
             reuse_policy=reuse_policy,
         )
 
@@ -5622,15 +5622,15 @@ class SystemDatabase(ABC):
         stmt = self._stream_insert_stmt(
             workflow_uuid, function_id, key, serialized_value, serialization
         )
-        execution_xid = current_execution_xid(workflow_uuid)
+        owner_xid = current_owner_xid(workflow_uuid)
 
         while True:
             try:
                 with self.engine.begin() as c:
                     c.execute(stmt)
                     # After the insert, in the order the workflow-level writes lock, so they cannot deadlock.
-                    if execution_xid is not None:
-                        self._check_owner_txn(c, workflow_uuid, execution_xid)
+                    if owner_xid is not None:
+                        self._check_owner_txn(c, workflow_uuid, owner_xid)
                 self._signal_notification(
                     _dbos_streams_channel, f"{workflow_uuid}::{key}"
                 )
@@ -6335,7 +6335,7 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.debounce_deadline_epoch_ms,
                         SystemSchema.workflow_status.c.is_debounced,
                         SystemSchema.workflow_status.c.application_name,
-                        # owner_xid and execution_xid are intentionally omitted: they
+                        # creator_xid and owner_xid are intentionally omitted: they
                         # are transient ownership tokens, not logical workflow state,
                         # and a source database's tokens are meaningless in the target.
                     )
