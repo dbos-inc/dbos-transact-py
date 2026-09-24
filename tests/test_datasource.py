@@ -593,16 +593,16 @@ class _ExpireItem(_ExpireBase):
 def test_sync_ds_returns_loaded_orm_objects(
     sync_ds: SQLAlchemyDatasource, dbos: DBOS
 ) -> None:
-    """ORM objects returned by a transaction stay loaded after commit, and on replay."""
+    """ORM objects returned by a transaction stay loaded after commit, and replay with
+    their generated key from both the workflow output and the datasource checkpoint."""
     _ExpireBase.metadata.create_all(sync_ds.engine)
     try:
 
         @sync_ds.transaction
         def add_item(name: str) -> _ExpireItem:
+            # No explicit flush: the key is generated only when DBOS flushes.
             item = _ExpireItem(name=name)
-            session = sync_ds.sql_session()
-            session.add(item)
-            session.flush()
+            sync_ds.sql_session().add(item)
             return item
 
         @DBOS.workflow()
@@ -614,10 +614,15 @@ def test_sync_ds_returns_loaded_orm_objects(
         wfid = str(uuid.uuid4())
         with SetWorkflowID(wfid):
             first = wf("a")
+        assert first.id is not None and first.name == "a"
         with SetWorkflowID(wfid):
             replayed = wf("a")
-        assert (first.id, first.name) == (replayed.id, replayed.name)
-        assert first.name == "a"
+        assert (replayed.id, replayed.name) == (first.id, first.name)
+        # Lose the sysdb records, so the step replays from the datasource checkpoint.
+        dbos._sys_db.delete_workflows([wfid])
+        with SetWorkflowID(wfid):
+            recovered = wf("a")
+        assert (recovered.id, recovered.name) == (first.id, first.name)
     finally:
         _ExpireBase.metadata.drop_all(sync_ds.engine)
 
@@ -1244,17 +1249,17 @@ async def test_async_ds_custom_sessionmaker(
 async def test_async_ds_returns_loaded_orm_objects(
     async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS
 ) -> None:
-    """ORM objects returned by a transaction stay loaded after commit, and on replay."""
+    """ORM objects returned by a transaction stay loaded after commit, and replay with
+    their generated key from both the workflow output and the datasource checkpoint."""
     async with async_ds.engine.begin() as conn:
         await conn.run_sync(_ExpireBase.metadata.create_all)
     try:
 
         @async_ds.transaction
         async def add_item(name: str) -> _ExpireItem:
+            # No explicit flush: the key is generated only when DBOS flushes.
             item = _ExpireItem(name=name)
-            session = async_ds.sql_session()
-            session.add(item)
-            await session.flush()
+            async_ds.sql_session().add(item)
             return item
 
         @DBOS.workflow()
@@ -1266,10 +1271,15 @@ async def test_async_ds_returns_loaded_orm_objects(
         wfid = str(uuid.uuid4())
         with SetWorkflowID(wfid):
             first = await wf("a")
+        assert first.id is not None and first.name == "a"
         with SetWorkflowID(wfid):
             replayed = await wf("a")
-        assert (first.id, first.name) == (replayed.id, replayed.name)
-        assert first.name == "a"
+        assert (replayed.id, replayed.name) == (first.id, first.name)
+        # Lose the sysdb records, so the step replays from the datasource checkpoint.
+        dbos._sys_db.delete_workflows([wfid])
+        with SetWorkflowID(wfid):
+            recovered = await wf("a")
+        assert (recovered.id, recovered.name) == (first.id, first.name)
     finally:
         async with async_ds.engine.begin() as conn:
             await conn.run_sync(_ExpireBase.metadata.drop_all)

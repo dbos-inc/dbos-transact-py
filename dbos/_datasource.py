@@ -420,6 +420,8 @@ class AsyncSQLAlchemyDatasource(ABC):
                                     )
                                     output = await func(*args, **kwargs)
                                     if in_wf:
+                                        # Flush first, so the checkpoint holds generated keys and defaults, as the caller sees them.
+                                        await session.flush()
                                         serialized, serialization = serialize_value(
                                             output, None, self.serializer
                                         )
@@ -790,6 +792,8 @@ class SQLAlchemyDatasource(ABC):
                                     )
                                     output = func(*args, **kwargs)
                                     if in_wf:
+                                        # Flush first, so the checkpoint holds generated keys and defaults, as the caller sees them.
+                                        session.flush()
                                         serialized, serialization = serialize_value(
                                             output, None, self.serializer
                                         )
