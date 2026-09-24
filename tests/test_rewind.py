@@ -898,7 +898,7 @@ def test_rewind_with_datasources_refuses_an_active_workflow(
             DBOS.rewind_workflow("no-such-workflow")
 
 
-def test_client_rewind_clears_the_given_datasources(
+def test_client_rewind_leaves_datasources_alone(
     config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
 ) -> None:
     with launched_with_datasources(config, tmp_path, 2) as (dbos, (first, second)):
@@ -917,27 +917,20 @@ def test_client_rewind_clears_the_given_datasources(
         assert config["system_database_url"] is not None
         client = DBOSClient(system_database_url=config["system_database_url"])
         try:
-            # Given the datasources, the client clears them like the application does.
-            handle = client.rewind_workflow(
-                workflow_id, start_step=3, datasources=[first, second]
-            )
-            assert handle.get_result() == 2
+            # The client only rewinds the system database. The datasources'
+            # checkpoints stay and the replay takes them as the transactions'
+            # results: nothing runs again.
+            assert client.rewind_workflow(workflow_id, start_step=3).get_result() == 2
             assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
             assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
-            assert table_rows(first.engine) == ["a", "c", "c"]
-            assert table_rows(second.engine) == ["b", "d", "d"]
-
-            # Without them, the checkpoints stay and the replay takes them as
-            # the transactions' results: nothing runs again.
-            assert client.rewind_workflow(workflow_id, start_step=3).get_result() == 3
-            assert table_rows(first.engine) == ["a", "c", "c"]
-            assert table_rows(second.engine) == ["b", "d", "d"]
+            assert table_rows(first.engine) == ["a", "c"]
+            assert table_rows(second.engine) == ["b", "d"]
         finally:
             client.destroy()
 
 
 @pytest.mark.asyncio
-async def test_async_client_rewind_clears_the_given_datasources(
+async def test_async_client_rewind_leaves_datasources_alone(
     config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
 ) -> None:
     async with launched_with_async_datasources(config, tmp_path, 2) as (
@@ -972,18 +965,7 @@ async def test_async_client_rewind_clears_the_given_datasources(
         assert config["system_database_url"] is not None
         client = DBOSClient(system_database_url=config["system_database_url"])
         try:
-            # The sync client cannot drive an async datasource, and says so before
-            # touching anything.
-            with pytest.raises(DBOSException, match="async rewind"):
-                client.rewind_workflow(workflow_id, datasources=[first])
-            assert await datasource_checkpoints_async(first.engine, workflow_id) == [
-                1,
-                3,
-            ]
-
-            handle = await client.rewind_workflow_async(
-                workflow_id, start_step=3, datasources=[first, second]
-            )
+            handle = await client.rewind_workflow_async(workflow_id, start_step=3)
             assert await handle.get_result() == 2
             assert await datasource_checkpoints_async(first.engine, workflow_id) == [
                 1,
@@ -993,7 +975,7 @@ async def test_async_client_rewind_clears_the_given_datasources(
                 2,
                 4,
             ]
-            assert await table_rows_async(first.engine) == ["a", "c", "c"]
-            assert await table_rows_async(second.engine) == ["b", "d", "d"]
+            assert await table_rows_async(first.engine) == ["a", "c"]
+            assert await table_rows_async(second.engine) == ["b", "d"]
         finally:
             client.destroy()
