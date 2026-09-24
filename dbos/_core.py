@@ -696,7 +696,7 @@ def _init_workflow(
             raise
 
     if should_execute:
-        # A direct start's insert makes its token the execution token too.
+        # A direct start's creator token also owns the execution.
         ctx.owner_xid = creator_xid
     ctx.workflow_deadline_epoch_ms = workflow_deadline_epoch_ms
     status["status"] = wf_status

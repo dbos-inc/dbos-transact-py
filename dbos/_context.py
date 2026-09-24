@@ -408,7 +408,7 @@ def current_owner_xid(
     # Every execution path sets a token before its workflow runs; a context without one is a bug.
     assert (
         ctx.owner_xid is not None
-    ), f"Workflow {workflow_id} is writing without an execution token"
+    ), f"Workflow {workflow_id} is writing without an ownership token"
     return ctx.owner_xid
 
 

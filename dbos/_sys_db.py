@@ -1026,7 +1026,7 @@ class SystemDatabase(ABC):
                 queue_partition_key=status["queue_partition_key"],
                 parent_workflow_id=status["parent_workflow_id"],
                 creator_xid=creator_xid,
-                # A direct start runs at once, so its insert token also owns the execution.
+                # A direct start runs at once, so its creator token also owns the execution.
                 owner_xid=(
                     creator_xid
                     if wf_status == WorkflowStatusString.PENDING.value
@@ -6336,7 +6336,7 @@ class SystemDatabase(ABC):
                         SystemSchema.workflow_status.c.is_debounced,
                         SystemSchema.workflow_status.c.application_name,
                         # creator_xid and owner_xid are intentionally omitted: they
-                        # are transient ownership tokens, not logical workflow state,
+                        # are transient tokens, not logical workflow state,
                         # and a source database's tokens are meaningless in the target.
                     )
                     .select_from(
