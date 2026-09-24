@@ -1181,6 +1181,8 @@ class SystemDatabase(ABC):
                     status=status,
                     # As the workflow is complete, remove its deduplication ID
                     deduplication_id=None,
+                    # A finished workflow has no owner.
+                    owner_xid=None,
                     updated_at=now_ms,
                     completed_at=now_ms,
                 )

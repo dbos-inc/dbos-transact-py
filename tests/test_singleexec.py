@@ -721,10 +721,16 @@ def test_owner_check_blocks_hand_off_until_commit(dbos: DBOS) -> None:
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         owned_workflow()
-    # PENDING again, keeping the finished execution's token.
-    set_workflow_status(dbos._sys_db, wfid, "PENDING")
-    token = dbos._sys_db.get_workflow_owner(wfid)
-    assert token is not None
+    # Recording the outcome released ownership.
+    assert dbos._sys_db.get_workflow_owner(wfid) is None
+    # PENDING again, owned by a stand-in execution.
+    token = str(uuid.uuid4())
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+            .values(status="PENDING", owner_xid=token)
+        )
 
     handed_off = threading.Event()
 
