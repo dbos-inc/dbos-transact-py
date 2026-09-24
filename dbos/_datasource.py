@@ -206,6 +206,8 @@ class AsyncSQLAlchemyDatasource(ABC):
             self.engine = self._create_engine(database_url, engine_kwargs)
             self.created_engine = True
         self._outputs_table = datasource_outputs_table(self.schema)
+        # Pinned on DBOS's own statements, so a caller engine's schema_translate_map can't move them.
+        self._pin: Dict[str, Any] = {"schema_translate_map": {self.schema: self.schema}}
         # Sessions are always opened with bind=self.engine, so checkpoints share the engine that reads them.
         # No expiry by default: returned ORM objects outlive the session and are checkpointed after commit.
         self.sessionmaker: async_sessionmaker[Any] = (
@@ -273,7 +275,8 @@ class AsyncSQLAlchemyDatasource(ABC):
         """Delete this workflow's checkpoints from start_step on."""
         async with self.engine.begin() as conn:
             await conn.execute(
-                _delete_checkpoints_sql(self._outputs_table, workflow_id, start_step)
+                _delete_checkpoints_sql(self._outputs_table, workflow_id, start_step),
+                execution_options=self._pin,
             )
 
     def sql_session(self) -> AsyncSession:
@@ -295,7 +298,8 @@ class AsyncSQLAlchemyDatasource(ABC):
                 ).where(
                     self._outputs_table.c.workflow_id == workflow_id,
                     self._outputs_table.c.step_id == step_id,
-                )
+                ),
+                execution_options=self._pin,
             )
             return _row_to_result(result.first())
 
@@ -358,7 +362,8 @@ class AsyncSQLAlchemyDatasource(ABC):
             # No row back means a concurrent execution's row was already visible to this
             # snapshot. Above READ COMMITTED it can instead surface as a serialization
             # error, which the caller's retry loop converges to this case.
-            .returning(self._outputs_table.c.workflow_id)
+            .returning(self._outputs_table.c.workflow_id),
+            execution_options=self._pin,
         )
         if result.first() is None:
             raise _StepAlreadyRecorded()
@@ -580,6 +585,8 @@ class SQLAlchemyDatasource(ABC):
             self.engine = self._create_engine(database_url, engine_kwargs)
             self.created_engine = True
         self._outputs_table = datasource_outputs_table(self.schema)
+        # Pinned on DBOS's own statements, so a caller engine's schema_translate_map can't move them.
+        self._pin: Dict[str, Any] = {"schema_translate_map": {self.schema: self.schema}}
         # Sessions are always opened with bind=self.engine, so checkpoints share the engine that reads them.
         # No expiry by default: returned ORM objects outlive the session and are checkpointed after commit.
         self.sessionmaker: SyncSessionmaker[Any] = (
@@ -647,7 +654,8 @@ class SQLAlchemyDatasource(ABC):
         """Delete this workflow's checkpoints from start_step on."""
         with self.engine.begin() as conn:
             conn.execute(
-                _delete_checkpoints_sql(self._outputs_table, workflow_id, start_step)
+                _delete_checkpoints_sql(self._outputs_table, workflow_id, start_step),
+                execution_options=self._pin,
             )
 
     def sql_session(self) -> Session:
@@ -669,7 +677,8 @@ class SQLAlchemyDatasource(ABC):
                 ).where(
                     self._outputs_table.c.workflow_id == workflow_id,
                     self._outputs_table.c.step_id == step_id,
-                )
+                ),
+                execution_options=self._pin,
             )
             return _row_to_result(result.first())
 
@@ -730,7 +739,8 @@ class SQLAlchemyDatasource(ABC):
             # No row back means a concurrent execution's row was already visible to this
             # snapshot. Above READ COMMITTED it can instead surface as a serialization
             # error, which the caller's retry loop converges to this case.
-            .returning(self._outputs_table.c.workflow_id)
+            .returning(self._outputs_table.c.workflow_id),
+            execution_options=self._pin,
         )
         if result.first() is None:
             raise _StepAlreadyRecorded()

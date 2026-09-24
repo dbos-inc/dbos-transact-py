@@ -468,13 +468,15 @@ def test_sync_ds_retries_locked_precheck(
 def test_sync_ds_keeps_caller_engine_schema_translate_map(
     sync_ds: SQLAlchemyDatasource, config: DBOSConfig
 ) -> None:
-    """A caller engine's own schema_translate_map survives, alongside DBOS's checkpoints."""
+    """A caller engine's schema_translate_map applies to the caller's tables but never
+    moves DBOS's checkpoints, even when it maps DBOS's own schema elsewhere."""
     app_rows = sa.Table("app_rows", sa.MetaData(schema="app"), sa.Column("v", sa.Text))
+    # The second key collides with DBOS's schema and points at one that doesn't exist.
     engine = sync_ds.engine.execution_options(
-        schema_translate_map={"app": sync_ds.schema}
+        schema_translate_map={"app": sync_ds.schema, sync_ds.schema: "missing_schema"}
     )
     DBOS.destroy(destroy_registry=True)
-    DBOS(config=config)
+    dbos = DBOS(config=config)
     try:
         ds = SQLAlchemyDatasource.create(
             sync_ds.engine.url.render_as_string(hide_password=False),
@@ -483,9 +485,11 @@ def test_sync_ds_keeps_caller_engine_schema_translate_map(
         )
         assert ds.engine is engine
         app_rows.create(ds.engine)
+        calls = {"n": 0}
 
         @ds.transaction
         def insert_row(v: str) -> str:
+            calls["n"] += 1
             ds.sql_session().execute(app_rows.insert().values(v=v))
             return v
 
@@ -497,13 +501,17 @@ def test_sync_ds_keeps_caller_engine_schema_translate_map(
         wfid = str(uuid.uuid4())
         with SetWorkflowID(wfid):
             assert wf() == "x"
+        # Replay from the checkpoint reads it back through the caller's engine.
+        dbos._sys_db.delete_workflows([wfid])
+        with SetWorkflowID(wfid):
+            assert wf() == "x"
+        assert calls["n"] == 1
         with ds.engine.connect() as conn:
             assert conn.execute(sa.select(app_rows.c.v)).scalars().all() == ["x"]
-            assert conn.execute(
-                sa.select(ds._outputs_table.c.step_id).where(
-                    ds._outputs_table.c.workflow_id == wfid
-                )
-            ).scalars().all() == [1]
+        # Checked on the fixture's untranslated engine: the checkpoint is where migrations put it.
+        assert _ds_rows(sync_ds, wfid)[0].step_id == 1
+        ds._delete_checkpoints(wfid, 1)
+        assert _ds_rows(sync_ds, wfid) == []
     finally:
         DBOS.destroy(destroy_registry=True)
 
