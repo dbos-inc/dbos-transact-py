@@ -15,10 +15,11 @@ import pytest_asyncio
 import sqlalchemy as sa
 from psycopg.errors import SerializationFailure
 from sqlalchemy import event, text
-from sqlalchemy.exc import OperationalError, ProgrammingError
+from sqlalchemy.exc import DBAPIError, OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
+import dbos._datasource_migration as ds_migration
 import dbos._workflow_commands as workflow_commands
 from dbos import (
     DBOS,
@@ -32,6 +33,7 @@ from dbos._datasource import RecordedResult
 from dbos._datasource_migration import (
     DATASOURCE_MIGRATIONS_TABLE,
     get_postgres_datasource_migrations,
+    migrate_datasource,
 )
 from dbos._datasource_postgres import PostgresAsyncDatasource, PostgresSyncDatasource
 from dbos._datasource_sqlite import SqliteAsyncDatasource, SqliteSyncDatasource
@@ -2089,6 +2091,31 @@ def test_ds_concurrent_creation_migrates_once(
     assert _ds_version(datasources[0]) == _LATEST_DS_VERSION
     for ds in datasources:
         ds.engine.dispose()
+
+
+def test_ds_frozen_migrator_releases_lock(
+    fresh_pg_schema: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A migrator that freezes mid-migration loses the lock instead of blocking peers."""
+    admin_url, schema = fresh_pg_schema
+    monkeypatch.setattr(ds_migration, "MIGRATION_IDLE_TIMEOUT", "1s")
+    engine = sa.create_engine(admin_url)
+    try:
+        frozen = engine.connect()
+        frozen.begin()
+        # Takes the lock and migrates, then sits idle in its transaction.
+        migrate_datasource(frozen, schema)
+        ds = SQLAlchemyDatasource.create(admin_url, schema=schema)
+        try:
+            assert _ds_version(ds) == _LATEST_DS_VERSION
+        finally:
+            ds.engine.dispose()
+        # The server killed the frozen session, rolling back its migration.
+        with pytest.raises(DBAPIError, match="idle-in-transaction timeout"):
+            frozen.execute(sa.text("SELECT 1"))
+        frozen.invalidate()
+    finally:
+        engine.dispose()
 
 
 @pytest.mark.asyncio

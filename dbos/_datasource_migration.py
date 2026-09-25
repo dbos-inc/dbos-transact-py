@@ -11,6 +11,9 @@ from ._utils import quote_identifier
 # Separate from the system database's dbos_migrations, since a datasource may share its schema.
 DATASOURCE_MIGRATIONS_TABLE = "dbos_datasource_migrations"
 
+# Longest a migrating transaction may sit idle while holding the migration lock.
+MIGRATION_IDLE_TIMEOUT = "30s"
+
 
 def get_postgres_datasource_migrations(schema: str) -> List[str]:
     # Migration 1 is IF NOT EXISTS so datasources created before versioning adopt it cleanly.
@@ -139,6 +142,12 @@ def migrate_datasource(conn: sa.Connection, schema: Optional[str]) -> None:
         quoted_schema = quote_identifier(schema)
         migrations = get_postgres_datasource_migrations(schema)
         table = f"{quoted_schema}.{DATASOURCE_MIGRATIONS_TABLE}"
+        # A frozen or partitioned migrator's session is killed, rolling back and releasing the lock.
+        conn.execute(
+            sa.text(
+                f"SET LOCAL idle_in_transaction_session_timeout = '{MIGRATION_IDLE_TIMEOUT}'"
+            )
+        )
         # Transaction-scoped, so it releases with the migration's commit or rollback.
         conn.execute(
             sa.text("SELECT pg_advisory_xact_lock(:key)"),
