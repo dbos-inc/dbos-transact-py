@@ -23,7 +23,6 @@ from dbos._error import (
     DBOSException,
     DBOSNonExistentWorkflowError,
 )
-from dbos._schemas.datasource_database import DatasourceSchema
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import deserialize_value
 from dbos._sys_db import WorkflowStatusString
@@ -643,22 +642,24 @@ def test_rewind_from_inside_a_workflow_is_checkpointed(dbos: DBOS) -> None:
 #######################################
 
 
-def datasource_checkpoints(engine: sa.Engine, workflow_id: str) -> List[int]:
-    with engine.begin() as c:
+def datasource_checkpoints(ds: SQLAlchemyDatasource, workflow_id: str) -> List[int]:
+    with ds.engine.begin() as c:
         return sorted(
             c.execute(
-                sa.select(DatasourceSchema.datasource_outputs.c.step_id).where(
-                    DatasourceSchema.datasource_outputs.c.workflow_id == workflow_id
+                sa.select(ds._outputs_table.c.step_id).where(
+                    ds._outputs_table.c.workflow_id == workflow_id
                 )
             ).scalars()
         )
 
 
-async def datasource_checkpoints_async(engine: Any, workflow_id: str) -> List[int]:
-    async with engine.begin() as c:
+async def datasource_checkpoints_async(
+    ds: AsyncSQLAlchemyDatasource, workflow_id: str
+) -> List[int]:
+    async with ds.engine.begin() as c:
         result = await c.execute(
-            sa.select(DatasourceSchema.datasource_outputs.c.step_id).where(
-                DatasourceSchema.datasource_outputs.c.workflow_id == workflow_id
+            sa.select(ds._outputs_table.c.step_id).where(
+                ds._outputs_table.c.workflow_id == workflow_id
             )
         )
         return sorted(result.scalars())
@@ -759,15 +760,15 @@ def test_rewind_drops_datasource_checkpoints(
             return run
 
         workflow_id = start(writer, "datasource")
-        assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
-        assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
+        assert datasource_checkpoints(first, workflow_id) == [1, 3]
+        assert datasource_checkpoints(second, workflow_id) == [2, 4]
 
         # A start_step the system database would reject must not get as far as the
         # checkpoints, which are deleted before it is ever consulted.
         with pytest.raises(ValueError, match="must be >= 1"):
             DBOS.rewind_workflow(workflow_id, start_step=0)
-        assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
-        assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
+        assert datasource_checkpoints(first, workflow_id) == [1, 3]
+        assert datasource_checkpoints(second, workflow_id) == [2, 4]
         assert runs["datasource"] == 1
 
         # Cut at the third step: each datasource keeps one checkpoint, loses one.
@@ -775,12 +776,12 @@ def test_rewind_drops_datasource_checkpoints(
             DBOS.rewind_workflow(
                 workflow_id, start_step=3, queue_name="rewind_datasource_gate"
             )
-            assert datasource_checkpoints(first.engine, workflow_id) == [1]
-            assert datasource_checkpoints(second.engine, workflow_id) == [2]
+            assert datasource_checkpoints(first, workflow_id) == [1]
+            assert datasource_checkpoints(second, workflow_id) == [2]
 
         assert DBOS.retrieve_workflow(workflow_id).get_result() == 2
-        assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
-        assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
+        assert datasource_checkpoints(first, workflow_id) == [1, 3]
+        assert datasource_checkpoints(second, workflow_id) == [2, 4]
         # The first transaction on each datasource replayed, the second ran again.
         assert table_rows(first.engine) == ["a", "c", "c"]
         assert table_rows(second.engine) == ["b", "d", "d"]
@@ -804,11 +805,11 @@ def test_rewind_after_completion_reruns_transactions_past_the_cut(
             return run
 
         workflow_id = start(writer, "rewind-after-cleanup")
-        assert datasource_checkpoints(first.engine, workflow_id) == []
-        assert datasource_checkpoints(second.engine, workflow_id) == []
+        assert datasource_checkpoints(first, workflow_id) == []
+        assert datasource_checkpoints(second, workflow_id) == []
         assert DBOS.rewind_workflow(workflow_id, start_step=3).get_result() == 2
-        assert datasource_checkpoints(first.engine, workflow_id) == []
-        assert datasource_checkpoints(second.engine, workflow_id) == []
+        assert datasource_checkpoints(first, workflow_id) == []
+        assert datasource_checkpoints(second, workflow_id) == []
         assert table_rows(first.engine) == ["a", "c", "c"]
         assert table_rows(second.engine) == ["b", "d", "d"]
 
@@ -848,13 +849,13 @@ async def test_rewind_drops_async_datasource_checkpoints(
         workflow_id = str(uuid.uuid4())
         with SetWorkflowID(workflow_id):
             assert await writer("async-datasource") == 1
-        assert await datasource_checkpoints_async(first.engine, workflow_id) == [1, 3]
-        assert await datasource_checkpoints_async(second.engine, workflow_id) == [2, 4]
+        assert await datasource_checkpoints_async(first, workflow_id) == [1, 3]
+        assert await datasource_checkpoints_async(second, workflow_id) == [2, 4]
 
         handle = await DBOS.rewind_workflow_async(workflow_id)
         assert await handle.get_result() == 2
-        assert await datasource_checkpoints_async(first.engine, workflow_id) == [1, 3]
-        assert await datasource_checkpoints_async(second.engine, workflow_id) == [2, 4]
+        assert await datasource_checkpoints_async(first, workflow_id) == [1, 3]
+        assert await datasource_checkpoints_async(second, workflow_id) == [2, 4]
         # Everything ran again.
         assert await table_rows_async(first.engine) == ["a", "a", "c", "c"]
         assert await table_rows_async(second.engine) == ["b", "b", "d", "d"]
@@ -886,8 +887,8 @@ def test_a_failed_rewind_leaves_the_workflow_untouched_and_can_be_retried(
             return run
 
         workflow_id = start(writer, "delete-failure")
-        assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
-        assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
+        assert datasource_checkpoints(first, workflow_id) == [1, 3]
+        assert datasource_checkpoints(second, workflow_id) == [2, 4]
 
         # One datasource's delete fails: the system database is not rewound, so
         # the workflow stays SUCCESS and is not re-enqueued. The datasource
@@ -900,8 +901,8 @@ def test_a_failed_rewind_leaves_the_workflow_untouched_and_can_be_retried(
             DBOS.rewind_workflow(workflow_id)
         status = DBOS.retrieve_workflow(workflow_id).get_status()
         assert status.status == "SUCCESS"
-        assert datasource_checkpoints(first.engine, workflow_id) == []
-        assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
+        assert datasource_checkpoints(first, workflow_id) == []
+        assert datasource_checkpoints(second, workflow_id) == [2, 4]
         assert runs["delete-failure"] == 1
 
         # The system database rewind fails: every checkpoint is already gone but
@@ -915,15 +916,15 @@ def test_a_failed_rewind_leaves_the_workflow_untouched_and_can_be_retried(
         with pytest.raises(RuntimeError, match="system database unavailable"):
             DBOS.rewind_workflow(workflow_id)
         assert DBOS.retrieve_workflow(workflow_id).get_status().status == "SUCCESS"
-        assert datasource_checkpoints(first.engine, workflow_id) == []
-        assert datasource_checkpoints(second.engine, workflow_id) == []
+        assert datasource_checkpoints(first, workflow_id) == []
+        assert datasource_checkpoints(second, workflow_id) == []
         assert runs["delete-failure"] == 1
 
         # Retrying replays from scratch and repeats every transaction.
         monkeypatch.undo()
         assert DBOS.rewind_workflow(workflow_id).get_result() == 2
-        assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
-        assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
+        assert datasource_checkpoints(first, workflow_id) == [1, 3]
+        assert datasource_checkpoints(second, workflow_id) == [2, 4]
         assert table_rows(first.engine) == ["a", "a", "c", "c"]
         assert table_rows(second.engine) == ["b", "b", "d", "d"]
 
@@ -945,10 +946,10 @@ def test_rewind_with_datasources_refuses_an_active_workflow(
 
         handle = DBOS.start_workflow(blocker)
         assert checkpointed.wait(10)
-        assert datasource_checkpoints(ds.engine, handle.workflow_id) == [1]
+        assert datasource_checkpoints(ds, handle.workflow_id) == [1]
         with pytest.raises(DBOSException, match="only a workflow in a terminal state"):
             DBOS.rewind_workflow(handle.workflow_id)
-        assert datasource_checkpoints(ds.engine, handle.workflow_id) == [1]
+        assert datasource_checkpoints(ds, handle.workflow_id) == [1]
         release.set()
         handle.get_result()
         with pytest.raises(DBOSNonExistentWorkflowError):
@@ -978,10 +979,10 @@ def test_client_rewind_reruns_datasource_transactions(
             # cleared the checkpoints: steps before the cut replay from their step
             # checkpoints and the transactions past it run again.
             # Checkpoints a cancel leaves are still replayed (documented client limitation).
-            assert datasource_checkpoints(first.engine, workflow_id) == []
+            assert datasource_checkpoints(first, workflow_id) == []
             assert client.rewind_workflow(workflow_id, start_step=3).get_result() == 2
-            assert datasource_checkpoints(first.engine, workflow_id) == []
-            assert datasource_checkpoints(second.engine, workflow_id) == []
+            assert datasource_checkpoints(first, workflow_id) == []
+            assert datasource_checkpoints(second, workflow_id) == []
             assert table_rows(first.engine) == ["a", "c", "c"]
             assert table_rows(second.engine) == ["b", "d", "d"]
         finally:
@@ -1026,8 +1027,8 @@ async def test_async_client_rewind_reruns_datasource_transactions(
         try:
             handle = await client.rewind_workflow_async(workflow_id, start_step=3)
             assert await handle.get_result() == 2
-            assert await datasource_checkpoints_async(first.engine, workflow_id) == []
-            assert await datasource_checkpoints_async(second.engine, workflow_id) == []
+            assert await datasource_checkpoints_async(first, workflow_id) == []
+            assert await datasource_checkpoints_async(second, workflow_id) == []
             assert await table_rows_async(first.engine) == ["a", "c", "c"]
             assert await table_rows_async(second.engine) == ["b", "d", "d"]
         finally:
@@ -1058,12 +1059,12 @@ def test_completion_drops_datasource_checkpoints(
 
         handle = DBOS.start_workflow(writer)
         assert checkpointed.wait(10)
-        assert datasource_checkpoints(first.engine, handle.workflow_id) == [1]
-        assert datasource_checkpoints(second.engine, handle.workflow_id) == [2]
+        assert datasource_checkpoints(first, handle.workflow_id) == [1]
+        assert datasource_checkpoints(second, handle.workflow_id) == [2]
         release.set()
         assert handle.get_result() == "done"
-        assert datasource_checkpoints(first.engine, handle.workflow_id) == []
-        assert datasource_checkpoints(second.engine, handle.workflow_id) == []
+        assert datasource_checkpoints(first, handle.workflow_id) == []
+        assert datasource_checkpoints(second, handle.workflow_id) == []
         assert table_rows(first.engine) == ["a"]
         assert table_rows(second.engine) == ["b"]
 
@@ -1091,10 +1092,10 @@ async def test_completion_drops_async_datasource_checkpoints(
 
         handle = await DBOS.start_workflow_async(writer)
         await asyncio.wait_for(checkpointed.wait(), 10)
-        assert await datasource_checkpoints_async(ds.engine, handle.workflow_id) == [1]
+        assert await datasource_checkpoints_async(ds, handle.workflow_id) == [1]
         release.set()
         assert await handle.get_result() == "done"
-        assert await datasource_checkpoints_async(ds.engine, handle.workflow_id) == []
+        assert await datasource_checkpoints_async(ds, handle.workflow_id) == []
         assert await table_rows_async(ds.engine) == ["a"]
 
 
@@ -1113,7 +1114,7 @@ def test_error_drops_datasource_checkpoints(
         with SetWorkflowID(workflow_id), pytest.raises(ValueError):
             failer()
         assert DBOS.retrieve_workflow(workflow_id).get_status().status == "ERROR"
-        assert datasource_checkpoints(ds.engine, workflow_id) == []
+        assert datasource_checkpoints(ds, workflow_id) == []
 
 
 def test_a_database_error_drops_datasource_checkpoints(
@@ -1135,7 +1136,7 @@ def test_a_database_error_drops_datasource_checkpoints(
         with SetWorkflowID(workflow_id), pytest.raises(OperationalError):
             failer()
         assert DBOS.retrieve_workflow(workflow_id).get_status().status == "ERROR"
-        assert datasource_checkpoints(ds.engine, workflow_id) == []
+        assert datasource_checkpoints(ds, workflow_id) == []
 
 
 def test_cancelled_workflow_keeps_datasource_checkpoints(
@@ -1171,7 +1172,7 @@ def test_cancelled_workflow_keeps_datasource_checkpoints(
             assert workflow_id not in dbos._active_workflows_set.activeList()
 
         retry_until_success(execution_left, interval=0.1, max_attempts=100)
-        assert datasource_checkpoints(ds.engine, workflow_id) == [1]
+        assert datasource_checkpoints(ds, workflow_id) == [1]
 
         # Lose the transaction's step checkpoint, as a crash just after its commit would.
         with dbos._sys_db.engine.begin() as c:
@@ -1182,7 +1183,7 @@ def test_cancelled_workflow_keeps_datasource_checkpoints(
             )
         assert DBOS.resume_workflow(workflow_id).get_result() == "done"
         assert table_rows(ds.engine) == ["a"]
-        assert datasource_checkpoints(ds.engine, workflow_id) == []
+        assert datasource_checkpoints(ds, workflow_id) == []
 
 
 def test_a_failed_cleanup_still_records_the_outcome(
@@ -1210,8 +1211,8 @@ def test_a_failed_cleanup_still_records_the_outcome(
         with SetWorkflowID(workflow_id):
             assert writer() == "done"
         assert DBOS.retrieve_workflow(workflow_id).get_status().status == "SUCCESS"
-        assert datasource_checkpoints(first.engine, workflow_id) == [1]
-        assert datasource_checkpoints(second.engine, workflow_id) == []
+        assert datasource_checkpoints(first, workflow_id) == [1]
+        assert datasource_checkpoints(second, workflow_id) == []
 
 
 def hand_off(dbos: DBOS, workflow_id: str) -> None:
@@ -1275,8 +1276,8 @@ def test_a_stale_execution_keeps_datasource_checkpoints(
         retry_until_success(cleanup_ran, interval=0.1, max_attempts=100)
         # Rolled back on the first datasource, which stops the cleanup there.
         assert cleanups == [False]
-        assert datasource_checkpoints(first.engine, workflow_id) == [1]
-        assert datasource_checkpoints(second.engine, workflow_id) == [2]
+        assert datasource_checkpoints(first, workflow_id) == [1]
+        assert datasource_checkpoints(second, workflow_id) == [2]
         # Release the parked execution.
         DBOS.cancel_workflow(workflow_id)
         with pytest.raises(DBOSAwaitedWorkflowCancelledError):
@@ -1315,7 +1316,7 @@ async def test_a_stale_execution_keeps_async_datasource_checkpoints(
 
         await retry_until_success_async(cleanup_ran, interval=0.1, max_attempts=100)
         assert cleanups == [False]
-        assert await datasource_checkpoints_async(ds.engine, workflow_id) == [1]
+        assert await datasource_checkpoints_async(ds, workflow_id) == [1]
         await DBOS.cancel_workflow_async(workflow_id)
         with pytest.raises(DBOSAwaitedWorkflowCancelledError):
             await handle.get_result()
@@ -1349,7 +1350,7 @@ def test_cleanup_skips_datasources_the_workflow_never_called(
         assert idle() == "idle"
         assert first_cleanups == []
         assert second_cleanups == [True]
-        assert datasource_checkpoints(second.engine, workflow_id) == []
+        assert datasource_checkpoints(second, workflow_id) == []
 
 
 @pytest.mark.asyncio
@@ -1378,7 +1379,7 @@ async def test_async_cleanup_needs_no_spare_executor_thread(
         workflow_id = str(uuid.uuid4())
         with SetWorkflowID(workflow_id):
             assert await asyncio.wait_for(writer(), 30) == "done"
-        assert await datasource_checkpoints_async(ds.engine, workflow_id) == []
+        assert await datasource_checkpoints_async(ds, workflow_id) == []
         assert await table_rows_async(ds.engine) == ["a"]
 
 
@@ -1398,11 +1399,11 @@ def test_recovery_clears_an_earlier_executions_checkpoints(
         workflow_id = str(uuid.uuid4())
         with keep_datasource_checkpoints(), SetWorkflowID(workflow_id):
             assert writer() == "done"
-        assert datasource_checkpoints(ds.engine, workflow_id) == [1]
+        assert datasource_checkpoints(ds, workflow_id) == [1]
 
         set_workflow_status(dbos._sys_db, workflow_id, "PENDING")
         handles = DBOS._recover_pending_workflows()
         assert [h.workflow_id for h in handles] == [workflow_id]
         assert handles[0].get_result() == "done"
         assert table_rows(ds.engine) == ["a"]
-        assert datasource_checkpoints(ds.engine, workflow_id) == []
+        assert datasource_checkpoints(ds, workflow_id) == []
