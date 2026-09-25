@@ -60,6 +60,11 @@ build-backend = "pdm.backend"
 [tool.pdm]
 distribution = true
 
+[tool.pdm.build]
+# version/ is the build-time version hook, so it belongs in the sdist only.
+includes = ["dbos/"]
+source-includes = ["tests/", "version/"]
+
 [tool.pdm.version]
 source = "scm"
 version_format = "version:format_version"
