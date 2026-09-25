@@ -378,9 +378,9 @@ class AsyncSQLAlchemyDatasource(ABC):
 
         ctx = get_local_dbos_context()
         in_wf = ctx is not None and ctx.is_workflow()
-        if ctx is not None and in_wf:
-            # Recorded even on replay, with the loop holding this execution's connections.
-            ctx.used_datasources.setdefault(self, asyncio.get_running_loop())
+        if ctx is not None and in_wf and self not in ctx.used_datasources:
+            # Recorded even on replay, so completion also clears an earlier execution's rows.
+            ctx.used_datasources.append(self)
 
         async def _body() -> R:
             workflow_id: str = ""
@@ -754,9 +754,9 @@ class SQLAlchemyDatasource(ABC):
 
         ctx = get_local_dbos_context()
         in_wf = ctx is not None and ctx.is_workflow()
-        if ctx is not None and in_wf:
+        if ctx is not None and in_wf and self not in ctx.used_datasources:
             # Recorded even on replay, so completion also clears an earlier execution's rows.
-            ctx.used_datasources.setdefault(self, None)
+            ctx.used_datasources.append(self)
 
         def _body() -> R:
             workflow_id: str = ""

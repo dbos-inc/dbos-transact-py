@@ -194,6 +194,7 @@ async def _async_check_both_tables(
 
 
 _real_cleanup = workflow_commands.delete_completed_datasource_checkpoints
+_real_cleanup_async = workflow_commands.delete_completed_datasource_checkpoints_async
 
 
 @pytest.fixture(autouse=True)
@@ -1661,10 +1662,12 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
 async def test_async_ds_completion_clears_checkpoints(
     async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """DBOS launched outside this test's loop, so the delete must be sent back to the
+    """DBOS launched outside this test's loop, so the delete must run on the
     workflow's loop, which holds the datasource's connections, not DBOS's own loop."""
     monkeypatch.setattr(
-        workflow_commands, "delete_completed_datasource_checkpoints", _real_cleanup
+        workflow_commands,
+        "delete_completed_datasource_checkpoints_async",
+        _real_cleanup_async,
     )
     delete_loops: list[asyncio.AbstractEventLoop] = []
     real_delete = async_ds._delete_checkpoints_if_owner

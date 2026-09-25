@@ -1,17 +1,8 @@
 import asyncio
 import threading
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Coroutine,
-    Mapping,
-    Optional,
-    Sequence,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, Sequence, Union
 
-from dbos._context import get_local_dbos_context
+from dbos._context import DBOSContext, get_local_dbos_context
 from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 from dbos._utils import generate_uuid
@@ -180,31 +171,48 @@ def _check_rewindable(
         )
 
 
-def delete_completed_datasource_checkpoints(
-    dbos: "DBOS",
-    datasources: Mapping[Datasource, Optional[asyncio.AbstractEventLoop]],
-    workflow_id: str,
-    owner_xid: str,
-) -> None:
-    """Drop a finishing workflow's datasource checkpoints while owner_xid still owns it.
+def delete_completed_datasource_checkpoints(dbos: "DBOS", ctx: DBOSContext) -> None:
+    """Drop a finishing sync workflow's datasource checkpoints while it still owns the workflow.
     Best effort: a leftover checkpoint is harmless, so failures only warn."""
-    for ds, loop in datasources.items():
+    for ds in ctx.used_datasources:
+        if isinstance(ds, AsyncSQLAlchemyDatasource):
+            continue  # Its connections belong to an event loop this workflow does not run on.
         try:
-            if isinstance(ds, AsyncSQLAlchemyDatasource):
-                # persist runs off the workflow's loop, which is free to run this.
-                assert loop is not None
-                owned = asyncio.run_coroutine_threadsafe(
-                    ds._delete_checkpoints_if_owner(workflow_id, owner_xid), loop
-                ).result()
-            else:
-                owned = ds._delete_checkpoints_if_owner(workflow_id, owner_xid)
+            # With no token nobody matches, so the delete rolls back.
+            owned = ds._delete_checkpoints_if_owner(
+                ctx.workflow_id, ctx.owner_xid or ""
+            )
         except Exception as e:
             dbos.logger.warning(
-                f"Failed to delete datasource checkpoints of workflow {workflow_id}: {e}"
+                f"Failed to delete datasource checkpoints of workflow {ctx.workflow_id}: {e}"
             )
             continue
         if not owned:
-            # Another execution owns the workflow now, and its checkpoints are its own.
+            return  # Another execution owns the workflow now, and its checkpoints are its own.
+
+
+async def delete_completed_datasource_checkpoints_async(
+    dbos: "DBOS", ctx: DBOSContext
+) -> None:
+    """Async version of delete_completed_datasource_checkpoints, run on the workflow's own loop."""
+    for ds in ctx.used_datasources:
+        try:
+            if isinstance(ds, AsyncSQLAlchemyDatasource):
+                owned = await ds._delete_checkpoints_if_owner(
+                    ctx.workflow_id, ctx.owner_xid or ""
+                )
+            else:
+                owned = await asyncio.to_thread(
+                    ds._delete_checkpoints_if_owner,
+                    ctx.workflow_id,
+                    ctx.owner_xid or "",
+                )
+        except Exception as e:
+            dbos.logger.warning(
+                f"Failed to delete datasource checkpoints of workflow {ctx.workflow_id}: {e}"
+            )
+            continue
+        if not owned:
             return
 
 

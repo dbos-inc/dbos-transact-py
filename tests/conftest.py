@@ -20,6 +20,7 @@ from typing import (
     TypeVar,
     cast,
 )
+from unittest import mock
 
 T = TypeVar("T")
 from pathlib import Path
@@ -389,18 +390,17 @@ def pytest_collection_modifyitems(session: Any, config: Any, items: Any) -> None
 @contextlib.contextmanager
 def keep_datasource_checkpoints() -> Iterator[None]:
     """Skip the datasource checkpoint cleanup at workflow completion."""
-    real_cleanup = workflow_commands.delete_completed_datasource_checkpoints
-    setattr(
-        workflow_commands,
-        "delete_completed_datasource_checkpoints",
-        lambda *args, **kwargs: None,
-    )
-    try:
+    with (
+        mock.patch.object(
+            workflow_commands, "delete_completed_datasource_checkpoints", mock.Mock()
+        ),
+        mock.patch.object(
+            workflow_commands,
+            "delete_completed_datasource_checkpoints_async",
+            mock.AsyncMock(),
+        ),
+    ):
         yield
-    finally:
-        setattr(
-            workflow_commands, "delete_completed_datasource_checkpoints", real_cleanup
-        )
 
 
 def set_workflow_status(sys_db: SystemDatabase, workflow_id: str, status: str) -> None:

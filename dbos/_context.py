@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import time
@@ -127,10 +126,9 @@ class DBOSContext:
         self.sync_ds_session: Optional[Session] = None
         self.async_ds_session: Optional[AsyncSession] = None
         # Datasources this workflow called; its checkpoints go when it completes.
-        self.used_datasources: dict[
-            Union[SQLAlchemyDatasource, AsyncSQLAlchemyDatasource],
-            Optional[asyncio.AbstractEventLoop],
-        ] = {}
+        self.used_datasources: list[
+            Union[SQLAlchemyDatasource, AsyncSQLAlchemyDatasource]
+        ] = []
         self.context_spans: list[ContextSpan] = []
 
         self.authenticated_user: Optional[str] = None
@@ -278,7 +276,7 @@ class DBOSContext:
         self.workflow_id = wfid
         self.function_id = 0
         self.active_stream_reads = 0
-        self.used_datasources = {}
+        self.used_datasources = []
         self._start_span(attributes)
 
     def end_workflow(self, exc_value: Optional[BaseException]) -> None:

@@ -9,7 +9,6 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.exc import OperationalError
 
-import dbos._workflow_commands as workflow_commands
 from dbos import (
     DBOS,
     AsyncSQLAlchemyDatasource,
@@ -741,8 +740,9 @@ def inserter(ds: SQLAlchemyDatasource) -> Any:
 def test_rewind_drops_datasource_checkpoints(
     config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
 ) -> None:
-    """Every registered datasource is cleared. A checkpoint left past the cut would
-    otherwise be replayed as the transaction's result without running it."""
+    """Checkpoints left behind (kept here, as a cancel or failed cleanup keeps them)
+    are cleared past the cut on every registered datasource. One left past the cut
+    would otherwise be replayed as the transaction's result without running it."""
     with launched_with_datasources(config, tmp_path, 2, keep_checkpoints=True) as (
         dbos,
         (first, second),
@@ -782,6 +782,33 @@ def test_rewind_drops_datasource_checkpoints(
         assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
         assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
         # The first transaction on each datasource replayed, the second ran again.
+        assert table_rows(first.engine) == ["a", "c", "c"]
+        assert table_rows(second.engine) == ["b", "d", "d"]
+
+
+def test_rewind_after_completion_reruns_transactions_past_the_cut(
+    config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
+) -> None:
+    """Completion cleared the checkpoints, so steps before the cut replay from their
+    step checkpoints and the transactions past it run again."""
+    with launched_with_datasources(config, tmp_path, 2) as (dbos, (first, second)):
+        insert_first, insert_second = inserter(first), inserter(second)
+
+        @DBOS.workflow()
+        def writer(name: str) -> int:
+            run = run_count(name)
+            first.run_tx_step(None, insert_first, "a")
+            second.run_tx_step(None, insert_second, "b")
+            first.run_tx_step(None, insert_first, "c")
+            second.run_tx_step(None, insert_second, "d")
+            return run
+
+        workflow_id = start(writer, "rewind-after-cleanup")
+        assert datasource_checkpoints(first.engine, workflow_id) == []
+        assert datasource_checkpoints(second.engine, workflow_id) == []
+        assert DBOS.rewind_workflow(workflow_id, start_step=3).get_result() == 2
+        assert datasource_checkpoints(first.engine, workflow_id) == []
+        assert datasource_checkpoints(second.engine, workflow_id) == []
         assert table_rows(first.engine) == ["a", "c", "c"]
         assert table_rows(second.engine) == ["b", "d", "d"]
 
@@ -928,13 +955,10 @@ def test_rewind_with_datasources_refuses_an_active_workflow(
             DBOS.rewind_workflow("no-such-workflow")
 
 
-def test_client_rewind_leaves_datasources_alone(
+def test_client_rewind_reruns_datasource_transactions(
     config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
 ) -> None:
-    with launched_with_datasources(config, tmp_path, 2, keep_checkpoints=True) as (
-        dbos,
-        (first, second),
-    ):
+    with launched_with_datasources(config, tmp_path, 2) as (dbos, (first, second)):
         insert_first, insert_second = inserter(first), inserter(second)
 
         @DBOS.workflow()
@@ -950,25 +974,24 @@ def test_client_rewind_leaves_datasources_alone(
         assert config["system_database_url"] is not None
         client = DBOSClient(system_database_url=config["system_database_url"])
         try:
-            # The client only rewinds the system database. The datasources'
-            # checkpoints stay and the replay takes them as the transactions'
-            # results: nothing runs again.
+            # The client only rewinds the system database, but completion already
+            # cleared the checkpoints: steps before the cut replay from their step
+            # checkpoints and the transactions past it run again.
+            assert datasource_checkpoints(first.engine, workflow_id) == []
             assert client.rewind_workflow(workflow_id, start_step=3).get_result() == 2
-            assert datasource_checkpoints(first.engine, workflow_id) == [1, 3]
-            assert datasource_checkpoints(second.engine, workflow_id) == [2, 4]
-            assert table_rows(first.engine) == ["a", "c"]
-            assert table_rows(second.engine) == ["b", "d"]
+            assert datasource_checkpoints(first.engine, workflow_id) == []
+            assert datasource_checkpoints(second.engine, workflow_id) == []
+            assert table_rows(first.engine) == ["a", "c", "c"]
+            assert table_rows(second.engine) == ["b", "d", "d"]
         finally:
             client.destroy()
 
 
 @pytest.mark.asyncio
-async def test_async_client_rewind_leaves_datasources_alone(
+async def test_async_client_rewind_reruns_datasource_transactions(
     config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
 ) -> None:
-    async with launched_with_async_datasources(
-        config, tmp_path, 2, keep_checkpoints=True
-    ) as (
+    async with launched_with_async_datasources(config, tmp_path, 2) as (
         dbos,
         (first, second),
     ):
@@ -1002,16 +1025,10 @@ async def test_async_client_rewind_leaves_datasources_alone(
         try:
             handle = await client.rewind_workflow_async(workflow_id, start_step=3)
             assert await handle.get_result() == 2
-            assert await datasource_checkpoints_async(first.engine, workflow_id) == [
-                1,
-                3,
-            ]
-            assert await datasource_checkpoints_async(second.engine, workflow_id) == [
-                2,
-                4,
-            ]
-            assert await table_rows_async(first.engine) == ["a", "c"]
-            assert await table_rows_async(second.engine) == ["b", "d"]
+            assert await datasource_checkpoints_async(first.engine, workflow_id) == []
+            assert await datasource_checkpoints_async(second.engine, workflow_id) == []
+            assert await table_rows_async(first.engine) == ["a", "c", "c"]
+            assert await table_rows_async(second.engine) == ["b", "d", "d"]
         finally:
             client.destroy()
 
@@ -1335,29 +1352,16 @@ def test_cleanup_skips_datasources_the_workflow_never_called(
 
 
 @pytest.mark.asyncio
-async def test_a_sync_workflow_never_cleans_async_datasources(
-    config: DBOSConfig,
-    cleanup_test_databases: None,
-    tmp_path: Any,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_async_cleanup_needs_no_spare_executor_thread(
+    config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
 ) -> None:
-    """A sync workflow cannot call an async datasource, so its completion never
-    blocks on an event loop, even when it runs on that loop's own thread."""
-    async with launched_with_async_datasources(config, tmp_path, 1) as (dbos, (ds,)):
-        cleaned: List[List[Any]] = []
-        real_cleanup = workflow_commands.delete_completed_datasource_checkpoints
-
-        def recording_cleanup(
-            dbos: DBOS, datasources: Any, *args: Any, **kwargs: Any
-        ) -> None:
-            cleaned.append(list(datasources))
-            real_cleanup(dbos, datasources, *args, **kwargs)
-
-        monkeypatch.setattr(
-            workflow_commands,
-            "delete_completed_datasource_checkpoints",
-            recording_cleanup,
-        )
+    """The cleanup runs on the workflow's loop, so it cannot pin an executor thread
+    while waiting on work that needs one: a single thread is enough to complete."""
+    one_thread: DBOSConfig = {**config, "max_executor_threads": 1}
+    async with launched_with_async_datasources(one_thread, tmp_path, 1) as (
+        dbos,
+        (ds,),
+    ):
 
         async def insert(v: str) -> str:
             await ds.sql_session().execute(
@@ -1366,22 +1370,15 @@ async def test_a_sync_workflow_never_cleans_async_datasources(
             return v
 
         @DBOS.workflow()
-        def sync_workflow() -> str:
-            return "sync"
-
-        @DBOS.workflow()
-        async def async_workflow() -> str:
+        async def writer() -> str:
             await ds.run_tx_step_async(None, insert, "a")
-            return "async"
+            return "done"
 
-        # Called directly, so it runs on the event loop's own thread.
-        assert sync_workflow() == "sync"
-        assert cleaned == []
         workflow_id = str(uuid.uuid4())
         with SetWorkflowID(workflow_id):
-            assert await async_workflow() == "async"
-        assert cleaned == [[ds]]
+            assert await asyncio.wait_for(writer(), 30) == "done"
         assert await datasource_checkpoints_async(ds.engine, workflow_id) == []
+        assert await table_rows_async(ds.engine) == ["a"]
 
 
 def test_recovery_clears_an_earlier_executions_checkpoints(
