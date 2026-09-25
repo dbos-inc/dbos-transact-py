@@ -823,22 +823,29 @@ def test_sync_ds_completion_clears_checkpoints(
     def step_fn() -> str:
         return "done"
 
+    def checkpoints(wfid: str) -> list[int]:
+        with sync_ds.engine.connect() as conn:
+            return list(
+                conn.execute(
+                    sa.select(DatasourceSchema.datasource_outputs.c.step_id).where(
+                        DatasourceSchema.datasource_outputs.c.workflow_id == wfid
+                    )
+                ).scalars()
+            )
+
+    before_cleanup: list[list[int]] = []
+
     @DBOS.workflow()
     def my_workflow() -> str:
-        return sync_ds.run_tx_step(None, step_fn)
+        result = sync_ds.run_tx_step(None, step_fn)
+        before_cleanup.append(checkpoints(DBOS.workflow_id or ""))
+        return result
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         assert my_workflow() == "done"
-    with sync_ds.engine.connect() as conn:
-        assert (
-            conn.execute(
-                sa.select(DatasourceSchema.datasource_outputs.c.step_id).where(
-                    DatasourceSchema.datasource_outputs.c.workflow_id == wfid
-                )
-            ).all()
-            == []
-        )
+    assert before_cleanup == [[1]]
+    assert checkpoints(wfid) == []
 
 
 # Whether a lost acknowledgement is retriable decides how the row is met, not whose it is.

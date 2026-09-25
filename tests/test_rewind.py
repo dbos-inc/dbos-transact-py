@@ -977,6 +977,7 @@ def test_client_rewind_reruns_datasource_transactions(
             # The client only rewinds the system database, but completion already
             # cleared the checkpoints: steps before the cut replay from their step
             # checkpoints and the transactions past it run again.
+            # Checkpoints a cancel leaves are still replayed (documented client limitation).
             assert datasource_checkpoints(first.engine, workflow_id) == []
             assert client.rewind_workflow(workflow_id, start_step=3).get_result() == 2
             assert datasource_checkpoints(first.engine, workflow_id) == []
@@ -1052,7 +1053,7 @@ def test_completion_drops_datasource_checkpoints(
             first.run_tx_step(None, insert_first, "a")
             second.run_tx_step(None, insert_second, "b")
             checkpointed.set()
-            release.wait()
+            release.wait(10)
             return "done"
 
         handle = DBOS.start_workflow(writer)
@@ -1085,7 +1086,7 @@ async def test_completion_drops_async_datasource_checkpoints(
         async def writer() -> str:
             await ds.run_tx_step_async(None, insert, "a")
             checkpointed.set()
-            await release.wait()
+            await asyncio.wait_for(release.wait(), 10)
             return "done"
 
         handle = await DBOS.start_workflow_async(writer)
@@ -1154,7 +1155,7 @@ def test_cancelled_workflow_keeps_datasource_checkpoints(
         def writer() -> str:
             ds.run_tx_step(None, insert, "a")
             checkpointed.set()
-            release.wait()
+            release.wait(10)
             after()
             return "done"
 
