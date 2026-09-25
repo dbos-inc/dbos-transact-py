@@ -18,6 +18,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
+import dbos._workflow_commands as workflow_commands
 from dbos import (
     DBOS,
     AsyncSQLAlchemyDatasource,
@@ -35,6 +36,7 @@ from dbos._serialization import deserialize_value
 from dbos._sys_db import WorkflowStatusString
 from tests.conftest import (
     ensure_user_database,
+    keep_datasource_checkpoints,
     postgres_urls,
     reexecute_workflow_by_id,
     retry_until_success,
@@ -188,6 +190,17 @@ def _blind_prechecks(
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+_real_cleanup = workflow_commands.delete_completed_datasource_checkpoints
+_real_cleanup_async = workflow_commands.delete_completed_datasource_checkpoints_async
+
+
+@pytest.fixture(autouse=True)
+def skip_checkpoint_cleanup() -> Generator[None, None, None]:
+    """Most tests here read checkpoints after completion."""
+    with keep_datasource_checkpoints():
+        yield
 
 
 @pytest.fixture(params=["sqlite", "pg"])
@@ -738,6 +751,80 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
         deserialize_value(ds_row.output, ds_row.serialization, sync_ds.serializer)
         == "result-1"
     )
+
+
+def test_sync_ds_rolls_back_once_ownership_moves(
+    sync_ds: SQLAlchemyDatasource, dbos: DBOS
+) -> None:
+    """An execution that loses the workflow mid-transaction rolls back rather than
+    commit, so a stale execution cannot apply a step the new owner also runs."""
+    race = _race_table(sync_ds)
+    race.create(sync_ds.engine, checkfirst=True)
+
+    def step_fn() -> str:
+        sync_ds.sql_session().execute(race.insert().values(tag="stale"))
+        _set_owner(dbos, wfid, "another-execution")
+        return "stale"
+
+    @DBOS.workflow()
+    def my_workflow() -> str:
+        try:
+            return sync_ds.run_tx_step(None, step_fn)
+        except DBOSWorkflowConflictIDError:
+            # A real duplicate parks here instead; caught and reclaimed to keep the assertion local.
+            _reclaim_ownership(dbos)
+            return "conflicted"
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "conflicted"
+
+    with sync_ds.engine.connect() as conn:
+        tags = list(conn.execute(sa.select(race.c.tag)).scalars())
+        ds_rows = conn.execute(
+            sa.select(sync_ds._outputs_table.c.error).where(
+                sync_ds._outputs_table.c.workflow_id == wfid
+            )
+        ).all()
+    assert tags == []
+    assert ds_rows == [], "the stale execution left a checkpoint or an error row"
+    with dbos._sys_db.engine.connect() as conn:
+        assert _checkpointed_steps(conn, wfid) == []
+
+
+def test_sync_ds_completion_clears_checkpoints(
+    sync_ds: SQLAlchemyDatasource, dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        workflow_commands, "delete_completed_datasource_checkpoints", _real_cleanup
+    )
+
+    def step_fn() -> str:
+        return "done"
+
+    def checkpoints(wfid: str) -> list[int]:
+        with sync_ds.engine.connect() as conn:
+            return list(
+                conn.execute(
+                    sa.select(sync_ds._outputs_table.c.step_id).where(
+                        sync_ds._outputs_table.c.workflow_id == wfid
+                    )
+                ).scalars()
+            )
+
+    before_cleanup: list[list[int]] = []
+
+    @DBOS.workflow()
+    def my_workflow() -> str:
+        result = sync_ds.run_tx_step(None, step_fn)
+        before_cleanup.append(checkpoints(DBOS.workflow_id or ""))
+        return result
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "done"
+    assert before_cleanup == [[1]]
+    assert checkpoints(wfid) == []
 
 
 # Whether a lost acknowledgement is retriable decides how the row is met, not whose it is.
@@ -1400,6 +1487,92 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
         deserialize_value(ds_row.output, ds_row.serialization, async_ds.serializer)
         == "result-1"
     )
+
+
+@pytest.mark.asyncio
+async def test_async_ds_completion_clears_checkpoints(
+    async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DBOS launched outside this test's loop, so the delete must run on the
+    workflow's loop, which holds the datasource's connections, not DBOS's own loop."""
+    monkeypatch.setattr(
+        workflow_commands,
+        "delete_completed_datasource_checkpoints_async",
+        _real_cleanup_async,
+    )
+    delete_loops: list[asyncio.AbstractEventLoop] = []
+    real_delete = async_ds._delete_checkpoints_if_owner
+
+    async def recording_delete(workflow_id: str, owner_xid: str) -> bool:
+        delete_loops.append(asyncio.get_running_loop())
+        return await real_delete(workflow_id, owner_xid)
+
+    monkeypatch.setattr(async_ds, "_delete_checkpoints_if_owner", recording_delete)
+
+    async def step_fn() -> str:
+        return "done"
+
+    @DBOS.workflow()
+    async def my_workflow() -> str:
+        return await async_ds.run_tx_step_async(None, step_fn)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "done"
+    assert dbos._background_event_loop.target_loop() is not asyncio.get_running_loop()
+    assert delete_loops == [asyncio.get_running_loop()]
+    async with async_ds.engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                sa.select(async_ds._outputs_table.c.step_id).where(
+                    async_ds._outputs_table.c.workflow_id == wfid
+                )
+            )
+        ).all()
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_async_ds_rolls_back_once_ownership_moves(
+    async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS
+) -> None:
+    """An execution that loses the workflow mid-transaction rolls back rather than
+    commit, so a stale execution cannot apply a step the new owner also runs."""
+    race = _race_table(async_ds)
+    async with async_ds.engine.begin() as conn:
+        await conn.run_sync(race.create, checkfirst=True)
+
+    async def step_fn() -> str:
+        await async_ds.sql_session().execute(race.insert().values(tag="stale"))
+        _set_owner(dbos, wfid, "another-execution")
+        return "stale"
+
+    @DBOS.workflow()
+    async def my_workflow() -> str:
+        try:
+            return await async_ds.run_tx_step_async(None, step_fn)
+        except DBOSWorkflowConflictIDError:
+            # A real duplicate parks here instead; caught and reclaimed to keep the assertion local.
+            _reclaim_ownership(dbos)
+            return "conflicted"
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "conflicted"
+
+    async with async_ds.engine.connect() as conn:
+        tags = list((await conn.execute(sa.select(race.c.tag))).scalars())
+        ds_rows = (
+            await conn.execute(
+                sa.select(async_ds._outputs_table.c.error).where(
+                    async_ds._outputs_table.c.workflow_id == wfid
+                )
+            )
+        ).all()
+    assert tags == []
+    assert ds_rows == [], "the stale execution left a checkpoint or an error row"
+    with dbos._sys_db.engine.connect() as sys_conn:
+        assert _checkpointed_steps(sys_conn, wfid) == []
 
 
 @pytest.mark.asyncio

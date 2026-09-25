@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import glob
 import os
 import sqlite3
@@ -13,11 +14,13 @@ from typing import (
     Any,
     Callable,
     Generator,
+    Iterator,
     Optional,
     Tuple,
     TypeVar,
     cast,
 )
+from unittest import mock
 
 T = TypeVar("T")
 from pathlib import Path
@@ -36,6 +39,7 @@ from opentelemetry.sdk._logs.export import (
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+import dbos._workflow_commands as workflow_commands
 from dbos import (
     DBOS,
     DBOSClient,
@@ -381,6 +385,22 @@ def setup_in_memory_otlp_collector() -> Generator[
 def pytest_collection_modifyitems(session: Any, config: Any, items: Any) -> None:
     for item in items:
         item._nodeid = "\n" + item.nodeid + "\n"
+
+
+@contextlib.contextmanager
+def keep_datasource_checkpoints() -> Iterator[None]:
+    """Skip the datasource checkpoint cleanup at workflow completion."""
+    with (
+        mock.patch.object(
+            workflow_commands, "delete_completed_datasource_checkpoints", mock.Mock()
+        ),
+        mock.patch.object(
+            workflow_commands,
+            "delete_completed_datasource_checkpoints_async",
+            mock.AsyncMock(),
+        ),
+    ):
+        yield
 
 
 def set_workflow_status(sys_db: SystemDatabase, workflow_id: str, status: str) -> None:

@@ -17,6 +17,7 @@ from typing import (
     Optional,
     Type,
     TypedDict,
+    Union,
 )
 
 from dbos._serialization import WorkflowSerializationFormat
@@ -24,6 +25,8 @@ from dbos._serialization import WorkflowSerializationFormat
 if TYPE_CHECKING:
     from opentelemetry.context import Context as OtelContext
     from opentelemetry.trace import Span
+
+    from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -122,6 +125,10 @@ class DBOSContext:
         self.active_stream_reads: int = 0
         self.sync_ds_session: Optional[Session] = None
         self.async_ds_session: Optional[AsyncSession] = None
+        # Datasources this workflow called; its checkpoints go when it completes.
+        self.used_datasources: list[
+            Union[SQLAlchemyDatasource, AsyncSQLAlchemyDatasource]
+        ] = []
         self.context_spans: list[ContextSpan] = []
 
         self.authenticated_user: Optional[str] = None
@@ -269,6 +276,7 @@ class DBOSContext:
         self.workflow_id = wfid
         self.function_id = 0
         self.active_stream_reads = 0
+        self.used_datasources = []
         self._start_span(attributes)
 
     def end_workflow(self, exc_value: Optional[BaseException]) -> None:

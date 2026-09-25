@@ -785,6 +785,40 @@ def _serialize_exception_for_persistence(
         return serialize_exception(fallback, serialization, serializer)[0]
 
 
+def _dropping_datasource_checkpoints(
+    dbos: "DBOS", func: Callable[[], Any]
+) -> Callable[[], Any]:
+    """Wrap a workflow body to drop its datasource checkpoints once it returns or raises,
+    on its own thread or loop; its step checkpoints then cover every transaction."""
+    from . import _workflow_commands as commands
+
+    if inspect.iscoroutinefunction(func):
+
+        async def run_async() -> Any:
+            ctx = assert_current_dbos_context()
+            try:
+                output = await func()
+            except Exception:
+                await commands.delete_completed_datasource_checkpoints_async(dbos, ctx)
+                raise
+            await commands.delete_completed_datasource_checkpoints_async(dbos, ctx)
+            return output
+
+        return run_async
+
+    def run() -> Any:
+        ctx = assert_current_dbos_context()
+        try:
+            output = func()
+        except Exception:
+            commands.delete_completed_datasource_checkpoints(dbos, ctx)
+            raise
+        commands.delete_completed_datasource_checkpoints(dbos, ctx)
+        return output
+
+    return run
+
+
 def _get_wf_invoke_func(
     dbos: "DBOS",
     status: WorkflowStatusInternal,
@@ -1086,9 +1120,11 @@ def _execute_workflow_wthread(
                 status.get("queue_partition_key"),
             )
             try:
-                return Immediate[R](functools.partial(func, *args, **kwargs)).then(
-                    _get_wf_invoke_func(dbos, status, entry.release)
-                )()
+                return Immediate[R](
+                    _dropping_datasource_checkpoints(
+                        dbos, functools.partial(func, *args, **kwargs)
+                    )
+                ).then(_get_wf_invoke_func(dbos, status, entry.release))()
             except Exception as e:
                 # This path runs on the executor thread pool, not the event loop.
                 dbos.logger.error(
@@ -1128,9 +1164,11 @@ async def _execute_workflow_async(
                 status.get("queue_partition_key"),
             )
             try:
-                result = Pending[R](functools.partial(func, *args, **kwargs)).then(
-                    _get_wf_invoke_func(dbos, status, entry.release)
-                )
+                result = Pending[R](
+                    _dropping_datasource_checkpoints(
+                        dbos, functools.partial(func, *args, **kwargs)
+                    )
+                ).then(_get_wf_invoke_func(dbos, status, entry.release))
                 return await result()
             except Exception as e:
                 dbos.logger.error(
@@ -1917,7 +1955,11 @@ def workflow_wrapper(
             cctx, queue=None
         )
 
-        wfOutcome = Outcome[R].make(functools.partial(func, *args, **kwargs))
+        wfOutcome = Outcome[R].make(
+            _dropping_datasource_checkpoints(
+                dbos, functools.partial(func, *args, **kwargs)
+            )
+        )
 
         workflow_id = None
         # Holds the initialized status so the invoke step can be built once the workflow is cleared to execute.
