@@ -821,7 +821,6 @@ def _get_wf_invoke_func(
                     ctx.used_datasources,
                     status["workflow_uuid"],
                     owner_xid,
-                    dbos._background_event_loop.submit_coroutine,
                 )
 
         if (

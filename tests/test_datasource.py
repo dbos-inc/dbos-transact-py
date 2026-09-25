@@ -1679,9 +1679,19 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
 async def test_async_ds_completion_clears_checkpoints(
     async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """DBOS launched outside this test's loop, so the delete must be sent back to the
+    workflow's loop, which holds the datasource's connections, not DBOS's own loop."""
     monkeypatch.setattr(
         workflow_commands, "delete_completed_datasource_checkpoints", _real_cleanup
     )
+    delete_loops: list[asyncio.AbstractEventLoop] = []
+    real_delete = async_ds._delete_checkpoints_if_owner
+
+    async def recording_delete(workflow_id: str, owner_xid: str) -> bool:
+        delete_loops.append(asyncio.get_running_loop())
+        return await real_delete(workflow_id, owner_xid)
+
+    monkeypatch.setattr(async_ds, "_delete_checkpoints_if_owner", recording_delete)
 
     async def step_fn() -> str:
         return "done"
@@ -1693,6 +1703,8 @@ async def test_async_ds_completion_clears_checkpoints(
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         assert await my_workflow() == "done"
+    assert dbos._background_event_loop.target_loop() is not asyncio.get_running_loop()
+    assert delete_loops == [asyncio.get_running_loop()]
     async with async_ds.engine.connect() as conn:
         rows = (
             await conn.execute(

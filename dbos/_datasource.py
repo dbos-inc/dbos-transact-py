@@ -112,11 +112,11 @@ def _still_owns(workflow_id: str, owner_xid: Optional[str] = None) -> bool:
 def _record_use(
     ds: Union["SQLAlchemyDatasource", "AsyncSQLAlchemyDatasource"],
     ctx: Optional[DBOSContext],
+    loop: Optional[asyncio.AbstractEventLoop],
 ) -> None:
     # Recorded even on replay, so completion also clears an earlier execution's rows.
     assert ctx is not None
-    if ds not in ctx.used_datasources:
-        ctx.used_datasources.append(ds)
+    ctx.used_datasources.setdefault(ds, loop)
 
 
 def _replay_recorded(recorded: "RecordedResult", serializer: "Serializer") -> Any:
@@ -394,7 +394,8 @@ class AsyncSQLAlchemyDatasource(ABC):
         ctx = get_local_dbos_context()
         in_wf = ctx is not None and ctx.is_workflow()
         if in_wf:
-            _record_use(self, ctx)
+            # The loop holding this execution's connections, where completion deletes.
+            _record_use(self, ctx, asyncio.get_running_loop())
 
         async def _body() -> R:
             workflow_id: str = ""
@@ -769,7 +770,7 @@ class SQLAlchemyDatasource(ABC):
         ctx = get_local_dbos_context()
         in_wf = ctx is not None and ctx.is_workflow()
         if in_wf:
-            _record_use(self, ctx)
+            _record_use(self, ctx, None)
 
         def _body() -> R:
             workflow_id: str = ""

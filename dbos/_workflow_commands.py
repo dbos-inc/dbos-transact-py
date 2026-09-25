@@ -1,5 +1,15 @@
+import asyncio
 import threading
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, Sequence, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Coroutine,
+    Mapping,
+    Optional,
+    Sequence,
+    Union,
+)
 
 from dbos._context import get_local_dbos_context
 from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
@@ -185,19 +195,30 @@ def _delete_datasource_checkpoints(
 
 def delete_completed_datasource_checkpoints(
     dbos: "DBOS",
-    datasources: Sequence[Datasource],
+    datasources: Mapping[Datasource, Optional[asyncio.AbstractEventLoop]],
     workflow_id: str,
     owner_xid: str,
-    run_coroutine: Callable[[Coroutine[Any, Any, Any]], Any],
 ) -> None:
     """Drop a finishing workflow's datasource checkpoints while owner_xid still owns it.
     Best effort: a leftover checkpoint is harmless, so failures only warn."""
-    for ds in datasources:
+    for ds, loop in datasources.items():
         try:
             if isinstance(ds, AsyncSQLAlchemyDatasource):
-                owned = run_coroutine(
-                    ds._delete_checkpoints_if_owner(workflow_id, owner_xid)
-                )
+                assert loop is not None
+                try:
+                    running: Optional[asyncio.AbstractEventLoop] = (
+                        asyncio.get_running_loop()
+                    )
+                except RuntimeError:
+                    running = None
+                if running is loop:
+                    # Blocking on the loop's own thread would deadlock it.
+                    raise RuntimeError(
+                        "Cannot block on a datasource's loop from its own thread"
+                    )
+                owned = asyncio.run_coroutine_threadsafe(
+                    ds._delete_checkpoints_if_owner(workflow_id, owner_xid), loop
+                ).result()
             else:
                 owned = ds._delete_checkpoints_if_owner(workflow_id, owner_xid)
         except Exception as e:
