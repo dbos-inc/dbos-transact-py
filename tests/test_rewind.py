@@ -1107,24 +1107,26 @@ def test_error_drops_datasource_checkpoints(
         assert datasource_checkpoints(ds.engine, workflow_id) == []
 
 
-def test_database_error_keeps_datasource_checkpoints(
+def test_a_database_error_drops_datasource_checkpoints(
     config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
 ) -> None:
-    """A database error may have cost a transaction its step checkpoint, leaving its
-    datasource checkpoint the only record of it, so the checkpoints stay."""
+    """A workflow failed by its own SQL error is cleared like any other failure."""
     with launched_with_datasources(config, tmp_path, 1) as (dbos, (ds,)):
         insert = inserter(ds)
+
+        def bad_sql() -> None:
+            ds.sql_session().execute(sa.text("SELECT * FROM no_such_table"))
 
         @DBOS.workflow()
         def failer() -> None:
             ds.run_tx_step(None, insert, "a")
-            raise OperationalError("SELECT 1", {}, Exception("connection lost"))
+            ds.run_tx_step(None, bad_sql)
 
         workflow_id = str(uuid.uuid4())
         with SetWorkflowID(workflow_id), pytest.raises(OperationalError):
             failer()
         assert DBOS.retrieve_workflow(workflow_id).get_status().status == "ERROR"
-        assert datasource_checkpoints(ds.engine, workflow_id) == [1]
+        assert datasource_checkpoints(ds.engine, workflow_id) == []
 
 
 def test_cancelled_workflow_keeps_datasource_checkpoints(

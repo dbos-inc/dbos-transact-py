@@ -33,8 +33,6 @@ from typing import (
     cast,
 )
 
-from sqlalchemy.exc import DBAPIError
-
 from dbos._outcome import DeferredResult, Immediate, NoResult, Outcome, Pending
 from dbos._utils import GlobalParams
 
@@ -861,9 +859,7 @@ def _get_wf_invoke_func(
             error_str = _serialize_exception_for_persistence(
                 error, status["serialization"], dbos._serializer
             )
-            # A database error may have cost a step its checkpoint, leaving its datasource row the only record.
-            if not isinstance(error, DBAPIError):
-                delete_datasource_checkpoints()
+            delete_datasource_checkpoints()
             if not dbos._sys_db.update_workflow_outcome(
                 status["workflow_uuid"],
                 WorkflowStatusString.ERROR.value,
