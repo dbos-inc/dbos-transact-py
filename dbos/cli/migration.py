@@ -3,6 +3,10 @@ from typing import List, Optional
 import click
 import sqlalchemy as sa
 
+from dbos._datasource_migration import (
+    get_datasource_permissions_sql,
+    migrate_datasource,
+)
 from dbos._migration import get_dbos_migrations
 from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
@@ -43,6 +47,42 @@ def run_dbos_database_migrations(
         grant_dbos_schema_permissions(
             database_url=system_database_url, role_name=application_role, schema=schema
         )
+
+
+def run_dbos_datasource_migrations(
+    database_url: str,
+    *,
+    schema: str = "dbos",
+    application_role: Optional[str] = None,
+) -> None:
+    """Create or migrate a datasource's tables with a privileged role, then optionally
+    grant application_role the minimal permissions to use it."""
+    is_sqlite = database_url.startswith("sqlite")
+    if is_sqlite and application_role:
+        click.echo("application_role is only supported for Postgres datasources")
+        raise click.exceptions.Exit(code=1)
+    url = sa.make_url(database_url)
+    url = url.set(drivername="sqlite" if is_sqlite else "postgresql+psycopg")
+    engine = None
+    try:
+        # A bare engine, not a datasource, which would register itself with DBOS.
+        engine = sa.create_engine(url)
+        with engine.begin() as conn:
+            migrate_datasource(conn, None if is_sqlite else schema)
+        if application_role:
+            click.echo(
+                f"Granting datasource permissions for the {schema} schema to {application_role} in database {url}"
+            )
+            with engine.begin() as conn:
+                for sql in get_datasource_permissions_sql(schema, application_role):
+                    click.echo(sql)
+                    conn.execute(sa.text(sql))
+    except Exception as e:
+        click.echo(f"DBOS datasource migrations failed: {e}")
+        raise click.exceptions.Exit(code=1)
+    finally:
+        if engine:
+            engine.dispose()
 
 
 def get_dbos_schema_permissions_sql(schema: str, role_name: str) -> List[str]:

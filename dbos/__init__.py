@@ -40,7 +40,7 @@ from ._sys_db import (
     WorkflowStatusString,
 )
 from ._validation import make_pydantic_args_validator, pydantic_args_validator
-from .cli.migration import run_dbos_database_migrations
+from .cli.migration import run_dbos_database_migrations, run_dbos_datasource_migrations
 
 __all__ = [
     "DBOSConfig",
@@ -80,6 +80,7 @@ __all__ = [
     "pydantic_args_validator",
     "make_pydantic_args_validator",
     "run_dbos_database_migrations",
+    "run_dbos_datasource_migrations",
     "SQLAlchemyDatasource",
     "AsyncSQLAlchemyDatasource",
 ]

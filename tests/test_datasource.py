@@ -6,6 +6,7 @@ import inspect
 import pickle
 import sqlite3
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, AsyncGenerator, Generator, Optional, Union, cast
 
 import psycopg
@@ -25,12 +26,21 @@ from dbos import (
     DBOSConfig,
     SetWorkflowID,
     SQLAlchemyDatasource,
+    run_dbos_datasource_migrations,
 )
 from dbos._context import get_local_dbos_context
 from dbos._datasource import RecordedResult
+from dbos._datasource_migration import (
+    DATASOURCE_MIGRATIONS_TABLE,
+    get_postgres_datasource_migrations,
+)
 from dbos._datasource_postgres import PostgresAsyncDatasource, PostgresSyncDatasource
 from dbos._datasource_sqlite import SqliteAsyncDatasource, SqliteSyncDatasource
-from dbos._error import DBOSException, DBOSWorkflowConflictIDError
+from dbos._error import (
+    DBOSException,
+    DBOSInitializationError,
+    DBOSWorkflowConflictIDError,
+)
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import deserialize_value
 from dbos._sys_db import WorkflowStatusString
@@ -1864,3 +1874,233 @@ async def test_async_ds_delete_checkpoints(
     assert await step_ids(wfid) == [1]
     await async_ds._delete_checkpoints(wfid, 1)
     assert await step_ids(wfid) == []
+
+
+# ---------------------------------------------------------------------------
+# Migrations
+# ---------------------------------------------------------------------------
+
+_LATEST_DS_VERSION = len(get_postgres_datasource_migrations("dbos"))
+
+
+def _pg_admin_url() -> str:
+    url = postgres_urls()[0]
+    _skip_if_pg_unreachable(url)
+    ensure_user_database()
+    return url.replace("postgresql://", "postgresql+psycopg://")
+
+
+def _pg_admin_exec(admin_url: str, *statements: str) -> None:
+    engine = sa.create_engine(admin_url)
+    try:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as c:
+            for sql in statements:
+                c.execute(sa.text(sql))
+    finally:
+        engine.dispose()
+
+
+def _pg_schema_exists(admin_url: str, schema: str) -> bool:
+    engine = sa.create_engine(admin_url)
+    try:
+        with engine.connect() as c:
+            return (
+                c.execute(
+                    sa.text("SELECT 1 FROM pg_namespace WHERE nspname = :s"),
+                    {"s": schema},
+                ).fetchone()
+                is not None
+            )
+    finally:
+        engine.dispose()
+
+
+def _ds_version(ds: SQLAlchemyDatasource) -> int:
+    prefix = f'"{ds.schema}".' if ds.schema else ""
+    with ds.engine.connect() as c:
+        return int(
+            c.execute(
+                sa.text(f"SELECT version FROM {prefix}{DATASOURCE_MIGRATIONS_TABLE}")
+            ).scalar_one()
+        )
+
+
+@pytest.fixture()
+def fresh_pg_schema(
+    cleanup_test_databases: None,
+) -> Generator[tuple[str, str], None, None]:
+    """An admin URL and a schema name not yet created in the user database."""
+    admin_url = _pg_admin_url()
+    schema = f"ds_mig_{uuid.uuid4().hex[:8]}"
+    yield admin_url, schema
+    _pg_admin_exec(admin_url, f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+
+
+@pytest.fixture()
+def least_privilege_ds(
+    fresh_pg_schema: tuple[str, str],
+) -> Generator[SQLAlchemyDatasource, None, None]:
+    """A datasource whose role holds only the grants the migration helper gives it."""
+    admin_url, schema = fresh_pg_schema
+    role, password = f"ds_app_{uuid.uuid4().hex[:8]}", "ds_app_password"
+    _pg_admin_exec(admin_url, f"CREATE ROLE \"{role}\" LOGIN PASSWORD '{password}'")
+    try:
+        run_dbos_datasource_migrations(admin_url, schema=schema, application_role=role)
+        role_url = (
+            sa.make_url(admin_url)
+            .set(username=role, password=password)
+            .render_as_string(hide_password=False)
+        )
+        # Verify-only creation needs no more than migrated-schema creation.
+        verified = SQLAlchemyDatasource.create(
+            role_url, schema=schema, run_migrations=False
+        )
+        verified.engine.dispose()
+        ds = SQLAlchemyDatasource.create(role_url, schema=schema)
+        yield ds
+        ds.engine.dispose()
+    finally:
+        _pg_admin_exec(
+            admin_url,
+            f'DROP SCHEMA IF EXISTS "{schema}" CASCADE',
+            f'DROP OWNED BY "{role}"',
+            f'DROP ROLE "{role}"',
+        )
+
+
+def test_ds_runs_with_least_privilege_role(
+    least_privilege_ds: SQLAlchemyDatasource, dbos: DBOS
+) -> None:
+    """A role without CREATE records, replays, and deletes checkpoints."""
+    ds = least_privilege_ds
+
+    @ds.transaction
+    def step(value: str) -> str:
+        return value
+
+    @DBOS.workflow()
+    def my_workflow() -> str:
+        return step("a") + step("b")
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "ab"
+    assert _checkpoint_step_ids(ds, wfid) == [1, 2]
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "ab"
+    ds._delete_checkpoints(wfid, 1)
+    assert _checkpoint_step_ids(ds, wfid) == []
+
+    # The role truly lacks CREATE, so it could not have migrated on its own.
+    with pytest.raises(sa.exc.ProgrammingError, match="permission denied"):
+        with ds.engine.begin() as conn:
+            conn.execute(sa.text(f'CREATE TABLE "{ds.schema}".nope (x INT)'))
+
+
+def test_ds_run_migrations_false_rejects_unmigrated_pg(
+    fresh_pg_schema: tuple[str, str],
+) -> None:
+    admin_url, schema = fresh_pg_schema
+    with pytest.raises(DBOSInitializationError, match="at datasource schema version 0"):
+        SQLAlchemyDatasource.create(admin_url, schema=schema, run_migrations=False)
+    assert not _pg_schema_exists(admin_url, schema)
+
+
+def test_ds_run_migrations_false_rejects_unmigrated_sqlite(tmp_path: Any) -> None:
+    url = f"sqlite:///{tmp_path}/unmigrated.sqlite"
+    with pytest.raises(DBOSInitializationError, match="at datasource schema version 0"):
+        SQLAlchemyDatasource.create(url, run_migrations=False)
+    engine = sa.create_engine(url)
+    with engine.connect() as c:
+        assert (
+            c.execute(
+                sa.text("SELECT name FROM sqlite_master WHERE type='table'")
+            ).fetchall()
+            == []
+        )
+    engine.dispose()
+
+
+def test_ds_migration_helper_sqlite(tmp_path: Any) -> None:
+    url = f"sqlite:///{tmp_path}/helper.sqlite"
+    run_dbos_datasource_migrations(url)
+    ds = SQLAlchemyDatasource.create(url, run_migrations=False)
+    assert _ds_version(ds) == _LATEST_DS_VERSION
+    ds.engine.dispose()
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "pg"])
+def test_ds_adopts_unversioned_table(
+    dialect: str, tmp_path: Any, cleanup_test_databases: None
+) -> None:
+    """A datasource_outputs table from before versioning keeps its rows and gets a version."""
+    if dialect == "sqlite":
+        url, schema, prefix = f"sqlite:///{tmp_path}/legacy.sqlite", None, ""
+        engine = sa.create_engine(url)
+    else:
+        url, schema = _pg_admin_url(), f"ds_mig_{uuid.uuid4().hex[:8]}"
+        prefix = f'"{schema}".'
+        engine = sa.create_engine(url)
+        with engine.begin() as c:
+            c.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
+    try:
+        with engine.begin() as c:
+            c.execute(
+                sa.text(
+                    f"CREATE TABLE {prefix}datasource_outputs (workflow_id TEXT NOT NULL, "
+                    "step_id INT NOT NULL, output TEXT, error TEXT, serialization TEXT, "
+                    "created_at BIGINT NOT NULL DEFAULT 0, PRIMARY KEY (workflow_id, step_id))"
+                )
+            )
+            c.execute(
+                sa.text(
+                    f"INSERT INTO {prefix}datasource_outputs (workflow_id, step_id) VALUES ('w', 1)"
+                )
+            )
+        with pytest.raises(DBOSInitializationError):
+            SQLAlchemyDatasource.create(url, schema=schema, run_migrations=False)
+        ds = SQLAlchemyDatasource.create(url, schema=schema)
+        assert _ds_version(ds) == _LATEST_DS_VERSION
+        assert _checkpoint_step_ids(ds, "w") == [1]
+        ds.engine.dispose()
+    finally:
+        if schema is not None:
+            with engine.begin() as c:
+                c.execute(sa.text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        engine.dispose()
+
+
+def test_ds_concurrent_creation_migrates_once(
+    fresh_pg_schema: tuple[str, str],
+) -> None:
+    admin_url, schema = fresh_pg_schema
+
+    def create() -> SQLAlchemyDatasource:
+        return SQLAlchemyDatasource.create(admin_url, schema=schema)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        datasources = list(pool.map(lambda _: create(), range(8)))
+    assert _ds_version(datasources[0]) == _LATEST_DS_VERSION
+    for ds in datasources:
+        ds.engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_async_ds_run_migrations_false(
+    async_ds: AsyncSQLAlchemyDatasource, tmp_path: Any
+) -> None:
+    """Verify-only creation accepts a migrated schema and rejects an unmigrated one."""
+    url = async_ds.engine.url.render_as_string(hide_password=False)
+    verified = await AsyncSQLAlchemyDatasource.create(
+        url, schema=async_ds.schema, run_migrations=False
+    )
+    await verified.engine.dispose()
+
+    if async_ds.schema is None:
+        fresh_url, fresh_schema = f"sqlite+aiosqlite:///{tmp_path}/fresh.sqlite", None
+    else:
+        fresh_url, fresh_schema = url, f"ds_mig_{uuid.uuid4().hex[:8]}"
+    with pytest.raises(DBOSInitializationError, match="at datasource schema version 0"):
+        await AsyncSQLAlchemyDatasource.create(
+            fresh_url, schema=fresh_schema, run_migrations=False
+        )

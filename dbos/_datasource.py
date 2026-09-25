@@ -228,6 +228,7 @@ class AsyncSQLAlchemyDatasource(ABC):
         schema: Optional[str] = None,
         serializer: Optional[Serializer] = None,
         sessionmaker: Optional[async_sessionmaker[Any]] = None,
+        run_migrations: bool = True,
     ) -> "AsyncSQLAlchemyDatasource ":
         if serializer is None:
             serializer = DBOSDefaultSerializer
@@ -255,7 +256,11 @@ class AsyncSQLAlchemyDatasource(ABC):
                 serializer=serializer,
                 sessionmaker=sessionmaker,
             )
-        await instance.run_migrations()
+        if run_migrations:
+            await instance.run_migrations()
+        else:
+            # This role may not be allowed to run DDL, but it still requires an up-to-date schema.
+            await instance.verify_migrations()
         return instance
 
     @abstractmethod
@@ -266,6 +271,10 @@ class AsyncSQLAlchemyDatasource(ABC):
 
     @abstractmethod
     async def run_migrations(self) -> None:
+        pass
+
+    @abstractmethod
+    async def verify_migrations(self) -> None:
         pass
 
     @abstractmethod
@@ -633,6 +642,7 @@ class SQLAlchemyDatasource(ABC):
         schema: Optional[str] = None,
         serializer: Optional[Serializer] = None,
         sessionmaker: Optional[SyncSessionmaker[Any]] = None,
+        run_migrations: bool = True,
     ) -> "SQLAlchemyDatasource ":
         if serializer is None:
             serializer = DBOSDefaultSerializer
@@ -660,7 +670,11 @@ class SQLAlchemyDatasource(ABC):
                 serializer=serializer,
                 sessionmaker=sessionmaker,
             )
-        instance.run_migrations()
+        if run_migrations:
+            instance.run_migrations()
+        else:
+            # This role may not be allowed to run DDL, but it still requires an up-to-date schema.
+            instance.verify_migrations()
         return instance
 
     @abstractmethod
@@ -671,6 +685,10 @@ class SQLAlchemyDatasource(ABC):
 
     @abstractmethod
     def run_migrations(self) -> None:
+        pass
+
+    @abstractmethod
+    def verify_migrations(self) -> None:
         pass
 
     @abstractmethod
