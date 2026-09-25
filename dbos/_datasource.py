@@ -26,12 +26,12 @@ from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
 )
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
+from sqlalchemy.orm import sessionmaker as SyncSessionmaker
 
 from dbos._context import DBOSContextEnsure, current_owner_xid, get_local_dbos_context
 from dbos._error import DBOSException, DBOSWorkflowConflictIDError
-from dbos._schemas import SCHEMA_PLACEHOLDER
-from dbos._schemas.datasource_database import DatasourceSchema
+from dbos._schemas.datasource_database import datasource_outputs_table
 from dbos._serialization import (
     DBOSDefaultSerializer,
     Serializer,
@@ -102,6 +102,16 @@ def _still_owns(workflow_id: str) -> bool:
     return _get_dbos_instance()._sys_db.get_workflow_owner(workflow_id) == owner_xid
 
 
+def _reject_session_binds(session_kw: Dict[str, Any]) -> None:
+    # Per-mapper binds outrank bind=self.engine, which would split user writes from the checkpoint.
+    if session_kw.get("binds"):
+        raise DBOSException(
+            "A datasource sessionmaker must not set binds=: every statement in a datasource "
+            "transaction must use the datasource's engine so it commits atomically with the "
+            "step checkpoint"
+        )
+
+
 def _replay_recorded(recorded: "RecordedResult", serializer: "Serializer") -> Any:
     if recorded["error"]:
         raise deserialize_exception(
@@ -150,8 +160,7 @@ def _register_datasource(
     _get_or_create_dbos_registry().register_datasource(ds)
 
 
-def _delete_checkpoints_sql(workflow_id: str, start_step: int) -> Any:
-    t = DatasourceSchema.datasource_outputs
+def _delete_checkpoints_sql(t: sa.Table, workflow_id: str, start_step: int) -> Any:
     return sa.delete(t).where(
         (t.c.workflow_id == workflow_id) & (t.c.step_id >= start_step)
     )
@@ -172,26 +181,40 @@ class AsyncSQLAlchemyDatasource(ABC):
         engine: Optional[AsyncEngine],
         schema: Optional[str],
         serializer: Serializer,
+        sessionmaker: Optional[async_sessionmaker[Any]] = None,
     ):
         import sqlalchemy.dialects.postgresql as pg
         import sqlalchemy.dialects.sqlite as sq
 
+        if sessionmaker is not None and not isinstance(
+            sessionmaker, async_sessionmaker
+        ):
+            raise DBOSException(
+                "AsyncSQLAlchemyDatasource requires an async_sessionmaker"
+            )
+        if sessionmaker is not None:
+            _reject_session_binds(sessionmaker.kw)
         _log_datasource_init(
             "AsyncDatasource", database_url, engine_kwargs, bool(engine)
         )
         self.dialect = sq if database_url.startswith("sqlite") else pg
         self.schema = _resolve_schema(database_url, schema)
         if engine:
-            base_engine = engine
+            self.engine = engine
             self.created_engine = False
         else:
-            base_engine = self._create_engine(database_url, engine_kwargs)
+            self.engine = self._create_engine(database_url, engine_kwargs)
             self.created_engine = True
-        # Translate the placeholder schema to this instance's schema per-engine (None for SQLite = unqualified).
-        self.engine = base_engine.execution_options(
-            schema_translate_map={SCHEMA_PLACEHOLDER: self.schema}
+        self._outputs_table = datasource_outputs_table(self.schema)
+        # Pinned on DBOS's own statements, so a caller engine's schema_translate_map can't move them.
+        self._pin: Dict[str, Any] = {"schema_translate_map": {self.schema: self.schema}}
+        # Sessions are always opened with bind=self.engine, so checkpoints share the engine that reads them.
+        # No expiry by default: returned ORM objects outlive the session and are checkpointed after commit.
+        self.sessionmaker: async_sessionmaker[Any] = (
+            sessionmaker
+            if sessionmaker is not None
+            else async_sessionmaker(expire_on_commit=False)
         )
-        self.sessionmaker = async_sessionmaker(bind=self.engine)
         self.serializer = serializer
         _register_datasource(self)
 
@@ -202,6 +225,7 @@ class AsyncSQLAlchemyDatasource(ABC):
         engine: Optional[AsyncEngine] = None,
         schema: Optional[str] = None,
         serializer: Optional[Serializer] = None,
+        sessionmaker: Optional[async_sessionmaker[Any]] = None,
     ) -> "AsyncSQLAlchemyDatasource ":
         if serializer is None:
             serializer = DBOSDefaultSerializer
@@ -216,6 +240,7 @@ class AsyncSQLAlchemyDatasource(ABC):
                 engine=engine,
                 schema=schema,
                 serializer=serializer,
+                sessionmaker=sessionmaker,
             )
         else:
             from ._datasource_postgres import PostgresAsyncDatasource
@@ -226,6 +251,7 @@ class AsyncSQLAlchemyDatasource(ABC):
                 engine=engine,
                 schema=schema,
                 serializer=serializer,
+                sessionmaker=sessionmaker,
             )
         await instance.run_migrations()
         return instance
@@ -248,7 +274,10 @@ class AsyncSQLAlchemyDatasource(ABC):
     async def _delete_checkpoints(self, workflow_id: str, start_step: int) -> None:
         """Delete this workflow's checkpoints from start_step on."""
         async with self.engine.begin() as conn:
-            await conn.execute(_delete_checkpoints_sql(workflow_id, start_step))
+            await conn.execute(
+                _delete_checkpoints_sql(self._outputs_table, workflow_id, start_step),
+                execution_options=self._pin,
+            )
 
     def sql_session(self) -> AsyncSession:
         ctx = get_local_dbos_context()
@@ -263,13 +292,14 @@ class AsyncSQLAlchemyDatasource(ABC):
         async with self.engine.connect() as conn:
             result = await conn.execute(
                 sa.select(
-                    DatasourceSchema.datasource_outputs.c.output,
-                    DatasourceSchema.datasource_outputs.c.error,
-                    DatasourceSchema.datasource_outputs.c.serialization,
+                    self._outputs_table.c.output,
+                    self._outputs_table.c.error,
+                    self._outputs_table.c.serialization,
                 ).where(
-                    DatasourceSchema.datasource_outputs.c.workflow_id == workflow_id,
-                    DatasourceSchema.datasource_outputs.c.step_id == step_id,
-                )
+                    self._outputs_table.c.workflow_id == workflow_id,
+                    self._outputs_table.c.step_id == step_id,
+                ),
+                execution_options=self._pin,
             )
             return _row_to_result(result.first())
 
@@ -315,7 +345,7 @@ class AsyncSQLAlchemyDatasource(ABC):
     ) -> None:
         """Record this step's outcome, raising _StepAlreadyRecorded if a concurrent execution beat us to it."""
         result = await conn.execute(
-            self.dialect.insert(DatasourceSchema.datasource_outputs)
+            self.dialect.insert(self._outputs_table)
             .values(
                 workflow_id=workflow_id,
                 step_id=step_id,
@@ -325,14 +355,15 @@ class AsyncSQLAlchemyDatasource(ABC):
             )
             .on_conflict_do_nothing(
                 index_elements=[
-                    DatasourceSchema.datasource_outputs.c.workflow_id,
-                    DatasourceSchema.datasource_outputs.c.step_id,
+                    self._outputs_table.c.workflow_id,
+                    self._outputs_table.c.step_id,
                 ]
             )
             # No row back means a concurrent execution's row was already visible to this
             # snapshot. Above READ COMMITTED it can instead surface as a serialization
             # error, which the caller's retry loop converges to this case.
-            .returning(DatasourceSchema.datasource_outputs.c.workflow_id)
+            .returning(self._outputs_table.c.workflow_id),
+            execution_options=self._pin,
         )
         if result.first() is None:
             raise _StepAlreadyRecorded()
@@ -383,7 +414,7 @@ class AsyncSQLAlchemyDatasource(ABC):
             try:
                 with DBOSContextEnsure() as exec_ctx:
                     while True:
-                        async with self.sessionmaker() as session:
+                        async with self.sessionmaker(bind=self.engine) as session:
                             exec_ctx.start_async_ds_transaction(session)
                             try:
                                 async with session.begin():
@@ -394,6 +425,8 @@ class AsyncSQLAlchemyDatasource(ABC):
                                     )
                                     output = await func(*args, **kwargs)
                                     if in_wf:
+                                        # Flush first, so the checkpoint holds generated keys and defaults, as the caller sees them.
+                                        await session.flush()
                                         serialized, serialization = serialize_value(
                                             output, None, self.serializer
                                         )
@@ -529,26 +562,38 @@ class SQLAlchemyDatasource(ABC):
         engine: Optional[sa.Engine],
         schema: Optional[str],
         serializer: Serializer,
+        sessionmaker: Optional[SyncSessionmaker[Any]] = None,
     ):
         import sqlalchemy.dialects.postgresql as pg
         import sqlalchemy.dialects.sqlite as sq
 
+        if sessionmaker is not None and not isinstance(sessionmaker, SyncSessionmaker):
+            raise DBOSException(
+                "SQLAlchemyDatasource requires a sqlalchemy.orm.sessionmaker"
+            )
+        if sessionmaker is not None:
+            _reject_session_binds(sessionmaker.kw)
         _log_datasource_init(
             "SyncDatasource", database_url, engine_kwargs, bool(engine)
         )
         self.dialect = sq if database_url.startswith("sqlite") else pg
         self.schema = _resolve_schema(database_url, schema)
         if engine:
-            base_engine = engine
+            self.engine = engine
             self.created_engine = False
         else:
-            base_engine = self._create_engine(database_url, engine_kwargs)
+            self.engine = self._create_engine(database_url, engine_kwargs)
             self.created_engine = True
-        # Translate the placeholder schema to this instance's schema per-engine (None for SQLite = unqualified).
-        self.engine = base_engine.execution_options(
-            schema_translate_map={SCHEMA_PLACEHOLDER: self.schema}
+        self._outputs_table = datasource_outputs_table(self.schema)
+        # Pinned on DBOS's own statements, so a caller engine's schema_translate_map can't move them.
+        self._pin: Dict[str, Any] = {"schema_translate_map": {self.schema: self.schema}}
+        # Sessions are always opened with bind=self.engine, so checkpoints share the engine that reads them.
+        # No expiry by default: returned ORM objects outlive the session and are checkpointed after commit.
+        self.sessionmaker: SyncSessionmaker[Any] = (
+            sessionmaker
+            if sessionmaker is not None
+            else SyncSessionmaker(expire_on_commit=False)
         )
-        self.sessionmaker = sessionmaker(bind=self.engine)
         self.serializer = serializer
         _register_datasource(self)
 
@@ -559,6 +604,7 @@ class SQLAlchemyDatasource(ABC):
         engine: Optional[sa.Engine] = None,
         schema: Optional[str] = None,
         serializer: Optional[Serializer] = None,
+        sessionmaker: Optional[SyncSessionmaker[Any]] = None,
     ) -> "SQLAlchemyDatasource ":
         if serializer is None:
             serializer = DBOSDefaultSerializer
@@ -573,6 +619,7 @@ class SQLAlchemyDatasource(ABC):
                 engine=engine,
                 schema=schema,
                 serializer=serializer,
+                sessionmaker=sessionmaker,
             )
         else:
             from ._datasource_postgres import PostgresSyncDatasource
@@ -583,6 +630,7 @@ class SQLAlchemyDatasource(ABC):
                 engine=engine,
                 schema=schema,
                 serializer=serializer,
+                sessionmaker=sessionmaker,
             )
         instance.run_migrations()
         return instance
@@ -605,7 +653,10 @@ class SQLAlchemyDatasource(ABC):
     def _delete_checkpoints(self, workflow_id: str, start_step: int) -> None:
         """Delete this workflow's checkpoints from start_step on."""
         with self.engine.begin() as conn:
-            conn.execute(_delete_checkpoints_sql(workflow_id, start_step))
+            conn.execute(
+                _delete_checkpoints_sql(self._outputs_table, workflow_id, start_step),
+                execution_options=self._pin,
+            )
 
     def sql_session(self) -> Session:
         ctx = get_local_dbos_context()
@@ -620,13 +671,14 @@ class SQLAlchemyDatasource(ABC):
         with self.engine.connect() as conn:
             result = conn.execute(
                 sa.select(
-                    DatasourceSchema.datasource_outputs.c.output,
-                    DatasourceSchema.datasource_outputs.c.error,
-                    DatasourceSchema.datasource_outputs.c.serialization,
+                    self._outputs_table.c.output,
+                    self._outputs_table.c.error,
+                    self._outputs_table.c.serialization,
                 ).where(
-                    DatasourceSchema.datasource_outputs.c.workflow_id == workflow_id,
-                    DatasourceSchema.datasource_outputs.c.step_id == step_id,
-                )
+                    self._outputs_table.c.workflow_id == workflow_id,
+                    self._outputs_table.c.step_id == step_id,
+                ),
+                execution_options=self._pin,
             )
             return _row_to_result(result.first())
 
@@ -670,7 +722,7 @@ class SQLAlchemyDatasource(ABC):
     ) -> None:
         """Record this step's outcome, raising _StepAlreadyRecorded if a concurrent execution beat us to it."""
         result = conn.execute(
-            self.dialect.insert(DatasourceSchema.datasource_outputs)
+            self.dialect.insert(self._outputs_table)
             .values(
                 workflow_id=workflow_id,
                 step_id=step_id,
@@ -680,14 +732,15 @@ class SQLAlchemyDatasource(ABC):
             )
             .on_conflict_do_nothing(
                 index_elements=[
-                    DatasourceSchema.datasource_outputs.c.workflow_id,
-                    DatasourceSchema.datasource_outputs.c.step_id,
+                    self._outputs_table.c.workflow_id,
+                    self._outputs_table.c.step_id,
                 ]
             )
             # No row back means a concurrent execution's row was already visible to this
             # snapshot. Above READ COMMITTED it can instead surface as a serialization
             # error, which the caller's retry loop converges to this case.
-            .returning(DatasourceSchema.datasource_outputs.c.workflow_id)
+            .returning(self._outputs_table.c.workflow_id),
+            execution_options=self._pin,
         )
         if result.first() is None:
             raise _StepAlreadyRecorded()
@@ -738,7 +791,7 @@ class SQLAlchemyDatasource(ABC):
             try:
                 with DBOSContextEnsure() as exec_ctx:
                     while True:
-                        with self.sessionmaker() as session:
+                        with self.sessionmaker(bind=self.engine) as session:
                             exec_ctx.start_sync_ds_transaction(session)
                             try:
                                 with session.begin():
@@ -749,6 +802,8 @@ class SQLAlchemyDatasource(ABC):
                                     )
                                     output = func(*args, **kwargs)
                                     if in_wf:
+                                        # Flush first, so the checkpoint holds generated keys and defaults, as the caller sees them.
+                                        session.flush()
                                         serialized, serialization = serialize_value(
                                             output, None, self.serializer
                                         )
