@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker as SyncSessionmaker
 
 from dbos._context import DBOSContextEnsure, current_owner_xid, get_local_dbos_context
+from dbos._datasource_migration import migrate_datasource_database
 from dbos._error import DBOSException, DBOSWorkflowConflictIDError
 from dbos._schemas.datasource_database import datasource_outputs_table
 from dbos._serialization import (
@@ -221,6 +222,19 @@ class AsyncSQLAlchemyDatasource(ABC):
         _register_datasource(self)
 
     @staticmethod
+    async def migrate(
+        database_url: str,
+        *,
+        schema: Optional[str] = None,
+        application_role: Optional[str] = None,
+    ) -> None:
+        """Create or migrate a datasource's tables with a privileged role, optionally
+        granting application_role the minimal permissions to use them."""
+        await asyncio.to_thread(
+            migrate_datasource_database, database_url, schema, application_role
+        )
+
+    @staticmethod
     async def create(
         database_url: str,
         engine_kwargs: Optional[Dict[str, Any]] = None,
@@ -228,6 +242,7 @@ class AsyncSQLAlchemyDatasource(ABC):
         schema: Optional[str] = None,
         serializer: Optional[Serializer] = None,
         sessionmaker: Optional[async_sessionmaker[Any]] = None,
+        run_migrations: bool = True,
     ) -> "AsyncSQLAlchemyDatasource ":
         if serializer is None:
             serializer = DBOSDefaultSerializer
@@ -255,7 +270,11 @@ class AsyncSQLAlchemyDatasource(ABC):
                 serializer=serializer,
                 sessionmaker=sessionmaker,
             )
-        await instance.run_migrations()
+        if run_migrations:
+            await instance.run_migrations()
+        else:
+            # This role may not be allowed to run DDL, but it still requires an up-to-date schema.
+            await instance.verify_migrations()
         return instance
 
     @abstractmethod
@@ -266,6 +285,10 @@ class AsyncSQLAlchemyDatasource(ABC):
 
     @abstractmethod
     async def run_migrations(self) -> None:
+        pass
+
+    @abstractmethod
+    async def verify_migrations(self) -> None:
         pass
 
     @abstractmethod
@@ -626,6 +649,17 @@ class SQLAlchemyDatasource(ABC):
         _register_datasource(self)
 
     @staticmethod
+    def migrate(
+        database_url: str,
+        *,
+        schema: Optional[str] = None,
+        application_role: Optional[str] = None,
+    ) -> None:
+        """Create or migrate a datasource's tables with a privileged role, optionally
+        granting application_role the minimal permissions to use them."""
+        migrate_datasource_database(database_url, schema, application_role)
+
+    @staticmethod
     def create(
         database_url: str,
         engine_kwargs: Optional[Dict[str, Any]] = None,
@@ -633,6 +667,7 @@ class SQLAlchemyDatasource(ABC):
         schema: Optional[str] = None,
         serializer: Optional[Serializer] = None,
         sessionmaker: Optional[SyncSessionmaker[Any]] = None,
+        run_migrations: bool = True,
     ) -> "SQLAlchemyDatasource ":
         if serializer is None:
             serializer = DBOSDefaultSerializer
@@ -660,7 +695,11 @@ class SQLAlchemyDatasource(ABC):
                 serializer=serializer,
                 sessionmaker=sessionmaker,
             )
-        instance.run_migrations()
+        if run_migrations:
+            instance.run_migrations()
+        else:
+            # This role may not be allowed to run DDL, but it still requires an up-to-date schema.
+            instance.verify_migrations()
         return instance
 
     @abstractmethod
@@ -671,6 +710,10 @@ class SQLAlchemyDatasource(ABC):
 
     @abstractmethod
     def run_migrations(self) -> None:
+        pass
+
+    @abstractmethod
+    def verify_migrations(self) -> None:
         pass
 
     @abstractmethod

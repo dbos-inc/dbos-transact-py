@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 
-from ._utils import quote_identifier
+from ._datasource_migration import migrate_datasource, verify_datasource_migrations
 
 
 def _is_postgres_serialization_error(error: Exception) -> bool:
@@ -31,25 +31,6 @@ def _make_url(database_url: str) -> URL:
     return sa.make_url(database_url).set(drivername="postgresql+psycopg")
 
 
-def _schema_sql(schema: str) -> sa.TextClause:
-    return sa.text(f"CREATE SCHEMA IF NOT EXISTS {quote_identifier(schema)}")
-
-
-def _table_sql(schema: str) -> sa.TextClause:
-    return sa.text(
-        f"""
-        CREATE TABLE IF NOT EXISTS {quote_identifier(schema)}.datasource_outputs (
-            workflow_id TEXT NOT NULL,
-            step_id INT NOT NULL,
-            output TEXT,
-            error TEXT,
-            serialization TEXT,
-            created_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM now())*1000)::bigint,
-            PRIMARY KEY (workflow_id, step_id)
-        )"""
-    )
-
-
 class PostgresAsyncDatasource(AsyncSQLAlchemyDatasource):
     def _create_engine(
         self, database_url: str, engine_kwargs: Dict[str, Any]
@@ -59,10 +40,14 @@ class PostgresAsyncDatasource(AsyncSQLAlchemyDatasource):
         return create_async_engine(_make_url(database_url), **engine_kwargs)
 
     async def run_migrations(self) -> None:
-        assert self.schema is not None
         async with self.engine.begin() as conn:
-            await conn.execute(_schema_sql(self.schema))
-            await conn.execute(_table_sql(self.schema))
+            await conn.run_sync(migrate_datasource, self.schema)
+
+    async def verify_migrations(self) -> None:
+        async with self.engine.connect() as conn:
+            await conn.run_sync(
+                verify_datasource_migrations, self.schema, self.engine.url
+            )
 
     def _is_serialization_error(self, error: Exception) -> bool:
         return _is_postgres_serialization_error(error)
@@ -77,10 +62,12 @@ class PostgresSyncDatasource(SQLAlchemyDatasource):
         return sa.create_engine(_make_url(database_url), **engine_kwargs)
 
     def run_migrations(self) -> None:
-        assert self.schema is not None
         with self.engine.begin() as conn:
-            conn.execute(_schema_sql(self.schema))
-            conn.execute(_table_sql(self.schema))
+            migrate_datasource(conn, self.schema)
+
+    def verify_migrations(self) -> None:
+        with self.engine.connect() as conn:
+            verify_datasource_migrations(conn, self.schema, self.engine.url)
 
     def _is_serialization_error(self, error: Exception) -> bool:
         return _is_postgres_serialization_error(error)
