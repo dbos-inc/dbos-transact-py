@@ -30,6 +30,7 @@ from dbos._serialization import deserialize_value
 from dbos._sys_db import WorkflowStatusString
 from dbos._utils import INTERNAL_QUEUE_NAME
 from tests.conftest import (
+    keep_datasource_checkpoints,
     retry_until_success,
     retry_until_success_async,
     set_workflow_status,
@@ -675,24 +676,6 @@ async def table_rows_async(engine: Any) -> List[str]:
 
 
 @contextlib.contextmanager
-def completion_keeps_datasource_checkpoints(keep: bool) -> Iterator[None]:
-    """Skip the cleanup at completion, leaving checkpoints as a workflow finished before it existed did."""
-    real_cleanup = workflow_commands.delete_completed_datasource_checkpoints
-    if keep:
-        setattr(
-            workflow_commands,
-            "delete_completed_datasource_checkpoints",
-            lambda *args, **kwargs: None,
-        )
-    try:
-        yield
-    finally:
-        setattr(
-            workflow_commands, "delete_completed_datasource_checkpoints", real_cleanup
-        )
-
-
-@contextlib.contextmanager
 def launched_with_datasources(
     config: DBOSConfig, tmp_path: Any, count: int, *, keep_checkpoints: bool = False
 ) -> Iterator[Any]:
@@ -707,7 +690,11 @@ def launched_with_datasources(
         datasources.append(ds)
     try:
         DBOS.launch()
-        with completion_keeps_datasource_checkpoints(keep_checkpoints):
+        with (
+            keep_datasource_checkpoints()
+            if keep_checkpoints
+            else contextlib.nullcontext()
+        ):
             yield dbos, datasources
     finally:
         DBOS.destroy(destroy_registry=True)
@@ -731,7 +718,11 @@ async def launched_with_async_datasources(
         datasources.append(ds)
     try:
         DBOS.launch()
-        with completion_keeps_datasource_checkpoints(keep_checkpoints):
+        with (
+            keep_datasource_checkpoints()
+            if keep_checkpoints
+            else contextlib.nullcontext()
+        ):
             yield dbos, datasources
     finally:
         DBOS.destroy(destroy_registry=True)
@@ -1407,7 +1398,7 @@ def test_recovery_clears_an_earlier_executions_checkpoints(
             return "done"
 
         workflow_id = str(uuid.uuid4())
-        with completion_keeps_datasource_checkpoints(True), SetWorkflowID(workflow_id):
+        with keep_datasource_checkpoints(), SetWorkflowID(workflow_id):
             assert writer() == "done"
         assert datasource_checkpoints(ds.engine, workflow_id) == [1]
 

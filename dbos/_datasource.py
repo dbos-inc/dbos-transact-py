@@ -28,12 +28,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import Session, sessionmaker
 
-from dbos._context import (
-    DBOSContext,
-    DBOSContextEnsure,
-    current_owner_xid,
-    get_local_dbos_context,
-)
+from dbos._context import DBOSContextEnsure, current_owner_xid, get_local_dbos_context
 from dbos._error import DBOSException, DBOSWorkflowConflictIDError
 from dbos._schemas import SCHEMA_PLACEHOLDER
 from dbos._schemas.datasource_database import DatasourceSchema
@@ -107,16 +102,6 @@ def _still_owns(workflow_id: str, owner_xid: Optional[str] = None) -> bool:
     from dbos._dbos import _get_dbos_instance
 
     return _get_dbos_instance()._sys_db.get_workflow_owner(workflow_id) == owner_xid
-
-
-def _record_use(
-    ds: Union["SQLAlchemyDatasource", "AsyncSQLAlchemyDatasource"],
-    ctx: Optional[DBOSContext],
-    loop: Optional[asyncio.AbstractEventLoop],
-) -> None:
-    # Recorded even on replay, so completion also clears an earlier execution's rows.
-    assert ctx is not None
-    ctx.used_datasources.setdefault(ds, loop)
 
 
 def _replay_recorded(recorded: "RecordedResult", serializer: "Serializer") -> Any:
@@ -393,9 +378,9 @@ class AsyncSQLAlchemyDatasource(ABC):
 
         ctx = get_local_dbos_context()
         in_wf = ctx is not None and ctx.is_workflow()
-        if in_wf:
-            # The loop holding this execution's connections, where completion deletes.
-            _record_use(self, ctx, asyncio.get_running_loop())
+        if ctx is not None and in_wf:
+            # Recorded even on replay, with the loop holding this execution's connections.
+            ctx.used_datasources.setdefault(self, asyncio.get_running_loop())
 
         async def _body() -> R:
             workflow_id: str = ""
@@ -446,8 +431,8 @@ class AsyncSQLAlchemyDatasource(ABC):
                                                 workflow_id
                                             )
                                 break
-                            except (_StepAlreadyRecorded, DBOSWorkflowConflictIDError):
-                                raise  # the recorded result or the new owner wins; don't record an error over it
+                            except _StepAlreadyRecorded:
+                                raise  # the recorded result wins; don't record an error over it
                             except Exception as e:
                                 if _is_retriable_db_error(
                                     e, self._is_serialization_error
@@ -769,8 +754,9 @@ class SQLAlchemyDatasource(ABC):
 
         ctx = get_local_dbos_context()
         in_wf = ctx is not None and ctx.is_workflow()
-        if in_wf:
-            _record_use(self, ctx, None)
+        if ctx is not None and in_wf:
+            # Recorded even on replay, so completion also clears an earlier execution's rows.
+            ctx.used_datasources.setdefault(self, None)
 
         def _body() -> R:
             workflow_id: str = ""
@@ -819,8 +805,8 @@ class SQLAlchemyDatasource(ABC):
                                                 workflow_id
                                             )
                                 break
-                            except (_StepAlreadyRecorded, DBOSWorkflowConflictIDError):
-                                raise  # the recorded result or the new owner wins; don't record an error over it
+                            except _StepAlreadyRecorded:
+                                raise  # the recorded result wins; don't record an error over it
                             except Exception as e:
                                 if _is_retriable_db_error(
                                     e, self._is_serialization_error

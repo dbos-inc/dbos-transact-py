@@ -809,16 +809,14 @@ def _get_wf_invoke_func(
 
         def delete_datasource_checkpoints() -> None:
             # Step checkpoints cover every transaction; commits only while still the owner.
-            ctx = get_local_dbos_context()
-            owner_xid = current_owner_xid(status["workflow_uuid"], ctx)
-            if ctx is not None and ctx.used_datasources and owner_xid is not None:
+            ctx = assert_current_dbos_context()
+            if ctx.used_datasources:
                 from ._workflow_commands import delete_completed_datasource_checkpoints
 
+                owner_xid = current_owner_xid(status["workflow_uuid"], ctx)
+                assert owner_xid is not None
                 delete_completed_datasource_checkpoints(
-                    dbos,
-                    ctx.used_datasources,
-                    status["workflow_uuid"],
-                    owner_xid,
+                    dbos, ctx.used_datasources, status["workflow_uuid"], owner_xid
                 )
 
         if (

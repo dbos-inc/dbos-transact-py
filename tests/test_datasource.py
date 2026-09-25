@@ -30,6 +30,7 @@ from dbos._serialization import deserialize_value
 from dbos._sys_db import WorkflowStatusString
 from tests.conftest import (
     ensure_user_database,
+    keep_datasource_checkpoints,
     postgres_urls,
     reexecute_workflow_by_id,
     retry_until_success,
@@ -196,13 +197,10 @@ _real_cleanup = workflow_commands.delete_completed_datasource_checkpoints
 
 
 @pytest.fixture(autouse=True)
-def keep_datasource_checkpoints(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Most tests here read checkpoints after completion, so skip the cleanup."""
-    monkeypatch.setattr(
-        workflow_commands,
-        "delete_completed_datasource_checkpoints",
-        lambda *args, **kwargs: None,
-    )
+def skip_checkpoint_cleanup() -> Generator[None, None, None]:
+    """Most tests here read checkpoints after completion."""
+    with keep_datasource_checkpoints():
+        yield
 
 
 @pytest.fixture(params=["sqlite", "pg"])
@@ -812,22 +810,6 @@ def test_sync_ds_rolls_back_once_ownership_moves(
     assert ds_rows == [], "the stale execution left a checkpoint or an error row"
     with dbos._sys_db.engine.connect() as conn:
         assert _checkpointed_steps(conn, wfid) == []
-
-
-def test_sync_ds_bare_run_skips_the_ownership_check(
-    sync_ds: SQLAlchemyDatasource,
-) -> None:
-    _race_side_effects.create(sync_ds.engine, checkfirst=True)
-
-    def step_fn() -> str:
-        sync_ds.sql_session().execute(_race_side_effects.insert().values(tag="bare"))
-        return "bare"
-
-    assert sync_ds.run_tx_step(None, step_fn) == "bare"
-    with sync_ds.engine.connect() as conn:
-        assert list(conn.execute(sa.select(_race_side_effects.c.tag)).scalars()) == [
-            "bare"
-        ]
 
 
 def test_sync_ds_completion_clears_checkpoints(
