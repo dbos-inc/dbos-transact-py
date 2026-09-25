@@ -737,7 +737,10 @@ def test_migrate(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
         DBOS.destroy()
 
 
-def test_programmatic_migration(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
+@pytest.mark.parametrize("entrypoint", ["function", "static"])
+def test_programmatic_migration(
+    entrypoint: str, db_engine: sa.Engine, skip_with_sqlite: None
+) -> None:
     database_name = "migrate_test"
     migrate_role = "migrate-test-role"
     app_role = "app-test-role"
@@ -772,11 +775,8 @@ def test_programmatic_migration(db_engine: sa.Engine, skip_with_sqlite: None) ->
         .set(password=role_password)
         .render_as_string(hide_password=False)
     )
-    run_dbos_database_migrations(
-        migrate_url,
-        schema=schema,
-        application_role=app_role,
-    )
+    migrate = run_dbos_database_migrations if entrypoint == "function" else DBOS.migrate
+    migrate(migrate_url, schema=schema, application_role=app_role)
     with db_engine.connect() as c:
         c.execution_options(isolation_level="AUTOCOMMIT")
         result = c.execute(

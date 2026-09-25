@@ -15,7 +15,7 @@ import pytest_asyncio
 import sqlalchemy as sa
 from psycopg.errors import SerializationFailure
 from sqlalchemy import event, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -1991,7 +1991,7 @@ def test_ds_runs_with_least_privilege_role(
     assert _checkpoint_step_ids(ds, wfid) == []
 
     # The role truly lacks CREATE, so it could not have migrated on its own.
-    with pytest.raises(sa.exc.ProgrammingError, match="permission denied"):
+    with pytest.raises(ProgrammingError, match="permission denied"):
         with ds.engine.begin() as conn:
             conn.execute(sa.text(f'CREATE TABLE "{ds.schema}".nope (x INT)'))
 

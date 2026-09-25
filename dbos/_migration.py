@@ -1,4 +1,5 @@
 import sys
+from typing import List
 
 import sqlalchemy as sa
 
@@ -105,6 +106,26 @@ def _bump_migration_version(
                 ),
                 {"version": version},
             )
+
+
+def get_dbos_schema_permissions_sql(schema: str, role_name: str) -> List[str]:
+    """The statements granting permissions on all entities in the system schema to a role."""
+    quoted_schema = quote_identifier(schema)
+    quoted_role = quote_identifier(role_name)
+    return [
+        # Grant usage on the system schema
+        f"GRANT USAGE ON SCHEMA {quoted_schema} TO {quoted_role}",
+        # Grant all privileges on all existing tables in the system schema (includes views)
+        f"GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA {quoted_schema} TO {quoted_role}",
+        # Grant all privileges on all sequences in the system schema
+        f"GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA {quoted_schema} TO {quoted_role}",
+        # Grant execute on all functions and procedures in the system schema
+        f"GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA {quoted_schema} TO {quoted_role}",
+        # Grant default privileges for future objects in the system schema
+        f"ALTER DEFAULT PRIVILEGES IN SCHEMA {quoted_schema} GRANT ALL ON TABLES TO {quoted_role}",
+        f"ALTER DEFAULT PRIVILEGES IN SCHEMA {quoted_schema} GRANT ALL ON SEQUENCES TO {quoted_role}",
+        f"ALTER DEFAULT PRIVILEGES IN SCHEMA {quoted_schema} GRANT EXECUTE ON FUNCTIONS TO {quoted_role}",
+    ]
 
 
 def get_migration_versions(

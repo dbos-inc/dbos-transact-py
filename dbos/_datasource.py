@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker as SyncSessionmaker
 
 from dbos._context import DBOSContextEnsure, current_owner_xid, get_local_dbos_context
+from dbos._datasource_migration import migrate_datasource_database
 from dbos._error import DBOSException, DBOSWorkflowConflictIDError
 from dbos._schemas.datasource_database import datasource_outputs_table
 from dbos._serialization import (
@@ -229,8 +230,6 @@ class AsyncSQLAlchemyDatasource(ABC):
     ) -> None:
         """Create or migrate a datasource's tables with a privileged role, optionally
         granting application_role the minimal permissions to use them."""
-        from ._datasource_migration import migrate_datasource_database
-
         await asyncio.to_thread(
             migrate_datasource_database, database_url, schema, application_role
         )
@@ -658,8 +657,6 @@ class SQLAlchemyDatasource(ABC):
     ) -> None:
         """Create or migrate a datasource's tables with a privileged role, optionally
         granting application_role the minimal permissions to use them."""
-        from ._datasource_migration import migrate_datasource_database
-
         migrate_datasource_database(database_url, schema, application_role)
 
     @staticmethod
