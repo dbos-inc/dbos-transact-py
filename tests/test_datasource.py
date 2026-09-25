@@ -1972,9 +1972,11 @@ def test_ds_runs_with_least_privilege_role(
 ) -> None:
     """A role without CREATE records, replays, and deletes checkpoints."""
     ds = least_privilege_ds
+    calls = {"n": 0}
 
     @ds.transaction
     def step(value: str) -> str:
+        calls["n"] += 1
         return value
 
     @DBOS.workflow()
@@ -1985,8 +1987,11 @@ def test_ds_runs_with_least_privilege_role(
     with SetWorkflowID(wfid):
         assert my_workflow() == "ab"
     assert _checkpoint_step_ids(ds, wfid) == [1, 2]
+    # Lose the sysdb records so the steps replay from the datasource checkpoints.
+    dbos._sys_db.delete_workflows([wfid])
     with SetWorkflowID(wfid):
         assert my_workflow() == "ab"
+    assert calls["n"] == 2
     ds._delete_checkpoints(wfid, 1)
     assert _checkpoint_step_ids(ds, wfid) == []
 
