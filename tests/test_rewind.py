@@ -1308,3 +1308,110 @@ async def test_a_stale_execution_keeps_async_datasource_checkpoints(
         await DBOS.cancel_workflow_async(workflow_id)
         with pytest.raises(DBOSAwaitedWorkflowCancelledError):
             await handle.get_result()
+
+
+def test_cleanup_skips_datasources_the_workflow_never_called(
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with launched_with_datasources(config, tmp_path, 2) as (dbos, (first, second)):
+        insert_second = inserter(second)
+        first_cleanups: List[bool] = []
+        second_cleanups: List[bool] = []
+        record_cleanups(first, first_cleanups, monkeypatch)
+        record_cleanups(second, second_cleanups, monkeypatch)
+
+        @DBOS.workflow()
+        def writer() -> str:
+            second.run_tx_step(None, insert_second, "b")
+            return "done"
+
+        @DBOS.workflow()
+        def idle() -> str:
+            return "idle"
+
+        workflow_id = str(uuid.uuid4())
+        with SetWorkflowID(workflow_id):
+            assert writer() == "done"
+        assert idle() == "idle"
+        assert first_cleanups == []
+        assert second_cleanups == [True]
+        assert datasource_checkpoints(second.engine, workflow_id) == []
+
+
+@pytest.mark.asyncio
+async def test_a_sync_workflow_never_cleans_async_datasources(
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sync workflow cannot call an async datasource, so its completion never
+    blocks on an event loop, even when it runs on that loop's own thread."""
+    async with launched_with_async_datasources(config, tmp_path, 1) as (dbos, (ds,)):
+        cleaned: List[List[Any]] = []
+        real_cleanup = workflow_commands.delete_completed_datasource_checkpoints
+
+        def recording_cleanup(
+            dbos: DBOS, datasources: Any, *args: Any, **kwargs: Any
+        ) -> None:
+            cleaned.append(list(datasources))
+            real_cleanup(dbos, datasources, *args, **kwargs)
+
+        monkeypatch.setattr(
+            workflow_commands,
+            "delete_completed_datasource_checkpoints",
+            recording_cleanup,
+        )
+
+        async def insert(v: str) -> str:
+            await ds.sql_session().execute(
+                sa.text("INSERT INTO rows (v) VALUES (:v)"), {"v": v}
+            )
+            return v
+
+        @DBOS.workflow()
+        def sync_workflow() -> str:
+            return "sync"
+
+        @DBOS.workflow()
+        async def async_workflow() -> str:
+            await ds.run_tx_step_async(None, insert, "a")
+            return "async"
+
+        # Called directly, so it runs on the event loop's own thread.
+        assert sync_workflow() == "sync"
+        assert cleaned == []
+        workflow_id = str(uuid.uuid4())
+        with SetWorkflowID(workflow_id):
+            assert await async_workflow() == "async"
+        assert cleaned == [[ds]]
+        assert await datasource_checkpoints_async(ds.engine, workflow_id) == []
+
+
+def test_recovery_clears_an_earlier_executions_checkpoints(
+    config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
+) -> None:
+    """A recovered execution replays every step from the system database, yet still
+    counts the datasources it called and clears what the earlier execution left."""
+    with launched_with_datasources(config, tmp_path, 1) as (dbos, (ds,)):
+        insert = inserter(ds)
+
+        @DBOS.workflow()
+        def writer() -> str:
+            ds.run_tx_step(None, insert, "a")
+            return "done"
+
+        workflow_id = str(uuid.uuid4())
+        with completion_keeps_datasource_checkpoints(True), SetWorkflowID(workflow_id):
+            assert writer() == "done"
+        assert datasource_checkpoints(ds.engine, workflow_id) == [1]
+
+        set_workflow_status(dbos._sys_db, workflow_id, "PENDING")
+        handles = DBOS._recover_pending_workflows()
+        assert [h.workflow_id for h in handles] == [workflow_id]
+        assert handles[0].get_result() == "done"
+        assert table_rows(ds.engine) == ["a"]
+        assert datasource_checkpoints(ds.engine, workflow_id) == []

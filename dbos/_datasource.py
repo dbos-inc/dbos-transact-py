@@ -28,7 +28,12 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import Session, sessionmaker
 
-from dbos._context import DBOSContextEnsure, current_owner_xid, get_local_dbos_context
+from dbos._context import (
+    DBOSContext,
+    DBOSContextEnsure,
+    current_owner_xid,
+    get_local_dbos_context,
+)
 from dbos._error import DBOSException, DBOSWorkflowConflictIDError
 from dbos._schemas import SCHEMA_PLACEHOLDER
 from dbos._schemas.datasource_database import DatasourceSchema
@@ -102,6 +107,16 @@ def _still_owns(workflow_id: str, owner_xid: Optional[str] = None) -> bool:
     from dbos._dbos import _get_dbos_instance
 
     return _get_dbos_instance()._sys_db.get_workflow_owner(workflow_id) == owner_xid
+
+
+def _record_use(
+    ds: Union["SQLAlchemyDatasource", "AsyncSQLAlchemyDatasource"],
+    ctx: Optional[DBOSContext],
+) -> None:
+    # Recorded even on replay, so completion also clears an earlier execution's rows.
+    assert ctx is not None
+    if ds not in ctx.used_datasources:
+        ctx.used_datasources.append(ds)
 
 
 def _replay_recorded(recorded: "RecordedResult", serializer: "Serializer") -> Any:
@@ -378,6 +393,8 @@ class AsyncSQLAlchemyDatasource(ABC):
 
         ctx = get_local_dbos_context()
         in_wf = ctx is not None and ctx.is_workflow()
+        if in_wf:
+            _record_use(self, ctx)
 
         async def _body() -> R:
             workflow_id: str = ""
@@ -751,6 +768,8 @@ class SQLAlchemyDatasource(ABC):
 
         ctx = get_local_dbos_context()
         in_wf = ctx is not None and ctx.is_workflow()
+        if in_wf:
+            _record_use(self, ctx)
 
         def _body() -> R:
             workflow_id: str = ""

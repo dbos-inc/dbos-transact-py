@@ -16,6 +16,7 @@ from psycopg.errors import SerializationFailure
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
+import dbos._workflow_commands as workflow_commands
 from dbos import DBOS, AsyncSQLAlchemyDatasource, SetWorkflowID, SQLAlchemyDatasource
 from dbos._context import get_local_dbos_context
 from dbos._datasource import RecordedResult
@@ -189,6 +190,19 @@ async def _async_check_both_tables(
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+_real_cleanup = workflow_commands.delete_completed_datasource_checkpoints
+
+
+@pytest.fixture(autouse=True)
+def keep_datasource_checkpoints(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Most tests here read checkpoints after completion, so skip the cleanup."""
+    monkeypatch.setattr(
+        workflow_commands,
+        "delete_completed_datasource_checkpoints",
+        lambda *args, **kwargs: None,
+    )
 
 
 @pytest.fixture(params=["sqlite", "pg"])
@@ -814,6 +828,34 @@ def test_sync_ds_bare_run_skips_the_ownership_check(
         assert list(conn.execute(sa.select(_race_side_effects.c.tag)).scalars()) == [
             "bare"
         ]
+
+
+def test_sync_ds_completion_clears_checkpoints(
+    sync_ds: SQLAlchemyDatasource, dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        workflow_commands, "delete_completed_datasource_checkpoints", _real_cleanup
+    )
+
+    def step_fn() -> str:
+        return "done"
+
+    @DBOS.workflow()
+    def my_workflow() -> str:
+        return sync_ds.run_tx_step(None, step_fn)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "done"
+    with sync_ds.engine.connect() as conn:
+        assert (
+            conn.execute(
+                sa.select(DatasourceSchema.datasource_outputs.c.step_id).where(
+                    DatasourceSchema.datasource_outputs.c.workflow_id == wfid
+                )
+            ).all()
+            == []
+        )
 
 
 # Whether a lost acknowledgement is retriable decides how the row is met, not whose it is.
@@ -1631,6 +1673,35 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
         deserialize_value(ds_row.output, ds_row.serialization, async_ds.serializer)
         == "result-1"
     )
+
+
+@pytest.mark.asyncio
+async def test_async_ds_completion_clears_checkpoints(
+    async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        workflow_commands, "delete_completed_datasource_checkpoints", _real_cleanup
+    )
+
+    async def step_fn() -> str:
+        return "done"
+
+    @DBOS.workflow()
+    async def my_workflow() -> str:
+        return await async_ds.run_tx_step_async(None, step_fn)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "done"
+    async with async_ds.engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                sa.select(DatasourceSchema.datasource_outputs.c.step_id).where(
+                    DatasourceSchema.datasource_outputs.c.workflow_id == wfid
+                )
+            )
+        ).all()
+    assert rows == []
 
 
 @pytest.mark.asyncio

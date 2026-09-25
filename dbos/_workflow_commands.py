@@ -185,13 +185,14 @@ def _delete_datasource_checkpoints(
 
 def delete_completed_datasource_checkpoints(
     dbos: "DBOS",
+    datasources: Sequence[Datasource],
     workflow_id: str,
     owner_xid: str,
     run_coroutine: Callable[[Coroutine[Any, Any, Any]], Any],
 ) -> None:
     """Drop a finishing workflow's datasource checkpoints while owner_xid still owns it.
     Best effort: a leftover checkpoint is harmless, so failures only warn."""
-    for ds in dbos._registry.datasources:
+    for ds in datasources:
         try:
             if isinstance(ds, AsyncSQLAlchemyDatasource):
                 owned = run_coroutine(
