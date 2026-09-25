@@ -142,20 +142,22 @@ def migrate_datasource(conn: sa.Connection, schema: Optional[str]) -> None:
         quoted_schema = quote_identifier(schema)
         migrations = get_postgres_datasource_migrations(schema)
         table = f"{quoted_schema}.{DATASOURCE_MIGRATIONS_TABLE}"
-        # A frozen or partitioned migrator's session is killed, rolling back and releasing the lock.
-        conn.execute(
-            sa.text(
-                f"SET LOCAL idle_in_transaction_session_timeout = '{MIGRATION_IDLE_TIMEOUT}'"
+        # CockroachDB has no advisory locks.
+        if conn.dialect.name != "cockroachdb":
+            # A frozen or partitioned migrator's session is killed, rolling back and releasing the lock.
+            conn.execute(
+                sa.text(
+                    f"SET LOCAL idle_in_transaction_session_timeout = '{MIGRATION_IDLE_TIMEOUT}'"
+                )
             )
-        )
-        # Transaction-scoped, so it releases with the migration's commit or rollback.
-        conn.execute(
-            sa.text("SELECT pg_advisory_xact_lock(:key)"),
-            {"key": _migration_lock_key(schema)},
-        )
-        current = _postgres_version(conn, schema)
-        if current >= latest:
-            return
+            # Transaction-scoped, so it releases with the migration's commit or rollback.
+            conn.execute(
+                sa.text("SELECT pg_advisory_xact_lock(:key)"),
+                {"key": _migration_lock_key(schema)},
+            )
+            current = _postgres_version(conn, schema)
+            if current >= latest:
+                return
         # Check first: CREATE ... IF NOT EXISTS still demands the CREATE privilege.
         if (
             conn.execute(
