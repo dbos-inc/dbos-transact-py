@@ -3,7 +3,7 @@ from typing import List, Optional, Tuple
 
 import sqlalchemy as sa
 
-from ._error import DBOSInitializationError
+from ._error import DBOSException, DBOSInitializationError
 from ._logger import dbos_logger
 from ._migration import get_sqlite_timestamp_expr
 from ._utils import quote_identifier
@@ -185,7 +185,7 @@ def verify_datasource_migrations(
             f"Datasource database {printable_url} is at datasource schema version {current}, but this "
             f"version of DBOS requires {latest}. This datasource was created with run_migrations "
             f"disabled, so it will not migrate it: either migrate it out of band "
-            f"(`run_dbos_datasource_migrations`) or create it with run_migrations enabled."
+            f"(the datasource class's `migrate`) or create it with run_migrations enabled."
         )
     dbos_logger.debug(
         f"Datasource schema version {current} satisfies the required version {latest}"
@@ -201,3 +201,34 @@ def get_datasource_permissions_sql(schema: str, role_name: str) -> List[str]:
         f"GRANT SELECT, INSERT, DELETE ON {quoted_schema}.datasource_outputs TO {quoted_role}",
         f"GRANT SELECT ON {quoted_schema}.{DATASOURCE_MIGRATIONS_TABLE} TO {quoted_role}",
     ]
+
+
+def migrate_datasource_database(
+    database_url: str, schema: Optional[str], application_role: Optional[str]
+) -> None:
+    """Migrate a datasource database, then grant application_role its runtime permissions."""
+    is_sqlite = database_url.startswith("sqlite")
+    if is_sqlite and application_role:
+        raise DBOSException(
+            "application_role is only supported for Postgres datasources"
+        )
+    url = sa.make_url(database_url).set(
+        drivername="sqlite" if is_sqlite else "postgresql+psycopg"
+    )
+    resolved_schema = None if is_sqlite else (schema or "dbos")
+    # A bare engine, not a datasource, which would register itself with DBOS.
+    engine = sa.create_engine(url)
+    try:
+        with engine.begin() as conn:
+            migrate_datasource(conn, resolved_schema)
+            if application_role:
+                assert resolved_schema is not None
+                dbos_logger.info(
+                    f"Granting datasource permissions on schema {resolved_schema} to {application_role}"
+                )
+                for sql in get_datasource_permissions_sql(
+                    resolved_schema, application_role
+                ):
+                    conn.execute(sa.text(sql))
+    finally:
+        engine.dispose()

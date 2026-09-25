@@ -26,7 +26,6 @@ from dbos import (
     DBOSConfig,
     SetWorkflowID,
     SQLAlchemyDatasource,
-    run_dbos_datasource_migrations,
 )
 from dbos._context import get_local_dbos_context
 from dbos._datasource import RecordedResult
@@ -1945,7 +1944,7 @@ def least_privilege_ds(
     role, password = f"ds_app_{uuid.uuid4().hex[:8]}", "ds_app_password"
     _pg_admin_exec(admin_url, f"CREATE ROLE \"{role}\" LOGIN PASSWORD '{password}'")
     try:
-        run_dbos_datasource_migrations(admin_url, schema=schema, application_role=role)
+        SQLAlchemyDatasource.migrate(admin_url, schema=schema, application_role=role)
         role_url = (
             sa.make_url(admin_url)
             .set(username=role, password=password)
@@ -2021,12 +2020,14 @@ def test_ds_run_migrations_false_rejects_unmigrated_sqlite(tmp_path: Any) -> Non
     engine.dispose()
 
 
-def test_ds_migration_helper_sqlite(tmp_path: Any) -> None:
+def test_ds_static_migrate_sqlite(tmp_path: Any) -> None:
     url = f"sqlite:///{tmp_path}/helper.sqlite"
-    run_dbos_datasource_migrations(url)
+    SQLAlchemyDatasource.migrate(url)
     ds = SQLAlchemyDatasource.create(url, run_migrations=False)
     assert _ds_version(ds) == _LATEST_DS_VERSION
     ds.engine.dispose()
+    with pytest.raises(DBOSException, match="only supported for Postgres"):
+        SQLAlchemyDatasource.migrate(url, application_role="app")
 
 
 @pytest.mark.parametrize("dialect", ["sqlite", "pg"])
@@ -2104,3 +2105,17 @@ async def test_async_ds_run_migrations_false(
         await AsyncSQLAlchemyDatasource.create(
             fresh_url, schema=fresh_schema, run_migrations=False
         )
+
+    # The static migrate brings the same database up to date for verify-only creation.
+    try:
+        await AsyncSQLAlchemyDatasource.migrate(fresh_url, schema=fresh_schema)
+        migrated = await AsyncSQLAlchemyDatasource.create(
+            fresh_url, schema=fresh_schema, run_migrations=False
+        )
+        await migrated.engine.dispose()
+    finally:
+        if fresh_schema is not None:
+            async with async_ds.engine.begin() as conn:
+                await conn.execute(
+                    text(f'DROP SCHEMA IF EXISTS "{fresh_schema}" CASCADE')
+                )

@@ -221,6 +221,21 @@ class AsyncSQLAlchemyDatasource(ABC):
         _register_datasource(self)
 
     @staticmethod
+    async def migrate(
+        database_url: str,
+        *,
+        schema: Optional[str] = None,
+        application_role: Optional[str] = None,
+    ) -> None:
+        """Create or migrate a datasource's tables with a privileged role, optionally
+        granting application_role the minimal permissions to use them."""
+        from ._datasource_migration import migrate_datasource_database
+
+        await asyncio.to_thread(
+            migrate_datasource_database, database_url, schema, application_role
+        )
+
+    @staticmethod
     async def create(
         database_url: str,
         engine_kwargs: Optional[Dict[str, Any]] = None,
@@ -633,6 +648,19 @@ class SQLAlchemyDatasource(ABC):
         )
         self.serializer = serializer
         _register_datasource(self)
+
+    @staticmethod
+    def migrate(
+        database_url: str,
+        *,
+        schema: Optional[str] = None,
+        application_role: Optional[str] = None,
+    ) -> None:
+        """Create or migrate a datasource's tables with a privileged role, optionally
+        granting application_role the minimal permissions to use them."""
+        from ._datasource_migration import migrate_datasource_database
+
+        migrate_datasource_database(database_url, schema, application_role)
 
     @staticmethod
     def create(
