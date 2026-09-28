@@ -4591,6 +4591,29 @@ class SystemDatabase(ABC):
         finally:
             self.workflow_events_map.pop(payload, event)
 
+    def _queue_pending_filter(self, queue_name: str) -> sa.ColumnElement[bool]:
+        """Workflows of this queue already running, which every worker counts against
+        the queue's concurrency limits."""
+        ws = SystemSchema.workflow_status
+        return sa.and_(
+            ws.c.queue_name == queue_name,
+            ws.c.status == WorkflowStatusString.PENDING.value,
+            self._in_flight_status_prover(),
+            self._name_filter(ws.c.application_name, self.app_name),
+        )
+
+    @db_retry()
+    def count_pending_queue_workflows(self, queue_name: str) -> int:
+        """How many of this queue's workflows are running across every worker."""
+        ws = SystemSchema.workflow_status
+        query = (
+            sa.select(sa.func.count())
+            .select_from(ws)
+            .where(self._queue_pending_filter(queue_name))
+        )
+        with self.engine.begin() as c:
+            return c.execute(query).scalar() or 0
+
     @db_retry()
     def get_queue_partitions(self, queue_name: str) -> List[str]:
         """
@@ -4783,10 +4806,7 @@ class SystemDatabase(ABC):
                 query = (
                     sa.select(sa.func.count())
                     .select_from(ws)
-                    .where(ws.c.queue_name == queue.name)
-                    .where(ws.c.status == WorkflowStatusString.PENDING.value)
-                    .where(self._in_flight_status_prover())
-                    .where(self._name_filter(ws.c.application_name, self.app_name))
+                    .where(self._queue_pending_filter(queue.name))
                 )
                 if partition_scoped:
                     query = query.where(ws.c.queue_partition_key == queue_partition_key)

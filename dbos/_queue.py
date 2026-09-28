@@ -765,14 +765,30 @@ def queue_worker_thread(
                     )
                     start_dequeued_workflows(dequeued_workflows, owner_xid)
             else:
+                # Room left under the queue-wide limit, counted once per sweep. Each claim
+                # still rechecks it in its own transaction, so this only stops the sweep
+                # from visiting every partition after the limit is spent.
+                global_budget = sys.maxsize
+                if queue._concurrency is not None:
+                    global_budget = (
+                        queue._concurrency
+                        - dbos._sys_db.count_pending_queue_workflows(queue.name)
+                    )
                 # Iterate through partitions one at a time in random order to prevent starvation.
-                partition_keys = dbos._sys_db.get_queue_partitions(queue.name)
+                partition_keys = (
+                    dbos._sys_db.get_queue_partitions(queue.name)
+                    if global_budget > 0
+                    else []
+                )
                 random.shuffle(partition_keys)
                 # Snapshot once: re-reading would count this sweep's own claims twice, since dispatch is asynchronous and `claimed` already accounts for them.
                 running = dbos._active_workflows_set.count_for_queue(queue.name)
                 claimed = 0
                 for key in partition_keys:
-                    if worker_budget(queue, running + claimed) <= 0:
+                    if (
+                        worker_budget(queue, running + claimed) <= 0
+                        or claimed >= global_budget
+                    ):
                         break
                     owner_xid = generate_uuid()
                     try:

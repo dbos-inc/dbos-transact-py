@@ -2848,6 +2848,81 @@ def test_partition_serialization_failure_skips_key(
     assert poisoned_handle.get_result()
 
 
+def test_partition_sweep_stops_at_global_concurrency(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once the queue-wide limit is spent, a sweep stops instead of opening a claim
+    transaction for every waiting partition, each of which could only come back
+    empty. The limit still holds while every partition drains."""
+
+    concurrency = 2
+    partitions = 20
+    lock = threading.Lock()
+    running = 0
+    peak = 0
+    release = threading.Event()
+
+    @DBOS.workflow()
+    def blocking_wf(i: int) -> int:
+        nonlocal running, peak
+        with lock:
+            running += 1
+            peak = max(peak, running)
+        release.wait()
+        with lock:
+            running -= 1
+        return i
+
+    queue = DBOS.register_queue(
+        f"global_cap_sweep_{uuid.uuid4().hex[:8]}",
+        concurrency=concurrency,
+        partition_concurrency=1,
+        polling_interval_sec=0.1,
+    )
+
+    claims: List[str] = []
+    sweeps: List[str] = []
+    real_start = dbos._sys_db.start_queued_workflows
+    real_count = dbos._active_workflows_set.count_for_queue
+
+    def spying_start(queue_arg: Queue, *args: Any, **kwargs: Any) -> List[str]:
+        claims.append(queue_arg.name)
+        return real_start(queue_arg, *args, **kwargs)
+
+    # Every sweep counts this worker's running workflows before claiming anything.
+    def spying_count(queue_name: str) -> int:
+        sweeps.append(queue_name)
+        return real_count(queue_name)
+
+    monkeypatch.setattr(dbos._sys_db, "start_queued_workflows", spying_start)
+    monkeypatch.setattr(dbos._active_workflows_set, "count_for_queue", spying_count)
+
+    handles = []
+    for i in range(partitions):
+        with SetEnqueueOptions(queue_partition_key=f"p{i}"):
+            handles.append(queue.enqueue(blocking_wf, i))
+
+    def limit_spent() -> None:
+        with lock:
+            assert running == concurrency
+
+    try:
+        retry_until_success(limit_spent, interval=0.1, max_attempts=100)
+        claims_when_spent = claims.count(queue.name)
+        sweeps_when_spent = sweeps.count(queue.name)
+
+        def swept_again() -> None:
+            assert sweeps.count(queue.name) >= sweeps_when_spent + 3
+
+        retry_until_success(swept_again, interval=0.1, max_attempts=100)
+        # Without the early stop, each of those sweeps claims against all 18 waiting partitions.
+        assert claims.count(queue.name) == claims_when_spent
+    finally:
+        release.set()
+    assert [handle.get_result() for handle in handles] == list(range(partitions))
+    assert peak == concurrency
+
+
 @pytest.mark.asyncio
 async def test_partition_worker_concurrency_async(dbos: DBOS) -> None:
     """partition_worker_concurrency is enforced *per partition*.
