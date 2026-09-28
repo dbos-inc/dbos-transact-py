@@ -111,3 +111,79 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         DBOS_DATABASE: ${{ matrix.dbos-database }}
         DBOS_COCKROACHDB_URL: cockroachdb://root@localhost:26257/postgres
+
+  # Runs the dbos-enterprise suite against this core, pairing with the same-named enterprise branch when one exists.
+  enterprise:
+    runs-on: ubuntu-latest
+    # Fork PRs get no secrets, so the app token cannot be minted there.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: a!b@c$d()e*_,/:;=?@ff[]22
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        path: dbos-transact-py
+        fetch-depth: 0
+        fetch-tags: true
+
+    - uses: actions/create-github-app-token@v2
+      id: app
+      with:
+        app-id: ${{ vars.ENTERPRISE_APP_ID }}
+        private-key: ${{ secrets.ENTERPRISE_APP_PRIVATE_KEY }}
+        owner: dbos-inc
+        repositories: dbos-enterprise-py
+
+    - name: Resolve paired enterprise ref
+      id: pair
+      env:
+        TOKEN: ${{ steps.app.outputs.token }}
+      run: |
+        url="https://x-access-token:$TOKEN@github.com/dbos-inc/dbos-enterprise-py"
+        for ref in "${{ github.head_ref || github.ref_name }}" main; do
+          if git ls-remote --exit-code --heads "$url" "$ref" >/dev/null; then break; fi
+        done
+        echo "Testing against dbos-enterprise-py@$ref"
+        echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/checkout@v4
+      with:
+        repository: dbos-inc/dbos-enterprise-py
+        token: ${{ steps.app.outputs.token }}
+        ref: ${{ steps.pair.outputs.ref }}
+        path: dbos-enterprise-py
+        fetch-depth: 0
+        fetch-tags: true
+
+    - name: Setup PDM
+      uses: pdm-project/setup-pdm@v4
+      with:
+        python-version: '3.13'
+        architecture: 'x64'
+
+    # The enterprise lock predates any dependency this core adds, so resolve those while keeping every pin.
+    - name: Install Dependencies
+      run: pdm lock --update-reuse && pdm install
+      working-directory: dbos-enterprise-py
+
+    - name: Check Types
+      run: pdm run mypy .
+      working-directory: dbos-enterprise-py
+
+    - name: Run Unit Tests
+      run: pdm run pytest tests
+      working-directory: dbos-enterprise-py
+      timeout-minutes: 30
+      env:
+        PGPASSWORD: a!b@c$d()e*_,/:;=?@ff[]22

@@ -33,7 +33,6 @@ from dbos import (
     SetWorkflowTimeout,
     WorkflowHandle,
 )
-from dbos._conductor.protocol import QueueOutput
 from dbos._context import assert_current_dbos_context
 from dbos._dbos import WorkflowHandleAsync
 from dbos._error import (
@@ -176,10 +175,6 @@ def test_queue_crud(dbos: DBOS) -> None:
 
     # Priority is always on, and the partition_* limits make the queue partitioned.
     assert legacy_queue_columns(dbos, queue_name) == (True, True)
-    # Conductor is told the same two things.
-    wire = QueueOutput.from_queue(retrieved)
-    assert wire.priority_enabled is True
-    assert wire.partition_queue is True
 
     # on_conflict="never_update" leaves the existing row alone.
     DBOS.register_queue(queue_name, concurrency=99, on_conflict="never_update")
@@ -202,7 +197,6 @@ def test_queue_crud(dbos: DBOS) -> None:
     assert retrieved.partition_limiter is None
     # Clearing them clears the derived column, and priority stays on.
     assert legacy_queue_columns(dbos, queue_name) == (True, False)
-    assert QueueOutput.from_queue(retrieved).partition_queue is False
 
     # on_conflict="update_if_latest_version" updates when the running version
     # is the latest registered version.

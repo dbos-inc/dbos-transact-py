@@ -9,7 +9,6 @@ from unittest.mock import patch
 import pytest
 import sqlalchemy as sa
 
-import dbos._conductor.protocol as p
 from dbos import DBOS, DBOSClient, DBOSConfig, Queue, WorkflowHandle
 from dbos._error import DBOSException
 from dbos._queue import _INTERNAL_QUEUE_CONSTRUCTION
@@ -387,19 +386,6 @@ def test_observability_filters_include_unclaimed_rows(
     assert {m["metric_name"] for m in metrics if m["metric_type"] == "step_count"} == {
         "their_step"
     }
-
-    # The Conductor's metrics fan-out is per-application, so its request must carry the predicate.
-    fields = {
-        "type": "get_metrics",
-        "request_id": "r",
-        "start_time": window_start,
-        "end_time": window_end,
-        "metric_class": "workflow_step_count",
-    }
-    assert p.GetMetricsRequest.from_json(
-        json.dumps({**fields, "application_name": [OTHER_APP]})
-    ).application_name == [OTHER_APP]
-    assert p.GetMetricsRequest.from_json(json.dumps(fields)).application_name is None
 
 
 # ── Isolation between applications ────────────────────────────────────────────

@@ -27,6 +27,7 @@ from dbos import (
     WorkflowHandleAsync,
     WorkflowStatusString,
 )
+from dbos import _dbos as dbos_module
 
 # Private API because this is a test
 from dbos._client import DBOSClient
@@ -2232,6 +2233,18 @@ def test_recovery_appversion(config: DBOSConfig) -> None:
 def test_conductor_key_keeps_cloud_executor_id(
     config: DBOSConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Only the executor identity is under test, so stand in for the enterprise client.
+    class _NoopConductor:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+    monkeypatch.setattr(dbos_module, "_load_conductor", lambda: _NoopConductor)
     monkeypatch.setenv("DBOS__VMID", "cloud-vm")
 
     # Off DBOS Cloud, Conductor assigns its own executor ID
