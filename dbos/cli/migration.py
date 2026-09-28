@@ -3,9 +3,8 @@ from typing import List, Optional
 import click
 import sqlalchemy as sa
 
-from dbos._migration import get_dbos_migrations
-from dbos._serialization import DefaultSerializer
-from dbos._sys_db import SystemDatabase
+from dbos._dbos import DBOS
+from dbos._migration import get_dbos_migrations, get_dbos_schema_permissions_sql
 from dbos._utils import quote_identifier
 
 
@@ -15,81 +14,13 @@ def run_dbos_database_migrations(
     schema: str = "dbos",
     application_role: Optional[str] = None,
 ) -> None:
-    # First, run DBOS migrations on the system database
-    sys_db = None
     try:
-        sys_db = SystemDatabase.create(
-            system_database_url=system_database_url,
-            engine_kwargs={
-                "pool_timeout": 30,
-                "max_overflow": 0,
-                "pool_size": 2,
-            },
-            engine=None,
-            schema=schema,
-            serializer=DefaultSerializer(),
-            executor_id=None,
+        DBOS.migrate(
+            system_database_url, schema=schema, application_role=application_role
         )
-        sys_db.run_migrations()
     except Exception as e:
         click.echo(f"DBOS migrations failed: {e}")
         raise click.exceptions.Exit(code=1)
-    finally:
-        if sys_db:
-            sys_db.destroy()
-
-    # Then, assign permissions on the DBOS schema to the application role, if any
-    if application_role:
-        grant_dbos_schema_permissions(
-            database_url=system_database_url, role_name=application_role, schema=schema
-        )
-
-
-def get_dbos_schema_permissions_sql(schema: str, role_name: str) -> List[str]:
-    """The statements granting permissions on all entities in the system schema to a role."""
-    quoted_schema = quote_identifier(schema)
-    quoted_role = quote_identifier(role_name)
-    return [
-        # Grant usage on the system schema
-        f"GRANT USAGE ON SCHEMA {quoted_schema} TO {quoted_role}",
-        # Grant all privileges on all existing tables in the system schema (includes views)
-        f"GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA {quoted_schema} TO {quoted_role}",
-        # Grant all privileges on all sequences in the system schema
-        f"GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA {quoted_schema} TO {quoted_role}",
-        # Grant execute on all functions and procedures in the system schema
-        f"GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA {quoted_schema} TO {quoted_role}",
-        # Grant default privileges for future objects in the system schema
-        f"ALTER DEFAULT PRIVILEGES IN SCHEMA {quoted_schema} GRANT ALL ON TABLES TO {quoted_role}",
-        f"ALTER DEFAULT PRIVILEGES IN SCHEMA {quoted_schema} GRANT ALL ON SEQUENCES TO {quoted_role}",
-        f"ALTER DEFAULT PRIVILEGES IN SCHEMA {quoted_schema} GRANT EXECUTE ON FUNCTIONS TO {quoted_role}",
-    ]
-
-
-def grant_dbos_schema_permissions(
-    database_url: str, role_name: str, schema: str
-) -> None:
-    """
-    Grant all permissions on all entities in the system schema to the specified role.
-    """
-    click.echo(
-        f"Granting permissions for the {schema} schema to {role_name} in database {sa.make_url(database_url)}"
-    )
-    engine = None
-    try:
-        engine = sa.create_engine(
-            sa.make_url(database_url).set(drivername="postgresql+psycopg")
-        )
-        with engine.connect() as connection:
-            connection.execution_options(isolation_level="AUTOCOMMIT")
-            for sql in get_dbos_schema_permissions_sql(schema, role_name):
-                click.echo(sql)
-                connection.execute(sa.text(sql))
-    except Exception as e:
-        click.echo(f"Failed to grant permissions to role {role_name}: {e}")
-        raise click.exceptions.Exit(code=1)
-    finally:
-        if engine:
-            engine.dispose()
 
 
 def _emit_sql(sql: str) -> None:

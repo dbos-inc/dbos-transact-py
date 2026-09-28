@@ -6,8 +6,8 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
-from dbos._migration import get_sqlite_timestamp_expr
 
+from ._datasource_migration import migrate_datasource, verify_datasource_migrations
 from ._logger import dbos_logger
 
 
@@ -20,23 +20,6 @@ def _is_sqlite_serialization_error(error: Exception) -> bool:
 
 
 _PG_ONLY_CONNECT_ARGS = frozenset(("application_name", "connect_timeout"))
-
-_CHECK_TABLE_SQL = sa.text(
-    "SELECT name FROM sqlite_master WHERE type='table' AND name='datasource_outputs'"
-)
-
-_CREATE_TABLE_SQL = sa.text(
-    f"""
-    CREATE TABLE datasource_outputs (
-        workflow_id TEXT NOT NULL,
-        step_id INTEGER NOT NULL,
-        output TEXT,
-        error TEXT,
-        serialization TEXT,
-        created_at INTEGER NOT NULL DEFAULT {get_sqlite_timestamp_expr()},
-        PRIMARY KEY (workflow_id, step_id)
-    )"""
-)
 
 
 def _set_sqlite_pragmas(dbapi_conn: Any, connection_record: Any) -> None:
@@ -76,10 +59,11 @@ class SqliteAsyncDatasource(AsyncSQLAlchemyDatasource):
 
     async def run_migrations(self) -> None:
         async with self.engine.begin() as conn:
-            await conn.execute(sa.text("PRAGMA foreign_keys = ON"))
-            result = await conn.execute(_CHECK_TABLE_SQL)
-            if result.fetchone() is None:
-                await conn.execute(_CREATE_TABLE_SQL)
+            await conn.run_sync(migrate_datasource, None)
+
+    async def verify_migrations(self) -> None:
+        async with self.engine.connect() as conn:
+            await conn.run_sync(verify_datasource_migrations, None, self.engine.url)
 
     def _is_serialization_error(self, error: Exception) -> bool:
         return _is_sqlite_serialization_error(error)
@@ -95,10 +79,11 @@ class SqliteSyncDatasource(SQLAlchemyDatasource):
 
     def run_migrations(self) -> None:
         with self.engine.begin() as conn:
-            conn.execute(sa.text("PRAGMA foreign_keys = ON"))
-            result = conn.execute(_CHECK_TABLE_SQL)
-            if result.fetchone() is None:
-                conn.execute(_CREATE_TABLE_SQL)
+            migrate_datasource(conn, None)
+
+    def verify_migrations(self) -> None:
+        with self.engine.connect() as conn:
+            verify_datasource_migrations(conn, None, self.engine.url)
 
     def _is_serialization_error(self, error: Exception) -> bool:
         return _is_sqlite_serialization_error(error)

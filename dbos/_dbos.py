@@ -35,6 +35,8 @@ from typing import (
 )
 from zoneinfo import ZoneInfo
 
+import sqlalchemy as sa
+
 from dbos._conductor.conductor import ConductorWebsocket
 from dbos._serialization import (
     DefaultSerializer,
@@ -77,6 +79,7 @@ from ._core import (
 from ._croniter import croniter  # type: ignore
 from ._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 from ._enqueue_options import EnqueueOptions
+from ._migration import get_dbos_schema_permissions_sql
 from ._queue import (
     _INTERNAL_QUEUE_CONSTRUCTION,
     Queue,
@@ -546,6 +549,49 @@ class DBOS:
             raise DBOSException("System database accessed before DBOS was launched")
         rv: SystemDatabase = self._sys_db_field
         return rv
+
+    @staticmethod
+    def migrate(
+        system_database_url: str,
+        *,
+        schema: str = "dbos",
+        application_role: Optional[str] = None,
+    ) -> None:
+        """Create or migrate the system database with a privileged role, optionally
+        granting application_role access to the system schema."""
+        is_sqlite = system_database_url.startswith("sqlite")
+        if is_sqlite and application_role:
+            raise DBOSException(
+                "application_role is only supported for Postgres system databases"
+            )
+        sys_db = SystemDatabase.create(
+            system_database_url=system_database_url,
+            engine_kwargs={"pool_timeout": 30, "max_overflow": 0, "pool_size": 2},
+            engine=None,
+            schema=schema,
+            serializer=DefaultSerializer(),
+            executor_id=None,
+        )
+        try:
+            sys_db.run_migrations()
+        finally:
+            sys_db.destroy()
+        if not application_role:
+            return
+        url = sa.make_url(system_database_url).set(drivername="postgresql+psycopg")
+        dbos_logger.info(
+            f"Granting permissions for the {schema} schema to {application_role} in database {url}"
+        )
+        engine = sa.create_engine(url)
+        try:
+            with engine.connect().execution_options(
+                isolation_level="AUTOCOMMIT"
+            ) as conn:
+                for sql in get_dbos_schema_permissions_sql(schema, application_role):
+                    dbos_logger.info(sql)
+                    conn.execute(sa.text(sql))
+        finally:
+            engine.dispose()
 
     @classmethod
     def launch(cls) -> None:
