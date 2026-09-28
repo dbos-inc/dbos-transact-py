@@ -12,6 +12,8 @@ import sqlalchemy as sa
 from inline_snapshot import snapshot
 from opentelemetry import context as otel_context
 from opentelemetry import trace
+from opentelemetry._logs import get_logger_provider
+from opentelemetry.instrumentation.logging.handler import LoggingHandler
 from opentelemetry.trace.span import format_trace_id
 
 import dbos._logger
@@ -305,12 +307,6 @@ def test_disable_otlp_no_spans(
     config["enable_otlp"] = False
     DBOS(config=config)
     DBOS.launch()
-    # DBOS attaches no OTLP handler when disabled, so route its logs to the collector here.
-    from opentelemetry._logs import get_logger_provider
-    from opentelemetry.instrumentation.logging.handler import LoggingHandler
-
-    handler = LoggingHandler(logger_provider=get_logger_provider())
-    dbos_logger.addHandler(handler)
 
     @DBOS.workflow()
     def test_workflow() -> None:
@@ -328,6 +324,9 @@ def test_disable_otlp_no_spans(
 
     expected_log_bodies = {"This is a test_step", "This is a test_workflow"}
 
+    # DBOS attaches no OTLP handler when disabled, so route its logs to the collector here.
+    handler = LoggingHandler(logger_provider=get_logger_provider())
+    dbos_logger.addHandler(handler)
     try:
         test_workflow()
     finally:
@@ -1014,8 +1013,6 @@ async def test_propagate_explicit_otel_context_to_inline_async_workflow(
 def test_destroy_detaches_otlp_logging(
     config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
 ) -> None:
-    from opentelemetry.instrumentation.logging.handler import LoggingHandler
-
     def attached() -> tuple[list[logging.Handler], list[logging.Filter]]:
         handlers: list[logging.Handler] = [
             h for h in dbos_logger.handlers if isinstance(h, LoggingHandler)

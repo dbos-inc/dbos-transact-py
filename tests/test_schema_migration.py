@@ -569,6 +569,8 @@ def test_enqueue_workflow_function_application_name(
 
 def test_sqlite_systemdb_migration() -> None:
     """Test SQLite system database migration."""
+    # A launched instance left in the registry would refuse the datasources below.
+    DBOS.destroy(destroy_registry=True)
     # Create a temporary SQLite database file
     with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as temp_db:
         temp_db_path = temp_db.name
@@ -694,7 +696,7 @@ def test_sqlite_systemdb_migration() -> None:
 
     # Test resetting the system database
     assert os.path.exists(temp_db_path)
-    DBOS.destroy()
+    DBOS.destroy(destroy_registry=True)
     DBOS(config={"name": "sqlite_test", "system_database_url": sqlite_url})
     DBOS.reset_system_database()
     assert not os.path.exists(temp_db_path)
