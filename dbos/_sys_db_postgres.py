@@ -16,6 +16,7 @@ from dbos._migration import (
     should_migrate,
 )
 
+from ._datasource_migration import DATASOURCE_MIGRATIONS_TABLE
 from ._logger import dbos_logger
 from ._schemas.system_database import SystemSchema
 from ._sys_db import (
@@ -301,7 +302,7 @@ class PostgresSystemDatabase(SystemDatabase):
     def _truncate_system_database(database_url: str, schema: str) -> None:
         """Empty every DBOS table in the system database, leaving the schema intact.
 
-        dbos_migrations is spared: clearing it would re-run applied migrations."""
+        Version tables are spared: clearing them would re-run applied migrations."""
         # The plain PostgreSQL dialect cannot connect to CockroachDB at all: it
         # asserts on the server version string. Keep the caller's dialect there.
         url = sa.make_url(database_url)
@@ -333,7 +334,8 @@ class PostgresSystemDatabase(SystemDatabase):
                         ),
                         {"schema": schema},
                     ).scalars()
-                    if table != "dbos_migrations"
+                    # A datasource sharing the schema keeps its version too.
+                    if table not in ("dbos_migrations", DATASOURCE_MIGRATIONS_TABLE)
                 ]
                 if not tables:
                     dbos_logger.warning(
