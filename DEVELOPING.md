@@ -88,6 +88,9 @@ Success: no issues found in 64 source files
 
 ### Creating a Release
 
+Releases are done alongside `dbos-enterprise`: both packages get the same
+version number, and `pdm_build.py` pins the `enterprise` extra to it.
+
 To cut a new release, run:
 
 ```shell
