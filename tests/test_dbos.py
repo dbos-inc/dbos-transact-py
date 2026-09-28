@@ -7,6 +7,7 @@ import os
 import random
 import threading
 import time
+import types
 import uuid
 from functools import wraps
 from typing import Any, Callable, List, Optional, Set, TypeVar, cast
@@ -27,7 +28,7 @@ from dbos import (
     WorkflowHandleAsync,
     WorkflowStatusString,
 )
-from dbos import _dbos as dbos_module
+from dbos import _enterprise as enterprise_module
 
 # Private API because this is a test
 from dbos._client import DBOSClient
@@ -2244,7 +2245,11 @@ def test_conductor_key_keeps_cloud_executor_id(
         def stop(self) -> None:
             pass
 
-    monkeypatch.setattr(dbos_module, "_load_conductor", lambda: _NoopConductor)
+    monkeypatch.setattr(
+        enterprise_module,
+        "load",
+        lambda: types.SimpleNamespace(ConductorWebsocket=_NoopConductor),
+    )
     monkeypatch.setenv("DBOS__VMID", "cloud-vm")
 
     # Off DBOS Cloud, Conductor assigns its own executor ID

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
-import importlib
 import inspect
 import json
 import os
@@ -32,7 +31,6 @@ from typing import (
     TypedDict,
     TypeVar,
     Union,
-    cast,
     overload,
 )
 from zoneinfo import ZoneInfo
@@ -129,6 +127,7 @@ if TYPE_CHECKING:
 
 from typing import ParamSpec
 
+from . import _enterprise
 from ._context import (
     DBOSContext,
     EnterDBOSStepCtx,
@@ -145,9 +144,9 @@ from ._dbos_config import (
     process_config,
     translate_dbos_config_to_config_file,
 )
+from ._enterprise import ConductorThread
 from ._error import (
     DBOSException,
-    DBOSInitializationError,
     DBOSNonExistentWorkflowError,
     DBOSPatchNondeterminismError,
 )
@@ -176,25 +175,6 @@ P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 T = TypeVar("T")
-
-
-class _ConductorThread(Protocol):
-    """The Conductor client thread, which dbos-enterprise ships."""
-
-    def start(self) -> None: ...
-
-    def stop(self) -> None: ...
-
-
-def _load_conductor() -> Callable[..., _ConductorThread]:
-    """Import the Conductor client class, failing with an install hint if the package is absent."""
-    try:
-        module = importlib.import_module("dbos_enterprise.conductor")
-    except ImportError as e:
-        raise DBOSInitializationError(
-            "Connecting to DBOS Conductor requires the dbos-enterprise package. Install it with `pip install dbos-enterprise`."
-        ) from e
-    return cast(Callable[..., _ConductorThread], module.ConductorWebsocket)
 
 
 _dbos_global_instance: Optional[DBOS] = None
@@ -500,9 +480,9 @@ class DBOS:
             self.conductor_key = config.get("conductor_key")
         if self.conductor_key is not None:
             # Fail at construction rather than launch when the client package is missing.
-            _load_conductor()
+            _enterprise.load()
         self.enable_patching = config.get("enable_patching") == True
-        self.conductor_websocket: Optional[_ConductorThread] = None
+        self.conductor_websocket: Optional[ConductorThread] = None
         self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()
         self._active_workflows_set: ActiveWorkflowById = ActiveWorkflowById()
         self._alert_handler: Optional[Callable[[str, str, Dict[str, str]], None]] = None
@@ -784,7 +764,7 @@ class DBOS:
                     and cloud_conductor_url is not None
                 ):
                     dbos_logger.debug("Starting Conductor thread (DBOS Cloud)")
-                    self.conductor_websocket = _load_conductor()(
+                    self.conductor_websocket = _enterprise.load().ConductorWebsocket(
                         self,
                         app_name=cloud_app_name,
                         conductor_url=cloud_conductor_url,
@@ -796,7 +776,7 @@ class DBOS:
                     dbos_domain = os.environ.get("DBOS_DOMAIN", "cloud.dbos.dev")
                     self.conductor_url = f"wss://{dbos_domain}/conductor/v1alpha1"
                 dbos_logger.debug("Starting Conductor thread")
-                self.conductor_websocket = _load_conductor()(
+                self.conductor_websocket = _enterprise.load().ConductorWebsocket(
                     self,
                     app_name=self._config["name"],
                     conductor_url=self.conductor_url,
