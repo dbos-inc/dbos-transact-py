@@ -788,7 +788,7 @@ def test_two_applications_share_one_system_database(dbos: DBOS, config: Any) -> 
         # Each application dequeues its own work and only its own.
         internal = dbos._registry.get_internal_queue()
         for name in names:
-            dequeued = peers[name].start_queued_workflows(
+            dequeued, _ = peers[name].start_queued_workflows(
                 internal, f"exec-{name}", f"version-{name}", None, 0
             )
             assert dequeued == [enqueued[name]], name
