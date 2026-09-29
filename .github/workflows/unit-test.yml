@@ -159,7 +159,7 @@ jobs:
         url="https://x-access-token:$TOKEN@github.com/dbos-inc/dbos-enterprise-py"
         # Same-named branch first, then the PR's base so a release branch pairs with its own release, then main.
         for ref in "$HEAD_REF" "$BASE_REF" main; do
-          if [ -n "$ref" ] && git ls-remote --exit-code --heads "$url" "$ref" >/dev/null; then break; fi
+          if [ -n "$ref" ] && git ls-remote --exit-code --heads "$url" "refs/heads/$ref" >/dev/null; then break; fi
         done
         echo "Testing against dbos-enterprise-py@$ref"
         echo "ref=$ref" >> "$GITHUB_OUTPUT"

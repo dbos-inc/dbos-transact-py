@@ -32,7 +32,9 @@ def test_absent_package_gets_the_install_hint(
             "No module named 'dbos_enterprise'", name="dbos_enterprise"
         ),
     )
-    with pytest.raises(DBOSInitializationError, match="pip install dbos-enterprise"):
+    with pytest.raises(
+        DBOSInitializationError, match=r"pip install \"dbos\[enterprise\]\""
+    ):
         enterprise_module.load()
 
 
