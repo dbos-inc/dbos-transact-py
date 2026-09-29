@@ -2821,11 +2821,6 @@ class SystemDatabase(ABC):
         pass
 
     @abstractmethod
-    def _is_serialization_error(self, dbapi_error: DBAPIError) -> bool:
-        """Check if the error is a serialization/concurrency error."""
-        pass
-
-    @abstractmethod
     def _attributes_contains_clause(
         self, attributes: Dict[str, Any]
     ) -> sa.ColumnElement[bool]:
@@ -5226,41 +5221,6 @@ class SystemDatabase(ABC):
         if row[3] is None:
             return row[0], _no_stream_value
         return row[0], deserialize_value(row[1], row[2], self.serializer)
-
-    def _retry_on_serialization_error(self, operation: Callable[[], T]) -> T:
-        """Re-run a batch that lost a deadlock or serialization race. The database
-        already rolled it back, so replaying it is safe."""
-        max_attempts, backoff, max_backoff = 10, 0.05, 2.0
-        for attempt in range(1, max_attempts + 1):
-            try:
-                return operation()
-            except DBAPIError as e:
-                if not self._is_serialization_error(e):
-                    raise
-                if attempt == max_attempts:
-                    dbos_logger.warning(
-                        f"Garbage collection failed after {max_attempts} attempts: {str(e.orig)}"
-                    )
-                    raise
-                # Jittered backoff, so peers that collided do not collide again
-                actual_backoff = backoff * (0.5 + random.random())
-                dbos_logger.warning(
-                    f"Contention or deadlock detected in workflow garbage collection: {str(e.orig)}. "
-                    f"Retrying in {actual_backoff:.2f}s (attempt {attempt})"
-                )
-                time.sleep(actual_backoff)
-                backoff = min(backoff * 2, max_backoff)
-        raise AssertionError("unreachable")
-
-    @contextmanager
-    def retention_lock(self) -> Generator[bool, None, None]:
-        """Hold a database-wide lock for one retention round, yielding whether it
-        was taken. Engines without advisory locks always yield True."""
-        yield True
-
-    def _vacuum_tables(self, tables: List[str]) -> None:
-        """VACUUM the tables the sweep just dirtied. No-op where there is no
-        autovacuum to outrun."""
 
     @db_retry()
     def get_checkpoint_name(
