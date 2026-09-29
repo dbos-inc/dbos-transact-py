@@ -11,7 +11,7 @@ import uuid
 import weakref
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, List
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pytest
 import sqlalchemy as sa
@@ -43,7 +43,7 @@ from dbos._error import (
 )
 from dbos._queue import _INTERNAL_QUEUE_CONSTRUCTION
 from dbos._schemas.system_database import SystemSchema
-from dbos._sys_db import WorkflowStatusString
+from dbos._sys_db import DequeueStopReason, WorkflowStatusString
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from tests.conftest import (
     default_config,
@@ -2810,7 +2810,7 @@ def test_partition_serialization_failure_skips_key(
         queue_partition_key: Any = None,
         *args: Any,
         **kwargs: Any,
-    ) -> List[str]:
+    ) -> Tuple[List[str], Optional[DequeueStopReason]]:
         if (
             poison_active.is_set()
             and queue_arg.name == queue.name
@@ -2846,6 +2846,123 @@ def test_partition_serialization_failure_skips_key(
     # Once the contention clears, the poisoned partition drains on a later sweep.
     poison_active.clear()
     assert poisoned_handle.get_result()
+
+
+def test_partition_sweep_stops_at_global_concurrency(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A partition sweep stops claiming once the queue-wide limit is spent, whether by its
+    own claims or by peers after its snapshot, and the limit holds while partitions drain.
+    """
+
+    concurrency = 2
+    partitions = 20
+    lock = threading.Lock()
+    running = 0
+    peak = 0
+    release = threading.Event()
+
+    @DBOS.workflow()
+    def blocking_wf(i: int) -> int:
+        nonlocal running, peak
+        with lock:
+            running += 1
+            peak = max(peak, running)
+        release.wait()
+        with lock:
+            running -= 1
+        return i
+
+    queue = DBOS.register_queue(
+        f"global_cap_sweep_{uuid.uuid4().hex[:8]}",
+        concurrency=concurrency,
+        partition_concurrency=1,
+        polling_interval_sec=0.1,
+    )
+
+    # One entry per sweep of this queue: its budget, whether its snapshot was stale, and its claims.
+    sweeps: List[Dict[str, Any]] = []
+    spy_lock = threading.Lock()
+    stale = False
+    real_start = dbos._sys_db.start_queued_workflows
+    real_pending = dbos._sys_db.count_pending_queue_workflows
+
+    def spying_pending(queue_name: str) -> int:
+        pending = real_pending(queue_name)
+        if queue_name == queue.name:
+            # A stale snapshot reports nothing running, as if taken before peers filled the limit.
+            # Read once, so the test thread flipping it can't split the count from the record.
+            is_stale = stale
+            pending = 0 if is_stale else pending
+            with spy_lock:
+                sweeps.append(
+                    {"budget": concurrency - pending, "stale": is_stale, "claims": []}
+                )
+        return pending
+
+    def spying_start(
+        queue_arg: Queue, *args: Any, **kwargs: Any
+    ) -> Tuple[List[str], Optional[DequeueStopReason]]:
+        result = real_start(queue_arg, *args, **kwargs)
+        if queue_arg.name == queue.name:
+            with spy_lock:
+                sweeps[-1]["claims"].append((len(result[0]), result[1]))
+        return result
+
+    monkeypatch.setattr(dbos._sys_db, "count_pending_queue_workflows", spying_pending)
+    monkeypatch.setattr(dbos._sys_db, "start_queued_workflows", spying_start)
+
+    def running_is(n: int) -> Callable[[], None]:
+        def check() -> None:
+            with lock:
+                assert running == n
+
+        return check
+
+    def completed_sweeps(is_stale: bool) -> List[Dict[str, Any]]:
+        # The last sweep may still be claiming.
+        with spy_lock:
+            return [sweep for sweep in sweeps[:-1] if sweep["stale"] == is_stale]
+
+    handles = []
+    try:
+        # Occupy one slot so a later sweep starts with a partly spent budget.
+        with SetEnqueueOptions(queue_partition_key="busy"):
+            handles.append(queue.enqueue(blocking_wf, -1))
+        retry_until_success(running_is(1), interval=0.1, max_attempts=100)
+        for i in range(partitions):
+            with SetEnqueueOptions(queue_partition_key=f"p{i}"):
+                handles.append(queue.enqueue(blocking_wf, i))
+        retry_until_success(running_is(concurrency), interval=0.1, max_attempts=100)
+        fresh_count = len(completed_sweeps(False))
+
+        def swept_fresh() -> None:
+            assert len(completed_sweeps(False)) >= fresh_count + 3
+
+        retry_until_success(swept_fresh, interval=0.1, max_attempts=100)
+        fresh = completed_sweeps(False)
+        # No sweep attempts a claim once it has claimed its whole budget.
+        for sweep in fresh:
+            claimed = 0
+            for count, _ in sweep["claims"]:
+                assert claimed < sweep["budget"], sweep
+                claimed += count
+        assert any(s["budget"] == 1 and s["claims"] for s in fresh), fresh
+
+        stale = True
+
+        def swept_stale() -> None:
+            assert len(completed_sweeps(True)) >= 3
+
+        retry_until_success(swept_stale, interval=0.1, max_attempts=100)
+        # A stale sweep stops at its first claim, which finds the queue-wide limit spent.
+        for sweep in completed_sweeps(True):
+            assert sweep["claims"] == [(0, "concurrency")], sweep
+    finally:
+        stale = False
+        release.set()
+    assert [handle.get_result() for handle in handles] == [-1] + list(range(partitions))
+    assert peak == concurrency
 
 
 @pytest.mark.asyncio
@@ -3062,7 +3179,7 @@ def test_queue_wide_limit_holds_across_executors(
         def sweep(index: int, partition: str) -> None:
             barrier.wait()
             try:
-                claimed[index] = dbos._sys_db.start_queued_workflows(
+                claimed[index], _ = dbos._sys_db.start_queued_workflows(
                     queue, f"executor-{index}", parked_version, partition, 0, 0
                 )
             except OperationalError:
@@ -3420,7 +3537,9 @@ def test_partitioned_queue_fallback_routing(
         batched_queues.append(queue_arg.name)
         return real_batched(queue_arg, *args, **kwargs)
 
-    def spying_single(queue_arg: Queue, *args: Any, **kwargs: Any) -> List[str]:
+    def spying_single(
+        queue_arg: Queue, *args: Any, **kwargs: Any
+    ) -> Tuple[List[str], Optional[DequeueStopReason]]:
         swept_queues.append(queue_arg.name)
         return real_single(queue_arg, *args, **kwargs)
 
@@ -3621,7 +3740,7 @@ def test_rate_limiter_query_plan(dbos: DBOS) -> None:
         assert (
             dbos._sys_db.start_queued_workflows(
                 queue, GlobalParams.executor_id, GlobalParams.app_version, None
-            )
+            )[0]
             == []
         )
     finally:
@@ -3701,7 +3820,7 @@ def test_pending_count_query_plan(dbos: DBOS, skip_with_sqlite: None) -> None:
         assert (
             dbos._sys_db.start_queued_workflows(
                 queue, GlobalParams.executor_id, GlobalParams.app_version, None
-            )
+            )[0]
             == []
         )
     finally:

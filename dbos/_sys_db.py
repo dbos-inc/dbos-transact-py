@@ -155,6 +155,16 @@ WorkflowStatuses = Literal[
     "DELAYED",
 ]
 
+# The reason start_queued_workflows did not dequeue workflows
+DequeueStopReason = Literal[
+    "worker_concurrency",
+    "partition_worker_concurrency",
+    "limiter",
+    "partition_limiter",
+    "concurrency",
+    "partition_concurrency",
+]
+
 
 class WorkflowStatus:
     # The workflow ID
@@ -4591,6 +4601,29 @@ class SystemDatabase(ABC):
         finally:
             self.workflow_events_map.pop(payload, event)
 
+    def _queue_pending_filter(self, queue_name: str) -> sa.ColumnElement[bool]:
+        """Workflows of this queue already running, which every worker counts against
+        the queue's concurrency limits."""
+        ws = SystemSchema.workflow_status
+        return sa.and_(
+            ws.c.queue_name == queue_name,
+            ws.c.status == WorkflowStatusString.PENDING.value,
+            self._in_flight_status_prover(),
+            self._name_filter(ws.c.application_name, self.app_name),
+        )
+
+    @db_retry()
+    def count_pending_queue_workflows(self, queue_name: str) -> int:
+        """How many of this queue's workflows are running across every worker."""
+        ws = SystemSchema.workflow_status
+        query = (
+            sa.select(sa.func.count())
+            .select_from(ws)
+            .where(self._queue_pending_filter(queue_name))
+        )
+        with self.engine.begin() as c:
+            return c.execute(query).scalar() or 0
+
     @db_retry()
     def get_queue_partitions(self, queue_name: str) -> List[str]:
         """
@@ -4724,7 +4757,9 @@ class SystemDatabase(ABC):
         partition_local_running_count: int = 0,
         *,
         owner_xid: Optional[str] = None,
-    ) -> List[str]:
+    ) -> Tuple[List[str], Optional[DequeueStopReason]]:
+        """Claim this queue's next workflows, plus the limit that left no room to claim any
+        (None if every limit had room)."""
         start_time_ms = int(time.time() * 1000)
         ws = SystemSchema.workflow_status
         # Read the queue's cached private fields, not its accessors, which would re-fetch a database-backed queue. _concurrency is the queue-wide (global) limit.
@@ -4783,10 +4818,7 @@ class SystemDatabase(ABC):
                 query = (
                     sa.select(sa.func.count())
                     .select_from(ws)
-                    .where(ws.c.queue_name == queue.name)
-                    .where(ws.c.status == WorkflowStatusString.PENDING.value)
-                    .where(self._in_flight_status_prover())
-                    .where(self._name_filter(ws.c.application_name, self.app_name))
+                    .where(self._queue_pending_filter(queue.name))
                 )
                 if partition_scoped:
                     query = query.where(ws.c.queue_partition_key == queue_partition_key)
@@ -4800,6 +4832,8 @@ class SystemDatabase(ABC):
                 max_tasks = min(
                     max_tasks, max(0, queue._worker_concurrency - local_running_count)
                 )
+                if max_tasks <= 0:
+                    return [], "worker_concurrency"
             if queue._partition_worker_concurrency is not None:
                 max_tasks = min(
                     max_tasks,
@@ -4809,18 +4843,20 @@ class SystemDatabase(ABC):
                         - partition_local_running_count,
                     ),
                 )
-            if max_tasks <= 0:
-                return []
+                if max_tasks <= 0:
+                    return [], "partition_worker_concurrency"
 
             if queue._limiter is not None:
                 # Bound the claim by the limiter's remaining slots so a backlogged queue locks only what it can start.
                 max_tasks = min(max_tasks, rate_limit_remaining(queue._limiter, False))
+                if max_tasks <= 0:
+                    return [], "limiter"
             if queue._partition_limiter is not None:
                 max_tasks = min(
                     max_tasks, rate_limit_remaining(queue._partition_limiter, True)
                 )
-            if max_tasks <= 0:
-                return []
+                if max_tasks <= 0:
+                    return [], "partition_limiter"
 
             if queue._concurrency is not None:
                 # Global concurrency still requires a DB query since other workers may be running workflows too.
@@ -4833,6 +4869,8 @@ class SystemDatabase(ABC):
                     max_tasks,
                     max(0, queue._concurrency - global_pending_workflows),
                 )
+                if max_tasks <= 0:
+                    return [], "concurrency"
             if queue._partition_concurrency is not None:
                 partition_pending_workflows = pending_count(True)
                 if partition_pending_workflows > queue._partition_concurrency:
@@ -4843,8 +4881,8 @@ class SystemDatabase(ABC):
                     max_tasks,
                     max(0, queue._partition_concurrency - partition_pending_workflows),
                 )
-            if max_tasks <= 0:
-                return []
+                if max_tasks <= 0:
+                    return [], "partition_concurrency"
 
             latest_version = c.execute(
                 sa.select(SystemSchema.application_versions.c.version_name)
@@ -4975,7 +5013,7 @@ class SystemDatabase(ABC):
                 claimed.update(row[0] for row in flipped_rows)
 
             # Return the IDs of all functions we started, in dequeue order: RETURNING order is unspecified.
-            return [id for id in dequeued_ids if id in claimed]
+            return [id for id in dequeued_ids if id in claimed], None
 
     # Max heads dequeued per partitioned sweep: bounds the IN-list bind params below (SQLite caps at 32766, libpq at 65535); leftover partitions rotate in on later polls via the PENDING gate.
     PARTITIONED_DEQUEUE_SWEEP_CAP = 8192
