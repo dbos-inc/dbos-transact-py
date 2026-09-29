@@ -12,6 +12,8 @@ import sqlalchemy as sa
 from inline_snapshot import snapshot
 from opentelemetry import context as otel_context
 from opentelemetry import trace
+from opentelemetry._logs import get_logger_provider
+from opentelemetry.instrumentation.logging.handler import LoggingHandler
 from opentelemetry.trace.span import format_trace_id
 
 import dbos._logger
@@ -23,7 +25,7 @@ from dbos import (
     SetWorkflowAttributes,
 )
 from dbos._dbos import WorkflowHandle
-from dbos._logger import add_otlp_to_all_loggers, dbos_logger
+from dbos._logger import DBOSLogTransformer, add_otlp_to_all_loggers, dbos_logger
 from dbos._schemas.system_database import SystemSchema
 from dbos._utils import GlobalParams
 from tests.conftest import TestOtelType, retry_until_success, set_workflow_status
@@ -322,7 +324,13 @@ def test_disable_otlp_no_spans(
 
     expected_log_bodies = {"This is a test_step", "This is a test_workflow"}
 
-    test_workflow()
+    # DBOS attaches no OTLP handler when disabled, so route its logs to the collector here.
+    handler = LoggingHandler(logger_provider=get_logger_provider())
+    dbos_logger.addHandler(handler)
+    try:
+        test_workflow()
+    finally:
+        dbos_logger.removeHandler(handler)
 
     log_processor.force_flush(timeout_millis=5000)
     logs = [
@@ -1000,6 +1008,34 @@ async def test_propagate_explicit_otel_context_to_inline_async_workflow(
     assert workflow_spans[0].parent is not None
     assert workflow_spans[0].parent.span_id == elsewhere_ctx.span_id
     assert workflow_spans[0].parent.span_id != caller_ctx.span_id
+
+
+def test_destroy_detaches_otlp_logging(
+    config: DBOSConfig, setup_in_memory_otlp_collector: TestOtelType
+) -> None:
+    def attached() -> tuple[list[logging.Handler], list[logging.Filter]]:
+        handlers: list[logging.Handler] = [
+            h for h in dbos_logger.handlers if isinstance(h, LoggingHandler)
+        ]
+        filters: list[logging.Filter] = [
+            f for f in dbos_logger.filters if isinstance(f, DBOSLogTransformer)
+        ]
+        return handlers, filters
+
+    DBOS.destroy(destroy_registry=True)
+    assert attached() == ([], [])
+    config["enable_otlp"] = True
+    previous_handler: Optional[logging.Handler] = None
+    for _ in range(2):
+        DBOS(config=config)
+        DBOS.launch()
+        handlers, filters = attached()
+        assert len(handlers) == 1 and len(filters) == 1
+        # Each cycle builds a new handler rather than reusing the last one
+        assert handlers[0] is not previous_handler
+        previous_handler = handlers[0]
+        DBOS.destroy(destroy_registry=True)
+        assert attached() == ([], [])
 
 
 # OTel's own non-propagating loggers. LoggingHandler.emit() reports re-entrancy

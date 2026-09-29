@@ -7,6 +7,7 @@ from sqlalchemy.exc import DBAPIError
 
 from dbos._migration import get_sqlite_migration_versions, sqlite_migrations
 
+from ._datasource_migration import DATASOURCE_MIGRATIONS_TABLE
 from ._error import DBOSException, DBOSInitializationError
 from ._logger import dbos_logger
 from ._sys_db import SystemDatabase
@@ -167,7 +168,7 @@ class SQLiteSystemDatabase(SystemDatabase):
     def _truncate_system_database(database_url: str, db_path: str) -> None:
         """Empty every DBOS table in the system database, leaving the file intact.
 
-        dbos_migrations is spared: clearing it would re-run applied migrations."""
+        Version tables are spared: clearing them would re-run applied migrations."""
         if not os.path.exists(db_path):
             dbos_logger.info(f"SQLite database file does not exist: {db_path}")
             return
@@ -187,7 +188,9 @@ class SQLiteSystemDatabase(SystemDatabase):
                     for table in conn.execute(
                         sa.text("SELECT name FROM sqlite_master WHERE type='table'")
                     ).scalars()
-                    if table != "dbos_migrations" and not table.startswith("sqlite_")
+                    # A datasource sharing the file keeps its version too.
+                    if table not in ("dbos_migrations", DATASOURCE_MIGRATIONS_TABLE)
+                    and not table.startswith("sqlite_")
                 ]
                 # SQLite has no TRUNCATE; foreign keys are off here, so order is free.
                 for table in tables:
