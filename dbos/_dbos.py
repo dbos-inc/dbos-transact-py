@@ -424,7 +424,12 @@ class DBOS:
         global _dbos_global_registry
         if _dbos_global_instance is None:
             _dbos_global_instance = super().__new__(cls)
-            _dbos_global_instance.__init__(config=config, conductor_url=conductor_url, conductor_key=conductor_key)  # type: ignore
+            try:
+                _dbos_global_instance.__init__(config=config, conductor_url=conductor_url, conductor_key=conductor_key)  # type: ignore
+            except BaseException:
+                # A half-built instance can be neither destroyed nor reused.
+                _dbos_global_instance = None
+                raise
         return _dbos_global_instance
 
     @classmethod
@@ -457,6 +462,11 @@ class DBOS:
         if hasattr(self, "_initialized") and self._initialized:
             return
 
+        # DBOS Cloud always uses Conductor. Checked before any state exists, so a missing package fails cleanly.
+        key = config.get("conductor_key") or conductor_key
+        if GlobalParams.dbos_cloud or key is not None:
+            _enterprise.load()
+
         self._initialized: bool = True
 
         self._launched: bool = False
@@ -481,9 +491,6 @@ class DBOS:
         self.conductor_key: Optional[str] = conductor_key
         if config.get("conductor_key"):
             self.conductor_key = config.get("conductor_key")
-        if self.conductor_key is not None:
-            # Fail at construction rather than launch when the client package is missing.
-            _enterprise.load()
         self.enable_patching = config.get("enable_patching") == True
         self.conductor_websocket: Optional[ConductorThread] = None
         self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()

@@ -117,6 +117,10 @@ jobs:
     runs-on: ubuntu-latest
     # Fork PRs get no secrets, so the app token cannot be minted there.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        dbos-database: ['SQLITE', 'POSTGRES']
     services:
       postgres:
         image: postgres:17
@@ -187,3 +191,4 @@ jobs:
       timeout-minutes: 30
       env:
         PGPASSWORD: a!b@c$d()e*_,/:;=?@ff[]22
+        DBOS_DATABASE: ${{ matrix.dbos-database }}

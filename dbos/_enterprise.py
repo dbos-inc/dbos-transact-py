@@ -11,6 +11,7 @@ import importlib
 from typing import TYPE_CHECKING, Protocol, cast
 
 from ._error import DBOSInitializationError
+from ._utils import GlobalParams
 
 if TYPE_CHECKING:
     from ._dbos import DBOS
@@ -44,10 +45,16 @@ class Enterprise(Protocol):
 
 
 def load() -> Enterprise:
-    """Import dbos_enterprise, failing with an install hint if it is absent."""
+    """Import dbos_enterprise, telling an absent package apart from one that fails to import."""
     try:
         return cast(Enterprise, importlib.import_module("dbos_enterprise"))
     except ImportError as e:
+        if isinstance(e, ModuleNotFoundError) and e.name == "dbos_enterprise":
+            raise DBOSInitializationError(
+                "Connecting to DBOS Conductor requires the dbos-enterprise package. Install it with `pip install dbos-enterprise`."
+            ) from e
+        # The package is present; it imports dbos internals, so this is almost always a version mismatch.
         raise DBOSInitializationError(
-            "Connecting to DBOS Conductor requires the dbos-enterprise package. Install it with `pip install dbos-enterprise`."
+            f"The dbos-enterprise package is installed but could not be imported by dbos {GlobalParams.dbos_version}. "
+            f"The two must be the same version; upgrade both together. Cause: {e}"
         ) from e
