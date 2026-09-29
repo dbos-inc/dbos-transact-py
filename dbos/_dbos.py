@@ -156,6 +156,7 @@ from ._logger import (
     config_logger,
     dbos_logger,
     init_logger,
+    teardown_logger,
 )
 from ._workflow_commands import (
     WORKFLOW_TIMEOUT_THREAD_NAME,
@@ -441,6 +442,8 @@ class DBOS:
             global _dbos_global_registry
             _dbos_global_registry = None
         dbos_logger.info("DBOS successfully shut down")
+        # Detached after the final log so it is still exported.
+        teardown_logger()
 
     def __init__(
         self,

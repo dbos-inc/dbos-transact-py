@@ -131,8 +131,23 @@ def config_logger(config: "ConfigFile") -> None:
 
     # Attach DBOS-specific attributes to all log entries.
     global _dbos_log_transformer
+    if _dbos_log_transformer is not None:
+        dbos_logger.removeFilter(_dbos_log_transformer)
     _dbos_log_transformer = DBOSLogTransformer(config)
     dbos_logger.addFilter(_dbos_log_transformer)
+
+
+def teardown_logger() -> None:
+    """Detach the OTLP handler and log transformer that config_logger added."""
+    global _otlp_handler, _dbos_log_transformer
+    if _otlp_handler is not None:
+        dbos_logger.removeHandler(_otlp_handler)
+        _otlp_handler.flush()
+        _otlp_handler.close()
+        _otlp_handler = None
+    if _dbos_log_transformer is not None:
+        dbos_logger.removeFilter(_dbos_log_transformer)
+        _dbos_log_transformer = None
 
 
 def add_otlp_to_all_loggers() -> None:
