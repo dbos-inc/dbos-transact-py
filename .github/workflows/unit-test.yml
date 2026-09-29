@@ -153,10 +153,13 @@ jobs:
       id: pair
       env:
         TOKEN: ${{ steps.app.outputs.token }}
+        HEAD_REF: ${{ github.head_ref || github.ref_name }}
+        BASE_REF: ${{ github.base_ref }}
       run: |
         url="https://x-access-token:$TOKEN@github.com/dbos-inc/dbos-enterprise-py"
-        for ref in "${{ github.head_ref || github.ref_name }}" main; do
-          if git ls-remote --exit-code --heads "$url" "$ref" >/dev/null; then break; fi
+        # Same-named branch first, then the PR's base so a release branch pairs with its own release, then main.
+        for ref in "$HEAD_REF" "$BASE_REF" main; do
+          if [ -n "$ref" ] && git ls-remote --exit-code --heads "$url" "$ref" >/dev/null; then break; fi
         done
         echo "Testing against dbos-enterprise-py@$ref"
         echo "ref=$ref" >> "$GITHUB_OUTPUT"
