@@ -966,3 +966,35 @@ def test_rename_moves_only_the_sources_it_is_given(dbos: DBOS) -> None:
     assert both["workflows"] == 2
     assert application_name_of(dbos, "peer-wf") == "final-app"
     assert application_name_of(dbos, "unclaimed-two") == "final-app"
+
+
+def test_list_workflows_scopes_to_the_application(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    """Unset lists this application's rows plus unclaimed ones, naming an application
+    lists its rows plus unclaimed ones, and a client with no application is unscoped."""
+
+    @DBOS.workflow()
+    def wf() -> int:
+        return 11
+
+    handle = DBOS.start_workflow(wf)
+    assert handle.get_result() == 11
+    insert_foreign_workflow(dbos, "foreign-listed", status="SUCCESS")
+    insert_foreign_workflow(
+        dbos, "unclaimed-listed", status="SUCCESS", application_name=None
+    )
+
+    # Unset is this application's scope, so naming it changes nothing.
+    unfiltered = {w.workflow_id for w in DBOS.list_workflows()}
+    assert {handle.workflow_id, "unclaimed-listed"} <= unfiltered
+    assert "foreign-listed" not in unfiltered
+    mine = {w.workflow_id for w in DBOS.list_workflows(application_name=APP_NAME)}
+    assert {handle.workflow_id, "unclaimed-listed"} <= mine
+    assert "foreign-listed" not in mine
+    theirs = {w.workflow_id for w in DBOS.list_workflows(application_name=OTHER_APP)}
+    assert theirs == {"foreign-listed", "unclaimed-listed"}
+    # A client with no application of its own has no scope to default to.
+    assert {handle.workflow_id, "foreign-listed", "unclaimed-listed"} <= {
+        w.workflow_id for w in client.list_workflows()
+    }

@@ -2066,3 +2066,25 @@ async def test_read_stream_async_close_releases_listener(
     finally:
         release.set()
         await handle.get_result()
+
+
+def test_read_stream_stops_at_close(dbos: DBOS) -> None:
+    """A stream ends where it was closed: a value written afterwards is never read, and
+    a stream closed with nothing in it reads as empty."""
+    stream_key = "closed_then_written_stream"
+    empty_key = "closed_empty_stream"
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        DBOS.write_stream(stream_key, "v0")
+        DBOS.close_stream(stream_key)
+        # Writing past a close is still accepted.
+        DBOS.write_stream(stream_key, "after")
+        DBOS.close_stream(empty_key)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        writer_workflow()
+
+    assert list(DBOS.read_stream(wfid, stream_key)) == ["v0"]
+    assert list(DBOS.read_stream(wfid, empty_key)) == []

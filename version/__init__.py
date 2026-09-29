@@ -39,5 +39,6 @@ def format_version(git_version: SCMVersion) -> str:
 
 def guess_next_version(version_number: str) -> str:
     major, minor, patch = map(int, version_number.split("."))
+    # The nearest tag may be a patch; previews of the next minor still start at .0.
     minor += 1
-    return f"{major}.{minor}.{patch}"
+    return f"{major}.{minor}.0"
