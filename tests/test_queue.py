@@ -2891,10 +2891,12 @@ def test_partition_sweep_stops_at_global_concurrency(
         pending = real_pending(queue_name)
         if queue_name == queue.name:
             # A stale snapshot reports nothing running, as if taken before peers filled the limit.
-            pending = 0 if stale else pending
+            # Read once, so the test thread flipping it can't split the count from the record.
+            is_stale = stale
+            pending = 0 if is_stale else pending
             with spy_lock:
                 sweeps.append(
-                    {"budget": concurrency - pending, "stale": stale, "claims": []}
+                    {"budget": concurrency - pending, "stale": is_stale, "claims": []}
                 )
         return pending
 
