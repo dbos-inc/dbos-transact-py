@@ -733,7 +733,7 @@ def queue_worker_thread(
         try:
             if not queue._has_partition_limits():
                 owner_xid = generate_uuid()
-                dequeued_workflows = dbos._sys_db.start_queued_workflows(
+                dequeued_workflows, _ = dbos._sys_db.start_queued_workflows(
                     queue,
                     GlobalParams.executor_id,
                     GlobalParams.app_version,
@@ -792,7 +792,7 @@ def queue_worker_thread(
                         break
                     owner_xid = generate_uuid()
                     try:
-                        dequeued_workflows = dbos._sys_db.start_queued_workflows(
+                        dequeued_workflows, _ = dbos._sys_db.start_queued_workflows(
                             queue,
                             GlobalParams.executor_id,
                             GlobalParams.app_version,

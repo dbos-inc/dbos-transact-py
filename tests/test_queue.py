@@ -11,7 +11,7 @@ import uuid
 import weakref
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, List
+from typing import Any, List, Optional, Tuple
 
 import pytest
 import sqlalchemy as sa
@@ -43,7 +43,7 @@ from dbos._error import (
 )
 from dbos._queue import _INTERNAL_QUEUE_CONSTRUCTION
 from dbos._schemas.system_database import SystemSchema
-from dbos._sys_db import WorkflowStatusString
+from dbos._sys_db import DequeueStopReason, WorkflowStatusString
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from tests.conftest import (
     default_config,
@@ -2810,7 +2810,7 @@ def test_partition_serialization_failure_skips_key(
         queue_partition_key: Any = None,
         *args: Any,
         **kwargs: Any,
-    ) -> List[str]:
+    ) -> Tuple[List[str], Optional[DequeueStopReason]]:
         if (
             poison_active.is_set()
             and queue_arg.name == queue.name
@@ -2885,7 +2885,9 @@ def test_partition_sweep_stops_at_global_concurrency(
     real_start = dbos._sys_db.start_queued_workflows
     real_count = dbos._active_workflows_set.count_for_queue
 
-    def spying_start(queue_arg: Queue, *args: Any, **kwargs: Any) -> List[str]:
+    def spying_start(
+        queue_arg: Queue, *args: Any, **kwargs: Any
+    ) -> Tuple[List[str], Optional[DequeueStopReason]]:
         claims.append(queue_arg.name)
         return real_start(queue_arg, *args, **kwargs)
 
@@ -3137,7 +3139,7 @@ def test_queue_wide_limit_holds_across_executors(
         def sweep(index: int, partition: str) -> None:
             barrier.wait()
             try:
-                claimed[index] = dbos._sys_db.start_queued_workflows(
+                claimed[index], _ = dbos._sys_db.start_queued_workflows(
                     queue, f"executor-{index}", parked_version, partition, 0, 0
                 )
             except OperationalError:
@@ -3495,7 +3497,9 @@ def test_partitioned_queue_fallback_routing(
         batched_queues.append(queue_arg.name)
         return real_batched(queue_arg, *args, **kwargs)
 
-    def spying_single(queue_arg: Queue, *args: Any, **kwargs: Any) -> List[str]:
+    def spying_single(
+        queue_arg: Queue, *args: Any, **kwargs: Any
+    ) -> Tuple[List[str], Optional[DequeueStopReason]]:
         swept_queues.append(queue_arg.name)
         return real_single(queue_arg, *args, **kwargs)
 
@@ -3696,7 +3700,7 @@ def test_rate_limiter_query_plan(dbos: DBOS) -> None:
         assert (
             dbos._sys_db.start_queued_workflows(
                 queue, GlobalParams.executor_id, GlobalParams.app_version, None
-            )
+            )[0]
             == []
         )
     finally:
@@ -3776,7 +3780,7 @@ def test_pending_count_query_plan(dbos: DBOS, skip_with_sqlite: None) -> None:
         assert (
             dbos._sys_db.start_queued_workflows(
                 queue, GlobalParams.executor_id, GlobalParams.app_version, None
-            )
+            )[0]
             == []
         )
     finally:
