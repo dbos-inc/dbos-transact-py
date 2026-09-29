@@ -765,9 +765,7 @@ def queue_worker_thread(
                     )
                     start_dequeued_workflows(dequeued_workflows, owner_xid)
             else:
-                # Room left under the queue-wide limit, counted once per sweep. Each claim
-                # still rechecks it in its own transaction, so this only stops the sweep
-                # from visiting every partition after the limit is spent.
+                # Room left under the queue-wide limit; each claim still rechecks it in its own transaction.
                 global_budget = sys.maxsize
                 if queue._concurrency is not None:
                     global_budget = (
@@ -792,16 +790,18 @@ def queue_worker_thread(
                         break
                     owner_xid = generate_uuid()
                     try:
-                        dequeued_workflows, _ = dbos._sys_db.start_queued_workflows(
-                            queue,
-                            GlobalParams.executor_id,
-                            GlobalParams.app_version,
-                            key,
-                            running + claimed,
-                            dbos._active_workflows_set.count_for_partition(
-                                queue.name, key
-                            ),
-                            owner_xid=owner_xid,
+                        dequeued_workflows, stop_reason = (
+                            dbos._sys_db.start_queued_workflows(
+                                queue,
+                                GlobalParams.executor_id,
+                                GlobalParams.app_version,
+                                key,
+                                running + claimed,
+                                dbos._active_workflows_set.count_for_partition(
+                                    queue.name, key
+                                ),
+                                owner_xid=owner_xid,
+                            )
                         )
                     except OperationalError as e:
                         # Lock held or claim raced by another worker: skip just this partition, no queue-wide backoff.
@@ -813,6 +813,9 @@ def queue_worker_thread(
                         raise
                     claimed += len(dequeued_workflows)
                     start_dequeued_workflows(dequeued_workflows, owner_xid)
+                    # A queue-wide limit (e.g. filled by peers since the snapshot) leaves every other partition empty too.
+                    if stop_reason in ("concurrency", "limiter"):
+                        break
         except OperationalError as e:
             if isinstance(e.orig, errors.LockNotAvailable):
                 # Another worker is dequeueing this queue right now; retry next

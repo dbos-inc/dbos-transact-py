@@ -11,7 +11,7 @@ import uuid
 import weakref
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pytest
 import sqlalchemy as sa
@@ -2851,9 +2851,9 @@ def test_partition_serialization_failure_skips_key(
 def test_partition_sweep_stops_at_global_concurrency(
     dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Once the queue-wide limit is spent, a sweep stops instead of opening a claim
-    transaction for every waiting partition, each of which could only come back
-    empty. The limit still holds while every partition drains."""
+    """A partition sweep stops claiming once the queue-wide limit is spent, whether by its
+    own claims or by peers after its snapshot, and the limit holds while partitions drain.
+    """
 
     concurrency = 2
     partitions = 20
@@ -2880,48 +2880,86 @@ def test_partition_sweep_stops_at_global_concurrency(
         polling_interval_sec=0.1,
     )
 
-    claims: List[str] = []
-    sweeps: List[str] = []
+    # One entry per sweep of this queue: its budget, whether its snapshot was stale, and its claims.
+    sweeps: List[Dict[str, Any]] = []
+    spy_lock = threading.Lock()
+    stale = False
     real_start = dbos._sys_db.start_queued_workflows
-    real_count = dbos._active_workflows_set.count_for_queue
+    real_pending = dbos._sys_db.count_pending_queue_workflows
+
+    def spying_pending(queue_name: str) -> int:
+        pending = real_pending(queue_name)
+        if queue_name == queue.name:
+            # A stale snapshot reports nothing running, as if taken before peers filled the limit.
+            pending = 0 if stale else pending
+            with spy_lock:
+                sweeps.append(
+                    {"budget": concurrency - pending, "stale": stale, "claims": []}
+                )
+        return pending
 
     def spying_start(
         queue_arg: Queue, *args: Any, **kwargs: Any
     ) -> Tuple[List[str], Optional[DequeueStopReason]]:
-        claims.append(queue_arg.name)
-        return real_start(queue_arg, *args, **kwargs)
+        result = real_start(queue_arg, *args, **kwargs)
+        if queue_arg.name == queue.name:
+            with spy_lock:
+                sweeps[-1]["claims"].append((len(result[0]), result[1]))
+        return result
 
-    # Every sweep counts this worker's running workflows before claiming anything.
-    def spying_count(queue_name: str) -> int:
-        sweeps.append(queue_name)
-        return real_count(queue_name)
-
+    monkeypatch.setattr(dbos._sys_db, "count_pending_queue_workflows", spying_pending)
     monkeypatch.setattr(dbos._sys_db, "start_queued_workflows", spying_start)
-    monkeypatch.setattr(dbos._active_workflows_set, "count_for_queue", spying_count)
+
+    def running_is(n: int) -> Callable[[], None]:
+        def check() -> None:
+            with lock:
+                assert running == n
+
+        return check
+
+    def completed_sweeps(is_stale: bool) -> List[Dict[str, Any]]:
+        # The last sweep may still be claiming.
+        with spy_lock:
+            return [sweep for sweep in sweeps[:-1] if sweep["stale"] == is_stale]
 
     handles = []
-    for i in range(partitions):
-        with SetEnqueueOptions(queue_partition_key=f"p{i}"):
-            handles.append(queue.enqueue(blocking_wf, i))
-
-    def limit_spent() -> None:
-        with lock:
-            assert running == concurrency
-
     try:
-        retry_until_success(limit_spent, interval=0.1, max_attempts=100)
-        claims_when_spent = claims.count(queue.name)
-        sweeps_when_spent = sweeps.count(queue.name)
+        # Occupy one slot so a later sweep starts with a partly spent budget.
+        with SetEnqueueOptions(queue_partition_key="busy"):
+            handles.append(queue.enqueue(blocking_wf, -1))
+        retry_until_success(running_is(1), interval=0.1, max_attempts=100)
+        for i in range(partitions):
+            with SetEnqueueOptions(queue_partition_key=f"p{i}"):
+                handles.append(queue.enqueue(blocking_wf, i))
+        retry_until_success(running_is(concurrency), interval=0.1, max_attempts=100)
+        fresh_count = len(completed_sweeps(False))
 
-        def swept_again() -> None:
-            assert sweeps.count(queue.name) >= sweeps_when_spent + 3
+        def swept_fresh() -> None:
+            assert len(completed_sweeps(False)) >= fresh_count + 3
 
-        retry_until_success(swept_again, interval=0.1, max_attempts=100)
-        # Without the early stop, each of those sweeps claims against all 18 waiting partitions.
-        assert claims.count(queue.name) == claims_when_spent
+        retry_until_success(swept_fresh, interval=0.1, max_attempts=100)
+        fresh = completed_sweeps(False)
+        # No sweep attempts a claim once it has claimed its whole budget.
+        for sweep in fresh:
+            claimed = 0
+            for count, _ in sweep["claims"]:
+                assert claimed < sweep["budget"], sweep
+                claimed += count
+        assert any(s["budget"] == 1 and s["claims"] for s in fresh), fresh
+
+        stale = True
+
+        def swept_stale() -> None:
+            assert len(completed_sweeps(True)) >= 3
+
+        retry_until_success(swept_stale, interval=0.1, max_attempts=100)
+        # A stale sweep stops at its first claim, which finds the queue-wide limit spent.
+        for sweep in completed_sweeps(True):
+            assert sweep["claims"] == [(0, "concurrency")], sweep
     finally:
+        stale = False
         release.set()
-    assert [handle.get_result() for handle in handles] == list(range(partitions))
+    assert [handle.get_result() for handle in handles] == [-1] + list(range(partitions))
     assert peak == concurrency
 
 
