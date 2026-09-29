@@ -1895,8 +1895,8 @@ class AmbiguousTruth:
 
 def test_stream_array_like_values(dbos: DBOS, client: DBOSClient) -> None:
     """Values whose __eq__ returns a non-boolean -- a DataFrame, a string-dtype ndarray -- must
-    survive every leg that compares a value to the closed-stream marker: the write, all the read
-    paths, and the bulk fetch the conductor uses."""
+    survive every leg that compares a value to the closed-stream marker: the write and all the read
+    paths."""
     stream_key = "array_like_stream"
 
     @DBOS.workflow()
@@ -1921,9 +1921,6 @@ def test_stream_array_like_values(dbos: DBOS, client: DBOSClient) -> None:
     with SetWorkflowID(reader_id):
         assert reader_workflow(wfid) == ["a", "b"]
     assert reexecute_workflow_by_id(dbos, reader_id).get_result() == ["a", "b"]
-
-    entries = dbos._sys_db.get_all_stream_entries(wfid)
-    assert [v.tag for v in entries[stream_key]] == ["a", "b"]
 
     steps = DBOS.list_workflow_steps(wfid)
     assert [s["function_name"] for s in steps] == [
@@ -1950,32 +1947,6 @@ async def test_stream_array_like_values_async(dbos: DBOS, client: DBOSClient) ->
     assert [v.tag async for v in DBOS.read_stream_async(wfid, stream_key)] == ["a"]
     assert [v.tag async for v in client.read_stream_async(wfid, stream_key)] == ["a"]
     assert (await DBOS.read_stream_offset_async(wfid, stream_key, 0)).tag == "a"
-
-
-def test_get_all_stream_entries_stops_at_close(dbos: DBOS) -> None:
-    """The bulk fetch the conductor uses ends a stream where read_stream ends it, so the two
-    never report different contents for the same rows."""
-    stream_key = "conductor_view_stream"
-    empty_key = "closed_empty_stream"
-
-    @DBOS.workflow()
-    def writer_workflow() -> None:
-        DBOS.write_stream(stream_key, "v0")
-        DBOS.close_stream(stream_key)
-        # Writing past a close is still accepted; the two readers must agree on what it holds.
-        DBOS.write_stream(stream_key, "after")
-        DBOS.close_stream(empty_key)
-
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        writer_workflow()
-
-    assert list(DBOS.read_stream(wfid, stream_key)) == ["v0"]
-    entries = dbos._sys_db.get_all_stream_entries(wfid)
-    assert entries[stream_key] == ["v0"]
-    # A stream that was opened and closed with nothing in it reads as empty, not as absent.
-    assert entries[empty_key] == []
-    assert list(DBOS.read_stream(wfid, empty_key)) == []
 
 
 def test_read_stream_notices_cancellation(dbos: DBOS) -> None:

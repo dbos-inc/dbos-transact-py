@@ -7,12 +7,7 @@ from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 from dbos._utils import generate_uuid
 
-from ._sys_db import (
-    DEFAULT_GC_BATCH_SIZE,
-    SystemDatabase,
-    WorkflowStatus,
-    workflow_is_active,
-)
+from ._sys_db import SystemDatabase, WorkflowStatus, workflow_is_active
 
 if TYPE_CHECKING:
     from ._dbos import DBOS
@@ -86,43 +81,6 @@ def delete_workflow(
         for wfid in workflow_ids:
             all_ids.extend(dbos._sys_db.get_workflow_children(wfid))
     dbos._sys_db.delete_workflows(all_ids)
-
-
-def garbage_collect(
-    dbos: "DBOS",
-    cutoff_epoch_timestamp_ms: Optional[int],
-    rows_threshold: Optional[int],
-    *,
-    batch_size: int = DEFAULT_GC_BATCH_SIZE,
-) -> None:
-    """Enforce retention across the entire system database."""
-    if cutoff_epoch_timestamp_ms is None and rows_threshold is None:
-        return
-    with dbos._sys_db.retention_lock() as acquired:
-        if not acquired:
-            dbos.logger.warning(
-                "Skipping retention: another round is already running against this "
-                "system database."
-            )
-            return
-        cutoff = dbos._sys_db.garbage_collect(
-            cutoff_epoch_timestamp_ms=cutoff_epoch_timestamp_ms,
-            rows_threshold=rows_threshold,
-            batch_size=batch_size,
-        )
-        if cutoff is None:
-            return
-        # Strictly after the status sweep: the payload sweep only takes orphans, so
-        # this round's are only visible to it once that sweep has committed.
-        dbos._sys_db.garbage_collect_payloads(cutoff, batch_size=batch_size)
-
-
-def global_timeout(dbos: "DBOS", cutoff_epoch_timestamp_ms: int) -> None:
-    # IDs only, so a bulk timeout does not deserialize every row's inputs and outputs.
-    for workflow_id in dbos._sys_db.list_timed_out_workflow_ids(
-        cutoff_epoch_timestamp_ms
-    ):
-        dbos.cancel_workflow(workflow_id)
 
 
 # Most workflows one sweep transaction cancels; a full batch sweeps again at once.
