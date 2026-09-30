@@ -2379,6 +2379,7 @@ class SystemDatabase(ABC):
         executor_id: Optional[str | list[str]] = None,
         queues_only: bool = False,
         was_forked_from: Optional[bool] = None,
+        is_fork: Optional[bool] = None,
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
         schedule_name: Optional[str | list[str]] = None,
@@ -2601,6 +2602,16 @@ class SystemDatabase(ABC):
             query = query.where(
                 SystemSchema.workflow_status.c.was_forked_from == was_forked_from
             )
+        # is_fork matches the forks themselves; was_forked_from matches the workflows they were forked from.
+        if is_fork is not None:
+            if is_fork:
+                query = query.where(
+                    SystemSchema.workflow_status.c.forked_from.isnot(None)
+                )
+            else:
+                query = query.where(
+                    SystemSchema.workflow_status.c.forked_from.is_(None)
+                )
         if has_parent is not None:
             if has_parent:
                 query = query.where(
