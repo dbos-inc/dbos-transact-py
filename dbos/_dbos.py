@@ -2153,9 +2153,14 @@ class DBOS:
 
     @classmethod
     def update_workflow_attributes(
-        cls, workflow_id: str, attributes: Optional[Dict[str, Any]]
+        cls,
+        workflow_id: str,
+        attributes: Optional[Dict[str, Any]],
+        *,
+        merge: bool = False,
     ) -> None:
-        """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes.
+        """Update a workflow's attributes. Merge top-level keys with merge=True;
+        otherwise replace the dict. Pass None to clear it when merge=False.
 
         Safe to call from within a workflow: the update is recorded as a step so
         it runs exactly once even if the workflow is recovered.
@@ -2165,7 +2170,7 @@ class DBOS:
         def fn() -> None:
             dbos_logger.info(f"Updating attributes of workflow: {workflow_id}")
             _get_dbos_instance()._sys_db.update_workflow_attributes(
-                workflow_id, attributes
+                workflow_id, attributes, merge=merge
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
@@ -2176,9 +2181,14 @@ class DBOS:
 
     @classmethod
     async def update_workflow_attributes_async(
-        cls, workflow_id: str, attributes: Optional[Dict[str, Any]]
+        cls,
+        workflow_id: str,
+        attributes: Optional[Dict[str, Any]],
+        *,
+        merge: bool = False,
     ) -> None:
-        """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes.
+        """Update a workflow's attributes. Merge top-level keys with merge=True;
+        otherwise replace the dict. Pass None to clear it when merge=False.
 
         Safe to call from within a workflow: the update is recorded as a step so
         it runs exactly once even if the workflow is recovered.
@@ -2189,7 +2199,7 @@ class DBOS:
         def fn() -> None:
             dbos_logger.info(f"Updating attributes of workflow: {workflow_id}")
             _get_dbos_instance()._sys_db.update_workflow_attributes(
-                workflow_id, attributes
+                workflow_id, attributes, merge=merge
             )
 
         return await asyncio.to_thread(

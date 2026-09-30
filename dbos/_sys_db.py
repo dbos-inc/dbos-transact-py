@@ -1487,16 +1487,47 @@ class SystemDatabase(ABC):
         return _standalone()
 
     def update_workflow_attributes(
-        self, workflow_id: str, attributes: Optional[Dict[str, Any]]
+        self,
+        workflow_id: str,
+        attributes: Optional[Dict[str, Any]],
+        *,
+        merge: bool = False,
     ) -> None:
-        """Replace the custom attributes attached to a workflow. Pass None to clear all attributes."""
+        """Replace attributes, or atomically merge top-level keys when merge=True."""
         validate_workflow_attributes(attributes)
+        if merge and attributes is None:
+            raise DBOSException("Cannot merge None into workflow attributes")
+
+        ws = SystemSchema.workflow_status
+        value: Any = attributes
+        if merge:
+            assert attributes is not None
+            if self._is_sqlite:
+                value = sa.case(
+                    (sa.func.json_type(ws.c.attributes) == "object", ws.c.attributes),
+                    else_=sa.literal("{}"),
+                )
+                for key, item in json.loads(json.dumps(attributes)).items():
+                    value = sa.func.json_set(
+                        value, f"$.{json.dumps(key)}", sa.func.json(json.dumps(item))
+                    )
+            else:
+                existing = sa.case(
+                    (
+                        sa.func.jsonb_typeof(ws.c.attributes) == "object",
+                        ws.c.attributes,
+                    ),
+                    else_=sa.literal({}, type_=ws.c.attributes.type),
+                )
+                value = existing.op("||")(
+                    sa.literal(attributes, type_=ws.c.attributes.type)
+                )
         with self.engine.begin() as c:
             c.execute(
-                sa.update(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                sa.update(ws)
+                .where(ws.c.workflow_uuid == workflow_id)
                 .values(
-                    attributes=attributes,
+                    attributes=value,
                     updated_at=self._now_ms_sql(),
                 )
             )

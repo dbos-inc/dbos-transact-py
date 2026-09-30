@@ -787,17 +787,25 @@ class DBOSClient:
         )
 
     def update_workflow_attributes(
-        self, workflow_id: str, attributes: Optional[Dict[str, Any]]
+        self,
+        workflow_id: str,
+        attributes: Optional[Dict[str, Any]],
+        *,
+        merge: bool = False,
     ) -> None:
-        """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes."""
-        self._sys_db.update_workflow_attributes(workflow_id, attributes)
+        """Update attributes, merging top-level keys when merge=True."""
+        self._sys_db.update_workflow_attributes(workflow_id, attributes, merge=merge)
 
     async def update_workflow_attributes_async(
-        self, workflow_id: str, attributes: Optional[Dict[str, Any]]
+        self,
+        workflow_id: str,
+        attributes: Optional[Dict[str, Any]],
+        *,
+        merge: bool = False,
     ) -> None:
-        """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes."""
+        """Update attributes, merging top-level keys when merge=True."""
         await asyncio.to_thread(
-            self.update_workflow_attributes, workflow_id, attributes
+            self.update_workflow_attributes, workflow_id, attributes, merge=merge
         )
 
     def delete_workflow(
