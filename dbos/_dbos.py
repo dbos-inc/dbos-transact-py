@@ -37,7 +37,6 @@ from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
 
-from dbos._conductor.conductor import ConductorWebsocket
 from dbos._serialization import (
     DefaultSerializer,
     Serializer,
@@ -128,6 +127,7 @@ if TYPE_CHECKING:
 
 from typing import ParamSpec
 
+from . import _enterprise
 from ._context import (
     DBOSContext,
     EnterDBOSStepCtx,
@@ -144,6 +144,7 @@ from ._dbos_config import (
     process_config,
     translate_dbos_config_to_config_file,
 )
+from ._enterprise import AlertHandler, ConductorThread
 from ._error import (
     DBOSException,
     DBOSNonExistentWorkflowError,
@@ -175,6 +176,7 @@ P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 T = TypeVar("T")
+
 
 _dbos_global_instance: Optional[DBOS] = None
 _dbos_global_registry: Optional[DBOSRegistry] = None
@@ -422,7 +424,12 @@ class DBOS:
         global _dbos_global_registry
         if _dbos_global_instance is None:
             _dbos_global_instance = super().__new__(cls)
-            _dbos_global_instance.__init__(config=config, conductor_url=conductor_url, conductor_key=conductor_key)  # type: ignore
+            try:
+                _dbos_global_instance.__init__(config=config, conductor_url=conductor_url, conductor_key=conductor_key)  # type: ignore
+            except BaseException:
+                # A half-built instance can be neither destroyed nor reused.
+                _dbos_global_instance = None
+                raise
         return _dbos_global_instance
 
     @classmethod
@@ -455,6 +462,11 @@ class DBOS:
         if hasattr(self, "_initialized") and self._initialized:
             return
 
+        # DBOS Cloud always uses Conductor. Checked before any state exists, so a missing package fails cleanly.
+        key = config.get("conductor_key") or conductor_key
+        if GlobalParams.dbos_cloud or key is not None:
+            _enterprise.load()
+
         self._initialized: bool = True
 
         self._launched: bool = False
@@ -480,10 +492,10 @@ class DBOS:
         if config.get("conductor_key"):
             self.conductor_key = config.get("conductor_key")
         self.enable_patching = config.get("enable_patching") == True
-        self.conductor_websocket: Optional[ConductorWebsocket] = None
+        self.conductor_websocket: Optional[ConductorThread] = None
         self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()
         self._active_workflows_set: ActiveWorkflowById = ActiveWorkflowById()
-        self._alert_handler: Optional[Callable[[str, str, Dict[str, str]], None]] = None
+        self._alert_handler: Optional[AlertHandler] = None
         serializer = config.get("serializer")
         self._serializer: Serializer = serializer if serializer else DefaultSerializer()
         self._conductor_executor_metadata: Optional[Dict[str, Any]] = config.get(
@@ -761,32 +773,32 @@ class DBOS:
                     and cloud_conductor_key is not None
                     and cloud_conductor_url is not None
                 ):
-                    evt = threading.Event()
                     dbos_logger.debug("Starting Conductor thread (DBOS Cloud)")
-                    self.conductor_websocket = ConductorWebsocket(
+                    self.conductor_websocket = _enterprise.load().ConductorWebsocket(
                         self,
                         app_name=cloud_app_name,
                         conductor_url=cloud_conductor_url,
                         conductor_key=cloud_conductor_key,
-                        evt=evt,
+                        executor_metadata=self._conductor_executor_metadata,
+                        metadata_only_mode=self._conductor_metadata_only_mode,
+                        alert_handler=self._alert_handler,
                     )
                     self.conductor_websocket.start()
-                    self._background_threads.append(self.conductor_websocket)
             elif self.conductor_key is not None:
                 if self.conductor_url is None:
                     dbos_domain = os.environ.get("DBOS_DOMAIN", "cloud.dbos.dev")
                     self.conductor_url = f"wss://{dbos_domain}/conductor/v1alpha1"
-                evt = threading.Event()
                 dbos_logger.debug("Starting Conductor thread")
-                self.conductor_websocket = ConductorWebsocket(
+                self.conductor_websocket = _enterprise.load().ConductorWebsocket(
                     self,
                     app_name=self._config["name"],
                     conductor_url=self.conductor_url,
                     conductor_key=self.conductor_key,
-                    evt=evt,
+                    executor_metadata=self._conductor_executor_metadata,
+                    metadata_only_mode=self._conductor_metadata_only_mode,
+                    alert_handler=self._alert_handler,
                 )
                 self.conductor_websocket.start()
-                self._background_threads.append(self.conductor_websocket)
 
             # Grab any pollers that were deferred and start them
             dbos_logger.debug("Starting event receivers")
@@ -915,17 +927,7 @@ class DBOS:
         self._workflow_timeout_stop_event.set()
         # Disconnect from Conductor only once the wait above is over, so the executor stays visibly alive to Conductor for its whole duration.
         if self.conductor_websocket is not None:
-            self.conductor_websocket.evt.set()
-            if self.conductor_websocket.websocket is not None:
-                self.conductor_websocket.websocket.close()
-            # Best effort: an in-flight command handler is not interruptible, so a slow one can outlast this join.
-            if (
-                self.conductor_websocket.is_alive()
-                and self.conductor_websocket is not threading.current_thread()
-            ):
-                self.conductor_websocket.join(timeout=10.0)
-                if self.conductor_websocket.is_alive():
-                    dbos_logger.warning("Conductor thread did not exit within timeout")
+            self.conductor_websocket.stop()
         self._background_event_loop.stop()
         if self._executor_field is not None:
             self._executor_field.shutdown(wait=False, cancel_futures=True)

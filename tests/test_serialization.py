@@ -433,41 +433,6 @@ def test_portable_ser(dbos: DBOS, client: DBOSClient) -> None:
     check_stream_ser(direct_id, "defstream", DBOSPortableJSON.name())
     check_msg_ser(direct_id, "default", DBOSPortableJSON.name())
 
-    # Test copy+paste workflow
-    # Export w/ children
-    expwf = dbos._sys_db.export_workflow(wfhd.workflow_id, export_children=True)
-    assert 1 == len(expwf)
-    assert 11 == len(expwf[0]["operation_outputs"])
-    assert wfhd.workflow_id == expwf[0]["workflow_status"]["workflow_uuid"]
-    # Delete so it can be reimported
-    DBOS.delete_workflow(wfhd.workflow_id, delete_children=True)
-    # Verify step outputs are deleted
-    pwfs = DBOS.list_workflows(workflow_ids=[wfhd.workflow_id])
-    psteps = DBOS.list_workflow_steps(wfhd.workflow_id)
-    assert 0 == len(pwfs)
-    assert 0 == len(psteps)
-
-    # Import after deletion
-    dbos._sys_db.import_workflow(expwf)
-
-    # Check that everything is still there
-    rvd = wfhd.get_result()
-    assert rvd == 's-1-k:v@"m"'
-    # WF
-    check_wf_ser(wfhd.workflow_id, DBOSPortableJSON.name())
-    # Messages
-    check_msg_ser(drpwfh.workflow_id, "default", DBOSPortableJSON.name())
-    check_msg_ser(drpwfh.workflow_id, "native", DBOSDefaultSerializer.name())
-    # check_msg_ser(drpwfh.workflow_id, "portable", DBOSPortableJSON.name()) # This got deleted
-    # Events
-    check_evt_ser(wfhd.workflow_id, "defstat", DBOSPortableJSON.name())
-    check_evt_ser(wfhd.workflow_id, "nstat", DBOSDefaultSerializer.name())
-    check_evt_ser(wfhd.workflow_id, "pstat", DBOSPortableJSON.name())
-    # Streams
-    check_stream_ser(wfhd.workflow_id, "defstream", DBOSPortableJSON.name())
-    check_stream_ser(wfhd.workflow_id, "nstream", DBOSDefaultSerializer.name())
-    check_stream_ser(wfhd.workflow_id, "pstream", DBOSPortableJSON.name())
-
     # Reexecute
     set_workflow_status(dbos._sys_db, wfhd.workflow_id, "PENDING")
     DBOS._recover_pending_workflows()

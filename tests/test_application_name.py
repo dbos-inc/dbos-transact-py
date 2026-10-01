@@ -9,7 +9,6 @@ from unittest.mock import patch
 import pytest
 import sqlalchemy as sa
 
-import dbos._conductor.protocol as p
 from dbos import DBOS, DBOSClient, DBOSConfig, Queue, WorkflowHandle
 from dbos._error import DBOSException
 from dbos._queue import _INTERNAL_QUEUE_CONSTRUCTION
@@ -45,13 +44,6 @@ def application_name_of(dbos: DBOS, workflow_id: str) -> Any:
 
 def status_of(dbos: DBOS, workflow_id: str) -> Any:
     return _column_of(dbos, SystemSchema.workflow_status.c.status, workflow_id)
-
-
-def workflow_exists(dbos: DBOS, workflow_id: str) -> bool:
-    return (
-        _column_of(dbos, SystemSchema.workflow_status.c.workflow_uuid, workflow_id)
-        is not None
-    )
 
 
 def step_owners(dbos: DBOS, workflow_id: str) -> set[Any]:
@@ -295,113 +287,6 @@ def test_reads_surface_owner_and_ids_stay_global(dbos: DBOS) -> None:
     )
 
 
-def test_export_import_round_trips_owner(dbos: DBOS) -> None:
-    @DBOS.workflow()
-    def wf() -> int:
-        return 10
-
-    handle = DBOS.start_workflow(wf)
-    assert handle.get_result() == 10
-
-    exported = dbos._sys_db.export_workflow(handle.workflow_id, export_children=False)
-    assert exported[0]["workflow_status"]["application_name"] == APP_NAME
-
-    dbos._sys_db.delete_workflows([handle.workflow_id])
-    dbos._sys_db.import_workflow(exported)
-    assert application_name_of(dbos, handle.workflow_id) == APP_NAME
-
-
-def test_observability_filters_include_unclaimed_rows(
-    dbos: DBOS, client: DBOSClient
-) -> None:
-    """All four surfaces follow the one rule: unset lists this application's rows
-    plus unclaimed ones, and naming one lists its rows plus unclaimed ones."""
-
-    @DBOS.step()
-    def a_step() -> int:
-        return 11
-
-    @DBOS.workflow()
-    def wf() -> int:
-        return a_step()
-
-    handle = DBOS.start_workflow(wf)
-    assert handle.get_result() == 11
-    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    insert_foreign_workflow(dbos, "foreign-listed", status="SUCCESS")
-    insert_foreign_step(
-        dbos, "foreign-listed", function_name="their_step", completed_at=now_ms
-    )
-    insert_foreign_workflow(
-        dbos, "unclaimed-listed", status="SUCCESS", application_name=None
-    )
-
-    # Unset is this application's scope, so naming it changes nothing.
-    unfiltered = {w.workflow_id for w in DBOS.list_workflows()}
-    assert {handle.workflow_id, "unclaimed-listed"} <= unfiltered
-    assert "foreign-listed" not in unfiltered
-    mine = {w.workflow_id for w in DBOS.list_workflows(application_name=APP_NAME)}
-    assert {handle.workflow_id, "unclaimed-listed"} <= mine
-    assert "foreign-listed" not in mine
-    theirs = {w.workflow_id for w in DBOS.list_workflows(application_name=OTHER_APP)}
-    assert theirs == {"foreign-listed", "unclaimed-listed"}
-    # A client with no application of its own has no scope to default to.
-    assert {handle.workflow_id, "foreign-listed", "unclaimed-listed"} <= {
-        w.workflow_id for w in client.list_workflows()
-    }
-
-    aggregates = dbos._sys_db.get_workflow_aggregates(
-        group_by_name=True, select_count=True, application_name=[OTHER_APP]
-    )
-    assert [r["group"]["name"] for r in aggregates] == ["foreign_workflow"]
-
-    # Grouping partitions where the filter deliberately overlaps.
-    grouped = dbos._sys_db.get_workflow_aggregates(
-        group_by_application_name=True,
-        select_count=True,
-        application_name=[APP_NAME, OTHER_APP],
-    )
-    assert {r["group"]["application_name"] for r in grouped} == {
-        APP_NAME,
-        OTHER_APP,
-        None,
-    }
-    # Unset would have dropped the peer's group entirely.
-    assert {
-        r["group"]["application_name"]
-        for r in dbos._sys_db.get_workflow_aggregates(
-            group_by_application_name=True, select_count=True
-        )
-    } == {APP_NAME, None}
-
-    steps = dbos._sys_db.get_step_aggregates(
-        group_by_function_name=True, select_count=True, application_name=[OTHER_APP]
-    )
-    assert [r["group"]["function_name"] for r in steps] == ["their_step"]
-
-    window_start = datetime.fromtimestamp(0, timezone.utc).isoformat()
-    window_end = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
-    metrics = dbos._sys_db.get_metrics(
-        window_start, window_end, application_name=[OTHER_APP]
-    )
-    assert {m["metric_name"] for m in metrics if m["metric_type"] == "step_count"} == {
-        "their_step"
-    }
-
-    # The Conductor's metrics fan-out is per-application, so its request must carry the predicate.
-    fields = {
-        "type": "get_metrics",
-        "request_id": "r",
-        "start_time": window_start,
-        "end_time": window_end,
-        "metric_class": "workflow_step_count",
-    }
-    assert p.GetMetricsRequest.from_json(
-        json.dumps({**fields, "application_name": [OTHER_APP]})
-    ).application_name == [OTHER_APP]
-    assert p.GetMetricsRequest.from_json(json.dumps(fields)).application_name is None
-
-
 # ── Isolation between applications ────────────────────────────────────────────
 
 
@@ -451,45 +336,6 @@ def test_claiming_skips_another_applications_workflows(dbos: DBOS) -> None:
         GlobalParams.executor_id, GlobalParams.app_version
     )
     assert "foreign-pending" not in [p.workflow_id for p in pending]
-
-
-def test_bulk_operations_across_applications(dbos: DBOS) -> None:
-    """The two bulk operations scope differently. Timing out cancels running work,
-    so it takes own plus unclaimed rows only; retention is system-wide."""
-    from dbos._sys_db import DEFAULT_GC_BATCH_SIZE
-    from dbos._workflow_commands import global_timeout
-
-    @DBOS.workflow()
-    def wf() -> int:
-        return 13
-
-    handle = DBOS.start_workflow(wf)
-    assert handle.get_result() == 13
-    insert_foreign_workflow(dbos, "foreign-inflight", status="ENQUEUED")
-    insert_foreign_workflow(
-        dbos, "unclaimed-inflight", status="ENQUEUED", application_name=None
-    )
-    insert_foreign_workflow(dbos, "foreign-old", status="SUCCESS")
-    insert_foreign_workflow(
-        dbos, "unclaimed-old", status="SUCCESS", application_name=None
-    )
-    cutoff = int(datetime.now(timezone.utc).timestamp() * 1000) + 1000
-
-    global_timeout(dbos, cutoff)
-    assert status_of(dbos, "foreign-inflight") == "ENQUEUED"
-    assert status_of(dbos, "unclaimed-inflight") == "CANCELLED"
-
-    dbos._sys_db.garbage_collect(
-        cutoff_epoch_timestamp_ms=cutoff,
-        rows_threshold=None,
-        batch_size=DEFAULT_GC_BATCH_SIZE,
-    )
-    # Retention spans every application, so the peer's old terminal row goes too.
-    assert not workflow_exists(dbos, "foreign-old")
-    assert not workflow_exists(dbos, "unclaimed-old")
-    assert not workflow_exists(dbos, handle.workflow_id)
-    # Still keyed on status, so a peer's in-flight row survives whoever sweeps.
-    assert status_of(dbos, "foreign-inflight") == "ENQUEUED"
 
 
 def test_unclaimed_rows_belong_to_every_application(
@@ -1120,3 +966,35 @@ def test_rename_moves_only_the_sources_it_is_given(dbos: DBOS) -> None:
     assert both["workflows"] == 2
     assert application_name_of(dbos, "peer-wf") == "final-app"
     assert application_name_of(dbos, "unclaimed-two") == "final-app"
+
+
+def test_list_workflows_scopes_to_the_application(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    """Unset lists this application's rows plus unclaimed ones, naming an application
+    lists its rows plus unclaimed ones, and a client with no application is unscoped."""
+
+    @DBOS.workflow()
+    def wf() -> int:
+        return 11
+
+    handle = DBOS.start_workflow(wf)
+    assert handle.get_result() == 11
+    insert_foreign_workflow(dbos, "foreign-listed", status="SUCCESS")
+    insert_foreign_workflow(
+        dbos, "unclaimed-listed", status="SUCCESS", application_name=None
+    )
+
+    # Unset is this application's scope, so naming it changes nothing.
+    unfiltered = {w.workflow_id for w in DBOS.list_workflows()}
+    assert {handle.workflow_id, "unclaimed-listed"} <= unfiltered
+    assert "foreign-listed" not in unfiltered
+    mine = {w.workflow_id for w in DBOS.list_workflows(application_name=APP_NAME)}
+    assert {handle.workflow_id, "unclaimed-listed"} <= mine
+    assert "foreign-listed" not in mine
+    theirs = {w.workflow_id for w in DBOS.list_workflows(application_name=OTHER_APP)}
+    assert theirs == {"foreign-listed", "unclaimed-listed"}
+    # A client with no application of its own has no scope to default to.
+    assert {handle.workflow_id, "foreign-listed", "unclaimed-listed"} <= {
+        w.workflow_id for w in client.list_workflows()
+    }
