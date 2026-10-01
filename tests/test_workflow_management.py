@@ -913,6 +913,16 @@ def test_fork_steps(
         fork_id_3,
     }
 
+    # is_fork is the other end of the relationship: it matches the forks themselves.
+    is_fork_workflows = DBOS.list_workflows(is_fork=True)
+    assert {w.workflow_id for w in is_fork_workflows} == {
+        fork_id,
+        fork_id_2,
+        fork_id_3,
+    }
+    not_fork_workflows = DBOS.list_workflows(is_fork=False)
+    assert [w.workflow_id for w in not_fork_workflows] == [wfid]
+
 
 def test_restart_fromsteps_stepsonly(
     dbos: DBOS,

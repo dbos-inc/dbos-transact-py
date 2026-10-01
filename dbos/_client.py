@@ -787,17 +787,27 @@ class DBOSClient:
         )
 
     def update_workflow_attributes(
-        self, workflow_id: str, attributes: Optional[Dict[str, Any]]
+        self,
+        workflow_id: str,
+        attributes: Optional[Dict[str, Any]],
+        *,
+        merge: bool = False,
     ) -> None:
-        """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes."""
-        self._sys_db.update_workflow_attributes(workflow_id, attributes)
+        """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes.
+        With merge=True, atomically merge top-level keys instead (requires a dict)."""
+        self._sys_db.update_workflow_attributes(workflow_id, attributes, merge=merge)
 
     async def update_workflow_attributes_async(
-        self, workflow_id: str, attributes: Optional[Dict[str, Any]]
+        self,
+        workflow_id: str,
+        attributes: Optional[Dict[str, Any]],
+        *,
+        merge: bool = False,
     ) -> None:
-        """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes."""
+        """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes.
+        With merge=True, atomically merge top-level keys instead (requires a dict)."""
         await asyncio.to_thread(
-            self.update_workflow_attributes, workflow_id, attributes
+            self.update_workflow_attributes, workflow_id, attributes, merge=merge
         )
 
     def delete_workflow(
@@ -982,6 +992,7 @@ class DBOSClient:
         executor_id: Optional[str | list[str]] = None,
         queues_only: bool = False,
         was_forked_from: Optional[bool] = None,
+        is_fork: Optional[bool] = None,
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
         schedule_name: Optional[str | list[str]] = None,
@@ -1011,6 +1022,7 @@ class DBOSClient:
             executor_id=executor_id,
             queues_only=queues_only,
             was_forked_from=was_forked_from,
+            is_fork=is_fork,
             has_parent=has_parent,
             attributes=attributes,
             schedule_name=schedule_name,
@@ -1043,6 +1055,7 @@ class DBOSClient:
         executor_id: Optional[str | list[str]] = None,
         queues_only: bool = False,
         was_forked_from: Optional[bool] = None,
+        is_fork: Optional[bool] = None,
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
         schedule_name: Optional[str | list[str]] = None,
@@ -1073,6 +1086,7 @@ class DBOSClient:
             executor_id=executor_id,
             queues_only=queues_only,
             was_forked_from=was_forked_from,
+            is_fork=is_fork,
             has_parent=has_parent,
             attributes=attributes,
             schedule_name=schedule_name,
@@ -1103,6 +1117,7 @@ class DBOSClient:
         load_input: bool = True,
         load_output: bool = True,
         executor_id: Optional[str | list[str]] = None,
+        is_fork: Optional[bool] = None,
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
         application_name: Optional[str | list[str]] = None,
@@ -1130,6 +1145,7 @@ class DBOSClient:
             load_output=load_output,
             executor_id=executor_id,
             queues_only=True,
+            is_fork=is_fork,
             has_parent=has_parent,
             attributes=attributes,
             application_name=application_name,
@@ -1159,6 +1175,7 @@ class DBOSClient:
         load_input: bool = True,
         load_output: bool = True,
         executor_id: Optional[str | list[str]] = None,
+        is_fork: Optional[bool] = None,
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
         application_name: Optional[str | list[str]] = None,
@@ -1186,6 +1203,7 @@ class DBOSClient:
             load_input=load_input,
             load_output=load_output,
             executor_id=executor_id,
+            is_fork=is_fork,
             has_parent=has_parent,
             attributes=attributes,
             application_name=application_name,
