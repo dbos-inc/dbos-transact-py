@@ -625,6 +625,9 @@ DEFAULT_OBSERVABILITY_QUERY_TIMEOUT_SEC = 30.0
 # Bounds how long a frozen or unreachable client can hold system database locks.
 DEFAULT_IDLE_TRANSACTION_TIMEOUT_SEC = 60.0
 
+# Key/value pairs per SQLite json_set call; SQLite caps function arguments at 127 by default.
+SQLITE_JSON_SET_MAX_PAIRS = 50
+
 
 class SystemDatabase(ABC):
 
@@ -1487,16 +1490,51 @@ class SystemDatabase(ABC):
         return _standalone()
 
     def update_workflow_attributes(
-        self, workflow_id: str, attributes: Optional[Dict[str, Any]]
+        self,
+        workflow_id: str,
+        attributes: Optional[Dict[str, Any]],
+        *,
+        merge: bool = False,
     ) -> None:
-        """Replace the custom attributes attached to a workflow. Pass None to clear all attributes."""
+        """Replace the custom attributes attached to a workflow. Pass None to clear all attributes.
+        With merge=True, atomically merge top-level keys instead."""
         validate_workflow_attributes(attributes)
+        if merge and attributes is None:
+            raise DBOSException("Cannot merge None into workflow attributes")
+
+        ws = SystemSchema.workflow_status
+        value: Any = attributes
+        if merge:
+            assert attributes is not None
+            if self._is_sqlite:
+                value = sa.case(
+                    (sa.func.json_type(ws.c.attributes) == "object", ws.c.attributes),
+                    else_=sa.literal("{}"),
+                )
+                # Nesting one json_set per key overflows the SQLAlchemy compiler's recursion limit.
+                pairs = list(json.loads(json.dumps(attributes)).items())
+                for i in range(0, len(pairs), SQLITE_JSON_SET_MAX_PAIRS):
+                    args: list[Any] = []
+                    for key, item in pairs[i : i + SQLITE_JSON_SET_MAX_PAIRS]:
+                        args += [f"$.{json.dumps(key)}", sa.func.json(json.dumps(item))]
+                    value = sa.func.json_set(value, *args)
+            else:
+                existing = sa.case(
+                    (
+                        sa.func.jsonb_typeof(ws.c.attributes) == "object",
+                        ws.c.attributes,
+                    ),
+                    else_=sa.literal({}, type_=ws.c.attributes.type),
+                )
+                value = existing.op("||")(
+                    sa.literal(attributes, type_=ws.c.attributes.type)
+                )
         with self.engine.begin() as c:
             c.execute(
-                sa.update(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                sa.update(ws)
+                .where(ws.c.workflow_uuid == workflow_id)
                 .values(
-                    attributes=attributes,
+                    attributes=value,
                     updated_at=self._now_ms_sql(),
                 )
             )
