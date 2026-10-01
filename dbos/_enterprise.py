@@ -8,13 +8,16 @@ it satisfies them, so each side is verified against the contract on its own.
 from __future__ import annotations
 
 import importlib
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Protocol, cast
 
 from ._error import DBOSInitializationError
 from ._utils import GlobalParams
 
 if TYPE_CHECKING:
     from ._dbos import DBOS
+
+# Receives a Conductor alert as (name, message, metadata).
+AlertHandler = Callable[[str, str, Dict[str, str]], None]
 
 
 class ConductorThread(Protocol):
@@ -33,6 +36,9 @@ class ConductorFactory(Protocol):
         app_name: str,
         conductor_url: str,
         conductor_key: str,
+        executor_metadata: Optional[Dict[str, Any]],
+        metadata_only_mode: bool,
+        alert_handler: Optional[AlertHandler],
     ) -> ConductorThread: ...
 
 

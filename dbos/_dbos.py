@@ -144,7 +144,7 @@ from ._dbos_config import (
     process_config,
     translate_dbos_config_to_config_file,
 )
-from ._enterprise import ConductorThread
+from ._enterprise import AlertHandler, ConductorThread
 from ._error import (
     DBOSException,
     DBOSNonExistentWorkflowError,
@@ -495,7 +495,7 @@ class DBOS:
         self.conductor_websocket: Optional[ConductorThread] = None
         self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()
         self._active_workflows_set: ActiveWorkflowById = ActiveWorkflowById()
-        self._alert_handler: Optional[Callable[[str, str, Dict[str, str]], None]] = None
+        self._alert_handler: Optional[AlertHandler] = None
         serializer = config.get("serializer")
         self._serializer: Serializer = serializer if serializer else DefaultSerializer()
         self._conductor_executor_metadata: Optional[Dict[str, Any]] = config.get(
@@ -779,6 +779,9 @@ class DBOS:
                         app_name=cloud_app_name,
                         conductor_url=cloud_conductor_url,
                         conductor_key=cloud_conductor_key,
+                        executor_metadata=self._conductor_executor_metadata,
+                        metadata_only_mode=self._conductor_metadata_only_mode,
+                        alert_handler=self._alert_handler,
                     )
                     self.conductor_websocket.start()
             elif self.conductor_key is not None:
@@ -791,6 +794,9 @@ class DBOS:
                     app_name=self._config["name"],
                     conductor_url=self.conductor_url,
                     conductor_key=self.conductor_key,
+                    executor_metadata=self._conductor_executor_metadata,
+                    metadata_only_mode=self._conductor_metadata_only_mode,
+                    alert_handler=self._alert_handler,
                 )
                 self.conductor_websocket.start()
 
