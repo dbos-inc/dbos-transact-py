@@ -1497,8 +1497,7 @@ class SystemDatabase(ABC):
         merge: bool = False,
     ) -> None:
         """Replace the custom attributes attached to a workflow. Pass None to clear all attributes.
-        With merge=True, atomically merge top-level keys into the existing attributes instead.
-        """
+        With merge=True, atomically merge top-level keys instead."""
         validate_workflow_attributes(attributes)
         if merge and attributes is None:
             raise DBOSException("Cannot merge None into workflow attributes")

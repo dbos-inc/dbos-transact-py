@@ -794,8 +794,7 @@ class DBOSClient:
         merge: bool = False,
     ) -> None:
         """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes.
-        With merge=True, atomically merge top-level keys into the existing attributes instead (requires a dict).
-        """
+        With merge=True, atomically merge top-level keys instead (requires a dict)."""
         self._sys_db.update_workflow_attributes(workflow_id, attributes, merge=merge)
 
     async def update_workflow_attributes_async(
@@ -806,8 +805,7 @@ class DBOSClient:
         merge: bool = False,
     ) -> None:
         """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes.
-        With merge=True, atomically merge top-level keys into the existing attributes instead (requires a dict).
-        """
+        With merge=True, atomically merge top-level keys instead (requires a dict)."""
         await asyncio.to_thread(
             self.update_workflow_attributes, workflow_id, attributes, merge=merge
         )

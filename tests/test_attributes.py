@@ -533,7 +533,7 @@ async def test_update_workflow_attributes_async_in_workflow(dbos: DBOS) -> None:
     statuses = await DBOS.list_workflows_async(workflow_ids=[target_id])
     assert statuses[0].attributes == {"phase": "managed", "owner": "mgmt"}
 
-    # The update is checkpointed as a single step, correctly ordered between the
+    # Each update is checkpointed as its own step, correctly ordered between the
     # surrounding real steps (no function-ID collision or off-by-one).
     steps = await DBOS.list_workflow_steps_async(mgmt_wfid)
     names = [s["function_name"] for s in steps]
