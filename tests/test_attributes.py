@@ -323,6 +323,39 @@ def test_update_workflow_attributes(dbos: DBOS) -> None:
         "a.b": 1,
     }
 
+    # Keys that need escaping in JSON paths, and values of every JSON type
+    special = {
+        "a[0]": 1,
+        "$": 2,
+        "a b": 3,
+        "a'b": 4,
+        "a\\b": 5,
+        "é": 6,
+        "日本": 7,
+        "": 8,
+        "list": [1, "two", None],
+        "float": 1.5,
+        "bool": False,
+        "text": 'it\'s "quoted"',
+    }
+    DBOS.update_workflow_attributes(wfid, special, merge=True)
+    DBOS.update_workflow_attributes(wfid, {"é": "again", "a[0]": None}, merge=True)
+    expected = {
+        "customer": "acme",
+        "tier": 3,
+        "nested": {"new": 2},
+        "nullable": None,
+        "a.b": 1,
+        **special,
+        "é": "again",
+        "a[0]": None,
+    }
+    assert DBOS.list_workflows(workflow_ids=[wfid])[0].attributes == expected
+
+    # Merging an empty dict changes nothing
+    DBOS.update_workflow_attributes(wfid, {}, merge=True)
+    assert DBOS.list_workflows(workflow_ids=[wfid])[0].attributes == expected
+
     # A workflow that started without attributes can have them set
     wfid_no_attrs = str(uuid.uuid4())
     with SetWorkflowID(wfid_no_attrs):
@@ -378,6 +411,21 @@ def test_update_workflow_attributes_validation(dbos: DBOS) -> None:
         DBOS.update_workflow_attributes(wfid, None, merge=True)
 
 
+def test_update_workflow_attributes_merge_many_keys(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def noop_workflow() -> None:
+        return None
+
+    with SetWorkflowAttributes({"k0": "old", "keep": True}):
+        handle = DBOS.start_workflow(noop_workflow)
+    handle.get_result()
+
+    # Enough keys to span several SQLite json_set chunks
+    many = {f"k{i}": i for i in range(300)}
+    DBOS.update_workflow_attributes(handle.workflow_id, many, merge=True)
+    assert handle.get_status().attributes == {**many, "keep": True}
+
+
 def test_update_workflow_attributes_merge_concurrently(dbos: DBOS) -> None:
     @DBOS.workflow()
     def noop_workflow() -> None:
@@ -390,13 +438,16 @@ def test_update_workflow_attributes_merge_concurrently(dbos: DBOS) -> None:
         list(
             pool.map(
                 lambda i: dbos._sys_db.update_workflow_attributes(
-                    handle.workflow_id, {str(i): i}, merge=True
+                    handle.workflow_id, {str(i): i, "last": i}, merge=True
                 ),
                 range(8),
             )
         )
 
-    assert handle.get_status().attributes == {str(i): i for i in range(8)}
+    attributes = handle.get_status().attributes
+    assert attributes is not None
+    assert attributes.pop("last") in range(8)
+    assert attributes == {str(i): i for i in range(8)}
 
 
 def test_update_workflow_attributes_after_rewind(dbos: DBOS) -> None:
@@ -426,6 +477,7 @@ def test_update_workflow_attributes_in_workflow(dbos: DBOS) -> None:
     def updating_workflow() -> None:
         assert DBOS.workflow_id is not None
         DBOS.update_workflow_attributes(DBOS.workflow_id, {"phase": "running"})
+        DBOS.update_workflow_attributes(DBOS.workflow_id, {"progress": 50}, merge=True)
 
     wfid = str(uuid.uuid4())
     with SetWorkflowAttributes({"phase": "start"}):
@@ -433,12 +485,16 @@ def test_update_workflow_attributes_in_workflow(dbos: DBOS) -> None:
             updating_workflow()
 
     assert DBOS.list_workflows(workflow_ids=[wfid])[0].attributes == {
-        "phase": "running"
+        "phase": "running",
+        "progress": 50,
     }
 
-    # The update is recorded as a step so it runs exactly once on recovery
+    # Each update is recorded as a step so it runs exactly once on recovery
     steps = DBOS.list_workflow_steps(wfid)
-    assert [s["function_name"] for s in steps] == ["DBOS.updateWorkflowAttributes"]
+    assert [s["function_name"] for s in steps] == [
+        "DBOS.updateWorkflowAttributes",
+        "DBOS.updateWorkflowAttributes",
+    ]
 
 
 @pytest.mark.asyncio
@@ -463,6 +519,9 @@ async def test_update_workflow_attributes_async_in_workflow(dbos: DBOS) -> None:
         # in the correct sequence even though the update runs in a worker thread.
         await marker_step("before")
         await DBOS.update_workflow_attributes_async(target_id, {"phase": "managed"})
+        await DBOS.update_workflow_attributes_async(
+            target_id, {"owner": "mgmt"}, merge=True
+        )
         await marker_step("after")
 
     mgmt_wfid = str(uuid.uuid4())
@@ -472,16 +531,17 @@ async def test_update_workflow_attributes_async_in_workflow(dbos: DBOS) -> None:
 
     # The update took effect on the target workflow
     statuses = await DBOS.list_workflows_async(workflow_ids=[target_id])
-    assert statuses[0].attributes == {"phase": "managed"}
+    assert statuses[0].attributes == {"phase": "managed", "owner": "mgmt"}
 
     # The update is checkpointed as a single step, correctly ordered between the
     # surrounding real steps (no function-ID collision or off-by-one).
     steps = await DBOS.list_workflow_steps_async(mgmt_wfid)
     names = [s["function_name"] for s in steps]
-    assert len(names) == 3
+    assert len(names) == 4
     assert "marker_step" in names[0]
     assert names[1] == "DBOS.updateWorkflowAttributes"
-    assert "marker_step" in names[2]
+    assert names[2] == "DBOS.updateWorkflowAttributes"
+    assert "marker_step" in names[3]
 
     # The sync method refuses to run inside an event loop, steering async callers
     # to the _async variant.
@@ -503,6 +563,9 @@ def test_update_workflow_attributes_client(client: DBOSClient, dbos: DBOS) -> No
 
     client.update_workflow_attributes(handle.workflow_id, {"count": 1}, merge=True)
     assert handle.get_status().attributes == {"source": "updated", "count": 1}
+
+    with pytest.raises(DBOSException, match="Cannot merge None"):
+        client.update_workflow_attributes(handle.workflow_id, None, merge=True)
 
     client.update_workflow_attributes(handle.workflow_id, None)
     assert handle.get_status().attributes is None

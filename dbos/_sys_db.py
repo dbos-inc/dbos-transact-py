@@ -625,6 +625,9 @@ DEFAULT_OBSERVABILITY_QUERY_TIMEOUT_SEC = 30.0
 # Bounds how long a frozen or unreachable client can hold system database locks.
 DEFAULT_IDLE_TRANSACTION_TIMEOUT_SEC = 60.0
 
+# Key/value pairs per SQLite json_set call; SQLite caps function arguments at 127 by default.
+SQLITE_JSON_SET_MAX_PAIRS = 50
+
 
 class SystemDatabase(ABC):
 
@@ -1493,7 +1496,9 @@ class SystemDatabase(ABC):
         *,
         merge: bool = False,
     ) -> None:
-        """Replace attributes, or atomically merge top-level keys when merge=True."""
+        """Replace the custom attributes attached to a workflow. Pass None to clear all attributes.
+        With merge=True, atomically merge top-level keys into the existing attributes instead.
+        """
         validate_workflow_attributes(attributes)
         if merge and attributes is None:
             raise DBOSException("Cannot merge None into workflow attributes")
@@ -1507,10 +1512,13 @@ class SystemDatabase(ABC):
                     (sa.func.json_type(ws.c.attributes) == "object", ws.c.attributes),
                     else_=sa.literal("{}"),
                 )
-                for key, item in json.loads(json.dumps(attributes)).items():
-                    value = sa.func.json_set(
-                        value, f"$.{json.dumps(key)}", sa.func.json(json.dumps(item))
-                    )
+                # Nesting one json_set per key overflows the SQLAlchemy compiler's recursion limit.
+                pairs = list(json.loads(json.dumps(attributes)).items())
+                for i in range(0, len(pairs), SQLITE_JSON_SET_MAX_PAIRS):
+                    args: list[Any] = []
+                    for key, item in pairs[i : i + SQLITE_JSON_SET_MAX_PAIRS]:
+                        args += [f"$.{json.dumps(key)}", sa.func.json(json.dumps(item))]
+                    value = sa.func.json_set(value, *args)
             else:
                 existing = sa.case(
                     (

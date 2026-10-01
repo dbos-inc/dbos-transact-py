@@ -2159,8 +2159,11 @@ class DBOS:
         *,
         merge: bool = False,
     ) -> None:
-        """Update a workflow's attributes. Merge top-level keys with merge=True;
-        otherwise replace the dict. Pass None to clear it when merge=False.
+        """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes.
+
+        With merge=True, atomically merge the given top-level keys into the existing
+        attributes instead: other keys are kept, matching keys (including nested dicts)
+        are overwritten, and None values are stored as JSON null. merge=True requires a dict.
 
         Safe to call from within a workflow: the update is recorded as a step so
         it runs exactly once even if the workflow is recovered.
@@ -2187,8 +2190,11 @@ class DBOS:
         *,
         merge: bool = False,
     ) -> None:
-        """Update a workflow's attributes. Merge top-level keys with merge=True;
-        otherwise replace the dict. Pass None to clear it when merge=False.
+        """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes.
+
+        With merge=True, atomically merge the given top-level keys into the existing
+        attributes instead: other keys are kept, matching keys (including nested dicts)
+        are overwritten, and None values are stored as JSON null. merge=True requires a dict.
 
         Safe to call from within a workflow: the update is recorded as a step so
         it runs exactly once even if the workflow is recovered.
