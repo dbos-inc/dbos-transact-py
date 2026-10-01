@@ -98,7 +98,6 @@ dev = [
     "requests>=2.32.3",
     "types-requests>=2.32.0.20240914",
     "pytz>=2024.2",
-    "GitPython>=3.1.43",
     "confluent-kafka==2.15.0",
     "types-confluent-kafka>=1.2.2",
     "pdm-backend>=2.4.2",

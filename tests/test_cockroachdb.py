@@ -1,15 +1,11 @@
-import logging
 import os
 from urllib.parse import urlparse, urlunparse
 
 import pytest
-import sqlalchemy as sa
 from sqlalchemy import create_engine, text
 
 from dbos import DBOS, DBOSConfig
 from dbos._error import DBOSQueryTimeoutError
-from dbos._logger import dbos_logger
-from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
 

@@ -31,7 +31,6 @@ from typing import (
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
-from sqlalchemy.sql import func
 
 from dbos._debug_trigger import DebugTriggers
 from dbos._utils import (

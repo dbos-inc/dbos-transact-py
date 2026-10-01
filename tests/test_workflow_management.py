@@ -1,13 +1,12 @@
 import threading
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 import sqlalchemy as sa
-from sqlalchemy import event as sa_event
 
-from dbos import DBOS, DBOSClient, SetEnqueueOptions, SetWorkflowID, WorkflowHandle
+from dbos import DBOS, DBOSClient, SetWorkflowID, WorkflowHandle
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,

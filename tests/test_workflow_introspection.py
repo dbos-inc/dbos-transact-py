@@ -10,14 +10,7 @@ import sqlalchemy as sa
 from sqlalchemy import event
 
 # Public API
-from dbos import (
-    DBOS,
-    DBOSClient,
-    DBOSConfig,
-    SetWorkflowAttributes,
-    SetWorkflowID,
-    WorkflowStatusString,
-)
+from dbos import DBOS, DBOSClient, DBOSConfig, SetWorkflowID, WorkflowStatusString
 from dbos._error import DBOSQueryTimeoutError, DBOSStepNondeterminismError
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import DefaultSerializer
