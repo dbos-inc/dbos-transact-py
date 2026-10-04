@@ -120,6 +120,7 @@ from ._sys_db import (
     WorkflowStatusString,
     _dbos_stream_closed_sentinel,
     _no_stream_value,
+    is_serialized_stream_closed_sentinel,
     is_stream_closed_sentinel,
     workflow_is_active,
 )
@@ -3034,8 +3035,8 @@ def read_stream(
     recorder = _StreamReadCheckpoint(sys_db, key, function_name, checkpoint)
     event, payload = sys_db.register_stream_listener(workflow_id, key)
     final_read = False
-    # Values read ahead of offset; pending[0] is always the value at offset.
-    pending: Deque[Any] = deque()
+    # Serialized values read ahead of offset; pending[0] is always the value at offset.
+    pending: Deque[Tuple[Optional[str], Optional[str]]] = deque()
     try:
         while True:
             # One step per delivered value, reserved before the read so it spans the wait.
@@ -3054,11 +3055,11 @@ def read_stream(
                 yield recorded
                 offset += 1
                 continue
-            value: Any = _no_stream_value
+            row: Optional[Tuple[Optional[str], Optional[str]]] = None
             while True:
                 if pending:
                     # Read ahead by an earlier round trip; written values never change.
-                    value = pending.popleft()
+                    row = pending.popleft()
                     break
                 # Clear before reading so a notification arriving after the read
                 # leaves the event set and the wait below returns immediately.
@@ -3070,10 +3071,10 @@ def read_stream(
                 if status is None:
                     raise DBOSNonExistentWorkflowError("target", workflow_id)
                 if values:
-                    value = values[0]
+                    row = values[0]
                     # A rewind can delete a close sentinel, so read one only at its own offset.
                     for later in values[1:]:
-                        if is_stream_closed_sentinel(later):
+                        if is_serialized_stream_closed_sentinel(*later):
                             break
                         pending.append(later)
                     break
@@ -3098,6 +3099,12 @@ def read_stream(
                     wait_for = min(remaining, polling_interval)
                 recorder.check_cancelled()
                 event.wait(timeout=wait_for)
+            # Deserialized only when delivered, so a value that cannot be deserialized fails its own read and no earlier one.
+            value = (
+                _no_stream_value
+                if row is None
+                else deserialize_value(row[0], row[1], sys_db.serializer)
+            )
             if value is _no_stream_value or is_stream_closed_sentinel(value):
                 # The end is recorded too, so a replay stops exactly where this read did.
                 recorder.record(step_ctx, _dbos_stream_closed_sentinel)
@@ -3139,8 +3146,8 @@ async def read_stream_async(
     recorder = _StreamReadCheckpoint(sys_db, key, function_name, checkpoint)
     event, payload = sys_db.register_stream_listener(workflow_id, key)
     final_read = False
-    # Values read ahead of offset; pending[0] is always the value at offset.
-    pending: Deque[Any] = deque()
+    # Serialized values read ahead of offset; pending[0] is always the value at offset.
+    pending: Deque[Tuple[Optional[str], Optional[str]]] = deque()
     try:
         while True:
             # One step per delivered value, reserved before the read so it spans the wait.
@@ -3159,11 +3166,11 @@ async def read_stream_async(
                 yield recorded
                 offset += 1
                 continue
-            value: Any = _no_stream_value
+            row: Optional[Tuple[Optional[str], Optional[str]]] = None
             while True:
                 if pending:
                     # Read ahead by an earlier round trip; written values never change.
-                    value = pending.popleft()
+                    row = pending.popleft()
                     break
                 # Clear before reading so a notification arriving after the read
                 # leaves the event set and the wait below returns immediately.
@@ -3175,10 +3182,10 @@ async def read_stream_async(
                 if status is None:
                     raise DBOSNonExistentWorkflowError("target", workflow_id)
                 if values:
-                    value = values[0]
+                    row = values[0]
                     # A rewind can delete a close sentinel, so read one only at its own offset.
                     for later in values[1:]:
-                        if is_stream_closed_sentinel(later):
+                        if is_serialized_stream_closed_sentinel(*later):
                             break
                         pending.append(later)
                     break
@@ -3205,6 +3212,14 @@ async def read_stream_async(
                     wait_for = min(remaining, polling_interval)
                 await asyncio.to_thread(recorder.check_cancelled)
                 await event.wait_async(timeout=wait_for)
+            # Deserialized only when delivered, off the event loop as a custom serializer may block.
+            value = (
+                _no_stream_value
+                if row is None
+                else await asyncio.to_thread(
+                    deserialize_value, row[0], row[1], sys_db.serializer
+                )
+            )
             if value is _no_stream_value or is_stream_closed_sentinel(value):
                 # The end is recorded too, so a replay stops exactly where this read did.
                 await asyncio.to_thread(

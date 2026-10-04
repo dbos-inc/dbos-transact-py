@@ -18,7 +18,12 @@ from dbos._error import (
     DBOSNonExistentWorkflowError,
     DBOSStreamTimeoutError,
 )
-from dbos._serialization import WorkflowSerializationFormat, serialize_value
+from dbos._schemas.system_database import SystemSchema
+from dbos._serialization import (
+    WorkflowSerializationFormat,
+    deserialize_value,
+    serialize_value,
+)
 from dbos._sys_db import _dbos_streams_channel
 from dbos._sys_db_postgres import PostgresSystemDatabase
 from tests.conftest import (
@@ -120,20 +125,25 @@ def test_stream_read_values_returns_status_and_values(dbos: DBOS) -> None:
     with SetWorkflowID(wfid):
         DBOS.start_workflow(writer_workflow).get_result()
 
+    def read(offset: int, limit: int) -> tuple[Any, list[Any]]:
+        # Values come back serialized; the reader deserializes each one when it delivers it.
+        status, values = sys_db.read_stream_values(wfid, "s", offset, limit)
+        return status, [deserialize_value(v, s, sys_db.serializer) for v, s in values]
+
     # The values from the offset and the status, together.
-    status, values = sys_db.read_stream_values(wfid, "s", 0, 1)
+    status, values = read(0, 1)
     assert status == "SUCCESS"
     assert values == [0]
 
     # A written None is a value, not an absence.
-    status, values = sys_db.read_stream_values(wfid, "s", 1, 1)
+    status, values = read(1, 1)
     assert status == "SUCCESS"
     assert values == [None]
 
     # The limit bounds the values, and the read stops at the first offset with nothing written.
-    status, values = sys_db.read_stream_values(wfid, "s", 0, 2)
+    status, values = read(0, 2)
     assert values == [0, None]
-    status, values = sys_db.read_stream_values(wfid, "s", 1, 100)
+    status, values = read(1, 100)
     assert values == [None, "__DBOS_STREAM_CLOSED__"]
 
     # Past the end: still reports status, so the reader can tell "not yet" from "never".
@@ -145,6 +155,52 @@ def test_stream_read_values_returns_status_and_values(dbos: DBOS) -> None:
     status, values = sys_db.read_stream_values(str(uuid.uuid4()), "s", 0, 100)
     assert status is None
     assert values == []
+
+
+def _stream_with_undeserializable_value(dbos: DBOS, stream_key: str) -> str:
+    """Write 0..4 and close, then make offset 3 impossible to deserialize."""
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for i in range(5):
+            DBOS.write_stream(stream_key, i)
+        DBOS.close_stream(stream_key)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        DBOS.start_workflow(writer_workflow).get_result()
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.streams)
+            .where(
+                SystemSchema.streams.c.workflow_uuid == wfid,
+                SystemSchema.streams.c.key == stream_key,
+                SystemSchema.streams.c.offset == 3,
+            )
+            .values(serialization="unavailable")
+        )
+    return wfid
+
+
+def test_stream_read_deserializes_each_value_when_delivered(dbos: DBOS) -> None:
+    """A value that cannot be deserialized fails the read that delivers it, not an earlier one,
+    even when it was fetched in the same batch."""
+    wfid = _stream_with_undeserializable_value(dbos, "lazy_stream")
+    reader = DBOS.read_stream(wfid, "lazy_stream")
+    assert [next(reader) for _ in range(3)] == [0, 1, 2]
+    with pytest.raises(TypeError, match="unavailable"):
+        next(reader)
+
+
+@pytest.mark.asyncio
+async def test_stream_read_async_deserializes_each_value_when_delivered(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    wfid = _stream_with_undeserializable_value(dbos, "lazy_stream_async")
+    reader = client.read_stream_async(wfid, "lazy_stream_async")
+    assert [await reader.__anext__() for _ in range(3)] == [0, 1, 2]
+    with pytest.raises(TypeError, match="unavailable"):
+        await reader.__anext__()
 
 
 def test_stream_read_across_batches(dbos: DBOS, client: DBOSClient) -> None:

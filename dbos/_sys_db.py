@@ -415,11 +415,24 @@ _dbos_streams_channel = "dbos_streams_channel"
 
 # Marks that a reader found nothing written at its offset. Not None, which is itself a valid stream value.
 _no_stream_value = object()
+_serialized_stream_closed_sentinel = DBOSPortableJSON.serialize(
+    _dbos_stream_closed_sentinel
+)
 
 
 def is_stream_closed_sentinel(value: Any) -> bool:
     """Whether a stream value is the marker a closed stream ends with."""
     return isinstance(value, str) and value == _dbos_stream_closed_sentinel
+
+
+def is_serialized_stream_closed_sentinel(
+    serialized_value: Optional[str], serialization: Optional[str]
+) -> bool:
+    """Whether a serialized stream value is the marker a closed stream ends with; close_stream always writes it as portable JSON."""
+    return (
+        serialization == DBOSPortableJSON.name()
+        and serialized_value == _serialized_stream_closed_sentinel
+    )
 
 
 @dataclass
@@ -5230,12 +5243,13 @@ class SystemDatabase(ABC):
     @db_retry()
     def read_stream_values(
         self, workflow_uuid: str, key: str, offset: int, limit: int
-    ) -> Tuple[Optional[str], List[Any]]:
-        """Read up to limit consecutive stream values from offset and the owning workflow's status in one round trip.
+    ) -> Tuple[Optional[str], List[Tuple[Optional[str], Optional[str]]]]:
+        """Read up to limit consecutive serialized stream values from offset and the owning workflow's status in one round trip.
 
         Returns (status, values). status is None if the workflow does not exist; values holds the
-        values at offset, offset + 1, ... up to the first offset with nothing written, so it is
-        empty if nothing is written at offset. Both come from one statement, so they share a
+        (serialized value, serialization) pairs at offset, offset + 1, ... up to the first offset
+        with nothing written, so it is empty if nothing is written at offset. The reader
+        deserializes each value when it delivers it. Both come from one statement, so they share a
         snapshot. A terminal status does not imply the stream is complete: cancel and timeout set
         it out-of-band while the workflow is still running, so a caller that stops reading must
         first drain to the first empty offset.
@@ -5268,12 +5282,12 @@ class SystemDatabase(ABC):
 
         if not rows:
             return None, []
-        values: List[Any] = []
+        values: List[Tuple[Optional[str], Optional[str]]] = []
         # streams.offset is non-nullable, so a NULL here means the join matched nothing from offset.
         for row in rows:
             if row[3] != offset + len(values):
                 break
-            values.append(deserialize_value(row[1], row[2], self.serializer))
+            values.append((row[1], row[2]))
         return rows[0][0], values
 
     @db_retry()
