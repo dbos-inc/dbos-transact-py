@@ -1635,18 +1635,16 @@ class SystemDatabase(ABC):
                 )
             )
 
-            # Clear streams' close sentinels
-            closed_value, closed_serialization = serialize_value(
-                _dbos_stream_closed_sentinel,
-                WorkflowSerializationFormat.PORTABLE,
-                self.serializer,
-            )
+            # Clear streams' close sentinels: the rows a reader never reads ahead.
             c.execute(
                 sa.delete(SystemSchema.streams).where(
                     (SystemSchema.streams.c.workflow_uuid == workflow_id)
                     & (SystemSchema.streams.c.function_id >= start_step)
-                    & (SystemSchema.streams.c.value == closed_value)
-                    & (SystemSchema.streams.c.serialization == closed_serialization)
+                    & (
+                        SystemSchema.streams.c.value
+                        == _serialized_stream_closed_sentinel
+                    )
+                    & (SystemSchema.streams.c.serialization == DBOSPortableJSON.name())
                 )
             )
 
