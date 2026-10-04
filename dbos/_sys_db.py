@@ -413,7 +413,7 @@ _dbos_notifications_channel = "dbos_notifications_channel"
 _dbos_workflow_events_channel = "dbos_workflow_events_channel"
 _dbos_streams_channel = "dbos_streams_channel"
 
-# Returned by read_stream_value when nothing is written at the requested offset. Not None, which is itself a valid stream value.
+# Marks that a reader found nothing written at its offset. Not None, which is itself a valid stream value.
 _no_stream_value = object()
 
 
@@ -5228,31 +5228,33 @@ class SystemDatabase(ABC):
         self.streams_map.pop(payload, event)
 
     @db_retry()
-    def read_stream_value(
-        self, workflow_uuid: str, key: str, offset: int
-    ) -> Tuple[Optional[str], Any]:
-        """Read the stream value at offset and the owning workflow's status in one round trip.
+    def read_stream_values(
+        self, workflow_uuid: str, key: str, offset: int, limit: int
+    ) -> Tuple[Optional[str], List[Any]]:
+        """Read up to limit consecutive stream values from offset and the owning workflow's status in one round trip.
 
-        Returns (status, value). status is None if the workflow does not exist; value is
-        _no_stream_value if nothing is written at offset. Both come from one statement, so they
-        share a snapshot. A terminal status does not imply the stream is complete: cancel and
-        timeout set it out-of-band while the workflow is still running, so a caller that stops
-        reading must first drain to the first empty offset.
+        Returns (status, values). status is None if the workflow does not exist; values holds the
+        values at offset, offset + 1, ... up to the first offset with nothing written, so it is
+        empty if nothing is written at offset. Both come from one statement, so they share a
+        snapshot. A terminal status does not imply the stream is complete: cancel and timeout set
+        it out-of-band while the workflow is still running, so a caller that stops reading must
+        first drain to the first empty offset.
         """
-        # LEFT JOIN so a workflow with nothing at offset still reports its status. Matching offset
-        # exactly keeps this a single index lookup on the (workflow_uuid, key, offset) primary key.
+        # LEFT JOIN so a workflow with nothing at offset still reports its status. The offset range
+        # keeps this a single range scan on the (workflow_uuid, key, offset) primary key.
         join = SystemSchema.workflow_status.outerjoin(
             SystemSchema.streams,
             sa.and_(
                 SystemSchema.streams.c.workflow_uuid
                 == SystemSchema.workflow_status.c.workflow_uuid,
                 SystemSchema.streams.c.key == key,
-                SystemSchema.streams.c.offset == offset,
+                SystemSchema.streams.c.offset >= offset,
+                SystemSchema.streams.c.offset < offset + limit,
             ),
         )
         # Polling read (listener-less clients poll the offset) under the limiter; inside db_retry so the permit frees across backoff.
         with self.poll_limiter, self.engine.begin() as c:
-            row = c.execute(
+            rows = c.execute(
                 sa.select(
                     SystemSchema.workflow_status.c.status,
                     SystemSchema.streams.c.value,
@@ -5261,14 +5263,18 @@ class SystemDatabase(ABC):
                 )
                 .select_from(join)
                 .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
-            ).fetchone()
+                .order_by(SystemSchema.streams.c.offset)
+            ).fetchall()
 
-        if row is None:
-            return None, _no_stream_value
-        # streams.offset is non-nullable, so a NULL here means the join matched nothing at offset.
-        if row[3] is None:
-            return row[0], _no_stream_value
-        return row[0], deserialize_value(row[1], row[2], self.serializer)
+        if not rows:
+            return None, []
+        values: List[Any] = []
+        # streams.offset is non-nullable, so a NULL here means the join matched nothing from offset.
+        for row in rows:
+            if row[3] != offset + len(values):
+                break
+            values.append(deserialize_value(row[1], row[2], self.serializer))
+        return rows[0][0], values
 
     @db_retry()
     def get_checkpoint_name(
