@@ -20,7 +20,7 @@ from dbos._serialization import (
     serialize_value_as,
 )
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
-from tests.conftest import queue_entries_are_cleaned_up
+from tests.conftest import queue_entries_are_cleaned_up, reexecute_workflow_by_id
 
 
 def test_cancel_resume(dbos: DBOS) -> None:
@@ -713,6 +713,33 @@ def test_fork_nonexistent_workflow(dbos: DBOS, client: DBOSClient) -> None:
         DBOS.fork_workflow(missing_id, 1)
     with pytest.raises(DBOSNonExistentWorkflowError):
         client.fork_workflow(missing_id, 1)
+
+
+def test_fork_nonexistent_workflow_replays_recorded_error(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def simple_workflow(x: int) -> int:
+        return x
+
+    missing_id = str(uuid.uuid4())
+
+    @DBOS.workflow()
+    def forker() -> str:
+        try:
+            DBOS.fork_workflow(missing_id, 1)
+        except DBOSNonExistentWorkflowError:
+            return "missing"
+        return "forked"
+
+    handle = DBOS.start_workflow(forker)
+    assert handle.get_result() == "missing"
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert isinstance(steps[0]["error"], DBOSNonExistentWorkflowError)
+
+    # Once the target exists, a replay still takes the recorded branch and forks nothing.
+    with SetWorkflowID(missing_id):
+        assert simple_workflow(1) == 1
+    assert reexecute_workflow_by_id(dbos, handle.workflow_id).get_result() == "missing"
+    assert DBOS.list_workflows(forked_from=missing_id) == []
 
 
 def test_bulk_delete(dbos: DBOS) -> None:

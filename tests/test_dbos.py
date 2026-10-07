@@ -33,12 +33,21 @@ from dbos import _enterprise as enterprise_module
 # Private API because this is a test
 from dbos._client import DBOSClient
 from dbos._context import assert_current_dbos_context, get_local_dbos_context
-from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSException
+from dbos._error import (
+    DBOSAwaitedWorkflowCancelledError,
+    DBOSException,
+    DBOSNonExistentWorkflowError,
+)
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import _dbos_null_topic
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from dbos._workflow_commands import WORKFLOW_TIMEOUT_THREAD_NAME
-from tests.conftest import retry_until_success, set_workflow_status, using_sqlite
+from tests.conftest import (
+    reexecute_workflow_by_id,
+    retry_until_success,
+    set_workflow_status,
+    using_sqlite,
+)
 
 
 def test_simple_workflow(dbos: DBOS) -> None:
@@ -1397,6 +1406,39 @@ def test_send_bulk_duplicate_key_within_batch(dbos: DBOS) -> None:
     assert key in str(exc_info.value)
     # Nothing was sent: the recv times out and returns None.
     assert handle.get_result() == "None"
+
+
+def test_send_missing_destination_replays_recorded_error(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def destination() -> None:
+        pass
+
+    dest_id = str(uuid.uuid4())
+
+    @DBOS.workflow()
+    def sender() -> str:
+        try:
+            DBOS.send(dest_id, "hello")
+        except DBOSNonExistentWorkflowError:
+            return "missing"
+        return "sent"
+
+    handle = DBOS.start_workflow(sender)
+    assert handle.get_result() == "missing"
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert isinstance(steps[0]["error"], DBOSNonExistentWorkflowError)
+
+    # Once the destination exists, a replay still takes the recorded branch and delivers nothing.
+    with SetWorkflowID(dest_id):
+        destination()
+    assert reexecute_workflow_by_id(dbos, handle.workflow_id).get_result() == "missing"
+    with dbos._sys_db.engine.begin() as c:
+        rows = c.execute(
+            sa.select(SystemSchema.notifications.c.message_uuid).where(
+                SystemSchema.notifications.c.destination_uuid == dest_id
+            )
+        ).all()
+    assert rows == []
 
 
 def test_send_bulk_empty(dbos: DBOS) -> None:

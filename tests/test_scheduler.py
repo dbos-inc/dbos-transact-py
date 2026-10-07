@@ -9,13 +9,14 @@ from typing import Any
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError
 
 from dbos import DBOS, DBOSClient, DBOSConfig, DBOSConfiguredInstance
 from dbos._error import DBOSException
 from dbos._serialization import DBOSPortableJSONSerializer
 from dbos._utils import INTERNAL_QUEUE_NAME
 
-from .conftest import retry_until_success
+from .conftest import reexecute_workflow_by_id, retry_until_success
 
 
 def daily_cron_far_from_now() -> str:
@@ -2022,3 +2023,67 @@ def test_schedule_survives_sysdb_downtime(dbos: DBOS, skip_with_sqlite: None) ->
         assert late_counter >= 1
 
     retry_until_success(check_late_schedule_fired)
+
+
+def test_schedule_failure_replays_recorded_error(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def target_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    @DBOS.workflow()
+    def setup_workflow() -> str:
+        try:
+            DBOS.create_schedule(
+                schedule_name="nightly",
+                workflow_fn=target_workflow,
+                schedule="0 0 * * *",
+            )
+        except DBOSException:
+            return "already-configured"
+        return "newly-configured"
+
+    DBOS.create_schedule(
+        schedule_name="nightly", workflow_fn=target_workflow, schedule="0 0 * * *"
+    )
+    handle = DBOS.start_workflow(setup_workflow)
+    assert handle.get_result() == "already-configured"
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert [s["function_name"] for s in steps] == ["DBOS.createSchedule"]
+    assert isinstance(steps[0]["error"], DBOSException)
+    assert steps[0]["output"] is None
+
+    # With the schedule gone, a replay re-raises the recorded error instead of re-creating it.
+    DBOS.delete_schedule("nightly")
+    replayed = reexecute_workflow_by_id(dbos, handle.workflow_id)
+    assert replayed.get_result() == "already-configured"
+    assert DBOS.get_schedule("nightly") is None
+
+
+def test_schedule_database_error_not_recorded(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    @DBOS.workflow()
+    def target_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    @DBOS.workflow()
+    def setup_workflow() -> None:
+        DBOS.create_schedule(
+            schedule_name="nightly", workflow_fn=target_workflow, schedule="0 0 * * *"
+        )
+
+    original_create = dbos._sys_db.create_schedule
+
+    def failing_create(*args: Any, **kwargs: Any) -> None:
+        raise OperationalError("INSERT", {}, Exception("connection lost"))
+
+    monkeypatch.setattr(dbos._sys_db, "create_schedule", failing_create)
+    handle = DBOS.start_workflow(setup_workflow)
+    with pytest.raises(OperationalError):
+        handle.get_result()
+    # A database fault is not an answer: nothing is checkpointed, so a replay runs the operation again.
+    assert DBOS.list_workflow_steps(handle.workflow_id) == []
+
+    monkeypatch.setattr(dbos._sys_db, "create_schedule", original_create)
+    reexecute_workflow_by_id(dbos, handle.workflow_id).get_result()
+    assert DBOS.get_schedule("nightly") is not None
