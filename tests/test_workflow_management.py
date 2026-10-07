@@ -776,6 +776,47 @@ def test_workflow_command_transient_error_is_retried_not_recorded(
     assert steps[0]["error"] is None
 
 
+def test_fork_retry_after_lost_commit_ack(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    @DBOS.workflow()
+    def simple_workflow(x: int) -> int:
+        return x
+
+    source_id = str(uuid.uuid4())
+    with SetWorkflowID(source_id):
+        assert simple_workflow(1) == 1
+
+    original_attempt = dbos._sys_db._fork_workflow_attempt
+    calls = {"count": 0}
+
+    def commit_then_drop(*args: Any, **kwargs: Any) -> list[str]:
+        calls["count"] += 1
+        result = original_attempt(*args, **kwargs)
+        if calls["count"] == 1:
+            # The fork committed, but the client never hears back.
+            raise OperationalError(
+                "COMMIT", {}, Exception("connection lost"), connection_invalidated=True
+            )
+        return result
+
+    monkeypatch.setattr(dbos._sys_db, "_fork_workflow_attempt", commit_then_drop)
+
+    @DBOS.workflow()
+    def forker() -> str:
+        return DBOS.fork_workflow(source_id, 1).workflow_id
+
+    handle = DBOS.start_workflow(forker)
+    fork_id = handle.get_result()
+    assert calls["count"] == 2
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert steps[0]["function_name"] == "DBOS.forkWorkflow"
+    assert steps[0]["error"] is None
+    assert [w.workflow_id for w in DBOS.list_workflows(forked_from=source_id)] == [
+        fork_id
+    ]
+
+
 def test_bulk_delete(dbos: DBOS) -> None:
     @DBOS.workflow()
     def simple_workflow(x: int) -> int:
