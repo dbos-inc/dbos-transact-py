@@ -1204,6 +1204,7 @@ class SystemDatabase(ABC):
             )
             return True
 
+    @db_retry()
     def cancel_workflows(
         self,
         workflow_ids: list[str],
@@ -1249,6 +1250,7 @@ class SystemDatabase(ABC):
             frontier = [c for c in children if c not in visited]
             visited.update(frontier)
 
+    @db_retry()
     def resume_workflows(
         self,
         workflow_ids: list[str],
@@ -1295,6 +1297,7 @@ class SystemDatabase(ABC):
                 )
             )
 
+    @db_retry()
     def set_workflow_delay(
         self,
         workflow_id: str,
@@ -1466,6 +1469,7 @@ class SystemDatabase(ABC):
 
         return _standalone()
 
+    @db_retry()
     def update_workflow_attributes(
         self,
         workflow_id: str,
@@ -1516,6 +1520,7 @@ class SystemDatabase(ABC):
                 )
             )
 
+    @db_retry()
     def delete_workflows(self, workflow_ids: list[str]) -> None:
         """Delete workflows and all associated data from the system database."""
         with self.engine.begin() as c:
@@ -1717,6 +1722,7 @@ class SystemDatabase(ABC):
                     "retry the rewind"
                 )
 
+    @db_retry()
     def fork_workflow(
         self,
         original_workflow_ids: list[str],
@@ -2279,6 +2285,7 @@ class SystemDatabase(ABC):
                 return result
             await asyncio.sleep(polling_interval)
 
+    @db_retry()
     def list_workflows(
         self,
         *,
@@ -2642,6 +2649,7 @@ class SystemDatabase(ABC):
                 GetPendingWorkflowsOutput(workflow_id=row.workflow_uuid) for row in rows
             ]
 
+    @db_retry()
     def list_workflow_steps(
         self,
         workflow_id: str,
@@ -3880,6 +3888,7 @@ class SystemDatabase(ABC):
             _dbos_workflow_events_channel, f"{workflow_uuid}::{key}"
         )
 
+    @db_retry()
     def get_all_events(self, workflow_id: str) -> Dict[str, Any]:
         """
         Get all events currently present for a workflow ID.
@@ -5421,6 +5430,7 @@ class SystemDatabase(ABC):
             ).fetchall()
         return [row[0] for row in child_rows]
 
+    @db_retry()
     def get_workflow_children(self, workflow_id: str) -> list[str]:
         """
         Recursively get all child workflow IDs for a workflow.

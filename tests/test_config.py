@@ -731,6 +731,19 @@ def test_idle_transaction_kill_is_retriable() -> None:
     assert retriable_postgres_exception(error)
 
 
+def test_statement_timeout_is_not_retriable(dbos: DBOS, skip_with_sqlite: None) -> None:
+    """A statement timeout would fire again on retry, but other query cancellations are still retried."""
+    with pytest.raises(OperationalError) as exc_info:
+        with dbos._sys_db.engine.begin() as c:
+            c.execute(sa.text("SET LOCAL statement_timeout = 10"))
+            c.execute(sa.text("SELECT pg_sleep(1)"))
+    assert getattr(exc_info.value.orig, "sqlstate", None) == "57014"
+    assert not retriable_postgres_exception(exc_info.value)
+
+    orig = psycopg.errors.lookup("57014")("canceling statement due to user request")
+    assert retriable_postgres_exception(OperationalError("SELECT 1", {}, orig))
+
+
 def test_client_configures_idle_transaction_timeout(skip_with_sqlite: None) -> None:
     client = DBOSClient(
         system_database_url=postgres_urls()[1],
