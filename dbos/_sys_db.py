@@ -1717,6 +1717,7 @@ class SystemDatabase(ABC):
                     "retry the rewind"
                 )
 
+    @db_retry()
     def fork_workflow(
         self,
         original_workflow_ids: list[str],
@@ -1738,57 +1739,8 @@ class SystemDatabase(ABC):
                 "original_workflow_ids, forked_workflow_ids, and start_steps "
                 "must have the same length"
             )
-        retrying = False
 
-        @db_retry(sys_db=self)
-        def attempt() -> list[str]:
-            nonlocal retrying
-            after_failed_attempt = retrying
-            retrying = True
-            return self._fork_workflow_attempt(
-                original_workflow_ids,
-                forked_workflow_ids,
-                start_steps,
-                after_failed_attempt=after_failed_attempt,
-                application_version=application_version,
-                queue_name=queue_name,
-                queue_partition_key=queue_partition_key,
-                replacement_children=replacement_children,
-                workflow_timeout_ms=workflow_timeout_ms,
-            )
-
-        return attempt()
-
-    def _fork_workflow_attempt(
-        self,
-        original_workflow_ids: list[str],
-        forked_workflow_ids: list[str],
-        start_steps: list[int],
-        *,
-        after_failed_attempt: bool,
-        application_version: Optional[str],
-        queue_name: Optional[str],
-        queue_partition_key: Optional[str],
-        replacement_children: Optional[dict[str, str]],
-        workflow_timeout_ms: Optional[int],
-    ) -> list[str]:
         with self.engine.begin() as c:
-            if after_failed_attempt:
-                # The forks commit together, so if all exist from their sources the failed attempt committed but lost its acknowledgement.
-                existing = c.execute(
-                    sa.select(
-                        SystemSchema.workflow_status.c.workflow_uuid,
-                        SystemSchema.workflow_status.c.forked_from,
-                    ).where(
-                        SystemSchema.workflow_status.c.workflow_uuid.in_(
-                            forked_workflow_ids
-                        )
-                    )
-                ).fetchall()
-                if {row[0]: row[1] for row in existing} == dict(
-                    zip(forked_workflow_ids, original_workflow_ids)
-                ):
-                    return forked_workflow_ids
             rows = c.execute(
                 sa.select(
                     SystemSchema.workflow_status.c.workflow_uuid,
