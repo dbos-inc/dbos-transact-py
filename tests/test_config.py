@@ -731,8 +731,8 @@ def test_idle_transaction_kill_is_retriable() -> None:
     assert retriable_postgres_exception(error)
 
 
-def test_statement_timeout_is_not_retriable(dbos: DBOS, skip_with_sqlite: None) -> None:
-    """A statement timeout would fire again on retry, but other query cancellations are still retried."""
+def test_query_canceled_is_not_retriable(dbos: DBOS, skip_with_sqlite: None) -> None:
+    """A canceled query (statement timeout or explicit cancel) is not retried, but an admin shutdown is."""
     with pytest.raises(OperationalError) as exc_info:
         with dbos._sys_db.engine.begin() as c:
             c.execute(sa.text("SET LOCAL statement_timeout = 10"))
@@ -741,6 +741,11 @@ def test_statement_timeout_is_not_retriable(dbos: DBOS, skip_with_sqlite: None) 
     assert not retriable_postgres_exception(exc_info.value)
 
     orig = psycopg.errors.lookup("57014")("canceling statement due to user request")
+    assert not retriable_postgres_exception(OperationalError("SELECT 1", {}, orig))
+
+    orig = psycopg.errors.lookup("57P01")(
+        "terminating connection due to administrator command"
+    )
     assert retriable_postgres_exception(OperationalError("SELECT 1", {}, orig))
 
 
