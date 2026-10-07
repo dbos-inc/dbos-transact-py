@@ -29,7 +29,7 @@ from typing import (
 )
 
 import sqlalchemy as sa
-from sqlalchemy.exc import DBAPIError, SQLAlchemyError
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from dbos._debug_trigger import DebugTriggers
@@ -312,11 +312,6 @@ class RecordedResult(TypedDict):
     error: Optional[str]  # Serialized
     serialization: Optional[str]
     child_workflow_id: Optional[str]
-
-
-def _is_recordable_op_error(error: Exception) -> bool:
-    """Whether an internal operation's failure is an answer to checkpoint rather than a database fault."""
-    return not isinstance(error, SQLAlchemyError)
 
 
 class OperationResultInternal(TypedDict):
@@ -4770,10 +4765,10 @@ class SystemDatabase(ABC):
         try:
             result = fn()
         except Exception as e:
-            if _is_recordable_op_error(e):
-                self._record_operation_error(
-                    ctx.workflow_id, ctx.function_id, function_name, start_time, e
-                )
+            # The operation retries its own transient database errors, so what escapes is its answer.
+            self._record_operation_error(
+                ctx.workflow_id, ctx.function_id, function_name, start_time, e
+            )
             raise
         serval, serialization = serialize_value(result, None, self.serializer)
         self.record_operation_result(
@@ -4810,15 +4805,15 @@ class SystemDatabase(ABC):
         try:
             result = await fn()
         except Exception as e:
-            if _is_recordable_op_error(e):
-                await asyncio.to_thread(
-                    self._record_operation_error,
-                    ctx.workflow_id,
-                    ctx.function_id,
-                    function_name,
-                    start_time,
-                    e,
-                )
+            # The operation retries its own transient database errors, so what escapes is its answer.
+            await asyncio.to_thread(
+                self._record_operation_error,
+                ctx.workflow_id,
+                ctx.function_id,
+                function_name,
+                start_time,
+                e,
+            )
             raise
         serval, serialization = serialize_value(result, None, self.serializer)
         await asyncio.to_thread(
@@ -6148,7 +6143,6 @@ class SystemDatabase(ABC):
             steps=steps,
         )
 
-    @db_retry()
     def call_txn_as_step(
         self,
         workflow_uuid: str,
@@ -6157,38 +6151,45 @@ class SystemDatabase(ABC):
         op: Callable[[sa.Connection], T],
     ) -> T:
         start_time = int(time.time() * 1000)
-        recorded: Optional[RecordedResult] = None
+        # The latest attempt's operation failure, told apart from a check or checkpoint failure.
         op_error: Optional[Exception] = None
-        try:
+
+        @db_retry(sys_db=self)
+        def attempt() -> Tuple[Optional[RecordedResult], Any]:
+            nonlocal op_error
+            op_error = None
             with self.engine.begin() as c:
                 recorded = self._check_operation_execution_txn(
                     workflow_uuid, function_id, function_name, conn=c
                 )
-                if recorded is None:
-                    try:
-                        result = op(c)
-                    except Exception as e:
-                        op_error = e
-                        raise
-                    serval, serialization = serialize_value(
-                        result, None, self.serializer
-                    )
-                    output: OperationResultInternal = {
-                        "workflow_uuid": workflow_uuid,
-                        "function_id": function_id,
-                        "function_name": function_name,
-                        "started_at_epoch_ms": start_time,
-                        "output": serval,
-                        "serialization": serialization,
-                        "error": None,
-                        "child_workflow_id": None,
-                    }
-                    self._record_operation_result_txn(
-                        output, int(time.time() * 1000), conn=c
-                    )
+                if recorded is not None:
+                    return recorded, None
+                try:
+                    result = op(c)
+                except Exception as e:
+                    op_error = e
+                    raise
+                serval, serialization = serialize_value(result, None, self.serializer)
+                output: OperationResultInternal = {
+                    "workflow_uuid": workflow_uuid,
+                    "function_id": function_id,
+                    "function_name": function_name,
+                    "started_at_epoch_ms": start_time,
+                    "output": serval,
+                    "serialization": serialization,
+                    "error": None,
+                    "child_workflow_id": None,
+                }
+                self._record_operation_result_txn(
+                    output, int(time.time() * 1000), conn=c
+                )
+                return None, result
+
+        try:
+            recorded, result = attempt()
         except Exception as e:
-            # Only the operation's own failure is an answer; the transaction has rolled back, so record it separately.
-            if e is op_error and _is_recordable_op_error(e):
+            # Retries are done and the transaction rolled back, so record the operation's own failure separately.
+            if e is op_error:
                 self._record_operation_error(
                     workflow_uuid, function_id, function_name, start_time, e
                 )
@@ -6198,4 +6199,4 @@ class SystemDatabase(ABC):
                 SystemDatabase.T, self._replay_recorded(recorded, function_name)
             )
         DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT)
-        return result
+        return cast(SystemDatabase.T, result)

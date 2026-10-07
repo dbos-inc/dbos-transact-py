@@ -2059,7 +2059,7 @@ def test_schedule_failure_replays_recorded_error(dbos: DBOS) -> None:
     assert DBOS.get_schedule("nightly") is None
 
 
-def test_schedule_database_error_not_recorded(
+def test_schedule_transient_error_is_retried_not_recorded(
     dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     @DBOS.workflow()
@@ -2067,23 +2067,69 @@ def test_schedule_database_error_not_recorded(
         pass
 
     @DBOS.workflow()
-    def setup_workflow() -> None:
-        DBOS.create_schedule(
-            schedule_name="nightly", workflow_fn=target_workflow, schedule="0 0 * * *"
-        )
+    def setup_workflow() -> str:
+        try:
+            DBOS.create_schedule(
+                schedule_name="nightly",
+                workflow_fn=target_workflow,
+                schedule="0 0 * * *",
+            )
+        except Exception:
+            return "failed"
+        return "created"
+
+    original_create = dbos._sys_db.create_schedule
+    calls = {"count": 0}
+
+    def flaky_create(*args: Any, **kwargs: Any) -> None:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise OperationalError(
+                "INSERT", {}, Exception("connection lost"), connection_invalidated=True
+            )
+        original_create(*args, **kwargs)
+
+    monkeypatch.setattr(dbos._sys_db, "create_schedule", flaky_create)
+    handle = DBOS.start_workflow(setup_workflow)
+    assert handle.get_result() == "created"
+    assert calls["count"] == 2
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert [s["function_name"] for s in steps] == ["DBOS.createSchedule"]
+    assert steps[0]["error"] is None
+    assert DBOS.get_schedule("nightly") is not None
+
+
+def test_schedule_non_retriable_database_error_is_recorded(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    @DBOS.workflow()
+    def target_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    @DBOS.workflow()
+    def setup_workflow() -> str:
+        try:
+            DBOS.create_schedule(
+                schedule_name="nightly",
+                workflow_fn=target_workflow,
+                schedule="0 0 * * *",
+            )
+        except OperationalError:
+            return "failed"
+        return "created"
 
     original_create = dbos._sys_db.create_schedule
 
     def failing_create(*args: Any, **kwargs: Any) -> None:
-        raise OperationalError("INSERT", {}, Exception("connection lost"))
+        raise OperationalError("INSERT", {}, Exception("disk full"))
 
     monkeypatch.setattr(dbos._sys_db, "create_schedule", failing_create)
     handle = DBOS.start_workflow(setup_workflow)
-    with pytest.raises(OperationalError):
-        handle.get_result()
-    # A database fault is not an answer: nothing is checkpointed, so a replay runs the operation again.
-    assert DBOS.list_workflow_steps(handle.workflow_id) == []
+    assert handle.get_result() == "failed"
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert isinstance(steps[0]["error"], OperationalError)
 
+    # Once retries give up, the error is the operation's answer: a replay re-raises it rather than re-running.
     monkeypatch.setattr(dbos._sys_db, "create_schedule", original_create)
-    reexecute_workflow_by_id(dbos, handle.workflow_id).get_result()
-    assert DBOS.get_schedule("nightly") is not None
+    assert reexecute_workflow_by_id(dbos, handle.workflow_id).get_result() == "failed"
+    assert DBOS.get_schedule("nightly") is None

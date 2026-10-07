@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.exc import OperationalError
 
 from dbos import DBOS, DBOSClient, SetWorkflowID, WorkflowHandle
 from dbos._error import (
@@ -740,6 +741,39 @@ def test_fork_nonexistent_workflow_replays_recorded_error(dbos: DBOS) -> None:
         assert simple_workflow(1) == 1
     assert reexecute_workflow_by_id(dbos, handle.workflow_id).get_result() == "missing"
     assert DBOS.list_workflows(forked_from=missing_id) == []
+
+
+def test_workflow_command_transient_error_is_retried_not_recorded(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target_id = str(uuid.uuid4())
+    original_children = dbos._sys_db._get_direct_children
+    calls = {"count": 0}
+
+    def flaky_children(ids: list[str]) -> list[str]:
+        if ids == [target_id]:
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise OperationalError(
+                    "SELECT",
+                    {},
+                    Exception("connection lost"),
+                    connection_invalidated=True,
+                )
+        return original_children(ids)
+
+    monkeypatch.setattr(dbos._sys_db, "_get_direct_children", flaky_children)
+
+    @DBOS.workflow()
+    def canceller() -> None:
+        DBOS.cancel_workflow(target_id, cancel_children=True)
+
+    handle = DBOS.start_workflow(canceller)
+    handle.get_result()
+    assert calls["count"] == 2
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert [s["function_name"] for s in steps] == ["DBOS.cancelWorkflow"]
+    assert steps[0]["error"] is None
 
 
 def test_bulk_delete(dbos: DBOS) -> None:
