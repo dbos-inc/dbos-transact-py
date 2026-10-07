@@ -1535,7 +1535,6 @@ class SystemDatabase(ABC):
                 )
             )
 
-    @db_retry()
     def rewind_workflow(
         self,
         workflow_id: str,
@@ -1717,7 +1716,6 @@ class SystemDatabase(ABC):
                     "retry the rewind"
                 )
 
-    @db_retry()
     def fork_workflow(
         self,
         original_workflow_ids: list[str],
