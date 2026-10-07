@@ -60,11 +60,9 @@ from ._error import (
     DBOSException,
     DBOSInitializationError,
     DBOSNonExistentWorkflowError,
-    DBOSPatchNondeterminismError,
     DBOSQueryTimeoutError,
     DBOSQueueDeduplicatedError,
     DBOSStepNondeterminismError,
-    DBOSStreamNondeterminismError,
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
     DBOSWorkflowConflictIDError,
@@ -316,18 +314,9 @@ class RecordedResult(TypedDict):
     child_workflow_id: Optional[str]
 
 
-def _is_recordable_op_error(error: BaseException) -> bool:
-    """Whether an internal operation's failure is an answer to checkpoint, not a database or integrity fault."""
-    return isinstance(error, Exception) and not isinstance(
-        error,
-        (
-            SQLAlchemyError,
-            DBOSUnexpectedStepError,
-            DBOSStepNondeterminismError,
-            DBOSPatchNondeterminismError,
-            DBOSStreamNondeterminismError,
-        ),
-    )
+def _is_recordable_op_error(error: Exception) -> bool:
+    """Whether an internal operation's failure is an answer to checkpoint rather than a database fault."""
+    return not isinstance(error, SQLAlchemyError)
 
 
 class OperationResultInternal(TypedDict):
@@ -3129,9 +3118,9 @@ class SystemDatabase(ABC):
                     send_to_forks=send_to_forks,
                     step_workflow_id=step_workflow_id,
                 )
-        except Exception as e:
-            # The transaction has rolled back, so record the failure separately.
-            if workflow_id is not None and _is_recordable_op_error(e):
+        except DBOSNonExistentWorkflowError as e:
+            # A missing destination is the send's answer; the transaction has rolled back, so record it separately.
+            if workflow_id is not None:
                 assert function_id is not None
                 self._record_operation_error(
                     workflow_id, function_id, function_name, start_time, e
