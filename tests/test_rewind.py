@@ -334,6 +334,24 @@ def test_rewind_reopens_a_closed_stream(dbos: DBOS) -> None:
     assert [row[1] for row in rows] == ["v1", "v2", "__DBOS_STREAM_CLOSED__"]
 
 
+def test_rewind_reopens_a_stream_a_reader_is_partway_through(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def writer(name: str) -> str:
+        DBOS.write_stream("out", f"v{run_count(name)}")
+        DBOS.close_stream("out")
+        return f"run{runs[name]}"
+
+    workflow_id = start(writer, "stream-close-reader")
+    reader = DBOS.read_stream(workflow_id, "out")
+    assert next(reader) == "v1"
+
+    # The reader fetched the close sentinel with "v1" in one batch. The rewind deletes
+    # that sentinel, so the reader must not stop on its earlier copy.
+    dbos._sys_db.rewind_workflow(workflow_id, 1)
+    assert DBOS.retrieve_workflow(workflow_id).get_result() == "run2"
+    assert list(reader) == ["v2"]
+
+
 #######################################
 ## Child workflows
 #######################################

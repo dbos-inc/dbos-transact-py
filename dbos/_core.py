@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import uuid
+from collections import deque
 from concurrent.futures import Future
 from contextlib import AbstractContextManager
 from functools import wraps
@@ -19,6 +20,7 @@ from typing import (
     Awaitable,
     Callable,
     Coroutine,
+    Deque,
     Generator,
     Generic,
     List,
@@ -118,6 +120,7 @@ from ._sys_db import (
     WorkflowStatusString,
     _dbos_stream_closed_sentinel,
     _no_stream_value,
+    is_serialized_stream_closed_sentinel,
     is_stream_closed_sentinel,
     workflow_is_active,
 )
@@ -2787,6 +2790,8 @@ _READ_STREAM_FUNCTION_NAME = "DBOS.readStream"
 # How often a reader re-checks its own workflow for cancellation while it reads.
 _STREAM_CANCEL_CHECK_INTERVAL_SEC = 1.0
 _READ_STREAM_OFFSET_FUNCTION_NAME = "DBOS.readStreamOffset"
+# How many consecutive values a reader fetches in one round trip. Written values never change, so reading ahead is safe.
+_STREAM_READ_BATCH_SIZE = 100
 
 # Returned by _StreamReadCheckpoint.replay when a step has no recorded result and must be read live.
 _no_recorded_value = object()
@@ -2959,6 +2964,7 @@ def read_stream_offset(
         timeout_seconds=timeout_seconds,
         function_name=_READ_STREAM_OFFSET_FUNCTION_NAME,
         checkpoint=checkpoint,
+        batch_size=1,
     )
     try:
         for value in values:
@@ -2990,6 +2996,7 @@ async def read_stream_offset_async(
         timeout_seconds=timeout_seconds,
         function_name=_READ_STREAM_OFFSET_FUNCTION_NAME,
         checkpoint=checkpoint,
+        batch_size=1,
     )
     try:
         async for value in values:
@@ -3011,6 +3018,7 @@ def read_stream(
     timeout_seconds: Optional[float] = None,
     function_name: str = _READ_STREAM_FUNCTION_NAME,
     checkpoint: bool = True,
+    batch_size: int = _STREAM_READ_BATCH_SIZE,
 ) -> Generator[Any, Any, None]:
     """Yield a stream's values in order, checkpointing each one when read from a workflow."""
     if timeout_seconds is not None and timeout_seconds < 0:
@@ -3027,6 +3035,8 @@ def read_stream(
     recorder = _StreamReadCheckpoint(sys_db, key, function_name, checkpoint)
     event, payload = sys_db.register_stream_listener(workflow_id, key)
     final_read = False
+    # Serialized values read ahead of offset; pending[0] is always the value at offset.
+    pending: Deque[Tuple[Optional[str], Optional[str]]] = deque()
     try:
         while True:
             # One step per delivered value, reserved before the read so it spans the wait.
@@ -3045,16 +3055,30 @@ def read_stream(
                 yield recorded
                 offset += 1
                 continue
-            value: Any = _no_stream_value
+            row: Optional[Tuple[Optional[str], Optional[str]]] = None
             while True:
+                if pending:
+                    # Read ahead by an earlier round trip; written values never change.
+                    row = pending.popleft()
+                    break
                 # Clear before reading so a notification arriving after the read
                 # leaves the event set and the wait below returns immediately.
                 event.clear()
-                # One round trip for both the value and the workflow's status.
-                status, value = sys_db.read_stream_value(workflow_id, key, offset)
+                # One round trip for the next values and the workflow's status.
+                status, values = sys_db.read_stream_values(
+                    workflow_id, key, offset, batch_size
+                )
                 if status is None:
                     raise DBOSNonExistentWorkflowError("target", workflow_id)
-                if value is not _no_stream_value or final_read:
+                if values:
+                    row = values[0]
+                    # A rewind can delete a close sentinel, so read one only at its own offset.
+                    for later in values[1:]:
+                        if is_serialized_stream_closed_sentinel(*later):
+                            break
+                        pending.append(later)
+                    break
+                if final_read:
                     break
                 # No value yet: stop if the workflow is done, else wait for a
                 # notification. Workflow completion fires none, so the wait
@@ -3075,6 +3099,12 @@ def read_stream(
                     wait_for = min(remaining, polling_interval)
                 recorder.check_cancelled()
                 event.wait(timeout=wait_for)
+            # Deserialized only when delivered, so a value that cannot be deserialized fails its own read and no earlier one.
+            value = (
+                _no_stream_value
+                if row is None
+                else deserialize_value(row[0], row[1], sys_db.serializer)
+            )
             if value is _no_stream_value or is_stream_closed_sentinel(value):
                 # The end is recorded too, so a replay stops exactly where this read did.
                 recorder.record(step_ctx, _dbos_stream_closed_sentinel)
@@ -3099,6 +3129,7 @@ async def read_stream_async(
     timeout_seconds: Optional[float] = None,
     function_name: str = _READ_STREAM_FUNCTION_NAME,
     checkpoint: bool = True,
+    batch_size: int = _STREAM_READ_BATCH_SIZE,
 ) -> AsyncGenerator[Any, None]:
     """Yield a stream's values in order, checkpointing each one when read from a workflow."""
     if timeout_seconds is not None and timeout_seconds < 0:
@@ -3115,6 +3146,8 @@ async def read_stream_async(
     recorder = _StreamReadCheckpoint(sys_db, key, function_name, checkpoint)
     event, payload = sys_db.register_stream_listener(workflow_id, key)
     final_read = False
+    # Serialized values read ahead of offset; pending[0] is always the value at offset.
+    pending: Deque[Tuple[Optional[str], Optional[str]]] = deque()
     try:
         while True:
             # One step per delivered value, reserved before the read so it spans the wait.
@@ -3133,18 +3166,30 @@ async def read_stream_async(
                 yield recorded
                 offset += 1
                 continue
-            value: Any = _no_stream_value
+            row: Optional[Tuple[Optional[str], Optional[str]]] = None
             while True:
+                if pending:
+                    # Read ahead by an earlier round trip; written values never change.
+                    row = pending.popleft()
+                    break
                 # Clear before reading so a notification arriving after the read
                 # leaves the event set and the wait below returns immediately.
                 event.clear()
-                # One round trip for both the value and the workflow's status.
-                status, value = await asyncio.to_thread(
-                    sys_db.read_stream_value, workflow_id, key, offset
+                # One round trip for the next values and the workflow's status.
+                status, values = await asyncio.to_thread(
+                    sys_db.read_stream_values, workflow_id, key, offset, batch_size
                 )
                 if status is None:
                     raise DBOSNonExistentWorkflowError("target", workflow_id)
-                if value is not _no_stream_value or final_read:
+                if values:
+                    row = values[0]
+                    # A rewind can delete a close sentinel, so read one only at its own offset.
+                    for later in values[1:]:
+                        if is_serialized_stream_closed_sentinel(*later):
+                            break
+                        pending.append(later)
+                    break
+                if final_read:
                     break
                 # No value yet: stop if the workflow is done, else await a
                 # notification, re-reading at the fallback interval in case one
@@ -3167,6 +3212,14 @@ async def read_stream_async(
                     wait_for = min(remaining, polling_interval)
                 await asyncio.to_thread(recorder.check_cancelled)
                 await event.wait_async(timeout=wait_for)
+            # Deserialized only when delivered, off the event loop as a custom serializer may block.
+            value = (
+                _no_stream_value
+                if row is None
+                else await asyncio.to_thread(
+                    deserialize_value, row[0], row[1], sys_db.serializer
+                )
+            )
             if value is _no_stream_value or is_stream_closed_sentinel(value):
                 # The end is recorded too, so a replay stops exactly where this read did.
                 await asyncio.to_thread(

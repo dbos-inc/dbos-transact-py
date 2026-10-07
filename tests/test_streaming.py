@@ -12,13 +12,19 @@ from sqlalchemy.exc import IntegrityError
 # Public API
 from dbos import DBOS, DBOSConfig, SetWorkflowID
 from dbos._client import DBOSClient
+from dbos._core import _STREAM_READ_BATCH_SIZE
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSNonExistentWorkflowError,
     DBOSStreamTimeoutError,
 )
-from dbos._serialization import WorkflowSerializationFormat, serialize_value
-from dbos._sys_db import _dbos_streams_channel, _no_stream_value
+from dbos._schemas.system_database import SystemSchema
+from dbos._serialization import (
+    WorkflowSerializationFormat,
+    deserialize_value,
+    serialize_value,
+)
+from dbos._sys_db import _dbos_streams_channel
 from dbos._sys_db_postgres import PostgresSystemDatabase
 from tests.conftest import (
     reexecute_workflow_by_id,
@@ -105,8 +111,8 @@ async def test_stream_read_offset_async(dbos: DBOS) -> None:
     assert values == [3, 4]
 
 
-def test_stream_read_value_returns_status_and_value(dbos: DBOS) -> None:
-    """read_stream_value answers both questions a reader tick asks -- 'is there a value at this offset?' and 'is the workflow still running?' -- in one round trip, from one snapshot."""
+def test_stream_read_values_returns_status_and_values(dbos: DBOS) -> None:
+    """read_stream_values answers both questions a reader tick asks -- 'what is written from this offset?' and 'is the workflow still running?' -- in one round trip, from one snapshot."""
     sys_db = dbos._sys_db
 
     @DBOS.workflow()
@@ -119,25 +125,220 @@ def test_stream_read_value_returns_status_and_value(dbos: DBOS) -> None:
     with SetWorkflowID(wfid):
         DBOS.start_workflow(writer_workflow).get_result()
 
-    # The value at the offset and the status, together.
-    status, value = sys_db.read_stream_value(wfid, "s", 0)
-    assert status == "SUCCESS"
-    assert value == 0
+    def read(offset: int, limit: int) -> tuple[Any, list[Any]]:
+        # Values come back serialized; the reader deserializes each one when it delivers it.
+        status, values = sys_db.read_stream_values(wfid, "s", offset, limit)
+        return status, [deserialize_value(v, s, sys_db.serializer) for v, s in values]
 
-    # A written None is a value, not an absence -- which is why absence needs its own sentinel.
-    status, value = sys_db.read_stream_value(wfid, "s", 1)
+    # The values from the offset and the status, together.
+    status, values = read(0, 1)
     assert status == "SUCCESS"
-    assert value is None
+    assert values == [0]
+
+    # A written None is a value, not an absence.
+    status, values = read(1, 1)
+    assert status == "SUCCESS"
+    assert values == [None]
+
+    # The limit bounds the values, and the read stops at the first offset with nothing written.
+    status, values = read(0, 2)
+    assert values == [0, None]
+    status, values = read(1, 100)
+    assert values == [None, "__DBOS_STREAM_CLOSED__"]
 
     # Past the end: still reports status, so the reader can tell "not yet" from "never".
-    status, value = sys_db.read_stream_value(wfid, "s", 99)
+    status, values = sys_db.read_stream_values(wfid, "s", 99, 100)
     assert status == "SUCCESS"
-    assert value is _no_stream_value
+    assert values == []
 
     # A non-existent workflow is distinguishable from a workflow with no value at the offset.
-    status, value = sys_db.read_stream_value(str(uuid.uuid4()), "s", 0)
+    status, values = sys_db.read_stream_values(str(uuid.uuid4()), "s", 0, 100)
     assert status is None
-    assert value is _no_stream_value
+    assert values == []
+
+
+def _stream_with_undeserializable_value(dbos: DBOS, stream_key: str) -> str:
+    """Write 0..4 and close, then make offset 3 impossible to deserialize."""
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for i in range(5):
+            DBOS.write_stream(stream_key, i)
+        DBOS.close_stream(stream_key)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        DBOS.start_workflow(writer_workflow).get_result()
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.streams)
+            .where(
+                SystemSchema.streams.c.workflow_uuid == wfid,
+                SystemSchema.streams.c.key == stream_key,
+                SystemSchema.streams.c.offset == 3,
+            )
+            .values(serialization="unavailable")
+        )
+    return wfid
+
+
+def test_stream_read_deserializes_each_value_when_delivered(dbos: DBOS) -> None:
+    """A value that cannot be deserialized fails the read that delivers it, not an earlier one,
+    even when it was fetched in the same batch."""
+    wfid = _stream_with_undeserializable_value(dbos, "lazy_stream")
+    reader = DBOS.read_stream(wfid, "lazy_stream")
+    assert [next(reader) for _ in range(3)] == [0, 1, 2]
+    with pytest.raises(TypeError, match="unavailable"):
+        next(reader)
+
+
+@pytest.mark.asyncio
+async def test_stream_read_async_deserializes_each_value_when_delivered(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    wfid = _stream_with_undeserializable_value(dbos, "lazy_stream_async")
+    reader = client.read_stream_async(wfid, "lazy_stream_async")
+    assert [await reader.__anext__() for _ in range(3)] == [0, 1, 2]
+    with pytest.raises(TypeError, match="unavailable"):
+        await reader.__anext__()
+
+
+def test_stream_read_across_batches(dbos: DBOS, client: DBOSClient) -> None:
+    """A stream longer than one read batch yields every value once, in order, from DBOS and from a client."""
+    stream_key = "long_stream"
+    count = 250
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for i in range(count):
+            DBOS.write_stream(stream_key, i)
+        DBOS.close_stream(stream_key)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        writer_workflow()
+
+    assert list(DBOS.read_stream(wfid, stream_key)) == list(range(count))
+    assert list(client.read_stream(wfid, stream_key)) == list(range(count))
+    assert list(DBOS.read_stream(wfid, stream_key, offset=150)) == list(
+        range(150, count)
+    )
+    assert DBOS.read_stream_offset(wfid, stream_key, 199) == 199
+
+    async def read_async() -> list[Any]:
+        return [v async for v in client.read_stream_async(wfid, stream_key)]
+
+    assert asyncio.run(read_async()) == list(range(count))
+
+
+def test_stream_read_live_across_batches(dbos: DBOS) -> None:
+    """A reader that starts before the writer gets every value, including those written after it caught up."""
+    stream_key = "live_long_stream"
+    count = 250
+    release = threading.Event()
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for i in range(150):
+            DBOS.write_stream(stream_key, i)
+        release.wait()
+        for i in range(150, count):
+            DBOS.write_stream(stream_key, i)
+        DBOS.close_stream(stream_key)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = DBOS.start_workflow(writer_workflow)
+
+    values = []
+    for value in DBOS.read_stream(wfid, stream_key, polling_interval_sec=0.01):
+        values.append(value)
+        if value == 149:
+            release.set()
+    handle.get_result()
+    assert values == list(range(count))
+
+
+_B = _STREAM_READ_BATCH_SIZE
+
+
+@pytest.mark.parametrize("closed", [True, False], ids=["closed", "unclosed"])
+@pytest.mark.parametrize("count", [0, 1, _B - 1, _B, _B + 1, 2 * _B, 2 * _B + 50])
+def test_stream_read_page_boundaries(
+    dbos: DBOS, client: DBOSClient, count: int, closed: bool
+) -> None:
+    """Every reader yields each value once and in order, whatever the stream's length and
+    start offset are relative to the read batch, and ends at the close or at the end of a
+    finished writer's stream."""
+    stream_key = "boundary_stream"
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for i in range(count):
+            DBOS.write_stream(stream_key, i)
+        if closed:
+            DBOS.close_stream(stream_key)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        writer_workflow()
+
+    async def read_async(offset: int) -> list[Any]:
+        return [
+            v async for v in client.read_stream_async(wfid, stream_key, offset=offset)
+        ]
+
+    for offset in sorted({o for o in (0, 1, _B - 1, _B, _B + 1) if o <= count}):
+        expected = list(range(offset, count))
+        assert list(DBOS.read_stream(wfid, stream_key, offset=offset)) == expected
+        assert list(client.read_stream(wfid, stream_key, offset=offset)) == expected
+        assert asyncio.run(read_async(offset)) == expected
+
+
+def test_stream_read_early_stop(dbos: DBOS) -> None:
+    """A reader can stop partway through a batch: closing it releases its listener, a new
+    reader resumes at the next offset, and a workflow reader checkpoints only the values it
+    delivered, not those read ahead."""
+    stream_key = "early_stop_stream"
+    count = 2 * _B + 50
+    stop_after = _B + 50
+
+    @DBOS.workflow()
+    def writer_workflow() -> None:
+        for i in range(count):
+            DBOS.write_stream(stream_key, i)
+        DBOS.close_stream(stream_key)
+
+    @DBOS.workflow()
+    def partial_reader_workflow(target_id: str) -> list[Any]:
+        seen: list[Any] = []
+        for value in DBOS.read_stream(target_id, stream_key):
+            seen.append(value)
+            if len(seen) == stop_after:
+                break
+        return seen
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        writer_workflow()
+
+    reader = DBOS.read_stream(wfid, stream_key)
+    assert [next(reader) for _ in range(stop_after)] == list(range(stop_after))
+    reader.close()
+    assert dbos._sys_db.streams_map.snapshot() == []
+    assert list(DBOS.read_stream(wfid, stream_key, offset=stop_after)) == list(
+        range(stop_after, count)
+    )
+
+    reader_id = str(uuid.uuid4())
+    with SetWorkflowID(reader_id):
+        assert partial_reader_workflow(wfid) == list(range(stop_after))
+    assert [s["function_name"] for s in DBOS.list_workflow_steps(reader_id)] == [
+        "DBOS.readStream"
+    ] * stop_after
+    assert reexecute_workflow_by_id(dbos, reader_id).get_result() == list(
+        range(stop_after)
+    )
 
 
 @pytest.mark.asyncio
@@ -179,9 +380,9 @@ async def test_stream_read_async_wakes_on_notification(
     assert ordered[-1] < 2.0, f"notification latencies {latencies}"
 
 
-def test_stream_read_is_one_round_trip_per_value(dbos: DBOS) -> None:
-    """Each reader tick issues a single query fetching the value and the workflow status together, rather than reading the stream and then looking the status up separately."""
-    n = 25
+def test_stream_read_is_one_round_trip_per_batch(dbos: DBOS) -> None:
+    """Each reader tick issues a single query fetching a batch of values and the workflow status together, rather than one query per value or a separate status lookup."""
+    n = 2 * _STREAM_READ_BATCH_SIZE + 50
 
     @DBOS.workflow()
     def writer_workflow() -> None:
@@ -214,11 +415,12 @@ def test_stream_read_is_one_round_trip_per_value(dbos: DBOS) -> None:
     assert values == list(range(n))
     # Guards against passing vacuously: reading the status separately issues no joined query at all.
     assert reads, "reader did not fetch value and status in one joined query"
-    # One query per delivered value, plus the one that finds the close sentinel. Two queries per
-    # tick (a read then a status lookup) would double this.
+    # One query per batch of the n values, plus the one that finds the close sentinel. One query
+    # per value, or two queries per tick (a read then a status lookup), would multiply this.
+    expected = -(-n // _STREAM_READ_BATCH_SIZE) + 1
     assert (
-        len(reads) == n + 1
-    ), f"expected {n + 1} reads for {n} values, got {len(reads)}"
+        len(reads) == expected
+    ), f"expected {expected} reads for {n} values, got {len(reads)}"
 
 
 def test_client_read_stream_offset(dbos: DBOS, client: DBOSClient) -> None:
@@ -1241,11 +1443,11 @@ async def test_client_read_stream_async(dbos: DBOS, client: DBOSClient) -> None:
         client.destroy()
 
 
-def test_client_read_stream_is_one_round_trip_per_value(
+def test_client_read_stream_is_one_round_trip_per_batch(
     dbos: DBOS, client: DBOSClient
 ) -> None:
-    """The client reader fetches value and status in one joined query per tick, like the in-process one."""
-    n = 25
+    """The client reader fetches a batch of values and the status in one joined query per tick, like the in-process one."""
+    n = 2 * _STREAM_READ_BATCH_SIZE + 50
 
     @DBOS.workflow()
     def writer_workflow() -> None:
@@ -1276,10 +1478,11 @@ def test_client_read_stream_is_one_round_trip_per_value(
     assert values == list(range(n))
     # Guards against passing vacuously: reading the status separately issues no joined query at all.
     assert reads, "client did not fetch value and status in one joined query"
-    # One query per delivered value, plus the one that finds the close sentinel.
+    # One query per batch of the n values, plus the one that finds the close sentinel.
+    expected = -(-n // _STREAM_READ_BATCH_SIZE) + 1
     assert (
-        len(reads) == n + 1
-    ), f"expected {n + 1} reads for {n} values, got {len(reads)}"
+        len(reads) == expected
+    ), f"expected {expected} reads for {n} values, got {len(reads)}"
 
 
 def test_read_stream_nonexistent_workflow(dbos: DBOS, client: DBOSClient) -> None:
