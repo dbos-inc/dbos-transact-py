@@ -94,50 +94,74 @@ class DBOSConflictingWorkflowError(DBOSException):
     """Exception raised different workflows started with the same workflow ID."""
 
     def __init__(self, workflow_id: str, message: Optional[str] = None):
+        self.workflow_id = workflow_id
+        self.detail = message
         super().__init__(
             f"Conflicting workflow invocation with the same ID ({workflow_id}): {message}",
             dbos_error_code=DBOSErrorCode.ConflictingWorkflowError.value,
         )
+
+    def __reduce__(self) -> Any:
+        return (self.__class__, (self.workflow_id, self.detail))
 
 
 class DBOSRecoveryError(DBOSException):
     """Exception raised when a workflow recovery fails."""
 
     def __init__(self, workflow_id: str, message: Optional[str] = None):
+        self.workflow_id = workflow_id
+        self.detail = message
         super().__init__(
             f"Recovery error for workflow ID {workflow_id}: {message}",
             dbos_error_code=DBOSErrorCode.RecoveryError.value,
         )
+
+    def __reduce__(self) -> Any:
+        return (self.__class__, (self.workflow_id, self.detail))
 
 
 class DBOSInitializationError(DBOSException):
     """Exception raised when DBOS initialization did not complete."""
 
     def __init__(self, message: str):
+        self.detail = message
         super().__init__(
             f"Error initializing DBOS Transact: {message}",
             DBOSErrorCode.InitializationError.value,
         )
+
+    def __reduce__(self) -> Any:
+        return (self.__class__, (self.detail,))
 
 
 class DBOSWorkflowFunctionNotFoundError(DBOSException):
     """Exception raised when the database refers to a workflow function that is not registered in the codebase."""
 
     def __init__(self, workflow_id: str, message: Optional[str] = None):
+        self.workflow_id = workflow_id
+        self.detail = message
         super().__init__(
             f"Could not execute workflow {workflow_id}: {message}",
             dbos_error_code=DBOSErrorCode.WorkflowFunctionNotFound.value,
         )
+
+    def __reduce__(self) -> Any:
+        return (self.__class__, (self.workflow_id, self.detail))
 
 
 class DBOSNonExistentWorkflowError(DBOSException):
     """Exception raised when a workflow database record does not exist for a given ID."""
 
     def __init__(self, destination: str, destination_id: str):
+        self.destination = destination
+        self.destination_id = destination_id
         super().__init__(
             f"Non-existent {destination} workflow ID: {destination_id}",
             dbos_error_code=DBOSErrorCode.NonExistentWorkflowError.value,
         )
+
+    def __reduce__(self) -> Any:
+        return (self.__class__, (self.destination, self.destination_id))
 
 
 class DBOSStreamTimeoutError(DBOSException):
@@ -187,6 +211,8 @@ class MaxRecoveryAttemptsExceededError(DBOSException):
     """Exception raised when a workflow exceeds its max recovery attempts."""
 
     def __init__(self, wf_id: str, max_retries: Optional[int] = None):
+        self.workflow_id = wf_id
+        self.max_retries = max_retries
         limit = "its maximum" + (
             f" of {max_retries}" if max_retries is not None else " number of"
         )
@@ -194,6 +220,9 @@ class MaxRecoveryAttemptsExceededError(DBOSException):
             f"Workflow {wf_id} has exceeded {limit} execution or recovery attempts. Further attempts to execute or recover it will fail. See documentation for details: https://docs.dbos.dev/python/reference/decorators",
             dbos_error_code=DBOSErrorCode.MaxRecoveryAttemptsExceeded.value,
         )
+
+    def __reduce__(self) -> Any:
+        return (self.__class__, (self.workflow_id, self.max_retries))
 
 
 class DBOSNotAuthorizedError(DBOSException):
