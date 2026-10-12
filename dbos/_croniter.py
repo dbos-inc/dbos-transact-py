@@ -375,33 +375,12 @@ class croniter(object):
         if not dom_dow_exception_processed:
             result = self._calc(self.cur, expanded, nth_weekday_of_month, is_prev)
 
-        # DST Handling for cron job spanning across days
-        dtstarttime = self._timestamp_to_datetime(self.dst_start_time)
-        dtstarttime_utcoffset = dtstarttime.utcoffset() or datetime.timedelta(0)
+        # Keep the wall-clock time from _calc across DST transitions.
+        # The former lag-based adjustment shifted 09:00 Europe/Berlin to 08:00
+        # on spring-forward days (and to 10:00 on fall-back), disagreeing with
+        # upstream croniter and causing schedules with cron_timezone to fire
+        # at the wrong local time twice a year.
         dtresult = self._timestamp_to_datetime(result)
-        lag = lag_hours = 0
-        # do we trigger DST on next crontab (handle backward changes)
-        dtresult_utcoffset = dtstarttime_utcoffset
-        if dtresult and self.tzinfo:
-            dtresult_utcoffset = dtresult.utcoffset()
-            lag_hours = self._timedelta_to_seconds(dtresult - dtstarttime) / (60 * 60)
-            lag = self._timedelta_to_seconds(dtresult_utcoffset - dtstarttime_utcoffset)
-        hours_before_midnight = 24 - dtstarttime.hour
-        if dtresult_utcoffset != dtstarttime_utcoffset:
-            if (lag > 0 and abs(lag_hours) >= hours_before_midnight) or (
-                lag < 0
-                and ((3600 * abs(lag_hours) + abs(lag)) >= hours_before_midnight * 3600)
-            ):
-                dtresult_adjusted = dtresult - datetime.timedelta(seconds=lag)
-                result_adjusted = self._datetime_to_timestamp(dtresult_adjusted)
-                # Do the actual adjust only if the result time actually exists
-                if (
-                    self._timestamp_to_datetime(result_adjusted).tzinfo
-                    == dtresult_adjusted.tzinfo
-                ):
-                    dtresult = dtresult_adjusted
-                    result = result_adjusted
-                self.dst_start_time = result
         if update_current:
             self.cur = result
         if issubclass(ret_type, datetime.datetime):
