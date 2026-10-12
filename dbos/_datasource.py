@@ -514,6 +514,10 @@ class AsyncSQLAlchemyDatasource(ABC):
                                     )
                                     continue
                                 if in_wf:
+                                    # Same ownership gate as the success path: a superseded
+                                    # execution must not write its failure as the durable result.
+                                    if not await asyncio.to_thread(_still_owns, workflow_id):
+                                        raise DBOSWorkflowConflictIDError(workflow_id)
                                     serialized_e, serialization = serialize_exception(
                                         e, None, self.serializer
                                     )
@@ -933,6 +937,10 @@ class SQLAlchemyDatasource(ABC):
                                     )
                                     continue
                                 if in_wf:
+                                    # Same ownership gate as the success path: a superseded
+                                    # execution must not write its failure as the durable result.
+                                    if not _still_owns(workflow_id):
+                                        raise DBOSWorkflowConflictIDError(workflow_id)
                                     serialized_e, serialization = serialize_exception(
                                         e, None, self.serializer
                                     )
