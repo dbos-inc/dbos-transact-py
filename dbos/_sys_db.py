@@ -3764,60 +3764,79 @@ class SystemDatabase(ABC):
         )
         function_name = "DBOS.setEvent"
         start_time = int(time.time() * 1000)
-        with self.engine.begin() as c:
-            recorded_output = self._check_operation_execution_txn(
-                workflow_uuid, function_id, function_name, conn=c
-            )
-            if recorded_output is not None:
-                dbos_logger.debug(f"Replaying set_event, id: {function_id}, key: {key}")
-                self._raise_recorded_error(recorded_output)
-                return  # Already sent before
-            else:
-                dbos_logger.debug(f"Running set_event, id: {function_id}, key: {key}")
-            c.execute(
-                self.dialect.insert(SystemSchema.workflow_events)
-                .values(
-                    workflow_uuid=workflow_uuid,
-                    key=key,
-                    value=serval,
-                    serialization=serialization,
+        op_error: Optional[Exception] = None
+        try:
+            with self.engine.begin() as c:
+                recorded_output = self._check_operation_execution_txn(
+                    workflow_uuid, function_id, function_name, conn=c
                 )
-                .on_conflict_do_update(
-                    index_elements=["workflow_uuid", "key"],
-                    set_={
-                        "value": serval,
-                        "serialization": serialization,
-                    },
+                if recorded_output is not None:
+                    dbos_logger.debug(
+                        f"Replaying set_event, id: {function_id}, key: {key}"
+                    )
+                    self._raise_recorded_error(recorded_output)
+                    return  # Already sent before
+                else:
+                    dbos_logger.debug(
+                        f"Running set_event, id: {function_id}, key: {key}"
+                    )
+                try:
+                    c.execute(
+                        self.dialect.insert(SystemSchema.workflow_events)
+                        .values(
+                            workflow_uuid=workflow_uuid,
+                            key=key,
+                            value=serval,
+                            serialization=serialization,
+                        )
+                        .on_conflict_do_update(
+                            index_elements=["workflow_uuid", "key"],
+                            set_={
+                                "value": serval,
+                                "serialization": serialization,
+                            },
+                        )
+                    )
+                    c.execute(
+                        self.dialect.insert(SystemSchema.workflow_events_history)
+                        .values(
+                            workflow_uuid=workflow_uuid,
+                            function_id=function_id,
+                            key=key,
+                            value=serval,
+                            serialization=serialization,
+                        )
+                        .on_conflict_do_update(
+                            index_elements=["workflow_uuid", "key", "function_id"],
+                            set_={
+                                "value": serval,
+                                "serialization": serialization,
+                            },
+                        )
+                    )
+                except Exception as e:
+                    op_error = e
+                    raise
+                output: OperationResultInternal = {
+                    "workflow_uuid": workflow_uuid,
+                    "function_id": function_id,
+                    "function_name": function_name,
+                    "started_at_epoch_ms": start_time,
+                    "output": None,
+                    "error": None,
+                    "serialization": None,
+                    "child_workflow_id": None,
+                }
+                self._record_operation_result_txn(
+                    output, int(time.time() * 1000), conn=c
                 )
-            )
-            c.execute(
-                self.dialect.insert(SystemSchema.workflow_events_history)
-                .values(
-                    workflow_uuid=workflow_uuid,
-                    function_id=function_id,
-                    key=key,
-                    value=serval,
-                    serialization=serialization,
+        except Exception as e:
+            # Op failure rolls the txn back; persist the error so recovery re-raises it.
+            if e is op_error:
+                self._record_operation_error(
+                    workflow_uuid, function_id, function_name, start_time, e
                 )
-                .on_conflict_do_update(
-                    index_elements=["workflow_uuid", "key", "function_id"],
-                    set_={
-                        "value": serval,
-                        "serialization": serialization,
-                    },
-                )
-            )
-            output: OperationResultInternal = {
-                "workflow_uuid": workflow_uuid,
-                "function_id": function_id,
-                "function_name": function_name,
-                "started_at_epoch_ms": start_time,
-                "output": None,
-                "error": None,
-                "serialization": None,
-                "child_workflow_id": None,
-            }
-            self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
+            raise
         # Notify only after commit, so a woken get_event sees the value.
         self._signal_notification(
             _dbos_workflow_events_channel, f"{workflow_uuid}::{key}"
@@ -5214,43 +5233,55 @@ class SystemDatabase(ABC):
             serialization,
         )
         while True:
-            with self.engine.begin() as c:
+            op_error: Optional[Exception] = None
+            try:
+                with self.engine.begin() as c:
 
-                recorded_output = self._check_operation_execution_txn(
-                    workflow_uuid, function_id, function_name, conn=c
-                )
-                if recorded_output is not None:
-                    dbos_logger.debug(
-                        f"Replaying writeStream, id: {function_id}, key: {key}"
+                    recorded_output = self._check_operation_execution_txn(
+                        workflow_uuid, function_id, function_name, conn=c
                     )
-                    self._raise_recorded_error(recorded_output)
-                    return
+                    if recorded_output is not None:
+                        dbos_logger.debug(
+                            f"Replaying writeStream, id: {function_id}, key: {key}"
+                        )
+                        self._raise_recorded_error(recorded_output)
+                        return
 
-                try:
-                    c.execute(stmt)
-                except sa.exc.IntegrityError as e:
-                    # Only an offset conflict is worth retrying; see write_stream_from_step.
-                    if not self._is_unique_constraint_violation(e):
+                    try:
+                        c.execute(stmt)
+                    except sa.exc.IntegrityError as e:
+                        # Only an offset conflict is worth retrying; see write_stream_from_step.
+                        if not self._is_unique_constraint_violation(e):
+                            op_error = e
+                            raise
+                        dbos_logger.warning(
+                            f"Stream offset conflict for workflow {workflow_uuid}, key {key}; retrying"
+                        )
+                        time.sleep(0.1)
+                        continue
+                    except Exception as e:
+                        op_error = e
                         raise
-                    dbos_logger.warning(
-                        f"Stream offset conflict for workflow {workflow_uuid}, key {key}; retrying"
-                    )
-                    time.sleep(0.1)
-                    continue
 
-                output: OperationResultInternal = {
-                    "workflow_uuid": workflow_uuid,
-                    "function_id": function_id,
-                    "function_name": function_name,
-                    "started_at_epoch_ms": start_time,
-                    "output": None,
-                    "error": None,
-                    "serialization": None,
-                    "child_workflow_id": None,
-                }
-                self._record_operation_result_txn(
-                    output, int(time.time() * 1000), conn=c
-                )
+                    output: OperationResultInternal = {
+                        "workflow_uuid": workflow_uuid,
+                        "function_id": function_id,
+                        "function_name": function_name,
+                        "started_at_epoch_ms": start_time,
+                        "output": None,
+                        "error": None,
+                        "serialization": None,
+                        "child_workflow_id": None,
+                    }
+                    self._record_operation_result_txn(
+                        output, int(time.time() * 1000), conn=c
+                    )
+            except Exception as e:
+                if e is op_error:
+                    self._record_operation_error(
+                        workflow_uuid, function_id, function_name, start_time, e
+                    )
+                raise
             self._signal_notification(_dbos_streams_channel, f"{workflow_uuid}::{key}")
             return
 
