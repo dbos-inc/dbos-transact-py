@@ -8,7 +8,7 @@ from dbos import DBOS, SetWorkflowID
 from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSException
 from dbos._sys_db import StepInfo, WorkflowStatus
 from dbos._utils import INTERNAL_QUEUE_NAME
-from tests.conftest import queue_entries_are_cleaned_up
+from tests.conftest import queue_entries_are_cleaned_up, reexecute_workflow_by_id
 
 
 @pytest.mark.asyncio
@@ -467,3 +467,37 @@ async def test_preemptible_step_no_leak_on_outer_cancel(dbos: DBOS) -> None:
 
     # If the step task leaked, this would time out.
     await asyncio.wait_for(step_cancelled.wait(), timeout=5.0)
+
+
+@pytest.mark.asyncio
+async def test_get_result_async_replays_recorded_error(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    async def failing_child() -> None:
+        raise ValueError("child failed")
+
+    child_id = str(uuid.uuid4())
+
+    @DBOS.workflow()
+    async def parent() -> str:
+        try:
+            await DBOS.get_result_async(child_id)
+        except ValueError as e:
+            return str(e)
+        return "succeeded"
+
+    with SetWorkflowID(child_id):
+        child_handle = await DBOS.start_workflow_async(failing_child)
+    with pytest.raises(ValueError):
+        await child_handle.get_result()
+
+    handle = await DBOS.start_workflow_async(parent)
+    assert await handle.get_result() == "child failed"
+    steps = await DBOS.list_workflow_steps_async(handle.workflow_id)
+    assert isinstance(steps[0]["error"], ValueError)
+
+    # The replay re-raises the recorded error rather than awaiting the now-deleted child.
+    await DBOS.delete_workflow_async(child_id)
+    replayed = await asyncio.to_thread(
+        reexecute_workflow_by_id, dbos, handle.workflow_id
+    )
+    assert await asyncio.to_thread(replayed.get_result) == "child failed"

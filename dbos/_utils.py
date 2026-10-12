@@ -175,6 +175,9 @@ def retriable_postgres_exception(e: Exception) -> bool:
         # Connection exception
         elif pgcode.startswith("08"):
             return True
+        # Query canceled (a statement timeout or an explicit cancel); retrying would undo it
+        elif pgcode == "57014":
+            return False
         # Operator intervention
         elif pgcode.startswith("57"):
             return True
