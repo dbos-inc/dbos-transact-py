@@ -22,7 +22,7 @@ def get_postgres_datasource_migrations(schema: str) -> List[str]:
         f"""
         CREATE TABLE IF NOT EXISTS {quoted_schema}.datasource_outputs (
             workflow_id TEXT NOT NULL,
-            step_id INT NOT NULL,
+            step_id INT4 NOT NULL,
             output TEXT,
             error TEXT,
             serialization TEXT,
