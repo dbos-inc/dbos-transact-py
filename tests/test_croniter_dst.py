@@ -1,3 +1,4 @@
+# type: ignore
 """DST wall-clock correctness for the vendored croniter (issue #885)."""
 
 from datetime import datetime
