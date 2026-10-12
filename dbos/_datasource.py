@@ -374,6 +374,9 @@ class AsyncSQLAlchemyDatasource(ABC):
             await self._record_result(
                 conn, workflow_id, step_id, None, error, serialization
             )
+            # Holding this step's row, so a later owner's insert waits on our commit.
+            if not await asyncio.to_thread(_still_owns, workflow_id):
+                raise DBOSWorkflowConflictIDError(workflow_id)
 
     async def _record_result(
         self,
@@ -514,10 +517,6 @@ class AsyncSQLAlchemyDatasource(ABC):
                                     )
                                     continue
                                 if in_wf:
-                                    # Same ownership gate as the success path: a superseded
-                                    # execution must not write its failure as the durable result.
-                                    if not await asyncio.to_thread(_still_owns, workflow_id):
-                                        raise DBOSWorkflowConflictIDError(workflow_id)
                                     serialized_e, serialization = serialize_exception(
                                         e, None, self.serializer
                                     )
@@ -799,6 +798,9 @@ class SQLAlchemyDatasource(ABC):
     ) -> None:
         with self.engine.begin() as conn:
             self._record_result(conn, workflow_id, step_id, None, error, serialization)
+            # Holding this step's row, so a later owner's insert waits on our commit.
+            if not _still_owns(workflow_id):
+                raise DBOSWorkflowConflictIDError(workflow_id)
 
     def _record_result(
         self,
@@ -937,10 +939,6 @@ class SQLAlchemyDatasource(ABC):
                                     )
                                     continue
                                 if in_wf:
-                                    # Same ownership gate as the success path: a superseded
-                                    # execution must not write its failure as the durable result.
-                                    if not _still_owns(workflow_id):
-                                        raise DBOSWorkflowConflictIDError(workflow_id)
                                     serialized_e, serialization = serialize_exception(
                                         e, None, self.serializer
                                     )
