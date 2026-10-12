@@ -80,6 +80,7 @@ from ._serialization import (
     deserialize_exception,
     deserialize_value,
     safe_deserialize,
+    serialize_exception,
     serialize_value,
     serialize_value_as,
 )
@@ -4703,7 +4704,26 @@ class SystemDatabase(ABC):
                     raise Exception(
                         f"Recorded output and error are both None for {function_name}"
                     )
-        result = fn()
+        try:
+            result = fn()
+        except Exception as e:
+            if ctx and ctx.is_workflow():
+                serialized_e, serialization = serialize_exception(
+                    e, None, self.serializer
+                )
+                self.record_operation_result(
+                    {
+                        "workflow_uuid": ctx.workflow_id,
+                        "function_id": ctx.function_id,
+                        "function_name": function_name,
+                        "started_at_epoch_ms": start_time,
+                        "output": None,
+                        "serialization": serialization,
+                        "error": serialized_e,
+                        "child_workflow_id": None,
+                    }
+                )
+            raise
         if ctx and ctx.is_workflow():
             serval, serialization = serialize_value(result, None, self.serializer)
             self.record_operation_result(
@@ -4753,7 +4773,27 @@ class SystemDatabase(ABC):
                     raise Exception(
                         f"Recorded output and error are both None for {function_name}"
                     )
-        result = await fn()
+        try:
+            result = await fn()
+        except Exception as e:
+            if ctx and ctx.is_workflow():
+                serialized_e, serialization = serialize_exception(
+                    e, None, self.serializer
+                )
+                await asyncio.to_thread(
+                    self.record_operation_result,
+                    {
+                        "workflow_uuid": ctx.workflow_id,
+                        "function_id": ctx.function_id,
+                        "function_name": function_name,
+                        "started_at_epoch_ms": start_time,
+                        "output": None,
+                        "serialization": serialization,
+                        "error": serialized_e,
+                        "child_workflow_id": None,
+                    },
+                )
+            raise
         if ctx and ctx.is_workflow():
             serval, serialization = serialize_value(result, None, self.serializer)
             await asyncio.to_thread(
@@ -6090,27 +6130,64 @@ class SystemDatabase(ABC):
         op: Callable[[sa.Connection], T],
     ) -> T:
         start_time = int(time.time() * 1000)
-        with self.engine.begin() as c:
-            recorded = self._check_operation_execution_txn(
-                workflow_uuid, function_id, function_name, conn=c
-            )
-            if recorded is not None:
-                assert recorded["output"] is not None
-                recorded_output: SystemDatabase.T = self.serializer.deserialize(
-                    recorded["output"]
+        try:
+            with self.engine.begin() as c:
+                recorded = self._check_operation_execution_txn(
+                    workflow_uuid, function_id, function_name, conn=c
                 )
-                return recorded_output
-            result = op(c)
-            output: OperationResultInternal = {
-                "workflow_uuid": workflow_uuid,
-                "function_id": function_id,
-                "function_name": function_name,
-                "started_at_epoch_ms": start_time,
-                "output": (self.serializer.serialize(result)),
-                "serialization": None,
-                "error": None,
-                "child_workflow_id": None,
-            }
-            self._record_operation_result_txn(output, int(time.time() * 1000), conn=c)
-        DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT)
-        return result
+                if recorded is not None:
+                    if recorded["output"] is not None:
+                        recorded_output: SystemDatabase.T = self.serializer.deserialize(
+                            recorded["output"]
+                        )
+                        return recorded_output
+                    elif recorded["error"] is not None:
+                        e: Exception = deserialize_exception(
+                            recorded["error"],
+                            recorded["serialization"],
+                            self.serializer,
+                        )
+                        raise e
+                    else:
+                        raise Exception(
+                            f"Recorded output and error are both None for {function_name}"
+                        )
+                result = op(c)
+                output: OperationResultInternal = {
+                    "workflow_uuid": workflow_uuid,
+                    "function_id": function_id,
+                    "function_name": function_name,
+                    "started_at_epoch_ms": start_time,
+                    "output": (self.serializer.serialize(result)),
+                    "serialization": None,
+                    "error": None,
+                    "child_workflow_id": None,
+                }
+                self._record_operation_result_txn(
+                    output, int(time.time() * 1000), conn=c
+                )
+            DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT)
+            return result
+        except Exception as e:
+            # Op failure rolls back the txn above; persist the error in a new txn so
+            # recovery re-raises the same failure instead of re-running the op.
+            existing = self.check_operation_execution(
+                workflow_uuid, function_id, function_name
+            )
+            if existing is None:
+                serialized_e, serialization = serialize_exception(
+                    e, None, self.serializer
+                )
+                self.record_operation_result(
+                    {
+                        "workflow_uuid": workflow_uuid,
+                        "function_id": function_id,
+                        "function_name": function_name,
+                        "started_at_epoch_ms": start_time,
+                        "output": None,
+                        "serialization": serialization,
+                        "error": serialized_e,
+                        "child_workflow_id": None,
+                    }
+                )
+            raise
