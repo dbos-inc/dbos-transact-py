@@ -1372,9 +1372,10 @@ def get_dbos_migration_hundredtwenty(quoted_schema: str, is_cockroach: bool) -> 
 
 def get_dbos_migration_hundredtwentyone(quoted_schema: str) -> str:
     # Records which recv consumed a notification.
+    # INT4 matches other step-ID columns; INTEGER is INT8 on CockroachDB (#882).
     return f"""
 ALTER TABLE {quoted_schema}."notifications"
-    ADD COLUMN IF NOT EXISTS "consumed_by_function_id" INTEGER;
+    ADD COLUMN IF NOT EXISTS "consumed_by_function_id" INT4;
 """
 
 
