@@ -233,6 +233,8 @@ class WorkflowStatus:
     application_name: Optional[str]
     # The shard key the workflow lives under; None on an unsharded database.
     shard_key: Optional[str] = None
+    # The parent workflow's shard key; None on an unsharded database.
+    parent_shard_key: Optional[str] = None
 
     # INTERNAL FIELDS
 
@@ -411,6 +413,8 @@ class StepInfo(TypedDict):
     error: Optional[Exception]
     # If the step starts or retrieves the result of a workflow, its ID
     child_workflow_id: Optional[str]
+    # That workflow's shard key; None on an unsharded database
+    child_shard_key: Optional[str]
     # The Unix epoch timestamp at which this step started
     started_at_epoch_ms: Optional[int]
     # The Unix epoch timestamp at which this step completed
@@ -972,6 +976,14 @@ class SystemDatabase(ABC):
         self._reject_shard_key(workflow_id, shard_key)
         return {}
 
+    def _parent_values(self, parent_workflow_id: Optional[str]) -> Dict[str, Any]:
+        """Extra column values storing the shard key of a new workflow's parent."""
+        return {}
+
+    def _child_values(self, child_workflow_id: Optional[str]) -> Dict[str, Any]:
+        """Extra column values storing the shard key of the workflow a step refers to."""
+        return {}
+
     def _wf_columns(self, workflow_id: str) -> List[Tuple[str, Any]]:
         """Extra (column, expression) pairs for an INSERT ... SELECT of this workflow's rows."""
         return []
@@ -1015,8 +1027,10 @@ class SystemDatabase(ABC):
         """Predicates selecting rows under these shard keys."""
         raise DBOSException("Filtering by shard key requires a sharded system database")
 
-    def _key_column(self, table: sa.FromClause) -> Optional[sa.ColumnElement[Any]]:
-        """The shard key column to read back with a workflow's row, if this handle has one."""
+    def _key_column(
+        self, table: sa.FromClause, column: str = "shard_key"
+    ) -> Optional[sa.ColumnElement[Any]]:
+        """A shard key column to read back with a row, if this handle has one."""
         return None
 
     def _schedule_values(self, schedule: "WorkflowSchedule") -> Dict[str, Any]:
@@ -1174,6 +1188,7 @@ class SystemDatabase(ABC):
                 serialization=status["serialization"],
                 queue_partition_key=status["queue_partition_key"],
                 parent_workflow_id=status["parent_workflow_id"],
+                **self._parent_values(status["parent_workflow_id"]),
                 creator_xid=creator_xid,
                 # A direct start runs at once, so its creator token also owns the execution.
                 owner_xid=(
@@ -2046,6 +2061,9 @@ class SystemDatabase(ABC):
                 key_columns = self._scoped_columns()
                 key_names = [name for name, _ in key_columns]
                 key_exprs = [expr for _, expr in key_columns]
+                # A replacement child is a fork, so it shares the replaced child's key.
+                child_key = self._key_column(oo, "child_shard_key")
+                child_key_columns = [] if child_key is None else [child_key]
 
                 child_wf_expr: sa.ColumnElement[Any] = oo.c.child_workflow_id
                 if replacement_children:
@@ -2076,6 +2094,7 @@ class SystemDatabase(ABC):
                             "completed_at_epoch_ms",
                             "application_name",
                             "retention_timestamp",
+                            *[col.name for col in child_key_columns],
                         ],
                         sa.select(
                             *key_exprs,
@@ -2090,6 +2109,7 @@ class SystemDatabase(ABC):
                             oo.c.completed_at_epoch_ms,
                             mapping_subquery.c.owner,
                             self._now_ms_sql(),
+                            *child_key_columns,
                         ).select_from(
                             mapping_subquery.join(
                                 oo,
@@ -2594,6 +2614,11 @@ class SystemDatabase(ABC):
         key_column = self._key_column(self.tables.workflow_status)
         if key_column is not None:
             load_columns.append(key_column)
+        parent_key_column = self._key_column(
+            self.tables.workflow_status, "parent_shard_key"
+        )
+        if parent_key_column is not None:
+            load_columns.append(parent_key_column)
 
         # Only join the payload tables the caller actually asked for.
         from_clause: Any = self.tables.workflow_status
@@ -2812,6 +2837,9 @@ class SystemDatabase(ABC):
             if load_input or load_output:
                 idx += 1
             info.shard_key = row[idx] if key_column is not None else None
+            if key_column is not None:
+                idx += 1
+            info.parent_shard_key = row[idx] if parent_key_column is not None else None
             inputs, output, exception = safe_deserialize(
                 self.serializer,
                 serialization,
@@ -2870,6 +2898,7 @@ class SystemDatabase(ABC):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
     ) -> List[StepInfo]:
+        child_key = self._key_column(self.tables.operation_outputs, "child_shard_key")
         with self._observability_query() as c:
             query = (
                 sa.select(
@@ -2881,6 +2910,7 @@ class SystemDatabase(ABC):
                     self.tables.operation_outputs.c.started_at_epoch_ms,
                     self.tables.operation_outputs.c.completed_at_epoch_ms,
                     self.tables.operation_outputs.c.serialization,
+                    *([] if child_key is None else [child_key]),
                 )
                 .where(*self._wf(self.tables.operation_outputs, workflow_id))
                 .order_by(self.tables.operation_outputs.c.function_id)
@@ -2911,6 +2941,7 @@ class SystemDatabase(ABC):
                 output=output,
                 error=exception,
                 child_workflow_id=row[4],
+                child_shard_key=row[8] if child_key is not None else None,
                 started_at_epoch_ms=row[5],
                 completed_at_epoch_ms=row[6],
             )
@@ -2980,6 +3011,7 @@ class SystemDatabase(ABC):
                     output=output,
                     error=error,
                     child_workflow_id=result["child_workflow_id"],
+                    **self._child_values(result["child_workflow_id"]),
                     serialization=result["serialization"],
                     # Mirrors the parent: only the running application records its steps.
                     application_name=self.app_name,
@@ -3137,6 +3169,7 @@ class SystemDatabase(ABC):
                     output=output,
                     error=error,
                     child_workflow_id=result_workflow_id,
+                    **self._child_values(result_workflow_id),
                     started_at_epoch_ms=started_at_epoch_ms,
                     completed_at_epoch_ms=int(time.time() * 1000),
                     retention_timestamp=self._now_ms_sql(),
@@ -5291,6 +5324,7 @@ class SystemDatabase(ABC):
                     "serialization": status["serialization"],
                     "queue_partition_key": status["queue_partition_key"],
                     "parent_workflow_id": status["parent_workflow_id"],
+                    **self._parent_values(status["parent_workflow_id"]),
                     "creator_xid": None,
                     "delay_until_epoch_ms": status["delay_until_epoch_ms"],
                     "attributes": status["attributes"],

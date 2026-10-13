@@ -2050,9 +2050,11 @@ def workflow_wrapper(
         resctx: Optional[DBOSContext] = None
         # Captured now: check_and_init runs inside the child's context, where the parent's token is not ambient.
         parent_owner_xid: Optional[str] = None
+        parent_shard_key: Optional[str] = None
         if cctx is not None and cctx.is_workflow():
             resctx = cctx.snapshot_step_ctx(reserve_sleep_id=False)
             parent_owner_xid = current_owner_xid(parent_wfid, cctx)
+            parent_shard_key = cctx.shard_key
         workflow_timeout_ms, workflow_deadline_epoch_ms = _get_timeout_deadline(
             cctx, queue=None
         )
@@ -2064,6 +2066,7 @@ def workflow_wrapper(
         )
 
         workflow_id = None
+        child_shard_key: Optional[str] = newwfctx.shard_key
         # Holds the initialized status so the invoke step can be built once the workflow is cleared to execute.
         init_status: dict[str, WorkflowStatusInternal] = {}
         # Hoisted out of record_get_result: Pending.then invokes it only after awaiting the body.
@@ -2071,7 +2074,14 @@ def workflow_wrapper(
 
         def check_and_init() -> Union[NoResult, "DeferredResult[R]", R]:
             """Initialize the workflow row, returning a deferred wait for an existing workflow's result to skip re-running its body, or NoResult to run it."""
-            nonlocal workflow_id
+            # The parent's key, like its token, is not ambient in the child's context.
+            with bind_shard_keys(
+                {parent_wfid: parent_shard_key} if parent_wfid else {}
+            ):
+                return _check_and_init()
+
+        def _check_and_init() -> Union[NoResult, "DeferredResult[R]", R]:
+            nonlocal workflow_id, child_shard_key
             workflow_id = child_wfid
 
             child_start_time = int(time.time() * 1000)
@@ -2108,6 +2118,7 @@ def workflow_wrapper(
                 parent_owner_xid=parent_owner_xid,
             )
 
+            child_shard_key = status["shard_key"]
             # The body writes events, streams, and messages in this format; without it a directly
             # invoked workflow would write them under the default while its own row says otherwise.
             serialization_type = fi.serialization_type
@@ -2149,25 +2160,27 @@ def workflow_wrapper(
                     e, None, dbos._serializer
                 )
                 assert workflow_id is not None
+                with bind_shard_keys({workflow_id: child_shard_key}):
+                    dbos._sys_db.record_get_result(
+                        workflow_id,
+                        None,
+                        serialized_e,
+                        serialization,
+                        resctx,
+                        started_at_epoch_ms=get_result_start_time,
+                    )
+                raise
+            serialized_r, serialization = serialize_value(r, None, dbos._serializer)
+            assert workflow_id is not None
+            with bind_shard_keys({workflow_id: child_shard_key}):
                 dbos._sys_db.record_get_result(
                     workflow_id,
+                    serialized_r,
                     None,
-                    serialized_e,
                     serialization,
                     resctx,
                     started_at_epoch_ms=get_result_start_time,
                 )
-                raise
-            serialized_r, serialization = serialize_value(r, None, dbos._serializer)
-            assert workflow_id is not None
-            dbos._sys_db.record_get_result(
-                workflow_id,
-                serialized_r,
-                None,
-                serialization,
-                resctx,
-                started_at_epoch_ms=get_result_start_time,
-            )
             return r
 
         outcome = (

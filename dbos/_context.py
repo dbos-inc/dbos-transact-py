@@ -4,7 +4,7 @@ import json
 import os
 import time
 from contextlib import AbstractContextManager, contextmanager
-from contextvars import ContextVar, Token
+from contextvars import ContextVar
 from dataclasses import dataclass
 from types import TracebackType
 from typing import (
