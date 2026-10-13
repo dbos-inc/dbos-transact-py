@@ -44,7 +44,8 @@ from dbos._utils import generate_uuid
 if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 
-from dbos._croniter import croniter  # type: ignore
+from croniter import croniter
+
 from dbos._dbos_config import is_valid_database_url
 from dbos._error import (
     DBOSException,
