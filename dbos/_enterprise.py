@@ -133,6 +133,21 @@ def entitlement_url(conductor_url: str) -> str:
     return urlunsplit((scheme, parts.netloc, path + ENTITLEMENT_PATH, "", ""))
 
 
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects: following one would carry the key to whatever host it names."""
+
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+def _fetch_entitlement(request: urllib.request.Request) -> None:
+    """GET the entitlement route; a refused redirect surfaces as an HTTPError."""
+    # Built per call, so proxy settings are read when the check runs, not at import.
+    opener = urllib.request.build_opener(_NoRedirects)
+    with opener.open(request, timeout=ENTITLEMENT_TIMEOUT_SEC):
+        pass
+
+
 def _error_detail(error: urllib.error.HTTPError) -> str:
     """The reason Conductor gave, from its JSON error body when there is one."""
     try:
@@ -170,11 +185,11 @@ def require_enterprise(
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=ENTITLEMENT_TIMEOUT_SEC):
-            return
+        _fetch_entitlement(request)
+        return
     except urllib.error.HTTPError as e:
         if e.code < 500:
-            # Rejected: an unknown key, an org not in good standing, or no such route.
+            # Rejected: an unknown key, an org not in good standing, no such route, or a redirect.
             raise DBOSInitializationError(
                 f"{names} requires a DBOS key in good standing. Conductor at {url} "
                 f"rejected the key (HTTP {e.code}): {_error_detail(e)}"

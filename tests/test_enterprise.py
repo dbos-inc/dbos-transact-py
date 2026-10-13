@@ -111,6 +111,7 @@ class FakeConductor:
     def __init__(self) -> None:
         self.status = 200
         self.body: Dict[str, Any] = {"entitled": True}
+        self.headers: Dict[str, str] = {}
         self.requests: List[Tuple[str, Optional[str]]] = []
         fake = self
 
@@ -121,6 +122,8 @@ class FakeConductor:
                 self.send_response(fake.status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(payload)))
+                for name, value in fake.headers.items():
+                    self.send_header(name, value)
                 self.end_headers()
                 self.wfile.write(payload)
 
@@ -220,6 +223,25 @@ def test_a_rejected_key_is_refused(
     assert "enterprise-key" not in message
 
 
+def test_a_redirect_is_refused_and_never_carries_the_key(
+    conductor: FakeConductor,
+) -> None:
+    elsewhere = FakeConductor()
+    try:
+        target = elsewhere.url.replace("ws://", "http://")
+        conductor.status = 302
+        conductor.headers = {"Location": f"{target}/v2/entitlements/enterprise"}
+        with pytest.raises(
+            DBOSInitializationError, match=r"rejected the key \(HTTP 302\)"
+        ):
+            check(conductor, enterprise_key="enterprise-key")
+        # The redirect target never saw the key, or anything at all.
+        assert elsewhere.requests == []
+    finally:
+        elsewhere.server.shutdown()
+        elsewhere.server.server_close()
+
+
 def test_an_unreachable_conductor_blocks_startup(conductor: FakeConductor) -> None:
     conductor.reject(503, "unavailable")
     with pytest.raises(
@@ -250,12 +272,12 @@ def test_a_hosted_conductor_outage_does_not_block_startup(
     monkeypatch.delenv("DBOS_DOMAIN", raising=False)
     requested: List[str] = []
 
-    def unreachable(request: Any, timeout: float) -> Any:
+    def unreachable(request: urllib.request.Request) -> None:
         requested.append(request.full_url)
         raise urllib.error.URLError("connection refused")
 
     warnings: List[str] = []
-    monkeypatch.setattr(urllib.request, "urlopen", unreachable)
+    monkeypatch.setattr(enterprise_module, "_fetch_entitlement", unreachable)
     monkeypatch.setattr(dbos_logger, "warning", lambda msg: warnings.append(msg))
     # No Conductor URL means DBOS's hosted one, whose outage only warns.
     _require_enterprise(

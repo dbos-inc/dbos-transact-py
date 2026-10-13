@@ -49,11 +49,12 @@ from dbos import (
     _workflow_commands,
     run_dbos_database_migrations,
 )
+from dbos._context import DBOSContext
 from dbos._core import execute_dequeued_workflow
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 from dbos._sys_db_postgres import PostgresSystemDatabase
-from dbos._utils import GlobalParams
+from dbos._utils import GlobalParams, quote_identifier
 
 if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle
@@ -185,25 +186,61 @@ def _reset_sharded_system_database() -> None:
     try:
         with engine.connect() as connection:
             connection.execution_options(isolation_level="AUTOCOMMIT")
-            # Every test schema, including custom system schemas a test configured.
+            # Only schemas DBOS created, including custom system schemas a test
+            # configured; a coordinator's own schemas (citus, columnar) stay.
             schemas = connection.execute(
                 sa.text(
-                    "SELECT DISTINCT schema_name FROM information_schema.schemata "
-                    "WHERE schema_name NOT LIKE 'pg\\_%' "
-                    "AND schema_name NOT IN ('information_schema', 'public')"
+                    "SELECT DISTINCT table_schema FROM information_schema.tables "
+                    "WHERE table_name = 'dbos_migrations' "
+                    "UNION SELECT 'dbos'"
                 )
             ).scalars()
             for schema in list(schemas):
-                connection.execute(sa.text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+                # Escaped for the driver, which reads a bare % as a placeholder.
+                name = quote_identifier(schema).replace("%", "%%")
+                connection.exec_driver_sql(f"DROP SCHEMA IF EXISTS {name} CASCADE")
     finally:
         engine.dispose()
 
 
+def _reset_sharded_run_user_database(drop: bool) -> None:
+    """The user database stays plain local Postgres in sharded runs, reset as in any other."""
+    user_db_url = postgres_urls()[0]
+    name = str(sa.make_url(user_db_url).database)
+    # db_engine points at the router in sharded runs, which serves only the system database.
+    engine = sa.create_engine(
+        sa.make_url(user_db_url).set(
+            drivername="postgresql+psycopg", database="postgres"
+        ),
+        connect_args={"connect_timeout": 30},
+    )
+    try:
+        with engine.connect() as connection:
+            connection.execution_options(isolation_level="AUTOCOMMIT")
+            if drop:
+                connection.execute(
+                    sa.text(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
+                )
+                return
+            present = connection.execute(
+                sa.text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                {"name": name},
+            ).scalar()
+    finally:
+        engine.dispose()
+    if present:
+        _truncate_user_database(user_db_url)
+
+
 @pytest.fixture(autouse=True)
 def default_shard_key() -> Generator[Optional[str], Any, None]:
-    """Sharded runs only: a per-test shard key for whatever a test starts or addresses
-    without one. The product has no default; this keeps core's tests checking the keyed
-    SQL. Per test, so tests spread across shards."""
+    """Sharded runs only: a per-test shard key for top-level workflows and bare-ID calls
+    a test makes without one. The product has no default; this keeps core's tests running
+    the keyed SQL. Per test, so tests spread across shards. A child the test starts
+    without a key is given its parent's key on the context core builds for it (core itself
+    has no such default), with no fallback: from there core must carry it to the row and
+    the handle, and a key lost on the way, or a parent running without one, fails the test.
+    """
     if not using_sharding():
         yield None
         return
@@ -232,7 +269,8 @@ def default_shard_key() -> Generator[Optional[str], Any, None]:
             return key
 
     def _require_key(status: Any) -> None:
-        if status["shard_key"] is None:
+        # Children are left to core's plumbing; only top-level starts fall back.
+        if status["shard_key"] is None and status.get("parent_workflow_id") is None:
             status["shard_key"] = key
         require(status)
 
@@ -260,6 +298,24 @@ def default_shard_key() -> Generator[Optional[str], Any, None]:
     monkeypatch.setattr(ShardedSystemDatabase, "_keyed_messages", _keyed_messages)
     monkeypatch.setattr(ShardedSystemDatabase, "_schedule_values", _schedule_values)
     monkeypatch.setattr(ShardedSystemDatabase, "_scope_key", _scope_key)
+
+    # Every new workflow's context gets a key where core builds it: a top-level workflow
+    # the per-test key, a child exactly its running parent's, with no fallback, so a key
+    # core loses on the way to the row or handle, or a parent running without one, fails.
+    start_workflow_child = DBOSContext.create_start_workflow_child
+
+    def _create_start_workflow_child(cur_ctx: Optional[DBOSContext]) -> DBOSContext:
+        new_ctx = start_workflow_child(cur_ctx)
+        if new_ctx.shard_key is None:
+            in_workflow = cur_ctx is not None and cur_ctx.is_within_workflow()
+            new_ctx.shard_key = cur_ctx.shard_key if in_workflow else key  # type: ignore[union-attr]
+        return new_ctx
+
+    monkeypatch.setattr(
+        DBOSContext,
+        "create_start_workflow_child",
+        staticmethod(_create_start_workflow_child),
+    )
 
     # Clients a test builds itself connect to the sharded database too.
     client_init = DBOSClient.__init__
@@ -352,16 +408,17 @@ def _reset_test_databases(db_engine: sa.Engine, *, drop: bool) -> None:
     # SQLite needs no reset here: sqlite_path is a fresh file per test.
     if using_sqlite():
         return
-    if using_sharding():
-        _reset_sharded_system_database()
-        return
-
     # A run killed mid-test can leave the schema half-migrated, which truncation
     # spares and the next launch then fails on. One drop per session repairs it.
     global _databases_dropped
     if not _databases_dropped:
         _databases_dropped = True
         drop = True
+
+    if using_sharding():
+        _reset_sharded_system_database()
+        _reset_sharded_run_user_database(drop)
+        return
 
     user_db_url, sys_db_url = postgres_urls()
     names = [str(sa.make_url(url).database) for url in (user_db_url, sys_db_url)]

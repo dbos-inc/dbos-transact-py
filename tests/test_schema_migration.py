@@ -26,6 +26,13 @@ from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
 from dbos.cli.migration import print_dbos_migrations, print_dbos_user_role_sql
 
+from .conftest import using_sharding
+
+pytestmark = pytest.mark.skipif(
+    using_sharding(),
+    reason="Tests core's unsharded schema migrations, which a sharded system database replaces",
+)
+
 
 def test_systemdb_migration(
     dbos_dropped_databases: DBOS, skip_with_sqlite: None

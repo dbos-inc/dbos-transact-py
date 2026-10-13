@@ -12,9 +12,6 @@ _bindings: ContextVar[Optional[Dict[str, str]]] = ContextVar(
     "dbos_shard_key_bindings", default=None
 )
 _scope: ContextVar[Optional[str]] = ContextVar("dbos_shard_key_scope", default=None)
-_next_workflow: ContextVar[Optional[str]] = ContextVar(
-    "dbos_next_workflow_shard_key", default=None
-)
 
 
 @contextmanager
@@ -52,32 +49,15 @@ def scoped_shard_key() -> Optional[str]:
     return _scope.get()
 
 
-def set_next_workflow_shard_key(key: Optional[str]) -> "Token[Optional[str]]":
-    """Set the shard key for workflows started or enqueued next, as SetEnqueueOptions does."""
-    return _next_workflow.set(key)
-
-
-def reset_next_workflow_shard_key(token: "Token[Optional[str]]") -> None:
-    _next_workflow.reset(token)
-
-
-def next_workflow_shard_key() -> Optional[str]:
-    """The shard key for workflows started or enqueued next, if any."""
-    return _next_workflow.get()
-
-
-_Tokens = Tuple[
-    "Token[Optional[Dict[str, str]]]", "Token[Optional[str]]", "Token[Optional[str]]"
-]
+_Tokens = Tuple["Token[Optional[Dict[str, str]]]", "Token[Optional[str]]"]
 
 
 def clear_shard_key_state() -> _Tokens:
-    """Empty every binding, scope and next-workflow key, so a workflow body inherits none from its caller."""
-    return (_bindings.set(None), _scope.set(None), _next_workflow.set(None))
+    """Empty every binding and scope, so a workflow body inherits none from its caller."""
+    return (_bindings.set(None), _scope.set(None))
 
 
 def restore_shard_key_state(tokens: _Tokens) -> None:
-    bindings, scope, next_workflow = tokens
-    _next_workflow.reset(next_workflow)
+    bindings, scope = tokens
     _scope.reset(scope)
     _bindings.reset(bindings)
