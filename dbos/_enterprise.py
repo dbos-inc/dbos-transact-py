@@ -8,7 +8,17 @@ it satisfies them, so each side is verified against the contract on its own.
 from __future__ import annotations
 
 import importlib
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Protocol, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Protocol,
+    cast,
+)
 
 from ._error import DBOSInitializationError
 from ._utils import GlobalParams
@@ -82,6 +92,24 @@ class Enterprise(Protocol):
 
 CONDUCTOR = "Connecting to DBOS Conductor"
 SHARDING = "Using a sharded system database"
+
+
+# Config keys that turn on an enterprise feature, each with the name its errors use.
+CONFIG_FEATURES: Dict[str, str] = {"sharding": SHARDING}
+
+
+def enabled_features(config: Mapping[str, object]) -> List[str]:
+    """The enterprise features a config turns on."""
+    return [feature for key, feature in CONFIG_FEATURES.items() if config.get(key)]
+
+
+def require_conductor(feature: str, conductor_key: Optional[str]) -> None:
+    """Enterprise features are for executors connected to DBOS Conductor; DBOS Cloud always connects."""
+    if GlobalParams.dbos_cloud or conductor_key is not None:
+        return
+    raise DBOSInitializationError(
+        f"{feature} requires a connection to DBOS Conductor. Pass a conductor_key to DBOS."
+    )
 
 
 def load(feature: str = CONDUCTOR) -> Enterprise:

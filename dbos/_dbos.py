@@ -468,10 +468,15 @@ class DBOS:
 
         # DBOS Cloud always uses Conductor. Checked before any state exists, so a missing package fails cleanly.
         key = config.get("conductor_key") or conductor_key
+        # Every enterprise feature requires Conductor.
+        features = _enterprise.enabled_features(config)
+        for feature in features:
+            _enterprise.require_conductor(feature, key)
         if GlobalParams.dbos_cloud or key is not None:
             _enterprise.load()
-        elif config.get("sharding"):
-            _enterprise.load(_enterprise.SHARDING)
+        elif features:
+            # Reached only with the Conductor gate bypassed, as test harnesses do.
+            _enterprise.load(features[0])
 
         self._initialized: bool = True
 

@@ -11,6 +11,9 @@ from dbos import _enterprise as enterprise_module
 from dbos._error import DBOSInitializationError
 from dbos._utils import GlobalParams
 
+# Captured at import, before the sharded test harness replaces it.
+_require_conductor = enterprise_module.require_conductor
+
 
 def _import_raises(monkeypatch: pytest.MonkeyPatch, error: ImportError) -> None:
     def import_module(name: str) -> Any:
@@ -89,4 +92,41 @@ def test_cloud_always_requires_the_package(
     # DBOS Cloud always connects to Conductor, whether or not a key is passed in code.
     with pytest.raises(DBOSInitializationError, match="refused"):
         DBOS(config=config)
+    DBOS.destroy(destroy_registry=True)
+
+
+def test_enterprise_features_require_conductor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(GlobalParams, "dbos_cloud", False)
+    # The error names the feature that asked.
+    with pytest.raises(
+        DBOSInitializationError,
+        match=": Some feature requires a connection to DBOS Conductor",
+    ):
+        _require_conductor("Some feature", None)
+    # A Conductor key, or DBOS Cloud, which always connects, unlocks every feature.
+    _require_conductor("Some feature", "test-key")
+    monkeypatch.setattr(GlobalParams, "dbos_cloud", True)
+    _require_conductor("Some feature", None)
+
+
+def test_config_turns_on_enterprise_features() -> None:
+    assert enterprise_module.enabled_features({}) == []
+    assert enterprise_module.enabled_features({"sharding": False}) == []
+    assert enterprise_module.enabled_features({"sharding": True}) == [
+        enterprise_module.SHARDING
+    ]
+
+
+def test_sharded_executor_without_conductor_is_refused(
+    config: DBOSConfig, skip_with_sharding: None
+) -> None:
+    DBOS.destroy(destroy_registry=True)
+    # Refused before the package is even loaded, so this holds without dbos-enterprise.
+    with pytest.raises(
+        DBOSInitializationError,
+        match=f": {enterprise_module.SHARDING} requires a connection to DBOS Conductor",
+    ):
+        DBOS(config={**config, "sharding": True})
     DBOS.destroy(destroy_registry=True)
