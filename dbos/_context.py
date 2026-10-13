@@ -4,14 +4,14 @@ import json
 import os
 import time
 from contextlib import AbstractContextManager, contextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
-    Iterator,
+    Generator,
     List,
     Literal,
     Optional,
@@ -21,6 +21,13 @@ from typing import (
 )
 
 from dbos._serialization import WorkflowSerializationFormat
+from dbos._shard_keys import (
+    clear_shard_key_state,
+    next_workflow_shard_key,
+    reset_next_workflow_shard_key,
+    restore_shard_key_state,
+    set_next_workflow_shard_key,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.context import Context as OtelContext
@@ -118,8 +125,6 @@ class DBOSContext:
         self.workflow_id: str = ""
         # Shard key of the running workflow; None on an unsharded database.
         self.shard_key: Optional[str] = None
-        # Shard key for the next workflow started from this context, set by SetEnqueueOptions.
-        self.shard_key_for_next_workflow: Optional[str] = None
         self.function_id: int = -1
         # Token this execution wrote to the row's owner_xid; checkpoints land only while it still matches.
         self.owner_xid: Optional[str] = None
@@ -188,7 +193,7 @@ class DBOSContext:
             rv.otel_carrier = (
                 dict(self.otel_carrier) if self.otel_carrier is not None else None
             )
-            rv.shard_key = self.shard_key_for_next_workflow
+            rv.shard_key = next_workflow_shard_key()
         rv.is_within_set_workflow_id_block = self.is_within_set_workflow_id_block
         rv.parent_workflow_id = self.workflow_id
         rv.parent_workflow_fid = self.function_id
@@ -210,7 +215,6 @@ class DBOSContext:
         rv.app_version = self.app_version
         rv.workflow_id = self.workflow_id
         rv.shard_key = self.shard_key
-        rv.shard_key_for_next_workflow = self.shard_key_for_next_workflow
         rv.owner_xid = self.owner_xid
         rv.workflow_deadline_epoch_ms = self.workflow_deadline_epoch_ms
         rv.workflow_timeout_ms = self.workflow_timeout_ms
@@ -771,7 +775,7 @@ class PropagateOtelContext:
 
 
 @contextmanager
-def restore_otel_carrier(carrier: Optional[Any]) -> Iterator[None]:
+def restore_otel_carrier(carrier: Optional[Any]) -> Generator[None, None, None]:
     """Put a carrier persisted by PropagateOtelContext back on the context.
 
     Dequeue and recovery rebuild the workflow status from a fresh context, so the stored
@@ -810,7 +814,7 @@ class SetEnqueueOptions:
     ) -> None:
         self.created_ctx = False
         self.shard_key = shard_key
-        self.saved_shard_key: Optional[str] = None
+        self.shard_key_token: Optional[Token[Optional[str]]] = None
         self.deduplication_id: Optional[str] = deduplication_id
         self.saved_deduplication_id: Optional[str] = None
         self.duplication_policy: Optional[DuplicationPolicy] = duplication_policy
@@ -851,8 +855,7 @@ class SetEnqueueOptions:
         ctx.queue_partition_key = self.queue_partition_key
         self.saved_delay_until_epoch_ms = ctx.delay_until_epoch_ms
         ctx.delay_until_epoch_ms = self.delay_until_epoch_ms
-        self.saved_shard_key = ctx.shard_key_for_next_workflow
-        ctx.shard_key_for_next_workflow = self.shard_key
+        self.shard_key_token = set_next_workflow_shard_key(self.shard_key)
         return self
 
     def __exit__(
@@ -868,7 +871,8 @@ class SetEnqueueOptions:
         curr_ctx.app_version = self.saved_app_version
         curr_ctx.queue_partition_key = self.saved_queue_partition_key
         curr_ctx.delay_until_epoch_ms = self.saved_delay_until_epoch_ms
-        curr_ctx.shard_key_for_next_workflow = self.saved_shard_key
+        if self.shard_key_token is not None:
+            reset_next_workflow_shard_key(self.shard_key_token)
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()
@@ -963,9 +967,12 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         self.saved_is_within_set_workflow_id_block: bool = False
         self.use_ctx = ctx
         self.prev_ctx: Optional[DBOSContext] = None
+        self.shard_key_tokens: Optional[Any] = None
 
     def __enter__(self) -> DBOSContext:
         self.prev_ctx = get_local_dbos_context()
+        # The body starts with no caller's shard keys; its own lives on the context.
+        self.shard_key_tokens = clear_shard_key_state()
         # Create a basic context if none exists
         if self.use_ctx is None:
             self.use_ctx = DBOSContext()
@@ -1014,6 +1021,8 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         ctx.duplication_policy = self.saved_duplication_policy
         # Code to clean up the basic context if we created it
         _set_local_dbos_context(self.prev_ctx)
+        if self.shard_key_tokens is not None:
+            restore_shard_key_state(self.shard_key_tokens)
         return False  # Did not handle
 
 

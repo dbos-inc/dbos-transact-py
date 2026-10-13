@@ -38,7 +38,7 @@ from dbos._error import DBOSException, DBOSQueueDeduplicatedError
 from dbos._queue import Queue
 from dbos._registrations import get_dbos_func_name, get_func_info
 from dbos._serialization import PortableWorkflowError, serialize_args
-from dbos._shard_keys import shard_key_scope
+from dbos._shard_keys import next_workflow_shard_key, shard_key_scope
 from dbos._sys_db import DebounceResult
 
 if TYPE_CHECKING:
@@ -312,7 +312,7 @@ class Debouncer(Generic[P, R]):
         deduplication_id = f"{self.options['workflow_name']}-{debounce_key}"
         timeout_sec = self.options["debounce_timeout_sec"]
         # The debounced workflow's shard key, from SetEnqueueOptions; debounce keys are unique within it.
-        shard_key = ctx.shard_key_for_next_workflow if ctx is not None else None
+        shard_key = next_workflow_shard_key()
         # One owner for the whole operation: the bounce scope, the conflict check, and the fresh enqueue must agree.
         target_app = (
             self.options["application_name"]

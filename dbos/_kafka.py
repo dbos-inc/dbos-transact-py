@@ -176,7 +176,6 @@ def _build_status(
     group_id: str,
     ordering: KafkaOrdering,
     queue_name: str,
-    shard_key: Optional[str] = None,
 ) -> "WorkflowStatusInternal":
     msg = KafkaMessage(
         headers=cmsg.headers(),
@@ -205,7 +204,6 @@ def _build_status(
         queue_name=queue_name,
         workflow_id=workflow_id,
         queue_partition_key=partition_key,
-        shard_key=shard_key,
     )
 
 
@@ -281,17 +279,11 @@ def _kafka_consumer_loop(
                     statuses: list["WorkflowStatusInternal"] = []
                     for cmsg in valid:
                         try:
-                            statuses.append(
-                                _build_status(
-                                    dbos,
-                                    func,
-                                    cmsg,
-                                    group_id,
-                                    ordering,
-                                    queue_name,
-                                    shard_key,
-                                )
+                            status = _build_status(
+                                dbos, func, cmsg, group_id, ordering, queue_name
                             )
+                            status["shard_key"] = shard_key
+                            statuses.append(status)
                         except Exception as e:
                             dbos_logger.error(
                                 f"Dropping unprocessable Kafka message "
