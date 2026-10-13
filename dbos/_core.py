@@ -10,7 +10,7 @@ import time
 import uuid
 from collections import deque
 from concurrent.futures import Future
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, nullcontext
 from functools import wraps
 from types import TracebackType
 from typing import (
@@ -47,6 +47,7 @@ from ._context import (
     EnterDBOSStepCtx,
     EnterDBOSWorkflow,
     SetEnqueueOptions,
+    SetShardKey,
     SetWorkflowID,
     TracedAttributes,
     WorkflowIDReusePolicy,
@@ -1377,9 +1378,11 @@ def execute_dequeued_workflow(
         # Restore the claimed row's ID and trace carrier onto the worker's ambient context.
         with (
             SetWorkflowID(workflow_id),
-            SetEnqueueOptions(
-                queue_partition_key=status.get("queue_partition_key"),
-                shard_key=status.get("shard_key"),
+            SetEnqueueOptions(queue_partition_key=status.get("queue_partition_key")),
+            (
+                SetShardKey(shard_key)
+                if (shard_key := status.get("shard_key")) is not None
+                else nullcontext()
             ),
             restore_otel_carrier(
                 otel_carrier_from_attributes(status.get("attributes"))

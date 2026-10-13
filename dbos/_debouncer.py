@@ -311,7 +311,7 @@ class Debouncer(Generic[P, R]):
 
         deduplication_id = f"{self.options['workflow_name']}-{debounce_key}"
         timeout_sec = self.options["debounce_timeout_sec"]
-        # The debounced workflow's shard key, from SetEnqueueOptions; debounce keys are unique within it.
+        # The debounced workflow's shard key, from SetShardKey; debounce keys are unique within it.
         shard_key = ctx.shard_key_for_next_workflow if ctx is not None else None
         # One owner for the whole operation: the bounce scope, the conflict check, and the fresh enqueue must agree.
         target_app = (

@@ -119,7 +119,7 @@ class DBOSContext:
         self.workflow_id: str = ""
         # Shard key of the running workflow; None on an unsharded database.
         self.shard_key: Optional[str] = None
-        # Shard key for the next workflow started from this context, set by SetEnqueueOptions.
+        # Shard key for the next workflow started from this context, set by SetShardKey.
         self.shard_key_for_next_workflow: Optional[str] = None
         self.function_id: int = -1
         # Token this execution wrote to the row's owner_xid; checkpoints land only while it still matches.
@@ -807,11 +807,8 @@ class SetEnqueueOptions:
         queue_partition_key: Optional[str] = None,
         delay_seconds: Optional[float] = None,
         duplication_policy: Optional[DuplicationPolicy] = None,
-        shard_key: Optional[str] = None,
     ) -> None:
         self.created_ctx = False
-        self.shard_key = shard_key
-        self.saved_shard_key: Optional[str] = None
         self.deduplication_id: Optional[str] = deduplication_id
         self.saved_deduplication_id: Optional[str] = None
         self.duplication_policy: Optional[DuplicationPolicy] = duplication_policy
@@ -852,8 +849,6 @@ class SetEnqueueOptions:
         ctx.queue_partition_key = self.queue_partition_key
         self.saved_delay_until_epoch_ms = ctx.delay_until_epoch_ms
         ctx.delay_until_epoch_ms = self.delay_until_epoch_ms
-        self.saved_shard_key = ctx.shard_key_for_next_workflow
-        ctx.shard_key_for_next_workflow = self.shard_key
         return self
 
     def __exit__(
@@ -869,8 +864,41 @@ class SetEnqueueOptions:
         curr_ctx.app_version = self.saved_app_version
         curr_ctx.queue_partition_key = self.saved_queue_partition_key
         curr_ctx.delay_until_epoch_ms = self.saved_delay_until_epoch_ms
-        curr_ctx.shard_key_for_next_workflow = self.saved_shard_key
         # Code to clean up the basic context if we created it
+        if self.created_ctx:
+            _clear_local_dbos_context()
+        return False
+
+
+class SetShardKey:
+    """Set the shard key of every workflow started, enqueued, or called in the block.
+    Required on a sharded system database; a workflow never inherits its caller's key.
+    """
+
+    def __init__(self, shard_key: str) -> None:
+        if not shard_key:
+            raise ValueError("shard_key must be a non-empty string")
+        self.created_ctx = False
+        self.shard_key = shard_key
+        self.saved_shard_key: Optional[str] = None
+
+    def __enter__(self) -> SetShardKey:
+        ctx = get_local_dbos_context()
+        if ctx is None:
+            self.created_ctx = True
+            _set_local_dbos_context(DBOSContext())
+        ctx = assert_current_dbos_context()
+        self.saved_shard_key = ctx.shard_key_for_next_workflow
+        ctx.shard_key_for_next_workflow = self.shard_key
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        assert_current_dbos_context().shard_key_for_next_workflow = self.saved_shard_key
         if self.created_ctx:
             _clear_local_dbos_context()
         return False

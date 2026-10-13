@@ -36,6 +36,7 @@ from dbos._client import DBOSClient
 from dbos._context import (
     DBOSContext,
     SetEnqueueOptions,
+    SetShardKey,
     _clear_local_dbos_context,
     _set_local_dbos_context,
     assert_current_dbos_context,
@@ -3623,19 +3624,37 @@ async def test_workflow_wrapped_by_custom_decorator(
     assert error_count == 0
 
 
-@pytest.mark.parametrize("shard_key", [None, "tenant-a"])
-def test_set_enqueue_options_exits_in_another_context(shard_key: Optional[str]) -> None:
+def test_set_enqueue_options_exits_in_another_context() -> None:
     """Entry and exit may run in different contextvars Contexts, as threadpool-run
     generator dependencies do; the options must still restore cleanly."""
     _set_local_dbos_context(DBOSContext())
     try:
-        options = SetEnqueueOptions(priority=1, shard_key=shard_key)
+        options = SetEnqueueOptions(priority=1)
         contextvars.copy_context().run(options.__enter__)
         ctx = assert_current_dbos_context()
-        assert ctx.shard_key_for_next_workflow == shard_key
+        assert ctx.priority == 1
         contextvars.copy_context().run(options.__exit__, None, None, None)
-        assert ctx.shard_key_for_next_workflow is None
         assert ctx.priority is None
+    finally:
+        _clear_local_dbos_context()
+
+
+def test_set_shard_key_exits_in_another_context() -> None:
+    _set_local_dbos_context(DBOSContext())
+    try:
+        with SetShardKey("tenant-a"):
+            shard_key = SetShardKey("tenant-b")
+            contextvars.copy_context().run(shard_key.__enter__)
+            ctx = assert_current_dbos_context()
+            assert ctx.shard_key_for_next_workflow == "tenant-b"
+            # Independent of the enqueue options: setting those keeps the key.
+            with SetEnqueueOptions(priority=1):
+                assert ctx.shard_key_for_next_workflow == "tenant-b"
+            contextvars.copy_context().run(shard_key.__exit__, None, None, None)
+            assert ctx.shard_key_for_next_workflow == "tenant-a"
+        assert ctx.shard_key_for_next_workflow is None
+        with pytest.raises(ValueError):
+            SetShardKey("")
     finally:
         _clear_local_dbos_context()
 
@@ -3659,7 +3678,7 @@ def test_shard_keys_are_rejected_without_sharding(
     key = "tenant-a"
 
     def start_keyed() -> Any:
-        with SetEnqueueOptions(shard_key=key):
+        with SetShardKey(key):
             return DBOS.start_workflow(keyless)
 
     calls: List[Callable[[], Any]] = [
