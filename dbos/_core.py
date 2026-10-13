@@ -724,19 +724,20 @@ def _init_workflow(
                 if existing_id is not None:
                     if ctx.has_parent():
                         # Attached: record the holder as the parent's child, not the error.
-                        dbos._sys_db.record_operation_result(
-                            {
-                                "workflow_uuid": ctx.parent_workflow_id,
-                                "function_id": ctx.parent_workflow_fid,
-                                "function_name": wf_name,
-                                "output": None,
-                                "error": None,
-                                "serialization": None,
-                                "started_at_epoch_ms": started_at_epoch_ms,
-                                "child_workflow_id": existing_id,
-                            },
-                            owner_xid=parent_owner_xid,
-                        )
+                        with bind_shard_keys({existing_id: status["shard_key"]}):
+                            dbos._sys_db.record_operation_result(
+                                {
+                                    "workflow_uuid": ctx.parent_workflow_id,
+                                    "function_id": ctx.parent_workflow_fid,
+                                    "function_name": wf_name,
+                                    "output": None,
+                                    "error": None,
+                                    "serialization": None,
+                                    "started_at_epoch_ms": started_at_epoch_ms,
+                                    "child_workflow_id": existing_id,
+                                },
+                                owner_xid=parent_owner_xid,
+                            )
                     return status, False, existing_id
                 continue
             # A step result, so the default format: replay must rebuild the exact type a caller catches.
@@ -1901,18 +1902,19 @@ def _persist_enqueue_with_options(
                 if existing_id is not None:
                     if new_wf_ctx.has_parent():
                         # Attached: record the holder as the parent's child, not the error.
-                        dbos._sys_db.record_operation_result(
-                            {
-                                "workflow_uuid": new_wf_ctx.parent_workflow_id,
-                                "function_id": new_wf_ctx.parent_workflow_fid,
-                                "function_name": wf_name,
-                                "output": None,
-                                "error": None,
-                                "serialization": None,
-                                "started_at_epoch_ms": child_start_time,
-                                "child_workflow_id": existing_id,
-                            }
-                        )
+                        with bind_shard_keys({existing_id: status["shard_key"]}):
+                            dbos._sys_db.record_operation_result(
+                                {
+                                    "workflow_uuid": new_wf_ctx.parent_workflow_id,
+                                    "function_id": new_wf_ctx.parent_workflow_fid,
+                                    "function_name": wf_name,
+                                    "output": None,
+                                    "error": None,
+                                    "serialization": None,
+                                    "started_at_epoch_ms": child_start_time,
+                                    "child_workflow_id": existing_id,
+                                }
+                            )
                     workflow_id = existing_id
                     break
                 continue

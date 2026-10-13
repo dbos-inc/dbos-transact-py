@@ -2178,7 +2178,12 @@ def test_ds_adopts_unversioned_table(
             SQLAlchemyDatasource.create(url, schema=schema, run_migrations=False)
         ds = SQLAlchemyDatasource.create(url, schema=schema)
         assert _ds_version(ds) == _LATEST_DS_VERSION
-        assert _checkpoint_step_ids(ds, "w") == [1]
+        with ds.engine.connect() as conn:
+            t = ds._outputs_table
+            # The legacy row is read by its stored ID: no DBOS runs here to resolve one.
+            assert conn.execute(
+                sa.select(t.c.step_id).where(t.c.workflow_id == "w")
+            ).scalars().all() == [1]
         ds.engine.dispose()
     finally:
         if schema is not None:
