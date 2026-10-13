@@ -36,6 +36,7 @@ from typing import (
 from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
+from croniter import croniter
 
 from dbos._serialization import (
     DefaultSerializer,
@@ -75,7 +76,6 @@ from ._core import (
     start_workflow_async,
     write_stream,
 )
-from ._croniter import croniter  # type: ignore
 from ._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 from ._enqueue_options import EnqueueOptions
 from ._migration import get_dbos_schema_permissions_sql

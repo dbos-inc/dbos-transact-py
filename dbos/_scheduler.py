@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional
 from zoneinfo import ZoneInfo
 
-from ._croniter import croniter  # type: ignore
+from croniter import croniter
+
 from ._error import DBOSException
 from ._logger import dbos_logger
 from ._serialization import Serializer, WorkflowInputs
