@@ -40,6 +40,8 @@ class DBOSConfig(TypedDict, total=False):
         conductor_url (str): The websockets URL for your DBOS Conductor service. Only set if you're self-hosting Conductor.
         conductor_executor_metadata (Dict[str, Any]): Metadata associated with this executor that may be used to identify an executor on the Conductor dashboard. Must be JSON-serializable.
         conductor_metadata_only_mode (bool): If True, only send workflow metadata to Conductor, never workflow data (inputs, outputs, errors, step outputs, events, notifications, streams, or schedule context). Defaults to False.
+        auto_upgrade (bool): If True, workflows registered by this application are auto-upgraded to the latest application version. Defaults to False.
+        auto_upgrade_interval_sec (float): Seconds between two auto-upgrade passes. Defaults to 30.0.
         serializer (Serializer): A custom serializer and deserializer DBOS uses when storing program data in the system database
         use_listen_notify (bool): Whether to use LISTEN/NOTIFY or polling to listen for notifications and events.  Defaults to True. As this affects migrations, may not be changed after the system database is first created.
         run_migrations (bool): Whether to create and migrate the system database on launch. Defaults to True. Set to False for a process that must not alter the schema, such as one whose database role cannot run DDL, or a deployment that migrates out of band with `dbos migrate`. Launch then verifies the schema instead: a system database that is missing, or behind the version this build requires, fails launch rather than being created or migrated.
@@ -76,6 +78,8 @@ class DBOSConfig(TypedDict, total=False):
     conductor_url: Optional[str]
     conductor_executor_metadata: Optional[Dict[str, Any]]
     conductor_metadata_only_mode: Optional[bool]
+    auto_upgrade: Optional[bool]
+    auto_upgrade_interval_sec: Optional[float]
     serializer: Optional[Serializer]
     enable_patching: Optional[bool]
     use_listen_notify: Optional[bool]
@@ -98,6 +102,7 @@ class RuntimeConfig(TypedDict, total=False):
     observability_query_timeout_sec: Optional[float]
     scheduler_polling_interval_sec: Optional[float]
     kafka_queue_polling_interval_sec: Optional[float]
+    auto_upgrade_interval_sec: Optional[float]
 
 
 class DatabaseConfig(TypedDict, total=False):
@@ -253,6 +258,18 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         translated_config["runtimeConfig"][
             "kafka_queue_polling_interval_sec"
         ] = kafka_interval
+    if "auto_upgrade_interval_sec" in config:
+        upgrade_interval = config["auto_upgrade_interval_sec"]
+        # Reject NaN/inf too (they slip past a bare <= 0) so the poller's wait can't crash.
+        if upgrade_interval is not None and (
+            not math.isfinite(upgrade_interval) or upgrade_interval <= 0
+        ):
+            raise DBOSInitializationError(
+                f"auto_upgrade_interval_sec must be a finite positive number of seconds, got {upgrade_interval}"
+            )
+        translated_config["runtimeConfig"][
+            "auto_upgrade_interval_sec"
+        ] = upgrade_interval
 
     # Telemetry config
     enable_otlp = config.get("enable_otlp", None)
