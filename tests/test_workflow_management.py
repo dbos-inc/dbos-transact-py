@@ -202,7 +202,9 @@ def test_cancel_after_final_step(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_workflow_outcome_is_owned_by_the_pending_row(dbos: DBOS) -> None:
+def test_workflow_outcome_is_owned_by_the_pending_row(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     # A run may record its outcome only while its workflow_status row is still
     # PENDING: that row is what says "this run is what the workflow is doing".
     # Every other status means the run lost ownership (a concurrent resume
@@ -744,7 +746,7 @@ def test_fork_nonexistent_workflow_replays_recorded_error(dbos: DBOS) -> None:
 
 
 def test_workflow_command_transient_error_is_retried_not_recorded(
-    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, skip_with_sharding: None
 ) -> None:
     target_id = str(uuid.uuid4())
     original_children = dbos._sys_db._get_direct_children

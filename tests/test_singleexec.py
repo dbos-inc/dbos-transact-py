@@ -416,12 +416,12 @@ def test_waiters_keep_their_own_events() -> None:
     """Each waiter on a key keeps its own event: one waiter's wake or clear never affects another."""
     registry = ThreadSafeEventDict()
     first_event = LoopAwareEvent()
-    registry.add("wf::topic", first_event, ("wf", "topic"))
+    registry.add("wf::topic", first_event, ("wf", "topic", None))
     first_event.set()
 
     # A waiter joining after an earlier one was woken starts unset.
     second_event = LoopAwareEvent()
-    registry.add("wf::topic", second_event, ("wf", "topic"))
+    registry.add("wf::topic", second_event, ("wf", "topic", None))
     assert not second_event.is_set()
 
     # A signal wakes every waiter, and clearing one leaves the others set.
@@ -452,7 +452,7 @@ def test_recv_ignores_a_stale_waiters_wake(dbos: DBOS) -> None:
     # What a stale execution leaves behind between its wake and its cleanup.
     stale_event = LoopAwareEvent()
     stale_event.set()
-    dbos._sys_db.notifications_map.add(payload, stale_event, (wfid, "topic"))
+    dbos._sys_db.notifications_map.add(payload, stale_event, (wfid, "topic", None))
     try:
         with SetWorkflowID(wfid):
             handle = DBOS.start_workflow(recv_workflow)

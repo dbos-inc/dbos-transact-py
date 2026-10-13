@@ -886,7 +886,7 @@ def test_debounce_targets_another_application(dbos: DBOS, config: Any) -> None:
 
 
 def test_debounce_bounce_atomic_with_checkpoint(
-    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, skip_with_sharding: None
 ) -> None:
     # Regression test (exactly-once): an in-workflow bounce commits atomically with its step
     # checkpoint. If the checkpoint write fails, the bounce must roll back with it; otherwise a

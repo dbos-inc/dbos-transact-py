@@ -116,6 +116,10 @@ class DBOSContext:
         self.parent_workflow_id: str = ""
         self.parent_workflow_fid: int = -1
         self.workflow_id: str = ""
+        # Shard key of the running workflow; None on an unsharded database.
+        self.shard_key: Optional[str] = None
+        # Shard key for the next workflow started from this context, set by SetEnqueueOptions.
+        self.shard_key_for_next_workflow: Optional[str] = None
         self.function_id: int = -1
         # Token this execution wrote to the row's owner_xid; checkpoints land only while it still matches.
         self.owner_xid: Optional[str] = None
@@ -184,6 +188,7 @@ class DBOSContext:
             rv.otel_carrier = (
                 dict(self.otel_carrier) if self.otel_carrier is not None else None
             )
+            rv.shard_key = self.shard_key_for_next_workflow
         rv.is_within_set_workflow_id_block = self.is_within_set_workflow_id_block
         rv.parent_workflow_id = self.workflow_id
         rv.parent_workflow_fid = self.function_id
@@ -204,6 +209,8 @@ class DBOSContext:
         rv.app_id = self.app_id
         rv.app_version = self.app_version
         rv.workflow_id = self.workflow_id
+        rv.shard_key = self.shard_key
+        rv.shard_key_for_next_workflow = self.shard_key_for_next_workflow
         rv.owner_xid = self.owner_xid
         rv.workflow_deadline_epoch_ms = self.workflow_deadline_epoch_ms
         rv.workflow_timeout_ms = self.workflow_timeout_ms
@@ -799,8 +806,11 @@ class SetEnqueueOptions:
         queue_partition_key: Optional[str] = None,
         delay_seconds: Optional[float] = None,
         duplication_policy: Optional[DuplicationPolicy] = None,
+        shard_key: Optional[str] = None,
     ) -> None:
         self.created_ctx = False
+        self.shard_key = shard_key
+        self.saved_shard_key: Optional[str] = None
         self.deduplication_id: Optional[str] = deduplication_id
         self.saved_deduplication_id: Optional[str] = None
         self.duplication_policy: Optional[DuplicationPolicy] = duplication_policy
@@ -841,6 +851,8 @@ class SetEnqueueOptions:
         ctx.queue_partition_key = self.queue_partition_key
         self.saved_delay_until_epoch_ms = ctx.delay_until_epoch_ms
         ctx.delay_until_epoch_ms = self.delay_until_epoch_ms
+        self.saved_shard_key = ctx.shard_key_for_next_workflow
+        ctx.shard_key_for_next_workflow = self.shard_key
         return self
 
     def __exit__(
@@ -856,6 +868,7 @@ class SetEnqueueOptions:
         curr_ctx.app_version = self.saved_app_version
         curr_ctx.queue_partition_key = self.saved_queue_partition_key
         curr_ctx.delay_until_epoch_ms = self.saved_delay_until_epoch_ms
+        curr_ctx.shard_key_for_next_workflow = self.saved_shard_key
         # Code to clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()

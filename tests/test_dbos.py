@@ -2274,7 +2274,7 @@ def test_recovery_appversion(config: DBOSConfig) -> None:
 
 
 def test_conductor_key_keeps_cloud_executor_id(
-    config: DBOSConfig, monkeypatch: pytest.MonkeyPatch
+    config: DBOSConfig, monkeypatch: pytest.MonkeyPatch, skip_with_sharding: None
 ) -> None:
     # Only the executor identity is under test, so stand in for the enterprise client.
     class _NoopConductor:
@@ -2520,7 +2520,7 @@ def test_timeout_sweep_cancels_unowned_workflows(dbos: DBOS) -> None:
     dbos._sys_db.cancel_timed_out_workflows = real_sweep  # type: ignore[method-assign]
 
 
-def test_timeout_sweep_query_plan(dbos: DBOS) -> None:
+def test_timeout_sweep_query_plan(dbos: DBOS, skip_with_sharding: None) -> None:
     """The sweep runs every poll, so it must reach expired rows through idx_workflow_status_deadline."""
     from sqlalchemy import event
 
@@ -2727,7 +2727,10 @@ def test_destroy(dbos: DBOS, config: DBOSConfig) -> None:
 
 
 def test_custom_database(
-    config: DBOSConfig, db_engine: sa.Engine, cleanup_test_databases: None
+    config: DBOSConfig,
+    db_engine: sa.Engine,
+    cleanup_test_databases: None,
+    skip_with_sharding: None,
 ) -> None:
     DBOS.destroy(destroy_registry=True)
     assert config["system_database_url"]
@@ -2851,6 +2854,7 @@ def test_custom_engine(
     drop_test_databases: None,
     db_engine: sa.Engine,
     skip_with_sqlite: None,
+    skip_with_sharding: None,
 ) -> None:
     # Needs a dropped database: it asserts launch fails before the database exists.
     DBOS.destroy(destroy_registry=True)
@@ -3422,7 +3426,9 @@ def test_notification_fallback_polling(dbos: DBOS) -> None:
     assert duration < 5.0
 
 
-def test_recv_wakeup_trigger_is_kept(dbos: DBOS, skip_with_sqlite: None) -> None:
+def test_recv_wakeup_trigger_is_kept(
+    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
     """The notifications trigger must wake a blocked recv: assert it exists and that, with the fallback recheck forced far out, a send still delivers promptly via the trigger's NOTIFY."""
     sys_db = dbos._sys_db
 

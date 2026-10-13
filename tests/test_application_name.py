@@ -245,7 +245,9 @@ def test_steps_carry_owner_and_forks_inherit_it(dbos: DBOS) -> None:
 # ── Reads ─────────────────────────────────────────────────────────────────────
 
 
-def test_reads_surface_owner_and_ids_stay_global(dbos: DBOS) -> None:
+def test_reads_surface_owner_and_ids_stay_global(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """Workflow IDs are unique, so identity reads are never scoped —
     cross-application get_result and status depend on it."""
 
@@ -290,7 +292,9 @@ def test_reads_surface_owner_and_ids_stay_global(dbos: DBOS) -> None:
 # ── Isolation between applications ────────────────────────────────────────────
 
 
-def test_claiming_skips_another_applications_workflows(dbos: DBOS) -> None:
+def test_claiming_skips_another_applications_workflows(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """Dequeue and recovery, the two ways a row gets picked up. Both collide across
     applications by default, so only ownership separates them."""
     queue = DBOS.register_queue("shared-name-queue")
@@ -339,7 +343,7 @@ def test_claiming_skips_another_applications_workflows(dbos: DBOS) -> None:
 
 
 def test_unclaimed_rows_belong_to_every_application(
-    dbos: DBOS, client: DBOSClient
+    dbos: DBOS, client: DBOSClient, skip_with_sharding: None
 ) -> None:
     """One rule everywhere: naming an application lists its rows plus unclaimed
     ones. Re-registering an unclaimed row claims it through the ordinary upsert."""
@@ -446,7 +450,9 @@ def test_unclaimed_rows_belong_to_every_application(
 # ── Application versions ──────────────────────────────────────────────────────
 
 
-def test_versions_are_per_application(dbos: DBOS, client: DBOSClient) -> None:
+def test_versions_are_per_application(
+    dbos: DBOS, client: DBOSClient, skip_with_sharding: None
+) -> None:
     """Version names stay global addresses, so a row records which application
     registered it, and two peers must never compute the same one."""
     registry = dbos._registry
@@ -576,7 +582,7 @@ def test_versions_are_per_application(dbos: DBOS, client: DBOSClient) -> None:
 
 
 def test_conflicting_names_across_applications_raise(
-    dbos: DBOS, client: DBOSClient
+    dbos: DBOS, client: DBOSClient, skip_with_sharding: None
 ) -> None:
     """Queue and schedule names stay globally unique, so a collision is a conflict, not
     a silent overwrite. A nameless writer administers any row without taking it."""
@@ -672,7 +678,9 @@ def test_conflicting_names_across_applications_raise(
         ).one() == (OTHER_APP, new_cron)
 
 
-def test_cli_binds_its_application_options(dbos: DBOS, config: Any) -> None:
+def test_cli_binds_its_application_options(
+    dbos: DBOS, config: Any, skip_with_sharding: None
+) -> None:
     """Click binds options to parameters by name, which mypy cannot check, so every
     command taking an application needs one real invocation."""
     from click.testing import CliRunner
@@ -741,7 +749,9 @@ def test_cli_binds_its_application_options(dbos: DBOS, config: Any) -> None:
 # ── Two applications, one system database ─────────────────────────────────────
 
 
-def test_two_applications_share_one_system_database(dbos: DBOS, config: Any) -> None:
+def test_two_applications_share_one_system_database(
+    dbos: DBOS, config: Any, skip_with_sharding: None
+) -> None:
     """The only test with genuine second and third applications. DBOS is a process
     singleton, so each peer is its own SystemDatabase against the same database."""
     from dbos._serialization import DefaultSerializer
@@ -861,7 +871,7 @@ def owners_of_everything(dbos: DBOS) -> dict[str, set[Any]]:
         }
 
 
-def test_rename_moves_every_owned_table(dbos: DBOS) -> None:
+def test_rename_moves_every_owned_table(dbos: DBOS, skip_with_sharding: None) -> None:
     """Ownership lives on the rows, so renaming an application is a re-own of all
     five tables. Counts are reported per table so an operator can check the move."""
     insert_foreign_workflow(dbos, "rename-terminal", status="SUCCESS")
@@ -884,7 +894,9 @@ def test_rename_moves_every_owned_table(dbos: DBOS) -> None:
         assert RENAMED_APP in owners, label
 
 
-def test_rename_batches_terminal_rows_and_resumes(dbos: DBOS) -> None:
+def test_rename_batches_terminal_rows_and_resumes(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """Terminal workflows and steps move in batches, so a long history does not run
     in one transaction. The predicate shrinks as it goes, so a re-run resumes."""
     for i in range(5):
@@ -922,7 +934,9 @@ def test_rename_rejects_names_an_application_could_not_use(dbos: DBOS) -> None:
         dbos._sys_db.rename_application(OTHER_APP, RENAMED_APP, batch_size=0)
 
 
-def test_rename_moves_only_the_sources_it_is_given(dbos: DBOS) -> None:
+def test_rename_moves_only_the_sources_it_is_given(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """Scope is the whole contract: a named application's rows, the unclaimed ones, or
     both. Never a peer nobody named, and never the live application's own."""
 
@@ -969,7 +983,7 @@ def test_rename_moves_only_the_sources_it_is_given(dbos: DBOS) -> None:
 
 
 def test_list_workflows_scopes_to_the_application(
-    dbos: DBOS, client: DBOSClient
+    dbos: DBOS, client: DBOSClient, skip_with_sharding: None
 ) -> None:
     """Unset lists this application's rows plus unclaimed ones, naming an application
     lists its rows plus unclaimed ones, and a client with no application is unscoped."""

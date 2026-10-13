@@ -176,6 +176,7 @@ def _build_status(
     group_id: str,
     ordering: KafkaOrdering,
     queue_name: str,
+    shard_key: Optional[str] = None,
 ) -> "WorkflowStatusInternal":
     msg = KafkaMessage(
         headers=cmsg.headers(),
@@ -204,6 +205,7 @@ def _build_status(
         queue_name=queue_name,
         workflow_id=workflow_id,
         queue_partition_key=partition_key,
+        shard_key=shard_key,
     )
 
 
@@ -224,6 +226,7 @@ def _kafka_consumer_loop(
     ordering: KafkaOrdering,
     batch_size: int,
     queue_name: str,
+    shard_key: Optional[str] = None,
 ) -> None:
     from ._dbos import _get_dbos_instance
 
@@ -280,7 +283,13 @@ def _kafka_consumer_loop(
                         try:
                             statuses.append(
                                 _build_status(
-                                    dbos, func, cmsg, group_id, ordering, queue_name
+                                    dbos,
+                                    func,
+                                    cmsg,
+                                    group_id,
+                                    ordering,
+                                    queue_name,
+                                    shard_key,
                                 )
                             )
                         except Exception as e:
@@ -344,6 +353,7 @@ def kafka_consumer(
     ordering: Optional[KafkaOrdering] = None,
     batch_size: int = 250,
     queue_name: Optional[str] = None,
+    shard_key: Optional[str] = None,
 ) -> Callable[[_KafkaConsumerWorkflow], _KafkaConsumerWorkflow]:
     resolved_ordering: KafkaOrdering
     if ordering is None:
@@ -458,6 +468,7 @@ def kafka_consumer(
             resolved_ordering,
             batch_size,
             consumer_queue_name,
+            shard_key,
         )
         return func
 

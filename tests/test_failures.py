@@ -37,7 +37,9 @@ from .conftest import (
 )
 
 
-def test_notification_errors(dbos: DBOS, skip_with_sqlite: None) -> None:
+def test_notification_errors(
+    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
     @DBOS.workflow()
     def test_send_workflow(dest_uuid: str, topic: str) -> str:
         DBOS.send(dest_uuid, "test1")

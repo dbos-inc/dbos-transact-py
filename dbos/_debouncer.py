@@ -38,6 +38,7 @@ from dbos._error import DBOSException, DBOSQueueDeduplicatedError
 from dbos._queue import Queue
 from dbos._registrations import get_dbos_func_name, get_func_info
 from dbos._serialization import PortableWorkflowError, serialize_args
+from dbos._shard_keys import shard_key_scope
 from dbos._sys_db import DebounceResult
 
 if TYPE_CHECKING:
@@ -247,6 +248,12 @@ class Debouncer(Generic[P, R]):
         )
         return result
 
+    def _bounce_scoped(
+        self, shard_key: Optional[str], *args: Any, **kwargs: Any
+    ) -> DebounceResult:
+        with shard_key_scope(shard_key):
+            return self._bounce(*args, **kwargs)
+
     def debounce(
         self,
         debounce_key: str,
@@ -304,6 +311,8 @@ class Debouncer(Generic[P, R]):
 
         deduplication_id = f"{self.options['workflow_name']}-{debounce_key}"
         timeout_sec = self.options["debounce_timeout_sec"]
+        # The debounced workflow's shard key, from SetEnqueueOptions; debounce keys are unique within it.
+        shard_key = ctx.shard_key_for_next_workflow if ctx is not None else None
         # One owner for the whole operation: the bounce scope, the conflict check, and the fresh enqueue must agree.
         target_app = (
             self.options["application_name"]
@@ -324,7 +333,8 @@ class Debouncer(Generic[P, R]):
                         step.workflow_id,
                         step.curr_step_function_id,
                         "DBOS.debounce_delayed_workflow",
-                        lambda c: self._bounce(
+                        lambda c: self._bounce_scoped(
+                            shard_key,
                             dbos,
                             func,
                             queue.name,
@@ -337,7 +347,8 @@ class Debouncer(Generic[P, R]):
                         ),
                     )
             else:
-                result = self._bounce(
+                result = self._bounce_scoped(
+                    shard_key,
                     dbos,
                     func,
                     queue.name,
@@ -351,7 +362,7 @@ class Debouncer(Generic[P, R]):
             if action == "return":
                 bounced_wfid = result["bounced_workflow_id"]
                 assert bounced_wfid is not None
-                return WorkflowHandlePolling(bounced_wfid, dbos)
+                return WorkflowHandlePolling(bounced_wfid, dbos, shard_key=shard_key)
             if action == "raise":
                 assert result["holder_workflow_id"] is not None
                 raise DBOSQueueDeduplicatedError(
@@ -398,7 +409,9 @@ class Debouncer(Generic[P, R]):
         handle = await asyncio.to_thread(
             self.debounce, debounce_key, debounce_period_sec, *args, **kwargs
         )
-        return WorkflowHandleAsyncPolling(handle.workflow_id, dbos)
+        return WorkflowHandleAsyncPolling(
+            handle.workflow_id, dbos, shard_key=handle.shard_key
+        )
 
 
 class DebouncerClient:
@@ -453,6 +466,8 @@ class DebouncerClient:
         if target_app is None:
             target_app = self.client._sys_db.app_name
         serialization_type = self.workflow_options.get("serialization_type")
+        # Debounce keys are unique within the debounced workflow's shard key.
+        shard_key = self.workflow_options.get("shard_key")
 
         while True:
             # Try to extend an existing debounced workflow for this key first, so the dedup key is the sole coalescing mechanism.
@@ -460,15 +475,16 @@ class DebouncerClient:
                 args, kwargs, serialization_type, self.client._serializer
             )
             bounce_delay_ms = int(time.time() * 1000 + debounce_period_sec * 1000)
-            result = self.client._sys_db.debounce_delayed_workflow(
-                workflow_name=self.debouncer_options["workflow_name"],
-                queue_name=queue_name,
-                deduplication_id=deduplication_id,
-                delay_until_epoch_ms=bounce_delay_ms,
-                inputs=inputs,
-                serialization=serialization,
-                application_name=target_app,
-            )
+            with shard_key_scope(shard_key):
+                result = self.client._sys_db.debounce_delayed_workflow(
+                    workflow_name=self.debouncer_options["workflow_name"],
+                    queue_name=queue_name,
+                    deduplication_id=deduplication_id,
+                    delay_until_epoch_ms=bounce_delay_ms,
+                    inputs=inputs,
+                    serialization=serialization,
+                    application_name=target_app,
+                )
             action = _classify_bounce(
                 result,
                 self.debouncer_options["workflow_name"],
@@ -477,7 +493,9 @@ class DebouncerClient:
             if action == "return":
                 bounced_wfid = result["bounced_workflow_id"]
                 assert bounced_wfid is not None
-                return WorkflowHandleClientPolling[R](bounced_wfid, self.client._sys_db)
+                return WorkflowHandleClientPolling[R](
+                    bounced_wfid, self.client._sys_db, shard_key=shard_key
+                )
             if action == "raise":
                 assert result["holder_workflow_id"] is not None
                 raise DBOSQueueDeduplicatedError(
@@ -507,7 +525,9 @@ class DebouncerClient:
                 workflow_id = self.client._enqueue_debounced(
                     options, deadline_ms, *args, **kwargs
                 )
-                return WorkflowHandleClientPolling[R](workflow_id, self.client._sys_db)
+                return WorkflowHandleClientPolling[R](
+                    workflow_id, self.client._sys_db, shard_key=shard_key
+                )
             except DBOSQueueDeduplicatedError:
                 # A concurrent debounce grabbed the key between bounce and enqueue; loop to bounce that workflow instead.
                 continue
@@ -519,5 +539,5 @@ class DebouncerClient:
             self.debounce, debounce_key, debounce_period_sec, *args, **kwargs
         )
         return WorkflowHandleClientAsyncPolling[R](
-            handle.workflow_id, self.client._sys_db
+            handle.workflow_id, self.client._sys_db, shard_key=handle.shard_key
         )

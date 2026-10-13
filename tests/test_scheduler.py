@@ -500,6 +500,7 @@ def test_schedule_thread_signature() -> None:
         "cron_timezone": None,
         "queue_name": None,
         "application_name": "app-a",
+        "shard_key": None,
     }
     sig = _ScheduleThread.compute_signature(base)
 
@@ -522,6 +523,7 @@ def test_schedule_thread_signature() -> None:
         ("context", "ctx2"),
         ("cron_timezone", "America/Los_Angeles"),
         ("queue_name", "q"),
+        ("shard_key", "tenant-a"),
     ]:
         assert _ScheduleThread.compute_signature({**base, field: value}) != sig  # type: ignore[misc]
 
@@ -1976,7 +1978,9 @@ def test_schedule_uses_latest_application_version(dbos: DBOS) -> None:
     retry_until_success(check_enqueued_on_latest_version)
 
 
-def test_schedule_survives_sysdb_downtime(dbos: DBOS, skip_with_sqlite: None) -> None:
+def test_schedule_survives_sysdb_downtime(
+    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
     late_counter: int = 0
 
     @DBOS.workflow()

@@ -135,7 +135,7 @@ def _count_notifications(client: DBOSClient, workflow_id: str) -> int:
 
 
 def test_client_no_migrate(
-    dbos: DBOS, config: DBOSConfig, skip_with_sqlite: None
+    dbos: DBOS, config: DBOSConfig, skip_with_sqlite: None, skip_with_sharding: None
 ) -> None:
     # Drop the system database
     DBOS.destroy()
@@ -487,7 +487,11 @@ def run_send_worker(
 
 
 def test_client_send_idempotent(
-    dbos: DBOS, client: DBOSClient, sqlite_path: Path, skip_with_sqlite: None
+    dbos: DBOS,
+    client: DBOSClient,
+    sqlite_path: Path,
+    skip_with_sqlite: None,
+    skip_with_sharding: None,
 ) -> None:
     run_client_collateral()
 
@@ -750,7 +754,7 @@ def test_client_no_retry_raises_on_unreachable_database() -> None:
 
 
 def test_client_listen_notify_get_event(
-    config: DBOSConfig, dbos: DBOS, skip_with_sqlite: None
+    config: DBOSConfig, dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
 ) -> None:
     """With use_listen_notify=True the client runs a listener thread, so waits stop
     polling the database and rely on notifications: the fallback re-check is 60s, so

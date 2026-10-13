@@ -186,9 +186,9 @@ class PostgresSystemDatabase(SystemDatabase):
         # Coerce to JSONB so contains() renders the @> containment operator,
         # which is served by the GIN index on the attributes column. The
         # column's generic JSON type would render contains() as a string LIKE.
-        return sa.type_coerce(
-            SystemSchema.workflow_status.c.attributes, JSONB
-        ).contains(attributes)
+        return sa.type_coerce(self.tables.workflow_status.c.attributes, JSONB).contains(
+            attributes
+        )
 
     def _is_foreign_key_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a foreign key violation in PostgreSQL."""

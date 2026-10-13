@@ -79,6 +79,8 @@ class DBOSConfig(TypedDict, total=False):
     serializer: Optional[Serializer]
     enable_patching: Optional[bool]
     use_listen_notify: Optional[bool]
+    # Use a sharded system database from dbos-enterprise; every workflow then lives under an explicit shard key.
+    sharding: Optional[bool]
     run_migrations: Optional[bool]
     max_executor_threads: Optional[int]
     notification_listener_polling_interval_sec: Optional[float]
@@ -143,6 +145,7 @@ class ConfigFile(TypedDict, total=False):
     dbos_system_schema: Optional[str]
     use_listen_notify: bool
     run_migrations: bool
+    sharding: bool
 
 
 def _validate_idle_transaction_timeout_sec(value: Optional[float]) -> None:
@@ -297,6 +300,7 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
     translated_config["run_migrations"] = (
         run_migrations if run_migrations is not None else True
     )
+    translated_config["sharding"] = bool(config.get("sharding"))
 
     return translated_config
 

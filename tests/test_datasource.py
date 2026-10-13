@@ -990,6 +990,7 @@ def test_sync_ds_duplicate_execution_stops_at_the_lost_race(
     winner_checkpoints: bool,
     expected_emails: int,
     expected_replays: int,
+    skip_with_sharding: None,
 ) -> None:
     """A duplicate execution that loses the datasource race parks where an ordinary
     step's loser parks, instead of replaying the winner's result and going on to run
@@ -1696,6 +1697,7 @@ async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
     winner_checkpoints: bool,
     expected_emails: int,
     expected_replays: int,
+    skip_with_sharding: None,
 ) -> None:
     """Async sibling of test_sync_ds_duplicate_execution_stops_at_the_lost_race (#818)."""
     reserve_calls = {"n": 0}

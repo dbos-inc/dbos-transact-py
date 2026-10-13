@@ -234,7 +234,7 @@ def test_interop_canonical(dbos: DBOS, client: DBOSClient) -> None:
 # ============================================================================
 
 
-def test_interop_direct_insert(dbos: DBOS) -> None:
+def test_interop_direct_insert(dbos: DBOS, skip_with_sharding: None) -> None:
     """Insert golden DB records via raw SQL and verify the workflow executes correctly.
 
     This proves that records produced by TypeScript or Java can be consumed by Python.
@@ -345,7 +345,7 @@ def test_interop_direct_insert(dbos: DBOS) -> None:
 # ============================================================================
 
 
-def test_interop_kwargs(dbos: DBOS) -> None:
+def test_interop_kwargs(dbos: DBOS, skip_with_sharding: None) -> None:
     """Test that Python kwargs are serialized as namedArgs in portable JSON,
     matching what TypeScript and Java produce via enqueuePortable with namedArgs.
     """

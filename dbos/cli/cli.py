@@ -15,6 +15,7 @@ from dbos._context import SetWorkflowID
 from dbos.cli.migration import (
     print_dbos_migrations,
     print_dbos_user_role_sql,
+    print_sharded_migrations,
     run_dbos_database_migrations,
 )
 
@@ -286,12 +287,18 @@ def _resolve_project_name_and_template(
     is_flag=True,
     help="Print the SQL granting the application role (--app-role) access to DBOS system tables instead of executing it",
 )
+@click.option(
+    "--sharding",
+    is_flag=True,
+    help="Create or migrate a sharded system database (requires dbos-enterprise)",
+)
 def migrate(
     system_database_url: Optional[str],
     application_role: Optional[str],
     schema: Optional[str],
     print_migrations: Optional[str],
     print_user_role: bool,
+    sharding: bool,
 ) -> None:
     if schema is None:
         schema = "dbos"
@@ -305,7 +312,9 @@ def migrate(
         if print_user_role and application_role is None:
             click.echo("--print-user-role requires --app-role", err=True)
             raise click.exceptions.Exit(code=1)
-        if print_migrations is not None:
+        if print_migrations is not None and sharding:
+            print_sharded_migrations(schema=schema)
+        elif print_migrations is not None:
             # Print modes never connect, so a missing database URL is fine.
             print_dbos_migrations(
                 _resolve_db_url(system_database_url=system_database_url),
@@ -339,6 +348,7 @@ def migrate(
         system_database_url=system_database_url,
         schema=schema,
         application_role=application_role,
+        sharding=sharding,
     )
 
     # Next, run any custom migration commands specified in the configuration

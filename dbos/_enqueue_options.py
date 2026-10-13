@@ -65,6 +65,8 @@ class EnqueueOptions(_EnqueueOptionsRequired, total=False):
     # Parents the enqueued workflow's span to this OpenTelemetry context, so it joins
     # this trace when it runs. The client-side PropagateOtelContext.
     otel_context: "OtelContext"
+    # The shard key the workflow lives under; required on a sharded system database.
+    shard_key: str
 
 
 def validate_duplication_policy(
@@ -212,5 +214,6 @@ def build_enqueue_status(
         "debounce_deadline_epoch_ms": None,
         "is_debounced": False,
         "application_name": options.get("application_name"),
+        "shard_key": options.get("shard_key"),
     }
     return workflow_id, status

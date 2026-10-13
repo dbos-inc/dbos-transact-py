@@ -994,7 +994,9 @@ def test_multiple_queues(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_queue_workflow_in_recovered_workflow(dbos: DBOS, sqlite_path: Path) -> None:
+def test_queue_workflow_in_recovered_workflow(
+    dbos: DBOS, sqlite_path: Path, skip_with_sharding: None
+) -> None:
     # We don't want to be taking queued jobs while subprocess runs
     DBOS.destroy()
 
@@ -1127,7 +1129,7 @@ def run_dbos_test_in_process(
 # For the global limit, we fill the queue in 2 steps, ensuring that the 2nd worker is able to cap its local utilization even
 # after having dequeued some tasks already
 def test_worker_concurrency_with_n_dbos_instances(
-    dbos: DBOS, sqlite_path: Path, skip_with_sqlite: None
+    dbos: DBOS, sqlite_path: Path, skip_with_sqlite: None, skip_with_sharding: None
 ) -> None:
     # Ensure children processes do not share global variables (including DBOS instance) with the parent
     multiprocessing.set_start_method("spawn")
@@ -3576,7 +3578,9 @@ def test_partitioned_queue_fallback_routing(
     assert paused_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
 
 
-def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
+def test_partitioned_batch_dequeue_version_gating(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """The batched path dequeues only rows of this worker's app version, plus
     version-less rows while this worker runs the latest registered version. A
     partition holding no eligible row is skipped without disturbing the others."""
@@ -3632,7 +3636,9 @@ def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
     assert start() == []
 
 
-def test_get_queue_partitions_query_plan(dbos: DBOS, skip_with_sqlite: None) -> None:
+def test_get_queue_partitions_query_plan(
+    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
     """The app-scoped partition walk must run index-only on the v3 partition index,
     which carries application_name so no partition probe reads the table."""
     queue_name = f"partition-plan-{uuid.uuid4().hex[:8]}"
@@ -3702,7 +3708,7 @@ def test_get_queue_partitions_query_plan(dbos: DBOS, skip_with_sqlite: None) -> 
     ), details
 
 
-def test_rate_limiter_query_plan(dbos: DBOS) -> None:
+def test_rate_limiter_query_plan(dbos: DBOS, skip_with_sharding: None) -> None:
     """The limiter's remaining-slots count must seek idx_workflow_status_rate_limited on
     both of its columns, else it rescans every workflow the queue ever rate-limited."""
 
@@ -3787,7 +3793,9 @@ def test_rate_limiter_query_plan(dbos: DBOS) -> None:
     assert not [d for d in details if d.startswith("SCAN") or "Seq Scan" in d]
 
 
-def test_pending_count_query_plan(dbos: DBOS, skip_with_sqlite: None) -> None:
+def test_pending_count_query_plan(
+    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
     """The global-concurrency PENDING count runs each poll, so it must run index-only on
     idx_workflow_status_in_flight_v2 rather than fetch every running workflow's row."""
 

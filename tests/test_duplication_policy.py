@@ -913,7 +913,7 @@ def test_id_reuse_reject_same_parent_reuse(dbos: DBOS, via: str) -> None:
     assert reexecute_workflow_by_id(dbos, parent_id).get_result() == "second-rejected"
 
 
-def test_init_child_workflow_is_atomic(dbos: DBOS) -> None:
+def test_init_child_workflow_is_atomic(dbos: DBOS, skip_with_sharding: None) -> None:
     wf = _register_reuse_workflows()
     child_id = f"reuse-atomic-child-{uuid.uuid4()}"
     parent_id = f"reuse-atomic-parent-{uuid.uuid4()}"

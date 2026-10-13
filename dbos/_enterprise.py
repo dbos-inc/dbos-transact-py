@@ -8,13 +8,15 @@ it satisfies them, so each side is verified against the contract on its own.
 from __future__ import annotations
 
 import importlib
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Protocol, cast
 
 from ._error import DBOSInitializationError
 from ._utils import GlobalParams
 
 if TYPE_CHECKING:
     from ._dbos import DBOS
+    from ._serialization import Serializer
+    from ._sys_db import SystemDatabase
 
 # Receives a Conductor alert as (name, message, metadata).
 AlertHandler = Callable[[str, str, Dict[str, str]], None]
@@ -42,12 +44,40 @@ class ConductorFactory(Protocol):
     ) -> ConductorThread: ...
 
 
+class ShardedSystemDatabaseFactory(Protocol):
+    """Builds the system database a sharded deployment uses, in place of core's Postgres one."""
+
+    def __call__(
+        self,
+        *,
+        system_database_url: str,
+        engine_kwargs: Dict[str, Any],
+        engine: Optional[Any],
+        schema: Optional[str],
+        serializer: "Serializer",
+        executor_id: Optional[str],
+        notification_listener_polling_interval_sec: float,
+        polling_concurrency: Optional[int],
+        app_name: Optional[str],
+        retry_connection_errors: bool,
+        observability_query_timeout_sec: Optional[float],
+        idle_transaction_timeout_sec: Optional[float],
+    ) -> "SystemDatabase": ...
+
+
 class Enterprise(Protocol):
     """What the top-level dbos_enterprise module must provide."""
 
     # A property rather than an attribute, so implementations may provide any compatible callable.
     @property
     def ConductorWebsocket(self) -> ConductorFactory: ...
+
+    @property
+    def ShardedSystemDatabase(self) -> ShardedSystemDatabaseFactory: ...
+
+    # The statements creating a sharded system database in a schema, for printing.
+    @property
+    def sharded_schema_statements(self) -> Callable[[str], List[str]]: ...
 
 
 def load() -> Enterprise:
@@ -57,7 +87,7 @@ def load() -> Enterprise:
     except ImportError as e:
         if isinstance(e, ModuleNotFoundError) and e.name == "dbos_enterprise":
             raise DBOSInitializationError(
-                'Connecting to DBOS Conductor requires the dbos-enterprise package. Install it with `pip install "dbos[enterprise]"`.'
+                'Connecting to DBOS Conductor or using a sharded system database requires the dbos-enterprise package. Install it with `pip install "dbos[enterprise]"`.'
             ) from e
         # The package is present; it imports dbos internals, so this is almost always a version mismatch.
         raise DBOSInitializationError(
