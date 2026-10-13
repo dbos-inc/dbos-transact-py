@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import glob
+import importlib
 import os
 import sqlite3
 import subprocess
@@ -205,7 +206,10 @@ def default_shard_key() -> Generator[Optional[str], Any, None]:
     if not using_sharding():
         yield None
         return
-    from dbos_enterprise.sharding import ShardedSystemDatabase
+    # Imported by name: core's CI type-checks without dbos-enterprise installed.
+    ShardedSystemDatabase: Any = importlib.import_module(
+        "dbos_enterprise.sharding"
+    ).ShardedSystemDatabase
 
     # Its own instance, so a test's monkeypatch.undo() cannot remove it.
     monkeypatch = pytest.MonkeyPatch()
@@ -221,7 +225,7 @@ def default_shard_key() -> Generator[Optional[str], Any, None]:
         self: Any, workflow_id: str, explicit: Optional[str] = None
     ) -> str:
         try:
-            return resolve(self, workflow_id, explicit)
+            return cast(str, resolve(self, workflow_id, explicit))
         except Exception:
             return key
 
@@ -238,7 +242,7 @@ def default_shard_key() -> Generator[Optional[str], Any, None]:
 
     def _scope_key(self: Any) -> str:
         try:
-            return scope_key(self)
+            return cast(str, scope_key(self))
         except Exception:
             return key
 
