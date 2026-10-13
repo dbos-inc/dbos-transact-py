@@ -8,6 +8,7 @@ it satisfies them, so each side is verified against the contract on its own.
 from __future__ import annotations
 
 import importlib
+import threading
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Protocol, cast
 
 from ._error import DBOSInitializationError
@@ -42,12 +43,27 @@ class ConductorFactory(Protocol):
     ) -> ConductorThread: ...
 
 
+class AutoUpgradePass(Protocol):
+    """One tick of auto-upgrade"""
+
+    def run(self, stop_event: threading.Event) -> int: ...
+
+    def close(self) -> None: ...
+
+
+class AutoUpgradePassFactory(Protocol):
+    def __call__(self, dbos: DBOS) -> AutoUpgradePass: ...
+
+
 class Enterprise(Protocol):
     """What the top-level dbos_enterprise module must provide."""
 
-    # A property rather than an attribute, so implementations may provide any compatible callable.
+    # Properties rather than attributes, so implementations may provide any compatible callable.
     @property
     def ConductorWebsocket(self) -> ConductorFactory: ...
+
+    @property
+    def AutoUpgradePass(self) -> AutoUpgradePassFactory: ...
 
 
 def load() -> Enterprise:

@@ -1914,11 +1914,13 @@ def workflow_wrapper(
     *,
     serialization_type: WorkflowSerializationFormat = WorkflowSerializationFormat.DEFAULT,
     validate_args: Optional["ValidateArgsCallable"] = None,
+    auto_upgrade: Optional[bool] = None,
 ) -> Callable[P, R]:
     func.__orig_func = func  # type: ignore
 
     fi = get_or_create_func_info(func)
     fi.max_recovery_attempts = max_recovery_attempts
+    fi.auto_upgrade = auto_upgrade
     fi.serialization_type = serialization_type
     fi.validate_args = validate_args
 
@@ -2090,6 +2092,7 @@ def decorate_workflow(
     *,
     serialization_type: Optional[WorkflowSerializationFormat] = None,
     validate_args: Optional["ValidateArgsCallable"] = None,
+    auto_upgrade: Optional[bool] = None,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     if serialization_type is None:
         serialization_type = WorkflowSerializationFormat.DEFAULT
@@ -2111,6 +2114,7 @@ def decorate_workflow(
             max_recovery_attempts,
             serialization_type=serialization_type,
             validate_args=resolved_validate_args,
+            auto_upgrade=auto_upgrade,
         )
         func_name = name if name is not None else func.__qualname__
         set_dbos_func_name(func, func_name)

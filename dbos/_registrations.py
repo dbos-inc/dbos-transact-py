@@ -47,6 +47,7 @@ class DBOSFuncInfo:
     func_type: DBOSFuncType = DBOSFuncType.Unknown
     required_roles: Optional[List[str]] = None
     max_recovery_attempts: Optional[int] = DEFAULT_MAX_RECOVERY_ATTEMPTS
+    auto_upgrade: Optional[bool] = None
     serialization_type: Optional["WorkflowSerializationFormat"] = None
     validate_args: Optional[ValidateArgsCallable] = None
 

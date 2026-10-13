@@ -144,9 +144,11 @@ from ._dbos_config import (
     process_config,
     translate_dbos_config_to_config_file,
 )
+from ._auto_upgrade import AutoUpgradeThread
 from ._enterprise import AlertHandler, ConductorThread
 from ._error import (
     DBOSException,
+    DBOSInitializationError,
     DBOSNonExistentWorkflowError,
     DBOSPatchNondeterminismError,
 )
@@ -324,6 +326,21 @@ class DBOSRegistry:
         else:
             self.instance_info_map[fn] = inst
 
+    def auto_upgradable_workflows(self, default: bool) -> List[str]:
+        """
+        Names of registered workflows eligible for auto-upgrade.
+        When default is set to true (passed via the DBOS class configuration), all workflows are considered
+        Except if they explicitly opted out.
+        When default is false, only opt-in workflows are considered
+        """
+        names: List[str] = []
+        for name, wf in self.workflow_info_map.items():
+            fi = get_func_info(wf)
+            flag = fi.auto_upgrade if fi is not None else None
+            if flag is True or (flag is None and default):
+                names.append(name)
+        return names
+
     def compute_app_version(self, app_name: str) -> str:
         """
         An application's version is computed from a hash of the source of its workflows.
@@ -466,6 +483,11 @@ class DBOS:
         key = config.get("conductor_key") or conductor_key
         if GlobalParams.dbos_cloud or key is not None:
             _enterprise.load()
+        # Check a key has been provided when configuring enteprise features.
+        if config.get("auto_upgrade") and not (GlobalParams.dbos_cloud or key):
+            raise DBOSInitializationError(
+                "auto_upgrade requires DBOS Conductor: set conductor_key in DBOSConfig."
+            )
 
         self._initialized: bool = True
 
@@ -493,6 +515,8 @@ class DBOS:
             self.conductor_key = config.get("conductor_key")
         self.enable_patching = config.get("enable_patching") == True
         self.conductor_websocket: Optional[ConductorThread] = None
+        self._auto_upgrade: bool = config.get("auto_upgrade") == True
+        self.auto_upgrader: Optional[AutoUpgradeThread] = None
         self._background_event_loop: BackgroundEventLoop = BackgroundEventLoop()
         self._active_workflows_set: ActiveWorkflowById = ActiveWorkflowById()
         self._alert_handler: Optional[AlertHandler] = None
@@ -811,6 +835,25 @@ class DBOS:
                 self._background_threads.append(poller_thread)
             self._registry.pollers = []
 
+            # Start the auto-upgrade pass if any workflow takes part.
+            if self._auto_upgradable_workflows():
+                if self.conductor_websocket is None:
+                    raise DBOSInitializationError(
+                        "auto_upgrade requires a valid DBOS license: set conductor_key in DBOSConfig."
+                    )
+                auto_upgrade_interval_sec: float = (
+                    self._config.get("runtimeConfig", {}).get(
+                        "auto_upgrade_interval_sec"
+                    )
+                    or 30.0
+                )
+                self.auto_upgrader = AutoUpgradeThread(
+                    self,
+                    _enterprise.load().AutoUpgradePass(self),
+                    interval_sec=auto_upgrade_interval_sec,
+                )
+                self.auto_upgrader.start()
+
             # Start the dynamic scheduler thread
             scheduler_polling_interval_sec: float = (
                 self._config.get("runtimeConfig", {}).get(
@@ -925,6 +968,9 @@ class DBOS:
                 else:
                     break
         self._workflow_timeout_stop_event.set()
+        # The upgrader unlocks its per-application advisory lock before the system database engine is disposed.
+        if self.auto_upgrader is not None:
+            self.auto_upgrader.stop()
         # Disconnect from Conductor only once the wait above is over, so the executor stays visibly alive to Conductor for its whole duration.
         if self.conductor_websocket is not None:
             self.conductor_websocket.stop()
@@ -1156,6 +1202,7 @@ class DBOS:
         max_recovery_attempts: Optional[int] = DEFAULT_MAX_RECOVERY_ATTEMPTS,
         serialization_type: Optional[WorkflowSerializationFormat] = None,
         validate_args: Optional["ValidateArgsCallable"] = None,
+        auto_upgrade: Optional[bool] = None,
     ) -> Callable[[Callable[P, R]], Callable[P, R]]:
         """Decorate a function for use as a DBOS workflow."""
         return decorate_workflow(
@@ -1164,6 +1211,7 @@ class DBOS:
             max_recovery_attempts,
             serialization_type=serialization_type,
             validate_args=validate_args,
+            auto_upgrade=auto_upgrade,
         )
 
     @classmethod
@@ -2087,6 +2135,9 @@ class DBOS:
             "DBOS.get_events",
             step_ctx,
         )
+
+    def _auto_upgradable_workflows(self) -> List[str]:
+        return self._registry.auto_upgradable_workflows(self._auto_upgrade)
 
     @classmethod
     def _recover_pending_workflows(
