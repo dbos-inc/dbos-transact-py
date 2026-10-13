@@ -803,6 +803,37 @@ def test_sync_ds_rolls_back_once_ownership_moves(
         assert _checkpointed_steps(conn, wfid) == []
 
 
+def test_sync_ds_stale_error_does_not_record_outcome(
+    sync_ds: SQLAlchemyDatasource, dbos: DBOS
+) -> None:
+    """A superseded execution that fails must not write its error as the step outcome."""
+
+    def step_fn() -> str:
+        _set_owner(dbos, wfid, "another-execution")
+        raise RuntimeError("stale execution failed")
+
+    @DBOS.workflow()
+    def my_workflow() -> str:
+        try:
+            return sync_ds.run_tx_step(None, step_fn)
+        except DBOSWorkflowConflictIDError:
+            _reclaim_ownership(dbos)
+            return "conflicted"
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert my_workflow() == "conflicted"
+
+    with sync_ds.engine.connect() as conn:
+        ds_rows = conn.execute(
+            sa.select(
+                sync_ds._outputs_table.c.output,
+                sync_ds._outputs_table.c.error,
+            ).where(sync_ds._outputs_table.c.workflow_id == wfid)
+        ).all()
+    assert ds_rows == [], "the stale execution left an error row"
+
+
 def test_sync_ds_completion_clears_checkpoints(
     sync_ds: SQLAlchemyDatasource, dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1584,6 +1615,40 @@ async def test_async_ds_rolls_back_once_ownership_moves(
     assert ds_rows == [], "the stale execution left a checkpoint or an error row"
     with dbos._sys_db.engine.connect() as sys_conn:
         assert _checkpointed_steps(sys_conn, wfid) == []
+
+
+@pytest.mark.asyncio
+async def test_async_ds_stale_error_does_not_record_outcome(
+    async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS
+) -> None:
+    """A superseded async execution that fails must not write its error as the step outcome."""
+
+    async def step_fn() -> str:
+        _set_owner(dbos, wfid, "another-execution")
+        raise RuntimeError("stale execution failed")
+
+    @DBOS.workflow()
+    async def my_workflow() -> str:
+        try:
+            return await async_ds.run_tx_step_async(None, step_fn)
+        except DBOSWorkflowConflictIDError:
+            _reclaim_ownership(dbos)
+            return "conflicted"
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert await my_workflow() == "conflicted"
+
+    async with async_ds.engine.connect() as conn:
+        ds_rows = (
+            await conn.execute(
+                sa.select(
+                    async_ds._outputs_table.c.output,
+                    async_ds._outputs_table.c.error,
+                ).where(async_ds._outputs_table.c.workflow_id == wfid)
+            )
+        ).all()
+    assert ds_rows == [], "the stale execution left an error row"
 
 
 @pytest.mark.asyncio
