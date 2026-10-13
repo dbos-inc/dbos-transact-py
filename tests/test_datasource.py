@@ -735,14 +735,14 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
     # Stopped at the lost race, not one statement later at the step checkpoint (#818).
     assert replays["n"] == 0, "the loser adopted the winner's result"
 
-    # A loser whose body fails: the collision moves to the error-recording insert.
+    # A loser whose body fails after ownership moved: refuse before _record_error (#886).
     forget_workflow()
     blind["next"] = True
     should_fail["v"] = True
     with SetWorkflowID(wfid):
         assert my_workflow() == "conflicted"
     assert call_count["n"] == 3
-    assert record_error_calls["n"] == 1
+    assert record_error_calls["n"] == 0
     assert replays["n"] == 0, "the loser adopted the winner's result"
 
     # The succeeding loser's writes were discarded and the winner's record still stands.
@@ -1500,14 +1500,14 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
     # Stopped at the lost race, not one statement later at the step checkpoint (#818).
     assert replays["n"] == 0, "the loser adopted the winner's result"
 
-    # A loser whose body fails: the collision moves to the error-recording insert.
+    # A loser whose body fails after ownership moved: refuse before _record_error (#886).
     forget_workflow()
     blind["next"] = True
     should_fail["v"] = True
     with SetWorkflowID(wfid):
         assert await my_workflow() == "conflicted"
     assert call_count["n"] == 3
-    assert record_error_calls["n"] == 1
+    assert record_error_calls["n"] == 0
     assert replays["n"] == 0, "the loser adopted the winner's result"
 
     # The succeeding loser's writes were discarded and the winner's record still stands.
