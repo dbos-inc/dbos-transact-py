@@ -80,14 +80,18 @@ class Enterprise(Protocol):
     def sharded_schema_statements(self) -> Callable[[str], List[str]]: ...
 
 
-def load() -> Enterprise:
+CONDUCTOR = "Connecting to DBOS Conductor"
+SHARDING = "Using a sharded system database"
+
+
+def load(feature: str = CONDUCTOR) -> Enterprise:
     """Import dbos_enterprise, telling an absent package apart from one that fails to import."""
     try:
         return cast(Enterprise, importlib.import_module("dbos_enterprise"))
     except ImportError as e:
         if isinstance(e, ModuleNotFoundError) and e.name == "dbos_enterprise":
             raise DBOSInitializationError(
-                'Connecting to DBOS Conductor or using a sharded system database requires the dbos-enterprise package. Install it with `pip install "dbos[enterprise]"`.'
+                f'{feature} requires the dbos-enterprise package. Install it with `pip install "dbos[enterprise]"`.'
             ) from e
         # The package is present; it imports dbos internals, so this is almost always a version mismatch.
         raise DBOSInitializationError(

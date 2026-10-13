@@ -468,8 +468,10 @@ class DBOS:
 
         # DBOS Cloud always uses Conductor. Checked before any state exists, so a missing package fails cleanly.
         key = config.get("conductor_key") or conductor_key
-        if GlobalParams.dbos_cloud or key is not None or config.get("sharding"):
+        if GlobalParams.dbos_cloud or key is not None:
             _enterprise.load()
+        elif config.get("sharding"):
+            _enterprise.load(_enterprise.SHARDING)
 
         self._initialized: bool = True
 

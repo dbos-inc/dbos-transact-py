@@ -18,7 +18,7 @@ QueueConflictResolution = Literal[
     "update_if_latest_version", "always_update", "never_update"
 ]
 
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, OperationalError
 
 from dbos._context import DBOSContext, get_local_dbos_context
 from dbos._error import DBOSException, DBOSRecoveryError
@@ -833,7 +833,8 @@ def queue_worker_thread(
                     dbos.logger.warning(
                         f"Contention detected in queue thread for {queue.name}. Increasing polling interval to {polling_interval:.2f}."
                     )
-                else:
+                elif isinstance(e, OperationalError) or not stop_event.is_set():
+                    # Other database errors stay quiet while stopping, like any other exception.
                     dbos.logger.warning(
                         f"Exception encountered in queue thread for {queue.name}: {e}"
                     )
