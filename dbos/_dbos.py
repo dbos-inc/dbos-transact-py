@@ -468,14 +468,17 @@ class DBOS:
 
         # DBOS Cloud always uses Conductor. Checked before any state exists, so a missing package fails cleanly.
         key = config.get("conductor_key") or conductor_key
-        # Every enterprise feature requires Conductor.
+        # Every enterprise feature requires a DBOS key in good standing.
         features = _enterprise.enabled_features(config)
-        for feature in features:
-            _enterprise.require_conductor(feature, key)
+        _enterprise.require_enterprise(
+            features,
+            enterprise_key=config.get("transact_enterprise_key"),
+            conductor_key=key,
+            conductor_url=config.get("conductor_url") or conductor_url,
+        )
         if GlobalParams.dbos_cloud or key is not None:
             _enterprise.load()
         elif features:
-            # Reached only with the Conductor gate bypassed, as test harnesses do.
             _enterprise.load(features[0])
 
         self._initialized: bool = True
@@ -800,8 +803,7 @@ class DBOS:
                     self.conductor_websocket.start()
             elif self.conductor_key is not None:
                 if self.conductor_url is None:
-                    dbos_domain = os.environ.get("DBOS_DOMAIN", "cloud.dbos.dev")
-                    self.conductor_url = f"wss://{dbos_domain}/conductor/v1alpha1"
+                    self.conductor_url = _enterprise.default_conductor_url()
                 dbos_logger.debug("Starting Conductor thread")
                 self.conductor_websocket = _enterprise.load().ConductorWebsocket(
                     self,

@@ -74,6 +74,7 @@ class DBOSConfig(TypedDict, total=False):
     system_database_engine: Optional[sa.Engine]
     conductor_key: Optional[str]
     conductor_url: Optional[str]
+    transact_enterprise_key: Optional[str]
     conductor_executor_metadata: Optional[Dict[str, Any]]
     conductor_metadata_only_mode: Optional[bool]
     serializer: Optional[Serializer]

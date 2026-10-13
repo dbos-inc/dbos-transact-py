@@ -214,9 +214,7 @@ def default_shard_key() -> Generator[Optional[str], Any, None]:
 
     # Its own instance, so a test's monkeypatch.undo() cannot remove it.
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(
-        _enterprise, "require_conductor", lambda feature, conductor_key: None
-    )
+    monkeypatch.setattr(_enterprise, "require_enterprise", lambda *args, **kwargs: None)
 
     key = f"test-{uuid.uuid4().hex[:8]}"
     resolve = ShardedSystemDatabase._shard_key_of
