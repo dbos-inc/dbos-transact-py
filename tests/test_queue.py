@@ -7,6 +7,7 @@ import random
 import subprocess
 import threading
 import time
+import types
 import uuid
 import weakref
 from concurrent.futures import ThreadPoolExecutor
@@ -17,7 +18,7 @@ import pytest
 import sqlalchemy as sa
 from psycopg import errors
 from pydantic import BaseModel
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DBAPIError, OperationalError
 
 from dbos import (
     DBOS,
@@ -40,7 +41,7 @@ from dbos._error import (
     DBOSException,
     DBOSQueueDeduplicatedError,
 )
-from dbos._queue import _INTERNAL_QUEUE_CONSTRUCTION
+from dbos._queue import _INTERNAL_QUEUE_CONSTRUCTION, queue_worker_thread
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import DequeueStopReason, WorkflowStatusString
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
@@ -4599,3 +4600,52 @@ def test_enqueue_with_options_ambient_context(dbos: DBOS) -> None:
             2,
         )
     assert explicit.get_result() == 2
+
+
+def test_queue_backs_off_once_per_poll_across_scopes() -> None:
+    """Serialization conflicts in several dequeue scopes double the polling interval
+    once per poll, so one contended shard key cannot throttle the others."""
+    stop = threading.Event()
+    warnings: List[str] = []
+
+    polls: List[int] = []
+
+    class ConflictingSysDb:
+        def dequeue_scopes(self, queue_name: str) -> List[Optional[str]]:
+            # One full poll over three conflicting scopes, then stop.
+            polls.append(1)
+            if len(polls) > 1:
+                stop.set()
+                return []
+            return ["a", "b", "c"]
+
+        def start_queued_workflows(self, *args: Any, **kwargs: Any) -> Any:
+            raise DBAPIError("SELECT 1", {}, Exception("could not serialize access"))
+
+        def is_lock_conflict(self, error: DBAPIError) -> bool:
+            return False
+
+        def is_serialization_conflict(self, error: DBAPIError) -> bool:
+            return True
+
+    fake_dbos: Any = types.SimpleNamespace(
+        _sys_db=ConflictingSysDb(),
+        _active_workflows_set=types.SimpleNamespace(count_for_queue=lambda name: 0),
+        logger=types.SimpleNamespace(warning=warnings.append, debug=lambda msg: None),
+    )
+    fake_queue: Any = types.SimpleNamespace(
+        name="contended",
+        _polling_interval_sec=0.01,
+        database_backed_queue=False,
+        _has_partition_limits=lambda: False,
+    )
+    worker = threading.Thread(
+        target=queue_worker_thread, args=(stop, fake_dbos, fake_queue), daemon=True
+    )
+    worker.start()
+    worker.join(timeout=10)
+    assert not worker.is_alive()
+    assert warnings == [
+        "Contention detected in queue thread for contended. "
+        "Increasing polling interval to 0.02."
+    ]

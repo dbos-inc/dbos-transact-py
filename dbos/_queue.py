@@ -669,6 +669,8 @@ def queue_worker_thread(
 ) -> None:
     """Worker thread for processing a single queue."""
     polling_interval = queue._polling_interval_sec
+    # Whether any scope hit a serialization conflict during the current poll.
+    contended = False
 
     def start_dequeued_workflows(workflow_ids: List[str], owner_xid: str) -> None:
         """Fetch the claimed workflows' statuses in one round trip, then dispatch each."""
@@ -731,7 +733,7 @@ def queue_worker_thread(
             return
 
         def dequeue() -> None:
-            nonlocal polling_interval
+            nonlocal contended
             try:
                 if not queue._has_partition_limits():
                     owner_xid = generate_uuid()
@@ -825,14 +827,8 @@ def queue_worker_thread(
                         f"Queue {queue.name} is locked by another worker; retrying next poll."
                     )
                 elif dbos._sys_db.is_serialization_conflict(e):
-                    # If a serialization error is encountered, increase the polling interval
-                    polling_interval = min(
-                        max_polling_interval,
-                        polling_interval * 2.0,
-                    )
-                    dbos.logger.warning(
-                        f"Contention detected in queue thread for {queue.name}. Increasing polling interval to {polling_interval:.2f}."
-                    )
+                    # Backed off once per poll below, however many scopes conflicted.
+                    contended = True
                 elif isinstance(e, OperationalError) or not stop_event.is_set():
                     # Other database errors stay quiet while stopping, like any other exception.
                     dbos.logger.warning(
@@ -855,11 +851,18 @@ def queue_worker_thread(
                 )
             scopes = []
         random.shuffle(scopes)
+        contended = False
         for scope in scopes:
             if stop_event.is_set():
                 break
             with shard_key_scope(scope):
                 dequeue()
+        if contended:
+            # If a serialization error is encountered, increase the polling interval
+            polling_interval = min(max_polling_interval, polling_interval * 2.0)
+            dbos.logger.warning(
+                f"Contention detected in queue thread for {queue.name}. Increasing polling interval to {polling_interval:.2f}."
+            )
 
         # Attempt to scale back the polling interval on each iteration
         polling_interval = max(min_polling_interval, polling_interval * 0.9)

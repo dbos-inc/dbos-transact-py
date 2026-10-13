@@ -3638,3 +3638,63 @@ def test_set_enqueue_options_exits_in_another_context(shard_key: Optional[str]) 
         assert ctx.priority is None
     finally:
         _clear_local_dbos_context()
+
+
+def test_shard_keys_are_rejected_without_sharding(
+    dbos: DBOS, client: DBOSClient, skip_with_sharding: None
+) -> None:
+    """Without sharding, a shard key passed to any API is an error, never silently ignored."""
+
+    @DBOS.workflow()
+    def keyless() -> int:
+        return 1
+
+    @DBOS.workflow()
+    def nightly(at: datetime.datetime, ctx: Any) -> None:
+        pass
+
+    handle = DBOS.start_workflow(keyless)
+    assert handle.get_result() == 1
+    wfid = handle.workflow_id
+    key = "tenant-a"
+
+    def start_keyed() -> Any:
+        with SetEnqueueOptions(shard_key=key):
+            return DBOS.start_workflow(keyless)
+
+    calls: List[Callable[[], Any]] = [
+        lambda: DBOS.get_workflow_status(wfid, shard_key=key),
+        lambda: DBOS.retrieve_workflow(wfid, shard_key=key),
+        lambda: DBOS.get_result(wfid, shard_key=key),
+        lambda: DBOS.get_event(wfid, "k", 0, shard_key=key),
+        lambda: DBOS.list_workflow_steps(wfid, shard_key=key),
+        lambda: DBOS.cancel_workflow(wfid, shard_key=key),
+        lambda: DBOS.resume_workflow(wfid, shard_key=key),
+        lambda: DBOS.fork_workflow(wfid, 1, shard_key=key),
+        lambda: DBOS.send(wfid, "m", shard_key=key),
+        lambda: DBOS.send_bulk([SendMessage(wfid, "m", shard_key=key)]),
+        start_keyed,
+        lambda: client.retrieve_workflow(wfid, shard_key=key).get_status(),
+        lambda: client.send(wfid, "m", shard_key=key),
+    ]
+    for call in calls:
+        with pytest.raises(DBOSException, match="not sharded"):
+            call()
+    listings: List[Callable[[], Any]] = [
+        lambda: DBOS.list_workflows(shard_key=key),
+        lambda: client.list_workflows(shard_key=key),
+    ]
+    for listing in listings:
+        with pytest.raises(DBOSException, match="requires a sharded system database"):
+            listing()
+    with pytest.raises(DBOSException, match="requires a sharded system database"):
+        DBOS.create_schedule(
+            schedule_name="keyed",
+            workflow_fn=nightly,
+            schedule="0 0 * * *",
+            shard_key=key,
+        )
+    # Nothing ran, moved or arrived under the key.
+    status = DBOS.get_workflow_status(wfid)
+    assert status is not None and status.status == "SUCCESS"
+    assert DBOS.get_schedule("keyed") is None

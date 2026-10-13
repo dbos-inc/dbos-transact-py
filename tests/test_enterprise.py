@@ -171,6 +171,14 @@ def test_entitlement_url_sits_beside_the_conductor_url() -> None:
         url("wss://cloud.dbos.dev/conductor/v1alpha1/")
         == "https://cloud.dbos.dev/conductor/v2/entitlements/enterprise"
     )
+    # Credentials in the URL are dropped, so they are never sent or quoted in errors.
+    assert url("wss://user:secret@conductor.example.com:8443/conductor/v1alpha1") == (
+        "https://conductor.example.com:8443/conductor/v2/entitlements/enterprise"
+    )
+    assert (
+        url("ws://user:secret@[::1]:8090")
+        == "http://[::1]:8090/v2/entitlements/enterprise"
+    )
     # A self-hosted Conductor serves its routes from the root.
     assert (
         url("ws://localhost:8090") == "http://localhost:8090/v2/entitlements/enterprise"
@@ -201,6 +209,20 @@ def test_enterprise_features_require_a_key(conductor: FakeConductor) -> None:
     ):
         check(conductor)
     assert conductor.requests == []
+
+
+def test_conductor_credentials_never_reach_errors(conductor: FakeConductor) -> None:
+    conductor.reject(403, "your DBOS account is past the free trial limit")
+    with_credentials = conductor.url.replace("ws://", "ws://user:secret@")
+    with pytest.raises(DBOSInitializationError) as raised:
+        _require_enterprise(
+            ["Some feature"],
+            enterprise_key="enterprise-key",
+            conductor_key=None,
+            conductor_url=with_credentials,
+        )
+    assert "rejected the key (HTTP 403)" in str(raised.value)
+    assert "secret" not in str(raised.value) and "user" not in str(raised.value)
 
 
 @pytest.mark.parametrize(

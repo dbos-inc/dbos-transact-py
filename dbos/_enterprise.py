@@ -130,7 +130,9 @@ def entitlement_url(conductor_url: str) -> str:
     path = parts.path.rstrip("/")
     if path.endswith("/v1alpha1"):
         path = path[: -len("/v1alpha1")]
-    return urlunsplit((scheme, parts.netloc, path + ENTITLEMENT_PATH, "", ""))
+    # Without any user:password@, which would otherwise be sent and quoted in errors.
+    host = parts.netloc.rpartition("@")[2]
+    return urlunsplit((scheme, host, path + ENTITLEMENT_PATH, "", ""))
 
 
 class _NoRedirects(urllib.request.HTTPRedirectHandler):
