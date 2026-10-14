@@ -40,6 +40,7 @@ class DBOSConfig(TypedDict, total=False):
         conductor_url (str): The websockets URL for your DBOS Conductor service. Only set if you're self-hosting Conductor.
         conductor_executor_metadata (Dict[str, Any]): Metadata associated with this executor that may be used to identify an executor on the Conductor dashboard. Must be JSON-serializable.
         conductor_metadata_only_mode (bool): If True, only send workflow metadata to Conductor, never workflow data (inputs, outputs, errors, step outputs, events, notifications, streams, or schedule context). Defaults to False.
+        transact_enterprise_key (str): The key that entitles this application to Transact Enterprise features.
         auto_upgrade (bool): If True, workflows registered by this application are auto-upgraded to the latest application version. Defaults to False.
         auto_upgrade_interval_sec (float): Seconds between two auto-upgrade passes. Defaults to 30.0.
         serializer (Serializer): A custom serializer and deserializer DBOS uses when storing program data in the system database
@@ -78,6 +79,7 @@ class DBOSConfig(TypedDict, total=False):
     conductor_url: Optional[str]
     conductor_executor_metadata: Optional[Dict[str, Any]]
     conductor_metadata_only_mode: Optional[bool]
+    transact_enterprise_key: Optional[str]
     auto_upgrade: Optional[bool]
     auto_upgrade_interval_sec: Optional[float]
     serializer: Optional[Serializer]
