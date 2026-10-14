@@ -85,7 +85,7 @@ from ._serialization import (
     serialize_value,
     serialize_value_as,
 )
-from ._shard_keys import bound_shard_key
+from ._shard_keys import bind_shard_keys, bound_shard_key
 
 if TYPE_CHECKING:
     from ._queue import Queue, QueueRateLimit
@@ -1060,6 +1060,21 @@ class SystemDatabase(ABC):
             name,
             key,
         )
+
+    @contextmanager
+    def _own_key(
+        self, workflow_id: str, ctx: Optional["DBOSContext"] = None
+    ) -> Generator[None, None, None]:
+        """Address the running workflow's own rows by its own key, even where a same-ID
+        workflow under another key is bound as the target of the current call."""
+        ctx = ctx if ctx is not None else get_local_dbos_context()
+        own = (
+            ctx.shard_key
+            if ctx is not None and ctx.workflow_id == workflow_id
+            else None
+        )
+        with bind_shard_keys({workflow_id: own}):
+            yield
 
     @staticmethod
     def _name_filter(
@@ -2994,6 +3009,7 @@ class SystemDatabase(ABC):
         conn: Union[sa.Connection, Session],
         *,
         owner_xid: Optional[str] = None,
+        child_values: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Insert the step row. owner_xid defaults to the calling execution's token; a caller
         writing on another workflow's behalf from inside a different context passes it.
@@ -3022,7 +3038,11 @@ class SystemDatabase(ABC):
                     output=output,
                     error=error,
                     child_workflow_id=result["child_workflow_id"],
-                    **self._child_values(result["child_workflow_id"]),
+                    **(
+                        child_values
+                        if child_values is not None
+                        else self._child_values(result["child_workflow_id"])
+                    ),
                     serialization=result["serialization"],
                     # Mirrors the parent: only the running application records its steps.
                     application_name=self.app_name,
@@ -3085,11 +3105,18 @@ class SystemDatabase(ABC):
             else int(time.time() * 1000)
         )
 
+        # Resolved before binding the caller's own key, which a same-ID child would share.
+        child_values = self._child_values(result["child_workflow_id"])
+
         @db_retry(sys_db=self)
         def record_operation_result_retry() -> None:
-            with self.engine.begin() as c:
+            with self._own_key(result["workflow_uuid"]), self.engine.begin() as c:
                 self._record_operation_result_txn(
-                    result, completed_at, c, owner_xid=owner_xid
+                    result,
+                    completed_at,
+                    c,
+                    owner_xid=owner_xid,
+                    child_values=child_values,
                 )
             DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT)
 
@@ -3165,9 +3192,16 @@ class SystemDatabase(ABC):
         workflow_id = ctx.workflow_id
         function_id = ctx.function_id
         owner_xid = current_owner_xid(workflow_id, ctx)
+        # Resolved before binding the caller's own key, which a same-ID target would share.
+        child_values = self._child_values(result_workflow_id)
+        own_ctx = ctx
 
         @db_retry(sys_db=self)
         def record() -> None:
+            with self._own_key(workflow_id, own_ctx):
+                record_own()
+
+        def record_own() -> None:
             # A duplicate row is a retry of this same record, so do nothing on conflict.
             # Lost ownership still raises DBOSWorkflowConflictIDError from the check below.
             sql = (
@@ -3180,7 +3214,7 @@ class SystemDatabase(ABC):
                     output=output,
                     error=error,
                     child_workflow_id=result_workflow_id,
-                    **self._child_values(result_workflow_id),
+                    **child_values,
                     started_at_epoch_ms=started_at_epoch_ms,
                     completed_at_epoch_ms=int(time.time() * 1000),
                     retention_timestamp=self._now_ms_sql(),
@@ -3289,7 +3323,7 @@ class SystemDatabase(ABC):
     def check_operation_execution(
         self, workflow_id: str, function_id: int, function_name: str
     ) -> Optional[RecordedResult]:
-        with self.engine.begin() as c:
+        with self._own_key(workflow_id), self.engine.begin() as c:
             return self._check_operation_execution_txn(
                 workflow_id, function_id, function_name, c
             )
