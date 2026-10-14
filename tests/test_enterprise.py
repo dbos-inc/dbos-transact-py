@@ -145,6 +145,7 @@ def conductor(monkeypatch: pytest.MonkeyPatch) -> Generator[FakeConductor, Any, 
     fake = FakeConductor()
     yield fake
     fake.server.shutdown()
+    fake.server.server_close()
 
 
 def check(
