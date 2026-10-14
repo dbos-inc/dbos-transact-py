@@ -1050,6 +1050,17 @@ class SystemDatabase(ABC):
         self._reject_shard_key(workflow_id, None)
         return None
 
+    def _waiter(self, workflow_id: str, name: str) -> Tuple[str, WaiterComponents]:
+        """The waiter-map key for a workflow's topic or key, and what the listener checks
+        for it. Keyed waiters are told apart, as one ID can live under several keys."""
+        key = self._key_hint(workflow_id)
+        payload = f"{workflow_id}::{name}"
+        return (payload if key is None else f"{len(key)}:{key}:{payload}"), (
+            workflow_id,
+            name,
+            key,
+        )
+
     @staticmethod
     def _name_filter(
         col: sa.ColumnElement[Any], value: Optional[Union[str, List[str]]]
@@ -3579,12 +3590,10 @@ class SystemDatabase(ABC):
             dbos_logger.debug(f"Running recv, id: {function_id}, topic: {topic}")
 
         # Insert an event to the notifications map, so the listener can signal it when a message is received.
-        payload = f"{workflow_uuid}::{topic}"
+        payload, components = self._waiter(workflow_uuid, topic)
         event = LoopAwareEvent()
         # A stale local execution may already wait here; both wake, and its consume fails the ownership check.
-        self.notifications_map.add(
-            payload, event, (workflow_uuid, topic, self._key_hint(workflow_uuid))
-        )
+        self.notifications_map.add(payload, event, components)
 
         try:
             # Check if an unconsumed message is already in the database.
@@ -4230,11 +4239,9 @@ class SystemDatabase(ABC):
                     f"Running get_event, id: {caller_ctx['function_id']}, key: {key}"
                 )
 
-        payload = f"{target_uuid}::{key}"
+        payload, components = self._waiter(target_uuid, key)
         event = LoopAwareEvent()
-        self.workflow_events_map.add(
-            payload, event, (target_uuid, key, self._key_hint(target_uuid))
-        )
+        self.workflow_events_map.add(payload, event, components)
 
         try:
             # Check if the key is already in the database
@@ -5611,11 +5618,9 @@ class SystemDatabase(ABC):
         Must be called before reading so a notification arriving between a read
         and the wait is not lost.
         """
-        payload = f"{workflow_uuid}::{key}"
+        payload, components = self._waiter(workflow_uuid, key)
         event = LoopAwareEvent()
-        self.streams_map.add(
-            payload, event, (workflow_uuid, key, self._key_hint(workflow_uuid))
-        )
+        self.streams_map.add(payload, event, components)
         return event, payload
 
     def unregister_stream_listener(self, payload: str, event: LoopAwareEvent) -> None:

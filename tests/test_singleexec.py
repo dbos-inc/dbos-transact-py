@@ -448,11 +448,11 @@ def test_recv_ignores_a_stale_waiters_wake(dbos: DBOS) -> None:
         return str(DBOS.recv("topic", timeout_seconds=30))
 
     wfid = str(uuid.uuid4())
-    payload = f"{wfid}::topic"
+    payload, components = dbos._sys_db._waiter(wfid, "topic")
     # What a stale execution leaves behind between its wake and its cleanup.
     stale_event = LoopAwareEvent()
     stale_event.set()
-    dbos._sys_db.notifications_map.add(payload, stale_event, (wfid, "topic", None))
+    dbos._sys_db.notifications_map.add(payload, stale_event, components)
     try:
         with SetWorkflowID(wfid):
             handle = DBOS.start_workflow(recv_workflow)
@@ -647,7 +647,8 @@ def test_handoff_while_waiting_in_recv(dbos: DBOS) -> None:
 
     def waiting() -> None:
         assert calls["recv"] == 1
-        assert dbos._sys_db.notifications_map.get(f"{wfid}::topic") is not None
+        payload, _ = dbos._sys_db._waiter(wfid, "topic")
+        assert dbos._sys_db.notifications_map.get(payload) is not None
 
     retry_until_success(waiting, interval=0.1, max_attempts=100)
     first_owner = dbos._sys_db.get_workflow_owner(wfid)
