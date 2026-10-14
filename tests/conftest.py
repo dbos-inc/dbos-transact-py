@@ -16,6 +16,7 @@ from typing import (
     Callable,
     Generator,
     Iterator,
+    List,
     Optional,
     Tuple,
     TypeVar,
@@ -55,6 +56,7 @@ from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 from dbos._sys_db_postgres import PostgresSystemDatabase
 from dbos._utils import GlobalParams, quote_identifier
+from dbos._workflow_commands import WORKFLOW_TIMEOUT_THREAD_NAME
 
 if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle
@@ -254,6 +256,30 @@ def default_shard_key() -> Generator[Optional[str], Any, None]:
     monkeypatch.setattr(_enterprise, "require_enterprise", lambda *args, **kwargs: None)
 
     key = f"test-{uuid.uuid4().hex[:8]}"
+    # Fallbacks on DBOS's own service threads, which never run test code: there core's
+    # machinery lost a key. Other threads also run test code across hops a stack can't
+    # follow, so their fallbacks stand for bare IDs the test passed.
+    lost: List[str] = []
+    service_threads = tuple(
+        f"({target})"
+        for target in (
+            "queue_thread",
+            "queue_worker_thread",
+            "workflow_timeout_thread",
+            "dynamic_scheduler_loop",
+            "run_notification_listener",
+            "run_notifier",
+            "_loop",
+        )
+    )
+
+    def fall_back(what: str) -> str:
+        thread = threading.current_thread().name
+        named = thread.startswith(("queue-worker-", WORKFLOW_TIMEOUT_THREAD_NAME))
+        if named or thread.endswith(service_threads):
+            lost.append(f"{what} on thread {thread}")
+        return key
+
     resolve = ShardedSystemDatabase._shard_key_of
     require = ShardedSystemDatabase._require_key
     keyed_messages = ShardedSystemDatabase._keyed_messages
@@ -266,7 +292,7 @@ def default_shard_key() -> Generator[Optional[str], Any, None]:
         try:
             return cast(str, resolve(self, workflow_id, explicit))
         except Exception:
-            return key
+            return fall_back(f"no shard key for workflow {workflow_id}")
 
     def _require_key(status: Any) -> None:
         # Children are left to core's plumbing; only top-level starts fall back.
@@ -284,7 +310,7 @@ def default_shard_key() -> Generator[Optional[str], Any, None]:
         try:
             return cast(str, scope_key(self))
         except Exception:
-            return key
+            return fall_back("no shard key scope")
 
     def _schedule_values(self: Any, schedule: Any) -> Any:
         if schedule.get("shard_key") is None:
@@ -329,6 +355,7 @@ def default_shard_key() -> Generator[Optional[str], Any, None]:
     monkeypatch.setattr(DBOSClient, "__init__", _client_init)
     yield key
     monkeypatch.undo()
+    assert not lost, "Core lost a shard key:\n" + "\n".join(sorted(set(lost)))
 
 
 def _truncate_user_database(user_database_url: str) -> None:

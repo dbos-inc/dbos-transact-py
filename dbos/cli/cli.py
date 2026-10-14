@@ -79,8 +79,11 @@ def _resolve_db_url(*, system_database_url: Optional[str]) -> Optional[str]:
             raise click.ClickException(str(e))
 
 
-def _get_db_url(*, system_database_url: Optional[str]) -> str:
-    """Like _resolve_db_url, but exits when no database URL can be resolved."""
+def _get_db_url(
+    *, system_database_url: Optional[str], allow_sharded: bool = False
+) -> str:
+    """Like _resolve_db_url, but exits when no database URL can be resolved, or when it
+    names a sharded system database and the command doesn't support one."""
     url = _resolve_db_url(system_database_url=system_database_url)
     if url is None:
         click.echo(
@@ -88,7 +91,46 @@ def _get_db_url(*, system_database_url: Optional[str]) -> str:
             err=True,
         )
         raise click.exceptions.Exit(code=1)
+    if not allow_sharded and _is_sharded(url):
+        click.echo(
+            "Error: this command does not support a sharded system database; "
+            "only `dbos migrate` does.",
+            err=True,
+        )
+        raise click.exceptions.Exit(code=1)
     return url
+
+
+def _is_sharded(system_database_url: str) -> bool:
+    """Whether the configuration enables sharding or the database holds a sharded schema."""
+    try:
+        if load_config().get("sharding"):
+            return True
+    except Exception:
+        pass
+    if system_database_url.startswith("sqlite"):
+        return False
+    url = sa.make_url(system_database_url)
+    if not url.drivername.startswith("cockroachdb"):
+        url = url.set(drivername="postgresql+psycopg")
+    engine = sa.create_engine(url)
+    try:
+        with engine.connect() as c:
+            return (
+                c.execute(
+                    sa.text(
+                        "SELECT 1 FROM information_schema.columns WHERE "
+                        "table_name = 'workflow_status' AND column_name = 'shard_key' "
+                        "LIMIT 1"
+                    )
+                ).first()
+                is not None
+            )
+    except Exception:
+        # Unreachable or not yet created: the command itself reports that.
+        return False
+    finally:
+        engine.dispose()
 
 
 @click.group(
@@ -326,7 +368,9 @@ def migrate(
             print_dbos_user_role_sql(schema=schema, role_name=application_role)
         return
 
-    system_database_url = _get_db_url(system_database_url=system_database_url)
+    system_database_url = _get_db_url(
+        system_database_url=system_database_url, allow_sharded=True
+    )
 
     migrate_commands: List[str] = []
     if os.path.exists("dbos-config.yaml"):
@@ -378,6 +422,7 @@ def reset(
     yes: bool,
     system_database_url: Optional[str],
 ) -> None:
+    system_database_url = _get_db_url(system_database_url=system_database_url)
     if not yes:
         confirm = click.confirm(
             "This command resets your DBOS system database, deleting metadata about past workflows and steps. Are you sure you want to proceed?"
@@ -386,7 +431,6 @@ def reset(
             click.echo("Operation cancelled.")
             raise click.exceptions.Exit()
     try:
-        system_database_url = _get_db_url(system_database_url=system_database_url)
         SystemDatabase.reset_system_database(system_database_url)
     except (click.ClickException, click.exceptions.Exit):
         raise
@@ -450,6 +494,7 @@ def rename_application(
         raise click.UsageError(
             "Nothing to re-own: pass --from, --adopt-unclaimed-rows, or both."
         )
+    system_database_url = _get_db_url(system_database_url=system_database_url)
     if not yes:
         confirm = click.confirm(
             f"This command re-owns {' and '.join(sources)} in your DBOS system "
@@ -459,7 +504,6 @@ def rename_application(
         if not confirm:
             click.echo("Operation cancelled.")
             raise click.exceptions.Exit()
-    system_database_url = _get_db_url(system_database_url=system_database_url)
     client = DBOSClient(
         system_database_url=system_database_url, dbos_system_schema=schema
     )

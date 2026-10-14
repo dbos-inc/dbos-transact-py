@@ -3579,9 +3579,7 @@ def test_partitioned_queue_fallback_routing(
     assert paused_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
 
 
-def test_partitioned_batch_dequeue_version_gating(
-    dbos: DBOS, skip_with_sharding: None
-) -> None:
+def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
     """The batched path dequeues only rows of this worker's app version, plus
     version-less rows while this worker runs the latest registered version. A
     partition holding no eligible row is skipped without disturbing the others."""
@@ -3594,11 +3592,13 @@ def test_partitioned_batch_dequeue_version_gating(
     queue = unpolled_queue(queue_name, partition_concurrency=1)
     ids = _enqueue_partition_rows(dbos, batch_wf, queue_name, "ver", ["p0", "p1"], 3)
 
+    ws = dbos._sys_db.tables.workflow_status
+
     def pin_version(wfid: str, version: Any) -> None:
         with dbos._sys_db.engine.begin() as c:
             c.execute(
-                sa.update(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+                sa.update(ws)
+                .where(*dbos._sys_db._wf(ws, wfid))
                 .values(application_version=version)
             )
 
@@ -3627,7 +3627,8 @@ def test_partitioned_batch_dequeue_version_gating(
     now_ms = int(time.time() * 1000)
     with dbos._sys_db.engine.begin() as c:
         c.execute(
-            sa.insert(SystemSchema.application_versions).values(
+            sa.insert(dbos._sys_db.tables.application_versions).values(
+                **dbos._sys_db._global_values(),
                 version_id="newer-than-this-worker",
                 version_name="newer-than-this-worker",
                 version_timestamp=now_ms + 3_600_000,

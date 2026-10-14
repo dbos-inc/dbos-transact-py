@@ -732,8 +732,19 @@ def queue_worker_thread(
         if stop_event.wait(timeout=polling_interval * random.uniform(0.95, 1.05)):
             return
 
+        # This worker's load for the whole poll: running workflows, snapshotted at first
+        # use, plus every claim since, which dispatch registers asynchronously.
+        running: Optional[int] = None
+        polled = 0
+
+        def worker_load() -> int:
+            nonlocal running
+            if running is None:
+                running = dbos._active_workflows_set.count_for_queue(queue.name)
+            return running + polled
+
         def dequeue() -> None:
-            nonlocal contended
+            nonlocal contended, polled
             try:
                 if not queue._has_partition_limits():
                     owner_xid = generate_uuid()
@@ -742,9 +753,10 @@ def queue_worker_thread(
                         GlobalParams.executor_id,
                         GlobalParams.app_version,
                         None,
-                        dbos._active_workflows_set.count_for_queue(queue.name),
+                        worker_load(),
                         owner_xid=owner_xid,
                     )
+                    polled += len(dequeued_workflows)
                     start_dequeued_workflows(dequeued_workflows, owner_xid)
                 elif (
                     queue._partition_concurrency == 1
@@ -753,9 +765,7 @@ def queue_worker_thread(
                     and queue._partition_limiter is None
                 ):
                     # Optimization: Batch dequeue if partition concurrency is 1
-                    max_tasks = worker_budget(
-                        queue, dbos._active_workflows_set.count_for_queue(queue.name)
-                    )
+                    max_tasks = worker_budget(queue, worker_load())
                     if max_tasks > 0:
                         owner_xid = generate_uuid()
                         dequeued_workflows = (
@@ -767,6 +777,7 @@ def queue_worker_thread(
                                 owner_xid=owner_xid,
                             )
                         )
+                        polled += len(dequeued_workflows)
                         start_dequeued_workflows(dequeued_workflows, owner_xid)
                 else:
                     # Room left under the queue-wide limit; each claim still rechecks it in its own transaction.
@@ -783,12 +794,10 @@ def queue_worker_thread(
                         else []
                     )
                     random.shuffle(partition_keys)
-                    # Snapshot once: re-reading would count this sweep's own claims twice, since dispatch is asynchronous and `claimed` already accounts for them.
-                    running = dbos._active_workflows_set.count_for_queue(queue.name)
                     claimed = 0
                     for key in partition_keys:
                         if (
-                            worker_budget(queue, running + claimed) <= 0
+                            worker_budget(queue, worker_load()) <= 0
                             or claimed >= global_budget
                         ):
                             break
@@ -800,7 +809,7 @@ def queue_worker_thread(
                                     GlobalParams.executor_id,
                                     GlobalParams.app_version,
                                     key,
-                                    running + claimed,
+                                    worker_load(),
                                     dbos._active_workflows_set.count_for_partition(
                                         queue.name, key
                                     ),
@@ -815,6 +824,7 @@ def queue_worker_thread(
                                 continue
                             raise
                         claimed += len(dequeued_workflows)
+                        polled += len(dequeued_workflows)
                         start_dequeued_workflows(dequeued_workflows, owner_xid)
                         # A queue-wide limit (e.g. filled by peers since the snapshot) leaves every other partition empty too.
                         if stop_reason in ("concurrency", "limiter"):
