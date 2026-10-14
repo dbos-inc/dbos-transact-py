@@ -440,7 +440,9 @@ def test_delete_workflow(dbos: DBOS) -> None:
     assert result == 10
 
     # Get the child workflow ID
-    children = dbos._sys_db.get_workflow_children(parent_wfid)
+    children = [
+        w.workflow_id for w in DBOS.list_workflows(parent_workflow_id=parent_wfid)
+    ]
     assert len(children) == 1
     child_wfid = children[0]
 
@@ -459,7 +461,9 @@ def test_delete_workflow(dbos: DBOS) -> None:
         result = parent_workflow(7)
     assert result == 14
 
-    children2 = dbos._sys_db.get_workflow_children(parent_wfid2)
+    children2 = [
+        w.workflow_id for w in DBOS.list_workflows(parent_workflow_id=parent_wfid2)
+    ]
     assert len(children2) == 1
     child_wfid2 = children2[0]
 
@@ -585,11 +589,9 @@ def test_cancel_workflow_children(dbos: DBOS) -> None:
     for i in ids:
         main_events[i].wait()
 
-    # The cascade should discover the full descendant tree
-    assert set(dbos._sys_db.get_workflow_children(parent_id)) == {
-        child_id,
-        grandchild_id,
-    }
+    # The whole descendant tree is recorded: the parent's child, and that child's child
+    tree = DBOS.list_workflows(parent_workflow_id=[parent_id, child_id])
+    assert {w.workflow_id for w in tree} == {child_id, grandchild_id}
 
     # Cancelling without cancel_children only affects the parent
     DBOS.cancel_workflow(parent_id, cancel_children=False)
