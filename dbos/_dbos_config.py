@@ -43,6 +43,7 @@ class DBOSConfig(TypedDict, total=False):
         transact_enterprise_key (str): The key that entitles this application to Transact Enterprise features.
         auto_upgrade (bool): If True, workflows registered by this application are auto-upgraded to the latest application version. Defaults to False.
         auto_upgrade_interval_sec (float): Seconds between two auto-upgrade passes. Defaults to 30.0.
+        auto_upgrade_grace_sec (float): Seconds the latest application version must have been the latest before auto-upgrade re-enqueues PENDING workflows left on older versions, giving executors on those versions time to drain. ENQUEUED and DELAYED workflows are upgraded without waiting. Defaults to 0.0.
         serializer (Serializer): A custom serializer and deserializer DBOS uses when storing program data in the system database
         use_listen_notify (bool): Whether to use LISTEN/NOTIFY or polling to listen for notifications and events.  Defaults to True. As this affects migrations, may not be changed after the system database is first created.
         run_migrations (bool): Whether to create and migrate the system database on launch. Defaults to True. Set to False for a process that must not alter the schema, such as one whose database role cannot run DDL, or a deployment that migrates out of band with `dbos migrate`. Launch then verifies the schema instead: a system database that is missing, or behind the version this build requires, fails launch rather than being created or migrated.
@@ -82,6 +83,7 @@ class DBOSConfig(TypedDict, total=False):
     transact_enterprise_key: Optional[str]
     auto_upgrade: Optional[bool]
     auto_upgrade_interval_sec: Optional[float]
+    auto_upgrade_grace_sec: Optional[float]
     serializer: Optional[Serializer]
     enable_patching: Optional[bool]
     use_listen_notify: Optional[bool]
@@ -105,6 +107,7 @@ class RuntimeConfig(TypedDict, total=False):
     scheduler_polling_interval_sec: Optional[float]
     kafka_queue_polling_interval_sec: Optional[float]
     auto_upgrade_interval_sec: Optional[float]
+    auto_upgrade_grace_sec: Optional[float]
 
 
 class DatabaseConfig(TypedDict, total=False):
@@ -272,6 +275,16 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         translated_config["runtimeConfig"][
             "auto_upgrade_interval_sec"
         ] = upgrade_interval
+    if "auto_upgrade_grace_sec" in config:
+        upgrade_grace = config["auto_upgrade_grace_sec"]
+        # Zero means no grace; NaN/inf are rejected so the pass's comparison stays meaningful.
+        if upgrade_grace is not None and (
+            not math.isfinite(upgrade_grace) or upgrade_grace < 0
+        ):
+            raise DBOSInitializationError(
+                f"auto_upgrade_grace_sec must be a finite non-negative number of seconds, got {upgrade_grace}"
+            )
+        translated_config["runtimeConfig"]["auto_upgrade_grace_sec"] = upgrade_grace
 
     # Telemetry config
     enable_otlp = config.get("enable_otlp", None)
