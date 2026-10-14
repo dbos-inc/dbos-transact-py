@@ -25,6 +25,7 @@ from .._docker_pg_helper import start_docker_pg, stop_docker_pg
 from .._error import DBOSInitializationError
 from .._logger import dbos_logger, init_logger
 from .._sys_db import DEFAULT_RENAME_BATCH_SIZE, SystemDatabase
+from .._sys_db_postgres import PostgresSystemDatabase
 from .._utils import GlobalParams
 from ..cli._github_init import create_template_from_github
 from ._template_init import copy_template, get_project_name, get_templates_directory
@@ -110,27 +111,7 @@ def _is_sharded(system_database_url: str) -> bool:
         pass
     if system_database_url.startswith("sqlite"):
         return False
-    url = sa.make_url(system_database_url)
-    if not url.drivername.startswith("cockroachdb"):
-        url = url.set(drivername="postgresql+psycopg")
-    engine = sa.create_engine(url)
-    try:
-        with engine.connect() as c:
-            return (
-                c.execute(
-                    sa.text(
-                        "SELECT 1 FROM information_schema.columns WHERE "
-                        "table_name = 'workflow_status' AND column_name = 'shard_key' "
-                        "LIMIT 1"
-                    )
-                ).first()
-                is not None
-            )
-    except Exception:
-        # Unreachable or not yet created: the command itself reports that.
-        return False
-    finally:
-        engine.dispose()
+    return PostgresSystemDatabase.holds_sharded_schema(system_database_url)
 
 
 @click.group(

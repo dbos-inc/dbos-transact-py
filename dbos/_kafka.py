@@ -42,6 +42,8 @@ class KafkaConsumerRegistration:
     ordering: KafkaOrdering
     # Custom queue the consumer was registered with, or None for an internal one
     queue_name: Optional[str]
+    # Shard key its workflows run under; required on a sharded system database
+    shard_key: Optional[str] = None
 
 
 def safe_group_name(method_name: str, topics: list[str]) -> str:
@@ -100,9 +102,22 @@ def _validate_consumer_queue(dbos: "DBOS", func_name: str, queue_name: str) -> N
         )
 
 
+def _validate_consumer_key(
+    dbos: "DBOS", func_name: str, shard_key: Optional[str]
+) -> None:
+    """Raise if a consumer names no shard key on a sharded system database, where every
+    workflow it enqueues needs one; otherwise it would retry the same batch forever."""
+    if shard_key is None and dbos._sys_db.sharded:
+        raise DBOSInitializationError(
+            f"Error: Kafka consumer {func_name} has no shard_key. On a sharded system "
+            "database, every consumer names the shard key its workflows run under."
+        )
+
+
 def validate_kafka_consumers(dbos: "DBOS") -> None:
-    """Validate the custom queue of every consumer registered before launch."""
+    """Validate the shard key and custom queue of every consumer registered before launch."""
     for reg in dbos._registry.kafka_registrations:
+        _validate_consumer_key(dbos, reg.func_name, reg.shard_key)
         if reg.queue_name is not None:
             _validate_consumer_queue(dbos, reg.func_name, reg.queue_name)
 
@@ -368,12 +383,10 @@ def kafka_consumer(
     def decorator(func: _KafkaConsumerWorkflow) -> _KafkaConsumerWorkflow:
         func_name = get_dbos_func_name(func)
         # Validate before registering anything below, so a rejected consumer leaves no trace; a consumer declared pre-launch is validated at launch instead, once its queue is resolvable.
-        if (
-            queue_name is not None
-            and dbosreg.dbos is not None
-            and dbosreg.dbos._launched
-        ):
-            _validate_consumer_queue(dbosreg.dbos, func_name, queue_name)
+        if dbosreg.dbos is not None and dbosreg.dbos._launched:
+            _validate_consumer_key(dbosreg.dbos, func_name, shard_key)
+            if queue_name is not None:
+                _validate_consumer_queue(dbosreg.dbos, func_name, queue_name)
         cfg = dict(config)  # copy: never mutate the caller's dict
 
         if "auto.offset.reset" not in cfg:
@@ -430,6 +443,7 @@ def kafka_consumer(
                 topics=list(topics),
                 ordering=resolved_ordering,
                 queue_name=queue_name,
+                shard_key=shard_key,
             )
         )
 

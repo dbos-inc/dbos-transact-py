@@ -291,6 +291,31 @@ class PostgresSystemDatabase(SystemDatabase):
             dbos_logger.error(f"Error resetting PostgreSQL system database: {str(e)}")
             raise e
 
+    @staticmethod
+    def holds_sharded_schema(database_url: str) -> bool:
+        """Whether this database holds a sharded DBOS system schema. False when it can't be
+        reached or doesn't exist yet, leaving the caller to report that."""
+        url = sa.make_url(database_url)
+        if not url.drivername.startswith("cockroachdb"):
+            url = url.set(drivername="postgresql+psycopg")
+        engine = sa.create_engine(url)
+        try:
+            with engine.connect() as c:
+                return (
+                    c.execute(
+                        sa.text(
+                            "SELECT 1 FROM information_schema.columns WHERE "
+                            "table_name = 'workflow_status' AND column_name = 'shard_key' "
+                            "LIMIT 1"
+                        )
+                    ).first()
+                    is not None
+                )
+        except Exception:
+            return False
+        finally:
+            engine.dispose()
+
     def _notification_listener(self) -> None:
         """Listen for PostgreSQL notifications using psycopg."""
         if not self.use_listen_notify:

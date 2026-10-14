@@ -2,13 +2,15 @@ import logging
 import random
 import threading
 import time
-from typing import Any, NoReturn, Optional
+from types import SimpleNamespace
+from typing import Any, NoReturn, Optional, cast
 
 import pytest
 from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 
 from dbos import DBOS, DBOSConfig, KafkaMessage
-from dbos._kafka import _describe_kafka_error, _make_error_cb
+from dbos._error import DBOSInitializationError
+from dbos._kafka import _describe_kafka_error, _make_error_cb, _validate_consumer_key
 from dbos._logger import dbos_logger
 from tests.conftest import retry_until_success
 
@@ -2083,3 +2085,13 @@ def test_kafka_custom_queue(dbos: DBOS) -> None:
     assert event.wait(timeout=60)
     assert processed == set(range(num_messages))
     assert max_active == 1  # concurrency=1 honored
+
+
+def test_a_consumer_needs_a_shard_key_when_sharded() -> None:
+    """Without one, every batch it consumed would fail to enqueue and retry forever."""
+    sharded = cast(Any, SimpleNamespace(_sys_db=SimpleNamespace(sharded=True)))
+    unsharded = cast(Any, SimpleNamespace(_sys_db=SimpleNamespace(sharded=False)))
+    with pytest.raises(DBOSInitializationError, match="has no shard_key"):
+        _validate_consumer_key(sharded, "consume", None)
+    _validate_consumer_key(sharded, "consume", "tenant-a")
+    _validate_consumer_key(unsharded, "consume", None)

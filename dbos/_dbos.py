@@ -107,6 +107,7 @@ from ._scheduler import (
     trigger_schedule,
 )
 from ._sys_db import (
+    _SHARDED_RESET_REFUSED,
     DEFAULT_NOTIFICATION_COALESCE_SEC,
     GetEventWorkflowContext,
     SendMessage,
@@ -910,6 +911,8 @@ class DBOS:
         assert (
             not self._launched
         ), "The system database cannot be reset after DBOS is launched. Resetting the system database is a destructive operation that should only be used in a test environment."
+        if self._config.get("sharding"):
+            raise DBOSException(_SHARDED_RESET_REFUSED)
 
         configured_url = self._config["system_database_url"]
         assert configured_url is not None

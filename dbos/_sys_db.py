@@ -466,6 +466,11 @@ class SendMessage:
 # A waiter's (workflow ID, topic or key, shard key) for the polling listener's checks.
 WaiterComponents = Tuple[str, str, Optional[str]]
 
+_SHARDED_RESET_REFUSED = (
+    "Resetting a sharded system database is not supported, with or without truncate: "
+    "drop or empty its schema through the router instead."
+)
+
 
 class KeySignal:
     """Fans one key's wake out to every waiter registered under it."""
@@ -4009,6 +4014,8 @@ class SystemDatabase(ABC):
         else:
             from ._sys_db_postgres import PostgresSystemDatabase
 
+            if PostgresSystemDatabase.holds_sharded_schema(database_url):
+                raise DBOSException(_SHARDED_RESET_REFUSED)
             PostgresSystemDatabase._reset_system_database(
                 database_url, truncate=truncate, schema=schema
             )
