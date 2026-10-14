@@ -73,7 +73,7 @@ def load() -> Enterprise:
     except ImportError as e:
         if isinstance(e, ModuleNotFoundError) and e.name == "dbos_enterprise":
             raise DBOSInitializationError(
-                'Connecting to DBOS Conductor requires the dbos-enterprise package. Install it with `pip install "dbos[enterprise]"`.'
+                'Transact Enterprise features (DBOS Conductor, auto-upgrade) require the dbos-enterprise package. Install it with `pip install "dbos[enterprise]"`.'
             ) from e
         # The package is present; it imports dbos internals, so this is almost always a version mismatch.
         raise DBOSInitializationError(
