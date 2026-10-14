@@ -488,11 +488,11 @@ class DBOS:
         key = config.get("conductor_key") or conductor_key
         enterprise_key = config.get("transact_enterprise_key") or key
         need_enterprise_key = bool(config.get("auto_upgrade"))
-        # DBOS Cloud always uses Conductor. Checked before any state exists, so a missing package fails cleanly.
-        if GlobalParams.dbos_cloud or key is not None or need_enterprise_key:
-            _enterprise.load()
         if need_enterprise_key and not (GlobalParams.dbos_cloud or enterprise_key):
             raise DBOSInitializationError(_NEED_ENTERPRISE_KEY_MSG)
+        # DBOS Cloud always uses Conductor.
+        if GlobalParams.dbos_cloud or key is not None or need_enterprise_key:
+            _enterprise.load()
 
         self._initialized: bool = True
 
