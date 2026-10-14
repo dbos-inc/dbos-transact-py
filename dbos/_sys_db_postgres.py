@@ -298,7 +298,8 @@ class PostgresSystemDatabase(SystemDatabase):
         url = sa.make_url(database_url)
         if not url.drivername.startswith("cockroachdb"):
             url = url.set(drivername="postgresql+psycopg")
-        engine = sa.create_engine(url)
+        # Bounded like the reset's own connection, so an unreachable host fails as fast.
+        engine = sa.create_engine(url, connect_args={"connect_timeout": 10})
         try:
             with engine.connect() as c:
                 return (

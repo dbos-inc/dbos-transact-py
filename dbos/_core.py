@@ -52,6 +52,7 @@ from ._context import (
     TracedAttributes,
     WorkflowIDReusePolicy,
     assert_current_dbos_context,
+    child_workflow_id,
     current_owner_xid,
     extract_trace_context,
     get_local_dbos_context,
@@ -664,6 +665,7 @@ def _init_workflow(
     duplication_policy: Optional[DuplicationPolicy] = None,
     workflow_id_reuse_policy: Optional[WorkflowIDReusePolicy] = None,
     parent_owner_xid: Optional[str] = None,
+    parent_shard_key: Optional[str] = None,
 ) -> tuple[WorkflowStatusInternal, bool, Optional[str]]:
     """Persist this workflow's initial status row, and for a child its parent's step, in one transaction.
 
@@ -738,6 +740,7 @@ def _init_workflow(
                                     "child_workflow_id": existing_id,
                                 },
                                 owner_xid=parent_owner_xid,
+                                owner_key=parent_shard_key,
                             )
                     return status, False, existing_id
                 continue
@@ -754,7 +757,9 @@ def _init_workflow(
                     "started_at_epoch_ms": started_at_epoch_ms,
                     "child_workflow_id": None,
                 }
-                dbos._sys_db.record_operation_result(result, owner_xid=parent_owner_xid)
+                dbos._sys_db.record_operation_result(
+                    result, owner_xid=parent_owner_xid, owner_key=parent_shard_key
+                )
             raise
 
     if should_execute:
@@ -1753,6 +1758,14 @@ def _build_enqueue_with_options(
             resolved["workflow_id_reuse_policy"] = new_wf_ctx.workflow_id_reuse_policy
     if resolved.get("shard_key") is None and new_wf_ctx.shard_key is not None:
         resolved["shard_key"] = new_wf_ctx.shard_key
+    # A derived default ID was made for the context's key; the options may name another.
+    if (
+        new_wf_ctx.derived_from is not None
+        and resolved.get("workflow_id") == new_wf_ctx.id_assigned_for_next_workflow
+    ):
+        resolved["workflow_id"] = child_workflow_id(
+            *new_wf_ctx.derived_from, resolved.get("shard_key")
+        )
     if local_ctx is not None:
         if (
             resolved.get("deduplication_id") is None
@@ -2091,10 +2104,12 @@ def workflow_wrapper(
 
             child_start_time = int(time.time() * 1000)
             if parent_wfid:
+                # The ambient context is the child's, so name the parent's key outright.
                 r = dbos._sys_db.check_operation_execution(
                     parent_wfid,
                     parent_fid,
                     get_dbos_func_name(func),
+                    owner_key=parent_shard_key,
                 )
                 if r and r["error"]:
                     raise deserialize_exception(
@@ -2121,6 +2136,7 @@ def workflow_wrapper(
                 child_start_time_ms=child_start_time,
                 workflow_id_reuse_policy=reuse_policy,
                 parent_owner_xid=parent_owner_xid,
+                parent_shard_key=parent_shard_key,
             )
 
             child_shard_key = status["shard_key"]

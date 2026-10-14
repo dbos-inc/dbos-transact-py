@@ -1068,17 +1068,19 @@ class SystemDatabase(ABC):
 
     @contextmanager
     def _own_key(
-        self, workflow_id: str, ctx: Optional["DBOSContext"] = None
+        self,
+        workflow_id: str,
+        ctx: Optional["DBOSContext"] = None,
+        *,
+        key: Optional[str] = None,
     ) -> Generator[None, None, None]:
-        """Address the running workflow's own rows by its own key, even where a same-ID
-        workflow under another key is bound as the target of the current call."""
-        ctx = ctx if ctx is not None else get_local_dbos_context()
-        own = (
-            ctx.shard_key
-            if ctx is not None and ctx.workflow_id == workflow_id
-            else None
-        )
-        with bind_shard_keys({workflow_id: own}):
+        """Address a workflow's own rows by its own key: key when the caller knows it, else
+        the running workflow's, even where a same-ID workflow is bound as a target."""
+        if key is None:
+            ctx = ctx if ctx is not None else get_local_dbos_context()
+            if ctx is not None and ctx.workflow_id == workflow_id:
+                key = ctx.shard_key
+        with bind_shard_keys({workflow_id: key}):
             yield
 
     @staticmethod
@@ -3102,6 +3104,7 @@ class SystemDatabase(ABC):
         *,
         completed_at_epoch_ms: Optional[int] = None,
         owner_xid: Optional[str] = None,
+        owner_key: Optional[str] = None,
     ) -> None:
         # Outside the retry: the conflict check compares the stored completion to ours.
         completed_at = (
@@ -3115,7 +3118,10 @@ class SystemDatabase(ABC):
 
         @db_retry(sys_db=self)
         def record_operation_result_retry() -> None:
-            with self._own_key(result["workflow_uuid"]), self.engine.begin() as c:
+            with (
+                self._own_key(result["workflow_uuid"], key=owner_key),
+                self.engine.begin() as c,
+            ):
                 self._record_operation_result_txn(
                     result,
                     completed_at,
@@ -3326,9 +3332,14 @@ class SystemDatabase(ABC):
 
     @db_retry()
     def check_operation_execution(
-        self, workflow_id: str, function_id: int, function_name: str
+        self,
+        workflow_id: str,
+        function_id: int,
+        function_name: str,
+        *,
+        owner_key: Optional[str] = None,
     ) -> Optional[RecordedResult]:
-        with self._own_key(workflow_id), self.engine.begin() as c:
+        with self._own_key(workflow_id, key=owner_key), self.engine.begin() as c:
             return self._check_operation_execution_txn(
                 workflow_id, function_id, function_name, c
             )

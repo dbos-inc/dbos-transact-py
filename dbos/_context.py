@@ -15,6 +15,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Tuple,
     Type,
     TypedDict,
     Union,
@@ -102,6 +103,21 @@ class ContextSpan:
     context_manager: "AbstractContextManager[Span]"
 
 
+def child_workflow_id(
+    parent_id: str,
+    function_id: int,
+    parent_key: Optional[str],
+    child_key: Optional[str],
+) -> str:
+    """A child's default ID: its parent's, suffixed with the call number. A parent ID is
+    unique only within its shard key, so a child under another key carries the parent's.
+    """
+    base = f"{parent_id}-{function_id}"
+    if parent_key is None or child_key is None or child_key == parent_key:
+        return base
+    return f"{len(parent_key)}:{parent_key}:{base}"
+
+
 class DBOSContext:
     def __init__(self) -> None:
         self.executor_id = GlobalParams.executor_id
@@ -110,6 +126,8 @@ class DBOSContext:
         self.logger = dbos_logger
 
         self.id_assigned_for_next_workflow: str = ""
+        # (parent ID, call number, parent's shard key) when the ID above is a derived default
+        self.derived_from: Optional[Tuple[str, int, Optional[str]]] = None
         # Reuse policy for id_assigned_for_next_workflow, consumed along with it.
         self.workflow_id_reuse_policy: Optional[WorkflowIDReusePolicy] = None
         self.is_within_set_workflow_id_block: bool = False
@@ -241,12 +259,18 @@ class DBOSContext:
         #      If this is a child workflow, assign parent wf id with call# suffix
         #   Make a (system) DB record for the workflow
         #   Pass the new context to a worker thread that will run the wf function
+        derived_from: Optional[Tuple[str, int, Optional[str]]] = None
         if cur_ctx is not None and cur_ctx.is_within_workflow():
             assert cur_ctx.is_workflow()  # Not in a step
             cur_ctx.function_id += 1
             if len(cur_ctx.id_assigned_for_next_workflow) == 0:
-                cur_ctx.id_assigned_for_next_workflow = (
-                    cur_ctx.workflow_id + "-" + str(cur_ctx.function_id)
+                derived_from = (
+                    cur_ctx.workflow_id,
+                    cur_ctx.function_id,
+                    cur_ctx.shard_key,
+                )
+                cur_ctx.id_assigned_for_next_workflow = child_workflow_id(
+                    *derived_from, cur_ctx.shard_key_for_next_workflow
                 )
 
         new_wf_ctx = (
@@ -255,6 +279,7 @@ class DBOSContext:
             else cur_ctx.create_child(is_for_workflow=True)
         )
         new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
+        new_wf_ctx.derived_from = derived_from
 
         return new_wf_ctx
 
