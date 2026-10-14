@@ -128,6 +128,7 @@ if TYPE_CHECKING:
 from typing import ParamSpec
 
 from . import _enterprise
+from ._auto_upgrade import AutoUpgradeThread
 from ._context import (
     DBOSContext,
     EnterDBOSStepCtx,
@@ -144,9 +145,8 @@ from ._dbos_config import (
     process_config,
     translate_dbos_config_to_config_file,
 )
-from ._auto_upgrade import AutoUpgradeThread
-from ._entitlements import check_enterprise_entitlement
 from ._enterprise import AlertHandler, ConductorThread
+from ._entitlements import check_enterprise_entitlement
 from ._error import (
     DBOSException,
     DBOSInitializationError,
