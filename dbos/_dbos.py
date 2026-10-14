@@ -2703,8 +2703,9 @@ class DBOS:
             new_id = _get_dbos_instance()._sys_db.call_function_as_step(
                 fn, "DBOS.forkWorkflow", snapshot_step_context(reserve_sleep_id=False)
             )
-            # A fork lives under its original's shard key.
-            return cls.retrieve_workflow(new_id, shard_key=shard_key)
+            # A fork lives under its original's shard key, however the caller supplied it.
+            fork_key = _get_dbos_instance()._sys_db._key_hint(workflow_id)
+            return cls.retrieve_workflow(new_id, shard_key=fork_key)
 
     @classmethod
     async def fork_workflow_async(
@@ -2751,7 +2752,9 @@ class DBOS:
                 return get_workflow(_get_dbos_instance()._sys_db, new_id)
 
             # A fork lives under its original's shard key.
-            with bind_shard_keys({new_id: shard_key}):
+            # A fork lives under its original's shard key, however the caller supplied it.
+            fork_key = _get_dbos_instance()._sys_db._key_hint(workflow_id)
+            with bind_shard_keys({new_id: fork_key}):
                 stat = await asyncio.to_thread(
                     _get_dbos_instance()._sys_db.call_function_as_step,
                     fnret,
@@ -2761,7 +2764,7 @@ class DBOS:
             if stat is None:
                 raise DBOSNonExistentWorkflowError("target", new_id)
             return WorkflowHandleAsyncPolling(
-                new_id, _get_dbos_instance(), shard_key=shard_key
+                new_id, _get_dbos_instance(), shard_key=fork_key
             )
 
     @classmethod

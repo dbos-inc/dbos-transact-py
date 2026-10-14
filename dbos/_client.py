@@ -1396,8 +1396,11 @@ class DBOSClient:
                 replacement_children=replacement_children,
                 timeout_seconds=timeout_seconds,
             )
+            # A fork lives under its original's shard key, however the caller supplied it.
             return WorkflowHandleClientPolling[Any](
-                forked_workflow_id, self._sys_db, shard_key=shard_key
+                forked_workflow_id,
+                self._sys_db,
+                shard_key=self._sys_db._key_hint(workflow_id),
             )
 
     async def fork_workflow_async(
@@ -1424,8 +1427,11 @@ class DBOSClient:
                 replacement_children=replacement_children,
                 timeout_seconds=timeout_seconds,
             )
+            # A fork lives under its original's shard key, however the caller supplied it.
             return WorkflowHandleClientAsyncPolling[Any](
-                forked_workflow_id, self._sys_db, shard_key=shard_key
+                forked_workflow_id,
+                self._sys_db,
+                shard_key=self._sys_db._key_hint(workflow_id),
             )
 
     def read_stream(
