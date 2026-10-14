@@ -912,6 +912,36 @@ def test_backfill_with_timezone(dbos: DBOS) -> None:
     DBOS.delete_schedule("tz-ny")
 
 
+def test_backfill_window_bounds_are_exclusive(dbos: DBOS) -> None:
+    received: list[datetime] = []
+
+    @DBOS.workflow()
+    def wf(scheduled_at: datetime, ctx: Any) -> None:
+        received.append(scheduled_at)
+
+    DBOS.create_schedule(
+        schedule_name="backfill-bounds",
+        workflow_fn=wf,
+        schedule="0 * * * *",  # every hour
+    )
+
+    # Both ends fall on a scheduled time and both are exclusive: 00:00 to 03:00
+    # yields 01:00 and 02:00 only
+    start = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2025, 1, 1, 3, 0, 0, tzinfo=timezone.utc)
+    handles = DBOS.backfill_schedule("backfill-bounds", start, end)
+    for h in handles:
+        h.get_result()
+
+    # Keep 2025 only: the live schedule may also fire if the test crosses a top-of-hour
+    backfilled = sorted(t for t in received if t.year == 2025)
+    expected = [datetime(2025, 1, 1, h, 0, 0, tzinfo=timezone.utc) for h in (1, 2)]
+    assert backfilled == expected
+    assert len(handles) == 2
+
+    DBOS.delete_schedule("backfill-bounds")
+
+
 def test_trigger_schedule(dbos: DBOS) -> None:
     received: list[tuple[datetime, Any]] = []
 
