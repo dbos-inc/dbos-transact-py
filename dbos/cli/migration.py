@@ -124,7 +124,9 @@ def print_sharded_migrations(*, schema: str = "dbos") -> None:
     click.echo(
         "-- Run each statement through the router or coordinator, outside a transaction block."
     )
-    for sql in _enterprise.load(_enterprise.SHARDING).sharded_schema_statements(schema):
+    for sql in _enterprise.load(
+        _enterprise.SHARDING.description
+    ).sharded_schema_statements(schema):
         _emit_sql(sql)
 
 

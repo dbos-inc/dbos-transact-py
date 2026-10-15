@@ -469,7 +469,7 @@ class DBOS:
 
         # DBOS Cloud always uses Conductor. Checked before any state exists, so a missing package fails cleanly.
         key = config.get("conductor_key") or conductor_key
-        # Every enterprise feature requires a DBOS key in good standing.
+        # Every enterprise feature requires a DBOS key whose org is entitled to it.
         features = _enterprise.enabled_features(config)
         _enterprise.require_enterprise(
             features,
@@ -480,7 +480,7 @@ class DBOS:
         if GlobalParams.dbos_cloud or key is not None:
             _enterprise.load()
         elif features:
-            _enterprise.load(features[0])
+            _enterprise.load(features[0].description)
 
         self._initialized: bool = True
 

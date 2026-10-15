@@ -12,6 +12,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -21,6 +22,8 @@ from typing import (
     Mapping,
     Optional,
     Protocol,
+    Sequence,
+    Tuple,
     cast,
 )
 from urllib.parse import urlsplit, urlunsplit
@@ -96,20 +99,34 @@ class Enterprise(Protocol):
     def sharded_schema_statements(self) -> Callable[[str], List[str]]: ...
 
 
+# What needs the package without being an entitlement, for load()'s messages.
 CONDUCTOR = "Connecting to DBOS Conductor"
-SHARDING = "Using a sharded system database"
 
 
-# Config keys that turn on an enterprise feature, each with the name its errors use.
-CONFIG_FEATURES: Dict[str, str] = {"sharding": SHARDING}
+@dataclass(frozen=True)
+class Feature:
+    """A Transact Enterprise feature: the entitlement Conductor reports it under, how
+    messages name it, and the DBOSConfig key that turns it on, if one does."""
+
+    entitlement: str
+    description: str
+    config_key: Optional[str] = None
 
 
-def enabled_features(config: Mapping[str, object]) -> List[str]:
+SHARDING = Feature("sharding", "Using a sharded system database", config_key="sharding")
+
+# Every entitled feature; a new one is a Feature here plus its entitlement in Conductor.
+FEATURES: Tuple[Feature, ...] = (SHARDING,)
+
+
+def enabled_features(config: Mapping[str, object]) -> List[Feature]:
     """The enterprise features a config turns on."""
-    return [feature for key, feature in CONFIG_FEATURES.items() if config.get(key)]
+    return [
+        f for f in FEATURES if f.config_key is not None and config.get(f.config_key)
+    ]
 
 
-ENTITLEMENT_PATH = "/v2/entitlements/enterprise"
+ENTITLEMENTS_PATH = "/v2/entitlements"
 ENTITLEMENT_TIMEOUT_SEC = 10.0
 
 
@@ -132,7 +149,7 @@ def entitlement_url(conductor_url: str) -> str:
         path = path[: -len("/v1alpha1")]
     # Without any user:password@, which would otherwise be sent and quoted in errors.
     host = parts.netloc.rpartition("@")[2]
-    return urlunsplit((scheme, host, path + ENTITLEMENT_PATH, "", ""))
+    return urlunsplit((scheme, host, path + ENTITLEMENTS_PATH, "", ""))
 
 
 class _NoRedirects(urllib.request.HTTPRedirectHandler):
@@ -142,12 +159,17 @@ class _NoRedirects(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _fetch_entitlement(request: urllib.request.Request) -> None:
-    """GET the entitlement route; a refused redirect surfaces as an HTTPError."""
+def _fetch_entitlements(request: urllib.request.Request) -> Dict[str, bool]:
+    """GET the key's org's entitlements, by entitlement name; a refused redirect surfaces
+    as an HTTPError, and a malformed body as a ValueError."""
     # Built per call, so proxy settings are read when the check runs, not at import.
     opener = urllib.request.build_opener(_NoRedirects)
-    with opener.open(request, timeout=ENTITLEMENT_TIMEOUT_SEC):
-        pass
+    with opener.open(request, timeout=ENTITLEMENT_TIMEOUT_SEC) as response:
+        body = json.loads(response.read())
+    entitlements = body.get("entitlements") if isinstance(body, dict) else None
+    if not isinstance(entitlements, dict):
+        raise ValueError("the response has no entitlements")
+    return {name: value is True for name, value in entitlements.items()}
 
 
 def _error_detail(error: urllib.error.HTTPError) -> str:
@@ -160,17 +182,17 @@ def _error_detail(error: urllib.error.HTTPError) -> str:
 
 
 def require_enterprise(
-    features: List[str],
+    features: Sequence[Feature],
     *,
     enterprise_key: Optional[str],
     conductor_key: Optional[str],
     conductor_url: Optional[str],
 ) -> None:
-    """Enterprise features need a DBOS key in good standing, checked with Conductor.
-    DBOS Cloud passes without a check."""
+    """Enterprise features need a DBOS key whose org is entitled to each of them, checked
+    with Conductor. DBOS Cloud passes without a check."""
     if not features or GlobalParams.dbos_cloud:
         return
-    names = " and ".join(features)
+    names = " and ".join(f.description for f in features)
     key = enterprise_key or conductor_key
     if key is None:
         raise DBOSInitializationError(
@@ -187,30 +209,46 @@ def require_enterprise(
         },
     )
     try:
-        _fetch_entitlement(request)
-        return
+        granted = _fetch_entitlements(request)
     except urllib.error.HTTPError as e:
-        if e.code < 500:
-            # Rejected: an unknown key, an org not in good standing, no such route, or a redirect.
+        if e.code == 404:
+            # A Conductor predating per-feature entitlements, or self-hosted without OAuth.
             raise DBOSInitializationError(
-                f"{names} requires a DBOS key in good standing. Conductor at {url} "
-                f"rejected the key (HTTP {e.code}): {_error_detail(e)}"
+                f"{names} requires a DBOS key, but Conductor at {url} has no "
+                "entitlements route (HTTP 404). Upgrade Conductor, or check its URL."
+            ) from e
+        if e.code < 500:
+            # Rejected: an unknown key, a user credential instead of a key, or a redirect.
+            raise DBOSInitializationError(
+                f"{names} requires a valid DBOS key. Conductor at {url} rejected the "
+                f"key (HTTP {e.code}): {_error_detail(e)}"
             ) from e
         failure = f"HTTP {e.code}"
         cause: Exception = e
     except Exception as e:
         failure = str(e)
         cause = e
+    else:
+        missing = [f for f in features if not granted.get(f.entitlement, False)]
+        if missing:
+            raise DBOSInitializationError(
+                f"Your DBOS organization is not entitled to "
+                f"{' and '.join(f.entitlement for f in missing)} "
+                f"({' and '.join(f.description for f in missing)}). Every entitlement is "
+                "off while the organization is past its plan limit; otherwise, contact "
+                "DBOS to enable it."
+            )
+        return
     if target == HOSTED_CONDUCTOR_URL:
         dbos_logger.warning(
-            f"Could not verify the DBOS key with Conductor at {url} ({failure}); "
-            "starting anyway."
+            f"Could not verify the DBOS key's entitlements with Conductor at {url} "
+            f"({failure}); starting anyway."
         )
         return
     # Any other Conductor fails closed, so an unreachable URL cannot stand in for a key.
     raise DBOSInitializationError(
-        f"{names} requires a DBOS key in good standing, but checking it with Conductor "
-        f"at {url} failed ({failure}). Retry once Conductor is reachable."
+        f"{names} requires an entitled DBOS key, but checking it with Conductor at {url} "
+        f"failed ({failure}). Retry once Conductor is reachable."
     ) from cause
 
 

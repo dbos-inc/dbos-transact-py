@@ -105,12 +105,17 @@ def test_cloud_always_requires_the_package(
     DBOS.destroy(destroy_registry=True)
 
 
+# A feature for exercising the check itself, entitled under a name Conductor may not know.
+SOME_FEATURE = enterprise_module.Feature("some_feature", "Some feature")
+ALL_ENTITLED = {"sharding": True, "auto_upgrade": True, "suspend_workflows": True}
+
+
 class FakeConductor:
-    """A local stand-in for Conductor's entitlement route."""
+    """A local stand-in for Conductor's entitlements route."""
 
     def __init__(self) -> None:
         self.status = 200
-        self.body: Dict[str, Any] = {"entitled": True}
+        self.body: Any = {"entitlements": {**ALL_ENTITLED, "some_feature": True}}
         self.headers: Dict[str, str] = {}
         self.requests: List[Tuple[str, Optional[str]]] = []
         fake = self
@@ -138,6 +143,10 @@ class FakeConductor:
         self.status = status
         self.body = {"title": "Rejected", "status": status, "detail": detail}
 
+    def entitle(self, **entitlements: bool) -> None:
+        self.status = 200
+        self.body = {"entitlements": entitlements}
+
 
 @pytest.fixture()
 def conductor(monkeypatch: pytest.MonkeyPatch) -> Generator[FakeConductor, Any, None]:
@@ -153,9 +162,10 @@ def check(
     *,
     enterprise_key: Optional[str] = None,
     conductor_key: Optional[str] = None,
+    features: Optional[List[enterprise_module.Feature]] = None,
 ) -> None:
     _require_enterprise(
-        ["Some feature"],
+        features if features is not None else [SOME_FEATURE],
         enterprise_key=enterprise_key,
         conductor_key=conductor_key,
         conductor_url=conductor.url,
@@ -166,30 +176,25 @@ def test_entitlement_url_sits_beside_the_conductor_url() -> None:
     url = enterprise_module.entitlement_url
     assert (
         url("wss://cloud.dbos.dev/conductor/v1alpha1")
-        == "https://cloud.dbos.dev/conductor/v2/entitlements/enterprise"
+        == "https://cloud.dbos.dev/conductor/v2/entitlements"
     )
     assert (
         url("wss://cloud.dbos.dev/conductor/v1alpha1/")
-        == "https://cloud.dbos.dev/conductor/v2/entitlements/enterprise"
+        == "https://cloud.dbos.dev/conductor/v2/entitlements"
     )
     # Credentials in the URL are dropped, so they are never sent or quoted in errors.
     assert url("wss://user:secret@conductor.example.com:8443/conductor/v1alpha1") == (
-        "https://conductor.example.com:8443/conductor/v2/entitlements/enterprise"
+        "https://conductor.example.com:8443/conductor/v2/entitlements"
     )
-    assert (
-        url("ws://user:secret@[::1]:8090")
-        == "http://[::1]:8090/v2/entitlements/enterprise"
-    )
+    assert url("ws://user:secret@[::1]:8090") == "http://[::1]:8090/v2/entitlements"
     # A self-hosted Conductor serves its routes from the root.
-    assert (
-        url("ws://localhost:8090") == "http://localhost:8090/v2/entitlements/enterprise"
-    )
+    assert url("ws://localhost:8090") == "http://localhost:8090/v2/entitlements"
     assert url("https://conductor.example.com/") == (
-        "https://conductor.example.com/v2/entitlements/enterprise"
+        "https://conductor.example.com/v2/entitlements"
     )
 
 
-def test_a_key_in_good_standing_unlocks_enterprise_features(
+def test_an_entitled_key_unlocks_enterprise_features(
     conductor: FakeConductor,
 ) -> None:
     check(conductor, enterprise_key="enterprise-key")
@@ -197,10 +202,48 @@ def test_a_key_in_good_standing_unlocks_enterprise_features(
     # The enterprise key is checked when both are set.
     check(conductor, enterprise_key="enterprise-key", conductor_key="conductor-key")
     assert conductor.requests == [
-        ("/v2/entitlements/enterprise", "Bearer enterprise-key"),
-        ("/v2/entitlements/enterprise", "Bearer conductor-key"),
-        ("/v2/entitlements/enterprise", "Bearer enterprise-key"),
+        ("/v2/entitlements", "Bearer enterprise-key"),
+        ("/v2/entitlements", "Bearer conductor-key"),
+        ("/v2/entitlements", "Bearer enterprise-key"),
     ]
+
+
+def test_each_feature_needs_its_own_entitlement(conductor: FakeConductor) -> None:
+    conductor.entitle(sharding=False, auto_upgrade=True, some_feature=True)
+    check(conductor, enterprise_key="enterprise-key")
+    with pytest.raises(DBOSInitializationError) as raised:
+        check(
+            conductor,
+            enterprise_key="enterprise-key",
+            features=[SOME_FEATURE, enterprise_module.SHARDING],
+        )
+    message = str(raised.value)
+    # Names only what the org lacks, by entitlement and by what it does.
+    assert "not entitled to sharding (Using a sharded system database)" in message
+    assert "some_feature" not in message and "enterprise-key" not in message
+    # One request answers for every feature.
+    assert len(conductor.requests) == 2
+
+
+def test_a_past_limit_org_is_entitled_to_nothing(conductor: FakeConductor) -> None:
+    # Conductor reports every entitlement off while the org is past its plan limit.
+    conductor.entitle(**{name: False for name in ALL_ENTITLED}, some_feature=False)
+    with pytest.raises(DBOSInitializationError, match="past its plan limit") as raised:
+        check(conductor, enterprise_key="enterprise-key")
+    assert "not entitled to some_feature" in str(raised.value)
+
+
+def test_an_entitlement_conductor_does_not_report_is_not_granted(
+    conductor: FakeConductor,
+) -> None:
+    # A Conductor older than the feature doesn't list it, which grants nothing.
+    conductor.entitle(**ALL_ENTITLED)
+    with pytest.raises(DBOSInitializationError, match="not entitled to some_feature"):
+        check(conductor, enterprise_key="enterprise-key")
+    # Anything but true grants nothing either.
+    conductor.entitle(some_feature="yes")  # type: ignore[arg-type]
+    with pytest.raises(DBOSInitializationError, match="not entitled to some_feature"):
+        check(conductor, enterprise_key="enterprise-key")
 
 
 def test_enterprise_features_require_a_key(conductor: FakeConductor) -> None:
@@ -213,16 +256,16 @@ def test_enterprise_features_require_a_key(conductor: FakeConductor) -> None:
 
 
 def test_conductor_credentials_never_reach_errors(conductor: FakeConductor) -> None:
-    conductor.reject(403, "your DBOS account is past the free trial limit")
+    conductor.reject(401, "invalid API key")
     with_credentials = conductor.url.replace("ws://", "ws://user:secret@")
     with pytest.raises(DBOSInitializationError) as raised:
         _require_enterprise(
-            ["Some feature"],
+            [SOME_FEATURE],
             enterprise_key="enterprise-key",
             conductor_key=None,
             conductor_url=with_credentials,
         )
-    assert "rejected the key (HTTP 403)" in str(raised.value)
+    assert "rejected the key (HTTP 401)" in str(raised.value)
     assert "secret" not in str(raised.value) and "user" not in str(raised.value)
 
 
@@ -230,9 +273,9 @@ def test_conductor_credentials_never_reach_errors(conductor: FakeConductor) -> N
     "status, detail",
     [
         (401, "invalid API key"),
-        (403, "your DBOS account is past the free trial limit"),
-        # A Conductor without the route, such as a self-hosted one without OAuth.
-        (404, "Not Found"),
+        # A user credential, which the route refuses in favor of an API key.
+        (401, "this endpoint requires a DBOS API key"),
+        (403, "forbidden"),
     ],
 )
 def test_a_rejected_key_is_refused(
@@ -246,6 +289,15 @@ def test_a_rejected_key_is_refused(
     assert "enterprise-key" not in message
 
 
+def test_a_conductor_without_the_route_is_refused(conductor: FakeConductor) -> None:
+    # An older Conductor, or a self-hosted one without OAuth.
+    conductor.reject(404, "Not Found")
+    with pytest.raises(
+        DBOSInitializationError, match=r"has no entitlements route \(HTTP 404\)"
+    ):
+        check(conductor, enterprise_key="enterprise-key")
+
+
 def test_a_redirect_is_refused_and_never_carries_the_key(
     conductor: FakeConductor,
 ) -> None:
@@ -253,7 +305,7 @@ def test_a_redirect_is_refused_and_never_carries_the_key(
     try:
         target = elsewhere.url.replace("ws://", "http://")
         conductor.status = 302
-        conductor.headers = {"Location": f"{target}/v2/entitlements/enterprise"}
+        conductor.headers = {"Location": f"{target}/v2/entitlements"}
         with pytest.raises(
             DBOSInitializationError, match=r"rejected the key \(HTTP 302\)"
         ):
@@ -263,6 +315,17 @@ def test_a_redirect_is_refused_and_never_carries_the_key(
     finally:
         elsewhere.server.shutdown()
         elsewhere.server.server_close()
+
+
+@pytest.mark.parametrize(
+    "body", [[], {"entitlements": None}, {"entitled": True}, "not json"]
+)
+def test_a_malformed_answer_counts_as_an_outage(
+    conductor: FakeConductor, body: Any
+) -> None:
+    conductor.body = body
+    with pytest.raises(DBOSInitializationError, match="Retry once Conductor"):
+        check(conductor, enterprise_key="enterprise-key")
 
 
 def test_an_unreachable_conductor_blocks_startup(conductor: FakeConductor) -> None:
@@ -278,7 +341,7 @@ def test_an_unreachable_conductor_blocks_startup(conductor: FakeConductor) -> No
         closed = s.getsockname()[1]
     with pytest.raises(DBOSInitializationError) as raised:
         _require_enterprise(
-            ["Some feature"],
+            [SOME_FEATURE],
             enterprise_key="enterprise-key",
             conductor_key=None,
             conductor_url=f"ws://127.0.0.1:{closed}",
@@ -295,21 +358,21 @@ def test_a_hosted_conductor_outage_does_not_block_startup(
     monkeypatch.delenv("DBOS_DOMAIN", raising=False)
     requested: List[str] = []
 
-    def unreachable(request: urllib.request.Request) -> None:
+    def unreachable(request: urllib.request.Request) -> Dict[str, bool]:
         requested.append(request.full_url)
         raise urllib.error.URLError("connection refused")
 
     warnings: List[str] = []
-    monkeypatch.setattr(enterprise_module, "_fetch_entitlement", unreachable)
+    monkeypatch.setattr(enterprise_module, "_fetch_entitlements", unreachable)
     monkeypatch.setattr(dbos_logger, "warning", lambda msg: warnings.append(msg))
     # No Conductor URL means DBOS's hosted one, whose outage only warns.
     _require_enterprise(
-        ["Some feature"],
+        [SOME_FEATURE],
         enterprise_key="enterprise-key",
         conductor_key=None,
         conductor_url=None,
     )
-    assert requested == ["https://cloud.dbos.dev/conductor/v2/entitlements/enterprise"]
+    assert requested == ["https://cloud.dbos.dev/conductor/v2/entitlements"]
     assert len(warnings) == 1 and "Could not verify the DBOS key" in warnings[0]
     assert "enterprise-key" not in warnings[0]
     # Another domain is not DBOS's hosted Conductor, so its outage still refuses.
@@ -318,7 +381,7 @@ def test_a_hosted_conductor_outage_does_not_block_startup(
         DBOSInitializationError, match="Retry once Conductor is reachable"
     ):
         _require_enterprise(
-            ["Some feature"],
+            [SOME_FEATURE],
             enterprise_key="enterprise-key",
             conductor_key=None,
             conductor_url=None,
@@ -339,9 +402,12 @@ def test_config_turns_on_enterprise_features() -> None:
     assert enterprise_module.enabled_features({"sharding": True}) == [
         enterprise_module.SHARDING
     ]
+    # Every registered feature has a distinct entitlement name.
+    names = [f.entitlement for f in enterprise_module.FEATURES]
+    assert len(names) == len(set(names))
 
 
-def test_sharded_executor_checks_its_key(
+def test_sharded_executor_checks_its_entitlement(
     config: DBOSConfig,
     conductor: FakeConductor,
     skip_with_sharding: None,
@@ -350,21 +416,18 @@ def test_sharded_executor_checks_its_key(
     # Refused before the package is even loaded, so this holds without dbos-enterprise.
     with pytest.raises(
         DBOSInitializationError,
-        match=f": {enterprise_module.SHARDING} requires a DBOS key",
+        match=f": {enterprise_module.SHARDING.description} requires a DBOS key",
     ):
         DBOS(config={**config, "sharding": True})
     DBOS.destroy(destroy_registry=True)
-    conductor.reject(403, "your DBOS account is past the free trial limit")
-    with pytest.raises(DBOSInitializationError, match="HTTP 403"):
-        DBOS(
-            config={
-                **config,
-                "sharding": True,
-                "transact_enterprise_key": "enterprise-key",
-                "conductor_url": conductor.url,
-            }
-        )
+    sharded = {
+        **config,
+        "sharding": True,
+        "transact_enterprise_key": "enterprise-key",
+        "conductor_url": conductor.url,
+    }
+    conductor.entitle(**{**ALL_ENTITLED, "sharding": False})
+    with pytest.raises(DBOSInitializationError, match="not entitled to sharding"):
+        DBOS(config=sharded)  # type: ignore[arg-type]
     DBOS.destroy(destroy_registry=True)
-    assert conductor.requests == [
-        ("/v2/entitlements/enterprise", "Bearer enterprise-key")
-    ]
+    assert conductor.requests == [("/v2/entitlements", "Bearer enterprise-key")]

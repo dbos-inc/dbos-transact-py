@@ -660,7 +660,9 @@ class SystemDatabase(ABC):
                 )
             from . import _enterprise
 
-            return _enterprise.load(_enterprise.SHARDING).ShardedSystemDatabase(
+            return _enterprise.load(
+                _enterprise.SHARDING.description
+            ).ShardedSystemDatabase(
                 system_database_url=system_database_url,
                 engine_kwargs=engine_kwargs,
                 engine=engine,
