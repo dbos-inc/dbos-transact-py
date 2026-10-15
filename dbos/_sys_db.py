@@ -402,12 +402,7 @@ class ApplicationRowCounts(TypedDict):
     steps: int
 
 
-class _StepInfoShardKey(TypedDict, total=False):
-    # The shard key of the step's child workflow; None on an unsharded database
-    child_shard_key: Optional[str]
-
-
-class StepInfo(_StepInfoShardKey):
+class StepInfo(TypedDict):
     # The unique ID of the step in the workflow
     function_id: int
     # The (fully qualified) name of the step
@@ -418,6 +413,8 @@ class StepInfo(_StepInfoShardKey):
     error: Optional[Exception]
     # If the step starts or retrieves the result of a workflow, its ID
     child_workflow_id: Optional[str]
+    # That workflow's shard key; None on an unsharded database
+    child_shard_key: Optional[str]
     # The Unix epoch timestamp at which this step started
     started_at_epoch_ms: Optional[int]
     # The Unix epoch timestamp at which this step completed
