@@ -52,7 +52,7 @@ class AutoUpgradePass(Protocol):
 
 
 class AutoUpgradePassFactory(Protocol):
-    def __call__(self, dbos: DBOS) -> AutoUpgradePass: ...
+    def __call__(self, dbos: DBOS, *, grace_sec: float) -> AutoUpgradePass: ...
 
 
 class Enterprise(Protocol):
