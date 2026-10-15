@@ -115,7 +115,7 @@ class Feature:
 
 SHARDING = Feature("sharding", "Using a sharded system database", config_key="sharding")
 
-# Every entitled feature; a new one is a Feature here plus its entitlement in Conductor.
+# Every entitled feature; a new one is a Feature here, named by Conductor's camelCase key.
 FEATURES: Tuple[Feature, ...] = (SHARDING,)
 
 

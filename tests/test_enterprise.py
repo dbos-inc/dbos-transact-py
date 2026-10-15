@@ -106,8 +106,8 @@ def test_cloud_always_requires_the_package(
 
 
 # A feature for exercising the check itself, entitled under a name Conductor may not know.
-SOME_FEATURE = enterprise_module.Feature("some_feature", "Some feature")
-ALL_ENTITLED = {"sharding": True, "auto_upgrade": True, "suspend_workflows": True}
+SOME_FEATURE = enterprise_module.Feature("someFeature", "Some feature")
+ALL_ENTITLED = {"sharding": True, "autoUpgrade": True, "suspendWorkflows": True}
 
 
 class FakeConductor:
@@ -115,7 +115,7 @@ class FakeConductor:
 
     def __init__(self) -> None:
         self.status = 200
-        self.body: Any = {"entitlements": {**ALL_ENTITLED, "some_feature": True}}
+        self.body: Any = {"entitlements": {**ALL_ENTITLED, "someFeature": True}}
         self.headers: Dict[str, str] = {}
         self.requests: List[Tuple[str, Optional[str]]] = []
         fake = self
@@ -212,7 +212,7 @@ def test_an_entitled_key_unlocks_enterprise_features(
 
 
 def test_each_feature_needs_its_own_entitlement(conductor: FakeConductor) -> None:
-    conductor.entitle(sharding=False, auto_upgrade=True, some_feature=True)
+    conductor.entitle(sharding=False, autoUpgrade=True, someFeature=True)
     check(conductor, enterprise_key="enterprise-key")
     with pytest.raises(DBOSInitializationError) as raised:
         check(
@@ -224,7 +224,7 @@ def test_each_feature_needs_its_own_entitlement(conductor: FakeConductor) -> Non
     # Names only what the org lacks, by entitlement and by what it does.
     assert "not entitled to sharding (Using a sharded system database)" in message
     assert "plan does not include it" in message
-    assert "some_feature" not in message and "enterprise-key" not in message
+    assert "someFeature" not in message and "enterprise-key" not in message
     # One request answers for every feature.
     assert len(conductor.requests) == 2
 
@@ -239,7 +239,7 @@ def test_a_past_limit_org_is_told_to_upgrade(conductor: FakeConductor) -> None:
     with pytest.raises(DBOSInitializationError) as raised:
         check(conductor, enterprise_key="enterprise-key")
     message = str(raised.value)
-    assert "past its plan limit, so it is not entitled to some_feature" in message
+    assert "past its plan limit, so it is not entitled to someFeature" in message
     assert "Upgrade its plan" in message
     # The code, not the status or the prose, marks it: a bare 403 is another refusal.
     conductor.reject(403, "your DBOS account is past the free trial limit")
@@ -254,11 +254,11 @@ def test_an_entitlement_conductor_does_not_report_is_not_granted(
 ) -> None:
     # A Conductor older than the feature doesn't list it, which grants nothing.
     conductor.entitle(**ALL_ENTITLED)
-    with pytest.raises(DBOSInitializationError, match="not entitled to some_feature"):
+    with pytest.raises(DBOSInitializationError, match="not entitled to someFeature"):
         check(conductor, enterprise_key="enterprise-key")
     # Anything but true grants nothing either.
-    conductor.entitle(some_feature="yes")  # type: ignore[arg-type]
-    with pytest.raises(DBOSInitializationError, match="not entitled to some_feature"):
+    conductor.entitle(someFeature="yes")  # type: ignore[arg-type]
+    with pytest.raises(DBOSInitializationError, match="not entitled to someFeature"):
         check(conductor, enterprise_key="enterprise-key")
 
 
