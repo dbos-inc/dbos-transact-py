@@ -1,10 +1,17 @@
+# Run the project's own black and isort, so commits format exactly as `pdm run black .` does.
 repos:
-  - repo: https://github.com/psf/black-pre-commit-mirror
-    rev: 24.4.2
+  - repo: local
     hooks:
       - id: black
-        language_version: python3
-  - repo: https://github.com/pycqa/isort
-    rev: 5.13.2
-    hooks:
+        name: black
+        entry: pdm run black
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
       - id: isort
+        name: isort
+        entry: pdm run isort
+        language: system
+        types_or: [cython, pyi, python]
+        args: ["--filter-files"]
+        require_serial: true
