@@ -2737,11 +2737,12 @@ class SystemDatabase(ABC):
                 self.tables.workflow_status.c.application_name, application_name
             )
         )
-        if shard_key_list:
+        # An empty key list matches nothing, rather than every key.
+        if shard_key_list is not None:
             query = query.where(
                 *self._key_in(self.tables.workflow_status, shard_key_list)
             )
-        if parent_shard_key_list:
+        if parent_shard_key_list is not None:
             query = query.where(
                 *self._key_in(
                     self.tables.workflow_status,

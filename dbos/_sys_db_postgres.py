@@ -15,6 +15,7 @@ from dbos._migration import (
 )
 
 from ._datasource_migration import DATASOURCE_MIGRATIONS_TABLE
+from ._error import DBOSException
 from ._logger import dbos_logger
 from ._schemas.system_database import SystemSchema
 from ._sys_db import (
@@ -100,6 +101,7 @@ class PostgresSystemDatabase(SystemDatabase):
                 conn.execute(sa.text("SELECT 1"))
 
         assert self.schema
+        self._refuse_sharded_schema()
         # Skip the advisory lock and migration work entirely if the schema
         # and dbos_migrations table already exist and are at the latest version.
         if not should_migrate(self.engine, self.schema, self.use_listen_notify):
@@ -290,6 +292,28 @@ class PostgresSystemDatabase(SystemDatabase):
         except Exception as e:
             dbos_logger.error(f"Error resetting PostgreSQL system database: {str(e)}")
             raise e
+
+    def check_connection(self) -> None:
+        super().check_connection()
+        if not self.sharded:
+            self._refuse_sharded_schema()
+
+    def _refuse_sharded_schema(self) -> None:
+        """Raise if this unsharded handle's schema is sharded: its statements name no shard
+        key, so they would read and write across every tenant's rows."""
+        with self.engine.connect() as c:
+            sharded_schema = c.execute(
+                sa.text(
+                    "SELECT 1 FROM information_schema.columns WHERE table_schema = :schema "
+                    "AND table_name = 'workflow_status' AND column_name = 'shard_key'"
+                ),
+                {"schema": self.schema},
+            ).first()
+        if sharded_schema is not None:
+            raise DBOSException(
+                f"The DBOS system schema {self.schema} is sharded. Enable sharding to use "
+                "it: set sharding in DBOSConfig, or pass sharding=True to DBOSClient."
+            )
 
     @staticmethod
     def holds_sharded_schema(database_url: str) -> bool:

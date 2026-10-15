@@ -3725,6 +3725,7 @@ def test_shard_keys_are_rejected_without_sharding(
         lambda: client.list_workflows(shard_key=key),
         lambda: DBOS.list_workflows(parent_shard_key=key),
         lambda: client.list_queued_workflows(parent_shard_key=key),
+        lambda: DBOS.list_workflows(shard_key=[]),
     ]
     for listing in listings:
         with pytest.raises(DBOSException, match="requires a sharded system database"):
