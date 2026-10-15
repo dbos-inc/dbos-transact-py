@@ -871,9 +871,15 @@ class DBOS:
                     )
                     or 30.0
                 )
+                auto_upgrade_grace_sec: float = (
+                    self._config.get("runtimeConfig", {}).get("auto_upgrade_grace_sec")
+                    or 0.0
+                )
                 self.auto_upgrader = AutoUpgradeThread(
                     self,
-                    _enterprise.load().AutoUpgradePass(self),
+                    _enterprise.load().AutoUpgradePass(
+                        self, grace_sec=auto_upgrade_grace_sec
+                    ),
                     interval_sec=auto_upgrade_interval_sec,
                 )
                 self.auto_upgrader.start()

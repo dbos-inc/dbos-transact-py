@@ -34,8 +34,9 @@ class _RecordingPass:
 
     instances: List["_RecordingPass"] = []
 
-    def __init__(self, dbos: DBOS) -> None:
+    def __init__(self, dbos: DBOS, *, grace_sec: float) -> None:
         self.dbos = dbos
+        self.grace_sec = grace_sec
         self.runs: List[threading.Event] = []
         self.closes = 0
         self.events: List[str] = []
@@ -111,6 +112,7 @@ def _conductor_config(config: DBOSConfig, **overrides: Any) -> DBOSConfig:
             "conductor_key": "test-key",
             "conductor_url": "ws://127.0.0.1:1",
             "auto_upgrade_interval_sec": 0.05,
+            "auto_upgrade_grace_sec": 7.5,
             **overrides,
         },
     )
@@ -311,9 +313,11 @@ def test_thread_runs_the_pass_until_destroy(
     assert upgrader.is_alive()
     assert upgrader.interval_sec == 0.05
 
-    # The pass was built from this instance and ticks on the configured interval.
+    # The pass was built from this instance with the configured grace, and ticks on
+    # the configured interval.
     [upgrade_pass] = _RecordingPass.instances
     assert upgrade_pass.dbos is dbos
+    assert upgrade_pass.grace_sec == 7.5
     _wait_for_runs(upgrade_pass, 3)
     assert all(evt is upgrader.stop_event for evt in upgrade_pass.runs)
 
@@ -331,7 +335,10 @@ def test_default_interval(
 ) -> None:
     dbos = DBOS(
         config=_conductor_config(
-            config, auto_upgrade=True, auto_upgrade_interval_sec=None
+            config,
+            auto_upgrade=True,
+            auto_upgrade_interval_sec=None,
+            auto_upgrade_grace_sec=None,
         )
     )
 
@@ -342,6 +349,8 @@ def test_default_interval(
     DBOS.launch()
     assert dbos.auto_upgrader is not None
     assert dbos.auto_upgrader.interval_sec == 30.0
+    [upgrade_pass] = _RecordingPass.instances
+    assert upgrade_pass.grace_sec == 0.0
 
 
 # --- Thread lifecycle in isolation --------------------------------------------
@@ -354,7 +363,7 @@ def _thread(
 
 
 def test_pass_failure_does_not_stop_the_thread(enterprise_stand_in: None) -> None:
-    upgrade_pass = _RecordingPass(cast(DBOS, None))
+    upgrade_pass = _RecordingPass(cast(DBOS, None), grace_sec=0.0)
     upgrade_pass.run_error = RuntimeError("boom")
     thread = _thread(upgrade_pass)
     thread.start()
@@ -368,7 +377,7 @@ def test_pass_failure_does_not_stop_the_thread(enterprise_stand_in: None) -> Non
 def test_stop_lets_a_pass_in_flight_finish_before_closing(
     enterprise_stand_in: None,
 ) -> None:
-    upgrade_pass = _RecordingPass(cast(DBOS, None))
+    upgrade_pass = _RecordingPass(cast(DBOS, None), grace_sec=0.0)
     upgrade_pass.block_until_stopped = True
     thread = _thread(upgrade_pass)
     thread.start()
