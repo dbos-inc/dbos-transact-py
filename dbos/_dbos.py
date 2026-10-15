@@ -181,10 +181,13 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 T = TypeVar("T")
 
 
-_NEED_ENTERPRISE_KEY_MSG = (
-    "auto_upgrade requires a Transact Enterprise key: "
-    "set transact_enterprise_key or conductor_key in DBOSConfig."
-)
+def _need_enterprise_key_msg(feature: str) -> str:
+    """The error for an enterprise `feature` configured without a key to check it with."""
+    return (
+        f"{feature} requires a Transact Enterprise key: "
+        "set transact_enterprise_key or conductor_key in DBOSConfig."
+    )
+
 
 _dbos_global_instance: Optional[DBOS] = None
 _dbos_global_registry: Optional[DBOSRegistry] = None
@@ -489,7 +492,7 @@ class DBOS:
         enterprise_key = config.get("transact_enterprise_key") or key
         need_enterprise_key = bool(config.get("auto_upgrade"))
         if need_enterprise_key and not (GlobalParams.dbos_cloud or enterprise_key):
-            raise DBOSInitializationError(_NEED_ENTERPRISE_KEY_MSG)
+            raise DBOSInitializationError(_need_enterprise_key_msg("auto_upgrade"))
         # DBOS Cloud always uses Conductor.
         if GlobalParams.dbos_cloud or key is not None or need_enterprise_key:
             _enterprise.load()
@@ -848,7 +851,9 @@ class DBOS:
             if self._auto_upgradable_workflows():
                 enterprise_key = self._transact_enterprise_key()
                 if enterprise_key is None:
-                    raise DBOSInitializationError(_NEED_ENTERPRISE_KEY_MSG)
+                    raise DBOSInitializationError(
+                        _need_enterprise_key_msg("auto_upgrade")
+                    )
                 check_enterprise_entitlement(
                     enterprise_key,
                     feature="auto_upgrade",

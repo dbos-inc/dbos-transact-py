@@ -168,14 +168,14 @@ def test_launch_refuses_when_the_key_is_not_entitled(
     enterprise_stand_in: None,
     entitlement: _EntitlementStandIn,
 ) -> None:
-    entitlement.error = DBOSInitializationError("not entitled (past_limit)")
+    entitlement.error = DBOSInitializationError("plan does not include it")
     dbos = DBOS(config=_conductor_config(config, auto_upgrade=True))
 
     @DBOS.workflow()
     def inherits() -> None:
         pass
 
-    with pytest.raises(DBOSInitializationError, match="past_limit"):
+    with pytest.raises(DBOSInitializationError, match="plan does not include it"):
         DBOS.launch()
     assert entitlement.checked == ["test-key"]
     assert dbos.auto_upgrader is None
