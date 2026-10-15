@@ -327,15 +327,18 @@ def default_shard_key() -> Generator[Optional[str], Any, None]:
     monkeypatch.setattr(ShardedSystemDatabase, "_scope_key", _scope_key)
 
     # Every new workflow's context gets a key where core builds it: a top-level workflow
-    # the per-test key, a child exactly its running parent's, with no fallback, so a key
-    # core loses on the way to the row or handle, or a parent running without one, fails.
+    # the per-test key through fall_back, so a dequeue that lost its row's key fails; a
+    # child exactly its running parent's, so a key core loses on the way to the row or
+    # handle, or a parent running without one, fails.
     start_workflow_child = DBOSContext.create_start_workflow_child
 
     def _create_start_workflow_child(cur_ctx: Optional[DBOSContext]) -> DBOSContext:
         new_ctx = start_workflow_child(cur_ctx)
         if new_ctx.shard_key is None:
-            in_workflow = cur_ctx is not None and cur_ctx.is_within_workflow()
-            new_ctx.shard_key = cur_ctx.shard_key if in_workflow else key  # type: ignore[union-attr]
+            if cur_ctx is not None and cur_ctx.is_within_workflow():
+                new_ctx.shard_key = cur_ctx.shard_key
+            else:
+                new_ctx.shard_key = fall_back("no shard key for a top-level workflow")
         return new_ctx
 
     monkeypatch.setattr(
