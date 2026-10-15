@@ -402,7 +402,12 @@ class ApplicationRowCounts(TypedDict):
     steps: int
 
 
-class StepInfo(TypedDict):
+class _StepInfoShardKey(TypedDict, total=False):
+    # The shard key of the step's child workflow; None on an unsharded database
+    child_shard_key: Optional[str]
+
+
+class StepInfo(_StepInfoShardKey):
     # The unique ID of the step in the workflow
     function_id: int
     # The (fully qualified) name of the step
@@ -413,8 +418,6 @@ class StepInfo(TypedDict):
     error: Optional[Exception]
     # If the step starts or retrieves the result of a workflow, its ID
     child_workflow_id: Optional[str]
-    # That workflow's shard key; None on an unsharded database
-    child_shard_key: Optional[str]
     # The Unix epoch timestamp at which this step started
     started_at_epoch_ms: Optional[int]
     # The Unix epoch timestamp at which this step completed
@@ -4949,7 +4952,7 @@ class SystemDatabase(ABC):
             partitions = partitions.union_all(
                 sa.select(next_pk).where(partitions.c.pk.isnot(None))
             )
-            # Unscoped by design: a mutual-exclusion probe must block on any owner's row.
+            # No application filter by design: a mutual-exclusion probe must block on any owner's row.
             pending_probe = (
                 sa.select(sa.literal(1))
                 .where(*self._scoped(ws))

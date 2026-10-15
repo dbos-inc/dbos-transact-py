@@ -2754,7 +2754,6 @@ class DBOS:
             def fnret() -> Optional[WorkflowStatus]:
                 return get_workflow(_get_dbos_instance()._sys_db, new_id)
 
-            # A fork lives under its original's shard key.
             # A fork lives under its original's shard key, however the caller supplied it.
             fork_key = _get_dbos_instance()._sys_db._key_hint(workflow_id)
             with bind_shard_keys({new_id: fork_key}):
