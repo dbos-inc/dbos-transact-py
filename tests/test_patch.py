@@ -1,4 +1,6 @@
 # mypy: disable-error-code="no-redef"
+import logging
+
 import pytest
 
 from dbos import DBOS, DBOSConfig
@@ -8,8 +10,9 @@ from dbos._error import DBOSUnexpectedStepError
 def test_patch(
     dbos: DBOS, config: DBOSConfig, skip_with_sqlite_imprecise_time: None
 ) -> None:
+    # Patching needs no flag: a fixed application_version is enough for every
+    # deployment to recover and dequeue each other's workflows.
     DBOS.destroy(destroy_registry=True)
-    config["enable_patching"] = True
     test_version = "test_version"
     config["application_version"] = test_version
     DBOS(config=config)
@@ -227,11 +230,19 @@ def test_patch(
 
 @pytest.mark.asyncio
 async def test_patch_async(
-    dbos: DBOS, config: DBOSConfig, skip_with_sqlite_imprecise_time: None
+    dbos: DBOS,
+    config: DBOSConfig,
+    skip_with_sqlite_imprecise_time: None,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # The deprecated flag still pins the application version, and says it is deprecated.
     DBOS.destroy(destroy_registry=True)
     config["enable_patching"] = True
+    caplog.set_level(logging.WARNING, "dbos")
+    monkeypatch.setattr(logging.getLogger("dbos"), "propagate", True)
     DBOS(config=config)
+    assert "enable_patching is deprecated" in caplog.text
 
     @DBOS.step()
     async def step_one() -> int:
