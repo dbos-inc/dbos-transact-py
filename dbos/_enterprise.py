@@ -94,10 +94,6 @@ class Enterprise(Protocol):
     @property
     def ShardedSystemDatabase(self) -> ShardedSystemDatabaseFactory: ...
 
-    # The statements creating a sharded system database in a schema, for printing.
-    @property
-    def sharded_schema_statements(self) -> Callable[[str], List[str]]: ...
-
 
 # What needs the package without being an entitlement, for load()'s messages.
 CONDUCTOR = "Connecting to DBOS Conductor"

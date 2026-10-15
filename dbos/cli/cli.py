@@ -15,7 +15,6 @@ from dbos._context import SetWorkflowID
 from dbos.cli.migration import (
     print_dbos_migrations,
     print_dbos_user_role_sql,
-    print_sharded_migrations,
     run_dbos_database_migrations,
 )
 
@@ -336,8 +335,14 @@ def migrate(
             click.echo("--print-user-role requires --app-role", err=True)
             raise click.exceptions.Exit(code=1)
         if print_migrations is not None and sharding:
-            print_sharded_migrations(schema=schema)
-        elif print_migrations is not None:
+            # Sharded migrations also distribute tables (on Citus), which only a live run does.
+            click.echo(
+                "--print-migrations is not supported with --sharding; run "
+                "`dbos migrate --sharding` against the database instead",
+                err=True,
+            )
+            raise click.exceptions.Exit(code=1)
+        if print_migrations is not None:
             # Print modes never connect, so a missing database URL is fine.
             print_dbos_migrations(
                 _resolve_db_url(system_database_url=system_database_url),

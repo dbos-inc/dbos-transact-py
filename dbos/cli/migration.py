@@ -3,7 +3,6 @@ from typing import List, Optional
 import click
 import sqlalchemy as sa
 
-from dbos import _enterprise
 from dbos._dbos import DBOS
 from dbos._migration import get_dbos_migrations, get_dbos_schema_permissions_sql
 from dbos._utils import quote_identifier
@@ -116,18 +115,6 @@ def print_dbos_migrations(
     # Empty migrations at the end still count as applied.
     if latest_version > last_emitted:
         _emit_version(latest_version)
-
-
-def print_sharded_migrations(*, schema: str = "dbos") -> None:
-    """Print to stdout the SQL creating a sharded system database, without touching any database."""
-    click.echo("-- DBOS sharded system database")
-    click.echo(
-        "-- Run each statement through the router or coordinator, outside a transaction block."
-    )
-    for sql in _enterprise.load(
-        _enterprise.SHARDING.description
-    ).sharded_schema_statements(schema):
-        _emit_sql(sql)
 
 
 def print_dbos_user_role_sql(*, schema: str = "dbos", role_name: str) -> None:
