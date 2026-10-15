@@ -66,11 +66,15 @@ class _EntitlementStandIn:
 
     def __init__(self) -> None:
         self.checked: List[str] = []
+        self.conductor_urls: List[Optional[str]] = []
         self.error: Optional[DBOSInitializationError] = None
 
-    def __call__(self, key: str, *, feature: str) -> None:
+    def __call__(
+        self, key: str, *, feature: str, conductor_url: Optional[str] = None
+    ) -> None:
         assert feature == "auto_upgrade"
         self.checked.append(key)
+        self.conductor_urls.append(conductor_url)
         if self.error is not None:
             raise self.error
 
@@ -197,10 +201,13 @@ def test_entitlement_is_checked_with_the_enterprise_key_first(
 
     DBOS.launch()
     assert entitlement.checked == ["enterprise-key"]
+    # The self-hosted Conductor configured is the one asked about the entitlement.
+    assert entitlement.conductor_urls == ["ws://127.0.0.1:1"]
     assert dbos.auto_upgrader is not None
     DBOS.destroy(destroy_registry=True)
 
-    # The enterprise key alone is enough: no Conductor connection is needed.
+    # The enterprise key alone is enough: no Conductor connection is needed, and
+    # with no Conductor configured the check goes to DBOS Cloud.
     dbos = DBOS(
         config={
             **config,
@@ -216,6 +223,7 @@ def test_entitlement_is_checked_with_the_enterprise_key_first(
 
     DBOS.launch()
     assert entitlement.checked == ["enterprise-key", "enterprise-key"]
+    assert entitlement.conductor_urls == ["ws://127.0.0.1:1", None]
     assert dbos.conductor_websocket is None
     assert dbos.auto_upgrader is not None
     assert dbos.auto_upgrader.is_alive()

@@ -817,14 +817,15 @@ class DBOS:
                     )
                     self.conductor_websocket.start()
             elif self.conductor_key is not None:
-                if self.conductor_url is None:
+                conductor_url = self.conductor_url
+                if conductor_url is None:
                     dbos_domain = os.environ.get("DBOS_DOMAIN", "cloud.dbos.dev")
-                    self.conductor_url = f"wss://{dbos_domain}/conductor/v1alpha1"
+                    conductor_url = f"wss://{dbos_domain}/conductor/v1alpha1"
                 dbos_logger.debug("Starting Conductor thread")
                 self.conductor_websocket = _enterprise.load().ConductorWebsocket(
                     self,
                     app_name=self._config["name"],
-                    conductor_url=self.conductor_url,
+                    conductor_url=conductor_url,
                     conductor_key=self.conductor_key,
                     executor_metadata=self._conductor_executor_metadata,
                     metadata_only_mode=self._conductor_metadata_only_mode,
@@ -848,7 +849,11 @@ class DBOS:
                 enterprise_key = self._transact_enterprise_key()
                 if enterprise_key is None:
                     raise DBOSInitializationError(_NEED_ENTERPRISE_KEY_MSG)
-                check_enterprise_entitlement(enterprise_key, feature="auto_upgrade")
+                check_enterprise_entitlement(
+                    enterprise_key,
+                    feature="auto_upgrade",
+                    conductor_url=self.conductor_url,
+                )
                 auto_upgrade_interval_sec: float = (
                     self._config.get("runtimeConfig", {}).get(
                         "auto_upgrade_interval_sec"
