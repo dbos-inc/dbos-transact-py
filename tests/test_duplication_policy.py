@@ -36,6 +36,7 @@ from tests.conftest import (
     queue_entries_are_cleaned_up,
     reexecute_workflow_by_id,
     set_workflow_status,
+    using_sharding,
 )
 
 QUEUE_NAME = "test_duplication_policy_queue"
@@ -748,6 +749,8 @@ def test_id_reuse_reject_survives_retried_init_commit(
         "workflow_id": workflow_id,
         "workflow_id_reuse_policy": "reject",
     }
+    if via.startswith("child_") and using_sharding():
+        pytest.skip("Sharding refuses the reject policy inside workflows")
     try:
         if via.startswith("child_"):
             parent_id = f"reuse-retry-parent-{via}-{uuid.uuid4()}"
@@ -887,7 +890,9 @@ def test_id_reuse_reject_client_enqueue(
 
 
 @pytest.mark.parametrize("via", REUSE_VIAS)
-def test_id_reuse_reject_child_is_recorded_for_replay(dbos: DBOS, via: str) -> None:
+def test_id_reuse_reject_child_is_recorded_for_replay(
+    dbos: DBOS, via: str, skip_with_sharding: None
+) -> None:
     wf = _register_reuse_workflows()
     child_id = f"reuse-child-{via}-{uuid.uuid4()}"
     with SetWorkflowID(child_id):
@@ -911,7 +916,9 @@ def test_id_reuse_reject_child_is_recorded_for_replay(dbos: DBOS, via: str) -> N
 
 
 @pytest.mark.parametrize("via", REUSE_VIAS)
-def test_id_reuse_reject_same_parent_reuse(dbos: DBOS, via: str) -> None:
+def test_id_reuse_reject_same_parent_reuse(
+    dbos: DBOS, via: str, skip_with_sharding: None
+) -> None:
     wf = _register_reuse_workflows()
     child_id = f"reuse-same-parent-{via}-{uuid.uuid4()}"
     parent_id = f"reuse-same-parent-p-{via}-{uuid.uuid4()}"
@@ -961,7 +968,9 @@ def test_init_child_workflow_is_atomic(dbos: DBOS, skip_with_sharding: None) -> 
 
 
 @pytest.mark.parametrize("via", ["start", "enqueue_options"])
-def test_id_reuse_reject_portable_replay(dbos: DBOS, via: str) -> None:
+def test_id_reuse_reject_portable_replay(
+    dbos: DBOS, via: str, skip_with_sharding: None
+) -> None:
     _register_queue()
 
     @DBOS.workflow(serialization_type=WorkflowSerializationFormat.PORTABLE)
@@ -1078,7 +1087,8 @@ async def test_id_reuse_reject_async(dbos: DBOS, client: DBOSClient) -> None:
     with pytest.raises(DBOSWorkflowIDInUseError):
         await client.enqueue_async(options, "new")
 
-    for direct in (False, True):
+    # Sharding refuses the reject policy inside workflows.
+    for direct in () if using_sharding() else (False, True):
         parent_id = f"reuse-async-parent-{direct}-{uuid.uuid4()}"
         with SetWorkflowID(parent_id):
             parent = await DBOS.start_workflow_async(
