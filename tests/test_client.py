@@ -983,7 +983,9 @@ async def test_client_fork_async(dbos: DBOS, client: DBOSClient) -> None:
     assert len(await client.list_workflows_async()) == 3
 
 
-def test_enqueue_with_deduplication(dbos: DBOS, client: DBOSClient) -> None:
+def test_enqueue_with_deduplication(
+    dbos: DBOS, client: DBOSClient, skip_with_sharding: None
+) -> None:
     run_client_collateral()
 
     wfid = str(uuid.uuid4())
@@ -1105,7 +1107,9 @@ def test_enqueue_in_transaction_pre_commit_invisible(
                 assert row is None
 
 
-def test_enqueue_in_transaction_deduplication(dbos: DBOS, client: DBOSClient) -> None:
+def test_enqueue_in_transaction_deduplication(
+    dbos: DBOS, client: DBOSClient, skip_with_sharding: None
+) -> None:
     run_client_collateral()
 
     wfid = str(uuid.uuid4())

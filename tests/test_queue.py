@@ -53,6 +53,7 @@ from tests.conftest import (
     retry_until_success,
     retry_until_success_async,
     set_workflow_status,
+    using_sharding,
     using_sqlite,
 )
 
@@ -2022,7 +2023,7 @@ async def test_enqueue_options_require_a_queue_async(dbos: DBOS) -> None:
     assert await DBOS.get_workflow_status_async(wfid) is None
 
 
-def test_queue_deduplication(dbos: DBOS) -> None:
+def test_queue_deduplication(dbos: DBOS, skip_with_sharding: None) -> None:
     queue_name = "test_dedup_queue"
     DBOS.register_queue(queue_name)
     workflow_event = threading.Event()
@@ -2085,7 +2086,7 @@ def test_queue_deduplication(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_queue_deduplication_recovery(dbos: DBOS) -> None:
+def test_queue_deduplication_recovery(dbos: DBOS, skip_with_sharding: None) -> None:
     queue_name = "test_dedup_queue"
     DBOS.register_queue(queue_name)
     workflow_event = threading.Event()
@@ -2123,7 +2124,7 @@ def test_queue_deduplication_recovery(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
-async def test_queue_deduplication_async(dbos: DBOS) -> None:
+async def test_queue_deduplication_async(dbos: DBOS, skip_with_sharding: None) -> None:
     queue_name = "test_dedup_queue_async"
     await DBOS.register_queue_async(queue_name)
     workflow_event = asyncio.Event()
@@ -4121,6 +4122,8 @@ def test_delay(
     completed.get_result()
     assert completed.get_status().status == WorkflowStatusString.SUCCESS.value
 
+    if using_sharding():
+        return
     # Deduplication: a second enqueue with the same dedup ID should fail while DELAYED
     dedup_id = str(uuid.uuid4())
     with SetEnqueueOptions(delay_seconds=60.0, deduplication_id=dedup_id):
@@ -4279,7 +4282,7 @@ def test_enqueue_with_options(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_enqueue_with_options_passthrough(dbos: DBOS) -> None:
+def test_enqueue_with_options_passthrough(dbos: DBOS, skip_with_sharding: None) -> None:
     @DBOS.workflow(name="with_options_passthrough_target")
     def with_options_passthrough_target(x: int) -> int:
         return x * 2
@@ -4536,15 +4539,17 @@ def test_enqueue_with_options_ambient_context(dbos: DBOS) -> None:
         "queue_name": "with_options_ctx_queue",
     }
     ambient_opts["deduplication_id"] = None  # type: ignore[typeddict-item]
+    # Sharding refuses deduplication.
+    ambient_dedup = None if using_sharding() else "ambient-dedup"
     with SetEnqueueOptions(
-        deduplication_id="ambient-dedup", priority=5, delay_seconds=3600
+        deduplication_id=ambient_dedup, priority=5, delay_seconds=3600
     ):
         ambient: WorkflowHandle[int] = DBOS.enqueue_workflow_with_options(
             ambient_opts, 3
         )
     ambient_status = ambient.get_status()
     assert ambient_status.status == WorkflowStatusString.DELAYED.value
-    assert ambient_status.deduplication_id == "ambient-dedup"
+    assert ambient_status.deduplication_id == ambient_dedup
     assert ambient_status.priority == 5
     DBOS.cancel_workflow(ambient.get_workflow_id())
 

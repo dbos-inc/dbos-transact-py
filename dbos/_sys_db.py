@@ -1561,7 +1561,6 @@ class SystemDatabase(ABC):
         with self.engine.begin() as c:
             row = c.execute(
                 sa.select(self.tables.workflow_status.c.workflow_uuid)
-                .where(*self._scoped(self.tables.workflow_status))
                 .where(self.tables.workflow_status.c.queue_name == queue_name)
                 .where(
                     self.tables.workflow_status.c.deduplication_id == deduplication_id
@@ -1611,7 +1610,6 @@ class SystemDatabase(ABC):
             )
             updated = c.execute(
                 sa.update(self.tables.workflow_status)
-                .where(*self._scoped(self.tables.workflow_status))
                 .where(wsc.name == workflow_name)
                 .where(wsc.queue_name == queue_name)
                 .where(wsc.deduplication_id == deduplication_id)
@@ -1634,7 +1632,6 @@ class SystemDatabase(ABC):
                 c.execute(
                     self.dialect.insert(self.tables.workflow_input)
                     .values(
-                        **self._wf_values(updated[0]),
                         workflow_uuid=updated[0],
                         inputs=inputs,
                         retention_timestamp=self._now_ms_sql(),

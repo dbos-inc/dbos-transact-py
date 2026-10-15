@@ -94,7 +94,8 @@ def skip_with_sqlite() -> None:
 
 @pytest.fixture()
 def skip_with_sharding() -> None:
-    """For tests that write core's unkeyed tables directly, or manage databases themselves."""
+    """For tests of features sharding refuses (deduplication, debouncing), that write
+    core's unkeyed tables directly, or that manage databases themselves."""
     if using_sharding():
         pytest.skip("Skipping test when testing a sharded system database")
 

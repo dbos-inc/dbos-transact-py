@@ -21,7 +21,11 @@ from dbos._error import DBOSException, DBOSQueueDeduplicatedError
 from dbos._queue import Queue
 from dbos._registrations import get_dbos_func_name
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
-from tests.conftest import set_workflow_status
+from tests.conftest import set_workflow_status, using_sharding
+
+pytestmark = pytest.mark.skipif(
+    using_sharding(), reason="Debouncing is not supported on a sharded system database"
+)
 
 
 def test_debouncer(dbos: DBOS) -> None:
@@ -886,7 +890,7 @@ def test_debounce_targets_another_application(dbos: DBOS, config: Any) -> None:
 
 
 def test_debounce_bounce_atomic_with_checkpoint(
-    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, skip_with_sharding: None
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Regression test (exactly-once): an in-workflow bounce commits atomically with its step
     # checkpoint. If the checkpoint write fails, the bounce must roll back with it; otherwise a

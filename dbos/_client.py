@@ -38,7 +38,7 @@ from dbos._queue import (
     _warn_sync_db_call_in_async_context,
     log_queue,
 )
-from dbos._shard_keys import bind_shard_keys, shard_key_scope
+from dbos._shard_keys import bind_shard_keys
 from dbos._sys_db import SystemDatabase
 from dbos._utils import generate_uuid
 
@@ -295,11 +295,9 @@ class DBOSClient:
                     raise
                 queue_name, dedup_id = status["queue_name"], status["deduplication_id"]
                 assert queue_name is not None and dedup_id is not None
-                # A deduplication ID is unique within the enqueue's shard key.
-                with shard_key_scope(status["shard_key"]):
-                    existing_id = self._sys_db.get_deduplicated_workflow(
-                        queue_name, dedup_id
-                    )
+                existing_id = self._sys_db.get_deduplicated_workflow(
+                    queue_name, dedup_id
+                )
                 if existing_id is not None:
                     return existing_id
                 # The holder released the deduplication ID between our insert and this

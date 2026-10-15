@@ -550,7 +550,7 @@ async def test_update_workflow_attributes_client_async(
     assert handle.get_status().attributes == {"source": "updated_async", "count": 1}
 
 
-def test_attributes_debouncer(dbos: DBOS) -> None:
+def test_attributes_debouncer(dbos: DBOS, skip_with_sharding: None) -> None:
     @DBOS.workflow()
     def debounced_workflow(x: int) -> int:
         return x

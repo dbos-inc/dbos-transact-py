@@ -112,7 +112,7 @@ from ._serialization import (
     serialize_value,
     serialize_value_as,
 )
-from ._shard_keys import bind_shard_keys, shard_key_scope
+from ._shard_keys import bind_shard_keys
 from ._sys_db import (
     EnqueueOptionsInternal,
     OperationResultInternal,
@@ -727,21 +727,20 @@ def _init_workflow(
                 if existing_id is not None:
                     if ctx.has_parent():
                         # Attached: record the holder as the parent's child, not the error.
-                        with bind_shard_keys({existing_id: status["shard_key"]}):
-                            dbos._sys_db.record_operation_result(
-                                {
-                                    "workflow_uuid": ctx.parent_workflow_id,
-                                    "function_id": ctx.parent_workflow_fid,
-                                    "function_name": wf_name,
-                                    "output": None,
-                                    "error": None,
-                                    "serialization": None,
-                                    "started_at_epoch_ms": started_at_epoch_ms,
-                                    "child_workflow_id": existing_id,
-                                },
-                                owner_xid=parent_owner_xid,
-                                owner_key=parent_shard_key,
-                            )
+                        dbos._sys_db.record_operation_result(
+                            {
+                                "workflow_uuid": ctx.parent_workflow_id,
+                                "function_id": ctx.parent_workflow_fid,
+                                "function_name": wf_name,
+                                "output": None,
+                                "error": None,
+                                "serialization": None,
+                                "started_at_epoch_ms": started_at_epoch_ms,
+                                "child_workflow_id": existing_id,
+                            },
+                            owner_xid=parent_owner_xid,
+                            owner_key=parent_shard_key,
+                        )
                     return status, False, existing_id
                 continue
             # A step result, so the default format: replay must rebuild the exact type a caller catches.
@@ -1868,9 +1867,7 @@ def _deduplicated_workflow_id(
     """
     queue_name, dedup_id = status["queue_name"], status["deduplication_id"]
     assert queue_name is not None and dedup_id is not None
-    # A deduplication ID is unique within the enqueue's shard key.
-    with shard_key_scope(status["shard_key"]):
-        return dbos._sys_db.get_deduplicated_workflow(queue_name, dedup_id)
+    return dbos._sys_db.get_deduplicated_workflow(queue_name, dedup_id)
 
 
 def _persist_enqueue_with_options(
@@ -1918,19 +1915,18 @@ def _persist_enqueue_with_options(
                 if existing_id is not None:
                     if new_wf_ctx.has_parent():
                         # Attached: record the holder as the parent's child, not the error.
-                        with bind_shard_keys({existing_id: status["shard_key"]}):
-                            dbos._sys_db.record_operation_result(
-                                {
-                                    "workflow_uuid": new_wf_ctx.parent_workflow_id,
-                                    "function_id": new_wf_ctx.parent_workflow_fid,
-                                    "function_name": wf_name,
-                                    "output": None,
-                                    "error": None,
-                                    "serialization": None,
-                                    "started_at_epoch_ms": child_start_time,
-                                    "child_workflow_id": existing_id,
-                                }
-                            )
+                        dbos._sys_db.record_operation_result(
+                            {
+                                "workflow_uuid": new_wf_ctx.parent_workflow_id,
+                                "function_id": new_wf_ctx.parent_workflow_fid,
+                                "function_name": wf_name,
+                                "output": None,
+                                "error": None,
+                                "serialization": None,
+                                "started_at_epoch_ms": child_start_time,
+                                "child_workflow_id": existing_id,
+                            }
+                        )
                     workflow_id = existing_id
                     break
                 continue
