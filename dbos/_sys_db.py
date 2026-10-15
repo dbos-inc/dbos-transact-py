@@ -320,6 +320,8 @@ class RecordedResult(TypedDict):
     error: Optional[str]  # Serialized
     serialization: Optional[str]
     child_workflow_id: Optional[str]
+    # The key that child was recorded under; None on an unsharded database
+    child_shard_key: Optional[str]
 
 
 class OperationResultInternal(TypedDict):
@@ -2098,6 +2100,37 @@ class SystemDatabase(ABC):
                 child_key_columns = [] if child_key is None else [child_key]
 
                 child_wf_expr: sa.ColumnElement[Any] = oo.c.child_workflow_id
+                if replacement_children and child_key is not None:
+                    # A replacement names a child by ID, which can't pick one of several keys.
+                    ambiguous = (
+                        c.execute(
+                            sa.select(oo.c.child_workflow_id)
+                            .select_from(
+                                mapping_subquery.join(
+                                    oo,
+                                    sa.and_(
+                                        *self._scoped(oo),
+                                        oo.c.workflow_uuid
+                                        == mapping_subquery.c.orig_id,
+                                        oo.c.function_id
+                                        < mapping_subquery.c.start_step,
+                                    ),
+                                )
+                            )
+                            .where(
+                                oo.c.child_workflow_id.in_(list(replacement_children))
+                            )
+                            .group_by(oo.c.child_workflow_id)
+                            .having(sa.func.count(sa.distinct(child_key)) > 1)
+                        )
+                        .scalars()
+                        .first()
+                    )
+                    if ambiguous is not None:
+                        raise DBOSException(
+                            f"Can't replace child workflow {ambiguous}: the forked steps "
+                            "refer to children with that ID under more than one shard key"
+                        )
                 if replacement_children:
                     child_wf_expr = sa.case(
                         *[
@@ -2198,7 +2231,7 @@ class SystemDatabase(ABC):
                         weh.c.serialization,
                         sa.func.row_number()
                         .over(
-                            partition_by=[weh.c.workflow_uuid, weh.c.key],
+                            partition_by=[mapping_subquery.c.fork_id, weh.c.key],
                             order_by=weh.c.function_id.desc(),
                         )
                         .label("rn"),
@@ -3280,12 +3313,14 @@ class SystemDatabase(ABC):
         ).where(*self._wf(self.tables.workflow_status, workflow_id))
 
         # Second query: Retrieve operation outputs if they exist
+        child_key = self._key_column(self.tables.operation_outputs, "child_shard_key")
         operation_output_sql = sa.select(
             self.tables.operation_outputs.c.output,
             self.tables.operation_outputs.c.error,
             self.tables.operation_outputs.c.function_name,
             self.tables.operation_outputs.c.child_workflow_id,
             self.tables.operation_outputs.c.serialization,
+            *([] if child_key is None else [child_key]),
         ).where(
             *self._wf(self.tables.operation_outputs, workflow_id),
             self.tables.operation_outputs.c.function_id == function_id,
@@ -3336,6 +3371,9 @@ class SystemDatabase(ABC):
             "error": error,
             "serialization": serialization,
             "child_workflow_id": child_workflow_id,
+            "child_shard_key": (
+                operation_output_rows[0][5] if child_key is not None else None
+            ),
         }
         return result
 

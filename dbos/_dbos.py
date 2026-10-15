@@ -1661,7 +1661,10 @@ class DBOS:
                 stat = dbos.get_workflow_status(workflow_id)
                 if stat is None:
                     raise DBOSNonExistentWorkflowError("target", workflow_id)
-            return WorkflowHandlePolling(workflow_id, dbos, shard_key=shard_key)
+            # The resolved key, so the handle also works outside this binding.
+            return WorkflowHandlePolling(
+                workflow_id, dbos, shard_key=dbos._sys_db._key_hint(workflow_id)
+            )
 
     @classmethod
     async def retrieve_workflow_async(
@@ -1689,7 +1692,10 @@ class DBOS:
                 )
                 if stat is None:
                     raise DBOSNonExistentWorkflowError("target", workflow_id)
-            return WorkflowHandleAsyncPolling(workflow_id, dbos, shard_key=shard_key)
+            # The resolved key, so the handle also works outside this binding.
+            return WorkflowHandleAsyncPolling(
+                workflow_id, dbos, shard_key=dbos._sys_db._key_hint(workflow_id)
+            )
 
     @classmethod
     def send(
@@ -2422,8 +2428,11 @@ class DBOS:
             _get_dbos_instance()._sys_db.call_function_as_step(
                 fn, "DBOS.resumeWorkflow", snapshot_step_context(reserve_sleep_id=False)
             )
+            # The resolved key, so the handle also works outside this binding.
             return WorkflowHandlePolling(
-                workflow_id, _get_dbos_instance(), shard_key=shard_key
+                workflow_id,
+                _get_dbos_instance(),
+                shard_key=_get_dbos_instance()._sys_db._key_hint(workflow_id),
             )
 
     @classmethod
@@ -2452,8 +2461,11 @@ class DBOS:
                 "DBOS.resumeWorkflow",
                 step_ctx_res,
             )
+            # The resolved key, so the handle also works outside this binding.
             return WorkflowHandleAsyncPolling(
-                workflow_id, _get_dbos_instance(), shard_key=shard_key
+                workflow_id,
+                _get_dbos_instance(),
+                shard_key=_get_dbos_instance()._sys_db._key_hint(workflow_id),
             )
 
     @classmethod
@@ -2629,8 +2641,11 @@ class DBOS:
             _get_dbos_instance()._sys_db.call_function_as_step(
                 fn, "DBOS.rewindWorkflow", snapshot_step_context(reserve_sleep_id=False)
             )
+            # The resolved key, so the handle also works outside this binding.
             return WorkflowHandlePolling(
-                workflow_id, _get_dbos_instance(), shard_key=shard_key
+                workflow_id,
+                _get_dbos_instance(),
+                shard_key=_get_dbos_instance()._sys_db._key_hint(workflow_id),
             )
 
     @classmethod
@@ -2667,8 +2682,11 @@ class DBOS:
                 "DBOS.rewindWorkflow",
                 step_ctx_res,
             )
+            # The resolved key, so the handle also works outside this binding.
             return WorkflowHandleAsyncPolling(
-                workflow_id, _get_dbos_instance(), shard_key=shard_key
+                workflow_id,
+                _get_dbos_instance(),
+                shard_key=_get_dbos_instance()._sys_db._key_hint(workflow_id),
             )
 
     @classmethod

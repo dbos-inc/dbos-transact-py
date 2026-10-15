@@ -1531,7 +1531,7 @@ def start_workflow(
             return WorkflowHandlePolling(
                 recorded_result["child_workflow_id"],
                 dbos,
-                shard_key=new_wf_ctx.shard_key,
+                shard_key=recorded_result["child_shard_key"] or new_wf_ctx.shard_key,
             )
 
     status, should_execute, attached_workflow_id = _init_workflow(
@@ -1665,7 +1665,7 @@ async def start_workflow_async(
             return WorkflowHandleAsyncPolling(
                 recorded_result["child_workflow_id"],
                 dbos,
-                shard_key=new_wf_ctx.shard_key,
+                shard_key=recorded_result["child_shard_key"] or new_wf_ctx.shard_key,
             )
 
     status, should_execute, attached_workflow_id = await asyncio.to_thread(
@@ -1832,8 +1832,8 @@ def _build_enqueue_with_options(
 
 def _check_recorded_enqueue(
     dbos: "DBOS", new_wf_ctx: DBOSContext, wf_name: str
-) -> Optional[str]:
-    """Return the child ID this enqueue already recorded, or None if it is new.
+) -> Optional[Tuple[str, Optional[str]]]:
+    """Return the child ID and key this enqueue already recorded, or None if it is new.
 
     Raises the recorded error if the original call failed. Runs before the row is
     built so a replay re-validates and re-serializes nothing it already checkpointed.
@@ -1853,7 +1853,7 @@ def _check_recorded_enqueue(
         )
         raise e
     elif recorded_result and recorded_result["child_workflow_id"]:
-        return recorded_result["child_workflow_id"]
+        return recorded_result["child_workflow_id"], recorded_result["child_shard_key"]
     return None
 
 
@@ -1957,14 +1957,13 @@ def enqueue_workflow_with_options(
 ) -> "WorkflowHandle[Any]":
     local_ctx = get_local_dbos_context()
     new_wf_ctx = DBOSContext.create_start_workflow_child(local_ctx)
-    recorded_child_id = _check_recorded_enqueue(
-        dbos, new_wf_ctx, options["workflow_name"]
-    )
-    if recorded_child_id is not None:
+    recorded = _check_recorded_enqueue(dbos, new_wf_ctx, options["workflow_name"])
+    if recorded is not None:
+        child_id, child_key = recorded
         return WorkflowHandlePolling(
-            recorded_child_id,
+            child_id,
             dbos,
-            shard_key=options.get("shard_key") or new_wf_ctx.shard_key,
+            shard_key=child_key or options.get("shard_key") or new_wf_ctx.shard_key,
         )
     status, resolved = _build_enqueue_with_options(
         dbos, local_ctx, new_wf_ctx, options, args, kwargs
@@ -1981,14 +1980,15 @@ async def enqueue_workflow_with_options_async(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
 ) -> "WorkflowHandleAsync[Any]":
-    recorded_child_id = await asyncio.to_thread(
+    recorded = await asyncio.to_thread(
         _check_recorded_enqueue, dbos, new_wf_ctx, options["workflow_name"]
     )
-    if recorded_child_id is not None:
+    if recorded is not None:
+        child_id, child_key = recorded
         return WorkflowHandleAsyncPolling(
-            recorded_child_id,
+            child_id,
             dbos,
-            shard_key=options.get("shard_key") or new_wf_ctx.shard_key,
+            shard_key=child_key or options.get("shard_key") or new_wf_ctx.shard_key,
         )
     status, resolved = _build_enqueue_with_options(
         dbos, local_ctx, new_wf_ctx, options, args, kwargs
@@ -2113,7 +2113,9 @@ def workflow_wrapper(
                     )
                 elif r and r["child_workflow_id"]:
                     return _deferred_workflow_result(
-                        dbos, r["child_workflow_id"], shard_key=newwfctx.shard_key
+                        dbos,
+                        r["child_workflow_id"],
+                        shard_key=r["child_shard_key"] or newwfctx.shard_key,
                     )
 
             status, should_execute, _ = _init_workflow(

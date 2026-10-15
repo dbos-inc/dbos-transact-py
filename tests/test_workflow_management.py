@@ -1441,6 +1441,28 @@ def test_fork_events(dbos: DBOS) -> None:
         assert DBOS.get_event(handle.workflow_id, key) == 2
 
 
+def test_forking_one_workflow_twice_in_one_call(dbos: DBOS) -> None:
+    """Each fork in a batch gets the original's latest events, even when one batch forks
+    the same workflow twice."""
+
+    @DBOS.workflow()
+    def workflow() -> None:
+        DBOS.set_event("key", 0)
+        DBOS.set_event("key", 1)
+
+    handle = DBOS.start_workflow(workflow)
+    handle.get_result()
+    forks = [str(uuid.uuid4()), str(uuid.uuid4())]
+    dbos._sys_db.fork_workflow(
+        [handle.workflow_id, handle.workflow_id],
+        forks,
+        [3, 3],
+        application_version=None,
+    )
+    for fork in forks:
+        assert DBOS.get_event(fork, "key", timeout_seconds=0) == 1
+
+
 def test_fork_streams(dbos: DBOS) -> None:
     key = "key"
     event = threading.Event()
