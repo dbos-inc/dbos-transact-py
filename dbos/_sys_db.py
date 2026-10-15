@@ -1029,9 +1029,9 @@ class SystemDatabase(ABC):
         return {}
 
     def _key_in(
-        self, table: sa.FromClause, shard_keys: List[str]
+        self, table: sa.FromClause, shard_keys: List[str], column: str = "shard_key"
     ) -> List[sa.ColumnElement[bool]]:
-        """Predicates selecting rows under these shard keys."""
+        """Predicates selecting rows whose column holds one of these shard keys."""
         raise DBOSException("Filtering by shard key requires a sharded system database")
 
     def _key_column(
@@ -2566,6 +2566,7 @@ class SystemDatabase(ABC):
         schedule_name: Optional[str | list[str]] = None,
         application_name: Optional[str | list[str]] = None,
         shard_key: Optional[str | list[str]] = None,
+        parent_shard_key: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         """
         Retrieve a list of workflows based on the search criteria.
@@ -2589,6 +2590,7 @@ class SystemDatabase(ABC):
         prefix_list = _to_list(workflow_id_prefix)
         schedule_name_list = _to_list(schedule_name)
         shard_key_list = _to_list(shard_key)
+        parent_shard_key_list = _to_list(parent_shard_key)
 
         load_columns: List[Any] = [
             self.tables.workflow_status.c.workflow_uuid,
@@ -2705,6 +2707,14 @@ class SystemDatabase(ABC):
         if shard_key_list:
             query = query.where(
                 *self._key_in(self.tables.workflow_status, shard_key_list)
+            )
+        if parent_shard_key_list:
+            query = query.where(
+                *self._key_in(
+                    self.tables.workflow_status,
+                    parent_shard_key_list,
+                    column="parent_shard_key",
+                )
             )
         if user_list:
             query = query.where(

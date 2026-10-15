@@ -1120,6 +1120,7 @@ class DBOSClient:
         schedule_name: Optional[str | list[str]] = None,
         application_name: Optional[str | list[str]] = None,
         shard_key: Optional[str | list[str]] = None,
+        parent_shard_key: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         return self._sys_db.list_workflows(
             workflow_ids=workflow_ids,
@@ -1151,6 +1152,7 @@ class DBOSClient:
             schedule_name=schedule_name,
             application_name=application_name,
             shard_key=shard_key,
+            parent_shard_key=parent_shard_key,
         )
 
     async def list_workflows_async(
@@ -1185,6 +1187,7 @@ class DBOSClient:
         schedule_name: Optional[str | list[str]] = None,
         application_name: Optional[str | list[str]] = None,
         shard_key: Optional[str | list[str]] = None,
+        parent_shard_key: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         return await asyncio.to_thread(
             self.list_workflows,
@@ -1217,6 +1220,7 @@ class DBOSClient:
             schedule_name=schedule_name,
             application_name=application_name,
             shard_key=shard_key,
+            parent_shard_key=parent_shard_key,
         )
 
     def list_queued_workflows(
@@ -1248,6 +1252,7 @@ class DBOSClient:
         attributes: Optional[Dict[str, Any]] = None,
         application_name: Optional[str | list[str]] = None,
         shard_key: Optional[str | list[str]] = None,
+        parent_shard_key: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         return self._sys_db.list_workflows(
             workflow_ids=workflow_ids,
@@ -1277,6 +1282,7 @@ class DBOSClient:
             attributes=attributes,
             application_name=application_name,
             shard_key=shard_key,
+            parent_shard_key=parent_shard_key,
         )
 
     async def list_queued_workflows_async(
@@ -1308,6 +1314,7 @@ class DBOSClient:
         attributes: Optional[Dict[str, Any]] = None,
         application_name: Optional[str | list[str]] = None,
         shard_key: Optional[str | list[str]] = None,
+        parent_shard_key: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         return await asyncio.to_thread(
             self.list_queued_workflows,
@@ -1337,6 +1344,7 @@ class DBOSClient:
             attributes=attributes,
             application_name=application_name,
             shard_key=shard_key,
+            parent_shard_key=parent_shard_key,
         )
 
     def list_workflow_steps(

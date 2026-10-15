@@ -2803,6 +2803,7 @@ class DBOS:
         schedule_name: Optional[str | list[str]] = None,
         application_name: Optional[str | list[str]] = None,
         shard_key: Optional[str | list[str]] = None,
+        parent_shard_key: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         check_async("list_workflows")
 
@@ -2837,6 +2838,7 @@ class DBOS:
                 schedule_name=schedule_name,
                 application_name=application_name,
                 shard_key=shard_key,
+                parent_shard_key=parent_shard_key,
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
@@ -2876,6 +2878,7 @@ class DBOS:
         schedule_name: Optional[str | list[str]] = None,
         application_name: Optional[str | list[str]] = None,
         shard_key: Optional[str | list[str]] = None,
+        parent_shard_key: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
@@ -2911,6 +2914,7 @@ class DBOS:
                 schedule_name=schedule_name,
                 application_name=application_name,
                 shard_key=shard_key,
+                parent_shard_key=parent_shard_key,
             )
 
         return await asyncio.to_thread(
@@ -2950,6 +2954,7 @@ class DBOS:
         attributes: Optional[Dict[str, Any]] = None,
         application_name: Optional[str | list[str]] = None,
         shard_key: Optional[str | list[str]] = None,
+        parent_shard_key: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         check_async("list_queued_workflows")
 
@@ -2982,6 +2987,7 @@ class DBOS:
                 attributes=attributes,
                 application_name=application_name,
                 shard_key=shard_key,
+                parent_shard_key=parent_shard_key,
             )
 
         return _get_dbos_instance()._sys_db.call_function_as_step(
@@ -3020,6 +3026,7 @@ class DBOS:
         attributes: Optional[Dict[str, Any]] = None,
         application_name: Optional[str | list[str]] = None,
         shard_key: Optional[str | list[str]] = None,
+        parent_shard_key: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
@@ -3053,6 +3060,7 @@ class DBOS:
                 attributes=attributes,
                 application_name=application_name,
                 shard_key=shard_key,
+                parent_shard_key=parent_shard_key,
             )
 
         return await asyncio.to_thread(
