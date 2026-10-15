@@ -62,7 +62,9 @@ def dbos_stand_in(
     stand_in = _DBOSStandIn()
     stand_in.start()
     monkeypatch.setattr(
-        _entitlements, "enterprise_entitlements_url", lambda: stand_in.url
+        _entitlements,
+        "enterprise_entitlements_url",
+        lambda conductor_url=None: stand_in.url,
     )
     yield stand_in
     stand_in.stop()
@@ -78,6 +80,25 @@ def test_url_follows_the_dbos_domain(monkeypatch: pytest.MonkeyPatch) -> None:
     assert (
         _entitlements.enterprise_entitlements_url()
         == "https://staging.dbos.dev/conductor/v2/entitlements/enterprise"
+    )
+
+
+def test_url_follows_a_self_hosted_conductor(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A self-hosted Conductor is configured by its root URL, and DBOS_DOMAIN plays no part.
+    monkeypatch.setenv("DBOS_DOMAIN", "staging.dbos.dev")
+    assert (
+        _entitlements.enterprise_entitlements_url("ws://localhost:8090/")
+        == "http://localhost:8090/v2/entitlements/enterprise"
+    )
+    assert (
+        _entitlements.enterprise_entitlements_url(
+            "wss://dbos.example.com/conductor-api"
+        )
+        == "https://dbos.example.com/conductor-api/v2/entitlements/enterprise"
+    )
+    assert (
+        _entitlements.enterprise_entitlements_url("http://conductor:8090")
+        == "http://conductor:8090/v2/entitlements/enterprise"
     )
 
 
