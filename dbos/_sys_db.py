@@ -4682,6 +4682,7 @@ class SystemDatabase(ABC):
         partition_local_running_count: int = 0,
         *,
         owner_xid: Optional[str] = None,
+        is_latest_version: Optional[bool] = None,
     ) -> Tuple[List[str], Optional[DequeueStopReason]]:
         """Claim this queue's next workflows, plus the limit that left no room to claim any
         (None if every limit had room)."""
@@ -4699,8 +4700,9 @@ class SystemDatabase(ABC):
         has_write_skew = queue_partition_key is not None and (
             queue._concurrency is not None or queue._limiter is not None
         )
-        # Read before the claim's transaction: the version row is global and may live elsewhere.
-        is_latest_version = self._is_latest_version(app_version)
+        # The queue thread reads it once per poll; read before the claim's transaction, as the version row is global.
+        if is_latest_version is None:
+            is_latest_version = self._is_latest_version(app_version)
         with self.engine.begin() as c:
             # Otherwise READ COMMITTED
             if self.engine.dialect.name == "postgresql" and has_shared_budget:
@@ -4942,6 +4944,7 @@ class SystemDatabase(ABC):
         max_tasks: int = sys.maxsize,
         *,
         owner_xid: Optional[str] = None,
+        is_latest_version: Optional[bool] = None,
     ) -> List[str]:
         """Batch dequeue from a partitioned queue, optimized for the specific
         case where partition_concurrency=1. All other cases iterate and dequeue
@@ -4954,8 +4957,9 @@ class SystemDatabase(ABC):
         assert queue._partition_limiter is None
         start_time_ms = int(time.time() * 1000)
         ws = self.tables.workflow_status
-        # Read before the claim's transaction: the version row is global and may live elsewhere.
-        is_latest_version = self._is_latest_version(app_version)
+        # The queue thread reads it once per poll; read before the claim's transaction, as the version row is global.
+        if is_latest_version is None:
+            is_latest_version = self._is_latest_version(app_version)
         with self.engine.begin() as c:
             version_predicate = ws.c.application_version == app_version
             if is_latest_version:

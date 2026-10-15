@@ -755,6 +755,7 @@ def queue_worker_thread(
                         None,
                         worker_load(),
                         owner_xid=owner_xid,
+                        is_latest_version=is_latest_version,
                     )
                     polled += len(dequeued_workflows)
                     start_dequeued_workflows(dequeued_workflows, owner_xid)
@@ -775,6 +776,7 @@ def queue_worker_thread(
                                 GlobalParams.app_version,
                                 max_tasks,
                                 owner_xid=owner_xid,
+                                is_latest_version=is_latest_version,
                             )
                         )
                         polled += len(dequeued_workflows)
@@ -814,6 +816,7 @@ def queue_worker_thread(
                                         queue.name, key
                                     ),
                                     owner_xid=owner_xid,
+                                    is_latest_version=is_latest_version,
                                 )
                             )
                         except DBAPIError as e:
@@ -852,8 +855,14 @@ def queue_worker_thread(
                     )
 
         # Each scope dequeues independently; a sharded system database has one per shard key with work.
+        is_latest_version = False
         try:
             scopes = dbos._sys_db.dequeue_scopes(queue.name)
+            # Once per poll, for every scope and partition: whether unversioned work is ours to claim.
+            if scopes:
+                is_latest_version = dbos._sys_db._is_latest_version(
+                    GlobalParams.app_version
+                )
         except Exception as e:
             if not stop_event.is_set():
                 dbos.logger.warning(
