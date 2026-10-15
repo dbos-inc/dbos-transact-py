@@ -22,6 +22,7 @@ from dbos._context import (
 )
 from dbos._error import DBOSException
 from dbos._serialization import Serializer, WorkflowSerializationFormat, serialize_args
+from dbos._shard_keys import validate_shard_key
 from dbos._sys_db import WorkflowStatusInternal, WorkflowStatusString
 from dbos._utils import generate_uuid
 
@@ -103,6 +104,7 @@ def validate_enqueue_options(options: EnqueueOptions) -> None:
     if workflow_id is not None:
         validate_workflow_id(workflow_id)
     validate_workflow_id_reuse_policy(options.get("workflow_id_reuse_policy"))
+    validate_shard_key(options.get("shard_key"))
     validate_duplication_policy(
         options.get("duplication_policy"),
         options.get("queue_name"),

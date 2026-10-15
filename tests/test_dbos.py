@@ -42,12 +42,14 @@ from dbos._context import (
     assert_current_dbos_context,
     get_local_dbos_context,
 )
+from dbos._enqueue_options import validate_enqueue_options
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSException,
     DBOSNonExistentWorkflowError,
 )
 from dbos._schemas.system_database import SystemSchema
+from dbos._shard_keys import bind_shard_keys, shard_key_scope
 from dbos._sys_db import _dbos_null_topic
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from dbos._workflow_commands import WORKFLOW_TIMEOUT_THREAD_NAME
@@ -3657,6 +3659,25 @@ def test_set_shard_key_exits_in_another_context() -> None:
             SetShardKey("")
     finally:
         _clear_local_dbos_context()
+
+
+def test_shard_keys_must_be_non_empty_strings() -> None:
+    """Every way a shard key enters refuses an empty or non-string one; SetShardKey alone
+    used to, and an empty key written anywhere else could never run."""
+    for bad in ("", 1):
+        with pytest.raises(DBOSException, match="non-empty string"):
+            with bind_shard_keys({"w": bad}):  # type: ignore[dict-item]
+                pass
+        with pytest.raises(DBOSException, match="non-empty string"):
+            with shard_key_scope(bad):  # type: ignore[arg-type]
+                pass
+        options: EnqueueOptions = {"queue_name": "q", "workflow_name": "w"}
+        options["shard_key"] = bad  # type: ignore[typeddict-item]
+        with pytest.raises(DBOSException, match="non-empty string"):
+            validate_enqueue_options(options)
+    # None leaves the key unset rather than invalid.
+    with bind_shard_keys({"w": None}), shard_key_scope(None):
+        pass
 
 
 def test_shard_keys_are_rejected_without_sharding(

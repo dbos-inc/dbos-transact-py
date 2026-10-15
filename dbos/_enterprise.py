@@ -131,6 +131,7 @@ ENTITLEMENT_TIMEOUT_SEC = 10.0
 # Conductor's machine-readable error code, in this header, for an org past its plan limit.
 ERROR_CODE_HEADER = "X-DBOS-Error"
 PAST_LIMIT = "past_limit"
+HOSTED_UNAVAILABLE = frozenset({403, 407, 408, 425, 429})
 
 
 # DBOS's hosted Conductor. An outage there must not keep applications from starting.
@@ -223,25 +224,27 @@ def require_enterprise(
                 f"Your DBOS organization is past its plan limit, so it is not entitled "
                 f"to {entitlements} ({names}). Upgrade its plan to continue."
             ) from e
-        if e.code == 404 and detail is None:
+        reason = detail or str(e.reason)
+        if target == HOSTED_CONDUCTOR_URL and e.code in HOSTED_UNAVAILABLE:
+            pass  # An outage, handled below.
+        elif e.code == 404 and detail is None:
             # A bare 404 is a missing route: a Conductor predating per-feature entitlements.
             raise DBOSInitializationError(
                 f"{names} requires an entitled DBOS key, but Conductor at {url} has no "
                 "entitlements route (HTTP 404). Upgrade Conductor, or check its URL."
             ) from e
-        reason = detail or str(e.reason)
-        if e.code == 401 and key is None:
+        elif e.code == 401 and key is None:
             raise DBOSInitializationError(
                 f"{names} requires a DBOS key: Conductor at {url} refused to check "
                 f"without one (HTTP 401): {reason}. {key_hint}"
             ) from e
-        if e.code == 401:
+        elif e.code == 401:
             # An unknown key, or a user credential instead of an API key.
             raise DBOSInitializationError(
                 f"{names} requires a valid DBOS key. Conductor at {url} rejected the "
                 f"key (HTTP 401): {reason}"
             ) from e
-        if e.code < 500:
+        elif e.code < 500:
             # Any other refusal, such as the key's organization being gone, or a redirect.
             raise DBOSInitializationError(
                 f"{names} requires an entitled DBOS key, but Conductor at {url} refused "

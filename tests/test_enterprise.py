@@ -1,6 +1,8 @@
 """The seam to dbos-enterprise: what core reports when the package is absent or
 broken, and that a refused construction leaves nothing behind."""
 
+import email.message
+import io
 import json
 import socket
 import threading
@@ -447,6 +449,64 @@ def test_a_hosted_conductor_outage_does_not_block_startup(
             conductor_key=None,
             conductor_url=None,
         )
+
+
+def _hosted_answers(
+    monkeypatch: pytest.MonkeyPatch, status: int, headers: Dict[str, str]
+) -> List[str]:
+    """Make the hosted Conductor answer with this error; returns the warnings logged."""
+    monkeypatch.setattr(GlobalParams, "dbos_cloud", False)
+    monkeypatch.delenv("DBOS_DOMAIN", raising=False)
+
+    def answer(request: urllib.request.Request) -> Dict[str, bool]:
+        hdrs = email.message.Message()
+        for name, value in headers.items():
+            hdrs[name] = value
+        raise urllib.error.HTTPError(
+            request.full_url, status, "error", hdrs, io.BytesIO(b"")
+        )
+
+    warnings: List[str] = []
+    monkeypatch.setattr(enterprise_module, "_fetch_entitlements", answer)
+    monkeypatch.setattr(dbos_logger, "warning", lambda msg: warnings.append(msg))
+    return warnings
+
+
+def _check_hosted() -> None:
+    _require_enterprise(
+        [SOME_FEATURE],
+        enterprise_key="enterprise-key",
+        conductor_key=None,
+        conductor_url=None,
+    )
+
+
+@pytest.mark.parametrize("status", [403, 407, 408, 425, 429])
+def test_hosted_throttling_and_proxies_count_as_outages(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    """From the hosted Conductor these mean it couldn't answer, not that it refused the
+    key, so startup warns and goes on as for any hosted outage."""
+    warnings = _hosted_answers(monkeypatch, status, {})
+    _check_hosted()
+    assert len(warnings) == 1 and f"(HTTP {status})" in warnings[0]
+
+
+def test_hosted_refusals_still_refuse(monkeypatch: pytest.MonkeyPatch) -> None:
+    _hosted_answers(monkeypatch, 403, {"X-DBOS-Error": "past_limit"})
+    with pytest.raises(DBOSInitializationError, match="past its plan limit"):
+        _check_hosted()
+    _hosted_answers(monkeypatch, 401, {})
+    with pytest.raises(DBOSInitializationError, match=r"rejected the key \(HTTP 401\)"):
+        _check_hosted()
+
+
+def test_another_conductors_throttling_still_refuses(conductor: FakeConductor) -> None:
+    conductor.reject(429, "slow down")
+    with pytest.raises(
+        DBOSInitializationError, match=r"refused the check \(HTTP 429\)"
+    ):
+        check(conductor, enterprise_key="enterprise-key")
 
 
 def test_dbos_cloud_passes_without_a_check(

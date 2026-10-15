@@ -16,6 +16,7 @@ from ._error import DBOSInitializationError
 from ._kafka_message import KafkaMessage
 from ._logger import dbos_logger
 from ._registrations import get_dbos_func_name
+from ._shard_keys import validate_shard_key
 
 _KafkaConsumerWorkflow = (
     Callable[[KafkaMessage], None] | Callable[[KafkaMessage], Coroutine[Any, Any, None]]
@@ -105,13 +106,19 @@ def _validate_consumer_queue(dbos: "DBOS", func_name: str, queue_name: str) -> N
 def _validate_consumer_key(
     dbos: "DBOS", func_name: str, shard_key: Optional[str]
 ) -> None:
-    """Raise if a consumer names no shard key on a sharded system database, where every
-    workflow it enqueues needs one; otherwise it would retry the same batch forever."""
+    """Raise unless a consumer's shard key fits the system database: required and
+    non-empty when sharded, absent otherwise. A misfit would retry one batch forever."""
     if shard_key is None and dbos._sys_db.sharded:
         raise DBOSInitializationError(
             f"Error: Kafka consumer {func_name} has no shard_key. On a sharded system "
             "database, every consumer names the shard key its workflows run under."
         )
+    if shard_key is not None and not dbos._sys_db.sharded:
+        raise DBOSInitializationError(
+            f"Error: Kafka consumer {func_name} has a shard_key, but this system "
+            "database is not sharded."
+        )
+    validate_shard_key(shard_key)
 
 
 def validate_kafka_consumers(dbos: "DBOS") -> None:

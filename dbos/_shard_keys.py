@@ -8,16 +8,28 @@ from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from typing import Dict, Generator, Mapping, Optional, Tuple
 
+from ._error import DBOSException
+
 _bindings: ContextVar[Optional[Dict[str, str]]] = ContextVar(
     "dbos_shard_key_bindings", default=None
 )
 _scope: ContextVar[Optional[str]] = ContextVar("dbos_shard_key_scope", default=None)
 
 
+def validate_shard_key(shard_key: object) -> None:
+    """Raise unless shard_key is None or a non-empty string."""
+    if shard_key is not None and (not isinstance(shard_key, str) or not shard_key):
+        raise DBOSException(
+            f"Invalid shard key {shard_key!r}: a shard key must be a non-empty string"
+        )
+
+
 @contextmanager
 def bind_shard_keys(keys: Mapping[str, Optional[str]]) -> Generator[None, None, None]:
     """Within the block, each workflow ID in keys lives under its shard key. None values are ignored."""
     given = {wfid: key for wfid, key in keys.items() if key is not None}
+    for key in given.values():
+        validate_shard_key(key)
     if not given:
         yield
         return
@@ -37,6 +49,7 @@ def bound_shard_key(workflow_id: str) -> Optional[str]:
 @contextmanager
 def shard_key_scope(key: Optional[str]) -> Generator[None, None, None]:
     """Within the block, statements not addressing a specific workflow run under this shard key."""
+    validate_shard_key(key)
     token = _scope.set(key)
     try:
         yield

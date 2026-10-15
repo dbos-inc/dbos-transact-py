@@ -9,7 +9,7 @@ import pytest
 from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 
 from dbos import DBOS, DBOSConfig, KafkaMessage
-from dbos._error import DBOSInitializationError
+from dbos._error import DBOSException, DBOSInitializationError
 from dbos._kafka import _describe_kafka_error, _make_error_cb, _validate_consumer_key
 from dbos._logger import dbos_logger
 from tests.conftest import retry_until_success
@@ -2087,11 +2087,16 @@ def test_kafka_custom_queue(dbos: DBOS) -> None:
     assert max_active == 1  # concurrency=1 honored
 
 
-def test_a_consumer_needs_a_shard_key_when_sharded() -> None:
-    """Without one, every batch it consumed would fail to enqueue and retry forever."""
+def test_a_consumer_key_must_fit_the_system_database() -> None:
+    """A consumer whose key doesn't fit would fail to enqueue every batch and retry forever:
+    sharded it needs a non-empty key, unsharded it must have none."""
     sharded = cast(Any, SimpleNamespace(_sys_db=SimpleNamespace(sharded=True)))
     unsharded = cast(Any, SimpleNamespace(_sys_db=SimpleNamespace(sharded=False)))
     with pytest.raises(DBOSInitializationError, match="has no shard_key"):
         _validate_consumer_key(sharded, "consume", None)
+    with pytest.raises(DBOSException, match="non-empty string"):
+        _validate_consumer_key(sharded, "consume", "")
     _validate_consumer_key(sharded, "consume", "tenant-a")
+    with pytest.raises(DBOSInitializationError, match="is not sharded"):
+        _validate_consumer_key(unsharded, "consume", "tenant-a")
     _validate_consumer_key(unsharded, "consume", None)
