@@ -563,6 +563,12 @@ class DBOS:
                 GlobalParams.executor_id = config["executor_id"]
 
         init_logger()
+        if self.enable_patching:
+            dbos_logger.warning(
+                "enable_patching is deprecated and will be removed in a future release. "
+                "DBOS.patch and DBOS.deprecate_patch no longer require it. "
+                "To keep every deployment on one application version, as the flag does, set application_version explicitly."
+            )
 
         # Translate user provided config to an internal format
         unvalidated_config = translate_dbos_config_to_config_file(config)
@@ -3805,8 +3811,6 @@ class DBOS:
     @classmethod
     def patch(cls, patch_name: str) -> bool:
         check_async("patch")
-        if not _get_dbos_instance().enable_patching:
-            raise DBOSException("enable_patching must be True in DBOS configuration")
         ctx = get_local_dbos_context()
         if ctx is None or not ctx.is_workflow():
             raise DBOSException("DBOS.patch must be called from a workflow")
@@ -3823,8 +3827,6 @@ class DBOS:
 
     @classmethod
     async def patch_async(cls, patch_name: str) -> bool:
-        if not _get_dbos_instance().enable_patching:
-            raise DBOSException("enable_patching must be True in DBOS configuration")
         ctx = get_local_dbos_context()
         if ctx is None or not ctx.is_workflow():
             raise DBOSException("DBOS.patch_async must be called from a workflow")
@@ -3877,8 +3879,6 @@ class DBOS:
     @classmethod
     def deprecate_patch(cls, patch_name: str) -> bool:
         check_async("deprecate_patch")
-        if not _get_dbos_instance().enable_patching:
-            raise DBOSException("enable_patching must be True in DBOS configuration")
         ctx = get_local_dbos_context()
         if ctx is None or not ctx.is_workflow():
             raise DBOSException("DBOS.deprecate_patch must be called from a workflow")
@@ -3895,8 +3895,6 @@ class DBOS:
 
     @classmethod
     async def deprecate_patch_async(cls, patch_name: str) -> bool:
-        if not _get_dbos_instance().enable_patching:
-            raise DBOSException("enable_patching must be True in DBOS configuration")
         ctx = get_local_dbos_context()
         if ctx is None or not ctx.is_workflow():
             raise DBOSException(
