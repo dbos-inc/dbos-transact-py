@@ -139,9 +139,12 @@ class FakeConductor:
         self.url = f"ws://127.0.0.1:{self.server.server_address[1]}"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
-    def reject(self, status: int, detail: str) -> None:
+    def reject(
+        self, status: int, detail: str, headers: Optional[Dict[str, str]] = None
+    ) -> None:
         self.status = status
         self.body = {"title": "Rejected", "status": status, "detail": detail}
+        self.headers = headers or {}
 
     def entitle(self, **entitlements: bool) -> None:
         self.status = 200
@@ -220,17 +223,30 @@ def test_each_feature_needs_its_own_entitlement(conductor: FakeConductor) -> Non
     message = str(raised.value)
     # Names only what the org lacks, by entitlement and by what it does.
     assert "not entitled to sharding (Using a sharded system database)" in message
+    assert "plan does not include it" in message
     assert "some_feature" not in message and "enterprise-key" not in message
     # One request answers for every feature.
     assert len(conductor.requests) == 2
 
 
-def test_a_past_limit_org_is_entitled_to_nothing(conductor: FakeConductor) -> None:
-    # Conductor reports every entitlement off while the org is past its plan limit.
-    conductor.entitle(**{name: False for name in ALL_ENTITLED}, some_feature=False)
-    with pytest.raises(DBOSInitializationError, match="past its plan limit") as raised:
+def test_a_past_limit_org_is_told_to_upgrade(conductor: FakeConductor) -> None:
+    # Conductor refuses a past-limit org outright, tagging the 403 with a code.
+    conductor.reject(
+        403,
+        "your DBOS account is past the free trial limit",
+        headers={"X-DBOS-Error": "past_limit"},
+    )
+    with pytest.raises(DBOSInitializationError) as raised:
         check(conductor, enterprise_key="enterprise-key")
-    assert "not entitled to some_feature" in str(raised.value)
+    message = str(raised.value)
+    assert "past its plan limit, so it is not entitled to some_feature" in message
+    assert "Upgrade its plan" in message
+    # The code, not the status or the prose, marks it: a bare 403 is another refusal.
+    conductor.reject(403, "your DBOS account is past the free trial limit")
+    with pytest.raises(DBOSInitializationError) as raised:
+        check(conductor, enterprise_key="enterprise-key")
+    assert "refused the check (HTTP 403)" in str(raised.value)
+    assert "Upgrade its plan" not in str(raised.value)
 
 
 def test_an_entitlement_conductor_does_not_report_is_not_granted(
@@ -246,13 +262,39 @@ def test_an_entitlement_conductor_does_not_report_is_not_granted(
         check(conductor, enterprise_key="enterprise-key")
 
 
-def test_enterprise_features_require_a_key(conductor: FakeConductor) -> None:
-    with pytest.raises(
-        DBOSInitializationError,
-        match=": Some feature requires a DBOS key. Set transact_enterprise_key",
-    ):
-        check(conductor)
+def test_enterprise_features_require_a_key(
+    conductor: FakeConductor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # DBOS's hosted Conductor, implicit or named, is never asked without a key.
+    monkeypatch.delenv("DBOS_DOMAIN", raising=False)
+    for url in [None, enterprise_module.HOSTED_CONDUCTOR_URL]:
+        with pytest.raises(
+            DBOSInitializationError,
+            match=": Some feature requires a DBOS key. Set transact_enterprise_key",
+        ):
+            _require_enterprise(
+                [SOME_FEATURE],
+                enterprise_key=None,
+                conductor_key=None,
+                conductor_url=url,
+            )
     assert conductor.requests == []
+
+
+def test_a_self_hosted_conductor_is_asked_without_a_key(
+    conductor: FakeConductor,
+) -> None:
+    # Without OAuth, a self-hosted Conductor grants every feature to any caller.
+    check(conductor)
+    assert conductor.requests == [("/v2/entitlements", None)]
+    # With OAuth, it wants a key.
+    conductor.reject(401, "this endpoint requires a DBOS API key")
+    with pytest.raises(DBOSInitializationError) as raised:
+        check(conductor)
+    message = str(raised.value)
+    assert "requires a DBOS key: Conductor at" in message
+    assert "(HTTP 401): this endpoint requires a DBOS API key" in message
+    assert "Set transact_enterprise_key" in message
 
 
 def test_conductor_credentials_never_reach_errors(conductor: FakeConductor) -> None:
@@ -270,28 +312,42 @@ def test_conductor_credentials_never_reach_errors(conductor: FakeConductor) -> N
 
 
 @pytest.mark.parametrize(
-    "status, detail",
+    "detail",
     [
-        (401, "invalid API key"),
+        "invalid API key",
         # A user credential, which the route refuses in favor of an API key.
-        (401, "this endpoint requires a DBOS API key"),
-        (403, "forbidden"),
+        "this endpoint requires a DBOS API key",
     ],
 )
-def test_a_rejected_key_is_refused(
+def test_a_rejected_key_is_refused(conductor: FakeConductor, detail: str) -> None:
+    conductor.reject(401, detail)
+    with pytest.raises(DBOSInitializationError) as raised:
+        check(conductor, enterprise_key="enterprise-key")
+    message = str(raised.value)
+    assert "requires a valid DBOS key." in message
+    assert f"rejected the key (HTTP 401): {detail}" in message
+    assert "enterprise-key" not in message
+
+
+@pytest.mark.parametrize(
+    "status, detail",
+    [(403, "forbidden"), (404, "organization not found"), (409, "conflict")],
+)
+def test_any_other_refusal_quotes_conductor(
     conductor: FakeConductor, status: int, detail: str
 ) -> None:
     conductor.reject(status, detail)
     with pytest.raises(DBOSInitializationError) as raised:
         check(conductor, enterprise_key="enterprise-key")
     message = str(raised.value)
-    assert f"rejected the key (HTTP {status}): {detail}" in message
-    assert "enterprise-key" not in message
+    assert f"refused the check (HTTP {status}): {detail}" in message
+    assert "rejected the key" not in message and "enterprise-key" not in message
 
 
 def test_a_conductor_without_the_route_is_refused(conductor: FakeConductor) -> None:
-    # An older Conductor, or a self-hosted one without OAuth.
-    conductor.reject(404, "Not Found")
+    # An older Conductor's router answers an unknown route with no problem detail.
+    conductor.status = 404
+    conductor.body = "404 page not found"
     with pytest.raises(
         DBOSInitializationError, match=r"has no entitlements route \(HTTP 404\)"
     ):
@@ -307,7 +363,7 @@ def test_a_redirect_is_refused_and_never_carries_the_key(
         conductor.status = 302
         conductor.headers = {"Location": f"{target}/v2/entitlements"}
         with pytest.raises(
-            DBOSInitializationError, match=r"rejected the key \(HTTP 302\)"
+            DBOSInitializationError, match=r"refused the check \(HTTP 302\)"
         ):
             check(conductor, enterprise_key="enterprise-key")
         # The redirect target never saw the key, or anything at all.
@@ -332,8 +388,13 @@ def test_an_unreachable_conductor_blocks_startup(conductor: FakeConductor) -> No
     conductor.reject(503, "unavailable")
     with pytest.raises(
         DBOSInitializationError,
-        match=r"checking it with Conductor .* failed \(HTTP 503\)",
+        match=r"checking it with Conductor .* failed \(HTTP 503: unavailable\)",
     ):
+        check(conductor, enterprise_key="enterprise-key")
+    # A failure without a problem detail is reported by status alone.
+    conductor.body = "Bad Gateway"
+    conductor.status = 502
+    with pytest.raises(DBOSInitializationError, match=r"failed \(HTTP 502\)\."):
         check(conductor, enterprise_key="enterprise-key")
     # A port nothing listens on.
     with socket.socket() as s:

@@ -128,6 +128,9 @@ def enabled_features(config: Mapping[str, object]) -> List[Feature]:
 
 ENTITLEMENTS_PATH = "/v2/entitlements"
 ENTITLEMENT_TIMEOUT_SEC = 10.0
+# Conductor's machine-readable error code, in this header, for an org past its plan limit.
+ERROR_CODE_HEADER = "X-DBOS-Error"
+PAST_LIMIT = "past_limit"
 
 
 # DBOS's hosted Conductor. An outage there must not keep applications from starting.
@@ -172,13 +175,16 @@ def _fetch_entitlements(request: urllib.request.Request) -> Dict[str, bool]:
     return {name: value is True for name, value in entitlements.items()}
 
 
-def _error_detail(error: urllib.error.HTTPError) -> str:
-    """The reason Conductor gave, from its JSON error body when there is one."""
+def _problem_detail(error: urllib.error.HTTPError) -> Optional[str]:
+    """The reason Conductor gave in its JSON error body, or None if it sent none."""
     try:
         body = json.loads(error.read())
-        return str(body.get("detail") or body.get("message") or error.reason)
     except Exception:
-        return str(error.reason)
+        return None
+    detail = (
+        body.get("detail") or body.get("message") if isinstance(body, dict) else None
+    )
+    return str(detail) if detail else None
 
 
 def require_enterprise(
@@ -188,42 +194,60 @@ def require_enterprise(
     conductor_key: Optional[str],
     conductor_url: Optional[str],
 ) -> None:
-    """Enterprise features need a DBOS key whose org is entitled to each of them, checked
-    with Conductor. DBOS Cloud passes without a check."""
+    """Enterprise features need Conductor to report the org entitled to each of them. A
+    self-hosted Conductor may answer without a key; DBOS Cloud passes without a check.
+    """
     if not features or GlobalParams.dbos_cloud:
         return
     names = " and ".join(f.description for f in features)
+    entitlements = " and ".join(f.entitlement for f in features)
     key = enterprise_key or conductor_key
-    if key is None:
-        raise DBOSInitializationError(
-            f"{names} requires a DBOS key. Set transact_enterprise_key in your DBOS "
-            "configuration, or pass a conductor_key to DBOS."
-        )
     target = conductor_url or default_conductor_url()
-    url = entitlement_url(target)
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"Bearer {key}",
-            "User-Agent": f"dbos-transact-py/{GlobalParams.dbos_version}",
-        },
+    key_hint = (
+        "Set transact_enterprise_key in your DBOS configuration, or pass a "
+        "conductor_key to DBOS."
     )
+    # Only a Conductor named explicitly is asked without a key, and never DBOS's hosted one.
+    if key is None and (not conductor_url or target == HOSTED_CONDUCTOR_URL):
+        raise DBOSInitializationError(f"{names} requires a DBOS key. {key_hint}")
+    url = entitlement_url(target)
+    headers = {"User-Agent": f"dbos-transact-py/{GlobalParams.dbos_version}"}
+    if key is not None:
+        headers["Authorization"] = f"Bearer {key}"
     try:
-        granted = _fetch_entitlements(request)
+        granted = _fetch_entitlements(urllib.request.Request(url, headers=headers))
     except urllib.error.HTTPError as e:
-        if e.code == 404:
-            # A Conductor predating per-feature entitlements, or self-hosted without OAuth.
+        detail = _problem_detail(e)
+        if e.code == 403 and e.headers.get(ERROR_CODE_HEADER) == PAST_LIMIT:
             raise DBOSInitializationError(
-                f"{names} requires a DBOS key, but Conductor at {url} has no "
+                f"Your DBOS organization is past its plan limit, so it is not entitled "
+                f"to {entitlements} ({names}). Upgrade its plan to continue."
+            ) from e
+        if e.code == 404 and detail is None:
+            # A bare 404 is a missing route: a Conductor predating per-feature entitlements.
+            raise DBOSInitializationError(
+                f"{names} requires an entitled DBOS key, but Conductor at {url} has no "
                 "entitlements route (HTTP 404). Upgrade Conductor, or check its URL."
             ) from e
-        if e.code < 500:
-            # Rejected: an unknown key, a user credential instead of a key, or a redirect.
+        reason = detail or str(e.reason)
+        if e.code == 401 and key is None:
+            raise DBOSInitializationError(
+                f"{names} requires a DBOS key: Conductor at {url} refused to check "
+                f"without one (HTTP 401): {reason}. {key_hint}"
+            ) from e
+        if e.code == 401:
+            # An unknown key, or a user credential instead of an API key.
             raise DBOSInitializationError(
                 f"{names} requires a valid DBOS key. Conductor at {url} rejected the "
-                f"key (HTTP {e.code}): {_error_detail(e)}"
+                f"key (HTTP 401): {reason}"
             ) from e
-        failure = f"HTTP {e.code}"
+        if e.code < 500:
+            # Any other refusal, such as the key's organization being gone, or a redirect.
+            raise DBOSInitializationError(
+                f"{names} requires an entitled DBOS key, but Conductor at {url} refused "
+                f"the check (HTTP {e.code}): {reason}"
+            ) from e
+        failure = f"HTTP {e.code}: {detail}" if detail else f"HTTP {e.code}"
         cause: Exception = e
     except Exception as e:
         failure = str(e)
@@ -234,9 +258,8 @@ def require_enterprise(
             raise DBOSInitializationError(
                 f"Your DBOS organization is not entitled to "
                 f"{' and '.join(f.entitlement for f in missing)} "
-                f"({' and '.join(f.description for f in missing)}). Every entitlement is "
-                "off while the organization is past its plan limit; otherwise, contact "
-                "DBOS to enable it."
+                f"({' and '.join(f.description for f in missing)}): its plan does not "
+                "include it. Contact DBOS to enable it."
             )
         return
     if target == HOSTED_CONDUCTOR_URL:
