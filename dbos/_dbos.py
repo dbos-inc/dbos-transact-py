@@ -146,7 +146,6 @@ from ._dbos_config import (
     translate_dbos_config_to_config_file,
 )
 from ._enterprise import AlertHandler, ConductorThread
-from ._entitlements import check_enterprise_entitlement
 from ._error import (
     DBOSException,
     DBOSInitializationError,
@@ -179,14 +178,6 @@ P = ParamSpec("P")  # A generic type for workflow parameters
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 T = TypeVar("T")
-
-
-def _need_enterprise_key_msg(feature: str) -> str:
-    """The error for an enterprise `feature` configured without a key to check it with."""
-    return (
-        f"{feature} requires a Transact Enterprise key: "
-        "set transact_enterprise_key or conductor_key in DBOSConfig."
-    )
 
 
 _dbos_global_instance: Optional[DBOS] = None
@@ -488,14 +479,20 @@ class DBOS:
         if hasattr(self, "_initialized") and self._initialized:
             return
 
+        # DBOS Cloud always uses Conductor. Checked before any state exists, so a missing package fails cleanly.
         key = config.get("conductor_key") or conductor_key
-        enterprise_key = config.get("transact_enterprise_key") or key
-        need_enterprise_key = bool(config.get("auto_upgrade"))
-        if need_enterprise_key and not (GlobalParams.dbos_cloud or enterprise_key):
-            raise DBOSInitializationError(_need_enterprise_key_msg("auto_upgrade"))
-        # DBOS Cloud always uses Conductor.
-        if GlobalParams.dbos_cloud or key is not None or need_enterprise_key:
+        # Every enterprise feature requires Conductor to report the org entitled to it.
+        features = _enterprise.enabled_features(config)
+        _enterprise.require_enterprise(
+            features,
+            enterprise_key=config.get("transact_enterprise_key"),
+            conductor_key=key,
+            conductor_url=config.get("conductor_url") or conductor_url,
+        )
+        if GlobalParams.dbos_cloud or key is not None:
             _enterprise.load()
+        elif features:
+            _enterprise.load(features[0].description)
 
         self._initialized: bool = True
 
@@ -828,8 +825,7 @@ class DBOS:
             elif self.conductor_key is not None:
                 conductor_url = self.conductor_url
                 if conductor_url is None:
-                    dbos_domain = os.environ.get("DBOS_DOMAIN", "cloud.dbos.dev")
-                    conductor_url = f"wss://{dbos_domain}/conductor/v1alpha1"
+                    conductor_url = _enterprise.default_conductor_url()
                 dbos_logger.debug("Starting Conductor thread")
                 self.conductor_websocket = _enterprise.load().ConductorWebsocket(
                     self,
@@ -855,16 +851,15 @@ class DBOS:
 
             # Start the auto-upgrade pass if any workflow takes part.
             if self._auto_upgradable_workflows():
-                enterprise_key = self._transact_enterprise_key()
-                if enterprise_key is None:
-                    raise DBOSInitializationError(
-                        _need_enterprise_key_msg("auto_upgrade")
+                # Workflows enroll one by one through DBOS.workflow(auto_upgrade=True),
+                # which only launch can see; the config flag was checked at construction.
+                if not self._auto_upgrade:
+                    _enterprise.require_enterprise(
+                        [_enterprise.AUTO_UPGRADE],
+                        enterprise_key=self.transact_enterprise_key,
+                        conductor_key=self.conductor_key,
+                        conductor_url=self.conductor_url,
                     )
-                check_enterprise_entitlement(
-                    enterprise_key,
-                    feature="auto_upgrade",
-                    conductor_url=self.conductor_url,
-                )
                 auto_upgrade_interval_sec: float = (
                     self._config.get("runtimeConfig", {}).get(
                         "auto_upgrade_interval_sec"
@@ -877,9 +872,9 @@ class DBOS:
                 )
                 self.auto_upgrader = AutoUpgradeThread(
                     self,
-                    _enterprise.load().AutoUpgradePass(
-                        self, grace_sec=auto_upgrade_grace_sec
-                    ),
+                    _enterprise.load(
+                        _enterprise.AUTO_UPGRADE.description
+                    ).AutoUpgradePass(self, grace_sec=auto_upgrade_grace_sec),
                     interval_sec=auto_upgrade_interval_sec,
                 )
                 self.auto_upgrader.start()
@@ -2168,16 +2163,6 @@ class DBOS:
 
     def _auto_upgradable_workflows(self) -> List[str]:
         return self._registry.auto_upgradable_workflows(self._auto_upgrade)
-
-    def _transact_enterprise_key(self) -> Optional[str]:
-        """The key enterprise features are entitled by: transact_enterprise_key, else the Conductor key."""
-        if self.transact_enterprise_key:
-            return self.transact_enterprise_key
-        if self.conductor_key:
-            return self.conductor_key
-        if GlobalParams.dbos_cloud:
-            return os.environ.get("DBOS__CONDUCTOR_KEY")
-        return None
 
     @classmethod
     def _recover_pending_workflows(
