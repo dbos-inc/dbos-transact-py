@@ -1429,7 +1429,7 @@ class SystemDatabase(ABC):
         """
         if owner_xid is None:
             owner_xid = current_owner_xid(workflow_id)
-        if self._is_sqlite:
+        if not self._outcome_in_one_statement():
             return self._update_workflow_outcome_in_transaction(
                 workflow_id, status, output=output, error=error, owner_xid=owner_xid
             )
@@ -1520,6 +1520,11 @@ class SystemDatabase(ABC):
             ).scalar()
         return bool(written)
 
+    def _outcome_in_one_statement(self) -> bool:
+        """Whether update_workflow_outcome writes in one statement; SQLite cannot put an
+        UPDATE in a WITH clause."""
+        return not self._is_sqlite
+
     def _update_workflow_outcome_in_transaction(
         self,
         workflow_id: str,
@@ -1529,8 +1534,8 @@ class SystemDatabase(ABC):
         error: Optional[str],
         owner_xid: Optional[str],
     ) -> bool:
-        """update_workflow_outcome as a transaction of two statements, for SQLite, which
-        cannot put an UPDATE in a WITH clause."""
+        """update_workflow_outcome as a transaction of two statements, for a backend
+        that cannot run it as one."""
         with self.engine.begin() as c:
             now_ms = self._now_ms_sql()
             update = (
