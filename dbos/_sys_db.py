@@ -1015,7 +1015,9 @@ class SystemDatabase(ABC):
         its type's bind processor, so what reaches the driver is unchanged. SQLite has no
         schema to render ahead of time, so there the statement is built per call.
         """
-        if self._is_sqlite:
+        connection = conn.connection() if isinstance(conn, Session) else conn
+        # A caller's connection may use another driver, so it compiles the statement itself.
+        if self._is_sqlite or connection.dialect is not self.engine.dialect:
             return conn.execute(build(), values)
         key = (name, tuple(values))
         prepared = self._prepared_statements.get(key)
@@ -1038,7 +1040,6 @@ class SystemDatabase(ABC):
         params = {
             k: processors[k](v) if k in processors else v for k, v in values.items()
         }
-        connection = conn.connection() if isinstance(conn, Session) else conn
         return connection.exec_driver_sql(sql, params)
 
     def _key_conflict(self, *columns: Any) -> List[Any]:

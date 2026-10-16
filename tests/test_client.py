@@ -1207,6 +1207,37 @@ def test_enqueue_in_transaction_session_after_statement(
     assert handle.get_result() == "after-statement"
 
 
+def test_enqueue_in_transaction_on_another_driver(
+    dbos: DBOS, client: DBOSClient, skip_with_sqlite: None
+) -> None:
+    # A caller's engine may use another driver than DBOS's, here psycopg2; its connection
+    # must compile DBOS's statements itself rather than receive psycopg 3's.
+    run_client_collateral()
+
+    url = client._sys_db.engine.url.set(drivername="postgresql+psycopg2")
+    engine = sa.create_engine(url)
+    try:
+        with engine.begin() as conn:
+            options: EnqueueOptions = {
+                "queue_name": "test_queue",
+                "workflow_name": "retrieve_test",
+                "workflow_id": str(uuid.uuid4()),
+            }
+            via_conn: WorkflowHandle[str] = client.enqueue_in_transaction(
+                conn, options, "psycopg2-connection"
+            )
+        with Session(engine) as session:
+            with session.begin():
+                options["workflow_id"] = str(uuid.uuid4())
+                via_session: WorkflowHandle[str] = client.enqueue_in_transaction(
+                    session, options, "psycopg2-session"
+                )
+    finally:
+        engine.dispose()
+    assert via_conn.get_result() == "psycopg2-connection"
+    assert via_session.get_result() == "psycopg2-session"
+
+
 @pytest.mark.asyncio
 async def test_enqueue_in_transaction_run_sync(
     dbos: DBOS, client: DBOSClient, skip_with_sqlite: None
