@@ -417,6 +417,7 @@ FAN_OUT_FUNCTIONS = {
     "get_pending_workflows",
     "_children_of",
     "list_workflows",
+    "rename_application",
 }
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__)) + os.sep
 _ORIGIN = re.compile(r"/\* origin: (.*?) \*/")
