@@ -4625,6 +4625,9 @@ def test_queue_backs_off_once_per_poll_across_scopes() -> None:
                 return []
             return ["a", "b", "c"]
 
+        def _is_latest_version(self, app_version: str) -> bool:
+            return True
+
         def start_queued_workflows(self, *args: Any, **kwargs: Any) -> Any:
             raise DBAPIError("SELECT 1", {}, Exception("could not serialize access"))
 
