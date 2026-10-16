@@ -43,6 +43,7 @@ from dbos._error import (
 )
 from dbos._queue import _INTERNAL_QUEUE_CONSTRUCTION, queue_worker_thread
 from dbos._schemas.system_database import SystemSchema
+from dbos._shard_keys import scoped_shard_key
 from dbos._sys_db import DequeueStopReason, WorkflowStatusString
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from tests.conftest import (
@@ -4647,6 +4648,8 @@ def test_queue_backs_off_once_per_poll_across_scopes() -> None:
         _polling_interval_sec=0.01,
         database_backed_queue=False,
         _has_partition_limits=lambda: False,
+        _worker_concurrency=None,
+        _partition_worker_concurrency=None,
     )
     worker = threading.Thread(
         target=queue_worker_thread, args=(stop, fake_dbos, fake_queue), daemon=True
@@ -4658,3 +4661,57 @@ def test_queue_backs_off_once_per_poll_across_scopes() -> None:
         "Contention detected in queue thread for contended. "
         "Increasing polling interval to 0.02."
     ]
+
+
+def test_queue_stops_visiting_scopes_once_the_worker_is_full() -> None:
+    """A poll stops claiming from further dequeue scopes once this worker's
+    concurrency is used up, instead of trying every remaining shard key."""
+    stop = threading.Event()
+    polls: List[int] = []
+    claimed_scopes: List[Optional[str]] = []
+
+    class ClaimingSysDb:
+        def dequeue_scopes(self, queue_name: str) -> List[Optional[str]]:
+            polls.append(1)
+            if len(polls) > 1:
+                stop.set()
+                return []
+            return ["a", "b", "c", "d"]
+
+        def _is_latest_version(self, app_version: str) -> bool:
+            return True
+
+        def start_queued_workflows(self, *args: Any, **kwargs: Any) -> Any:
+            # Each scope yields one workflow; their statuses are never found.
+            claimed_scopes.append(scoped_shard_key())
+            return [f"wf-{len(claimed_scopes)}"], None
+
+        def get_workflow_statuses(self, workflow_ids: List[str]) -> List[Any]:
+            return []
+
+        def get_workflow_status(self, workflow_id: str) -> None:
+            return None
+
+    fake_dbos: Any = types.SimpleNamespace(
+        _sys_db=ClaimingSysDb(),
+        _active_workflows_set=types.SimpleNamespace(count_for_queue=lambda name: 0),
+        logger=types.SimpleNamespace(
+            warning=lambda msg: None, debug=lambda msg: None, error=lambda msg: None
+        ),
+    )
+    fake_queue: Any = types.SimpleNamespace(
+        name="full",
+        _polling_interval_sec=0.01,
+        database_backed_queue=False,
+        _has_partition_limits=lambda: False,
+        _worker_concurrency=2,
+        _partition_worker_concurrency=None,
+    )
+    worker = threading.Thread(
+        target=queue_worker_thread, args=(stop, fake_dbos, fake_queue), daemon=True
+    )
+    worker.start()
+    worker.join(timeout=10)
+    assert not worker.is_alive()
+    assert len(claimed_scopes) == 2
+    assert len(set(claimed_scopes)) == 2

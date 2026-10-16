@@ -872,7 +872,8 @@ def queue_worker_thread(
         random.shuffle(scopes)
         contended = False
         for scope in scopes:
-            if stop_event.is_set():
+            # The shuffle gives the keys skipped once the worker is full their turn on later polls.
+            if stop_event.is_set() or worker_budget(queue, worker_load()) <= 0:
                 break
             with shard_key_scope(scope):
                 dequeue()
