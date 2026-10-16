@@ -503,7 +503,10 @@ def test_kafka_listen_queues_excludes_custom_consumer_queue(
 
 
 def test_kafka_throughput(
-    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, skip_with_sqlite: None
+    dbos: DBOS,
+    monkeypatch: pytest.MonkeyPatch,
+    skip_with_sqlite: None,
+    skip_with_sharding: None,
 ) -> None:
     # Ingest throughput: batched enqueue must far exceed the old one-txn-per-message path.
     server = "localhost:9092"

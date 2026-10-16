@@ -3,6 +3,7 @@ import contextlib
 import glob
 import importlib
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -14,6 +15,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Dict,
     Generator,
     Iterator,
     List,
@@ -26,8 +28,10 @@ from unittest import mock
 
 T = TypeVar("T")
 from pathlib import Path
+from types import FrameType
 from urllib.parse import quote
 
+import psycopg
 import pytest
 import sqlalchemy as sa
 from opentelemetry import trace
@@ -40,23 +44,29 @@ from opentelemetry.sdk._logs.export import (
 )
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from sqlalchemy import event as sa_event
 
+import dbos._dbos as dbos_module
 import dbos._workflow_commands as workflow_commands
 from dbos import (
     DBOS,
     DBOSClient,
     DBOSConfig,
     _enterprise,
+    _kafka,
     _workflow_commands,
     run_dbos_database_migrations,
 )
 from dbos._context import DBOSContext
 from dbos._core import execute_dequeued_workflow
+from dbos._error import DBOSException
+from dbos._queue import queue_worker_thread
+from dbos._recovery import startup_recovery_thread
+from dbos._scheduler import _ScheduleThread
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 from dbos._sys_db_postgres import PostgresSystemDatabase
 from dbos._utils import GlobalParams, quote_identifier
-from dbos._workflow_commands import WORKFLOW_TIMEOUT_THREAD_NAME
 
 if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle
@@ -95,7 +105,7 @@ def skip_with_sqlite() -> None:
 @pytest.fixture()
 def skip_with_sharding() -> None:
     """For tests of features sharding refuses (deduplication, debouncing), that write
-    core's unkeyed tables directly, or that manage databases themselves."""
+    core's unkeyed tables directly, manage databases, or time batched inserts."""
     if using_sharding():
         pytest.skip("Skipping test when testing a sharded system database")
 
@@ -235,6 +245,32 @@ def _reset_sharded_run_user_database(drop: bool) -> None:
         _truncate_user_database(user_db_url)
 
 
+# Keys a sharded run's fallbacks filled in on DBOS's own service paths, for the canary.
+lost_shard_keys: List[str] = []
+
+
+def _on_service_path() -> bool:
+    """Whether this thread runs only DBOS's machinery, never test code: a DBOS background
+    thread, a queue worker, a schedule, or startup recovery."""
+    thread = threading.current_thread()
+    instance = dbos_module._dbos_global_instance
+    if instance is not None and thread in instance._background_threads:
+        return True
+    target = getattr(thread, "_target", None)
+    if getattr(target, "__func__", target) in (
+        queue_worker_thread,
+        _ScheduleThread._loop,
+    ):
+        return True
+    # Startup recovery runs on executor threads, which also run test code.
+    frame: Optional[FrameType] = sys._getframe()
+    while frame is not None:
+        if frame.f_code is startup_recovery_thread.__code__:
+            return True
+        frame = frame.f_back
+    return False
+
+
 @pytest.fixture(autouse=True)
 def default_shard_key() -> Generator[Optional[str], Any, None]:
     """Sharded runs only: a per-test shard key for top-level workflows and bare-ID calls
@@ -257,29 +293,21 @@ def default_shard_key() -> Generator[Optional[str], Any, None]:
     monkeypatch.setattr(_enterprise, "require_enterprise", lambda *args, **kwargs: None)
 
     key = f"test-{uuid.uuid4().hex[:8]}"
-    # Fallbacks on DBOS's own service threads, which never run test code: there core's
+    # Fallbacks on DBOS's own service paths, which never run test code: there core's
     # machinery lost a key. Other threads also run test code across hops a stack can't
     # follow, so their fallbacks stand for bare IDs the test passed.
-    lost: List[str] = []
-    service_threads = tuple(
-        f"({target})"
-        for target in (
-            "queue_thread",
-            "queue_worker_thread",
-            "workflow_timeout_thread",
-            "dynamic_scheduler_loop",
-            "run_notification_listener",
-            "run_notifier",
-            "_loop",
-        )
-    )
+    lost_shard_keys.clear()
 
     def fall_back(what: str) -> str:
-        thread = threading.current_thread().name
-        named = thread.startswith(("queue-worker-", WORKFLOW_TIMEOUT_THREAD_NAME))
-        if named or thread.endswith(service_threads):
-            lost.append(f"{what} on thread {thread}")
+        if _on_service_path():
+            lost_shard_keys.append(
+                f"{what} on thread {threading.current_thread().name}"
+            )
         return key
+
+    def no_key(e: DBOSException) -> bool:
+        # Only a missing key falls back; an invalid one is the test's error to see.
+        return e.message.startswith("No shard key")
 
     resolve = ShardedSystemDatabase._shard_key_of
     require = ShardedSystemDatabase._require_key
@@ -292,13 +320,17 @@ def default_shard_key() -> Generator[Optional[str], Any, None]:
     ) -> str:
         try:
             return cast(str, resolve(self, workflow_id, explicit))
-        except Exception:
+        except DBOSException as e:
+            if not no_key(e):
+                raise
             return fall_back(f"no shard key for workflow {workflow_id}")
 
     def _require_key(status: Any) -> None:
         # Children are left to core's plumbing; only top-level starts fall back.
         if status["shard_key"] is None and status.get("parent_workflow_id") is None:
-            status["shard_key"] = key
+            status["shard_key"] = fall_back(
+                f"no shard key for new workflow {status['workflow_uuid']}"
+            )
         require(status)
 
     def _keyed_messages(self: Any, messages: Any, *args: Any) -> Any:
@@ -310,7 +342,9 @@ def default_shard_key() -> Generator[Optional[str], Any, None]:
     def _scope_key(self: Any) -> str:
         try:
             return cast(str, scope_key(self))
-        except Exception:
+        except DBOSException as e:
+            if not no_key(e):
+                raise
             return fall_back("no shard key scope")
 
     def _schedule_values(self: Any, schedule: Any) -> Any:
@@ -325,6 +359,15 @@ def default_shard_key() -> Generator[Optional[str], Any, None]:
     monkeypatch.setattr(ShardedSystemDatabase, "_keyed_messages", _keyed_messages)
     monkeypatch.setattr(ShardedSystemDatabase, "_schedule_values", _schedule_values)
     monkeypatch.setattr(ShardedSystemDatabase, "_scope_key", _scope_key)
+
+    kafka_consumer = _kafka.kafka_consumer
+
+    def _kafka_consumer(
+        *args: Any, shard_key: Optional[str] = None, **kwargs: Any
+    ) -> Any:
+        return kafka_consumer(*args, shard_key=shard_key or key, **kwargs)
+
+    monkeypatch.setattr(_kafka, "kafka_consumer", _kafka_consumer)
 
     # Every new workflow's context gets a key where core builds it: a top-level workflow
     # the per-test key through fall_back, so a dequeue that lost its row's key fails; a
@@ -359,7 +402,89 @@ def default_shard_key() -> Generator[Optional[str], Any, None]:
     monkeypatch.setattr(DBOSClient, "__init__", _client_init)
     yield key
     monkeypatch.undo()
-    assert not lost, "Core lost a shard key:\n" + "\n".join(sorted(set(lost)))
+    assert not lost_shard_keys, "Core lost a shard key:\n" + "\n".join(
+        sorted(set(lost_shard_keys))
+    )
+
+
+# DBOS functions whose statements read or write every shard by design: migrations, queue
+# discovery, sweeps, recovery, the children walk, and admin listings.
+FAN_OUT_FUNCTIONS = {
+    "run_migrations",
+    "dequeue_scopes",
+    "transition_delayed_workflows",
+    "cancel_timed_out_workflows",
+    "get_pending_workflows",
+    "_children_of",
+    "list_workflows",
+}
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__)) + os.sep
+_ORIGIN = re.compile(r"/\* origin: (.*?) \*/")
+_FIRST_WORD = re.compile(r"^\s*\w+")
+
+
+def _statement_origin(dbos_dirs: Tuple[str, ...]) -> str:
+    """The DBOS functions on the stack issuing a statement, innermost first, or "test" when
+    test code issues it directly."""
+    names: List[str] = []
+    # Past this function and the listener calling it, both in tests/.
+    frame: Optional[FrameType] = sys._getframe(2)
+    while frame is not None:
+        path = frame.f_code.co_filename
+        if path.startswith(_TESTS_DIR):
+            break
+        if path.startswith(dbos_dirs) and frame.f_code.co_name not in names:
+            names.append(frame.f_code.co_name)
+        frame = frame.f_back
+    return " < ".join(names) or "test"
+
+
+def _multi_shard_counts(admin_url: str) -> Dict[str, int]:
+    """How often the router has sent each statement to more than one shard."""
+    with psycopg.connect(admin_url, autocommit=True) as admin:
+        cursor = admin.execute("SHOW QUERY_CACHE")
+        columns = [d.name for d in cursor.description or []]
+        rows = cursor.fetchall()
+    query_i, multi_i = columns.index("query"), columns.index("multi")
+    return {" ".join(str(r[query_i]).split()): int(r[multi_i] or 0) for r in rows}
+
+
+@pytest.fixture(autouse=True, scope="session")
+def sharded_routing_guard() -> Generator[None, Any, None]:
+    """Sharded runs only: every statement DBOS sent to more than one shard came from a
+    function that fans out by design. A lost key predicate still returns the right rows
+    through the router, so this is what catches it."""
+    if not using_sharding():
+        yield
+        return
+    admin_url = os.environ.get(
+        "DBOS_ROUTER_ADMIN_URL", "postgresql://admin:dbos@localhost:6432/admin"
+    )
+    packages = (dbos_module, importlib.import_module("dbos_enterprise"))
+    dbos_dirs = tuple(os.path.dirname(str(p.__file__)) + os.sep for p in packages)
+
+    def tag(
+        conn: Any, cursor: Any, statement: str, parameters: Any, *args: Any
+    ) -> Tuple[str, Any]:
+        # After the first keyword, where the router keeps a comment in its statement stats.
+        origin = f" /* origin: {_statement_origin(dbos_dirs)} */"
+        return _FIRST_WORD.sub(lambda m: m.group(0) + origin, statement, 1), parameters
+
+    before = _multi_shard_counts(admin_url)
+    sa_event.listen(sa.Engine, "before_cursor_execute", tag, retval=True)
+    try:
+        yield
+    finally:
+        sa_event.remove(sa.Engine, "before_cursor_execute", tag)
+    leaked = []
+    for statement, multi in _multi_shard_counts(admin_url).items():
+        found = _ORIGIN.search(statement)
+        if multi <= before.get(statement, 0) or found is None:
+            continue
+        origin = found.group(1)
+        if origin != "test" and not FAN_OUT_FUNCTIONS & set(origin.split(" < ")):
+            leaked.append(statement)
+    assert not leaked, "Statements reached every shard:\n\n" + "\n\n".join(leaked)
 
 
 def _truncate_user_database(user_database_url: str) -> None:
