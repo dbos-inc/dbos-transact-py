@@ -768,6 +768,10 @@ class SystemDatabase(ABC):
         self._retry_connection_errors = retry_connection_errors
         # db_retry trusts the text-based SQLite retriability heuristic only on SQLite.
         self._is_sqlite = system_database_url.startswith("sqlite")
+        # Hot-path statements, compiled once; see _execute_prepared.
+        self._prepared_statements: Dict[
+            Tuple[str, Tuple[str, ...]], Tuple[str, Dict[str, Callable[[Any], Any]]]
+        ] = {}
         # Statement timeout for observability reads, in ms. Unset takes the default; non-positive disables the cap.
         _validate_observability_query_timeout_sec(observability_query_timeout_sec)
         timeout_sec = (
@@ -997,6 +1001,46 @@ class SystemDatabase(ABC):
         """Extra (column, expression) pairs for an INSERT ... SELECT of this workflow's rows."""
         return []
 
+    def _execute_prepared(
+        self,
+        conn: Union[sa.Connection, Session],
+        name: str,
+        values: Dict[str, Any],
+        build: Callable[[], Any],
+    ) -> Any:
+        """Execute build()'s statement with values, building and compiling it only once per
+        set of columns. SQLAlchemy never caches a postgresql.insert, so building and
+        compiling the hot path's inserts on every call was a large share of a workflow's
+        client CPU. The SQL is the engine's own compilation and each value goes through
+        its type's bind processor, so what reaches the driver is unchanged. SQLite has no
+        schema to render ahead of time, so there the statement is built per call.
+        """
+        if self._is_sqlite:
+            return conn.execute(build(), values)
+        key = (name, tuple(values))
+        prepared = self._prepared_statements.get(key)
+        if prepared is None:
+            dialect = self.engine.dialect
+            compiled = build().compile(
+                dialect=dialect,
+                column_keys=list(values),
+                schema_translate_map={SCHEMA_PLACEHOLDER: self.schema},
+                render_schema_translate=True,
+            )
+            processors: Dict[str, Callable[[Any], Any]] = {}
+            for bind_name, bind in compiled.binds.items():
+                processor = bind.type.dialect_impl(dialect).bind_processor(dialect)
+                if processor is not None:
+                    processors[bind_name] = processor
+            prepared = (str(compiled), processors)
+            self._prepared_statements[key] = prepared
+        sql, processors = prepared
+        params = {
+            k: processors[k](v) if k in processors else v for k, v in values.items()
+        }
+        connection = conn.connection() if isinstance(conn, Session) else conn
+        return connection.exec_driver_sql(sql, params)
+
     def _key_conflict(self, *columns: Any) -> List[Any]:
         """Conflict target for a unique key of a workflow table."""
         return list(columns)
@@ -1200,76 +1244,71 @@ class SystemDatabase(ABC):
             WorkflowStatusString.DELAYED.value,
         ]
 
-        cmd = (
-            self.dialect.insert(self.tables.workflow_status).values(
-                **self._wf_values(
-                    status["workflow_uuid"], shard_key=status["shard_key"]
-                ),
-                workflow_uuid=status["workflow_uuid"],
-                status=status["status"],
-                name=status["name"],
-                class_name=status["class_name"],
-                config_name=status["config_name"],
-                executor_id=status["executor_id"],
-                application_version=status["app_version"],
-                application_id=status["app_id"],
-                authenticated_user=status["authenticated_user"],
-                authenticated_roles=status["authenticated_roles"],
-                assumed_role=status["assumed_role"],
-                queue_name=status["queue_name"],
-                recovery_attempts=(1 if wf_status not in _enqueued_statuses else 0),
-                workflow_timeout_ms=status["workflow_timeout_ms"],
-                workflow_deadline_epoch_ms=status["workflow_deadline_epoch_ms"],
-                deduplication_id=status["deduplication_id"],
-                priority=status["priority"],
-                serialization=status["serialization"],
-                queue_partition_key=status["queue_partition_key"],
-                parent_workflow_id=status["parent_workflow_id"],
-                **self._parent_values(status["parent_workflow_id"]),
-                creator_xid=creator_xid,
-                # A direct start runs at once, so its creator token also owns the execution.
-                owner_xid=(
-                    creator_xid
-                    if wf_status == WorkflowStatusString.PENDING.value
-                    else None
-                ),
-                delay_until_epoch_ms=status["delay_until_epoch_ms"],
-                attributes=status["attributes"],
-                schedule_name=status["schedule_name"],
-                debounce_deadline_epoch_ms=status["debounce_deadline_epoch_ms"],
-                is_debounced=status["is_debounced"],
-                application_name=status["application_name"],
-            )
+        values = dict(
+            **self._wf_values(status["workflow_uuid"], shard_key=status["shard_key"]),
+            workflow_uuid=status["workflow_uuid"],
+            status=status["status"],
+            name=status["name"],
+            class_name=status["class_name"],
+            config_name=status["config_name"],
+            executor_id=status["executor_id"],
+            application_version=status["app_version"],
+            application_id=status["app_id"],
+            authenticated_user=status["authenticated_user"],
+            authenticated_roles=status["authenticated_roles"],
+            assumed_role=status["assumed_role"],
+            queue_name=status["queue_name"],
+            recovery_attempts=(1 if wf_status not in _enqueued_statuses else 0),
+            workflow_timeout_ms=status["workflow_timeout_ms"],
+            workflow_deadline_epoch_ms=status["workflow_deadline_epoch_ms"],
+            deduplication_id=status["deduplication_id"],
+            priority=status["priority"],
+            serialization=status["serialization"],
+            queue_partition_key=status["queue_partition_key"],
+            parent_workflow_id=status["parent_workflow_id"],
+            **self._parent_values(status["parent_workflow_id"]),
+            creator_xid=creator_xid,
+            # A direct start runs at once, so its creator token also owns the execution.
+            owner_xid=(
+                creator_xid if wf_status == WorkflowStatusString.PENDING.value else None
+            ),
+            delay_until_epoch_ms=status["delay_until_epoch_ms"],
+            attributes=status["attributes"],
+            schedule_name=status["schedule_name"],
+            debounce_deadline_epoch_ms=status["debounce_deadline_epoch_ms"],
+            is_debounced=status["is_debounced"],
+            application_name=status["application_name"],
+        )
+        ws = self.tables.workflow_status
+        build_status_insert = lambda: (
+            self.dialect.insert(ws)
             # A no-op update, so an existing row comes back unchanged for the caller to inspect.
             .on_conflict_do_update(
                 index_elements=self._key_conflict("workflow_uuid"),
-                set_={"creator_xid": self.tables.workflow_status.c.creator_xid},
+                set_={"creator_xid": ws.c.creator_xid},
+            ).returning(
+                ws.c.status,
+                ws.c.name,
+                ws.c.class_name,
+                ws.c.config_name,
+                ws.c.queue_name,
+                ws.c.creator_xid,
+                ws.c.serialization,
             )
         )
 
-        cmd = cmd.returning(
-            self.tables.workflow_status.c.status,
-            self.tables.workflow_status.c.name,
-            self.tables.workflow_status.c.class_name,
-            self.tables.workflow_status.c.config_name,
-            self.tables.workflow_status.c.queue_name,
-            self.tables.workflow_status.c.creator_xid,
-            self.tables.workflow_status.c.serialization,
+        input_values = dict(
+            **self._wf_values(status["workflow_uuid"], shard_key=status["shard_key"]),
+            workflow_uuid=status["workflow_uuid"],
+            inputs=status["inputs"],
         )
-
-        inputs_insert = (
-            self.dialect.insert(self.tables.workflow_input)
-            .values(
-                **self._wf_values(
-                    status["workflow_uuid"], shard_key=status["shard_key"]
-                ),
-                workflow_uuid=status["workflow_uuid"],
-                inputs=status["inputs"],
-            )
-            .on_conflict_do_nothing(index_elements=self._key_conflict("workflow_uuid"))
-        )
+        build_inputs_insert = lambda: self.dialect.insert(
+            self.tables.workflow_input
+        ).on_conflict_do_nothing(index_elements=self._key_conflict("workflow_uuid"))
         try:
-            results = conn.execute(cmd)
+            results = self._execute_prepared(
+                conn, "insert_workflow_status", values, build_status_insert
+            )
         except DBAPIError as dbapi_error:
             # Unique constraint violation for the deduplication ID
             if self._is_unique_constraint_violation(dbapi_error):
@@ -1316,7 +1355,9 @@ class SystemDatabase(ABC):
             status["serialization"] = m["serialization"]
 
         # After the checks above, so a rejected start writes no inputs.
-        conn.execute(inputs_insert)
+        self._execute_prepared(
+            conn, "insert_workflow_input", input_values, build_inputs_insert
+        )
         return wf_status, should_execute
 
     @db_retry()
@@ -1404,18 +1445,26 @@ class SystemDatabase(ABC):
             if result.rowcount == 0:
                 # The outcome was not ours to write, so leave no orphan payload.
                 return False
-            c.execute(
-                self.dialect.insert(self.tables.workflow_output)
-                .values(
-                    **self._wf_values(workflow_id),
-                    workflow_uuid=workflow_id,
-                    output=output,
-                    error=error,
-                )
-                .on_conflict_do_update(
+            output_values = dict(
+                **self._wf_values(workflow_id),
+                workflow_uuid=workflow_id,
+                output=output,
+                error=error,
+            )
+
+            def build_output_upsert() -> Any:
+                insert = self.dialect.insert(self.tables.workflow_output)
+                # excluded is the row this INSERT proposed, so these are the values above.
+                return insert.on_conflict_do_update(
                     index_elements=self._key_conflict("workflow_uuid"),
-                    set_={"output": output, "error": error},
+                    set_={
+                        "output": insert.excluded.output,
+                        "error": insert.excluded.error,
+                    },
                 )
+
+            self._execute_prepared(
+                c, "upsert_workflow_output", output_values, build_output_upsert
             )
             return True
 
