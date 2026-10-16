@@ -18,12 +18,12 @@ QueueConflictResolution = Literal[
     "update_if_latest_version", "always_update", "never_update"
 ]
 
-from psycopg import errors
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DBAPIError, OperationalError
 
 from dbos._context import DBOSContext, get_local_dbos_context
 from dbos._error import DBOSException, DBOSRecoveryError
 from dbos._logger import dbos_logger
+from dbos._shard_keys import shard_key_scope
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, generate_uuid
 
 from ._core import P, R, execute_dequeued_workflow, start_workflow, start_workflow_async
@@ -669,6 +669,8 @@ def queue_worker_thread(
 ) -> None:
     """Worker thread for processing a single queue."""
     polling_interval = queue._polling_interval_sec
+    # Whether any scope hit a serialization conflict during the current poll.
+    contended = False
 
     def start_dequeued_workflows(workflow_ids: List[str], owner_xid: str) -> None:
         """Fetch the claimed workflows' statuses in one round trip, then dispatch each."""
@@ -730,118 +732,157 @@ def queue_worker_thread(
         if stop_event.wait(timeout=polling_interval * random.uniform(0.95, 1.05)):
             return
 
-        try:
-            if not queue._has_partition_limits():
-                owner_xid = generate_uuid()
-                dequeued_workflows, _ = dbos._sys_db.start_queued_workflows(
-                    queue,
-                    GlobalParams.executor_id,
-                    GlobalParams.app_version,
-                    None,
-                    dbos._active_workflows_set.count_for_queue(queue.name),
-                    owner_xid=owner_xid,
-                )
-                start_dequeued_workflows(dequeued_workflows, owner_xid)
-            elif (
-                queue._partition_concurrency == 1
-                and queue._concurrency is None
-                and queue._limiter is None
-                and queue._partition_limiter is None
-            ):
-                # Optimization: Batch dequeue if partition concurrency is 1
-                max_tasks = worker_budget(
-                    queue, dbos._active_workflows_set.count_for_queue(queue.name)
-                )
-                if max_tasks > 0:
-                    owner_xid = generate_uuid()
-                    dequeued_workflows = (
-                        dbos._sys_db.start_queued_partitioned_workflows(
-                            queue,
-                            GlobalParams.executor_id,
-                            GlobalParams.app_version,
-                            max_tasks,
-                            owner_xid=owner_xid,
-                        )
-                    )
-                    start_dequeued_workflows(dequeued_workflows, owner_xid)
-            else:
-                # Room left under the queue-wide limit; each claim still rechecks it in its own transaction.
-                global_budget = sys.maxsize
-                if queue._concurrency is not None:
-                    global_budget = (
-                        queue._concurrency
-                        - dbos._sys_db.count_pending_queue_workflows(queue.name)
-                    )
-                # Iterate through partitions one at a time in random order to prevent starvation.
-                partition_keys = (
-                    dbos._sys_db.get_queue_partitions(queue.name)
-                    if global_budget > 0
-                    else []
-                )
-                random.shuffle(partition_keys)
-                # Snapshot once: re-reading would count this sweep's own claims twice, since dispatch is asynchronous and `claimed` already accounts for them.
+        # This worker's load for the whole poll: running workflows, snapshotted at first
+        # use, plus every claim since, which dispatch registers asynchronously.
+        running: Optional[int] = None
+        polled = 0
+
+        def worker_load() -> int:
+            nonlocal running
+            if running is None:
                 running = dbos._active_workflows_set.count_for_queue(queue.name)
-                claimed = 0
-                for key in partition_keys:
-                    if (
-                        worker_budget(queue, running + claimed) <= 0
-                        or claimed >= global_budget
-                    ):
-                        break
+            return running + polled
+
+        def dequeue() -> None:
+            nonlocal contended, polled
+            try:
+                if not queue._has_partition_limits():
                     owner_xid = generate_uuid()
-                    try:
-                        dequeued_workflows, stop_reason = (
-                            dbos._sys_db.start_queued_workflows(
+                    dequeued_workflows, _ = dbos._sys_db.start_queued_workflows(
+                        queue,
+                        GlobalParams.executor_id,
+                        GlobalParams.app_version,
+                        None,
+                        worker_load(),
+                        owner_xid=owner_xid,
+                        is_latest_version=is_latest_version,
+                    )
+                    polled += len(dequeued_workflows)
+                    start_dequeued_workflows(dequeued_workflows, owner_xid)
+                elif (
+                    queue._partition_concurrency == 1
+                    and queue._concurrency is None
+                    and queue._limiter is None
+                    and queue._partition_limiter is None
+                ):
+                    # Optimization: Batch dequeue if partition concurrency is 1
+                    max_tasks = worker_budget(queue, worker_load())
+                    if max_tasks > 0:
+                        owner_xid = generate_uuid()
+                        dequeued_workflows = (
+                            dbos._sys_db.start_queued_partitioned_workflows(
                                 queue,
                                 GlobalParams.executor_id,
                                 GlobalParams.app_version,
-                                key,
-                                running + claimed,
-                                dbos._active_workflows_set.count_for_partition(
-                                    queue.name, key
-                                ),
+                                max_tasks,
                                 owner_xid=owner_xid,
+                                is_latest_version=is_latest_version,
                             )
                         )
-                    except OperationalError as e:
-                        # Lock held or claim raced by another worker: skip just this partition, no queue-wide backoff.
-                        if isinstance(
-                            e.orig,
-                            (errors.LockNotAvailable, errors.SerializationFailure),
+                        polled += len(dequeued_workflows)
+                        start_dequeued_workflows(dequeued_workflows, owner_xid)
+                else:
+                    # Room left under the queue-wide limit; each claim still rechecks it in its own transaction.
+                    global_budget = sys.maxsize
+                    if queue._concurrency is not None:
+                        global_budget = (
+                            queue._concurrency
+                            - dbos._sys_db.count_pending_queue_workflows(queue.name)
+                        )
+                    # Iterate through partitions one at a time in random order to prevent starvation.
+                    partition_keys = (
+                        dbos._sys_db.get_queue_partitions(queue.name)
+                        if global_budget > 0
+                        else []
+                    )
+                    random.shuffle(partition_keys)
+                    claimed = 0
+                    for key in partition_keys:
+                        if (
+                            worker_budget(queue, worker_load()) <= 0
+                            or claimed >= global_budget
                         ):
-                            continue
-                        raise
-                    claimed += len(dequeued_workflows)
-                    start_dequeued_workflows(dequeued_workflows, owner_xid)
-                    # A queue-wide limit (e.g. filled by peers since the snapshot) leaves every other partition empty too.
-                    if stop_reason in ("concurrency", "limiter"):
-                        break
-        except OperationalError as e:
-            if isinstance(e.orig, errors.LockNotAvailable):
-                # Another worker is dequeueing this queue right now; retry next
-                # poll without backing off.
-                dbos.logger.debug(
-                    f"Queue {queue.name} is locked by another worker; retrying next poll."
-                )
-            elif isinstance(e.orig, errors.SerializationFailure):
-                # If a serialization error is encountered, increase the polling interval
-                polling_interval = min(
-                    max_polling_interval,
-                    polling_interval * 2.0,
-                )
-                dbos.logger.warning(
-                    f"Contention detected in queue thread for {queue.name}. Increasing polling interval to {polling_interval:.2f}."
-                )
-            else:
-                dbos.logger.warning(
-                    f"Exception encountered in queue thread for {queue.name}: {e}"
+                            break
+                        owner_xid = generate_uuid()
+                        try:
+                            dequeued_workflows, stop_reason = (
+                                dbos._sys_db.start_queued_workflows(
+                                    queue,
+                                    GlobalParams.executor_id,
+                                    GlobalParams.app_version,
+                                    key,
+                                    worker_load(),
+                                    dbos._active_workflows_set.count_for_partition(
+                                        queue.name, key
+                                    ),
+                                    owner_xid=owner_xid,
+                                    is_latest_version=is_latest_version,
+                                )
+                            )
+                        except DBAPIError as e:
+                            # Lock held or claim raced by another worker: skip just this partition, no queue-wide backoff.
+                            if dbos._sys_db.is_lock_conflict(
+                                e
+                            ) or dbos._sys_db.is_serialization_conflict(e):
+                                continue
+                            raise
+                        claimed += len(dequeued_workflows)
+                        polled += len(dequeued_workflows)
+                        start_dequeued_workflows(dequeued_workflows, owner_xid)
+                        # A queue-wide limit (e.g. filled by peers since the snapshot) leaves every other partition empty too.
+                        if stop_reason in ("concurrency", "limiter"):
+                            break
+            except DBAPIError as e:
+                if dbos._sys_db.is_lock_conflict(e):
+                    # Another worker is dequeueing this queue right now; retry next
+                    # poll without backing off.
+                    dbos.logger.debug(
+                        f"Queue {queue.name} is locked by another worker; retrying next poll."
+                    )
+                elif dbos._sys_db.is_serialization_conflict(e):
+                    # Backed off once per poll below, however many scopes conflicted.
+                    contended = True
+                elif isinstance(e, OperationalError) or not stop_event.is_set():
+                    # Other database errors stay quiet while stopping, like any other exception.
+                    dbos.logger.warning(
+                        f"Exception encountered in queue thread for {queue.name}: {e}"
+                    )
+            except Exception as e:
+                if not stop_event.is_set():
+                    # Only print the error if the thread is not stopping
+                    dbos.logger.warning(
+                        f"Exception encountered in queue thread for {queue.name}: {e}"
+                    )
+
+        # Each scope dequeues independently; a sharded system database has one per shard key with work.
+        is_latest_version = False
+        try:
+            scopes = dbos._sys_db.dequeue_scopes(queue.name)
+            # Once per poll, for every scope and partition: whether unversioned work is ours to claim.
+            if scopes:
+                is_latest_version = dbos._sys_db._is_latest_version(
+                    GlobalParams.app_version
                 )
         except Exception as e:
             if not stop_event.is_set():
-                # Only print the error if the thread is not stopping
                 dbos.logger.warning(
-                    f"Exception encountered in queue thread for {queue.name}: {e}"
+                    f"Exception finding work for queue {queue.name}: {e}"
                 )
+            scopes = []
+        random.shuffle(scopes)
+        contended = False
+        for scope in scopes:
+            # The shuffle gives the keys skipped once the worker is full their turn on later polls.
+            if stop_event.is_set() or worker_budget(queue, worker_load()) <= 0:
+                break
+            with shard_key_scope(scope):
+                dequeue()
+        if contended:
+            # If a serialization error is encountered, increase the polling interval
+            polling_interval = min(max_polling_interval, polling_interval * 2.0)
+            dbos.logger.warning(
+                f"Contention detected in queue thread for {queue.name}. Increasing polling interval to {polling_interval:.2f}."
+            )
 
         # Attempt to scale back the polling interval on each iteration
         polling_interval = max(min_polling_interval, polling_interval * 0.9)

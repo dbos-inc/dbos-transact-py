@@ -21,7 +21,11 @@ from dbos._error import DBOSException, DBOSQueueDeduplicatedError
 from dbos._queue import Queue
 from dbos._registrations import get_dbos_func_name
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
-from tests.conftest import set_workflow_status
+from tests.conftest import set_workflow_status, using_sharding
+
+pytestmark = pytest.mark.skipif(
+    using_sharding(), reason="Debouncing is not supported on a sharded system database"
+)
 
 
 def test_debouncer(dbos: DBOS) -> None:

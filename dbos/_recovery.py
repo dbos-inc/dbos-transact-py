@@ -2,6 +2,7 @@ import threading
 from typing import TYPE_CHECKING, Any, List
 
 from dbos._context import UseLogAttributes
+from dbos._shard_keys import bind_shard_keys
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 
 from ._core import WorkflowHandlePolling
@@ -21,10 +22,13 @@ def _recover_workflow(
     handoff admits exactly one runner, which makes duplicate recovery requests
     idempotent.
     """
-    dbos._sys_db.reenqueue_for_recovery(
-        workflow.workflow_id, executor_ids, INTERNAL_QUEUE_NAME
+    with bind_shard_keys({workflow.workflow_id: workflow.shard_key}):
+        dbos._sys_db.reenqueue_for_recovery(
+            workflow.workflow_id, executor_ids, INTERNAL_QUEUE_NAME
+        )
+    return WorkflowHandlePolling(
+        workflow.workflow_id, dbos, shard_key=workflow.shard_key
     )
-    return WorkflowHandlePolling(workflow.workflow_id, dbos)
 
 
 def startup_recovery_thread(

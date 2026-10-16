@@ -24,6 +24,7 @@ def get_workflow(
         workflow_ids=[workflow_id],
         load_input=load_input,
         load_output=load_output,
+        shard_key=sys_db._key_hint(workflow_id),
     )
     if not infos:
         return None
@@ -76,11 +77,7 @@ def delete_workflow(
 
     If delete_children is True, also deletes all child workflows recursively.
     """
-    all_ids = list(workflow_ids)
-    if delete_children:
-        for wfid in workflow_ids:
-            all_ids.extend(dbos._sys_db.get_workflow_children(wfid))
-    dbos._sys_db.delete_workflows(all_ids)
+    dbos._sys_db.delete_workflows(workflow_ids, delete_children=delete_children)
 
 
 # Most workflows one sweep transaction cancels; a full batch sweeps again at once.

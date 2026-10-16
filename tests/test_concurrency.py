@@ -655,7 +655,9 @@ async def test_gather_many_set_event(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
-async def test_high_async_concurrency(dbos: DBOS, config: DBOSConfig) -> None:
+async def test_high_async_concurrency(
+    dbos: DBOS, config: DBOSConfig, skip_with_sharding: None
+) -> None:
     config["max_executor_threads"] = 32
     DBOS.destroy(destroy_registry=True)
     DBOS(config=config)

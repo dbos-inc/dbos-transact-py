@@ -2,13 +2,15 @@ import logging
 import random
 import threading
 import time
-from typing import Any, NoReturn, Optional
+from types import SimpleNamespace
+from typing import Any, NoReturn, Optional, cast
 
 import pytest
 from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 
 from dbos import DBOS, DBOSConfig, KafkaMessage
-from dbos._kafka import _describe_kafka_error, _make_error_cb
+from dbos._error import DBOSException, DBOSInitializationError
+from dbos._kafka import _describe_kafka_error, _make_error_cb, _validate_consumer_key
 from dbos._logger import dbos_logger
 from tests.conftest import retry_until_success
 
@@ -501,7 +503,10 @@ def test_kafka_listen_queues_excludes_custom_consumer_queue(
 
 
 def test_kafka_throughput(
-    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, skip_with_sqlite: None
+    dbos: DBOS,
+    monkeypatch: pytest.MonkeyPatch,
+    skip_with_sqlite: None,
+    skip_with_sharding: None,
 ) -> None:
     # Ingest throughput: batched enqueue must far exceed the old one-txn-per-message path.
     server = "localhost:9092"
@@ -2083,3 +2088,18 @@ def test_kafka_custom_queue(dbos: DBOS) -> None:
     assert event.wait(timeout=60)
     assert processed == set(range(num_messages))
     assert max_active == 1  # concurrency=1 honored
+
+
+def test_a_consumer_key_must_fit_the_system_database() -> None:
+    """A consumer whose key doesn't fit would fail to enqueue every batch and retry forever:
+    sharded it needs a non-empty key, unsharded it must have none."""
+    sharded = cast(Any, SimpleNamespace(_sys_db=SimpleNamespace(sharded=True)))
+    unsharded = cast(Any, SimpleNamespace(_sys_db=SimpleNamespace(sharded=False)))
+    with pytest.raises(DBOSInitializationError, match="has no shard_key"):
+        _validate_consumer_key(sharded, "consume", None)
+    with pytest.raises(DBOSException, match="non-empty string"):
+        _validate_consumer_key(sharded, "consume", "")
+    _validate_consumer_key(sharded, "consume", "tenant-a")
+    with pytest.raises(DBOSInitializationError, match="is not sharded"):
+        _validate_consumer_key(unsharded, "consume", "tenant-a")
+    _validate_consumer_key(unsharded, "consume", None)

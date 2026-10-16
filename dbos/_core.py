@@ -10,7 +10,7 @@ import time
 import uuid
 from collections import deque
 from concurrent.futures import Future
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, nullcontext
 from functools import wraps
 from types import TracebackType
 from typing import (
@@ -47,10 +47,12 @@ from ._context import (
     EnterDBOSStepCtx,
     EnterDBOSWorkflow,
     SetEnqueueOptions,
+    SetShardKey,
     SetWorkflowID,
     TracedAttributes,
     WorkflowIDReusePolicy,
     assert_current_dbos_context,
+    child_workflow_id,
     current_owner_xid,
     extract_trace_context,
     get_local_dbos_context,
@@ -110,6 +112,7 @@ from ._serialization import (
     serialize_value,
     serialize_value_as,
 )
+from ._shard_keys import bind_shard_keys
 from ._sys_db import (
     EnqueueOptionsInternal,
     OperationResultInternal,
@@ -142,7 +145,11 @@ DEFAULT_POLLING_INTERVAL = 1.0
 
 
 def _deferred_workflow_result(
-    dbos: "DBOS", workflow_id: str, *, fail_if_missing: bool = False
+    dbos: "DBOS",
+    workflow_id: str,
+    *,
+    fail_if_missing: bool = False,
+    shard_key: Optional[str] = None,
 ) -> DeferredResult[Any]:
     """Wait for a workflow's result, deferred so the Outcome layer picks the mode:
     a sync (Immediate) caller blocks in-thread, but an async (Pending) workflow
@@ -153,26 +160,40 @@ def _deferred_workflow_result(
 
     fail_if_missing fails fast for callers that know the row exists, so one that was
     deleted is not polled for forever."""
-    return DeferredResult(
-        lambda: dbos._sys_db.await_workflow_result(
-            workflow_id,
-            polling_interval=DEFAULT_POLLING_INTERVAL,
-            fail_if_missing=fail_if_missing,
-        ),
-        lambda: dbos._sys_db.await_workflow_result_async(
-            workflow_id,
-            polling_interval=DEFAULT_POLLING_INTERVAL,
-            fail_if_missing=fail_if_missing,
-        ),
-    )
+
+    # The wait runs later, outside any caller's binding, so it binds the key itself.
+    def wait() -> Any:
+        with bind_shard_keys({workflow_id: shard_key}):
+            return dbos._sys_db.await_workflow_result(
+                workflow_id,
+                polling_interval=DEFAULT_POLLING_INTERVAL,
+                fail_if_missing=fail_if_missing,
+            )
+
+    async def wait_async() -> Any:
+        with bind_shard_keys({workflow_id: shard_key}):
+            return await dbos._sys_db.await_workflow_result_async(
+                workflow_id,
+                polling_interval=DEFAULT_POLLING_INTERVAL,
+                fail_if_missing=fail_if_missing,
+            )
+
+    return DeferredResult(wait, wait_async)
 
 
 class WorkflowHandleFuture(Generic[R]):
 
-    def __init__(self, workflow_id: str, future: Future[R], dbos: "DBOS"):
+    def __init__(
+        self,
+        workflow_id: str,
+        future: Future[R],
+        dbos: "DBOS",
+        shard_key: Optional[str] = None,
+    ):
         self.workflow_id = workflow_id
         self.future = future
         self.dbos = dbos
+        self.shard_key = shard_key
 
     def get_workflow_id(self) -> str:
         return self.workflow_id
@@ -180,6 +201,10 @@ class WorkflowHandleFuture(Generic[R]):
     def get_result(
         self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
     ) -> R:
+        with bind_shard_keys({self.workflow_id: self.shard_key}):
+            return self._get_result(polling_interval_sec)
+
+    def _get_result(self, polling_interval_sec: float) -> R:
         start_time = int(time.time() * 1000)
         try:
             try:
@@ -212,7 +237,7 @@ class WorkflowHandleFuture(Generic[R]):
         return r
 
     def get_status(self) -> WorkflowStatus:
-        stat = self.dbos.get_workflow_status(self.workflow_id)
+        stat = self.dbos.get_workflow_status(self.workflow_id, shard_key=self.shard_key)
         if stat is None:
             raise DBOSNonExistentWorkflowError("target", self.workflow_id)
         return stat
@@ -220,9 +245,10 @@ class WorkflowHandleFuture(Generic[R]):
 
 class WorkflowHandlePolling(Generic[R]):
 
-    def __init__(self, workflow_id: str, dbos: "DBOS"):
+    def __init__(self, workflow_id: str, dbos: "DBOS", shard_key: Optional[str] = None):
         self.workflow_id = workflow_id
         self.dbos = dbos
+        self.shard_key = shard_key
 
     def get_workflow_id(self) -> str:
         return self.workflow_id
@@ -230,6 +256,10 @@ class WorkflowHandlePolling(Generic[R]):
     def get_result(
         self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
     ) -> R:
+        with bind_shard_keys({self.workflow_id: self.shard_key}):
+            return self._get_result(polling_interval_sec)
+
+    def _get_result(self, polling_interval_sec: float) -> R:
         start_time = int(time.time() * 1000)
         try:
             r: R = self.dbos._sys_db.await_workflow_result(
@@ -258,7 +288,7 @@ class WorkflowHandlePolling(Generic[R]):
         return r
 
     def get_status(self) -> WorkflowStatus:
-        stat = self.dbos.get_workflow_status(self.workflow_id)
+        stat = self.dbos.get_workflow_status(self.workflow_id, shard_key=self.shard_key)
         if stat is None:
             raise DBOSNonExistentWorkflowError("target", self.workflow_id)
         return stat
@@ -266,10 +296,17 @@ class WorkflowHandlePolling(Generic[R]):
 
 class WorkflowHandleAsyncTask(Generic[R]):
 
-    def __init__(self, workflow_id: str, task: asyncio.Future[R], dbos: "DBOS"):
+    def __init__(
+        self,
+        workflow_id: str,
+        task: asyncio.Future[R],
+        dbos: "DBOS",
+        shard_key: Optional[str] = None,
+    ):
         self.workflow_id = workflow_id
         self.task = task
         self.dbos = dbos
+        self.shard_key = shard_key
 
     def get_workflow_id(self) -> str:
         return self.workflow_id
@@ -277,6 +314,10 @@ class WorkflowHandleAsyncTask(Generic[R]):
     async def get_result(
         self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
     ) -> R:
+        with bind_shard_keys({self.workflow_id: self.shard_key}):
+            return await self._get_result(polling_interval_sec)
+
+    async def _get_result(self, polling_interval_sec: float) -> R:
         start_time = int(time.time() * 1000)
         try:
             try:
@@ -312,7 +353,13 @@ class WorkflowHandleAsyncTask(Generic[R]):
         return r
 
     async def get_status(self) -> WorkflowStatus:
-        stat = await asyncio.to_thread(self.dbos.get_workflow_status, self.workflow_id)
+        stat = await asyncio.to_thread(
+            functools.partial(
+                self.dbos.get_workflow_status,
+                self.workflow_id,
+                shard_key=self.shard_key,
+            )
+        )
         if stat is None:
             raise DBOSNonExistentWorkflowError("target", self.workflow_id)
         return stat
@@ -320,9 +367,10 @@ class WorkflowHandleAsyncTask(Generic[R]):
 
 class WorkflowHandleAsyncPolling(Generic[R]):
 
-    def __init__(self, workflow_id: str, dbos: "DBOS"):
+    def __init__(self, workflow_id: str, dbos: "DBOS", shard_key: Optional[str] = None):
         self.workflow_id = workflow_id
         self.dbos = dbos
+        self.shard_key = shard_key
 
     def get_workflow_id(self) -> str:
         return self.workflow_id
@@ -330,6 +378,10 @@ class WorkflowHandleAsyncPolling(Generic[R]):
     async def get_result(
         self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
     ) -> R:
+        with bind_shard_keys({self.workflow_id: self.shard_key}):
+            return await self._get_result(polling_interval_sec)
+
+    async def _get_result(self, polling_interval_sec: float) -> R:
         start_time = int(time.time() * 1000)
         try:
             r: R = await self.dbos._sys_db.await_workflow_result_async(
@@ -361,7 +413,13 @@ class WorkflowHandleAsyncPolling(Generic[R]):
         return r
 
     async def get_status(self) -> WorkflowStatus:
-        stat = await asyncio.to_thread(self.dbos.get_workflow_status, self.workflow_id)
+        stat = await asyncio.to_thread(
+            functools.partial(
+                self.dbos.get_workflow_status,
+                self.workflow_id,
+                shard_key=self.shard_key,
+            )
+        )
         if stat is None:
             raise DBOSNonExistentWorkflowError("target", self.workflow_id)
         return stat
@@ -580,6 +638,7 @@ def _assemble_workflow_status(
         # the workflow status directly rather than going through this path.
         "schedule_name": None,
         "application_name": owner_app,
+        "shard_key": ctx.shard_key,
     }
     # Consume the attributes from the workflow's context so that workflows
     # started inside this workflow do not inherit them.
@@ -606,6 +665,7 @@ def _init_workflow(
     duplication_policy: Optional[DuplicationPolicy] = None,
     workflow_id_reuse_policy: Optional[WorkflowIDReusePolicy] = None,
     parent_owner_xid: Optional[str] = None,
+    parent_shard_key: Optional[str] = None,
 ) -> tuple[WorkflowStatusInternal, bool, Optional[str]]:
     """Persist this workflow's initial status row, and for a child its parent's step, in one transaction.
 
@@ -679,6 +739,7 @@ def _init_workflow(
                                 "child_workflow_id": existing_id,
                             },
                             owner_xid=parent_owner_xid,
+                            owner_key=parent_shard_key,
                         )
                     return status, False, existing_id
                 continue
@@ -695,7 +756,9 @@ def _init_workflow(
                     "started_at_epoch_ms": started_at_epoch_ms,
                     "child_workflow_id": None,
                 }
-                dbos._sys_db.record_operation_result(result, owner_xid=parent_owner_xid)
+                dbos._sys_db.record_operation_result(
+                    result, owner_xid=parent_owner_xid, owner_key=parent_shard_key
+                )
             raise
 
     if should_execute:
@@ -715,6 +778,7 @@ def prepare_enqueued_workflow(
     queue_name: str,
     workflow_id: str,
     queue_partition_key: Optional[str] = None,
+    shard_key: Optional[str] = None,
 ) -> WorkflowStatusInternal:
     """Build (without persisting) an ENQUEUED status row for func on queue_name.
 
@@ -751,9 +815,11 @@ def prepare_enqueued_workflow(
         is_debounced=False,
         application_name=None,
     )
+    fresh_ctx = DBOSContext()  # fresh context: no parent, auth, or attributes
+    fresh_ctx.shard_key = shard_key
     return _assemble_workflow_status(
         dbos,
-        DBOSContext(),  # fresh context: no parent, auth, or attributes
+        fresh_ctx,
         inputs=inputs,
         wf_name=get_dbos_func_name(func),
         class_name=get_dbos_class_name(fi, func, args),
@@ -837,7 +903,10 @@ def _get_wf_invoke_func(
             return cast(
                 R,
                 _deferred_workflow_result(
-                    dbos, status["workflow_uuid"], fail_if_missing=True
+                    dbos,
+                    status["workflow_uuid"],
+                    fail_if_missing=True,
+                    shard_key=status["shard_key"],
                 ),
             )
 
@@ -854,7 +923,10 @@ def _get_wf_invoke_func(
             return cast(
                 R,
                 _deferred_workflow_result(
-                    dbos, status["workflow_uuid"], fail_if_missing=True
+                    dbos,
+                    status["workflow_uuid"],
+                    fail_if_missing=True,
+                    shard_key=status["shard_key"],
                 ),
             )
         try:
@@ -1311,13 +1383,20 @@ def execute_dequeued_workflow(
         with (
             SetWorkflowID(workflow_id),
             SetEnqueueOptions(queue_partition_key=status.get("queue_partition_key")),
+            (
+                SetShardKey(shard_key)
+                if (shard_key := status.get("shard_key")) is not None
+                else nullcontext()
+            ),
             restore_otel_carrier(
                 otel_carrier_from_attributes(status.get("attributes"))
             ),
         ):
             # Only a PENDING row can own its outcome, so a row moved on since the claim would run for nothing.
             if status["status"] != WorkflowStatusString.PENDING.value:
-                return WorkflowHandlePolling(workflow_id, dbos)
+                return WorkflowHandlePolling(
+                    workflow_id, dbos, shard_key=status.get("shard_key")
+                )
 
             # Same context start_workflow builds: create_start_workflow_child consumes the
             # ambient SetWorkflowID, so the run adopts the claimed row's ID.
@@ -1353,7 +1432,7 @@ def execute_dequeued_workflow(
                 # Onto the event loop. Blocks only until the task is created, so a stopped
                 # loop surfaces here; the local concurrency count lags until it registers.
                 dbos._background_event_loop.submit_coroutine(start_workflow_task())
-                return WorkflowHandlePolling(workflow_id, dbos)
+                return WorkflowHandlePolling(workflow_id, dbos, shard_key=ctx.shard_key)
             else:
                 # Onto the thread pool
                 future = dbos._executor.submit(
@@ -1366,7 +1445,9 @@ def execute_dequeued_workflow(
                     inputs["kwargs"],
                     _capture_otel_context(),
                 )
-                return WorkflowHandleFuture(workflow_id, future, dbos)
+                return WorkflowHandleFuture(
+                    workflow_id, future, dbos, shard_key=ctx.shard_key
+                )
 
 
 def start_workflow(
@@ -1447,7 +1528,11 @@ def start_workflow(
             )
             raise e
         elif recorded_result and recorded_result["child_workflow_id"]:
-            return WorkflowHandlePolling(recorded_result["child_workflow_id"], dbos)
+            return WorkflowHandlePolling(
+                recorded_result["child_workflow_id"],
+                dbos,
+                shard_key=recorded_result["child_shard_key"] or new_wf_ctx.shard_key,
+            )
 
     status, should_execute, attached_workflow_id = _init_workflow(
         dbos,
@@ -1482,7 +1567,9 @@ def start_workflow(
         or wf_status == WorkflowStatusString.ERROR.value
         or wf_status == WorkflowStatusString.SUCCESS.value
     ):
-        return WorkflowHandlePolling(new_child_workflow_id, dbos)
+        return WorkflowHandlePolling(
+            new_child_workflow_id, dbos, shard_key=new_wf_ctx.shard_key
+        )
 
     # Captured on the caller's thread, re-attached inside the executor thread.
     future = dbos._executor.submit(
@@ -1495,7 +1582,9 @@ def start_workflow(
         kwargs,
         _capture_otel_context(),
     )
-    return WorkflowHandleFuture(new_child_workflow_id, future, dbos)
+    return WorkflowHandleFuture(
+        new_child_workflow_id, future, dbos, shard_key=new_wf_ctx.shard_key
+    )
 
 
 async def start_workflow_async(
@@ -1574,7 +1663,9 @@ async def start_workflow_async(
             raise e
         elif recorded_result and recorded_result["child_workflow_id"]:
             return WorkflowHandleAsyncPolling(
-                recorded_result["child_workflow_id"], dbos
+                recorded_result["child_workflow_id"],
+                dbos,
+                shard_key=recorded_result["child_shard_key"] or new_wf_ctx.shard_key,
             )
 
     status, should_execute, attached_workflow_id = await asyncio.to_thread(
@@ -1612,7 +1703,9 @@ async def start_workflow_async(
         or wf_status == WorkflowStatusString.ERROR.value
         or wf_status == WorkflowStatusString.SUCCESS.value
     ):
-        return WorkflowHandleAsyncPolling(new_child_workflow_id, dbos)
+        return WorkflowHandleAsyncPolling(
+            new_child_workflow_id, dbos, shard_key=new_wf_ctx.shard_key
+        )
 
     coro = _execute_workflow_async(dbos, status, func, new_wf_ctx, args, kwargs)
     inner_task = asyncio.create_task(coro)
@@ -1627,7 +1720,9 @@ async def start_workflow_async(
     task = asyncio.shield(inner_task)
     # Nothing awaits this future when dequeue/recovery callers discard the handle (#796)
     task.add_done_callback(retrieve_future_exception)
-    return WorkflowHandleAsyncTask(new_child_workflow_id, task, dbos)
+    return WorkflowHandleAsyncTask(
+        new_child_workflow_id, task, dbos, shard_key=new_wf_ctx.shard_key
+    )
 
 
 def _build_enqueue_with_options(
@@ -1660,6 +1755,16 @@ def _build_enqueue_with_options(
             and new_wf_ctx.workflow_id_reuse_policy is not None
         ):
             resolved["workflow_id_reuse_policy"] = new_wf_ctx.workflow_id_reuse_policy
+    if resolved.get("shard_key") is None and new_wf_ctx.shard_key is not None:
+        resolved["shard_key"] = new_wf_ctx.shard_key
+    # A derived default ID was made for the context's key; the options may name another.
+    if (
+        new_wf_ctx.derived_from is not None
+        and resolved.get("workflow_id") == new_wf_ctx.id_assigned_for_next_workflow
+    ):
+        resolved["workflow_id"] = child_workflow_id(
+            *new_wf_ctx.derived_from, resolved.get("shard_key")
+        )
     if local_ctx is not None:
         if (
             resolved.get("deduplication_id") is None
@@ -1727,8 +1832,8 @@ def _build_enqueue_with_options(
 
 def _check_recorded_enqueue(
     dbos: "DBOS", new_wf_ctx: DBOSContext, wf_name: str
-) -> Optional[str]:
-    """Return the child ID this enqueue already recorded, or None if it is new.
+) -> Optional[Tuple[str, Optional[str]]]:
+    """Return the child ID and key this enqueue already recorded, or None if it is new.
 
     Raises the recorded error if the original call failed. Runs before the row is
     built so a replay re-validates and re-serializes nothing it already checkpointed.
@@ -1748,7 +1853,7 @@ def _check_recorded_enqueue(
         )
         raise e
     elif recorded_result and recorded_result["child_workflow_id"]:
-        return recorded_result["child_workflow_id"]
+        return recorded_result["child_workflow_id"], recorded_result["child_shard_key"]
     return None
 
 
@@ -1852,16 +1957,19 @@ def enqueue_workflow_with_options(
 ) -> "WorkflowHandle[Any]":
     local_ctx = get_local_dbos_context()
     new_wf_ctx = DBOSContext.create_start_workflow_child(local_ctx)
-    recorded_child_id = _check_recorded_enqueue(
-        dbos, new_wf_ctx, options["workflow_name"]
-    )
-    if recorded_child_id is not None:
-        return WorkflowHandlePolling(recorded_child_id, dbos)
+    recorded = _check_recorded_enqueue(dbos, new_wf_ctx, options["workflow_name"])
+    if recorded is not None:
+        child_id, child_key = recorded
+        return WorkflowHandlePolling(
+            child_id,
+            dbos,
+            shard_key=child_key or options.get("shard_key") or new_wf_ctx.shard_key,
+        )
     status, resolved = _build_enqueue_with_options(
         dbos, local_ctx, new_wf_ctx, options, args, kwargs
     )
     workflow_id = _persist_enqueue_with_options(dbos, new_wf_ctx, status, resolved)
-    return WorkflowHandlePolling(workflow_id, dbos)
+    return WorkflowHandlePolling(workflow_id, dbos, shard_key=status["shard_key"])
 
 
 async def enqueue_workflow_with_options_async(
@@ -1872,18 +1980,23 @@ async def enqueue_workflow_with_options_async(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
 ) -> "WorkflowHandleAsync[Any]":
-    recorded_child_id = await asyncio.to_thread(
+    recorded = await asyncio.to_thread(
         _check_recorded_enqueue, dbos, new_wf_ctx, options["workflow_name"]
     )
-    if recorded_child_id is not None:
-        return WorkflowHandleAsyncPolling(recorded_child_id, dbos)
+    if recorded is not None:
+        child_id, child_key = recorded
+        return WorkflowHandleAsyncPolling(
+            child_id,
+            dbos,
+            shard_key=child_key or options.get("shard_key") or new_wf_ctx.shard_key,
+        )
     status, resolved = _build_enqueue_with_options(
         dbos, local_ctx, new_wf_ctx, options, args, kwargs
     )
     workflow_id = await asyncio.to_thread(
         _persist_enqueue_with_options, dbos, new_wf_ctx, status, resolved
     )
-    return WorkflowHandleAsyncPolling(workflow_id, dbos)
+    return WorkflowHandleAsyncPolling(workflow_id, dbos, shard_key=status["shard_key"])
 
 
 if sys.version_info < (3, 12):
@@ -1951,9 +2064,11 @@ def workflow_wrapper(
         resctx: Optional[DBOSContext] = None
         # Captured now: check_and_init runs inside the child's context, where the parent's token is not ambient.
         parent_owner_xid: Optional[str] = None
+        parent_shard_key: Optional[str] = None
         if cctx is not None and cctx.is_workflow():
             resctx = cctx.snapshot_step_ctx(reserve_sleep_id=False)
             parent_owner_xid = current_owner_xid(parent_wfid, cctx)
+            parent_shard_key = cctx.shard_key
         workflow_timeout_ms, workflow_deadline_epoch_ms = _get_timeout_deadline(
             cctx, queue=None
         )
@@ -1965,6 +2080,7 @@ def workflow_wrapper(
         )
 
         workflow_id = None
+        child_shard_key: Optional[str] = newwfctx.shard_key
         # Holds the initialized status so the invoke step can be built once the workflow is cleared to execute.
         init_status: dict[str, WorkflowStatusInternal] = {}
         # Hoisted out of record_get_result: Pending.then invokes it only after awaiting the body.
@@ -1972,22 +2088,35 @@ def workflow_wrapper(
 
         def check_and_init() -> Union[NoResult, "DeferredResult[R]", R]:
             """Initialize the workflow row, returning a deferred wait for an existing workflow's result to skip re-running its body, or NoResult to run it."""
-            nonlocal workflow_id
+            # The parent's key, like its token, is not ambient in the child's context.
+            with bind_shard_keys(
+                {parent_wfid: parent_shard_key} if parent_wfid else {}
+            ):
+                return _check_and_init()
+
+        def _check_and_init() -> Union[NoResult, "DeferredResult[R]", R]:
+            nonlocal workflow_id, child_shard_key
             workflow_id = child_wfid
 
             child_start_time = int(time.time() * 1000)
             if parent_wfid:
+                # The ambient context is the child's, so name the parent's key outright.
                 r = dbos._sys_db.check_operation_execution(
                     parent_wfid,
                     parent_fid,
                     get_dbos_func_name(func),
+                    owner_key=parent_shard_key,
                 )
                 if r and r["error"]:
                     raise deserialize_exception(
                         r["error"], r["serialization"], dbos._sys_db.serializer
                     )
                 elif r and r["child_workflow_id"]:
-                    return _deferred_workflow_result(dbos, r["child_workflow_id"])
+                    return _deferred_workflow_result(
+                        dbos,
+                        r["child_workflow_id"],
+                        shard_key=r["child_shard_key"] or newwfctx.shard_key,
+                    )
 
             status, should_execute, _ = _init_workflow(
                 dbos,
@@ -2005,8 +2134,10 @@ def workflow_wrapper(
                 child_start_time_ms=child_start_time,
                 workflow_id_reuse_policy=reuse_policy,
                 parent_owner_xid=parent_owner_xid,
+                parent_shard_key=parent_shard_key,
             )
 
+            child_shard_key = status["shard_key"]
             # The body writes events, streams, and messages in this format; without it a directly
             # invoked workflow would write them under the default while its own row says otherwise.
             serialization_type = fi.serialization_type
@@ -2029,7 +2160,9 @@ def workflow_wrapper(
             dbos.logger.debug(
                 f"Workflow {status['workflow_uuid']} already run with status {status['status']}"
             )
-            return _deferred_workflow_result(dbos, status["workflow_uuid"])
+            return _deferred_workflow_result(
+                dbos, status["workflow_uuid"], shard_key=status["shard_key"]
+            )
 
         def get_wf_invoke() -> Callable[[Callable[[], R]], R]:
             return _get_wf_invoke_func(dbos, init_status["status"])
@@ -2046,25 +2179,27 @@ def workflow_wrapper(
                     e, None, dbos._serializer
                 )
                 assert workflow_id is not None
+                with bind_shard_keys({workflow_id: child_shard_key}):
+                    dbos._sys_db.record_get_result(
+                        workflow_id,
+                        None,
+                        serialized_e,
+                        serialization,
+                        resctx,
+                        started_at_epoch_ms=get_result_start_time,
+                    )
+                raise
+            serialized_r, serialization = serialize_value(r, None, dbos._serializer)
+            assert workflow_id is not None
+            with bind_shard_keys({workflow_id: child_shard_key}):
                 dbos._sys_db.record_get_result(
                     workflow_id,
+                    serialized_r,
                     None,
-                    serialized_e,
                     serialization,
                     resctx,
                     started_at_epoch_ms=get_result_start_time,
                 )
-                raise
-            serialized_r, serialization = serialize_value(r, None, dbos._serializer)
-            assert workflow_id is not None
-            dbos._sys_db.record_get_result(
-                workflow_id,
-                serialized_r,
-                None,
-                serialization,
-                resctx,
-                started_at_epoch_ms=get_result_start_time,
-            )
             return r
 
         outcome = (
@@ -2953,6 +3088,7 @@ def read_stream_offset(
     polling_interval: Optional[float] = None,
     timeout_seconds: Optional[float] = None,
     checkpoint: bool = True,
+    shard_key: Optional[str] = None,
 ) -> Any:
     """Return the single value at one offset of a stream, waiting for it to be written."""
     values = read_stream(
@@ -2965,6 +3101,7 @@ def read_stream_offset(
         function_name=_READ_STREAM_OFFSET_FUNCTION_NAME,
         checkpoint=checkpoint,
         batch_size=1,
+        shard_key=shard_key,
     )
     try:
         for value in values:
@@ -2985,6 +3122,7 @@ async def read_stream_offset_async(
     polling_interval: Optional[float] = None,
     timeout_seconds: Optional[float] = None,
     checkpoint: bool = True,
+    shard_key: Optional[str] = None,
 ) -> Any:
     """Return the single value at one offset of a stream, waiting for it to be written."""
     values = read_stream_async(
@@ -2997,6 +3135,7 @@ async def read_stream_offset_async(
         function_name=_READ_STREAM_OFFSET_FUNCTION_NAME,
         checkpoint=checkpoint,
         batch_size=1,
+        shard_key=shard_key,
     )
     try:
         async for value in values:
@@ -3019,6 +3158,7 @@ def read_stream(
     function_name: str = _READ_STREAM_FUNCTION_NAME,
     checkpoint: bool = True,
     batch_size: int = _STREAM_READ_BATCH_SIZE,
+    shard_key: Optional[str] = None,
 ) -> Generator[Any, Any, None]:
     """Yield a stream's values in order, checkpointing each one when read from a workflow."""
     if timeout_seconds is not None and timeout_seconds < 0:
@@ -3033,7 +3173,10 @@ def read_stream(
     if polling_interval is None:
         polling_interval = sys_db._notification_listener_polling_interval_sec
     recorder = _StreamReadCheckpoint(sys_db, key, function_name, checkpoint)
-    event, payload = sys_db.register_stream_listener(workflow_id, key)
+    # Bound per call, never across a yield, which would leak into the consumer's context.
+    target_key = {workflow_id: shard_key}
+    with bind_shard_keys(target_key):
+        event, payload = sys_db.register_stream_listener(workflow_id, key)
     final_read = False
     # Serialized values read ahead of offset; pending[0] is always the value at offset.
     pending: Deque[Tuple[Optional[str], Optional[str]]] = deque()
@@ -3065,9 +3208,10 @@ def read_stream(
                 # leaves the event set and the wait below returns immediately.
                 event.clear()
                 # One round trip for the next values and the workflow's status.
-                status, values = sys_db.read_stream_values(
-                    workflow_id, key, offset, batch_size
-                )
+                with bind_shard_keys(target_key):
+                    status, values = sys_db.read_stream_values(
+                        workflow_id, key, offset, batch_size
+                    )
                 if status is None:
                     raise DBOSNonExistentWorkflowError("target", workflow_id)
                 if values:
@@ -3130,6 +3274,7 @@ async def read_stream_async(
     function_name: str = _READ_STREAM_FUNCTION_NAME,
     checkpoint: bool = True,
     batch_size: int = _STREAM_READ_BATCH_SIZE,
+    shard_key: Optional[str] = None,
 ) -> AsyncGenerator[Any, None]:
     """Yield a stream's values in order, checkpointing each one when read from a workflow."""
     if timeout_seconds is not None and timeout_seconds < 0:
@@ -3144,7 +3289,10 @@ async def read_stream_async(
     if polling_interval is None:
         polling_interval = sys_db._notification_listener_polling_interval_sec
     recorder = _StreamReadCheckpoint(sys_db, key, function_name, checkpoint)
-    event, payload = sys_db.register_stream_listener(workflow_id, key)
+    # Bound per call, never across a yield, which would leak into the consumer's context.
+    target_key = {workflow_id: shard_key}
+    with bind_shard_keys(target_key):
+        event, payload = sys_db.register_stream_listener(workflow_id, key)
     final_read = False
     # Serialized values read ahead of offset; pending[0] is always the value at offset.
     pending: Deque[Tuple[Optional[str], Optional[str]]] = deque()
@@ -3176,9 +3324,10 @@ async def read_stream_async(
                 # leaves the event set and the wait below returns immediately.
                 event.clear()
                 # One round trip for the next values and the workflow's status.
-                status, values = await asyncio.to_thread(
-                    sys_db.read_stream_values, workflow_id, key, offset, batch_size
-                )
+                with bind_shard_keys(target_key):
+                    status, values = await asyncio.to_thread(
+                        sys_db.read_stream_values, workflow_id, key, offset, batch_size
+                    )
                 if status is None:
                     raise DBOSNonExistentWorkflowError("target", workflow_id)
                 if values:

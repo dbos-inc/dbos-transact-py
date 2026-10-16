@@ -13,10 +13,14 @@ def run_dbos_database_migrations(
     *,
     schema: str = "dbos",
     application_role: Optional[str] = None,
+    sharding: bool = False,
 ) -> None:
     try:
         DBOS.migrate(
-            system_database_url, schema=schema, application_role=application_role
+            system_database_url,
+            schema=schema,
+            application_role=application_role,
+            sharding=sharding,
         )
     except Exception as e:
         click.echo(f"DBOS migrations failed: {e}")

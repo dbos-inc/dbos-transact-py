@@ -36,6 +36,7 @@ from tests.conftest import (
     queue_entries_are_cleaned_up,
     reexecute_workflow_by_id,
     set_workflow_status,
+    using_sharding,
 )
 
 QUEUE_NAME = "test_duplication_policy_queue"
@@ -45,7 +46,7 @@ def _register_queue() -> None:
     DBOS.register_queue(QUEUE_NAME, polling_interval_sec=0.1)
 
 
-def test_return_existing_attaches(dbos: DBOS) -> None:
+def test_return_existing_attaches(dbos: DBOS, skip_with_sharding: None) -> None:
     _register_queue()
     workflow_event = threading.Event()
 
@@ -70,7 +71,9 @@ def test_return_existing_attaches(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_return_existing_fresh_after_completion(dbos: DBOS) -> None:
+def test_return_existing_fresh_after_completion(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     _register_queue()
 
     @DBOS.workflow()
@@ -144,7 +147,9 @@ def test_return_existing_rejects_invalid_policy(dbos: DBOS) -> None:
     assert "Invalid duplication_policy" in str(exc_info.value)
 
 
-def test_return_existing_retries_when_slot_released(dbos: DBOS) -> None:
+def test_return_existing_retries_when_slot_released(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """The holder can release the deduplication ID between our insert and the lookup.
 
     Forcing the first lookup to miss makes the retry loop iterate, which must claim
@@ -190,7 +195,9 @@ def test_return_existing_retries_when_slot_released(dbos: DBOS) -> None:
     assert handle2.get_result() == "first-done"
 
 
-def test_return_existing_honors_set_workflow_id(dbos: DBOS) -> None:
+def test_return_existing_honors_set_workflow_id(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """A SetWorkflowID reservation must survive the retry loop.
 
     Otherwise the first iteration consumes the reserved ID and an iteration that
@@ -234,7 +241,9 @@ def test_return_existing_honors_set_workflow_id(dbos: DBOS) -> None:
     assert handle.get_result() == "reserved-done"
 
 
-def test_return_existing_in_parent_workflow(dbos: DBOS) -> None:
+def test_return_existing_in_parent_workflow(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """A parent attaching to an existing workflow consumes exactly one function ID.
 
     The retry loop must not burn one function ID per iteration: later operations
@@ -353,7 +362,7 @@ def test_return_existing_in_parent_workflow(dbos: DBOS) -> None:
     )
 
 
-def test_return_existing_recovery(dbos: DBOS) -> None:
+def test_return_existing_recovery(dbos: DBOS, skip_with_sharding: None) -> None:
     """A recovered parent re-attaches to the same workflow it attached to before."""
     _register_queue()
     workflow_event = threading.Event()
@@ -406,7 +415,7 @@ def test_return_existing_recovery(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
-async def test_return_existing_async(dbos: DBOS) -> None:
+async def test_return_existing_async(dbos: DBOS, skip_with_sharding: None) -> None:
     await DBOS.register_queue_async(QUEUE_NAME, polling_interval_sec=0.1)
     workflow_event = asyncio.Event()
 
@@ -432,7 +441,9 @@ async def test_return_existing_async(dbos: DBOS) -> None:
     assert await handle2.get_result() == "first-done"
 
 
-def test_return_existing_enqueue_with_options(dbos: DBOS) -> None:
+def test_return_existing_enqueue_with_options(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     _register_queue()
     workflow_event = threading.Event()
 
@@ -457,7 +468,9 @@ def test_return_existing_enqueue_with_options(dbos: DBOS) -> None:
     assert handle2.get_result() == "first-done"
 
 
-def test_client_return_existing(dbos: DBOS, client: DBOSClient) -> None:
+def test_client_return_existing(
+    dbos: DBOS, client: DBOSClient, skip_with_sharding: None
+) -> None:
     _register_queue()
     workflow_event = threading.Event()
 
@@ -736,6 +749,8 @@ def test_id_reuse_reject_survives_retried_init_commit(
         "workflow_id": workflow_id,
         "workflow_id_reuse_policy": "reject",
     }
+    if via.startswith("child_") and using_sharding():
+        pytest.skip("Sharding refuses the reject policy inside workflows")
     try:
         if via.startswith("child_"):
             parent_id = f"reuse-retry-parent-{via}-{uuid.uuid4()}"
@@ -765,7 +780,7 @@ def test_id_reuse_reject_survives_retried_init_commit(
         DebugTriggers.clear_debug_triggers()
 
 
-def test_id_reuse_reject_dedup_interplay(dbos: DBOS) -> None:
+def test_id_reuse_reject_dedup_interplay(dbos: DBOS, skip_with_sharding: None) -> None:
     wf = _register_reuse_workflows()
     workflow_id = f"reuse-dedup-{uuid.uuid4()}"
     dedup_id = f"dedup-{uuid.uuid4()}"
@@ -823,7 +838,9 @@ def test_id_reuse_reject_enqueue_with_options(dbos: DBOS) -> None:
     assert handle.get_result() == "original"
 
 
-def test_id_reuse_reject_client_enqueue(dbos: DBOS, client: DBOSClient) -> None:
+def test_id_reuse_reject_client_enqueue(
+    dbos: DBOS, client: DBOSClient, skip_with_sharding: None
+) -> None:
     wf = _register_reuse_workflows()
     workflow_id = f"reuse-client-{uuid.uuid4()}"
     with SetWorkflowID(workflow_id):
@@ -873,7 +890,9 @@ def test_id_reuse_reject_client_enqueue(dbos: DBOS, client: DBOSClient) -> None:
 
 
 @pytest.mark.parametrize("via", REUSE_VIAS)
-def test_id_reuse_reject_child_is_recorded_for_replay(dbos: DBOS, via: str) -> None:
+def test_id_reuse_reject_child_is_recorded_for_replay(
+    dbos: DBOS, via: str, skip_with_sharding: None
+) -> None:
     wf = _register_reuse_workflows()
     child_id = f"reuse-child-{via}-{uuid.uuid4()}"
     with SetWorkflowID(child_id):
@@ -897,7 +916,9 @@ def test_id_reuse_reject_child_is_recorded_for_replay(dbos: DBOS, via: str) -> N
 
 
 @pytest.mark.parametrize("via", REUSE_VIAS)
-def test_id_reuse_reject_same_parent_reuse(dbos: DBOS, via: str) -> None:
+def test_id_reuse_reject_same_parent_reuse(
+    dbos: DBOS, via: str, skip_with_sharding: None
+) -> None:
     wf = _register_reuse_workflows()
     child_id = f"reuse-same-parent-{via}-{uuid.uuid4()}"
     parent_id = f"reuse-same-parent-p-{via}-{uuid.uuid4()}"
@@ -913,7 +934,7 @@ def test_id_reuse_reject_same_parent_reuse(dbos: DBOS, via: str) -> None:
     assert reexecute_workflow_by_id(dbos, parent_id).get_result() == "second-rejected"
 
 
-def test_init_child_workflow_is_atomic(dbos: DBOS) -> None:
+def test_init_child_workflow_is_atomic(dbos: DBOS, skip_with_sharding: None) -> None:
     wf = _register_reuse_workflows()
     child_id = f"reuse-atomic-child-{uuid.uuid4()}"
     parent_id = f"reuse-atomic-parent-{uuid.uuid4()}"
@@ -947,7 +968,9 @@ def test_init_child_workflow_is_atomic(dbos: DBOS) -> None:
 
 
 @pytest.mark.parametrize("via", ["start", "enqueue_options"])
-def test_id_reuse_reject_portable_replay(dbos: DBOS, via: str) -> None:
+def test_id_reuse_reject_portable_replay(
+    dbos: DBOS, via: str, skip_with_sharding: None
+) -> None:
     _register_queue()
 
     @DBOS.workflow(serialization_type=WorkflowSerializationFormat.PORTABLE)
@@ -1064,7 +1087,8 @@ async def test_id_reuse_reject_async(dbos: DBOS, client: DBOSClient) -> None:
     with pytest.raises(DBOSWorkflowIDInUseError):
         await client.enqueue_async(options, "new")
 
-    for direct in (False, True):
+    # Sharding refuses the reject policy inside workflows.
+    for direct in () if using_sharding() else (False, True):
         parent_id = f"reuse-async-parent-{direct}-{uuid.uuid4()}"
         with SetWorkflowID(parent_id):
             parent = await DBOS.start_workflow_async(

@@ -11,6 +11,7 @@ from croniter import croniter
 from ._error import DBOSException
 from ._logger import dbos_logger
 from ._serialization import Serializer, WorkflowInputs
+from ._shard_keys import bind_shard_keys
 from ._sys_db import WorkflowSchedule, WorkflowStatusInternal, WorkflowStatusString
 from ._utils import INTERNAL_QUEUE_NAME
 
@@ -37,6 +38,7 @@ class _ScheduleThread:
         self.tzinfo = ZoneInfo(tz_name) if tz_name else timezone.utc
         self.queue_name: Optional[str] = schedule.get("queue_name")
         self.application_name: Optional[str] = schedule.get("application_name")
+        self.shard_key: Optional[str] = schedule.get("shard_key")
         # Definition snapshot; the loop restarts the thread when it changes.
         self.signature: tuple[Any, ...] = self.compute_signature(schedule)
         self._stop_event = threading.Event()
@@ -53,6 +55,7 @@ class _ScheduleThread:
             schedule["context"],
             schedule.get("cron_timezone"),
             schedule.get("queue_name"),
+            schedule.get("shard_key"),
         )
 
     def _loop(self) -> None:
@@ -81,7 +84,9 @@ class _ScheduleThread:
                 return
             try:
                 workflow_id = f"sched-{self.schedule_name}-{next_exec_time.isoformat()}"
-                if not dbos._sys_db.get_workflow_status(workflow_id):
+                with bind_shard_keys({workflow_id: self.shard_key}):
+                    exists = dbos._sys_db.get_workflow_status(workflow_id)
+                if not exists:
                     _enqueue_scheduled_workflow(
                         dbos._sys_db,
                         self.workflow_name,
@@ -92,6 +97,7 @@ class _ScheduleThread:
                         self.class_name,
                         self.queue_name,
                         self.application_name,
+                        self.shard_key,
                     )
                 dbos._sys_db.update_last_fired_at(
                     self.schedule_name, next_exec_time.isoformat()
@@ -122,6 +128,7 @@ def _enqueue_scheduled_workflow(
     class_name: Optional[str] = None,
     queue_name: Optional[str] = None,
     application_name: Optional[str] = None,
+    shard_key: Optional[str] = None,
 ) -> None:
     """Enqueue a single scheduled workflow execution via init_workflow."""
     # The schedule's owner routes its runs, whoever fires them; an unclaimed one falls back to the firing handle, which may have no identity itself.
@@ -164,6 +171,7 @@ def _enqueue_scheduled_workflow(
         "is_debounced": False,
         # Owned where possible: the internal queue's shared name cannot route an unclaimed row.
         "application_name": owner,
+        "shard_key": shard_key,
     }
     sys_db.init_workflow(
         status,
@@ -198,7 +206,9 @@ def backfill_schedule(
         if next_time >= end:
             break
         workflow_id = f"sched-{schedule_name}-{next_time.isoformat()}"
-        if not sys_db.get_workflow_status(workflow_id):
+        with bind_shard_keys({workflow_id: schedule.get("shard_key")}):
+            exists = sys_db.get_workflow_status(workflow_id)
+        if not exists:
             _enqueue_scheduled_workflow(
                 sys_db,
                 schedule["workflow_name"],
@@ -209,9 +219,16 @@ def backfill_schedule(
                 class_name,
                 queue_name,
                 schedule.get("application_name"),
+                schedule.get("shard_key"),
             )
         workflow_ids.append(workflow_id)
     return workflow_ids
+
+
+def schedule_shard_key(sys_db: "SystemDatabase", schedule_name: str) -> Optional[str]:
+    """The shard key a schedule's workflows run under."""
+    schedule = sys_db.get_schedule(schedule_name)
+    return schedule.get("shard_key") if schedule is not None else None
 
 
 def trigger_schedule(sys_db: "SystemDatabase", schedule_name: str) -> str:
@@ -234,6 +251,7 @@ def trigger_schedule(sys_db: "SystemDatabase", schedule_name: str) -> str:
         class_name,
         queue_name,
         schedule.get("application_name"),
+        schedule.get("shard_key"),
     )
     return workflow_id
 

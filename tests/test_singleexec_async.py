@@ -369,6 +369,7 @@ async def test_parked_duplicate_does_not_hold_a_thread(
         *,
         completed_at_epoch_ms: Optional[int] = None,
         owner_xid: Optional[str] = None,
+        owner_key: Optional[str] = None,
     ) -> None:
         # What the loser of a checkpoint race sees: the owner's row is already there.
         if result["workflow_uuid"] in lost_ids:
@@ -377,6 +378,7 @@ async def test_parked_duplicate_does_not_hold_a_thread(
             result,
             completed_at_epoch_ms=completed_at_epoch_ms,
             owner_xid=owner_xid,
+            owner_key=owner_key,
         )
 
     original_update = dbos._sys_db.update_workflow_outcome

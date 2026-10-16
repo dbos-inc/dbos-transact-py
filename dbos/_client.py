@@ -38,6 +38,7 @@ from dbos._queue import (
     _warn_sync_db_call_in_async_context,
     log_queue,
 )
+from dbos._shard_keys import bind_shard_keys
 from dbos._sys_db import SystemDatabase
 from dbos._utils import generate_uuid
 
@@ -52,7 +53,7 @@ from dbos._error import (
     DBOSNonExistentWorkflowError,
     DBOSQueueDeduplicatedError,
 )
-from dbos._scheduler import backfill_schedule, trigger_schedule
+from dbos._scheduler import backfill_schedule, schedule_shard_key, trigger_schedule
 from dbos._serialization import (
     DefaultSerializer,
     Serializer,
@@ -78,9 +79,12 @@ R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 
 class WorkflowHandleClientPolling(Generic[R]):
 
-    def __init__(self, workflow_id: str, sys_db: SystemDatabase):
+    def __init__(
+        self, workflow_id: str, sys_db: SystemDatabase, shard_key: Optional[str] = None
+    ):
         self.workflow_id = workflow_id
         self._sys_db = sys_db
+        self.shard_key = shard_key
 
     def get_workflow_id(self) -> str:
         return self.workflow_id
@@ -88,13 +92,15 @@ class WorkflowHandleClientPolling(Generic[R]):
     def get_result(
         self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
     ) -> R:
-        res: R = self._sys_db.await_workflow_result(
-            self.workflow_id, polling_interval_sec
-        )
+        with bind_shard_keys({self.workflow_id: self.shard_key}):
+            res: R = self._sys_db.await_workflow_result(
+                self.workflow_id, polling_interval_sec
+            )
         return res
 
     def get_status(self) -> WorkflowStatus:
-        status = get_workflow(self._sys_db, self.workflow_id)
+        with bind_shard_keys({self.workflow_id: self.shard_key}):
+            status = get_workflow(self._sys_db, self.workflow_id)
         if status is None:
             raise DBOSNonExistentWorkflowError("target", self.workflow_id)
         return status
@@ -102,9 +108,12 @@ class WorkflowHandleClientPolling(Generic[R]):
 
 class WorkflowHandleClientAsyncPolling(Generic[R]):
 
-    def __init__(self, workflow_id: str, sys_db: SystemDatabase):
+    def __init__(
+        self, workflow_id: str, sys_db: SystemDatabase, shard_key: Optional[str] = None
+    ):
         self.workflow_id = workflow_id
         self._sys_db = sys_db
+        self.shard_key = shard_key
 
     def get_workflow_id(self) -> str:
         return self.workflow_id
@@ -112,13 +121,17 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
     async def get_result(
         self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
     ) -> R:
-        res: R = await self._sys_db.await_workflow_result_async(
-            self.workflow_id, polling_interval_sec
-        )
+        with bind_shard_keys({self.workflow_id: self.shard_key}):
+            res: R = await self._sys_db.await_workflow_result_async(
+                self.workflow_id, polling_interval_sec
+            )
         return res
 
     async def get_status(self) -> WorkflowStatus:
-        status = await asyncio.to_thread(get_workflow, self._sys_db, self.workflow_id)
+        with bind_shard_keys({self.workflow_id: self.shard_key}):
+            status = await asyncio.to_thread(
+                get_workflow, self._sys_db, self.workflow_id
+            )
         if status is None:
             raise DBOSNonExistentWorkflowError("target", self.workflow_id)
         return status
@@ -145,6 +158,7 @@ class DBOSClient:
         retry_connection_errors: bool = True,
         observability_query_timeout_sec: Optional[float] = None,
         sys_db_idle_transaction_timeout_sec: Optional[float] = None,
+        sharding: bool = False,
     ):
         """Create a client for interacting with a DBOS application from outside it.
 
@@ -215,6 +229,7 @@ class DBOSClient:
             retry_connection_errors=retry_connection_errors,
             observability_query_timeout_sec=observability_query_timeout_sec,
             idle_transaction_timeout_sec=sys_db_idle_transaction_timeout_sec,
+            sharding=sharding,
         )
         self._notification_listener_thread: Optional[threading.Thread] = None
         if not lazy:
@@ -336,13 +351,17 @@ class DBOSClient:
         self, options: EnqueueOptions, *args: Any, **kwargs: Any
     ) -> "WorkflowHandle[R]":
         workflow_id = self._enqueue(options, *args, **kwargs)
-        return WorkflowHandleClientPolling[R](workflow_id, self._sys_db)
+        return WorkflowHandleClientPolling[R](
+            workflow_id, self._sys_db, shard_key=options.get("shard_key")
+        )
 
     async def enqueue_async(
         self, options: EnqueueOptions, *args: Any, **kwargs: Any
     ) -> "WorkflowHandleAsync[R]":
         workflow_id = await asyncio.to_thread(self._enqueue, options, *args, **kwargs)
-        return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)
+        return WorkflowHandleClientAsyncPolling[R](
+            workflow_id, self._sys_db, shard_key=options.get("shard_key")
+        )
 
     def enqueue_in_transaction(
         self,
@@ -364,7 +383,9 @@ class DBOSClient:
         workflow_id = self._enqueue_with_connection(
             conn_or_session, options, *args, **kwargs
         )
-        return WorkflowHandleClientPolling[R](workflow_id, self._sys_db)
+        return WorkflowHandleClientPolling[R](
+            workflow_id, self._sys_db, shard_key=options.get("shard_key")
+        )
 
     def register_queue(
         self,
@@ -555,19 +576,27 @@ class DBOSClient:
             lambda: self.list_queues(application_name=application_name)
         )
 
-    def retrieve_workflow(self, workflow_id: str) -> "WorkflowHandle[R]":
-        status = get_workflow(self._sys_db, workflow_id)
-        if status is None:
-            raise DBOSNonExistentWorkflowError("target", workflow_id)
-        return WorkflowHandleClientPolling[R](workflow_id, self._sys_db)
+    def retrieve_workflow(
+        self, workflow_id: str, *, shard_key: Optional[str] = None
+    ) -> "WorkflowHandle[R]":
+        with bind_shard_keys({workflow_id: shard_key}):
+            status = get_workflow(self._sys_db, workflow_id)
+            if status is None:
+                raise DBOSNonExistentWorkflowError("target", workflow_id)
+            return WorkflowHandleClientPolling[R](
+                workflow_id, self._sys_db, shard_key=shard_key
+            )
 
     async def retrieve_workflow_async(
-        self, workflow_id: str
+        self, workflow_id: str, *, shard_key: Optional[str] = None
     ) -> "WorkflowHandleAsync[R]":
-        status = await asyncio.to_thread(get_workflow, self._sys_db, workflow_id)
-        if status is None:
-            raise DBOSNonExistentWorkflowError("target", workflow_id)
-        return WorkflowHandleClientAsyncPolling[R](workflow_id, self._sys_db)
+        with bind_shard_keys({workflow_id: shard_key}):
+            status = await asyncio.to_thread(get_workflow, self._sys_db, workflow_id)
+            if status is None:
+                raise DBOSNonExistentWorkflowError("target", workflow_id)
+            return WorkflowHandleClientAsyncPolling[R](
+                workflow_id, self._sys_db, shard_key=shard_key
+            )
 
     def wait_first(
         self,
@@ -584,9 +613,10 @@ class DBOSClient:
         handle_map: Dict[str, "WorkflowHandle[Any]"] = {
             h.workflow_id: h for h in handles
         }
-        completed_id = self._sys_db.await_first_workflow_id(
-            workflow_ids, polling_interval_sec
-        )
+        with bind_shard_keys({h.workflow_id: h.shard_key for h in handles}):
+            completed_id = self._sys_db.await_first_workflow_id(
+                workflow_ids, polling_interval_sec
+            )
         return handle_map[completed_id]
 
     async def wait_first_async(
@@ -604,9 +634,10 @@ class DBOSClient:
         handle_map: Dict[str, "WorkflowHandleAsync[Any]"] = {
             h.workflow_id: h for h in handles
         }
-        completed_id = await self._sys_db.await_first_workflow_id_async(
-            workflow_ids, polling_interval_sec
-        )
+        with bind_shard_keys({h.workflow_id: h.shard_key for h in handles}):
+            completed_id = await self._sys_db.await_first_workflow_id_async(
+                workflow_ids, polling_interval_sec
+            )
         return handle_map[completed_id]
 
     def send(
@@ -620,9 +651,10 @@ class DBOSClient:
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
         send_to_forks: bool = False,
+        shard_key: Optional[str] = None,
     ) -> None:
         self._sys_db.send_bulk(
-            [SendMessage(destination_id, message, topic, idempotency_key)],
+            [SendMessage(destination_id, message, topic, idempotency_key, shard_key)],
             serialization_type=serialization_type,
             workflow_id=None,
             function_id=None,
@@ -641,6 +673,7 @@ class DBOSClient:
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
         send_to_forks: bool = False,
+        shard_key: Optional[str] = None,
     ) -> None:
         return await asyncio.to_thread(
             self.send,
@@ -650,6 +683,7 @@ class DBOSClient:
             idempotency_key,
             serialization_type=serialization_type,
             send_to_forks=send_to_forks,
+            shard_key=shard_key,
         )
 
     def send_in_transaction(
@@ -664,6 +698,7 @@ class DBOSClient:
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
         send_to_forks: bool = False,
+        shard_key: Optional[str] = None,
     ) -> None:
         """
         Send a message to a workflow within a caller-owned synchronous SQLAlchemy transaction.
@@ -676,7 +711,7 @@ class DBOSClient:
         ``await async_conn.run_sync(lambda sync_conn: client.send_in_transaction(sync_conn, destination_id, message))``.
         """
         self._sys_db.send_bulk_with_connection(
-            [SendMessage(destination_id, message, topic, idempotency_key)],
+            [SendMessage(destination_id, message, topic, idempotency_key, shard_key)],
             conn_or_session,
             serialization_type=serialization_type,
             function_name="DBOS.send",
@@ -755,37 +790,73 @@ class DBOSClient:
             send_to_forks=send_to_forks,
         )
 
-    def get_event(self, workflow_id: str, key: str, timeout_seconds: float = 60) -> Any:
-        return self._sys_db.get_event(workflow_id, key, timeout_seconds)
+    def get_event(
+        self,
+        workflow_id: str,
+        key: str,
+        timeout_seconds: float = 60,
+        *,
+        shard_key: Optional[str] = None,
+    ) -> Any:
+        with bind_shard_keys({workflow_id: shard_key}):
+            return self._sys_db.get_event(workflow_id, key, timeout_seconds)
 
     async def get_event_async(
-        self, workflow_id: str, key: str, timeout_seconds: float = 60
+        self,
+        workflow_id: str,
+        key: str,
+        timeout_seconds: float = 60,
+        *,
+        shard_key: Optional[str] = None,
     ) -> Any:
-        return await self._sys_db.get_event_async(workflow_id, key, timeout_seconds)
+        with bind_shard_keys({workflow_id: shard_key}):
+            return await self._sys_db.get_event_async(workflow_id, key, timeout_seconds)
 
     def cancel_workflow(
-        self, workflow_id: str, *, cancel_children: bool = False
+        self,
+        workflow_id: str,
+        *,
+        cancel_children: bool = False,
+        shard_key: Optional[str] = None,
     ) -> None:
-        self._sys_db.cancel_workflows([workflow_id], cancel_children=cancel_children)
+        with bind_shard_keys({workflow_id: shard_key}):
+            self._sys_db.cancel_workflows(
+                [workflow_id], cancel_children=cancel_children
+            )
 
     async def cancel_workflow_async(
-        self, workflow_id: str, *, cancel_children: bool = False
+        self,
+        workflow_id: str,
+        *,
+        cancel_children: bool = False,
+        shard_key: Optional[str] = None,
     ) -> None:
-        await asyncio.to_thread(
-            self.cancel_workflow, workflow_id, cancel_children=cancel_children
-        )
+        with bind_shard_keys({workflow_id: shard_key}):
+            await asyncio.to_thread(
+                self.cancel_workflow, workflow_id, cancel_children=cancel_children
+            )
 
     def cancel_workflows(
-        self, workflow_ids: List[str], *, cancel_children: bool = False
+        self,
+        workflow_ids: List[str],
+        *,
+        cancel_children: bool = False,
+        shard_key: Optional[str] = None,
     ) -> None:
-        self._sys_db.cancel_workflows(workflow_ids, cancel_children=cancel_children)
+        with bind_shard_keys({wid: shard_key for wid in workflow_ids}):
+            self._sys_db.cancel_workflows(workflow_ids, cancel_children=cancel_children)
 
     async def cancel_workflows_async(
-        self, workflow_ids: List[str], *, cancel_children: bool = False
+        self,
+        workflow_ids: List[str],
+        *,
+        cancel_children: bool = False,
+        shard_key: Optional[str] = None,
     ) -> None:
-        await asyncio.to_thread(
-            self.cancel_workflows, workflow_ids, cancel_children=cancel_children
-        )
+        with bind_shard_keys({wid: shard_key for wid in workflow_ids}):
+            await asyncio.to_thread(
+                self.cancel_workflows, workflow_ids, cancel_children=cancel_children
+            )
 
     def update_workflow_attributes(
         self,
@@ -793,10 +864,14 @@ class DBOSClient:
         attributes: Optional[Dict[str, Any]],
         *,
         merge: bool = False,
+        shard_key: Optional[str] = None,
     ) -> None:
         """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes.
         With merge=True, atomically merge top-level keys instead (requires a dict)."""
-        self._sys_db.update_workflow_attributes(workflow_id, attributes, merge=merge)
+        with bind_shard_keys({workflow_id: shard_key}):
+            self._sys_db.update_workflow_attributes(
+                workflow_id, attributes, merge=merge
+            )
 
     async def update_workflow_attributes_async(
         self,
@@ -804,96 +879,130 @@ class DBOSClient:
         attributes: Optional[Dict[str, Any]],
         *,
         merge: bool = False,
+        shard_key: Optional[str] = None,
     ) -> None:
         """Replace the custom attributes attached to a workflow by ID. Pass None to clear all attributes.
         With merge=True, atomically merge top-level keys instead (requires a dict)."""
-        await asyncio.to_thread(
-            self.update_workflow_attributes, workflow_id, attributes, merge=merge
-        )
+        with bind_shard_keys({workflow_id: shard_key}):
+            await asyncio.to_thread(
+                self.update_workflow_attributes, workflow_id, attributes, merge=merge
+            )
 
     def delete_workflow(
-        self, workflow_id: str, *, delete_children: bool = False
+        self,
+        workflow_id: str,
+        *,
+        delete_children: bool = False,
+        shard_key: Optional[str] = None,
     ) -> None:
-        self.delete_workflows([workflow_id], delete_children=delete_children)
+        with bind_shard_keys({workflow_id: shard_key}):
+            self.delete_workflows([workflow_id], delete_children=delete_children)
 
     async def delete_workflow_async(
-        self, workflow_id: str, *, delete_children: bool = False
+        self,
+        workflow_id: str,
+        *,
+        delete_children: bool = False,
+        shard_key: Optional[str] = None,
     ) -> None:
-        await asyncio.to_thread(
-            self.delete_workflows, [workflow_id], delete_children=delete_children
-        )
+        with bind_shard_keys({workflow_id: shard_key}):
+            await asyncio.to_thread(
+                self.delete_workflows, [workflow_id], delete_children=delete_children
+            )
 
     def delete_workflows(
-        self, workflow_ids: List[str], *, delete_children: bool = False
+        self,
+        workflow_ids: List[str],
+        *,
+        delete_children: bool = False,
+        shard_key: Optional[str] = None,
     ) -> None:
-        all_ids = list(workflow_ids)
-        if delete_children:
-            for wfid in workflow_ids:
-                all_ids.extend(self._sys_db.get_workflow_children(wfid))
-        self._sys_db.delete_workflows(all_ids)
+        with bind_shard_keys({wid: shard_key for wid in workflow_ids}):
+            self._sys_db.delete_workflows(workflow_ids, delete_children=delete_children)
 
     async def delete_workflows_async(
-        self, workflow_ids: List[str], *, delete_children: bool = False
+        self,
+        workflow_ids: List[str],
+        *,
+        delete_children: bool = False,
+        shard_key: Optional[str] = None,
     ) -> None:
-        await asyncio.to_thread(
-            self.delete_workflows, workflow_ids, delete_children=delete_children
-        )
+        with bind_shard_keys({wid: shard_key for wid in workflow_ids}):
+            await asyncio.to_thread(
+                self.delete_workflows, workflow_ids, delete_children=delete_children
+            )
 
     def resume_workflow(
         self,
         workflow_id: str,
         *,
         queue_name: Optional[str] = None,
+        shard_key: Optional[str] = None,
     ) -> "WorkflowHandle[Any]":
-        self._sys_db.resume_workflows(
-            [workflow_id],
-            queue_name=queue_name,
-        )
-        return WorkflowHandleClientPolling[Any](workflow_id, self._sys_db)
+        with bind_shard_keys({workflow_id: shard_key}):
+            self._sys_db.resume_workflows(
+                [workflow_id],
+                queue_name=queue_name,
+            )
+            return WorkflowHandleClientPolling[Any](
+                workflow_id, self._sys_db, shard_key=shard_key
+            )
 
     async def resume_workflow_async(
         self,
         workflow_id: str,
         *,
         queue_name: Optional[str] = None,
+        shard_key: Optional[str] = None,
     ) -> "WorkflowHandleAsync[Any]":
-        await asyncio.to_thread(
-            self.resume_workflow,
-            workflow_id,
-            queue_name=queue_name,
-        )
-        return WorkflowHandleClientAsyncPolling[Any](workflow_id, self._sys_db)
+        with bind_shard_keys({workflow_id: shard_key}):
+            await asyncio.to_thread(
+                self.resume_workflow,
+                workflow_id,
+                queue_name=queue_name,
+            )
+            return WorkflowHandleClientAsyncPolling[Any](
+                workflow_id, self._sys_db, shard_key=shard_key
+            )
 
     def resume_workflows(
         self,
         workflow_ids: List[str],
         *,
         queue_name: Optional[str] = None,
+        shard_key: Optional[str] = None,
     ) -> "List[WorkflowHandle[Any]]":
-        self._sys_db.resume_workflows(
-            workflow_ids,
-            queue_name=queue_name,
-        )
-        return [
-            WorkflowHandleClientPolling[Any](wfid, self._sys_db)
-            for wfid in workflow_ids
-        ]
+        with bind_shard_keys({wid: shard_key for wid in workflow_ids}):
+            self._sys_db.resume_workflows(
+                workflow_ids,
+                queue_name=queue_name,
+            )
+            return [
+                WorkflowHandleClientPolling[Any](
+                    wfid, self._sys_db, shard_key=shard_key
+                )
+                for wfid in workflow_ids
+            ]
 
     async def resume_workflows_async(
         self,
         workflow_ids: List[str],
         *,
         queue_name: Optional[str] = None,
+        shard_key: Optional[str] = None,
     ) -> "List[WorkflowHandleAsync[Any]]":
-        await asyncio.to_thread(
-            self._sys_db.resume_workflows,
-            workflow_ids,
-            queue_name=queue_name,
-        )
-        return [
-            WorkflowHandleClientAsyncPolling[Any](wfid, self._sys_db)
-            for wfid in workflow_ids
-        ]
+        with bind_shard_keys({wid: shard_key for wid in workflow_ids}):
+            await asyncio.to_thread(
+                self._sys_db.resume_workflows,
+                workflow_ids,
+                queue_name=queue_name,
+            )
+            return [
+                WorkflowHandleClientAsyncPolling[Any](
+                    wfid, self._sys_db, shard_key=shard_key
+                )
+                for wfid in workflow_ids
+            ]
 
     def rewind_workflow(
         self,
@@ -903,19 +1012,23 @@ class DBOSClient:
         application_version: Optional[str] = None,
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
+        shard_key: Optional[str] = None,
     ) -> "WorkflowHandle[Any]":
         """Rewind a workflow to a step (default: the first). Only a workflow in a
         terminal state can be rewound."""
-        rewind_workflow(
-            self._sys_db,
-            [],
-            workflow_id,
-            1 if start_step is None else start_step,
-            application_version=application_version,
-            queue_name=queue_name,
-            queue_partition_key=queue_partition_key,
-        )
-        return WorkflowHandleClientPolling[Any](workflow_id, self._sys_db)
+        with bind_shard_keys({workflow_id: shard_key}):
+            rewind_workflow(
+                self._sys_db,
+                [],
+                workflow_id,
+                1 if start_step is None else start_step,
+                application_version=application_version,
+                queue_name=queue_name,
+                queue_partition_key=queue_partition_key,
+            )
+            return WorkflowHandleClientPolling[Any](
+                workflow_id, self._sys_db, shard_key=shard_key
+            )
 
     async def rewind_workflow_async(
         self,
@@ -925,20 +1038,24 @@ class DBOSClient:
         application_version: Optional[str] = None,
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
+        shard_key: Optional[str] = None,
     ) -> "WorkflowHandleAsync[Any]":
         """Rewind a workflow to a step (default: the first). Only a workflow in a
         terminal state can be rewound."""
-        await asyncio.to_thread(
-            rewind_workflow,
-            self._sys_db,
-            [],
-            workflow_id,
-            1 if start_step is None else start_step,
-            application_version=application_version,
-            queue_name=queue_name,
-            queue_partition_key=queue_partition_key,
-        )
-        return WorkflowHandleClientAsyncPolling[Any](workflow_id, self._sys_db)
+        with bind_shard_keys({workflow_id: shard_key}):
+            await asyncio.to_thread(
+                rewind_workflow,
+                self._sys_db,
+                [],
+                workflow_id,
+                1 if start_step is None else start_step,
+                application_version=application_version,
+                queue_name=queue_name,
+                queue_partition_key=queue_partition_key,
+            )
+            return WorkflowHandleClientAsyncPolling[Any](
+                workflow_id, self._sys_db, shard_key=shard_key
+            )
 
     def set_workflow_delay(
         self,
@@ -946,12 +1063,14 @@ class DBOSClient:
         *,
         delay_seconds: Optional[float] = None,
         delay_until_epoch_ms: Optional[int] = None,
+        shard_key: Optional[str] = None,
     ) -> None:
-        self._sys_db.set_workflow_delay(
-            workflow_id,
-            delay_seconds=delay_seconds,
-            delay_until_epoch_ms=delay_until_epoch_ms,
-        )
+        with bind_shard_keys({workflow_id: shard_key}):
+            self._sys_db.set_workflow_delay(
+                workflow_id,
+                delay_seconds=delay_seconds,
+                delay_until_epoch_ms=delay_until_epoch_ms,
+            )
 
     async def set_workflow_delay_async(
         self,
@@ -959,13 +1078,15 @@ class DBOSClient:
         *,
         delay_seconds: Optional[float] = None,
         delay_until_epoch_ms: Optional[int] = None,
+        shard_key: Optional[str] = None,
     ) -> None:
-        await asyncio.to_thread(
-            self.set_workflow_delay,
-            workflow_id,
-            delay_seconds=delay_seconds,
-            delay_until_epoch_ms=delay_until_epoch_ms,
-        )
+        with bind_shard_keys({workflow_id: shard_key}):
+            await asyncio.to_thread(
+                self.set_workflow_delay,
+                workflow_id,
+                delay_seconds=delay_seconds,
+                delay_until_epoch_ms=delay_until_epoch_ms,
+            )
 
     def list_workflows(
         self,
@@ -998,6 +1119,8 @@ class DBOSClient:
         attributes: Optional[Dict[str, Any]] = None,
         schedule_name: Optional[str | list[str]] = None,
         application_name: Optional[str | list[str]] = None,
+        shard_key: Optional[str | list[str]] = None,
+        parent_shard_key: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         return self._sys_db.list_workflows(
             workflow_ids=workflow_ids,
@@ -1028,6 +1151,8 @@ class DBOSClient:
             attributes=attributes,
             schedule_name=schedule_name,
             application_name=application_name,
+            shard_key=shard_key,
+            parent_shard_key=parent_shard_key,
         )
 
     async def list_workflows_async(
@@ -1061,6 +1186,8 @@ class DBOSClient:
         attributes: Optional[Dict[str, Any]] = None,
         schedule_name: Optional[str | list[str]] = None,
         application_name: Optional[str | list[str]] = None,
+        shard_key: Optional[str | list[str]] = None,
+        parent_shard_key: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         return await asyncio.to_thread(
             self.list_workflows,
@@ -1092,6 +1219,8 @@ class DBOSClient:
             attributes=attributes,
             schedule_name=schedule_name,
             application_name=application_name,
+            shard_key=shard_key,
+            parent_shard_key=parent_shard_key,
         )
 
     def list_queued_workflows(
@@ -1122,6 +1251,8 @@ class DBOSClient:
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
         application_name: Optional[str | list[str]] = None,
+        shard_key: Optional[str | list[str]] = None,
+        parent_shard_key: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         return self._sys_db.list_workflows(
             workflow_ids=workflow_ids,
@@ -1150,6 +1281,8 @@ class DBOSClient:
             has_parent=has_parent,
             attributes=attributes,
             application_name=application_name,
+            shard_key=shard_key,
+            parent_shard_key=parent_shard_key,
         )
 
     async def list_queued_workflows_async(
@@ -1180,6 +1313,8 @@ class DBOSClient:
         has_parent: Optional[bool] = None,
         attributes: Optional[Dict[str, Any]] = None,
         application_name: Optional[str | list[str]] = None,
+        shard_key: Optional[str | list[str]] = None,
+        parent_shard_key: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         return await asyncio.to_thread(
             self.list_queued_workflows,
@@ -1208,6 +1343,8 @@ class DBOSClient:
             has_parent=has_parent,
             attributes=attributes,
             application_name=application_name,
+            shard_key=shard_key,
+            parent_shard_key=parent_shard_key,
         )
 
     def list_workflow_steps(
@@ -1217,10 +1354,12 @@ class DBOSClient:
         load_output: bool = True,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        shard_key: Optional[str] = None,
     ) -> List[StepInfo]:
-        return self._sys_db.list_workflow_steps(
-            workflow_id, load_output=load_output, limit=limit, offset=offset
-        )
+        with bind_shard_keys({workflow_id: shard_key}):
+            return self._sys_db.list_workflow_steps(
+                workflow_id, load_output=load_output, limit=limit, offset=offset
+            )
 
     async def list_workflow_steps_async(
         self,
@@ -1229,14 +1368,16 @@ class DBOSClient:
         load_output: bool = True,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        shard_key: Optional[str] = None,
     ) -> List[StepInfo]:
-        return await asyncio.to_thread(
-            self.list_workflow_steps,
-            workflow_id,
-            load_output=load_output,
-            limit=limit,
-            offset=offset,
-        )
+        with bind_shard_keys({workflow_id: shard_key}):
+            return await asyncio.to_thread(
+                self.list_workflow_steps,
+                workflow_id,
+                load_output=load_output,
+                limit=limit,
+                offset=offset,
+            )
 
     def fork_workflow(
         self,
@@ -1248,18 +1389,25 @@ class DBOSClient:
         queue_partition_key: Optional[str] = None,
         replacement_children: Optional[dict[str, str]] = None,
         timeout_seconds: Optional[float] = None,
+        shard_key: Optional[str] = None,
     ) -> "WorkflowHandle[Any]":
-        forked_workflow_id = fork_workflow(
-            self._sys_db,
-            workflow_id,
-            start_step,
-            application_version=application_version,
-            queue_name=queue_name,
-            queue_partition_key=queue_partition_key,
-            replacement_children=replacement_children,
-            timeout_seconds=timeout_seconds,
-        )
-        return WorkflowHandleClientPolling[Any](forked_workflow_id, self._sys_db)
+        with bind_shard_keys({workflow_id: shard_key}):
+            forked_workflow_id = fork_workflow(
+                self._sys_db,
+                workflow_id,
+                start_step,
+                application_version=application_version,
+                queue_name=queue_name,
+                queue_partition_key=queue_partition_key,
+                replacement_children=replacement_children,
+                timeout_seconds=timeout_seconds,
+            )
+            # A fork lives under its original's shard key, however the caller supplied it.
+            return WorkflowHandleClientPolling[Any](
+                forked_workflow_id,
+                self._sys_db,
+                shard_key=self._sys_db._key_hint(workflow_id),
+            )
 
     async def fork_workflow_async(
         self,
@@ -1271,19 +1419,26 @@ class DBOSClient:
         queue_partition_key: Optional[str] = None,
         replacement_children: Optional[dict[str, str]] = None,
         timeout_seconds: Optional[float] = None,
+        shard_key: Optional[str] = None,
     ) -> "WorkflowHandleAsync[Any]":
-        forked_workflow_id = await asyncio.to_thread(
-            fork_workflow,
-            self._sys_db,
-            workflow_id,
-            start_step,
-            application_version=application_version,
-            queue_name=queue_name,
-            queue_partition_key=queue_partition_key,
-            replacement_children=replacement_children,
-            timeout_seconds=timeout_seconds,
-        )
-        return WorkflowHandleClientAsyncPolling[Any](forked_workflow_id, self._sys_db)
+        with bind_shard_keys({workflow_id: shard_key}):
+            forked_workflow_id = await asyncio.to_thread(
+                fork_workflow,
+                self._sys_db,
+                workflow_id,
+                start_step,
+                application_version=application_version,
+                queue_name=queue_name,
+                queue_partition_key=queue_partition_key,
+                replacement_children=replacement_children,
+                timeout_seconds=timeout_seconds,
+            )
+            # A fork lives under its original's shard key, however the caller supplied it.
+            return WorkflowHandleClientAsyncPolling[Any](
+                forked_workflow_id,
+                self._sys_db,
+                shard_key=self._sys_db._key_hint(workflow_id),
+            )
 
     def read_stream(
         self,
@@ -1293,6 +1448,7 @@ class DBOSClient:
         offset: int = 0,
         polling_interval_sec: Optional[float] = None,
         timeout_seconds: Optional[float] = None,
+        shard_key: Optional[str] = None,
     ) -> Generator[Any, Any, None]:
         """
         Read values from a stream as a generator.
@@ -1317,6 +1473,7 @@ class DBOSClient:
             offset=offset,
             polling_interval=polling_interval_sec,
             timeout_seconds=timeout_seconds,
+            shard_key=shard_key,
             checkpoint=False,
         )
 
@@ -1328,6 +1485,7 @@ class DBOSClient:
         offset: int = 0,
         polling_interval_sec: Optional[float] = None,
         timeout_seconds: Optional[float] = None,
+        shard_key: Optional[str] = None,
     ) -> AsyncGenerator[Any, None]:
         """
         Read values from a stream as an async generator.
@@ -1352,6 +1510,7 @@ class DBOSClient:
             offset=offset,
             polling_interval=polling_interval_sec,
             timeout_seconds=timeout_seconds,
+            shard_key=shard_key,
             checkpoint=False,
         )
         try:
@@ -1369,6 +1528,7 @@ class DBOSClient:
         *,
         polling_interval_sec: Optional[float] = None,
         timeout_seconds: Optional[float] = None,
+        shard_key: Optional[str] = None,
     ) -> Any:
         """
         Read the single value at one offset of a stream, waiting for it to be written.
@@ -1395,6 +1555,7 @@ class DBOSClient:
             offset,
             polling_interval=polling_interval_sec,
             timeout_seconds=timeout_seconds,
+            shard_key=shard_key,
             checkpoint=False,
         )
 
@@ -1406,6 +1567,7 @@ class DBOSClient:
         *,
         polling_interval_sec: Optional[float] = None,
         timeout_seconds: Optional[float] = None,
+        shard_key: Optional[str] = None,
     ) -> Any:
         """
         Read the single value at one offset of a stream, waiting for it to be written.
@@ -1432,6 +1594,7 @@ class DBOSClient:
             offset,
             polling_interval=polling_interval_sec,
             timeout_seconds=timeout_seconds,
+            shard_key=shard_key,
             checkpoint=False,
         )
 
@@ -1449,6 +1612,7 @@ class DBOSClient:
         cron_timezone: Optional[str] = None,
         queue_name: Optional[str] = None,
         application_name: Optional[str] = None,
+        shard_key: Optional[str] = None,
     ) -> None:
         """
         Create a cron schedule that periodically invokes a workflow.
@@ -1492,6 +1656,7 @@ class DBOSClient:
                     if application_name is not None
                     else self._sys_db.app_name
                 ),
+                shard_key=shard_key,
             )
         )
 
@@ -1554,6 +1719,7 @@ class DBOSClient:
         cron_timezone: Optional[str] = None,
         queue_name: Optional[str] = None,
         application_name: Optional[str] = None,
+        shard_key: Optional[str] = None,
     ) -> None:
         """Async version of :meth:`create_schedule`."""
         await asyncio.to_thread(
@@ -1567,6 +1733,7 @@ class DBOSClient:
             cron_timezone=cron_timezone,
             queue_name=queue_name,
             application_name=application_name,
+            shard_key=shard_key,
         )
 
     async def list_schedules_async(
@@ -1654,6 +1821,7 @@ class DBOSClient:
                     application_name=entry.get(
                         "application_name", self._sys_db.app_name
                     ),
+                    shard_key=entry.get("shard_key"),
                 )
             )
         with self._sys_db.engine.begin() as c:
@@ -1688,8 +1856,9 @@ class DBOSClient:
             DBOSException: If the schedule does not exist
         """
         workflow_ids = backfill_schedule(self._sys_db, schedule_name, start, end)
+        shard_key = schedule_shard_key(self._sys_db, schedule_name)
         return [
-            WorkflowHandleClientPolling[None](wf_id, self._sys_db)
+            WorkflowHandleClientPolling[None](wf_id, self._sys_db, shard_key=shard_key)
             for wf_id in workflow_ids
         ]
 
@@ -1707,7 +1876,11 @@ class DBOSClient:
             DBOSException: If the schedule does not exist
         """
         workflow_id = trigger_schedule(self._sys_db, schedule_name)
-        return WorkflowHandleClientPolling[None](workflow_id, self._sys_db)
+        return WorkflowHandleClientPolling[None](
+            workflow_id,
+            self._sys_db,
+            shard_key=schedule_shard_key(self._sys_db, schedule_name),
+        )
 
     # ── Application Version API ─────────────────────────────────
 

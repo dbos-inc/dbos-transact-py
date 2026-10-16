@@ -29,6 +29,7 @@ from typing import (
 )
 
 import sqlalchemy as sa
+from psycopg import errors as pg_errors
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
@@ -84,6 +85,7 @@ from ._serialization import (
     serialize_value,
     serialize_value_as,
 )
+from ._shard_keys import bind_shard_keys, bound_shard_key
 
 if TYPE_CHECKING:
     from ._queue import Queue, QueueRateLimit
@@ -229,6 +231,10 @@ class WorkflowStatus:
     schedule_name: Optional[str]
     # Owning application; None if unclaimed, in which case any application may run it.
     application_name: Optional[str]
+    # The shard key the workflow lives under; None on an unsharded database.
+    shard_key: Optional[str] = None
+    # The parent workflow's shard key; None on an unsharded database.
+    parent_shard_key: Optional[str] = None
 
     # INTERNAL FIELDS
 
@@ -273,6 +279,8 @@ class WorkflowStatusInternal(TypedDict):
     is_debounced: bool
     # Owning application; None writes an unclaimed row.
     application_name: Optional[str]
+    # Shard key the workflow lives under; None on an unsharded database.
+    shard_key: Optional[str]
 
 
 class EnqueueOptionsInternal(TypedDict):
@@ -312,6 +320,8 @@ class RecordedResult(TypedDict):
     error: Optional[str]  # Serialized
     serialization: Optional[str]
     child_workflow_id: Optional[str]
+    # The key that child was recorded under; None on an unsharded database
+    child_shard_key: Optional[str]
 
 
 class OperationResultInternal(TypedDict):
@@ -333,8 +343,9 @@ class GetEventWorkflowContext(TypedDict):
 
 
 class GetPendingWorkflowsOutput:
-    def __init__(self, *, workflow_id: str):
+    def __init__(self, *, workflow_id: str, shard_key: Optional[str] = None):
         self.workflow_id: str = workflow_id
+        self.shard_key: Optional[str] = shard_key
 
 
 class WorkflowSchedule(TypedDict):
@@ -351,6 +362,8 @@ class WorkflowSchedule(TypedDict):
     queue_name: Optional[str]
     # Owning application; None leaves it unclaimed. Writers may name another.
     application_name: Optional[str]
+    # Shard key the schedule's workflows run under; None on an unsharded database.
+    shard_key: Optional[str]
 
 
 class ClientScheduleInput(TypedDict, total=False):
@@ -364,6 +377,8 @@ class ClientScheduleInput(TypedDict, total=False):
     queue_name: Optional[str]
     # Owning application; unset falls back to the client's own.
     application_name: Optional[str]
+    # Shard key the schedule's workflows run under; required on a sharded system database.
+    shard_key: Optional[str]
 
 
 class VersionInfo(TypedDict):
@@ -400,6 +415,8 @@ class StepInfo(TypedDict):
     error: Optional[Exception]
     # If the step starts or retrieves the result of a workflow, its ID
     child_workflow_id: Optional[str]
+    # That workflow's shard key; None on an unsharded database
+    child_shard_key: Optional[str]
     # The Unix epoch timestamp at which this step started
     started_at_epoch_ms: Optional[int]
     # The Unix epoch timestamp at which this step completed
@@ -444,12 +461,23 @@ class SendMessage:
     message: Any
     topic: Optional[str] = None
     idempotency_key: Optional[str] = None
+    # The destination's shard key; required on a sharded system database.
+    shard_key: Optional[str] = None
+
+
+# A waiter's (workflow ID, topic or key, shard key) for the polling listener's checks.
+WaiterComponents = Tuple[str, str, Optional[str]]
+
+_SHARDED_RESET_REFUSED = (
+    "Resetting a sharded system database is not supported, with or without truncate: "
+    "drop or empty its schema through the router instead."
+)
 
 
 class KeySignal:
     """Fans one key's wake out to every waiter registered under it."""
 
-    def __init__(self, components: Tuple[str, str]) -> None:
+    def __init__(self, components: WaiterComponents) -> None:
         self.components = components
         self._waiters: Set[LoopAwareEvent] = set()
         self._lock = threading.Lock()
@@ -481,7 +509,7 @@ class ThreadSafeEventDict:
         self,
         key: str,
         event: LoopAwareEvent,
-        components: Tuple[str, str],
+        components: WaiterComponents,
     ) -> None:
         """Register event as a waiter on key."""
         with self._lock:
@@ -505,7 +533,7 @@ class ThreadSafeEventDict:
             if empty:
                 del self._dict[key]
 
-    def snapshot(self) -> List[Tuple[str, Tuple[str, str], KeySignal]]:
+    def snapshot(self) -> List[Tuple[str, WaiterComponents, KeySignal]]:
         """Return a snapshot of (key, components, signal) for every entry."""
         with self._lock:
             return [(key, s.components, s) for key, s in self._dict.items()]
@@ -603,6 +631,11 @@ SQLITE_JSON_SET_MAX_PAIRS = 50
 
 class SystemDatabase(ABC):
 
+    # Tables this handle queries; a sharded subclass supplies copies that also declare shard_key.
+    tables: type[SystemSchema] = SystemSchema
+    # Whether this handle routes every statement by shard key.
+    sharded: bool = False
+
     @staticmethod
     def create(
         system_database_url: str,
@@ -619,8 +652,32 @@ class SystemDatabase(ABC):
         retry_connection_errors: bool = True,
         observability_query_timeout_sec: Optional[float] = None,
         idle_transaction_timeout_sec: Optional[float] = None,
+        sharding: bool = False,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
+        if sharding:
+            if system_database_url.startswith("sqlite"):
+                raise DBOSInitializationError(
+                    "A sharded system database must be Postgres-compatible, not SQLite."
+                )
+            from . import _enterprise
+
+            return _enterprise.load(
+                _enterprise.SHARDING.description
+            ).ShardedSystemDatabase(
+                system_database_url=system_database_url,
+                engine_kwargs=engine_kwargs,
+                engine=engine,
+                schema=schema,
+                serializer=serializer,
+                executor_id=executor_id,
+                notification_listener_polling_interval_sec=notification_listener_polling_interval_sec,
+                polling_concurrency=polling_concurrency,
+                app_name=app_name,
+                retry_connection_errors=retry_connection_errors,
+                observability_query_timeout_sec=observability_query_timeout_sec,
+                idle_transaction_timeout_sec=idle_transaction_timeout_sec,
+            )
         if system_database_url.startswith("sqlite"):
             from ._sys_db_sqlite import SQLiteSystemDatabase
 
@@ -711,6 +768,11 @@ class SystemDatabase(ABC):
         self._retry_connection_errors = retry_connection_errors
         # db_retry trusts the text-based SQLite retriability heuristic only on SQLite.
         self._is_sqlite = system_database_url.startswith("sqlite")
+        # Hot-path statements, compiled once; see _execute_prepared.
+        self._prepared_statements: Dict[
+            Tuple[str, Tuple[str, ...]],
+            Tuple[str, Dict[str, Callable[[Any], Any]], Dict[str, Any]],
+        ] = {}
         # Statement timeout for observability reads, in ms. Unset takes the default; non-positive disables the cap.
         _validate_observability_query_timeout_sec(observability_query_timeout_sec)
         timeout_sec = (
@@ -877,6 +939,209 @@ class SystemDatabase(ABC):
             return sa.cast(sa.func.strftime("%s", "now") * 1000, sa.BigInteger)
         return sa.cast(sa.func.extract("epoch", sa.func.now()) * 1000, sa.BigInteger)
 
+    # Key helpers: every statement locates a workflow's rows through these, so a sharded
+    # subclass can add the shard key without rewriting the statement.
+
+    @staticmethod
+    def _reject_shard_key(workflow_id: Any, shard_key: Optional[str]) -> None:
+        if shard_key is not None or (
+            isinstance(workflow_id, str) and bound_shard_key(workflow_id) is not None
+        ):
+            raise DBOSException(
+                "A shard key was given, but this system database is not sharded"
+            )
+
+    def _wf(
+        self,
+        table: sa.FromClause,
+        workflow_id: Any,
+        column: str = "workflow_uuid",
+        *,
+        shard_key: Optional[str] = None,
+    ) -> List[sa.ColumnElement[bool]]:
+        """Predicates selecting one workflow's rows in table."""
+        self._reject_shard_key(workflow_id, shard_key)
+        return [table.c[column] == workflow_id]
+
+    def _wf_in(
+        self, table: sa.FromClause, workflow_ids: Any, column: str = "workflow_uuid"
+    ) -> List[sa.ColumnElement[bool]]:
+        """Predicates selecting several workflows' rows in table."""
+        for workflow_id in workflow_ids:
+            self._reject_shard_key(workflow_id, None)
+        return [table.c[column].in_(workflow_ids)]
+
+    def _wf_join(
+        self,
+        left: Any,
+        right: Any,
+        left_column: str = "workflow_uuid",
+        right_column: str = "workflow_uuid",
+    ) -> sa.ColumnElement[bool]:
+        """Condition joining two tables' rows of the same workflow."""
+        return cast(
+            sa.ColumnElement[bool], left.c[left_column] == right.c[right_column]
+        )
+
+    def _wf_values(
+        self, workflow_id: str, *, shard_key: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Extra column values for a new row of this workflow."""
+        self._reject_shard_key(workflow_id, shard_key)
+        return {}
+
+    def _parent_values(self, parent_workflow_id: Optional[str]) -> Dict[str, Any]:
+        """Extra column values storing the shard key of a new workflow's parent."""
+        return {}
+
+    def _child_values(self, child_workflow_id: Optional[str]) -> Dict[str, Any]:
+        """Extra column values storing the shard key of the workflow a step refers to."""
+        return {}
+
+    def _wf_columns(self, workflow_id: str) -> List[Tuple[str, Any]]:
+        """Extra (column, expression) pairs for an INSERT ... SELECT of this workflow's rows."""
+        return []
+
+    def _execute_prepared(
+        self,
+        conn: Union[sa.Connection, Session],
+        name: str,
+        values: Dict[str, Any],
+        build: Callable[[], Any],
+        *,
+        insert_columns: bool = True,
+    ) -> Any:
+        """Execute build()'s statement with values, building and compiling it only once per
+        set of columns. values are the INSERT's columns, or with insert_columns=False the
+        statement's own named bind parameters. SQLAlchemy never caches a postgresql.insert, so building and
+        compiling the hot path's inserts on every call was a large share of a workflow's
+        client CPU. The SQL is the engine's own compilation and each value goes through
+        its type's bind processor, so what reaches the driver is unchanged. SQLite has no
+        schema to render ahead of time, so there the statement is built per call.
+        """
+        connection = conn.connection() if isinstance(conn, Session) else conn
+        # A caller's connection may use another driver, so it compiles the statement itself.
+        if self._is_sqlite or connection.dialect is not self.engine.dialect:
+            return conn.execute(build(), values)
+        key = (name, tuple(values))
+        prepared = self._prepared_statements.get(key)
+        if prepared is None:
+            dialect = self.engine.dialect
+            compiled = build().compile(
+                dialect=dialect,
+                column_keys=list(values) if insert_columns else None,
+                schema_translate_map={SCHEMA_PLACEHOLDER: self.schema},
+                render_schema_translate=True,
+            )
+            processors: Dict[str, Callable[[Any], Any]] = {}
+            # The statement's own constants, such as a status it compares against, are
+            # bind parameters too; their values are fixed, so they are kept with the SQL.
+            constants: Dict[str, Any] = {}
+            for bind_name, bind in compiled.binds.items():
+                processor = bind.type.dialect_impl(dialect).bind_processor(dialect)
+                if processor is not None:
+                    processors[bind_name] = processor
+                if bind_name not in values:
+                    constants[bind_name] = bind.value
+            prepared = (str(compiled), processors, constants)
+            self._prepared_statements[key] = prepared
+        sql, processors, constants = prepared
+        params = {
+            k: processors[k](v) if k in processors else v
+            for k, v in {**constants, **values}.items()
+        }
+        return connection.exec_driver_sql(sql, params)
+
+    def _key_conflict(self, *columns: Any) -> List[Any]:
+        """Conflict target for a unique key of a workflow table."""
+        return list(columns)
+
+    def _insert_rows(
+        self,
+        conn: Union[sa.Connection, Session],
+        build: Callable[[List[Dict[str, Any]]], sa.Executable],
+        rows: List[Dict[str, Any]],
+        *,
+        returning: bool = False,
+    ) -> List[sa.Row[Any]]:
+        """Insert rows, returning the RETURNING rows if asked. One statement here; a sharded
+        subclass inserts row by row, since routers broadcast a multi-row VALUES."""
+        result = conn.execute(build(rows))
+        return list(result) if returning else []
+
+    def _scoped(self, table: Any) -> List[sa.ColumnElement[bool]]:
+        """Predicates confining a statement that names no single workflow to the current shard."""
+        return []
+
+    def _scoped_columns(self) -> List[Tuple[str, Any]]:
+        """Extra (column, expression) pairs for an INSERT ... SELECT confined to the current shard."""
+        return []
+
+    def _global(self, table: sa.FromClause) -> List[sa.ColumnElement[bool]]:
+        """Predicates selecting a global table's rows (queues, schedules, versions)."""
+        return []
+
+    def _global_values(self) -> Dict[str, Any]:
+        """Extra column values for a new row of a global table."""
+        return {}
+
+    def _key_in(
+        self, table: sa.FromClause, shard_keys: List[str], column: str = "shard_key"
+    ) -> List[sa.ColumnElement[bool]]:
+        """Predicates selecting rows whose column holds one of these shard keys."""
+        raise DBOSException("Filtering by shard key requires a sharded system database")
+
+    def _key_column(
+        self, table: sa.FromClause, column: str = "shard_key"
+    ) -> Optional[sa.ColumnElement[Any]]:
+        """A shard key column to read back with a row, if this handle has one."""
+        return None
+
+    def _schedule_values(self, schedule: "WorkflowSchedule") -> Dict[str, Any]:
+        """Extra column values storing the shard key a schedule's workflows run under."""
+        if schedule.get("shard_key") is not None:
+            raise DBOSException(
+                "Scheduling under a shard key requires a sharded system database"
+            )
+        return {}
+
+    def _schedule_key_column(self) -> Optional[sa.ColumnElement[Any]]:
+        """The column holding the shard key a schedule's workflows run under, if any."""
+        return None
+
+    def _key_hint(self, workflow_id: str) -> Optional[str]:
+        """This workflow's shard key, resolved now for a statement or waiter that needs it later."""
+        self._reject_shard_key(workflow_id, None)
+        return None
+
+    def _waiter(self, workflow_id: str, name: str) -> Tuple[str, WaiterComponents]:
+        """The waiter-map key for a workflow's topic or key, and what the listener checks
+        for it. Keyed waiters are told apart, as one ID can live under several keys."""
+        key = self._key_hint(workflow_id)
+        payload = f"{workflow_id}::{name}"
+        return (payload if key is None else f"{len(key)}:{key}:{payload}"), (
+            workflow_id,
+            name,
+            key,
+        )
+
+    @contextmanager
+    def _own_key(
+        self,
+        workflow_id: str,
+        ctx: Optional["DBOSContext"] = None,
+        *,
+        key: Optional[str] = None,
+    ) -> Generator[None, None, None]:
+        """Address a workflow's own rows by its own key: key when the caller knows it, else
+        the running workflow's, even where a same-ID workflow is bound as a target."""
+        if key is None:
+            ctx = ctx if ctx is not None else get_local_dbos_context()
+            if ctx is not None and ctx.workflow_id == workflow_id:
+                key = ctx.shard_key
+        with bind_shard_keys({workflow_id: key}):
+            yield
+
     @staticmethod
     def _name_filter(
         col: sa.ColumnElement[Any], value: Optional[Union[str, List[str]]]
@@ -893,7 +1158,7 @@ class SystemDatabase(ABC):
         prepare-time prover. Omitted on Postgres, whose planner would count it twice."""
         if self.engine.dialect.name != "sqlite":
             return sa.true()
-        return SystemSchema.workflow_status.c.status.in_(
+        return self.tables.workflow_status.c.status.in_(
             [
                 sa.literal_column(f"'{WorkflowStatusString.ENQUEUED.value}'"),
                 sa.literal_column(f"'{WorkflowStatusString.PENDING.value}'"),
@@ -947,7 +1212,9 @@ class SystemDatabase(ABC):
         """Owner to persist when writing a row that may already exist. A nameless writer
         leaves the owner intact; a named one collides only with a different name."""
         existing = conn.execute(
-            sa.select(table.c.application_name).where(name_col == name)
+            sa.select(table.c.application_name).where(
+                *self._global(table), name_col == name
+            )
         ).fetchone()
         if existing is None or existing[0] is None:
             return owner
@@ -988,69 +1255,71 @@ class SystemDatabase(ABC):
             WorkflowStatusString.DELAYED.value,
         ]
 
-        cmd = (
-            self.dialect.insert(SystemSchema.workflow_status).values(
-                workflow_uuid=status["workflow_uuid"],
-                status=status["status"],
-                name=status["name"],
-                class_name=status["class_name"],
-                config_name=status["config_name"],
-                executor_id=status["executor_id"],
-                application_version=status["app_version"],
-                application_id=status["app_id"],
-                authenticated_user=status["authenticated_user"],
-                authenticated_roles=status["authenticated_roles"],
-                assumed_role=status["assumed_role"],
-                queue_name=status["queue_name"],
-                recovery_attempts=(1 if wf_status not in _enqueued_statuses else 0),
-                workflow_timeout_ms=status["workflow_timeout_ms"],
-                workflow_deadline_epoch_ms=status["workflow_deadline_epoch_ms"],
-                deduplication_id=status["deduplication_id"],
-                priority=status["priority"],
-                serialization=status["serialization"],
-                queue_partition_key=status["queue_partition_key"],
-                parent_workflow_id=status["parent_workflow_id"],
-                creator_xid=creator_xid,
-                # A direct start runs at once, so its creator token also owns the execution.
-                owner_xid=(
-                    creator_xid
-                    if wf_status == WorkflowStatusString.PENDING.value
-                    else None
-                ),
-                delay_until_epoch_ms=status["delay_until_epoch_ms"],
-                attributes=status["attributes"],
-                schedule_name=status["schedule_name"],
-                debounce_deadline_epoch_ms=status["debounce_deadline_epoch_ms"],
-                is_debounced=status["is_debounced"],
-                application_name=status["application_name"],
-            )
+        values = dict(
+            **self._wf_values(status["workflow_uuid"], shard_key=status["shard_key"]),
+            workflow_uuid=status["workflow_uuid"],
+            status=status["status"],
+            name=status["name"],
+            class_name=status["class_name"],
+            config_name=status["config_name"],
+            executor_id=status["executor_id"],
+            application_version=status["app_version"],
+            application_id=status["app_id"],
+            authenticated_user=status["authenticated_user"],
+            authenticated_roles=status["authenticated_roles"],
+            assumed_role=status["assumed_role"],
+            queue_name=status["queue_name"],
+            recovery_attempts=(1 if wf_status not in _enqueued_statuses else 0),
+            workflow_timeout_ms=status["workflow_timeout_ms"],
+            workflow_deadline_epoch_ms=status["workflow_deadline_epoch_ms"],
+            deduplication_id=status["deduplication_id"],
+            priority=status["priority"],
+            serialization=status["serialization"],
+            queue_partition_key=status["queue_partition_key"],
+            parent_workflow_id=status["parent_workflow_id"],
+            **self._parent_values(status["parent_workflow_id"]),
+            creator_xid=creator_xid,
+            # A direct start runs at once, so its creator token also owns the execution.
+            owner_xid=(
+                creator_xid if wf_status == WorkflowStatusString.PENDING.value else None
+            ),
+            delay_until_epoch_ms=status["delay_until_epoch_ms"],
+            attributes=status["attributes"],
+            schedule_name=status["schedule_name"],
+            debounce_deadline_epoch_ms=status["debounce_deadline_epoch_ms"],
+            is_debounced=status["is_debounced"],
+            application_name=status["application_name"],
+        )
+        ws = self.tables.workflow_status
+        build_status_insert = lambda: (
+            self.dialect.insert(ws)
             # A no-op update, so an existing row comes back unchanged for the caller to inspect.
             .on_conflict_do_update(
-                index_elements=["workflow_uuid"],
-                set_={"creator_xid": SystemSchema.workflow_status.c.creator_xid},
+                index_elements=self._key_conflict("workflow_uuid"),
+                set_={"creator_xid": ws.c.creator_xid},
+            ).returning(
+                ws.c.status,
+                ws.c.name,
+                ws.c.class_name,
+                ws.c.config_name,
+                ws.c.queue_name,
+                ws.c.creator_xid,
+                ws.c.serialization,
             )
         )
 
-        cmd = cmd.returning(
-            SystemSchema.workflow_status.c.status,
-            SystemSchema.workflow_status.c.name,
-            SystemSchema.workflow_status.c.class_name,
-            SystemSchema.workflow_status.c.config_name,
-            SystemSchema.workflow_status.c.queue_name,
-            SystemSchema.workflow_status.c.creator_xid,
-            SystemSchema.workflow_status.c.serialization,
+        input_values = dict(
+            **self._wf_values(status["workflow_uuid"], shard_key=status["shard_key"]),
+            workflow_uuid=status["workflow_uuid"],
+            inputs=status["inputs"],
         )
-
-        inputs_insert = (
-            self.dialect.insert(SystemSchema.workflow_input)
-            .values(
-                workflow_uuid=status["workflow_uuid"],
-                inputs=status["inputs"],
-            )
-            .on_conflict_do_nothing(index_elements=["workflow_uuid"])
-        )
+        build_inputs_insert = lambda: self.dialect.insert(
+            self.tables.workflow_input
+        ).on_conflict_do_nothing(index_elements=self._key_conflict("workflow_uuid"))
         try:
-            results = conn.execute(cmd)
+            results = self._execute_prepared(
+                conn, "insert_workflow_status", values, build_status_insert
+            )
         except DBAPIError as dbapi_error:
             # Unique constraint violation for the deduplication ID
             if self._is_unique_constraint_violation(dbapi_error):
@@ -1097,7 +1366,9 @@ class SystemDatabase(ABC):
             status["serialization"] = m["serialization"]
 
         # After the checks above, so a rejected start writes no inputs.
-        conn.execute(inputs_insert)
+        self._execute_prepared(
+            conn, "insert_workflow_input", input_values, build_inputs_insert
+        )
         return wf_status, should_execute
 
     @db_retry()
@@ -1115,14 +1386,14 @@ class SystemDatabase(ABC):
         with self.engine.begin() as c:
             now_ms = self._now_ms_sql()
             c.execute(
-                sa.update(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids))
+                sa.update(self.tables.workflow_status)
+                .where(*self._wf_in(self.tables.workflow_status, workflow_ids))
                 .where(
-                    SystemSchema.workflow_status.c.status
+                    self.tables.workflow_status.c.status
                     == WorkflowStatusString.PENDING.value
                 )
                 .where(
-                    SystemSchema.workflow_status.c.recovery_attempts
+                    self.tables.workflow_status.c.recovery_attempts
                     >= min_recovery_attempts
                 )
                 .values(
@@ -1158,10 +1429,119 @@ class SystemDatabase(ABC):
         """
         if owner_xid is None:
             owner_xid = current_owner_xid(workflow_id)
+        if not self._outcome_in_one_statement():
+            return self._update_workflow_outcome_in_transaction(
+                workflow_id, status, output=output, error=error, owner_xid=owner_xid
+            )
+        # One statement, run in autocommit: a single round trip, where a transaction of
+        # the UPDATE and the output's upsert took four (BEGIN, two statements, COMMIT).
+        # The upsert reads only the UPDATE's returned rows, so the output is written
+        # exactly when the status write lands, as before; when it does not, no orphan
+        # payload is left.
+        keys = self._wf_values(workflow_id)
+        values: Dict[str, Any] = {
+            **{f"key_{column}": value for column, value in keys.items()},
+            "wf_id": workflow_id,
+            "new_status": status,
+            "output": output,
+            "error": error,
+        }
+        if owner_xid is not None:
+            values["owner"] = owner_xid
+
+        def build() -> Any:
+            ws, wo = self.tables.workflow_status, self.tables.workflow_output
+            # One object per name, so each parameter appears once in the statement's binds.
+            param = {
+                name: sa.bindparam(name, type_=wo.c[name[4:]].type)
+                for name in values
+                if name.startswith("key_")
+            }
+            param["wf_id"] = sa.bindparam("wf_id", type_=ws.c.workflow_uuid.type)
+            now_ms = self._now_ms_sql()
+            update = (
+                sa.update(ws)
+                .values(
+                    status=sa.bindparam("new_status", type_=ws.c.status.type),
+                    # As the workflow is complete, remove its deduplication ID
+                    deduplication_id=None,
+                    # A finished workflow has no owner.
+                    owner_xid=None,
+                    updated_at=now_ms,
+                    completed_at=now_ms,
+                )
+                .where(
+                    *[
+                        ws.c[name[4:]] == p
+                        for name, p in param.items()
+                        if name != "wf_id"
+                    ]
+                )
+                .where(ws.c.workflow_uuid == param["wf_id"])
+                .where(ws.c.status == WorkflowStatusString.PENDING.value)
+            )
+            if owner_xid is not None:
+                update = update.where(
+                    ws.c.owner_xid == sa.bindparam("owner", type_=ws.c.owner_xid.type)
+                )
+            updated = update.returning(sa.literal_column("1")).cte("updated")
+            insert = self.dialect.insert(wo)
+            stored = (
+                insert.from_select(
+                    [*keys, "workflow_uuid", "output", "error"],
+                    sa.select(
+                        *[param[f"key_{column}"] for column in keys],
+                        param["wf_id"],
+                        sa.bindparam("output", type_=wo.c.output.type),
+                        sa.bindparam("error", type_=wo.c.error.type),
+                    ).where(sa.exists(sa.select(1).select_from(updated))),
+                )
+                # excluded is the row this INSERT proposed, so these are the values above.
+                .on_conflict_do_update(
+                    index_elements=self._key_conflict("workflow_uuid"),
+                    set_={
+                        "output": insert.excluded.output,
+                        "error": insert.excluded.error,
+                    },
+                )
+                # CockroachDB refuses a data-modifying CTE without RETURNING.
+                .returning(sa.literal_column("1")).cte("stored")
+            )
+            # Selecting from the CTEs rather than inserting at the top level lets a
+            # router see the shard key: PgDog sends an INSERT ... SELECT to every shard.
+            return sa.select(sa.func.count()).select_from(updated).add_cte(stored)
+
+        with self.engine.connect() as c:
+            c.execution_options(isolation_level="AUTOCOMMIT")
+            written = self._execute_prepared(
+                c,
+                "update_workflow_outcome" + ("" if owner_xid is None else "_owned"),
+                values,
+                build,
+                insert_columns=False,
+            ).scalar()
+        return bool(written)
+
+    def _outcome_in_one_statement(self) -> bool:
+        """Whether update_workflow_outcome writes in one statement; SQLite cannot put an
+        UPDATE in a WITH clause."""
+        return not self._is_sqlite
+
+    def _update_workflow_outcome_in_transaction(
+        self,
+        workflow_id: str,
+        status: WorkflowStatuses,
+        *,
+        output: Optional[str],
+        error: Optional[str],
+        owner_xid: Optional[str],
+    ) -> bool:
+        """update_workflow_outcome as a transaction of two statements, for a backend
+        that cannot run it as one."""
         with self.engine.begin() as c:
             now_ms = self._now_ms_sql()
             update = (
-                sa.update(SystemSchema.workflow_status)
+                sa.update(self.tables.workflow_status)
                 .values(
                     status=status,
                     # As the workflow is complete, remove its deduplication ID
@@ -1171,31 +1551,40 @@ class SystemDatabase(ABC):
                     updated_at=now_ms,
                     completed_at=now_ms,
                 )
-                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                .where(*self._wf(self.tables.workflow_status, workflow_id))
                 .where(
-                    SystemSchema.workflow_status.c.status
+                    self.tables.workflow_status.c.status
                     == WorkflowStatusString.PENDING.value
                 )
             )
             if owner_xid is not None:
                 update = update.where(
-                    SystemSchema.workflow_status.c.owner_xid == owner_xid
+                    self.tables.workflow_status.c.owner_xid == owner_xid
                 )
             result = c.execute(update)
             if result.rowcount == 0:
                 # The outcome was not ours to write, so leave no orphan payload.
                 return False
-            c.execute(
-                self.dialect.insert(SystemSchema.workflow_output)
-                .values(
-                    workflow_uuid=workflow_id,
-                    output=output,
-                    error=error,
+            output_values = dict(
+                **self._wf_values(workflow_id),
+                workflow_uuid=workflow_id,
+                output=output,
+                error=error,
+            )
+
+            def build_output_upsert() -> Any:
+                insert = self.dialect.insert(self.tables.workflow_output)
+                # excluded is the row this INSERT proposed, so these are the values above.
+                return insert.on_conflict_do_update(
+                    index_elements=self._key_conflict("workflow_uuid"),
+                    set_={
+                        "output": insert.excluded.output,
+                        "error": insert.excluded.error,
+                    },
                 )
-                .on_conflict_do_update(
-                    index_elements=["workflow_uuid"],
-                    set_={"output": output, "error": error},
-                )
+
+            self._execute_prepared(
+                c, "upsert_workflow_output", output_values, build_output_upsert
             )
             return True
 
@@ -1211,10 +1600,10 @@ class SystemDatabase(ABC):
                 # Set the workflows' status to CANCELLED and remove them from any
                 # queue, but only if the workflow is not already complete.
                 c.execute(
-                    sa.update(SystemSchema.workflow_status)
-                    .where(SystemSchema.workflow_status.c.workflow_uuid.in_(ids))
+                    sa.update(self.tables.workflow_status)
+                    .where(*self._wf_in(self.tables.workflow_status, ids))
                     .where(
-                        SystemSchema.workflow_status.c.status.notin_(
+                        self.tables.workflow_status.c.status.notin_(
                             [
                                 WorkflowStatusString.SUCCESS.value,
                                 WorkflowStatusString.ERROR.value,
@@ -1256,8 +1645,8 @@ class SystemDatabase(ABC):
             # Check existence separately: a zero-row update also means "already complete", a legal no-op.
             existing = set(
                 c.execute(
-                    sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
-                        SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids)
+                    sa.select(self.tables.workflow_status.c.workflow_uuid).where(
+                        *self._wf_in(self.tables.workflow_status, workflow_ids)
                     )
                 ).scalars()
             )
@@ -1267,10 +1656,10 @@ class SystemDatabase(ABC):
             # Set the workflows' status to ENQUEUED and clear recovery attempts and deadline,
             # but only if the workflow is not already complete.
             c.execute(
-                sa.update(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids))
+                sa.update(self.tables.workflow_status)
+                .where(*self._wf_in(self.tables.workflow_status, workflow_ids))
                 .where(
-                    SystemSchema.workflow_status.c.status.notin_(
+                    self.tables.workflow_status.c.status.notin_(
                         [
                             WorkflowStatusString.SUCCESS.value,
                             WorkflowStatusString.ERROR.value,
@@ -1319,10 +1708,10 @@ class SystemDatabase(ABC):
             )
         with self.engine.begin() as c:
             c.execute(
-                sa.update(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                sa.update(self.tables.workflow_status)
+                .where(*self._wf(self.tables.workflow_status, workflow_id))
                 .where(
-                    SystemSchema.workflow_status.c.status
+                    self.tables.workflow_status.c.status
                     == WorkflowStatusString.DELAYED.value
                 )
                 .values(
@@ -1342,10 +1731,10 @@ class SystemDatabase(ABC):
         """
         with self.engine.begin() as c:
             row = c.execute(
-                sa.select(SystemSchema.workflow_status.c.workflow_uuid)
-                .where(SystemSchema.workflow_status.c.queue_name == queue_name)
+                sa.select(self.tables.workflow_status.c.workflow_uuid)
+                .where(self.tables.workflow_status.c.queue_name == queue_name)
                 .where(
-                    SystemSchema.workflow_status.c.deduplication_id == deduplication_id
+                    self.tables.workflow_status.c.deduplication_id == deduplication_id
                 )
             ).fetchone()
         return row[0] if row is not None else None
@@ -1378,7 +1767,7 @@ class SystemDatabase(ABC):
         """
 
         def _do(c: sa.Connection) -> DebounceResult:
-            wsc = SystemSchema.workflow_status.c
+            wsc = self.tables.workflow_status.c
             # Cap the new delay at the debounce deadline, if any (CASE not LEAST/min, for Postgres/SQLite portability).
             capped_delay = sa.case(
                 (
@@ -1391,7 +1780,7 @@ class SystemDatabase(ABC):
                 else_=delay_until_epoch_ms,
             )
             updated = c.execute(
-                sa.update(SystemSchema.workflow_status)
+                sa.update(self.tables.workflow_status)
                 .where(wsc.name == workflow_name)
                 .where(wsc.queue_name == queue_name)
                 .where(wsc.deduplication_id == deduplication_id)
@@ -1412,14 +1801,14 @@ class SystemDatabase(ABC):
             ).fetchone()
             if updated is not None:
                 c.execute(
-                    self.dialect.insert(SystemSchema.workflow_input)
+                    self.dialect.insert(self.tables.workflow_input)
                     .values(
                         workflow_uuid=updated[0],
                         inputs=inputs,
                         retention_timestamp=self._now_ms_sql(),
                     )
                     .on_conflict_do_update(
-                        index_elements=["workflow_uuid"],
+                        index_elements=self._key_conflict("workflow_uuid"),
                         set_={"inputs": inputs},
                     )
                 )
@@ -1435,6 +1824,7 @@ class SystemDatabase(ABC):
                 sa.select(
                     wsc.workflow_uuid, wsc.is_debounced, wsc.name, wsc.application_name
                 )
+                .where(*self._scoped(self.tables.workflow_status))
                 .where(wsc.queue_name == queue_name)
                 .where(wsc.deduplication_id == deduplication_id)
             ).fetchone()
@@ -1478,7 +1868,7 @@ class SystemDatabase(ABC):
         if merge and attributes is None:
             raise DBOSException("Cannot merge None into workflow attributes")
 
-        ws = SystemSchema.workflow_status
+        ws = self.tables.workflow_status
         value: Any = attributes
         if merge:
             assert attributes is not None
@@ -1508,30 +1898,38 @@ class SystemDatabase(ABC):
         with self.engine.begin() as c:
             c.execute(
                 sa.update(ws)
-                .where(ws.c.workflow_uuid == workflow_id)
+                .where(*self._wf(ws, workflow_id))
                 .values(
                     attributes=value,
                     updated_at=self._now_ms_sql(),
                 )
             )
 
+    def delete_workflows(
+        self, workflow_ids: list[str], *, delete_children: bool = False
+    ) -> None:
+        """Delete workflows and all associated data from the system database,
+        and with delete_children every workflow they started, recursively."""
+        all_ids = list(workflow_ids)
+        if delete_children:
+            for wfid in workflow_ids:
+                all_ids.extend(self.get_workflow_children(wfid))
+        self._delete_workflows(all_ids)
+
     @db_retry()
-    def delete_workflows(self, workflow_ids: list[str]) -> None:
-        """Delete workflows and all associated data from the system database."""
+    def _delete_workflows(self, workflow_ids: list[str]) -> None:
         with self.engine.begin() as c:
             # The payload tables carry no foreign key, so the status delete does
             # not cascade into them; without this they survive as orphans.
             for table in (
-                SystemSchema.workflow_input,
-                SystemSchema.workflow_output,
-                SystemSchema.operation_outputs,
+                self.tables.workflow_input,
+                self.tables.workflow_output,
+                self.tables.operation_outputs,
             ):
-                c.execute(
-                    sa.delete(table).where(table.c.workflow_uuid.in_(workflow_ids))
-                )
+                c.execute(sa.delete(table).where(*self._wf_in(table, workflow_ids)))
             c.execute(
-                sa.delete(SystemSchema.workflow_status).where(
-                    SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids)
+                sa.delete(self.tables.workflow_status).where(
+                    *self._wf_in(self.tables.workflow_status, workflow_ids)
                 )
             )
 
@@ -1564,14 +1962,14 @@ class SystemDatabase(ABC):
         if start_step < 1:
             raise ValueError(f"start_step must be >= 1, got {start_step}")
 
-        weh = SystemSchema.workflow_events_history
-        events = SystemSchema.workflow_events
+        weh = self.tables.workflow_events_history
+        events = self.tables.workflow_events
 
         with self.engine.begin() as c:
             # Check the workflow exists and is in a terminal state
             status = c.execute(
-                sa.select(SystemSchema.workflow_status.c.status).where(
-                    SystemSchema.workflow_status.c.workflow_uuid == workflow_id
+                sa.select(self.tables.workflow_status.c.status).where(
+                    *self._wf(self.tables.workflow_status, workflow_id)
                 )
             ).scalar()
             if status is None:
@@ -1592,9 +1990,9 @@ class SystemDatabase(ABC):
                 return (
                     sa.select(sa.literal(1))
                     .where(
-                        (discarded.c.workflow_uuid == workflow_id)
-                        & (discarded.c.key == key)
-                        & (discarded.c.function_id >= start_step)
+                        *self._wf(discarded, workflow_id),
+                        discarded.c.key == key,
+                        discarded.c.function_id >= start_step,
                     )
                     .exists()
                 )
@@ -1602,8 +2000,7 @@ class SystemDatabase(ABC):
             # First delete all events published after the rewind point.
             c.execute(
                 sa.delete(events).where(
-                    (events.c.workflow_uuid == workflow_id)
-                    & published_past_cut(events.c.key)
+                    *self._wf(events, workflow_id), published_past_cut(events.c.key)
                 )
             )
 
@@ -1622,16 +2019,24 @@ class SystemDatabase(ABC):
                     .label("rn"),
                 )
                 .where(
-                    (weh.c.workflow_uuid == workflow_id)
-                    & (weh.c.function_id < start_step)
-                    & published_past_cut(weh.c.key)
+                    *self._wf(weh, workflow_id),
+                    weh.c.function_id < start_step,
+                    published_past_cut(weh.c.key),
                 )
                 .subquery("surviving")
             )
+            key_columns = self._wf_columns(workflow_id)
             c.execute(
                 sa.insert(events).from_select(
-                    ["workflow_uuid", "key", "value", "serialization"],
+                    [
+                        *[name for name, _ in key_columns],
+                        "workflow_uuid",
+                        "key",
+                        "value",
+                        "serialization",
+                    ],
                     sa.select(
+                        *[expr for _, expr in key_columns],
                         surviving.c.workflow_uuid,
                         surviving.c.key,
                         surviving.c.value,
@@ -1642,43 +2047,36 @@ class SystemDatabase(ABC):
 
             # Clear streams' close sentinels: the rows a reader never reads ahead.
             c.execute(
-                sa.delete(SystemSchema.streams).where(
-                    (SystemSchema.streams.c.workflow_uuid == workflow_id)
-                    & (SystemSchema.streams.c.function_id >= start_step)
-                    & (
-                        SystemSchema.streams.c.value
-                        == _serialized_stream_closed_sentinel
-                    )
-                    & (SystemSchema.streams.c.serialization == DBOSPortableJSON.name())
+                sa.delete(self.tables.streams).where(
+                    *self._wf(self.tables.streams, workflow_id),
+                    self.tables.streams.c.function_id >= start_step,
+                    self.tables.streams.c.value == _serialized_stream_closed_sentinel,
+                    self.tables.streams.c.serialization == DBOSPortableJSON.name(),
                 )
             )
 
             # Discard steps and workflow events history
-            for table in (SystemSchema.operation_outputs, weh):
+            for table in (self.tables.operation_outputs, weh):
                 c.execute(
                     sa.delete(table).where(
-                        (table.c.workflow_uuid == workflow_id)
-                        & (table.c.function_id >= start_step)
+                        *self._wf(table, workflow_id), table.c.function_id >= start_step
                     )
                 )
 
             # Delete messages consumed or received after the rewind point
             c.execute(
-                sa.delete(SystemSchema.notifications).where(
-                    (SystemSchema.notifications.c.destination_uuid == workflow_id)
-                    & (
-                        (
-                            SystemSchema.notifications.c.consumed_by_function_id
-                            >= start_step
-                        )
-                        | (SystemSchema.notifications.c.consumed == False)
-                    )
+                sa.delete(self.tables.notifications).where(
+                    *self._wf(
+                        self.tables.notifications, workflow_id, "destination_uuid"
+                    ),
+                    (self.tables.notifications.c.consumed_by_function_id >= start_step)
+                    | (self.tables.notifications.c.consumed == False),
                 )
             )
 
             c.execute(
-                sa.delete(SystemSchema.workflow_output).where(
-                    SystemSchema.workflow_output.c.workflow_uuid == workflow_id
+                sa.delete(self.tables.workflow_output).where(
+                    *self._wf(self.tables.workflow_output, workflow_id)
                 )
             )
 
@@ -1689,9 +2087,9 @@ class SystemDatabase(ABC):
                 else {}
             )
             result = c.execute(
-                sa.update(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
-                .where(SystemSchema.workflow_status.c.status == status)
+                sa.update(self.tables.workflow_status)
+                .where(*self._wf(self.tables.workflow_status, workflow_id))
+                .where(self.tables.workflow_status.c.status == status)
                 .values(
                     status=WorkflowStatusString.ENQUEUED.value,
                     owner_xid=None,
@@ -1741,34 +2139,31 @@ class SystemDatabase(ABC):
         with self.engine.begin() as c:
             rows = c.execute(
                 sa.select(
-                    SystemSchema.workflow_status.c.workflow_uuid,
-                    SystemSchema.workflow_status.c.name,
-                    SystemSchema.workflow_status.c.class_name,
-                    SystemSchema.workflow_status.c.config_name,
-                    SystemSchema.workflow_status.c.application_id,
-                    SystemSchema.workflow_status.c.authenticated_user,
-                    SystemSchema.workflow_status.c.authenticated_roles,
-                    SystemSchema.workflow_status.c.assumed_role,
+                    self.tables.workflow_status.c.workflow_uuid,
+                    self.tables.workflow_status.c.name,
+                    self.tables.workflow_status.c.class_name,
+                    self.tables.workflow_status.c.config_name,
+                    self.tables.workflow_status.c.application_id,
+                    self.tables.workflow_status.c.authenticated_user,
+                    self.tables.workflow_status.c.authenticated_roles,
+                    self.tables.workflow_status.c.assumed_role,
                     sa.func.coalesce(
-                        SystemSchema.workflow_input.c.inputs,
-                        SystemSchema.workflow_status.c.inputs,
+                        self.tables.workflow_input.c.inputs,
+                        self.tables.workflow_status.c.inputs,
                     ).label("inputs"),
-                    SystemSchema.workflow_status.c.serialization,
-                    SystemSchema.workflow_status.c.attributes,
-                    SystemSchema.workflow_status.c.application_name,
+                    self.tables.workflow_status.c.serialization,
+                    self.tables.workflow_status.c.attributes,
+                    self.tables.workflow_status.c.application_name,
                 )
                 .select_from(
-                    SystemSchema.workflow_status.outerjoin(
-                        SystemSchema.workflow_input,
-                        SystemSchema.workflow_status.c.workflow_uuid
-                        == SystemSchema.workflow_input.c.workflow_uuid,
+                    self.tables.workflow_status.outerjoin(
+                        self.tables.workflow_input,
+                        self._wf_join(
+                            self.tables.workflow_status, self.tables.workflow_input
+                        ),
                     )
                 )
-                .where(
-                    SystemSchema.workflow_status.c.workflow_uuid.in_(
-                        original_workflow_ids
-                    )
-                )
+                .where(*self._wf_in(self.tables.workflow_status, original_workflow_ids))
             ).fetchall()
 
             status_by_id = {row[0]: row for row in rows}
@@ -1782,62 +2177,58 @@ class SystemDatabase(ABC):
                 for fork_id, status in zip(forked_workflow_ids, statuses)
             }
             # Bulk insert all forked workflow status rows in one statement.
-            c.execute(
-                sa.insert(SystemSchema.workflow_status).values(
-                    [
-                        dict(
-                            workflow_uuid=forked_workflow_id,
-                            status=WorkflowStatusString.ENQUEUED.value,
-                            name=status[1],
-                            class_name=status[2],
-                            config_name=status[3],
-                            application_version=application_version,
-                            application_id=status[4],
-                            authenticated_user=status[5],
-                            authenticated_roles=status[6],
-                            serialization=status[9],
-                            queue_name=(
-                                queue_name
-                                if queue_name is not None
-                                else INTERNAL_QUEUE_NAME
-                            ),
-                            queue_partition_key=queue_partition_key,
-                            assumed_role=status[7],
-                            forked_from=original_workflow_id,
-                            attributes=status[10],
-                            # Inherit the source's owner so the fork runs on the same application; claim an unclaimed one, as dequeue does.
-                            application_name=fork_owners[forked_workflow_id],
-                            workflow_timeout_ms=workflow_timeout_ms,
-                        )
-                        for original_workflow_id, forked_workflow_id, status in zip(
-                            original_workflow_ids, forked_workflow_ids, statuses
-                        )
-                    ]
-                )
+            self._insert_rows(
+                c,
+                lambda batch: sa.insert(self.tables.workflow_status).values(batch),
+                [
+                    dict(
+                        **self._wf_values(forked_workflow_id),
+                        workflow_uuid=forked_workflow_id,
+                        status=WorkflowStatusString.ENQUEUED.value,
+                        name=status[1],
+                        class_name=status[2],
+                        config_name=status[3],
+                        application_version=application_version,
+                        application_id=status[4],
+                        authenticated_user=status[5],
+                        authenticated_roles=status[6],
+                        serialization=status[9],
+                        queue_name=(
+                            queue_name
+                            if queue_name is not None
+                            else INTERNAL_QUEUE_NAME
+                        ),
+                        queue_partition_key=queue_partition_key,
+                        assumed_role=status[7],
+                        forked_from=original_workflow_id,
+                        attributes=status[10],
+                        # Inherit the source's owner so the fork runs on the same application; claim an unclaimed one, as dequeue does.
+                        application_name=fork_owners[forked_workflow_id],
+                        workflow_timeout_ms=workflow_timeout_ms,
+                    )
+                    for original_workflow_id, forked_workflow_id, status in zip(
+                        original_workflow_ids, forked_workflow_ids, statuses
+                    )
+                ],
             )
 
-            c.execute(
-                sa.insert(SystemSchema.workflow_input).values(
-                    [
-                        dict(
-                            workflow_uuid=forked_workflow_id,
-                            inputs=status[8],
-                        )
-                        for forked_workflow_id, status in zip(
-                            forked_workflow_ids, statuses
-                        )
-                    ]
-                )
+            self._insert_rows(
+                c,
+                lambda batch: sa.insert(self.tables.workflow_input).values(batch),
+                [
+                    dict(
+                        **self._wf_values(forked_workflow_id),
+                        workflow_uuid=forked_workflow_id,
+                        inputs=status[8],
+                    )
+                    for forked_workflow_id, status in zip(forked_workflow_ids, statuses)
+                ],
             )
 
             # Mark the original workflows as having been forked from.
             c.execute(
-                sa.update(SystemSchema.workflow_status)
-                .where(
-                    SystemSchema.workflow_status.c.workflow_uuid.in_(
-                        original_workflow_ids
-                    )
-                )
+                sa.update(self.tables.workflow_status)
+                .where(*self._wf_in(self.tables.workflow_status, original_workflow_ids))
                 .values(was_forked_from=True)
             )
 
@@ -1868,9 +2259,47 @@ class SystemDatabase(ABC):
                     ]
                 ).subquery("mapping")
 
-                oo = SystemSchema.operation_outputs
+                oo = self.tables.operation_outputs
+                # The forks live under their originals' shard key.
+                key_columns = self._scoped_columns()
+                key_names = [name for name, _ in key_columns]
+                key_exprs = [expr for _, expr in key_columns]
+                # A replacement child is a fork, so it shares the replaced child's key.
+                child_key = self._key_column(oo, "child_shard_key")
+                child_key_columns = [] if child_key is None else [child_key]
 
                 child_wf_expr: sa.ColumnElement[Any] = oo.c.child_workflow_id
+                if replacement_children and child_key is not None:
+                    # A replacement names a child by ID, which can't pick one of several keys.
+                    ambiguous = (
+                        c.execute(
+                            sa.select(oo.c.child_workflow_id)
+                            .select_from(
+                                mapping_subquery.join(
+                                    oo,
+                                    sa.and_(
+                                        *self._scoped(oo),
+                                        oo.c.workflow_uuid
+                                        == mapping_subquery.c.orig_id,
+                                        oo.c.function_id
+                                        < mapping_subquery.c.start_step,
+                                    ),
+                                )
+                            )
+                            .where(
+                                oo.c.child_workflow_id.in_(list(replacement_children))
+                            )
+                            .group_by(oo.c.child_workflow_id)
+                            .having(sa.func.count(sa.distinct(child_key)) > 1)
+                        )
+                        .scalars()
+                        .first()
+                    )
+                    if ambiguous is not None:
+                        raise DBOSException(
+                            f"Can't replace child workflow {ambiguous}: the forked steps "
+                            "refer to children with that ID under more than one shard key"
+                        )
                 if replacement_children:
                     child_wf_expr = sa.case(
                         *[
@@ -1887,6 +2316,7 @@ class SystemDatabase(ABC):
                 c.execute(
                     sa.insert(oo).from_select(
                         [
+                            *key_names,
                             "workflow_uuid",
                             "function_id",
                             "output",
@@ -1898,8 +2328,10 @@ class SystemDatabase(ABC):
                             "completed_at_epoch_ms",
                             "application_name",
                             "retention_timestamp",
+                            *[col.name for col in child_key_columns],
                         ],
                         sa.select(
+                            *key_exprs,
                             mapping_subquery.c.fork_id.label("workflow_uuid"),
                             oo.c.function_id,
                             oo.c.output,
@@ -1911,22 +2343,27 @@ class SystemDatabase(ABC):
                             oo.c.completed_at_epoch_ms,
                             mapping_subquery.c.owner,
                             self._now_ms_sql(),
+                            *child_key_columns,
                         ).select_from(
                             mapping_subquery.join(
                                 oo,
-                                (oo.c.workflow_uuid == mapping_subquery.c.orig_id)
-                                & (oo.c.function_id < mapping_subquery.c.start_step),
+                                sa.and_(
+                                    *self._scoped(oo),
+                                    oo.c.workflow_uuid == mapping_subquery.c.orig_id,
+                                    oo.c.function_id < mapping_subquery.c.start_step,
+                                ),
                             )
                         ),
                     )
                 )
 
-                weh = SystemSchema.workflow_events_history
+                weh = self.tables.workflow_events_history
 
                 # Copy the workflow events history for all applicable workflows.
                 c.execute(
                     sa.insert(weh).from_select(
                         [
+                            *key_names,
                             "workflow_uuid",
                             "function_id",
                             "key",
@@ -1934,6 +2371,7 @@ class SystemDatabase(ABC):
                             "serialization",
                         ],
                         sa.select(
+                            *key_exprs,
                             mapping_subquery.c.fork_id.label("workflow_uuid"),
                             weh.c.function_id,
                             weh.c.key,
@@ -1942,8 +2380,11 @@ class SystemDatabase(ABC):
                         ).select_from(
                             mapping_subquery.join(
                                 weh,
-                                (weh.c.workflow_uuid == mapping_subquery.c.orig_id)
-                                & (weh.c.function_id < mapping_subquery.c.start_step),
+                                sa.and_(
+                                    *self._scoped(weh),
+                                    weh.c.workflow_uuid == mapping_subquery.c.orig_id,
+                                    weh.c.function_id < mapping_subquery.c.start_step,
+                                ),
                             )
                         ),
                     )
@@ -1959,28 +2400,33 @@ class SystemDatabase(ABC):
                         weh.c.serialization,
                         sa.func.row_number()
                         .over(
-                            partition_by=[weh.c.workflow_uuid, weh.c.key],
+                            partition_by=[mapping_subquery.c.fork_id, weh.c.key],
                             order_by=weh.c.function_id.desc(),
                         )
                         .label("rn"),
                     ).select_from(
                         mapping_subquery.join(
                             weh,
-                            (weh.c.workflow_uuid == mapping_subquery.c.orig_id)
-                            & (weh.c.function_id < mapping_subquery.c.start_step),
+                            sa.and_(
+                                *self._scoped(weh),
+                                weh.c.workflow_uuid == mapping_subquery.c.orig_id,
+                                weh.c.function_id < mapping_subquery.c.start_step,
+                            ),
                         )
                     )
                 ).subquery("ranked")
 
                 c.execute(
-                    sa.insert(SystemSchema.workflow_events).from_select(
+                    sa.insert(self.tables.workflow_events).from_select(
                         [
+                            *key_names,
                             "workflow_uuid",
                             "key",
                             "value",
                             "serialization",
                         ],
                         sa.select(
+                            *key_exprs,
                             ranked.c.workflow_uuid,
                             ranked.c.key,
                             ranked.c.value,
@@ -1989,12 +2435,13 @@ class SystemDatabase(ABC):
                     )
                 )
 
-                streams = SystemSchema.streams
+                streams = self.tables.streams
 
                 # Copy streams for all applicable workflows.
                 c.execute(
                     sa.insert(streams).from_select(
                         [
+                            *key_names,
                             "workflow_uuid",
                             "function_id",
                             "key",
@@ -2003,6 +2450,7 @@ class SystemDatabase(ABC):
                             "offset",
                         ],
                         sa.select(
+                            *key_exprs,
                             mapping_subquery.c.fork_id.label("workflow_uuid"),
                             streams.c.function_id,
                             streams.c.key,
@@ -2012,10 +2460,12 @@ class SystemDatabase(ABC):
                         ).select_from(
                             mapping_subquery.join(
                                 streams,
-                                (streams.c.workflow_uuid == mapping_subquery.c.orig_id)
-                                & (
+                                sa.and_(
+                                    *self._scoped(streams),
+                                    streams.c.workflow_uuid
+                                    == mapping_subquery.c.orig_id,
                                     streams.c.function_id
-                                    < mapping_subquery.c.start_step
+                                    < mapping_subquery.c.start_step,
                                 ),
                             )
                         ),
@@ -2037,7 +2487,8 @@ class SystemDatabase(ABC):
 
         IDs with no row are omitted, so the result may be shorter than the input.
         """
-        ws = SystemSchema.workflow_status
+        ws = self.tables.workflow_status
+        key_column = self._key_column(ws)
 
         # Decorated per chunk so a reconnect retries one chunk, not the whole loop.
         @db_retry(sys_db=self)
@@ -2045,6 +2496,11 @@ class SystemDatabase(ABC):
             with self.engine.begin() as c:
                 rows = c.execute(
                     sa.select(
+                        *(
+                            [key_column.label("shard_key")]
+                            if key_column is not None
+                            else []
+                        ),
                         ws.c.workflow_uuid,
                         ws.c.status,
                         ws.c.name,
@@ -2065,7 +2521,7 @@ class SystemDatabase(ABC):
                         ws.c.deduplication_id,
                         ws.c.priority,
                         sa.func.coalesce(
-                            SystemSchema.workflow_input.c.inputs, ws.c.inputs
+                            self.tables.workflow_input.c.inputs, ws.c.inputs
                         ).label("inputs"),
                         ws.c.queue_partition_key,
                         ws.c.forked_from,
@@ -2081,12 +2537,11 @@ class SystemDatabase(ABC):
                     )
                     .select_from(
                         ws.outerjoin(
-                            SystemSchema.workflow_input,
-                            ws.c.workflow_uuid
-                            == SystemSchema.workflow_input.c.workflow_uuid,
+                            self.tables.workflow_input,
+                            self._wf_join(ws, self.tables.workflow_input),
                         )
                     )
-                    .where(ws.c.workflow_uuid.in_(chunk))
+                    .where(*self._wf_in(ws, chunk))
                 ).fetchall()
             # Keyed by column name, not position, so adding a column above cannot
             # silently shift every field.
@@ -2123,6 +2578,7 @@ class SystemDatabase(ABC):
                     "debounce_deadline_epoch_ms": m["debounce_deadline_epoch_ms"],
                     "is_debounced": bool(m["is_debounced"]),
                     "application_name": m["application_name"],
+                    "shard_key": m["shard_key"] if key_column is not None else None,
                 }
                 for m in (row._mapping for row in rows)
             ]
@@ -2141,25 +2597,26 @@ class SystemDatabase(ABC):
         with self.poll_limiter, self.engine.begin() as c:
             return c.execute(
                 sa.select(
-                    SystemSchema.workflow_status.c.status,
+                    self.tables.workflow_status.c.status,
                     sa.func.coalesce(
-                        SystemSchema.workflow_output.c.output,
-                        SystemSchema.workflow_status.c.output,
+                        self.tables.workflow_output.c.output,
+                        self.tables.workflow_status.c.output,
                     ),
                     sa.func.coalesce(
-                        SystemSchema.workflow_output.c.error,
-                        SystemSchema.workflow_status.c.error,
+                        self.tables.workflow_output.c.error,
+                        self.tables.workflow_status.c.error,
                     ),
-                    SystemSchema.workflow_status.c.serialization,
+                    self.tables.workflow_status.c.serialization,
                 )
                 .select_from(
-                    SystemSchema.workflow_status.outerjoin(
-                        SystemSchema.workflow_output,
-                        SystemSchema.workflow_status.c.workflow_uuid
-                        == SystemSchema.workflow_output.c.workflow_uuid,
+                    self.tables.workflow_status.outerjoin(
+                        self.tables.workflow_output,
+                        self._wf_join(
+                            self.tables.workflow_status, self.tables.workflow_output
+                        ),
                     )
                 )
-                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                .where(*self._wf(self.tables.workflow_status, workflow_id))
             ).fetchone()
 
     def check_workflow_result(
@@ -2241,11 +2698,11 @@ class SystemDatabase(ABC):
         with self.poll_limiter, self.engine.begin() as c:
             row = c.execute(
                 sa.select(
-                    SystemSchema.workflow_status.c.workflow_uuid,
+                    self.tables.workflow_status.c.workflow_uuid,
                 )
                 .where(
-                    SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids),
-                    ~SystemSchema.workflow_status.c.status.in_(
+                    *self._wf_in(self.tables.workflow_status, workflow_ids),
+                    ~self.tables.workflow_status.c.status.in_(
                         [
                             WorkflowStatusString.PENDING.value,
                             WorkflowStatusString.ENQUEUED.value,
@@ -2310,6 +2767,8 @@ class SystemDatabase(ABC):
         attributes: Optional[Dict[str, Any]] = None,
         schedule_name: Optional[str | list[str]] = None,
         application_name: Optional[str | list[str]] = None,
+        shard_key: Optional[str | list[str]] = None,
+        parent_shard_key: Optional[str | list[str]] = None,
     ) -> List[WorkflowStatus]:
         """
         Retrieve a list of workflows based on the search criteria.
@@ -2332,74 +2791,82 @@ class SystemDatabase(ABC):
         executor_id_list = _to_list(executor_id)
         prefix_list = _to_list(workflow_id_prefix)
         schedule_name_list = _to_list(schedule_name)
+        shard_key_list = _to_list(shard_key)
+        parent_shard_key_list = _to_list(parent_shard_key)
 
         load_columns: List[Any] = [
-            SystemSchema.workflow_status.c.workflow_uuid,
-            SystemSchema.workflow_status.c.status,
-            SystemSchema.workflow_status.c.name,
-            SystemSchema.workflow_status.c.recovery_attempts,
-            SystemSchema.workflow_status.c.config_name,
-            SystemSchema.workflow_status.c.class_name,
-            SystemSchema.workflow_status.c.authenticated_user,
-            SystemSchema.workflow_status.c.authenticated_roles,
-            SystemSchema.workflow_status.c.assumed_role,
-            SystemSchema.workflow_status.c.queue_name,
-            SystemSchema.workflow_status.c.executor_id,
-            SystemSchema.workflow_status.c.created_at,
-            SystemSchema.workflow_status.c.updated_at,
-            SystemSchema.workflow_status.c.application_version,
-            SystemSchema.workflow_status.c.application_id,
-            SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
-            SystemSchema.workflow_status.c.workflow_timeout_ms,
-            SystemSchema.workflow_status.c.deduplication_id,
-            SystemSchema.workflow_status.c.priority,
-            SystemSchema.workflow_status.c.queue_partition_key,
-            SystemSchema.workflow_status.c.forked_from,
-            SystemSchema.workflow_status.c.parent_workflow_id,
-            SystemSchema.workflow_status.c.started_at_epoch_ms,
-            SystemSchema.workflow_status.c.delay_until_epoch_ms,
-            SystemSchema.workflow_status.c.was_forked_from,
-            SystemSchema.workflow_status.c.completed_at,
-            SystemSchema.workflow_status.c.attributes,
-            SystemSchema.workflow_status.c.schedule_name,
-            SystemSchema.workflow_status.c.application_name,
+            self.tables.workflow_status.c.workflow_uuid,
+            self.tables.workflow_status.c.status,
+            self.tables.workflow_status.c.name,
+            self.tables.workflow_status.c.recovery_attempts,
+            self.tables.workflow_status.c.config_name,
+            self.tables.workflow_status.c.class_name,
+            self.tables.workflow_status.c.authenticated_user,
+            self.tables.workflow_status.c.authenticated_roles,
+            self.tables.workflow_status.c.assumed_role,
+            self.tables.workflow_status.c.queue_name,
+            self.tables.workflow_status.c.executor_id,
+            self.tables.workflow_status.c.created_at,
+            self.tables.workflow_status.c.updated_at,
+            self.tables.workflow_status.c.application_version,
+            self.tables.workflow_status.c.application_id,
+            self.tables.workflow_status.c.workflow_deadline_epoch_ms,
+            self.tables.workflow_status.c.workflow_timeout_ms,
+            self.tables.workflow_status.c.deduplication_id,
+            self.tables.workflow_status.c.priority,
+            self.tables.workflow_status.c.queue_partition_key,
+            self.tables.workflow_status.c.forked_from,
+            self.tables.workflow_status.c.parent_workflow_id,
+            self.tables.workflow_status.c.started_at_epoch_ms,
+            self.tables.workflow_status.c.delay_until_epoch_ms,
+            self.tables.workflow_status.c.was_forked_from,
+            self.tables.workflow_status.c.completed_at,
+            self.tables.workflow_status.c.attributes,
+            self.tables.workflow_status.c.schedule_name,
+            self.tables.workflow_status.c.application_name,
         ]
         if load_input:
             load_columns.append(
                 sa.func.coalesce(
-                    SystemSchema.workflow_input.c.inputs,
-                    SystemSchema.workflow_status.c.inputs,
+                    self.tables.workflow_input.c.inputs,
+                    self.tables.workflow_status.c.inputs,
                 ).label("inputs")
             )
         if load_output:
             load_columns.append(
                 sa.func.coalesce(
-                    SystemSchema.workflow_output.c.output,
-                    SystemSchema.workflow_status.c.output,
+                    self.tables.workflow_output.c.output,
+                    self.tables.workflow_status.c.output,
                 ).label("output")
             )
             load_columns.append(
                 sa.func.coalesce(
-                    SystemSchema.workflow_output.c.error,
-                    SystemSchema.workflow_status.c.error,
+                    self.tables.workflow_output.c.error,
+                    self.tables.workflow_status.c.error,
                 ).label("error")
             )
         if load_input or load_output:
-            load_columns.append(SystemSchema.workflow_status.c.serialization)
+            load_columns.append(self.tables.workflow_status.c.serialization)
+        key_column = self._key_column(self.tables.workflow_status)
+        if key_column is not None:
+            load_columns.append(key_column)
+        parent_key_column = self._key_column(
+            self.tables.workflow_status, "parent_shard_key"
+        )
+        if parent_key_column is not None:
+            load_columns.append(parent_key_column)
 
         # Only join the payload tables the caller actually asked for.
-        from_clause: Any = SystemSchema.workflow_status
+        from_clause: Any = self.tables.workflow_status
         if load_input:
             from_clause = from_clause.outerjoin(
-                SystemSchema.workflow_input,
-                SystemSchema.workflow_status.c.workflow_uuid
-                == SystemSchema.workflow_input.c.workflow_uuid,
+                self.tables.workflow_input,
+                self._wf_join(self.tables.workflow_status, self.tables.workflow_input),
             )
         if load_output:
             from_clause = from_clause.outerjoin(
-                SystemSchema.workflow_output,
-                SystemSchema.workflow_status.c.workflow_uuid
-                == SystemSchema.workflow_output.c.workflow_uuid,
+                self.tables.workflow_output,
+                self._wf_join(self.tables.workflow_status, self.tables.workflow_output),
             )
 
         if queues_only:
@@ -2407,64 +2874,77 @@ class SystemDatabase(ABC):
                 sa.select(*load_columns)
                 .select_from(from_clause)
                 .where(
-                    SystemSchema.workflow_status.c.queue_name.isnot(None),
+                    self.tables.workflow_status.c.queue_name.isnot(None),
                 )
             )
             if not status_list:
                 query = query.where(
-                    SystemSchema.workflow_status.c.status.in_(
+                    self.tables.workflow_status.c.status.in_(
                         ["DELAYED", "ENQUEUED", "PENDING"]
                     )
                 )
         else:
             query = sa.select(*load_columns).select_from(from_clause)
         if sort_desc:
-            query = query.order_by(SystemSchema.workflow_status.c.created_at.desc())
+            query = query.order_by(self.tables.workflow_status.c.created_at.desc())
         else:
-            query = query.order_by(SystemSchema.workflow_status.c.created_at.asc())
+            query = query.order_by(self.tables.workflow_status.c.created_at.asc())
         if name_list:
-            query = query.where(SystemSchema.workflow_status.c.name.in_(name_list))
+            query = query.where(self.tables.workflow_status.c.name.in_(name_list))
         if schedule_name_list:
             query = query.where(
-                SystemSchema.workflow_status.c.schedule_name.in_(schedule_name_list)
+                self.tables.workflow_status.c.schedule_name.in_(schedule_name_list)
             )
         query = query.where(
             # A workflow ID is a global address, so an ID-keyed read is an identity
             # read: it takes an explicit filter but is never defaulted to this one.
             self._name_filter(
-                SystemSchema.workflow_status.c.application_name, application_name
+                self.tables.workflow_status.c.application_name, application_name
             )
             if workflow_ids
             else self._observability_filter(
-                SystemSchema.workflow_status.c.application_name, application_name
+                self.tables.workflow_status.c.application_name, application_name
             )
         )
+        # An empty key list matches nothing, rather than every key.
+        if shard_key_list is not None:
+            query = query.where(
+                *self._key_in(self.tables.workflow_status, shard_key_list)
+            )
+        if parent_shard_key_list is not None:
+            query = query.where(
+                *self._key_in(
+                    self.tables.workflow_status,
+                    parent_shard_key_list,
+                    column="parent_shard_key",
+                )
+            )
         if user_list:
             query = query.where(
-                SystemSchema.workflow_status.c.authenticated_user.in_(user_list)
+                self.tables.workflow_status.c.authenticated_user.in_(user_list)
             )
         if attributes:
             query = query.where(self._attributes_contains_clause(attributes))
         if start_time:
             query = query.where(
-                SystemSchema.workflow_status.c.created_at
+                self.tables.workflow_status.c.created_at
                 >= int(datetime.datetime.fromisoformat(start_time).timestamp() * 1000)
             )
         if end_time:
             query = query.where(
-                SystemSchema.workflow_status.c.created_at
+                self.tables.workflow_status.c.created_at
                 <= int(datetime.datetime.fromisoformat(end_time).timestamp() * 1000)
             )
         if completed_after:
             query = query.where(
-                SystemSchema.workflow_status.c.completed_at
+                self.tables.workflow_status.c.completed_at
                 >= int(
                     datetime.datetime.fromisoformat(completed_after).timestamp() * 1000
                 )
             )
         if completed_before:
             query = query.where(
-                SystemSchema.workflow_status.c.completed_at
+                self.tables.workflow_status.c.completed_at
                 <= int(
                     datetime.datetime.fromisoformat(completed_before).timestamp() * 1000
                 )
@@ -2473,43 +2953,43 @@ class SystemDatabase(ABC):
         # populated on dequeue and surfaced as WorkflowStatus.dequeued_at.
         if dequeued_after:
             query = query.where(
-                SystemSchema.workflow_status.c.started_at_epoch_ms
+                self.tables.workflow_status.c.started_at_epoch_ms
                 >= int(
                     datetime.datetime.fromisoformat(dequeued_after).timestamp() * 1000
                 )
             )
         if dequeued_before:
             query = query.where(
-                SystemSchema.workflow_status.c.started_at_epoch_ms
+                self.tables.workflow_status.c.started_at_epoch_ms
                 <= int(
                     datetime.datetime.fromisoformat(dequeued_before).timestamp() * 1000
                 )
             )
         if status_list:
-            query = query.where(SystemSchema.workflow_status.c.status.in_(status_list))
+            query = query.where(self.tables.workflow_status.c.status.in_(status_list))
         if app_version_list:
             query = query.where(
-                SystemSchema.workflow_status.c.application_version.in_(app_version_list)
+                self.tables.workflow_status.c.application_version.in_(app_version_list)
             )
         if forked_from_list:
             query = query.where(
-                SystemSchema.workflow_status.c.forked_from.in_(forked_from_list)
+                self.tables.workflow_status.c.forked_from.in_(forked_from_list)
             )
         if parent_workflow_id_list:
             query = query.where(
-                SystemSchema.workflow_status.c.parent_workflow_id.in_(
+                self.tables.workflow_status.c.parent_workflow_id.in_(
                     parent_workflow_id_list
                 )
             )
         if workflow_ids:
             query = query.where(
-                SystemSchema.workflow_status.c.workflow_uuid.in_(workflow_ids)
+                self.tables.workflow_status.c.workflow_uuid.in_(workflow_ids)
             )
         if prefix_list:
             query = query.where(
                 sa.or_(
                     *[
-                        SystemSchema.workflow_status.c.workflow_uuid.startswith(
+                        self.tables.workflow_status.c.workflow_uuid.startswith(
                             p, autoescape=True
                         )
                         for p in prefix_list
@@ -2518,34 +2998,32 @@ class SystemDatabase(ABC):
             )
         if queue_name_list:
             query = query.where(
-                SystemSchema.workflow_status.c.queue_name.in_(queue_name_list)
+                self.tables.workflow_status.c.queue_name.in_(queue_name_list)
             )
         if executor_id_list:
             query = query.where(
-                SystemSchema.workflow_status.c.executor_id.in_(executor_id_list)
+                self.tables.workflow_status.c.executor_id.in_(executor_id_list)
             )
         if was_forked_from is not None:
             query = query.where(
-                SystemSchema.workflow_status.c.was_forked_from == was_forked_from
+                self.tables.workflow_status.c.was_forked_from == was_forked_from
             )
         # is_fork matches the forks themselves; was_forked_from matches the workflows they were forked from.
         if is_fork is not None:
             if is_fork:
                 query = query.where(
-                    SystemSchema.workflow_status.c.forked_from.isnot(None)
+                    self.tables.workflow_status.c.forked_from.isnot(None)
                 )
             else:
-                query = query.where(
-                    SystemSchema.workflow_status.c.forked_from.is_(None)
-                )
+                query = query.where(self.tables.workflow_status.c.forked_from.is_(None))
         if has_parent is not None:
             if has_parent:
                 query = query.where(
-                    SystemSchema.workflow_status.c.parent_workflow_id.isnot(None)
+                    self.tables.workflow_status.c.parent_workflow_id.isnot(None)
                 )
             else:
                 query = query.where(
-                    SystemSchema.workflow_status.c.parent_workflow_id.is_(None)
+                    self.tables.workflow_status.c.parent_workflow_id.is_(None)
                 )
         if limit:
             query = query.limit(limit)
@@ -2603,6 +3081,10 @@ class SystemDatabase(ABC):
             serialization = row[idx] if load_input or load_output else None
             if load_input or load_output:
                 idx += 1
+            info.shard_key = row[idx] if key_column is not None else None
+            if key_column is not None:
+                idx += 1
+            info.parent_shard_key = row[idx] if parent_key_column is not None else None
             inputs, output, exception = safe_deserialize(
                 self.serializer,
                 serialization,
@@ -2622,24 +3104,34 @@ class SystemDatabase(ABC):
     def get_pending_workflows(
         self, executor_id: str, app_version: str
     ) -> list[GetPendingWorkflowsOutput]:
+        key_column = self._key_column(self.tables.workflow_status)
         with self.engine.begin() as c:
             rows = c.execute(
                 sa.select(
-                    SystemSchema.workflow_status.c.workflow_uuid,
+                    self.tables.workflow_status.c.workflow_uuid,
+                    *(
+                        [key_column.label("shard_key")]
+                        if key_column is not None
+                        else []
+                    ),
                 ).where(
-                    SystemSchema.workflow_status.c.status
+                    self.tables.workflow_status.c.status
                     == WorkflowStatusString.PENDING.value,
-                    SystemSchema.workflow_status.c.executor_id == executor_id,
-                    SystemSchema.workflow_status.c.application_version == app_version,
+                    self.tables.workflow_status.c.executor_id == executor_id,
+                    self.tables.workflow_status.c.application_version == app_version,
                     # executor_id defaults to "local", so it collides across applications.
                     self._name_filter(
-                        SystemSchema.workflow_status.c.application_name, self.app_name
+                        self.tables.workflow_status.c.application_name, self.app_name
                     ),
                 )
             ).fetchall()
 
             return [
-                GetPendingWorkflowsOutput(workflow_id=row.workflow_uuid) for row in rows
+                GetPendingWorkflowsOutput(
+                    workflow_id=row.workflow_uuid,
+                    shard_key=row.shard_key if key_column is not None else None,
+                )
+                for row in rows
             ]
 
     @db_retry()
@@ -2651,20 +3143,22 @@ class SystemDatabase(ABC):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
     ) -> List[StepInfo]:
+        child_key = self._key_column(self.tables.operation_outputs, "child_shard_key")
         with self._observability_query() as c:
             query = (
                 sa.select(
-                    SystemSchema.operation_outputs.c.function_id,
-                    SystemSchema.operation_outputs.c.function_name,
-                    SystemSchema.operation_outputs.c.output,
-                    SystemSchema.operation_outputs.c.error,
-                    SystemSchema.operation_outputs.c.child_workflow_id,
-                    SystemSchema.operation_outputs.c.started_at_epoch_ms,
-                    SystemSchema.operation_outputs.c.completed_at_epoch_ms,
-                    SystemSchema.operation_outputs.c.serialization,
+                    self.tables.operation_outputs.c.function_id,
+                    self.tables.operation_outputs.c.function_name,
+                    self.tables.operation_outputs.c.output,
+                    self.tables.operation_outputs.c.error,
+                    self.tables.operation_outputs.c.child_workflow_id,
+                    self.tables.operation_outputs.c.started_at_epoch_ms,
+                    self.tables.operation_outputs.c.completed_at_epoch_ms,
+                    self.tables.operation_outputs.c.serialization,
+                    *([] if child_key is None else [child_key]),
                 )
-                .where(SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
-                .order_by(SystemSchema.operation_outputs.c.function_id)
+                .where(*self._wf(self.tables.operation_outputs, workflow_id))
+                .order_by(self.tables.operation_outputs.c.function_id)
             )
             if limit is not None:
                 query = query.limit(limit)
@@ -2692,6 +3186,7 @@ class SystemDatabase(ABC):
                 output=output,
                 error=exception,
                 child_workflow_id=row[4],
+                child_shard_key=row[8] if child_key is not None else None,
                 started_at_epoch_ms=row[5],
                 completed_at_epoch_ms=row[6],
             )
@@ -2705,13 +3200,13 @@ class SystemDatabase(ABC):
 
         The row stays locked until commit, so a hand-off (cancel, resume, recovery) cannot land between this check and the write.
         """
-        ws = SystemSchema.workflow_status
+        ws = self.tables.workflow_status
         stmt: sa.Executable
         if self._is_sqlite:
             # A write, so pysqlite opens BEGIN IMMEDIATE here; a SELECT would run in autocommit.
             stmt = (
                 sa.update(ws)
-                .where(ws.c.workflow_uuid == workflow_id)
+                .where(*self._wf(ws, workflow_id))
                 .values(owner_xid=ws.c.owner_xid)
                 .returning(ws.c.owner_xid)
             )
@@ -2719,7 +3214,7 @@ class SystemDatabase(ABC):
             # FOR NO KEY UPDATE
             stmt = (
                 sa.select(ws.c.owner_xid)
-                .where(ws.c.workflow_uuid == workflow_id)
+                .where(*self._wf(ws, workflow_id))
                 .with_for_update(key_share=True)
             )
         current = conn.execute(stmt).scalar()
@@ -2733,6 +3228,7 @@ class SystemDatabase(ABC):
         conn: Union[sa.Connection, Session],
         *,
         owner_xid: Optional[str] = None,
+        child_values: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Insert the step row. owner_xid defaults to the calling execution's token; a caller
         writing on another workflow's behalf from inside a different context passes it.
@@ -2750,8 +3246,9 @@ class SystemDatabase(ABC):
         # execution's own doing (a retry carries the same time), so it is nondeterminism, not a duplicate.
         try:
             stmt = (
-                self.dialect.insert(SystemSchema.operation_outputs)
+                self.dialect.insert(self.tables.operation_outputs)
                 .values(
+                    **self._wf_values(result["workflow_uuid"]),
                     workflow_uuid=result["workflow_uuid"],
                     function_id=result["function_id"],
                     function_name=result["function_name"],
@@ -2760,6 +3257,11 @@ class SystemDatabase(ABC):
                     output=output,
                     error=error,
                     child_workflow_id=result["child_workflow_id"],
+                    **(
+                        child_values
+                        if child_values is not None
+                        else self._child_values(result["child_workflow_id"])
+                    ),
                     serialization=result["serialization"],
                     # Mirrors the parent: only the running application records its steps.
                     application_name=self.app_name,
@@ -2768,15 +3270,15 @@ class SystemDatabase(ABC):
                     retention_timestamp=self._now_ms_sql(),
                 )
                 .on_conflict_do_update(
-                    index_elements=[
-                        SystemSchema.operation_outputs.c.workflow_uuid,
-                        SystemSchema.operation_outputs.c.function_id,
-                    ],
+                    index_elements=self._key_conflict(
+                        "workflow_uuid",
+                        "function_id",
+                    ),
                     set_={
-                        "completed_at_epoch_ms": SystemSchema.operation_outputs.c.completed_at_epoch_ms,
+                        "completed_at_epoch_ms": self.tables.operation_outputs.c.completed_at_epoch_ms,
                     },
                 )
-                .returning(SystemSchema.operation_outputs.c.completed_at_epoch_ms)
+                .returning(self.tables.operation_outputs.c.completed_at_epoch_ms)
             )
 
             res = conn.execute(stmt)
@@ -2803,8 +3305,8 @@ class SystemDatabase(ABC):
         """The workflow's current ownership token; None if unowned or missing."""
         with self.engine.begin() as c:
             return c.execute(
-                sa.select(SystemSchema.workflow_status.c.owner_xid).where(
-                    SystemSchema.workflow_status.c.workflow_uuid == workflow_id
+                sa.select(self.tables.workflow_status.c.owner_xid).where(
+                    *self._wf(self.tables.workflow_status, workflow_id)
                 )
             ).scalar()
 
@@ -2814,6 +3316,7 @@ class SystemDatabase(ABC):
         *,
         completed_at_epoch_ms: Optional[int] = None,
         owner_xid: Optional[str] = None,
+        owner_key: Optional[str] = None,
     ) -> None:
         # Outside the retry: the conflict check compares the stored completion to ours.
         completed_at = (
@@ -2822,11 +3325,21 @@ class SystemDatabase(ABC):
             else int(time.time() * 1000)
         )
 
+        # Resolved before binding the caller's own key, which a same-ID child would share.
+        child_values = self._child_values(result["child_workflow_id"])
+
         @db_retry(sys_db=self)
         def record_operation_result_retry() -> None:
-            with self.engine.begin() as c:
+            with (
+                self._own_key(result["workflow_uuid"], key=owner_key),
+                self.engine.begin() as c,
+            ):
                 self._record_operation_result_txn(
-                    result, completed_at, c, owner_xid=owner_xid
+                    result,
+                    completed_at,
+                    c,
+                    owner_xid=owner_xid,
+                    child_values=child_values,
                 )
             DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT)
 
@@ -2902,20 +3415,29 @@ class SystemDatabase(ABC):
         workflow_id = ctx.workflow_id
         function_id = ctx.function_id
         owner_xid = current_owner_xid(workflow_id, ctx)
+        # Resolved before binding the caller's own key, which a same-ID target would share.
+        child_values = self._child_values(result_workflow_id)
+        own_ctx = ctx
 
         @db_retry(sys_db=self)
         def record() -> None:
+            with self._own_key(workflow_id, own_ctx):
+                record_own()
+
+        def record_own() -> None:
             # A duplicate row is a retry of this same record, so do nothing on conflict.
             # Lost ownership still raises DBOSWorkflowConflictIDError from the check below.
             sql = (
-                self.dialect.insert(SystemSchema.operation_outputs)
+                self.dialect.insert(self.tables.operation_outputs)
                 .values(
+                    **self._wf_values(workflow_id),
                     workflow_uuid=workflow_id,
                     function_id=function_id,
                     function_name="DBOS.getResult",
                     output=output,
                     error=error,
                     child_workflow_id=result_workflow_id,
+                    **child_values,
                     started_at_epoch_ms=started_at_epoch_ms,
                     completed_at_epoch_ms=int(time.time() * 1000),
                     retention_timestamp=self._now_ms_sql(),
@@ -2957,19 +3479,21 @@ class SystemDatabase(ABC):
     ) -> Optional[RecordedResult]:
         # First query: Retrieve the workflow status
         workflow_status_sql = sa.select(
-            SystemSchema.workflow_status.c.status,
-        ).where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+            self.tables.workflow_status.c.status,
+        ).where(*self._wf(self.tables.workflow_status, workflow_id))
 
         # Second query: Retrieve operation outputs if they exist
+        child_key = self._key_column(self.tables.operation_outputs, "child_shard_key")
         operation_output_sql = sa.select(
-            SystemSchema.operation_outputs.c.output,
-            SystemSchema.operation_outputs.c.error,
-            SystemSchema.operation_outputs.c.function_name,
-            SystemSchema.operation_outputs.c.child_workflow_id,
-            SystemSchema.operation_outputs.c.serialization,
+            self.tables.operation_outputs.c.output,
+            self.tables.operation_outputs.c.error,
+            self.tables.operation_outputs.c.function_name,
+            self.tables.operation_outputs.c.child_workflow_id,
+            self.tables.operation_outputs.c.serialization,
+            *([] if child_key is None else [child_key]),
         ).where(
-            (SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
-            & (SystemSchema.operation_outputs.c.function_id == function_id)
+            *self._wf(self.tables.operation_outputs, workflow_id),
+            self.tables.operation_outputs.c.function_id == function_id,
         )
 
         # Execute both queries
@@ -3017,14 +3541,22 @@ class SystemDatabase(ABC):
             "error": error,
             "serialization": serialization,
             "child_workflow_id": child_workflow_id,
+            "child_shard_key": (
+                operation_output_rows[0][5] if child_key is not None else None
+            ),
         }
         return result
 
     @db_retry()
     def check_operation_execution(
-        self, workflow_id: str, function_id: int, function_name: str
+        self,
+        workflow_id: str,
+        function_id: int,
+        function_name: str,
+        *,
+        owner_key: Optional[str] = None,
     ) -> Optional[RecordedResult]:
-        with self.engine.begin() as c:
+        with self._own_key(workflow_id, key=owner_key), self.engine.begin() as c:
             return self._check_operation_execution_txn(
                 workflow_id, function_id, function_name, c
             )
@@ -3049,9 +3581,12 @@ class SystemDatabase(ABC):
         while frontier:
             rows = conn.execute(
                 sa.select(
-                    SystemSchema.workflow_status.c.workflow_uuid,
-                    SystemSchema.workflow_status.c.forked_from,
-                ).where(SystemSchema.workflow_status.c.forked_from.in_(frontier))
+                    self.tables.workflow_status.c.workflow_uuid,
+                    self.tables.workflow_status.c.forked_from,
+                ).where(
+                    *self._scoped(self.tables.workflow_status),
+                    self.tables.workflow_status.c.forked_from.in_(frontier),
+                )
             ).all()
             next_frontier = []
             for forked_id, forked_from in rows:
@@ -3235,6 +3770,7 @@ class SystemDatabase(ABC):
                     message_uuid = f"{m.idempotency_key}::{dest}"
                 rows.append(
                     {
+                        **self._wf_values(dest, shard_key=m.shard_key),
                         "destination_uuid": dest,
                         "topic": (m.topic if m.topic is not None else _dbos_null_topic),
                         "message": serval,
@@ -3245,14 +3781,16 @@ class SystemDatabase(ABC):
 
         try:
             if rows:
-                conn.execute(
-                    self.dialect.insert(SystemSchema.notifications)
-                    .values(rows)
+                self._insert_rows(
+                    conn,
+                    lambda batch: self.dialect.insert(self.tables.notifications)
+                    .values(batch)
                     .on_conflict_do_nothing(
-                        index_elements=[
-                            SystemSchema.notifications.c.message_uuid,
-                        ]
-                    )
+                        index_elements=self._key_conflict(
+                            self.tables.notifications.c.message_uuid,
+                        )
+                    ),
+                    rows,
                 )
         except DBAPIError as dbapi_error:
             if self._is_foreign_key_violation(dbapi_error):
@@ -3319,10 +3857,10 @@ class SystemDatabase(ABC):
             dbos_logger.debug(f"Running recv, id: {function_id}, topic: {topic}")
 
         # Insert an event to the notifications map, so the listener can signal it when a message is received.
-        payload = f"{workflow_uuid}::{topic}"
+        payload, components = self._waiter(workflow_uuid, topic)
         event = LoopAwareEvent()
         # A stale local execution may already wait here; both wake, and its consume fails the ownership check.
-        self.notifications_map.add(payload, event, (workflow_uuid, topic))
+        self.notifications_map.add(payload, event, components)
 
         try:
             # Check if an unconsumed message is already in the database.
@@ -3355,11 +3893,11 @@ class SystemDatabase(ABC):
             # Idempotency: if a prior db_retry attempt already committed, return the recorded message, not a new one.
             recorded = c.execute(
                 sa.select(
-                    SystemSchema.operation_outputs.c.output,
-                    SystemSchema.operation_outputs.c.serialization,
+                    self.tables.operation_outputs.c.output,
+                    self.tables.operation_outputs.c.serialization,
                 ).where(
-                    SystemSchema.operation_outputs.c.workflow_uuid == workflow_uuid,
-                    SystemSchema.operation_outputs.c.function_id == function_id,
+                    *self._wf(self.tables.operation_outputs, workflow_uuid),
+                    self.tables.operation_outputs.c.function_id == function_id,
                 )
             ).fetchall()
             if len(recorded) > 0:
@@ -3368,31 +3906,34 @@ class SystemDatabase(ABC):
                 )
 
             consume_stmt = (
-                sa.update(SystemSchema.notifications)
+                sa.update(self.tables.notifications)
                 .where(
-                    SystemSchema.notifications.c.destination_uuid == workflow_uuid,
-                    SystemSchema.notifications.c.topic == topic,
-                    SystemSchema.notifications.c.consumed == False,
-                    SystemSchema.notifications.c.message_uuid
+                    *self._wf(
+                        self.tables.notifications, workflow_uuid, "destination_uuid"
+                    ),
+                    self.tables.notifications.c.topic == topic,
+                    self.tables.notifications.c.consumed == False,
+                    self.tables.notifications.c.message_uuid
                     == (
-                        sa.select(SystemSchema.notifications.c.message_uuid)
+                        sa.select(self.tables.notifications.c.message_uuid)
                         .where(
-                            SystemSchema.notifications.c.destination_uuid
-                            == workflow_uuid,
-                            SystemSchema.notifications.c.topic == topic,
-                            SystemSchema.notifications.c.consumed == False,
+                            *self._wf(
+                                self.tables.notifications,
+                                workflow_uuid,
+                                "destination_uuid",
+                            ),
+                            self.tables.notifications.c.topic == topic,
+                            self.tables.notifications.c.consumed == False,
                         )
-                        .order_by(
-                            SystemSchema.notifications.c.created_at_epoch_ms.asc()
-                        )
+                        .order_by(self.tables.notifications.c.created_at_epoch_ms.asc())
                         .limit(1)
                         .scalar_subquery()
                     ),
                 )
                 .values(consumed=True, consumed_by_function_id=function_id)
                 .returning(
-                    SystemSchema.notifications.c.message,
-                    SystemSchema.notifications.c.serialization,
+                    self.tables.notifications.c.message,
+                    self.tables.notifications.c.serialization,
                 )
             )
             rows = c.execute(consume_stmt).fetchall()
@@ -3435,10 +3976,12 @@ class SystemDatabase(ABC):
             # This is a polling read: run it under the polling limiter.
             with self.poll_limiter, self.engine.begin() as c:
                 rows = c.execute(
-                    sa.select(SystemSchema.notifications.c.topic).where(
-                        SystemSchema.notifications.c.destination_uuid == workflow_uuid,
-                        SystemSchema.notifications.c.topic == normalized_topic,
-                        SystemSchema.notifications.c.consumed == False,
+                    sa.select(self.tables.notifications.c.topic).where(
+                        *self._wf(
+                            self.tables.notifications, workflow_uuid, "destination_uuid"
+                        ),
+                        self.tables.notifications.c.topic == normalized_topic,
+                        self.tables.notifications.c.consumed == False,
                     )
                 ).fetchall()
             if len(rows) > 0:
@@ -3612,17 +4155,21 @@ class SystemDatabase(ABC):
                 # Check all entries in the notifications_map
                 for (
                     payload,
-                    (dest_uuid, topic),
+                    (dest_uuid, topic, dest_key),
                     event,
                 ) in self.notifications_map.snapshot():
                     with self.engine.begin() as conn:
                         result = conn.execute(
                             sa.select(sa.literal(1))
                             .where(
-                                SystemSchema.notifications.c.destination_uuid
-                                == dest_uuid,
-                                SystemSchema.notifications.c.topic == topic,
-                                SystemSchema.notifications.c.consumed == False,
+                                *self._wf(
+                                    self.tables.notifications,
+                                    dest_uuid,
+                                    "destination_uuid",
+                                    shard_key=dest_key,
+                                ),
+                                self.tables.notifications.c.topic == topic,
+                                self.tables.notifications.c.consumed == False,
                             )
                             .limit(1)
                         )
@@ -3633,16 +4180,19 @@ class SystemDatabase(ABC):
                 # Check all entries in the workflow_events_map
                 for (
                     payload,
-                    (workflow_uuid, key),
+                    (workflow_uuid, key, wf_key),
                     event,
                 ) in self.workflow_events_map.snapshot():
                     with self.engine.begin() as conn:
                         result = conn.execute(
                             sa.select(sa.literal(1))
                             .where(
-                                SystemSchema.workflow_events.c.workflow_uuid
-                                == workflow_uuid,
-                                SystemSchema.workflow_events.c.key == key,
+                                *self._wf(
+                                    self.tables.workflow_events,
+                                    workflow_uuid,
+                                    shard_key=wf_key,
+                                ),
+                                self.tables.workflow_events.c.key == key,
                             )
                             .limit(1)
                         )
@@ -3655,15 +4205,17 @@ class SystemDatabase(ABC):
                 # is a sufficient hint to re-check.
                 for (
                     payload,
-                    (workflow_uuid, key),
+                    (workflow_uuid, key, wf_key),
                     event,
                 ) in self.streams_map.snapshot():
                     with self.engine.begin() as conn:
                         result = conn.execute(
                             sa.select(sa.literal(1))
                             .where(
-                                SystemSchema.streams.c.workflow_uuid == workflow_uuid,
-                                SystemSchema.streams.c.key == key,
+                                *self._wf(
+                                    self.tables.streams, workflow_uuid, shard_key=wf_key
+                                ),
+                                self.tables.streams.c.key == key,
                             )
                             .limit(1)
                         )
@@ -3690,6 +4242,8 @@ class SystemDatabase(ABC):
         else:
             from ._sys_db_postgres import PostgresSystemDatabase
 
+            if PostgresSystemDatabase.holds_sharded_schema(database_url):
+                raise DBOSException(_SHARDED_RESET_REFUSED)
             PostgresSystemDatabase._reset_system_database(
                 database_url, truncate=truncate, schema=schema
             )
@@ -3775,15 +4329,16 @@ class SystemDatabase(ABC):
             else:
                 dbos_logger.debug(f"Running set_event, id: {function_id}, key: {key}")
             c.execute(
-                self.dialect.insert(SystemSchema.workflow_events)
+                self.dialect.insert(self.tables.workflow_events)
                 .values(
+                    **self._wf_values(workflow_uuid),
                     workflow_uuid=workflow_uuid,
                     key=key,
                     value=serval,
                     serialization=serialization,
                 )
                 .on_conflict_do_update(
-                    index_elements=["workflow_uuid", "key"],
+                    index_elements=self._key_conflict("workflow_uuid", "key"),
                     set_={
                         "value": serval,
                         "serialization": serialization,
@@ -3791,8 +4346,9 @@ class SystemDatabase(ABC):
                 )
             )
             c.execute(
-                self.dialect.insert(SystemSchema.workflow_events_history)
+                self.dialect.insert(self.tables.workflow_events_history)
                 .values(
+                    **self._wf_values(workflow_uuid),
                     workflow_uuid=workflow_uuid,
                     function_id=function_id,
                     key=key,
@@ -3800,7 +4356,9 @@ class SystemDatabase(ABC):
                     serialization=serialization,
                 )
                 .on_conflict_do_update(
-                    index_elements=["workflow_uuid", "key", "function_id"],
+                    index_elements=self._key_conflict(
+                        "workflow_uuid", "key", "function_id"
+                    ),
                     set_={
                         "value": serval,
                         "serialization": serialization,
@@ -3841,15 +4399,16 @@ class SystemDatabase(ABC):
 
         with self.engine.begin() as c:
             c.execute(
-                self.dialect.insert(SystemSchema.workflow_events)
+                self.dialect.insert(self.tables.workflow_events)
                 .values(
+                    **self._wf_values(workflow_uuid),
                     workflow_uuid=workflow_uuid,
                     key=key,
                     value=serval,
                     serialization=serialization,
                 )
                 .on_conflict_do_update(
-                    index_elements=["workflow_uuid", "key"],
+                    index_elements=self._key_conflict("workflow_uuid", "key"),
                     set_={
                         "value": serval,
                         "serialization": serialization,
@@ -3857,8 +4416,9 @@ class SystemDatabase(ABC):
                 )
             )
             c.execute(
-                self.dialect.insert(SystemSchema.workflow_events_history)
+                self.dialect.insert(self.tables.workflow_events_history)
                 .values(
+                    **self._wf_values(workflow_uuid),
                     workflow_uuid=workflow_uuid,
                     function_id=function_id,
                     key=key,
@@ -3866,7 +4426,9 @@ class SystemDatabase(ABC):
                     serialization=serialization,
                 )
                 .on_conflict_do_update(
-                    index_elements=["workflow_uuid", "key", "function_id"],
+                    index_elements=self._key_conflict(
+                        "workflow_uuid", "key", "function_id"
+                    ),
                     set_={
                         "value": serval,
                         "serialization": serialization,
@@ -3895,10 +4457,10 @@ class SystemDatabase(ABC):
         with self._observability_query() as c:
             rows = c.execute(
                 sa.select(
-                    SystemSchema.workflow_events.c.key,
-                    SystemSchema.workflow_events.c.value,
-                    SystemSchema.workflow_events.c.serialization,
-                ).where(SystemSchema.workflow_events.c.workflow_uuid == workflow_id)
+                    self.tables.workflow_events.c.key,
+                    self.tables.workflow_events.c.value,
+                    self.tables.workflow_events.c.serialization,
+                ).where(*self._wf(self.tables.workflow_events, workflow_id))
             ).fetchall()
 
         events: Dict[str, Any] = {}
@@ -3946,9 +4508,9 @@ class SystemDatabase(ABC):
                     f"Running get_event, id: {caller_ctx['function_id']}, key: {key}"
                 )
 
-        payload = f"{target_uuid}::{key}"
+        payload, components = self._waiter(target_uuid, key)
         event = LoopAwareEvent()
-        self.workflow_events_map.add(payload, event, (target_uuid, key))
+        self.workflow_events_map.add(payload, event, components)
 
         try:
             # Check if the key is already in the database
@@ -3983,11 +4545,11 @@ class SystemDatabase(ABC):
         with self.engine.begin() as c:
             rows = c.execute(
                 sa.select(
-                    SystemSchema.workflow_events.c.value,
-                    SystemSchema.workflow_events.c.serialization,
+                    self.tables.workflow_events.c.value,
+                    self.tables.workflow_events.c.serialization,
                 ).where(
-                    SystemSchema.workflow_events.c.workflow_uuid == target_uuid,
-                    SystemSchema.workflow_events.c.key == key,
+                    *self._wf(self.tables.workflow_events, target_uuid),
+                    self.tables.workflow_events.c.key == key,
                 )
             ).fetchall()
 
@@ -4030,10 +4592,10 @@ class SystemDatabase(ABC):
             with self.poll_limiter, self.engine.begin() as c:
                 rows = c.execute(
                     sa.select(
-                        SystemSchema.workflow_events.c.value,
+                        self.tables.workflow_events.c.value,
                     ).where(
-                        SystemSchema.workflow_events.c.workflow_uuid == target_uuid,
-                        SystemSchema.workflow_events.c.key == key,
+                        *self._wf(self.tables.workflow_events, target_uuid),
+                        self.tables.workflow_events.c.key == key,
                     )
                 ).fetchall()
             if len(rows) > 0:
@@ -4109,8 +4671,9 @@ class SystemDatabase(ABC):
     def _queue_pending_filter(self, queue_name: str) -> sa.ColumnElement[bool]:
         """Workflows of this queue already running, which every worker counts against
         the queue's concurrency limits."""
-        ws = SystemSchema.workflow_status
+        ws = self.tables.workflow_status
         return sa.and_(
+            *self._scoped(ws),
             ws.c.queue_name == queue_name,
             ws.c.status == WorkflowStatusString.PENDING.value,
             self._in_flight_status_prover(),
@@ -4120,7 +4683,7 @@ class SystemDatabase(ABC):
     @db_retry()
     def count_pending_queue_workflows(self, queue_name: str) -> int:
         """How many of this queue's workflows are running across every worker."""
-        ws = SystemSchema.workflow_status
+        ws = self.tables.workflow_status
         query = (
             sa.select(sa.func.count())
             .select_from(ws)
@@ -4145,8 +4708,9 @@ class SystemDatabase(ABC):
         # scan of every ENQUEUED row. Each iteration here is instead one index seek on
         # idx_workflow_status_partition_dequeue_v3, so cost scales with the number of
         # partitions rather than the backlog depth.
-        ws = SystemSchema.workflow_status
+        ws = self.tables.workflow_status
         base_filter = sa.and_(
+            *self._scoped(ws),
             ws.c.queue_name == queue_name,
             ws.c.status == WorkflowStatusString.ENQUEUED.value,
             self._in_flight_status_prover(),
@@ -4185,26 +4749,26 @@ class SystemDatabase(ABC):
         now_ms = int(time.time() * 1000)
         with self.engine.begin() as c:
             c.execute(
-                sa.update(SystemSchema.workflow_status)
+                sa.update(self.tables.workflow_status)
                 .where(
-                    SystemSchema.workflow_status.c.status
+                    self.tables.workflow_status.c.status
                     == WorkflowStatusString.DELAYED.value
                 )
-                .where(SystemSchema.workflow_status.c.delay_until_epoch_ms <= now_ms)
+                .where(self.tables.workflow_status.c.delay_until_epoch_ms <= now_ms)
                 # Only what this application would dequeue: a peer's debounce key is not ours to clear.
                 .where(
                     self._name_filter(
-                        SystemSchema.workflow_status.c.application_name, self.app_name
+                        self.tables.workflow_status.c.application_name, self.app_name
                     )
                 )
                 .values(
                     status=WorkflowStatusString.ENQUEUED.value,
                     deduplication_id=sa.case(
                         (
-                            SystemSchema.workflow_status.c.is_debounced == True,
+                            self.tables.workflow_status.c.is_debounced == True,
                             None,
                         ),
-                        else_=SystemSchema.workflow_status.c.deduplication_id,
+                        else_=self.tables.workflow_status.c.deduplication_id,
                     ),
                 )
             )
@@ -4212,7 +4776,7 @@ class SystemDatabase(ABC):
     def cancel_timed_out_workflows(self, limit: int) -> list[str]:
         """Cancel up to limit of this application's active workflows whose deadline has passed.
         Returns the IDs of the workflows cancelled."""
-        ws = SystemSchema.workflow_status
+        ws = self.tables.workflow_status
         now_ms = int(time.time() * 1000)
         timed_out = (
             sa.select(ws.c.workflow_uuid)
@@ -4252,6 +4816,32 @@ class SystemDatabase(ABC):
             ).fetchall()
         return [row[0] for row in rows]
 
+    def dequeue_scopes(self, queue_name: str) -> List[Optional[str]]:
+        """Scopes a queue's workers dequeue from in turn; one unkeyed scope unless sharded."""
+        return [None]
+
+    def is_lock_conflict(self, error: DBAPIError) -> bool:
+        """Whether a dequeue failed because another worker holds the rows it needs."""
+        return isinstance(error.orig, pg_errors.LockNotAvailable)
+
+    def is_serialization_conflict(self, error: DBAPIError) -> bool:
+        """Whether a dequeue failed on a serialization conflict with a concurrent one."""
+        return isinstance(error.orig, pg_errors.SerializationFailure)
+
+    def _is_latest_version(self, app_version: str) -> bool:
+        """Whether app_version is this application's latest registered version, or none is registered."""
+        av = self.tables.application_versions
+        with self.engine.begin() as c:
+            latest_version = c.execute(
+                sa.select(av.c.version_name)
+                .where(*self._global(av))
+                # Own plus unclaimed: a named peer's deploy must not demote this one.
+                .where(self._name_filter(av.c.application_name, self.app_name))
+                .order_by(av.c.version_timestamp.desc())
+                .limit(1)
+            ).scalar()
+        return latest_version is None or latest_version == app_version
+
     def start_queued_workflows(
         self,
         queue: "Queue",
@@ -4262,11 +4852,12 @@ class SystemDatabase(ABC):
         partition_local_running_count: int = 0,
         *,
         owner_xid: Optional[str] = None,
+        is_latest_version: Optional[bool] = None,
     ) -> Tuple[List[str], Optional[DequeueStopReason]]:
         """Claim this queue's next workflows, plus the limit that left no room to claim any
         (None if every limit had room)."""
         start_time_ms = int(time.time() * 1000)
-        ws = SystemSchema.workflow_status
+        ws = self.tables.workflow_status
         # Read the queue's cached private fields, not its accessors, which would re-fetch a database-backed queue. _concurrency is the queue-wide (global) limit.
         # Shares a concurrency or limiter budget with other executors
         has_shared_budget = (
@@ -4279,6 +4870,9 @@ class SystemDatabase(ABC):
         has_write_skew = queue_partition_key is not None and (
             queue._concurrency is not None or queue._limiter is not None
         )
+        # The queue thread reads it once per poll; read before the claim's transaction, as the version row is global.
+        if is_latest_version is None:
+            is_latest_version = self._is_latest_version(app_version)
         with self.engine.begin() as c:
             # Otherwise READ COMMITTED
             if self.engine.dialect.name == "postgresql" and has_shared_budget:
@@ -4292,6 +4886,7 @@ class SystemDatabase(ABC):
                 query = (
                     sa.select(sa.func.count())
                     .select_from(ws)
+                    .where(*self._scoped(ws))
                     .where(ws.c.queue_name == queue.name)
                     .where(ws.c.rate_limited == sa.literal_column("TRUE"))
                     .where(
@@ -4389,27 +4984,13 @@ class SystemDatabase(ABC):
                 if max_tasks <= 0:
                     return [], "partition_concurrency"
 
-            latest_version = c.execute(
-                sa.select(SystemSchema.application_versions.c.version_name)
-                # Own plus unclaimed: a named peer's deploy must not demote this one.
-                .where(
-                    self._name_filter(
-                        SystemSchema.application_versions.c.application_name,
-                        self.app_name,
-                    )
-                )
-                .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
-                .limit(1)
-            ).scalar()
-            is_latest_version = latest_version is None or latest_version == app_version
-
             version_predicate = (
-                SystemSchema.workflow_status.c.application_version == app_version
+                self.tables.workflow_status.c.application_version == app_version
             )
             if is_latest_version:
                 version_predicate = sa.or_(
-                    SystemSchema.workflow_status.c.application_version == app_version,
-                    SystemSchema.workflow_status.c.application_version.is_(None),
+                    self.tables.workflow_status.c.application_version == app_version,
+                    self.tables.workflow_status.c.application_version.is_(None),
                 )
 
             # Retrieve the first max_tasks workflows in the queue.
@@ -4419,19 +5000,20 @@ class SystemDatabase(ABC):
             skip_locks = not has_shared_budget
             query = (
                 sa.select(
-                    SystemSchema.workflow_status.c.workflow_uuid,
+                    self.tables.workflow_status.c.workflow_uuid,
                 )
-                .select_from(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_status.c.queue_name == queue.name)
+                .select_from(self.tables.workflow_status)
+                .where(*self._scoped(self.tables.workflow_status))
+                .where(self.tables.workflow_status.c.queue_name == queue.name)
                 .where(
-                    SystemSchema.workflow_status.c.status
+                    self.tables.workflow_status.c.status
                     == WorkflowStatusString.ENQUEUED.value
                 )
                 .where(self._in_flight_status_prover())
                 .where(version_predicate)
                 .where(
                     self._name_filter(
-                        SystemSchema.workflow_status.c.application_name, self.app_name
+                        self.tables.workflow_status.c.application_name, self.app_name
                     )
                 )
                 # Without a global budget, use skip_locked to only select rows that can be
@@ -4440,12 +5022,12 @@ class SystemDatabase(ABC):
             )
             if queue_partition_key is not None:
                 query = query.where(
-                    SystemSchema.workflow_status.c.queue_partition_key
+                    self.tables.workflow_status.c.queue_partition_key
                     == queue_partition_key
                 )
             query = query.order_by(
-                SystemSchema.workflow_status.c.priority.asc(),
-                SystemSchema.workflow_status.c.created_at.asc(),
+                self.tables.workflow_status.c.priority.asc(),
+                self.tables.workflow_status.c.created_at.asc(),
             )
             if max_tasks != sys.maxsize:
                 query = query.limit(int(max_tasks))
@@ -4465,20 +5047,21 @@ class SystemDatabase(ABC):
                 # Start the workflows by marking them PENDING and updating their executor ID.
                 # RETURNING reports exactly the rows this statement flipped (requires SQLite >= 3.35).
                 flipped_rows = c.execute(
-                    SystemSchema.workflow_status.update()
+                    self.tables.workflow_status.update()
                     .where(
-                        SystemSchema.workflow_status.c.workflow_uuid.in_(
-                            dequeued_ids[start : start + chunk_size]
+                        *self._wf_in(
+                            self.tables.workflow_status,
+                            dequeued_ids[start : start + chunk_size],
                         )
                     )
                     .where(
-                        SystemSchema.workflow_status.c.status
+                        self.tables.workflow_status.c.status
                         == WorkflowStatusString.ENQUEUED.value
                     )
                     # Re-check ownership alongside status, as the partitioned claim_guard does.
                     .where(
                         self._name_filter(
-                            SystemSchema.workflow_status.c.application_name,
+                            self.tables.workflow_status.c.application_name,
                             self.app_name,
                         )
                     )
@@ -4493,27 +5076,27 @@ class SystemDatabase(ABC):
                         rate_limited=queue._limiter is not None
                         or queue._partition_limiter is not None,
                         # Count this dispatch against the DLQ limit; no later insert does it.
-                        recovery_attempts=SystemSchema.workflow_status.c.recovery_attempts
+                        recovery_attempts=self.tables.workflow_status.c.recovery_attempts
                         + 1,
                         updated_at=self._now_ms_sql(),
                         # If a timeout is set, set the deadline on dequeue
                         workflow_deadline_epoch_ms=sa.case(
                             (
                                 sa.and_(
-                                    SystemSchema.workflow_status.c.workflow_timeout_ms.isnot(
+                                    self.tables.workflow_status.c.workflow_timeout_ms.isnot(
                                         None
                                     ),
-                                    SystemSchema.workflow_status.c.workflow_deadline_epoch_ms.is_(
+                                    self.tables.workflow_status.c.workflow_deadline_epoch_ms.is_(
                                         None
                                     ),
                                 ),
                                 start_time_ms
-                                + SystemSchema.workflow_status.c.workflow_timeout_ms,
+                                + self.tables.workflow_status.c.workflow_timeout_ms,
                             ),
-                            else_=SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
+                            else_=self.tables.workflow_status.c.workflow_deadline_epoch_ms,
                         ),
                     )
-                    .returning(SystemSchema.workflow_status.c.workflow_uuid)
+                    .returning(self.tables.workflow_status.c.workflow_uuid)
                 ).fetchall()
                 claimed.update(row[0] for row in flipped_rows)
 
@@ -4531,6 +5114,7 @@ class SystemDatabase(ABC):
         max_tasks: int = sys.maxsize,
         *,
         owner_xid: Optional[str] = None,
+        is_latest_version: Optional[bool] = None,
     ) -> List[str]:
         """Batch dequeue from a partitioned queue, optimized for the specific
         case where partition_concurrency=1. All other cases iterate and dequeue
@@ -4542,21 +5126,11 @@ class SystemDatabase(ABC):
         assert queue._limiter is None
         assert queue._partition_limiter is None
         start_time_ms = int(time.time() * 1000)
-        ws = SystemSchema.workflow_status
+        ws = self.tables.workflow_status
+        # The queue thread reads it once per poll; read before the claim's transaction, as the version row is global.
+        if is_latest_version is None:
+            is_latest_version = self._is_latest_version(app_version)
         with self.engine.begin() as c:
-            latest_version = c.execute(
-                sa.select(SystemSchema.application_versions.c.version_name)
-                # Own plus unclaimed: a named peer's deploy must not demote this one.
-                .where(
-                    self._name_filter(
-                        SystemSchema.application_versions.c.application_name,
-                        self.app_name,
-                    )
-                )
-                .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
-                .limit(1)
-            ).scalar()
-            is_latest_version = latest_version is None or latest_version == app_version
             version_predicate = ws.c.application_version == app_version
             if is_latest_version:
                 version_predicate = sa.or_(
@@ -4565,6 +5139,7 @@ class SystemDatabase(ABC):
                 )
             status_prover = self._in_flight_status_prover()
             enq = sa.and_(
+                *self._scoped(ws),
                 ws.c.queue_name == queue.name,
                 ws.c.status == WorkflowStatusString.ENQUEUED.value,
                 status_prover,
@@ -4586,9 +5161,10 @@ class SystemDatabase(ABC):
             partitions = partitions.union_all(
                 sa.select(next_pk).where(partitions.c.pk.isnot(None))
             )
-            # Unscoped by design: a mutual-exclusion probe must block on any owner's row.
+            # No application filter by design: a mutual-exclusion probe must block on any owner's row.
             pending_probe = (
                 sa.select(sa.literal(1))
+                .where(*self._scoped(ws))
                 .where(ws.c.queue_name == queue.name)
                 .where(ws.c.status == WorkflowStatusString.PENDING.value)
                 .where(status_prover)
@@ -4664,7 +5240,7 @@ class SystemDatabase(ABC):
             # Lock the fixed candidate set -- never a LIMIT query, whose SKIP LOCKED could slide past a locked head and admit out of order. On SQLite this is an unlocked re-read; the RETURNING flip below is the guard.
             locked_rows = c.execute(
                 sa.select(ws.c.workflow_uuid)
-                .where(ws.c.workflow_uuid.in_(candidate_ids))
+                .where(*self._wf_in(ws, candidate_ids))
                 .where(claim_guard)
                 .with_for_update(skip_locked=True)
             ).fetchall()
@@ -4676,7 +5252,7 @@ class SystemDatabase(ABC):
             # Start the workflows by marking them PENDING; RETURNING reports exactly the rows this statement flipped (requires SQLite >= 3.35).
             flipped_rows = c.execute(
                 ws.update()
-                .where(ws.c.workflow_uuid.in_(claim_ids))
+                .where(*self._wf_in(ws, claim_ids))
                 .where(claim_guard)
                 .values(
                     status=WorkflowStatusString.PENDING.value,
@@ -4728,20 +5304,20 @@ class SystemDatabase(ABC):
             return False
         with self.engine.begin() as c:
             res = c.execute(
-                sa.update(SystemSchema.workflow_status)
-                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+                sa.update(self.tables.workflow_status)
+                .where(*self._wf(self.tables.workflow_status, workflow_id))
                 .where(
-                    SystemSchema.workflow_status.c.status
+                    self.tables.workflow_status.c.status
                     == WorkflowStatusString.PENDING.value
                 )
-                .where(SystemSchema.workflow_status.c.executor_id.in_(executor_ids))
+                .where(self.tables.workflow_status.c.executor_id.in_(executor_ids))
                 .values(
                     status=WorkflowStatusString.ENQUEUED.value,
                     owner_xid=None,
                     started_at_epoch_ms=None,
                     updated_at=self._now_ms_sql(),
                     queue_name=sa.func.coalesce(
-                        SystemSchema.workflow_status.c.queue_name, recovery_queue_name
+                        self.tables.workflow_status.c.queue_name, recovery_queue_name
                     ),
                 )
             )
@@ -4880,8 +5456,9 @@ class SystemDatabase(ABC):
                 reuse_policy=reuse_policy,
             )
             inserted = conn.execute(
-                self.dialect.insert(SystemSchema.operation_outputs)
+                self.dialect.insert(self.tables.operation_outputs)
                 .values(
+                    **self._wf_values(parent_workflow_id),
                     workflow_uuid=parent_workflow_id,
                     function_id=parent_function_id,
                     function_name=function_name,
@@ -4893,14 +5470,13 @@ class SystemDatabase(ABC):
                     application_name=self.app_name,
                 )
                 .on_conflict_do_nothing()
-                .returning(SystemSchema.operation_outputs.c.function_id)
+                .returning(self.tables.operation_outputs.c.function_id)
             ).fetchone()
             if inserted is None:
                 existing = conn.execute(
-                    sa.select(SystemSchema.operation_outputs.c.child_workflow_id).where(
-                        SystemSchema.operation_outputs.c.workflow_uuid
-                        == parent_workflow_id,
-                        SystemSchema.operation_outputs.c.function_id
+                    sa.select(self.tables.operation_outputs.c.child_workflow_id).where(
+                        *self._wf(self.tables.operation_outputs, parent_workflow_id),
+                        self.tables.operation_outputs.c.function_id
                         == parent_function_id,
                     )
                 ).fetchone()
@@ -4923,18 +5499,19 @@ class SystemDatabase(ABC):
         # One arm per status so idx_workflow_status_partition_dequeue_v3 can seek: a status IN (...) matching that index's own predicate is dropped as redundant, leaving its status column unbound and blocking the seek on queue_partition_key.
         arms = [
             sa.select(
-                SystemSchema.workflow_status.c.queue_name,
-                SystemSchema.workflow_status.c.queue_partition_key,
-                sa.func.max(SystemSchema.workflow_status.c.created_at),
+                self.tables.workflow_status.c.queue_name,
+                self.tables.workflow_status.c.queue_partition_key,
+                sa.func.max(self.tables.workflow_status.c.created_at),
             )
-            .where(SystemSchema.workflow_status.c.queue_name.in_(queue_names))
+            .where(*self._scoped(self.tables.workflow_status))
+            .where(self.tables.workflow_status.c.queue_name.in_(queue_names))
             .where(
-                SystemSchema.workflow_status.c.queue_partition_key.in_(partition_keys)
+                self.tables.workflow_status.c.queue_partition_key.in_(partition_keys)
             )
-            .where(SystemSchema.workflow_status.c.status == status)
+            .where(self.tables.workflow_status.c.status == status)
             .group_by(
-                SystemSchema.workflow_status.c.queue_name,
-                SystemSchema.workflow_status.c.queue_partition_key,
+                self.tables.workflow_status.c.queue_name,
+                self.tables.workflow_status.c.queue_partition_key,
             )
             for status in (
                 WorkflowStatusString.ENQUEUED.value,
@@ -5004,6 +5581,9 @@ class SystemDatabase(ABC):
             assert status["deduplication_id"] is None
             rows.append(
                 {
+                    **self._wf_values(
+                        status["workflow_uuid"], shard_key=status["shard_key"]
+                    ),
                     "workflow_uuid": status["workflow_uuid"],
                     "status": status["status"],
                     "name": status["name"],
@@ -5024,6 +5604,7 @@ class SystemDatabase(ABC):
                     "serialization": status["serialization"],
                     "queue_partition_key": status["queue_partition_key"],
                     "parent_workflow_id": status["parent_workflow_id"],
+                    **self._parent_values(status["parent_workflow_id"]),
                     "creator_xid": None,
                     "delay_until_epoch_ms": status["delay_until_epoch_ms"],
                     "attributes": status["attributes"],
@@ -5035,6 +5616,9 @@ class SystemDatabase(ABC):
             )
         input_rows: List[Dict[str, Any]] = [
             {
+                **self._wf_values(
+                    status["workflow_uuid"], shard_key=status["shard_key"]
+                ),
                 "workflow_uuid": status["workflow_uuid"],
                 "inputs": status["inputs"],
                 "retention_timestamp": created_ats[i],
@@ -5047,18 +5631,27 @@ class SystemDatabase(ABC):
         with self.engine.begin() as conn:
             for start in range(0, len(rows), chunk_size):
                 chunk = rows[start : start + chunk_size]
-                result = conn.execute(
-                    self.dialect.insert(SystemSchema.workflow_status)
-                    .values(chunk)
-                    .on_conflict_do_nothing(index_elements=["workflow_uuid"])
-                    .returning(SystemSchema.workflow_status.c.workflow_uuid)
+                result = self._insert_rows(
+                    conn,
+                    lambda batch: self.dialect.insert(self.tables.workflow_status)
+                    .values(batch)
+                    .on_conflict_do_nothing(
+                        index_elements=self._key_conflict("workflow_uuid")
+                    )
+                    .returning(self.tables.workflow_status.c.workflow_uuid),
+                    chunk,
+                    returning=True,
                 )
                 inserted.update(row[0] for row in result)
             for start in range(0, len(input_rows), chunk_size):
-                conn.execute(
-                    self.dialect.insert(SystemSchema.workflow_input)
-                    .values(input_rows[start : start + chunk_size])
-                    .on_conflict_do_nothing(index_elements=["workflow_uuid"])
+                self._insert_rows(
+                    conn,
+                    lambda batch: self.dialect.insert(self.tables.workflow_input)
+                    .values(batch)
+                    .on_conflict_do_nothing(
+                        index_elements=self._key_conflict("workflow_uuid")
+                    ),
+                    input_rows[start : start + chunk_size],
                 )
         return inserted
 
@@ -5115,9 +5708,19 @@ class SystemDatabase(ABC):
         serialization: Optional[str],
     ) -> sa.Insert:
         """Build an atomic INSERT...SELECT that computes the next stream offset."""
-        return sa.insert(SystemSchema.streams).from_select(
-            ["workflow_uuid", "function_id", "key", "value", "serialization", "offset"],
+        key_columns = self._wf_columns(workflow_uuid)
+        return sa.insert(self.tables.streams).from_select(
+            [
+                *[name for name, _ in key_columns],
+                "workflow_uuid",
+                "function_id",
+                "key",
+                "value",
+                "serialization",
+                "offset",
+            ],
             sa.select(
+                *[expr for _, expr in key_columns],
                 sa.literal(workflow_uuid).label("workflow_uuid"),
                 sa.literal(function_id).label("function_id"),
                 sa.literal(key).label("key"),
@@ -5125,10 +5728,10 @@ class SystemDatabase(ABC):
                 sa.literal(serialization).label("serialization"),
                 (
                     sa.func.coalesce(
-                        sa.select(sa.func.max(SystemSchema.streams.c.offset))
+                        sa.select(sa.func.max(self.tables.streams.c.offset))
                         .where(
-                            SystemSchema.streams.c.workflow_uuid == workflow_uuid,
-                            SystemSchema.streams.c.key == key,
+                            *self._wf(self.tables.streams, workflow_uuid),
+                            self.tables.streams.c.key == key,
                         )
                         .correlate(None)
                         .scalar_subquery(),
@@ -5288,9 +5891,9 @@ class SystemDatabase(ABC):
         Must be called before reading so a notification arriving between a read
         and the wait is not lost.
         """
-        payload = f"{workflow_uuid}::{key}"
+        payload, components = self._waiter(workflow_uuid, key)
         event = LoopAwareEvent()
-        self.streams_map.add(payload, event, (workflow_uuid, key))
+        self.streams_map.add(payload, event, components)
         return event, payload
 
     def unregister_stream_listener(self, payload: str, event: LoopAwareEvent) -> None:
@@ -5313,28 +5916,27 @@ class SystemDatabase(ABC):
         """
         # LEFT JOIN so a workflow with nothing at offset still reports its status. The offset range
         # keeps this a single range scan on the (workflow_uuid, key, offset) primary key.
-        join = SystemSchema.workflow_status.outerjoin(
-            SystemSchema.streams,
+        join = self.tables.workflow_status.outerjoin(
+            self.tables.streams,
             sa.and_(
-                SystemSchema.streams.c.workflow_uuid
-                == SystemSchema.workflow_status.c.workflow_uuid,
-                SystemSchema.streams.c.key == key,
-                SystemSchema.streams.c.offset >= offset,
-                SystemSchema.streams.c.offset < offset + limit,
+                self._wf_join(self.tables.streams, self.tables.workflow_status),
+                self.tables.streams.c.key == key,
+                self.tables.streams.c.offset >= offset,
+                self.tables.streams.c.offset < offset + limit,
             ),
         )
         # Polling read (listener-less clients poll the offset) under the limiter; inside db_retry so the permit frees across backoff.
         with self.poll_limiter, self.engine.begin() as c:
             rows = c.execute(
                 sa.select(
-                    SystemSchema.workflow_status.c.status,
-                    SystemSchema.streams.c.value,
-                    SystemSchema.streams.c.serialization,
-                    SystemSchema.streams.c.offset,
+                    self.tables.workflow_status.c.status,
+                    self.tables.streams.c.value,
+                    self.tables.streams.c.serialization,
+                    self.tables.streams.c.offset,
                 )
                 .select_from(join)
-                .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid)
-                .order_by(SystemSchema.streams.c.offset)
+                .where(*self._wf(self.tables.workflow_status, workflow_uuid))
+                .order_by(self.tables.streams.c.offset)
             ).fetchall()
 
         if not rows:
@@ -5354,9 +5956,9 @@ class SystemDatabase(ABC):
         """Return the name of the checkpoint recorded at this point in history, if any."""
         with self.engine.begin() as c:
             checkpoint_name: str | None = c.execute(
-                sa.select(SystemSchema.operation_outputs.c.function_name).where(
-                    (SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
-                    & (SystemSchema.operation_outputs.c.function_id == function_id)
+                sa.select(self.tables.operation_outputs.c.function_name).where(
+                    *self._wf(self.tables.operation_outputs, workflow_id),
+                    self.tables.operation_outputs.c.function_id == function_id,
                 )
             ).scalar()
             return checkpoint_name
@@ -5368,9 +5970,9 @@ class SystemDatabase(ABC):
         Otherwise, return whether the checkpoint is this patch marker."""
         with self.engine.begin() as c:
             checkpoint_name: str | None = c.execute(
-                sa.select(SystemSchema.operation_outputs.c.function_name).where(
-                    (SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
-                    & (SystemSchema.operation_outputs.c.function_id == function_id)
+                sa.select(self.tables.operation_outputs.c.function_name).where(
+                    *self._wf(self.tables.operation_outputs, workflow_id),
+                    self.tables.operation_outputs.c.function_id == function_id,
                 )
             ).scalar()
             if checkpoint_name is None:
@@ -5396,9 +5998,9 @@ class SystemDatabase(ABC):
         """Respect patch markers in history, but do not introduce new patch markers"""
         with self.engine.begin() as c:
             checkpoint_name: str | None = c.execute(
-                sa.select(SystemSchema.operation_outputs.c.function_name).where(
-                    (SystemSchema.operation_outputs.c.workflow_uuid == workflow_id)
-                    & (SystemSchema.operation_outputs.c.function_id == function_id)
+                sa.select(self.tables.operation_outputs.c.function_name).where(
+                    *self._wf(self.tables.operation_outputs, workflow_id),
+                    self.tables.operation_outputs.c.function_id == function_id,
                 )
             ).scalar()
             return checkpoint_name == patch_name
@@ -5417,8 +6019,8 @@ class SystemDatabase(ABC):
             return []
         with self.engine.begin() as c:
             child_rows = c.execute(
-                sa.select(SystemSchema.workflow_status.c.workflow_uuid).where(
-                    SystemSchema.workflow_status.c.parent_workflow_id.in_(workflow_ids)
+                sa.select(self.tables.workflow_status.c.workflow_uuid).where(
+                    self.tables.workflow_status.c.parent_workflow_id.in_(workflow_ids)
                 )
             ).fetchall()
         return [row[0] for row in child_rows]
@@ -5450,15 +6052,17 @@ class SystemDatabase(ABC):
         def _do(c: sa.Connection) -> None:
             owner = self._resolve_row_owner(
                 c,
-                SystemSchema.workflow_schedules,
-                SystemSchema.workflow_schedules.c.schedule_name,
+                self.tables.workflow_schedules,
+                self.tables.workflow_schedules.c.schedule_name,
                 schedule["schedule_name"],
                 schedule.get("application_name"),
                 "Schedule",
             )
             try:
                 c.execute(
-                    sa.insert(SystemSchema.workflow_schedules).values(
+                    sa.insert(self.tables.workflow_schedules).values(
+                        **self._global_values(),
+                        **self._schedule_values(schedule),
                         schedule_id=schedule["schedule_id"],
                         schedule_name=schedule["schedule_name"],
                         workflow_name=schedule["workflow_name"],
@@ -5491,15 +6095,17 @@ class SystemDatabase(ABC):
         def _do(c: sa.Connection) -> None:
             owner = self._resolve_row_owner(
                 c,
-                SystemSchema.workflow_schedules,
-                SystemSchema.workflow_schedules.c.schedule_name,
+                self.tables.workflow_schedules,
+                self.tables.workflow_schedules.c.schedule_name,
                 schedule["schedule_name"],
                 schedule.get("application_name"),
                 "Schedule",
             )
             c.execute(
-                self.dialect.insert(SystemSchema.workflow_schedules)
+                self.dialect.insert(self.tables.workflow_schedules)
                 .values(
+                    **self._global_values(),
+                    **self._schedule_values(schedule),
                     schedule_id=schedule["schedule_id"],
                     schedule_name=schedule["schedule_name"],
                     workflow_name=schedule["workflow_name"],
@@ -5514,8 +6120,9 @@ class SystemDatabase(ABC):
                     application_name=owner,
                 )
                 .on_conflict_do_update(
-                    index_elements=["schedule_name"],
+                    index_elements=self._key_conflict("schedule_name"),
                     set_={
+                        **self._schedule_values(schedule),
                         "workflow_name": schedule["workflow_name"],
                         "workflow_class_name": schedule["workflow_class_name"],
                         "schedule": schedule["schedule"],
@@ -5525,7 +6132,7 @@ class SystemDatabase(ABC):
                         "queue_name": schedule.get("queue_name"),
                         # Claim only an unclaimed row, so a registration landing between the check above and this write keeps the name it took.
                         "application_name": sa.func.coalesce(
-                            SystemSchema.workflow_schedules.c.application_name, owner
+                            self.tables.workflow_schedules.c.application_name, owner
                         ),
                     },
                 )
@@ -5533,8 +6140,8 @@ class SystemDatabase(ABC):
             # Read back, since the guard above is silent about why it declined to claim.
             self._resolve_row_owner(
                 c,
-                SystemSchema.workflow_schedules,
-                SystemSchema.workflow_schedules.c.schedule_name,
+                self.tables.workflow_schedules,
+                self.tables.workflow_schedules.c.schedule_name,
                 schedule["schedule_name"],
                 schedule.get("application_name"),
                 "Schedule",
@@ -5559,7 +6166,7 @@ class SystemDatabase(ABC):
         By default, only list this application's schedules."""
         return self._list_schedules(
             self._observability_filter(
-                SystemSchema.workflow_schedules.c.application_name, application_name
+                self.tables.workflow_schedules.c.application_name, application_name
             ),
             status=status,
             workflow_name=workflow_name,
@@ -5576,30 +6183,33 @@ class SystemDatabase(ABC):
         schedule_name_prefix: Optional[Union[str, List[str]]] = None,
         conn: Optional[sa.Connection] = None,
     ) -> List[WorkflowSchedule]:
+        key_column = self._schedule_key_column()
+
         def _do(c: sa.Connection) -> List[WorkflowSchedule]:
             query = sa.select(
-                SystemSchema.workflow_schedules.c.schedule_id,
-                SystemSchema.workflow_schedules.c.schedule_name,
-                SystemSchema.workflow_schedules.c.workflow_name,
-                SystemSchema.workflow_schedules.c.workflow_class_name,
-                SystemSchema.workflow_schedules.c.schedule,
-                SystemSchema.workflow_schedules.c.status,
-                SystemSchema.workflow_schedules.c.context,
-                SystemSchema.workflow_schedules.c.last_fired_at,
-                SystemSchema.workflow_schedules.c.automatic_backfill,
-                SystemSchema.workflow_schedules.c.cron_timezone,
-                SystemSchema.workflow_schedules.c.queue_name,
-                SystemSchema.workflow_schedules.c.application_name,
-            ).where(scope)
+                self.tables.workflow_schedules.c.schedule_id,
+                self.tables.workflow_schedules.c.schedule_name,
+                self.tables.workflow_schedules.c.workflow_name,
+                self.tables.workflow_schedules.c.workflow_class_name,
+                self.tables.workflow_schedules.c.schedule,
+                self.tables.workflow_schedules.c.status,
+                self.tables.workflow_schedules.c.context,
+                self.tables.workflow_schedules.c.last_fired_at,
+                self.tables.workflow_schedules.c.automatic_backfill,
+                self.tables.workflow_schedules.c.cron_timezone,
+                self.tables.workflow_schedules.c.queue_name,
+                self.tables.workflow_schedules.c.application_name,
+                *([key_column] if key_column is not None else []),
+            ).where(*self._global(self.tables.workflow_schedules), scope)
             if status is not None:
                 vals = [status] if isinstance(status, str) else status
-                query = query.where(SystemSchema.workflow_schedules.c.status.in_(vals))
+                query = query.where(self.tables.workflow_schedules.c.status.in_(vals))
             if workflow_name is not None:
                 vals = (
                     [workflow_name] if isinstance(workflow_name, str) else workflow_name
                 )
                 query = query.where(
-                    SystemSchema.workflow_schedules.c.workflow_name.in_(vals)
+                    self.tables.workflow_schedules.c.workflow_name.in_(vals)
                 )
             if schedule_name_prefix is not None:
                 prefixes = (
@@ -5610,9 +6220,7 @@ class SystemDatabase(ABC):
                 query = query.where(
                     sa.or_(
                         *(
-                            SystemSchema.workflow_schedules.c.schedule_name.startswith(
-                                p
-                            )
+                            self.tables.workflow_schedules.c.schedule_name.startswith(p)
                             for p in prefixes
                         )
                     )
@@ -5632,6 +6240,7 @@ class SystemDatabase(ABC):
                     cron_timezone=row[9],
                     queue_name=row[10],
                     application_name=row[11],
+                    shard_key=row[12] if key_column is not None else None,
                 )
                 for row in rows
             ]
@@ -5644,22 +6253,28 @@ class SystemDatabase(ABC):
     def get_schedule(
         self, name: str, conn: Optional[sa.Connection] = None
     ) -> Optional[WorkflowSchedule]:
+        key_column = self._schedule_key_column()
+
         def _do(c: sa.Connection) -> Optional[WorkflowSchedule]:
             row = c.execute(
                 sa.select(
-                    SystemSchema.workflow_schedules.c.schedule_id,
-                    SystemSchema.workflow_schedules.c.schedule_name,
-                    SystemSchema.workflow_schedules.c.workflow_name,
-                    SystemSchema.workflow_schedules.c.workflow_class_name,
-                    SystemSchema.workflow_schedules.c.schedule,
-                    SystemSchema.workflow_schedules.c.status,
-                    SystemSchema.workflow_schedules.c.context,
-                    SystemSchema.workflow_schedules.c.last_fired_at,
-                    SystemSchema.workflow_schedules.c.automatic_backfill,
-                    SystemSchema.workflow_schedules.c.cron_timezone,
-                    SystemSchema.workflow_schedules.c.queue_name,
-                    SystemSchema.workflow_schedules.c.application_name,
-                ).where(SystemSchema.workflow_schedules.c.schedule_name == name)
+                    self.tables.workflow_schedules.c.schedule_id,
+                    self.tables.workflow_schedules.c.schedule_name,
+                    self.tables.workflow_schedules.c.workflow_name,
+                    self.tables.workflow_schedules.c.workflow_class_name,
+                    self.tables.workflow_schedules.c.schedule,
+                    self.tables.workflow_schedules.c.status,
+                    self.tables.workflow_schedules.c.context,
+                    self.tables.workflow_schedules.c.last_fired_at,
+                    self.tables.workflow_schedules.c.automatic_backfill,
+                    self.tables.workflow_schedules.c.cron_timezone,
+                    self.tables.workflow_schedules.c.queue_name,
+                    self.tables.workflow_schedules.c.application_name,
+                    *([key_column] if key_column is not None else []),
+                ).where(
+                    *self._global(self.tables.workflow_schedules),
+                    self.tables.workflow_schedules.c.schedule_name == name,
+                )
             ).fetchone()
             if row is None:
                 return None
@@ -5676,6 +6291,7 @@ class SystemDatabase(ABC):
                 cron_timezone=row[9],
                 queue_name=row[10],
                 application_name=row[11],
+                shard_key=row[12] if key_column is not None else None,
             )
 
         if conn is not None:
@@ -5688,8 +6304,11 @@ class SystemDatabase(ABC):
     ) -> None:
         def _do(c: sa.Connection) -> None:
             c.execute(
-                sa.update(SystemSchema.workflow_schedules)
-                .where(SystemSchema.workflow_schedules.c.schedule_name == name)
+                sa.update(self.tables.workflow_schedules)
+                .where(
+                    *self._global(self.tables.workflow_schedules),
+                    self.tables.workflow_schedules.c.schedule_name == name,
+                )
                 .values(status=status)
             )
 
@@ -5708,16 +6327,20 @@ class SystemDatabase(ABC):
     def update_last_fired_at(self, name: str, last_fired_at: str) -> None:
         with self.engine.begin() as c:
             c.execute(
-                sa.update(SystemSchema.workflow_schedules)
-                .where(SystemSchema.workflow_schedules.c.schedule_name == name)
+                sa.update(self.tables.workflow_schedules)
+                .where(
+                    *self._global(self.tables.workflow_schedules),
+                    self.tables.workflow_schedules.c.schedule_name == name,
+                )
                 .values(last_fired_at=last_fired_at)
             )
 
     def delete_schedule(self, name: str, conn: Optional[sa.Connection] = None) -> None:
         def _do(c: sa.Connection) -> None:
             c.execute(
-                sa.delete(SystemSchema.workflow_schedules).where(
-                    SystemSchema.workflow_schedules.c.schedule_name == name
+                sa.delete(self.tables.workflow_schedules).where(
+                    *self._global(self.tables.workflow_schedules),
+                    self.tables.workflow_schedules.c.schedule_name == name,
                 )
             )
 
@@ -5736,11 +6359,12 @@ class SystemDatabase(ABC):
         does not stay unclaimed. A peer's name is a collision, which is why this raises.
         """
         owner = application_name if application_name is not None else self.app_name
-        av = SystemSchema.application_versions
+        av = self.tables.application_versions
         with self.engine.begin() as c:
             # Claim a pre-upgrade row in place, so the version is not recreated or retimed.
             claimed = c.execute(
                 sa.update(av)
+                .where(*self._global(av))
                 .where(av.c.version_name == version_name)
                 .where(av.c.application_name.is_(None))
                 .values(application_name=owner)
@@ -5750,6 +6374,7 @@ class SystemDatabase(ABC):
                 c.execute(
                     self.dialect.insert(av)
                     .values(
+                        **self._global_values(),
                         version_id=generate_uuid(),
                         version_name=version_name,
                         application_name=owner,
@@ -5771,7 +6396,7 @@ class SystemDatabase(ABC):
         promotion claims an unclaimed row, which would otherwise be every peer's latest.
         """
         owner = application_name if application_name is not None else self.app_name
-        av = SystemSchema.application_versions
+        av = self.tables.application_versions
         with self.engine.begin() as c:
             resolved = self._resolve_row_owner(
                 c,
@@ -5787,6 +6412,7 @@ class SystemDatabase(ABC):
                 scope = sa.or_(av.c.application_name == resolved, scope)
             c.execute(
                 sa.update(av)
+                .where(*self._global(av))
                 .where(av.c.version_name == version_name)
                 .where(scope)
                 .values(version_timestamp=new_timestamp, application_name=resolved)
@@ -5796,19 +6422,20 @@ class SystemDatabase(ABC):
         with self._observability_query() as c:
             rows = c.execute(
                 sa.select(
-                    SystemSchema.application_versions.c.version_id,
-                    SystemSchema.application_versions.c.version_name,
-                    SystemSchema.application_versions.c.version_timestamp,
-                    SystemSchema.application_versions.c.created_at,
-                    SystemSchema.application_versions.c.application_name,
+                    self.tables.application_versions.c.version_id,
+                    self.tables.application_versions.c.version_name,
+                    self.tables.application_versions.c.version_timestamp,
+                    self.tables.application_versions.c.created_at,
+                    self.tables.application_versions.c.application_name,
                 )
+                .where(*self._global(self.tables.application_versions))
                 .where(
                     self._name_filter(
-                        SystemSchema.application_versions.c.application_name,
+                        self.tables.application_versions.c.application_name,
                         self.app_name,
                     )
                 )
-                .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
+                .order_by(self.tables.application_versions.c.version_timestamp.desc())
             ).fetchall()
 
         return [
@@ -5832,7 +6459,9 @@ class SystemDatabase(ABC):
     ) -> Optional["Queue"]:
         with self.engine.begin() as c:
             row = c.execute(
-                sa.select(SystemSchema.queues).where(SystemSchema.queues.c.name == name)
+                sa.select(self.tables.queues).where(
+                    *self._global(self.tables.queues), self.tables.queues.c.name == name
+                )
             ).fetchone()
             if row is None:
                 return None
@@ -5848,10 +6477,11 @@ class SystemDatabase(ABC):
         By default, only list this application's queues."""
         with self.engine.begin() as c:
             rows = c.execute(
-                sa.select(SystemSchema.queues).where(
+                sa.select(self.tables.queues).where(
+                    *self._global(self.tables.queues),
                     self._observability_filter(
-                        SystemSchema.queues.c.application_name, application_name
-                    )
+                        self.tables.queues.c.application_name, application_name
+                    ),
                 )
             ).fetchall()
             return [
@@ -5863,7 +6493,9 @@ class SystemDatabase(ABC):
         """Delete a queue's row, if it exists."""
         with self.engine.begin() as c:
             c.execute(
-                sa.delete(SystemSchema.queues).where(SystemSchema.queues.c.name == name)
+                sa.delete(self.tables.queues).where(
+                    *self._global(self.tables.queues), self.tables.queues.c.name == name
+                )
             )
 
     def update_queue(self, name: str, fields: Dict[str, Any]) -> None:
@@ -5874,8 +6506,9 @@ class SystemDatabase(ABC):
         values["updated_at"] = int(time.time() * 1000)
         with self.engine.begin() as c:
             c.execute(
-                sa.update(SystemSchema.queues)
-                .where(SystemSchema.queues.c.name == name)
+                sa.update(self.tables.queues)
+                .where(*self._global(self.tables.queues))
+                .where(self.tables.queues.c.name == name)
                 .values(**values)
             )
 
@@ -5922,8 +6555,9 @@ class SystemDatabase(ABC):
         with self.engine.begin() as c:
             existed = (
                 c.execute(
-                    sa.select(SystemSchema.queues.c.name).where(
-                        SystemSchema.queues.c.name == name
+                    sa.select(self.tables.queues.c.name).where(
+                        *self._global(self.tables.queues),
+                        self.tables.queues.c.name == name,
                     )
                 ).fetchone()
                 is not None
@@ -5931,33 +6565,37 @@ class SystemDatabase(ABC):
             # A name collision is a conflict in every mode: the name is the queue's address.
             values["application_name"] = self._resolve_row_owner(
                 c,
-                SystemSchema.queues,
-                SystemSchema.queues.c.name,
+                self.tables.queues,
+                self.tables.queues.c.name,
                 name,
                 owner,
                 "Queue",
             )
-            stmt = self.dialect.insert(SystemSchema.queues).values(**values)
+            stmt = self.dialect.insert(self.tables.queues).values(
+                **self._global_values(), **values
+            )
             if update_existing:
                 update_set: Dict[str, Any] = {
                     k: v for k, v in values.items() if k != "name"
                 }
                 # Claim only an unclaimed row, so a registration landing between the check above and this write keeps the name it just took.
                 update_set["application_name"] = sa.func.coalesce(
-                    SystemSchema.queues.c.application_name, values["application_name"]
+                    self.tables.queues.c.application_name, values["application_name"]
                 )
                 stmt = stmt.on_conflict_do_update(
-                    index_elements=["name"],
+                    index_elements=self._key_conflict("name"),
                     set_=update_set,
                 )
             else:
-                stmt = stmt.on_conflict_do_nothing(index_elements=["name"])
+                stmt = stmt.on_conflict_do_nothing(
+                    index_elements=self._key_conflict("name")
+                )
             c.execute(stmt)
             # Read back, since the guard above is silent about why it declined to claim.
             self._resolve_row_owner(
                 c,
-                SystemSchema.queues,
-                SystemSchema.queues.c.name,
+                self.tables.queues,
+                self.tables.queues.c.name,
                 name,
                 owner,
                 "Queue",
@@ -5974,19 +6612,20 @@ class SystemDatabase(ABC):
         with self.engine.begin() as c:
             row = c.execute(
                 sa.select(
-                    SystemSchema.application_versions.c.version_id,
-                    SystemSchema.application_versions.c.version_name,
-                    SystemSchema.application_versions.c.version_timestamp,
-                    SystemSchema.application_versions.c.created_at,
-                    SystemSchema.application_versions.c.application_name,
+                    self.tables.application_versions.c.version_id,
+                    self.tables.application_versions.c.version_name,
+                    self.tables.application_versions.c.version_timestamp,
+                    self.tables.application_versions.c.created_at,
+                    self.tables.application_versions.c.application_name,
                 )
+                .where(*self._global(self.tables.application_versions))
                 .where(
                     self._name_filter(
-                        SystemSchema.application_versions.c.application_name,
+                        self.tables.application_versions.c.application_name,
                         owner,
                     )
                 )
-                .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
+                .order_by(self.tables.application_versions.c.version_timestamp.desc())
                 .limit(1)
             ).fetchone()
             if row is None:
@@ -6104,7 +6743,7 @@ class SystemDatabase(ABC):
         if batch_size is not None and batch_size < 1:
             raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
 
-        ws = SystemSchema.workflow_status
+        ws = self.tables.workflow_status
         # Never a merge: queue, schedule, and version names are globally unique whatever their owner, so this cannot collide.
         with self.engine.begin() as c:
 
@@ -6120,16 +6759,22 @@ class SystemDatabase(ABC):
                     .values(application_name=new_name)
                 ).rowcount
 
-            queues = move(SystemSchema.queues)
-            schedules = move(SystemSchema.workflow_schedules)
-            versions = move(SystemSchema.application_versions)
+            queues = move(self.tables.queues, *self._global(self.tables.queues))
+            schedules = move(
+                self.tables.workflow_schedules,
+                *self._global(self.tables.workflow_schedules),
+            )
+            versions = move(
+                self.tables.application_versions,
+                *self._global(self.tables.application_versions),
+            )
             in_flight = move(ws, ws.c.status.in_(self._RENAME_ATOMIC_STATUSES))
 
         # Only terminal rows are left to match, and they scope observability and GC alone, so they may lag behind the commit above.
         terminal = self._rename_rows_in_batches(
             ws, ws.c.workflow_uuid, old_name, new_name, batch_size, adopt_unclaimed_rows
         )
-        oo = SystemSchema.operation_outputs
+        oo = self.tables.operation_outputs
         steps = self._rename_rows_in_batches(
             oo, oo.c.workflow_uuid, old_name, new_name, batch_size, adopt_unclaimed_rows
         )

@@ -1,6 +1,7 @@
 # mypy: disable-error-code="no-redef"
 
 import asyncio
+import contextvars
 import datetime
 import logging
 import os
@@ -32,13 +33,23 @@ from dbos import _enterprise as enterprise_module
 
 # Private API because this is a test
 from dbos._client import DBOSClient
-from dbos._context import assert_current_dbos_context, get_local_dbos_context
+from dbos._context import (
+    DBOSContext,
+    SetEnqueueOptions,
+    SetShardKey,
+    _clear_local_dbos_context,
+    _set_local_dbos_context,
+    assert_current_dbos_context,
+    get_local_dbos_context,
+)
+from dbos._enqueue_options import validate_enqueue_options
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSException,
     DBOSNonExistentWorkflowError,
 )
 from dbos._schemas.system_database import SystemSchema
+from dbos._shard_keys import bind_shard_keys, shard_key_scope
 from dbos._sys_db import _dbos_null_topic
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from dbos._workflow_commands import WORKFLOW_TIMEOUT_THREAD_NAME
@@ -2274,7 +2285,7 @@ def test_recovery_appversion(config: DBOSConfig) -> None:
 
 
 def test_conductor_key_keeps_cloud_executor_id(
-    config: DBOSConfig, monkeypatch: pytest.MonkeyPatch
+    config: DBOSConfig, monkeypatch: pytest.MonkeyPatch, skip_with_sharding: None
 ) -> None:
     # Only the executor identity is under test, so stand in for the enterprise client.
     class _NoopConductor:
@@ -2520,7 +2531,7 @@ def test_timeout_sweep_cancels_unowned_workflows(dbos: DBOS) -> None:
     dbos._sys_db.cancel_timed_out_workflows = real_sweep  # type: ignore[method-assign]
 
 
-def test_timeout_sweep_query_plan(dbos: DBOS) -> None:
+def test_timeout_sweep_query_plan(dbos: DBOS, skip_with_sharding: None) -> None:
     """The sweep runs every poll, so it must reach expired rows through idx_workflow_status_deadline."""
     from sqlalchemy import event
 
@@ -2727,7 +2738,10 @@ def test_destroy(dbos: DBOS, config: DBOSConfig) -> None:
 
 
 def test_custom_database(
-    config: DBOSConfig, db_engine: sa.Engine, cleanup_test_databases: None
+    config: DBOSConfig,
+    db_engine: sa.Engine,
+    cleanup_test_databases: None,
+    skip_with_sharding: None,
 ) -> None:
     DBOS.destroy(destroy_registry=True)
     assert config["system_database_url"]
@@ -2851,6 +2865,7 @@ def test_custom_engine(
     drop_test_databases: None,
     db_engine: sa.Engine,
     skip_with_sqlite: None,
+    skip_with_sharding: None,
 ) -> None:
     # Needs a dropped database: it asserts launch fails before the database exists.
     DBOS.destroy(destroy_registry=True)
@@ -3422,7 +3437,9 @@ def test_notification_fallback_polling(dbos: DBOS) -> None:
     assert duration < 5.0
 
 
-def test_recv_wakeup_trigger_is_kept(dbos: DBOS, skip_with_sqlite: None) -> None:
+def test_recv_wakeup_trigger_is_kept(
+    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
     """The notifications trigger must wake a blocked recv: assert it exists and that, with the fallback recheck forced far out, a send still delivers promptly via the trigger's NOTIFY."""
     sys_db = dbos._sys_db
 
@@ -3607,3 +3624,120 @@ async def test_workflow_wrapped_by_custom_decorator(
     assert before_count == 4
     assert after_count == 4
     assert error_count == 0
+
+
+def test_set_enqueue_options_exits_in_another_context() -> None:
+    """Entry and exit may run in different contextvars Contexts, as threadpool-run
+    generator dependencies do; the options must still restore cleanly."""
+    _set_local_dbos_context(DBOSContext())
+    try:
+        options = SetEnqueueOptions(priority=1)
+        contextvars.copy_context().run(options.__enter__)
+        ctx = assert_current_dbos_context()
+        assert ctx.priority == 1
+        contextvars.copy_context().run(options.__exit__, None, None, None)
+        assert ctx.priority is None
+    finally:
+        _clear_local_dbos_context()
+
+
+def test_set_shard_key_exits_in_another_context() -> None:
+    _set_local_dbos_context(DBOSContext())
+    try:
+        with SetShardKey("tenant-a"):
+            shard_key = SetShardKey("tenant-b")
+            contextvars.copy_context().run(shard_key.__enter__)
+            ctx = assert_current_dbos_context()
+            assert ctx.shard_key_for_next_workflow == "tenant-b"
+            # Independent of the enqueue options: setting those keeps the key.
+            with SetEnqueueOptions(priority=1):
+                assert ctx.shard_key_for_next_workflow == "tenant-b"
+            contextvars.copy_context().run(shard_key.__exit__, None, None, None)
+            assert ctx.shard_key_for_next_workflow == "tenant-a"
+        assert ctx.shard_key_for_next_workflow is None
+        with pytest.raises(ValueError):
+            SetShardKey("")
+    finally:
+        _clear_local_dbos_context()
+
+
+def test_shard_keys_must_be_non_empty_strings() -> None:
+    """Every way a shard key enters refuses an empty or non-string one; SetShardKey alone
+    used to, and an empty key written anywhere else could never run."""
+    for bad in ("", 1):
+        with pytest.raises(DBOSException, match="non-empty string"):
+            with bind_shard_keys({"w": bad}):  # type: ignore[dict-item]
+                pass
+        with pytest.raises(DBOSException, match="non-empty string"):
+            with shard_key_scope(bad):  # type: ignore[arg-type]
+                pass
+        options: EnqueueOptions = {"queue_name": "q", "workflow_name": "w"}
+        options["shard_key"] = bad  # type: ignore[typeddict-item]
+        with pytest.raises(DBOSException, match="non-empty string"):
+            validate_enqueue_options(options)
+    # None leaves the key unset rather than invalid.
+    with bind_shard_keys({"w": None}), shard_key_scope(None):
+        pass
+
+
+def test_shard_keys_are_rejected_without_sharding(
+    dbos: DBOS, client: DBOSClient, skip_with_sharding: None
+) -> None:
+    """Without sharding, a shard key passed to any API is an error, never silently ignored."""
+
+    @DBOS.workflow()
+    def keyless() -> int:
+        return 1
+
+    @DBOS.workflow()
+    def nightly(at: datetime.datetime, ctx: Any) -> None:
+        pass
+
+    handle = DBOS.start_workflow(keyless)
+    assert handle.get_result() == 1
+    wfid = handle.workflow_id
+    key = "tenant-a"
+
+    def start_keyed() -> Any:
+        with SetShardKey(key):
+            return DBOS.start_workflow(keyless)
+
+    calls: List[Callable[[], Any]] = [
+        lambda: DBOS.get_workflow_status(wfid, shard_key=key),
+        lambda: DBOS.retrieve_workflow(wfid, shard_key=key),
+        lambda: DBOS.get_result(wfid, shard_key=key),
+        lambda: DBOS.get_event(wfid, "k", 0, shard_key=key),
+        lambda: DBOS.list_workflow_steps(wfid, shard_key=key),
+        lambda: DBOS.cancel_workflow(wfid, shard_key=key),
+        lambda: DBOS.resume_workflow(wfid, shard_key=key),
+        lambda: DBOS.fork_workflow(wfid, 1, shard_key=key),
+        lambda: DBOS.send(wfid, "m", shard_key=key),
+        lambda: DBOS.send_bulk([SendMessage(wfid, "m", shard_key=key)]),
+        start_keyed,
+        lambda: client.retrieve_workflow(wfid, shard_key=key).get_status(),
+        lambda: client.send(wfid, "m", shard_key=key),
+    ]
+    for call in calls:
+        with pytest.raises(DBOSException, match="not sharded"):
+            call()
+    listings: List[Callable[[], Any]] = [
+        lambda: DBOS.list_workflows(shard_key=key),
+        lambda: client.list_workflows(shard_key=key),
+        lambda: DBOS.list_workflows(parent_shard_key=key),
+        lambda: client.list_queued_workflows(parent_shard_key=key),
+        lambda: DBOS.list_workflows(shard_key=[]),
+    ]
+    for listing in listings:
+        with pytest.raises(DBOSException, match="requires a sharded system database"):
+            listing()
+    with pytest.raises(DBOSException, match="requires a sharded system database"):
+        DBOS.create_schedule(
+            schedule_name="keyed",
+            workflow_fn=nightly,
+            schedule="0 0 * * *",
+            shard_key=key,
+        )
+    # Nothing ran, moved or arrived under the key.
+    status = DBOS.get_workflow_status(wfid)
+    assert status is not None and status.status == "SUCCESS"
+    assert DBOS.get_schedule("keyed") is None

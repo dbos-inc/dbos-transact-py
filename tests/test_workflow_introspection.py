@@ -1706,7 +1706,9 @@ def test_step_conflict_over_child_workflow_row(dbos: DBOS) -> None:
         )
 
 
-def test_step_conflict_over_row_without_completion(dbos: DBOS) -> None:
+def test_step_conflict_over_row_without_completion(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """No current write path leaves one NULL, so the row is built by hand."""
     workflow_id = _completed_workflow_id(dbos)
 
