@@ -1503,7 +1503,9 @@ class SystemDatabase(ABC):
                         "output": insert.excluded.output,
                         "error": insert.excluded.error,
                     },
-                ).cte("stored")
+                )
+                # CockroachDB refuses a data-modifying CTE without RETURNING.
+                .returning(sa.literal_column("1")).cte("stored")
             )
             # Selecting from the CTEs rather than inserting at the top level lets a
             # router see the shard key: PgDog sends an INSERT ... SELECT to every shard.
