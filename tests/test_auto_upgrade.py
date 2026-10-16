@@ -1,7 +1,7 @@
 """Auto-upgrade wiring in core: who enrolls, when launch refuses, which key the
 entitlement is checked with, and the thread's lifecycle. The enterprise package and
 the entitlement call are stood in for, so this runs without either; the pass itself
-(the queries) is tested in dbos-enterprise and the HTTP call in test_entitlements."""
+(the queries) is tested in dbos-enterprise and the HTTP call in test_enterprise."""
 
 import threading
 import types
@@ -10,7 +10,6 @@ from typing import Any, Generator, List, Optional, cast
 import pytest
 
 from dbos import DBOS, DBOSConfig
-from dbos import _dbos as dbos_module
 from dbos import _enterprise as enterprise_module
 from dbos._auto_upgrade import AutoUpgradeThread
 from dbos._error import DBOSInitializationError
@@ -63,7 +62,8 @@ class _RecordingPass:
 
 
 class _EntitlementStandIn:
-    """Stands in for the entitlement call: records the keys checked, fails on demand."""
+    """Stands in for require_enterprise: insists on a key as the real one does, records
+    the keys checked, and fails on demand."""
 
     def __init__(self) -> None:
         self.checked: List[str] = []
@@ -71,9 +71,21 @@ class _EntitlementStandIn:
         self.error: Optional[DBOSInitializationError] = None
 
     def __call__(
-        self, key: str, *, feature: str, conductor_url: Optional[str] = None
+        self,
+        features: List[enterprise_module.Feature],
+        *,
+        enterprise_key: Optional[str],
+        conductor_key: Optional[str],
+        conductor_url: Optional[str],
     ) -> None:
-        assert feature == "auto_upgrade"
+        if not features:
+            return
+        assert features == [enterprise_module.AUTO_UPGRADE]
+        key = enterprise_key or conductor_key
+        if key is None:
+            raise DBOSInitializationError(
+                f"{enterprise_module.AUTO_UPGRADE.description} requires a DBOS key."
+            )
         self.checked.append(key)
         self.conductor_urls.append(conductor_url)
         if self.error is not None:
@@ -83,7 +95,7 @@ class _EntitlementStandIn:
 @pytest.fixture()
 def entitlement(monkeypatch: pytest.MonkeyPatch) -> _EntitlementStandIn:
     stand_in = _EntitlementStandIn()
-    monkeypatch.setattr(dbos_module, "check_enterprise_entitlement", stand_in)
+    monkeypatch.setattr(enterprise_module, "require_enterprise", stand_in)
     return stand_in
 
 
@@ -95,7 +107,7 @@ def enterprise_stand_in(
     monkeypatch.setattr(
         enterprise_module,
         "load",
-        lambda: types.SimpleNamespace(
+        lambda *args: types.SimpleNamespace(
             ConductorWebsocket=_NoopConductor, AutoUpgradePass=_RecordingPass
         ),
     )
@@ -131,9 +143,7 @@ def _wait_for_runs(upgrade_pass: _RecordingPass, count: int) -> None:
 def test_auto_upgrade_requires_a_key(
     config: DBOSConfig, cleanup_test_databases: None, enterprise_stand_in: None
 ) -> None:
-    with pytest.raises(
-        DBOSInitializationError, match="requires a Transact Enterprise key"
-    ):
+    with pytest.raises(DBOSInitializationError, match="requires a DBOS key"):
         DBOS(config={**config, "auto_upgrade": True})
 
     # The refused instance leaves nothing behind.
@@ -156,27 +166,47 @@ def test_opted_in_workflow_requires_a_key_at_launch(
         pass
 
     # ...but the workflow's opt-in needs a key, which only launch can tell.
-    with pytest.raises(
-        DBOSInitializationError, match="requires a Transact Enterprise key"
-    ):
+    with pytest.raises(DBOSInitializationError, match="requires a DBOS key"):
         DBOS.launch()
     assert entitlement.checked == []
     assert _RecordingPass.instances == []
 
 
-def test_launch_refuses_when_the_key_is_not_entitled(
+def test_construction_refuses_when_the_config_flag_is_not_entitled(
     config: DBOSConfig,
     cleanup_test_databases: None,
     enterprise_stand_in: None,
     entitlement: _EntitlementStandIn,
 ) -> None:
+    # The config turns the feature on, so the constructor checks it, before any state exists.
     entitlement.error = DBOSInitializationError("plan does not include it")
-    dbos = DBOS(config=_conductor_config(config, auto_upgrade=True))
+    with pytest.raises(DBOSInitializationError, match="plan does not include it"):
+        DBOS(config=_conductor_config(config, auto_upgrade=True))
+    assert entitlement.checked == ["test-key"]
+    assert _RecordingPass.instances == []
 
-    @DBOS.workflow()
-    def inherits() -> None:
+    # The refused instance leaves nothing behind.
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+    DBOS.launch()
+
+
+def test_launch_refuses_when_an_opted_in_workflow_is_not_entitled(
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+    enterprise_stand_in: None,
+    entitlement: _EntitlementStandIn,
+) -> None:
+    # The config is off, so construction checks nothing...
+    dbos = DBOS(config=_conductor_config(config))
+    assert entitlement.checked == []
+
+    @DBOS.workflow(auto_upgrade=True)
+    def wants_upgrade() -> None:
         pass
 
+    # ...and the workflow's opt-in is checked at launch, which refuses.
+    entitlement.error = DBOSInitializationError("plan does not include it")
     with pytest.raises(DBOSInitializationError, match="plan does not include it"):
         DBOS.launch()
     assert entitlement.checked == ["test-key"]
@@ -202,6 +232,7 @@ def test_entitlement_is_checked_with_the_enterprise_key_first(
         pass
 
     DBOS.launch()
+    # Checked once, at construction: launch does not ask again for the config flag.
     assert entitlement.checked == ["enterprise-key"]
     # The self-hosted Conductor configured is the one asked about the entitlement.
     assert entitlement.conductor_urls == ["ws://127.0.0.1:1"]
