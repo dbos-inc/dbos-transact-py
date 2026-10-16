@@ -770,7 +770,8 @@ class SystemDatabase(ABC):
         self._is_sqlite = system_database_url.startswith("sqlite")
         # Hot-path statements, compiled once; see _execute_prepared.
         self._prepared_statements: Dict[
-            Tuple[str, Tuple[str, ...]], Tuple[str, Dict[str, Callable[[Any], Any]]]
+            Tuple[str, Tuple[str, ...]],
+            Tuple[str, Dict[str, Callable[[Any], Any]], Dict[str, Any]],
         ] = {}
         # Statement timeout for observability reads, in ms. Unset takes the default; non-positive disables the cap.
         _validate_observability_query_timeout_sec(observability_query_timeout_sec)
@@ -1007,9 +1008,12 @@ class SystemDatabase(ABC):
         name: str,
         values: Dict[str, Any],
         build: Callable[[], Any],
+        *,
+        insert_columns: bool = True,
     ) -> Any:
         """Execute build()'s statement with values, building and compiling it only once per
-        set of columns. SQLAlchemy never caches a postgresql.insert, so building and
+        set of columns. values are the INSERT's columns, or with insert_columns=False the
+        statement's own named bind parameters. SQLAlchemy never caches a postgresql.insert, so building and
         compiling the hot path's inserts on every call was a large share of a workflow's
         client CPU. The SQL is the engine's own compilation and each value goes through
         its type's bind processor, so what reaches the driver is unchanged. SQLite has no
@@ -1025,20 +1029,26 @@ class SystemDatabase(ABC):
             dialect = self.engine.dialect
             compiled = build().compile(
                 dialect=dialect,
-                column_keys=list(values),
+                column_keys=list(values) if insert_columns else None,
                 schema_translate_map={SCHEMA_PLACEHOLDER: self.schema},
                 render_schema_translate=True,
             )
             processors: Dict[str, Callable[[Any], Any]] = {}
+            # The statement's own constants, such as a status it compares against, are
+            # bind parameters too; their values are fixed, so they are kept with the SQL.
+            constants: Dict[str, Any] = {}
             for bind_name, bind in compiled.binds.items():
                 processor = bind.type.dialect_impl(dialect).bind_processor(dialect)
                 if processor is not None:
                     processors[bind_name] = processor
-            prepared = (str(compiled), processors)
+                if bind_name not in values:
+                    constants[bind_name] = bind.value
+            prepared = (str(compiled), processors, constants)
             self._prepared_statements[key] = prepared
-        sql, processors = prepared
+        sql, processors, constants = prepared
         params = {
-            k: processors[k](v) if k in processors else v for k, v in values.items()
+            k: processors[k](v) if k in processors else v
+            for k, v in {**constants, **values}.items()
         }
         return connection.exec_driver_sql(sql, params)
 
@@ -1419,6 +1429,108 @@ class SystemDatabase(ABC):
         """
         if owner_xid is None:
             owner_xid = current_owner_xid(workflow_id)
+        if self._is_sqlite:
+            return self._update_workflow_outcome_in_transaction(
+                workflow_id, status, output=output, error=error, owner_xid=owner_xid
+            )
+        # One statement, run in autocommit: a single round trip, where a transaction of
+        # the UPDATE and the output's upsert took four (BEGIN, two statements, COMMIT).
+        # The upsert reads only the UPDATE's returned rows, so the output is written
+        # exactly when the status write lands, as before; when it does not, no orphan
+        # payload is left.
+        keys = self._wf_values(workflow_id)
+        values: Dict[str, Any] = {
+            **{f"key_{column}": value for column, value in keys.items()},
+            "wf_id": workflow_id,
+            "new_status": status,
+            "output": output,
+            "error": error,
+        }
+        if owner_xid is not None:
+            values["owner"] = owner_xid
+
+        def build() -> Any:
+            ws, wo = self.tables.workflow_status, self.tables.workflow_output
+            # One object per name, so each parameter appears once in the statement's binds.
+            param = {
+                name: sa.bindparam(name, type_=wo.c[name[4:]].type)
+                for name in values
+                if name.startswith("key_")
+            }
+            param["wf_id"] = sa.bindparam("wf_id", type_=ws.c.workflow_uuid.type)
+            now_ms = self._now_ms_sql()
+            update = (
+                sa.update(ws)
+                .values(
+                    status=sa.bindparam("new_status", type_=ws.c.status.type),
+                    # As the workflow is complete, remove its deduplication ID
+                    deduplication_id=None,
+                    # A finished workflow has no owner.
+                    owner_xid=None,
+                    updated_at=now_ms,
+                    completed_at=now_ms,
+                )
+                .where(
+                    *[
+                        ws.c[name[4:]] == p
+                        for name, p in param.items()
+                        if name != "wf_id"
+                    ]
+                )
+                .where(ws.c.workflow_uuid == param["wf_id"])
+                .where(ws.c.status == WorkflowStatusString.PENDING.value)
+            )
+            if owner_xid is not None:
+                update = update.where(
+                    ws.c.owner_xid == sa.bindparam("owner", type_=ws.c.owner_xid.type)
+                )
+            updated = update.returning(sa.literal_column("1")).cte("updated")
+            insert = self.dialect.insert(wo)
+            stored = (
+                insert.from_select(
+                    [*keys, "workflow_uuid", "output", "error"],
+                    sa.select(
+                        *[param[f"key_{column}"] for column in keys],
+                        param["wf_id"],
+                        sa.bindparam("output", type_=wo.c.output.type),
+                        sa.bindparam("error", type_=wo.c.error.type),
+                    ).where(sa.exists(sa.select(1).select_from(updated))),
+                )
+                # excluded is the row this INSERT proposed, so these are the values above.
+                .on_conflict_do_update(
+                    index_elements=self._key_conflict("workflow_uuid"),
+                    set_={
+                        "output": insert.excluded.output,
+                        "error": insert.excluded.error,
+                    },
+                ).cte("stored")
+            )
+            # Selecting from the CTEs rather than inserting at the top level lets a
+            # router see the shard key: PgDog sends an INSERT ... SELECT to every shard.
+            return sa.select(sa.func.count()).select_from(updated).add_cte(stored)
+
+        with self.engine.connect() as c:
+            c.execution_options(isolation_level="AUTOCOMMIT")
+            written = self._execute_prepared(
+                c,
+                "update_workflow_outcome" + ("" if owner_xid is None else "_owned"),
+                values,
+                build,
+                insert_columns=False,
+            ).scalar()
+        return bool(written)
+
+    def _update_workflow_outcome_in_transaction(
+        self,
+        workflow_id: str,
+        status: WorkflowStatuses,
+        *,
+        output: Optional[str],
+        error: Optional[str],
+        owner_xid: Optional[str],
+    ) -> bool:
+        """update_workflow_outcome as a transaction of two statements, for SQLite, which
+        cannot put an UPDATE in a WITH clause."""
         with self.engine.begin() as c:
             now_ms = self._now_ms_sql()
             update = (

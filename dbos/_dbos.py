@@ -658,7 +658,7 @@ class DBOS:
                 max_workers=max_executor_threads, thread_name_prefix="dbos-executor-"
             )
 
-            self._background_event_loop.start()
+            self._background_event_loop.start(self._executor_field)
             assert self._config["database"]["sys_db_engine_kwargs"] is not None
             # Get the schema configuration, use "dbos" as default
             schema = self._config.get("dbos_system_schema", "dbos")
