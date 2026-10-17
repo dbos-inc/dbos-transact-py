@@ -1100,6 +1100,55 @@ def test_directinsert_with_pydantic_validation(dbos: DBOS) -> None:
     assert "missing" in exc_info.value.message.lower()
 
 
+def test_pydantic_validation_variadic_params(dbos: DBOS) -> None:
+    """*args and **kwargs are optional and validated per value; extra positional
+    arguments never go to keyword-only parameters."""
+
+    @DBOS.workflow(validate_args=pydantic_args_validator)
+    def variadic(n: int, *rest: Any, **options: Any) -> str:
+        return f"{n}-{list(rest)}-{options}"
+
+    @DBOS.workflow(validate_args=pydantic_args_validator)
+    def keyword_only(n: int, *rest: Any, flag: str) -> str:
+        return f"{n}-{list(rest)}-{flag}"
+
+    @DBOS.workflow(validate_args=pydantic_args_validator)
+    def typed(n: int, *rest: int, **options: int) -> str:
+        return f"{n}-{list(rest)}-{options}"
+
+    DBOS.register_queue("testq_variadic")
+
+    handle = DBOS.enqueue_workflow("testq_variadic", variadic, 1)
+    assert handle.get_result() == "1-[]-{}"
+    handle = DBOS.enqueue_workflow("testq_variadic", variadic, 1, "a", "b", k=2)
+    assert handle.get_result() == "1-['a', 'b']-{'k': 2}"
+    handle = DBOS.enqueue_workflow("testq_variadic", keyword_only, 1, 2, 3, flag="y")
+    assert handle.get_result() == "1-[2, 3]-y"
+
+    # Every value collected by *args and **kwargs is validated against its hint.
+    handle = DBOS.enqueue_workflow(
+        "testq_variadic", cast(Any, typed), 1, "5", "6", a="7"
+    )
+    assert handle.get_result() == "1-[5, 6]-{'a': 7}"
+    bad_rest = DBOS.enqueue_workflow("testq_variadic", cast(Any, typed), 1, "5", "x")
+    with pytest.raises(ValueError, match=r"Argument 'rest' \(position 2\)"):
+        bad_rest.get_result()
+    bad_option = DBOS.enqueue_workflow("testq_variadic", cast(Any, typed), 1, a="x")
+    with pytest.raises(ValueError, match="Argument 'a'"):
+        bad_option.get_result()
+
+    # The named parameters are still validated.
+    bad_type = DBOS.enqueue_workflow("testq_variadic", cast(Any, variadic), "x", 2)
+    with pytest.raises(ValueError, match="validation failed"):
+        bad_type.get_result()
+    missing = DBOS.enqueue_workflow("testq_variadic", cast(Any, variadic), k=2)
+    with pytest.raises(ValueError, match="Missing required argument: 'n'"):
+        missing.get_result()
+    no_flag = DBOS.enqueue_workflow("testq_variadic", cast(Any, keyword_only), 1, 2)
+    with pytest.raises(ValueError, match="Missing required argument: 'flag'"):
+        no_flag.get_result()
+
+
 def test_directinsert_datetime_validation(dbos: DBOS) -> None:
     """JSON has no native date type — pydantic should coerce ISO strings to datetime,
     and reject values that aren't valid date strings."""
