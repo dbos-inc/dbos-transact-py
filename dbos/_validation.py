@@ -61,10 +61,15 @@ def make_pydantic_args_validator(
         )
 
     # Cache for lazily-built adapters.  Empty list means "not yet built".
-    _cached_adapters: list[tuple[str, Any, Any]] = []
+    # Each entry is (name, adapter, default, can be passed by position).
+    _cached_adapters: list[tuple[str, Any, Any, bool]] = []
+    # The (name, adapter) of *args and of **kwargs, by parameter kind.
+    _cached_variadic: dict[Any, tuple[str, Any]] = {}
     _initialized = False
 
-    def _build_adapters() -> list[tuple[str, Any, Any]]:
+    def _build_adapters() -> (
+        tuple[list[tuple[str, Any, Any, bool]], dict[Any, tuple[str, Any]]]
+    ):
         sig = inspect.signature(func)
         hints = _get_type_hints_safe(func)
         params = list(sig.parameters.values())
@@ -78,14 +83,18 @@ def make_pydantic_args_validator(
         ):
             params = params[1:]
 
-        adapters: list[tuple[str, Any, Any]] = []
+        adapters: list[tuple[str, Any, Any, bool]] = []
+        variadic: dict[Any, tuple[str, Any]] = {}
         for p in params:
             hint = hints.get(p.name)
-            if hint is not None:
-                adapters.append((p.name, TypeAdapter(hint), p.default))
+            adapter: Any = TypeAdapter(hint) if hint is not None else None
+            # *args and **kwargs accept any number of arguments, so none is required.
+            if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
+                variadic[p.kind] = (p.name, adapter)
             else:
-                adapters.append((p.name, None, p.default))
-        return adapters
+                by_position = p.kind is not p.KEYWORD_ONLY
+                adapters.append((p.name, adapter, p.default, by_position))
+        return adapters, variadic
 
     def _validate(
         args: Tuple[Any, ...], kwargs: Dict[str, Any]
@@ -93,29 +102,36 @@ def make_pydantic_args_validator(
         nonlocal _initialized
         # Lazy init — first call builds the TypeAdapters.
         if not _initialized:
-            _cached_adapters.extend(_build_adapters())
+            adapters, variadic = _build_adapters()
+            _cached_adapters.extend(adapters)
+            _cached_variadic.update(variadic)
             _initialized = True
         adapters = _cached_adapters
+        var_args = _cached_variadic.get(inspect.Parameter.VAR_POSITIONAL, ("", None))
+        var_kwargs = _cached_variadic.get(inspect.Parameter.VAR_KEYWORD, ("", None))
 
         validated_args = list(args)
         validated_kwargs = dict(kwargs)
 
         errors: list[str] = []
 
-        # Validate positional args
+        # Validate positional args; those past the last parameter that can be
+        # passed by position are collected by *args.
         for i, val in enumerate(validated_args):
-            if i < len(adapters):
-                name, adapter, _default = adapters[i]
-                if adapter is not None:
-                    try:
-                        validated_args[i] = adapter.validate_python(val)
-                    except ValidationError as e:
-                        errors.append(f"Argument '{name}' (position {i}): {e}")
+            if i < len(adapters) and adapters[i][3]:
+                name, adapter, _default, _by_position = adapters[i]
+            else:
+                name, adapter = var_args
+            if adapter is not None:
+                try:
+                    validated_args[i] = adapter.validate_python(val)
+                except ValidationError as e:
+                    errors.append(f"Argument '{name}' (position {i}): {e}")
 
-        # Validate keyword args
-        adapter_by_name = {name: adapter for name, adapter, _ in adapters}
+        # Validate keyword args; those naming no parameter are collected by **kwargs.
+        adapter_by_name = {name: adapter for name, adapter, _, _ in adapters}
         for key, val in validated_kwargs.items():
-            adapter = adapter_by_name.get(key)
+            adapter = adapter_by_name.get(key, var_kwargs[1])
             if adapter is not None:
                 try:
                     validated_kwargs[key] = adapter.validate_python(val)
@@ -125,11 +141,11 @@ def make_pydantic_args_validator(
         # Check for missing required arguments
         provided_names = set()
         for i in range(len(args)):
-            if i < len(adapters):
+            if i < len(adapters) and adapters[i][3]:
                 provided_names.add(adapters[i][0])
         provided_names.update(kwargs.keys())
 
-        for name, _adapter, default in adapters:
+        for name, _adapter, default, _by_position in adapters:
             if name not in provided_names and default is inspect.Parameter.empty:
                 errors.append(f"Missing required argument: '{name}'")
 
