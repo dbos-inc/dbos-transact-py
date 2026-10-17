@@ -1,10 +1,12 @@
 import asyncio
 import uuid
-from typing import List
+from typing import Any, List
 
 import pytest
+import sqlalchemy as sa
 
 from dbos import DBOS, SetWorkflowID
+from dbos import _core as dbos_core
 from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSException
 from dbos._sys_db import StepInfo, WorkflowStatus
 from dbos._utils import INTERNAL_QUEUE_NAME
@@ -370,6 +372,48 @@ async def test_preemptible_step_cancellation_and_resume(dbos: DBOS) -> None:
     assert len(step_entries) == 1
     assert step_entries[0]["output"] == "done"
     assert step_entries[0]["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_preemptible_step_poll_reads_only_the_status(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cancellation poll runs every second for every in-flight preemptible
+    step, so it must not load the workflow's inputs to read one status string."""
+    monkeypatch.setattr(dbos_core, "_PREEMPTIBLE_POLL_INTERVAL_SEC", 0.05)
+    step_started = asyncio.Event()
+
+    @DBOS.step(preemptible=True)
+    async def long_running_step(payload: str) -> str:
+        step_started.set()
+        await asyncio.sleep(60)
+        return payload
+
+    @DBOS.workflow()
+    async def wf(payload: str) -> str:
+        return await long_running_step(payload)
+
+    statements: List[str] = []
+
+    def record(_conn: Any, _cursor: Any, statement: str, *_: Any) -> None:
+        statements.append(" ".join(statement.split()))
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(wf, "x" * 100_000)
+    await step_started.wait()
+    sa.event.listen(dbos._sys_db.engine, "before_cursor_execute", record)
+    try:
+        await asyncio.sleep(0.5)
+    finally:
+        sa.event.remove(dbos._sys_db.engine, "before_cursor_execute", record)
+    polls = [s for s in statements if "workflow_status.workflow_uuid =" in s]
+    assert len(polls) >= 3
+    assert not [s for s in polls if "inputs" in s]
+
+    await DBOS.cancel_workflow_async(wfid)
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        await handle.get_result()
 
 
 @pytest.mark.asyncio
