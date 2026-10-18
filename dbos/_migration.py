@@ -37,6 +37,8 @@ _ONLINE_MIGRATIONS = {
     119,
     120,
     122,
+    124,
+    125,
 }
 
 # From this index on, every SDK defines the same migration at the same index.
@@ -1388,6 +1390,16 @@ def get_dbos_migration_hundredtwentythree(quoted_schema: str) -> str:
     return f"""ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN IF NOT EXISTS "creator_xid" TEXT DEFAULT NULL;"""
 
 
+def get_dbos_migration_hundredtwentyfour(quoted_schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_application_versions_timestamp" ON {quoted_schema}."application_versions" ("version_timestamp" DESC)'
+
+
+def get_dbos_migration_hundredtwentyfive(quoted_schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_application_versions_owner_timestamp" ON {quoted_schema}."application_versions" ("application_name", "version_timestamp" DESC)'
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -1468,6 +1480,8 @@ def get_dbos_migrations(
         get_dbos_migration_hundredtwentyone(quoted_schema),
         get_dbos_migration_hundredtwentytwo(quoted_schema, is_cockroach),
         get_dbos_migration_hundredtwentythree(quoted_schema),
+        get_dbos_migration_hundredtwentyfour(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredtwentyfive(quoted_schema, is_cockroach),
     ]
 
 
@@ -1918,6 +1932,10 @@ sqlite_migration_hundredtwentythree = (
     """ALTER TABLE workflow_status ADD COLUMN "creator_xid" TEXT DEFAULT NULL;"""
 )
 
+sqlite_migration_hundredtwentyfour = 'CREATE INDEX IF NOT EXISTS "idx_application_versions_timestamp" ON "application_versions" ("version_timestamp" DESC)'
+
+sqlite_migration_hundredtwentyfive = 'CREATE INDEX IF NOT EXISTS "idx_application_versions_owner_timestamp" ON "application_versions" ("application_name", "version_timestamp" DESC)'
+
 sqlite_migrations = [
     *_pad_to_shared_base(_sqlite_history),
     sqlite_migration_hundred,
@@ -1946,4 +1964,6 @@ sqlite_migrations = [
     sqlite_migration_hundredtwentyone,
     sqlite_migration_hundredtwentytwo,
     sqlite_migration_hundredtwentythree,
+    sqlite_migration_hundredtwentyfour,
+    sqlite_migration_hundredtwentyfive,
 ]
