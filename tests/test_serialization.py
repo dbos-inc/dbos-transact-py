@@ -14,6 +14,7 @@ from dbos import (
     DBOSPortableJSONSerializer,
     SetWorkflowID,
     WorkflowHandle,
+    make_pydantic_args_validator,
     pydantic_args_validator,
 )
 from dbos._client import DBOSClient
@@ -1147,6 +1148,53 @@ def test_pydantic_validation_variadic_params(dbos: DBOS) -> None:
     no_flag = DBOS.enqueue_workflow("testq_variadic", cast(Any, keyword_only), 1, 2)
     with pytest.raises(ValueError, match="Missing required argument: 'flag'"):
         no_flag.get_result()
+
+    # A keyword named after a positional-only parameter is collected by **kwargs.
+    @DBOS.workflow(validate_args=pydantic_args_validator)
+    def positional_only(n: int, /, **options: str) -> str:
+        return f"{n}-{options}"
+
+    handle = DBOS.enqueue_workflow("testq_variadic", positional_only, 1, n="x")
+    assert handle.get_result() == "1-{'n': 'x'}"
+    no_n = DBOS.enqueue_workflow("testq_variadic", cast(Any, positional_only), n="x")
+    with pytest.raises(ValueError, match="Missing required argument: 'n'"):
+        no_n.get_result()
+
+
+def test_pydantic_validator_concurrent_first_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Concurrent first calls each build the adapters but must not duplicate
+    them, or later *args values are validated against the wrong parameter."""
+    import pydantic
+
+    real_type_adapter = pydantic.TypeAdapter
+
+    def slow_type_adapter(hint: Any) -> Any:
+        time.sleep(0.05)
+        return real_type_adapter(hint)
+
+    monkeypatch.setattr(pydantic, "TypeAdapter", slow_type_adapter)
+
+    def variadic(n: int, *rest: str) -> None:
+        pass
+
+    validate = make_pydantic_args_validator(variadic)
+    errors: list[Exception] = []
+
+    def first_call() -> None:
+        try:
+            validate((1, "a"), {})
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=first_call) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert validate((1, "a", "b"), {}) == ((1, "a", "b"), {})
 
 
 def test_directinsert_datetime_validation(dbos: DBOS) -> None:
