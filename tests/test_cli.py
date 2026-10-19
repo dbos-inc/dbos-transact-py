@@ -54,12 +54,16 @@ def _run_dbos_start(
 def test_start_exits_zero_when_commands_succeed(tmp_path: Path) -> None:
     result = _run_dbos_start(tmp_path, ["echo first", "echo second"])
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "first" in result.stdout and "second" in result.stdout
+    # Match whole lines: "Executing: echo first" also contains "first".
+    lines = result.stdout.splitlines()
+    assert "first" in lines and "second" in lines
 
 
 def test_start_propagates_failing_command_exit_code(tmp_path: Path) -> None:
     result = _run_dbos_start(tmp_path, ["echo first; exit 3", "echo second"])
     assert result.returncode == 3, result.stdout + result.stderr
-    assert "first" in result.stdout
+    lines = result.stdout.splitlines()
+    assert "first" in lines
     # Commands after the failing one do not run.
-    assert "second" not in result.stdout
+    assert "second" not in lines
+    assert "Executing: echo second" not in lines
