@@ -2280,17 +2280,14 @@ async def _supervise_step(
             await asyncio.sleep(_PREEMPTIBLE_POLL_INTERVAL_SEC)
             try:
                 status = await asyncio.to_thread(
-                    dbos._sys_db.get_workflow_status, workflow_id
+                    dbos._sys_db.get_workflow_status_value, workflow_id
                 )
             except Exception as e:
                 dbos.logger.warning(
                     f"Error polling status for preemptible step in workflow {workflow_id}: {e}"
                 )
                 continue
-            if (
-                status is not None
-                and status["status"] == WorkflowStatusString.CANCELLED.value
-            ):
+            if status == WorkflowStatusString.CANCELLED.value:
                 return True
 
     loop = asyncio.get_running_loop()

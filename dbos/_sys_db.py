@@ -2480,6 +2480,17 @@ class SystemDatabase(ABC):
         statuses = self.get_workflow_statuses([workflow_uuid])
         return statuses[0] if statuses else None
 
+    @db_retry()
+    def get_workflow_status_value(self, workflow_uuid: str) -> Optional[str]:
+        """Only the status column, for callers that poll it. The full status row
+        also carries the workflow's serialized inputs."""
+        with self.engine.begin() as c:
+            return c.execute(
+                sa.select(SystemSchema.workflow_status.c.status).where(
+                    SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid
+                )
+            ).scalar()
+
     def get_workflow_statuses(
         self, workflow_ids: List[str]
     ) -> List[WorkflowStatusInternal]:
