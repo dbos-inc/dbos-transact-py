@@ -4469,67 +4469,89 @@ class SystemDatabase(ABC):
                 dbos_logger.debug(
                     f"[{queue.name}] dequeueing {len(dequeued_ids)} task(s)"
                 )
-            claimed: Set[str] = set()
-            # Chunk dequeues to stay under bind-parameter limits (SQLite caps at 32766, libpq at 65535).
-            chunk_size = 4096
-            for start in range(0, len(dequeued_ids), chunk_size):
-                # Start the workflows by marking them PENDING and updating their executor ID.
-                # RETURNING reports exactly the rows this statement flipped (requires SQLite >= 3.35).
-                flipped_rows = c.execute(
-                    SystemSchema.workflow_status.update()
-                    .where(
-                        SystemSchema.workflow_status.c.workflow_uuid.in_(
-                            dequeued_ids[start : start + chunk_size]
-                        )
-                    )
-                    .where(
-                        SystemSchema.workflow_status.c.status
-                        == WorkflowStatusString.ENQUEUED.value
-                    )
-                    # Re-check ownership alongside status, as the partitioned claim_guard does.
-                    .where(
-                        self._name_filter(
-                            SystemSchema.workflow_status.c.application_name,
-                            self.app_name,
-                        )
-                    )
-                    .values(
-                        status=WorkflowStatusString.PENDING.value,
-                        owner_xid=owner_xid,
-                        application_version=app_version,
-                        executor_id=executor_id,
-                        # Claim it, so the unclaimed partition drains as workflows run.
-                        application_name=self.app_name,
-                        started_at_epoch_ms=self._now_ms_sql(),
-                        rate_limited=queue._limiter is not None
-                        or queue._partition_limiter is not None,
-                        # Count this dispatch against the DLQ limit; no later insert does it.
-                        recovery_attempts=SystemSchema.workflow_status.c.recovery_attempts
-                        + 1,
-                        updated_at=self._now_ms_sql(),
-                        # If a timeout is set, set the deadline on dequeue
-                        workflow_deadline_epoch_ms=sa.case(
-                            (
-                                sa.and_(
-                                    SystemSchema.workflow_status.c.workflow_timeout_ms.isnot(
-                                        None
-                                    ),
-                                    SystemSchema.workflow_status.c.workflow_deadline_epoch_ms.is_(
-                                        None
-                                    ),
-                                ),
-                                start_time_ms
-                                + SystemSchema.workflow_status.c.workflow_timeout_ms,
-                            ),
-                            else_=SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
-                        ),
-                    )
-                    .returning(SystemSchema.workflow_status.c.workflow_uuid)
-                ).fetchall()
-                claimed.update(row[0] for row in flipped_rows)
+            claimed = self._claim_dequeued(
+                c,
+                queue,
+                dequeued_ids,
+                executor_id,
+                app_version,
+                owner_xid,
+                start_time_ms,
+            )
 
             # Return the IDs of all functions we started, in dequeue order: RETURNING order is unspecified.
             return [id for id in dequeued_ids if id in claimed], None
+
+    def _claim_dequeued(
+        self,
+        c: sa.Connection,
+        queue: "Queue",
+        ids: List[str],
+        executor_id: str,
+        app_version: str,
+        owner_xid: Optional[str],
+        start_time_ms: int,
+    ) -> Set[str]:
+        """Mark these ENQUEUED workflows PENDING under this executor. Returns the IDs this call flipped."""
+        claimed: Set[str] = set()
+        # Chunk dequeues to stay under bind-parameter limits (SQLite caps at 32766, libpq at 65535).
+        chunk_size = 4096
+        for start in range(0, len(ids), chunk_size):
+            # Start the workflows by marking them PENDING and updating their executor ID.
+            # RETURNING reports exactly the rows this statement flipped (requires SQLite >= 3.35).
+            flipped_rows = c.execute(
+                SystemSchema.workflow_status.update()
+                .where(
+                    SystemSchema.workflow_status.c.workflow_uuid.in_(
+                        ids[start : start + chunk_size]
+                    )
+                )
+                .where(
+                    SystemSchema.workflow_status.c.status
+                    == WorkflowStatusString.ENQUEUED.value
+                )
+                # Re-check ownership alongside status, as the partitioned claim_guard does.
+                .where(
+                    self._name_filter(
+                        SystemSchema.workflow_status.c.application_name,
+                        self.app_name,
+                    )
+                )
+                .values(
+                    status=WorkflowStatusString.PENDING.value,
+                    owner_xid=owner_xid,
+                    application_version=app_version,
+                    executor_id=executor_id,
+                    # Claim it, so the unclaimed partition drains as workflows run.
+                    application_name=self.app_name,
+                    started_at_epoch_ms=self._now_ms_sql(),
+                    rate_limited=queue._limiter is not None
+                    or queue._partition_limiter is not None,
+                    # Count this dispatch against the DLQ limit; no later insert does it.
+                    recovery_attempts=SystemSchema.workflow_status.c.recovery_attempts
+                    + 1,
+                    updated_at=self._now_ms_sql(),
+                    # If a timeout is set, set the deadline on dequeue
+                    workflow_deadline_epoch_ms=sa.case(
+                        (
+                            sa.and_(
+                                SystemSchema.workflow_status.c.workflow_timeout_ms.isnot(
+                                    None
+                                ),
+                                SystemSchema.workflow_status.c.workflow_deadline_epoch_ms.is_(
+                                    None
+                                ),
+                            ),
+                            start_time_ms
+                            + SystemSchema.workflow_status.c.workflow_timeout_ms,
+                        ),
+                        else_=SystemSchema.workflow_status.c.workflow_deadline_epoch_ms,
+                    ),
+                )
+                .returning(SystemSchema.workflow_status.c.workflow_uuid)
+            ).fetchall()
+            claimed.update(row[0] for row in flipped_rows)
+        return claimed
 
     # Max heads dequeued per partitioned sweep: bounds the IN-list bind params below (SQLite caps at 32766, libpq at 65535); leftover partitions rotate in on later polls via the PENDING gate.
     PARTITIONED_DEQUEUE_SWEEP_CAP = 8192
