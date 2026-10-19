@@ -3,7 +3,7 @@ import uuid
 from typing import Any, List
 
 import pytest
-import sqlalchemy as sa
+from sqlalchemy import event
 
 from dbos import DBOS, SetWorkflowID
 from dbos import _core as dbos_core
@@ -402,11 +402,11 @@ async def test_preemptible_step_poll_reads_only_the_status(
     with SetWorkflowID(wfid):
         handle = await DBOS.start_workflow_async(wf, "x" * 100_000)
     await step_started.wait()
-    sa.event.listen(dbos._sys_db.engine, "before_cursor_execute", record)
+    event.listen(dbos._sys_db.engine, "before_cursor_execute", record)
     try:
         await asyncio.sleep(0.5)
     finally:
-        sa.event.remove(dbos._sys_db.engine, "before_cursor_execute", record)
+        event.remove(dbos._sys_db.engine, "before_cursor_execute", record)
     polls = [s for s in statements if "workflow_status.workflow_uuid =" in s]
     assert len(polls) >= 3
     assert not [s for s in polls if "inputs" in s]
