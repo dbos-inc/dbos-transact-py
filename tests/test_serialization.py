@@ -14,6 +14,7 @@ from dbos import (
     DBOSPortableJSONSerializer,
     SetWorkflowID,
     WorkflowHandle,
+    make_pydantic_args_validator,
     pydantic_args_validator,
 )
 from dbos._client import DBOSClient
@@ -1100,6 +1101,102 @@ def test_directinsert_with_pydantic_validation(
         wfh_missing.get_result()
     assert "ValueError" in exc_info.value.name
     assert "missing" in exc_info.value.message.lower()
+
+
+def test_pydantic_validation_variadic_params(dbos: DBOS) -> None:
+    """*args and **kwargs are optional and validated per value; extra positional
+    arguments never go to keyword-only parameters."""
+
+    @DBOS.workflow(validate_args=pydantic_args_validator)
+    def variadic(n: int, *rest: Any, **options: Any) -> str:
+        return f"{n}-{list(rest)}-{options}"
+
+    @DBOS.workflow(validate_args=pydantic_args_validator)
+    def keyword_only(n: int, *rest: Any, flag: str) -> str:
+        return f"{n}-{list(rest)}-{flag}"
+
+    @DBOS.workflow(validate_args=pydantic_args_validator)
+    def typed(n: int, *rest: int, **options: int) -> str:
+        return f"{n}-{list(rest)}-{options}"
+
+    DBOS.register_queue("testq_variadic")
+
+    handle = DBOS.enqueue_workflow("testq_variadic", variadic, 1)
+    assert handle.get_result() == "1-[]-{}"
+    handle = DBOS.enqueue_workflow("testq_variadic", variadic, 1, "a", "b", k=2)
+    assert handle.get_result() == "1-['a', 'b']-{'k': 2}"
+    handle = DBOS.enqueue_workflow("testq_variadic", keyword_only, 1, 2, 3, flag="y")
+    assert handle.get_result() == "1-[2, 3]-y"
+
+    # Every value collected by *args and **kwargs is validated against its hint.
+    handle = DBOS.enqueue_workflow(
+        "testq_variadic", cast(Any, typed), 1, "5", "6", a="7"
+    )
+    assert handle.get_result() == "1-[5, 6]-{'a': 7}"
+    bad_rest = DBOS.enqueue_workflow("testq_variadic", cast(Any, typed), 1, "5", "x")
+    with pytest.raises(ValueError, match=r"Argument 'rest' \(position 2\)"):
+        bad_rest.get_result()
+    bad_option = DBOS.enqueue_workflow("testq_variadic", cast(Any, typed), 1, a="x")
+    with pytest.raises(ValueError, match="Argument 'a'"):
+        bad_option.get_result()
+
+    # The named parameters are still validated.
+    bad_type = DBOS.enqueue_workflow("testq_variadic", cast(Any, variadic), "x", 2)
+    with pytest.raises(ValueError, match="validation failed"):
+        bad_type.get_result()
+    missing = DBOS.enqueue_workflow("testq_variadic", cast(Any, variadic), k=2)
+    with pytest.raises(ValueError, match="Missing required argument: 'n'"):
+        missing.get_result()
+    no_flag = DBOS.enqueue_workflow("testq_variadic", cast(Any, keyword_only), 1, 2)
+    with pytest.raises(ValueError, match="Missing required argument: 'flag'"):
+        no_flag.get_result()
+
+    # A keyword named after a positional-only parameter is collected by **kwargs.
+    @DBOS.workflow(validate_args=pydantic_args_validator)
+    def positional_only(n: int, /, **options: str) -> str:
+        return f"{n}-{options}"
+
+    handle = DBOS.enqueue_workflow("testq_variadic", positional_only, 1, n="x")
+    assert handle.get_result() == "1-{'n': 'x'}"
+    no_n = DBOS.enqueue_workflow("testq_variadic", cast(Any, positional_only), n="x")
+    with pytest.raises(ValueError, match="Missing required argument: 'n'"):
+        no_n.get_result()
+
+
+def test_pydantic_validator_concurrent_first_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Concurrent first calls each build the adapters but must not duplicate
+    them, or later *args values are validated against the wrong parameter."""
+    import pydantic
+
+    real_type_adapter = pydantic.TypeAdapter
+
+    def slow_type_adapter(hint: Any) -> Any:
+        time.sleep(0.05)
+        return real_type_adapter(hint)
+
+    monkeypatch.setattr(pydantic, "TypeAdapter", slow_type_adapter)
+
+    def variadic(n: int, *rest: str) -> None:
+        pass
+
+    validate = make_pydantic_args_validator(variadic)
+    errors: list[Exception] = []
+
+    def first_call() -> None:
+        try:
+            validate((1, "a"), {})
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=first_call) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert validate((1, "a", "b"), {}) == ((1, "a", "b"), {})
 
 
 def test_directinsert_datetime_validation(dbos: DBOS, skip_with_sharding: None) -> None:
