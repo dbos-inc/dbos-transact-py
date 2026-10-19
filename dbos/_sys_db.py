@@ -86,7 +86,7 @@ from ._serialization import (
 )
 
 if TYPE_CHECKING:
-    from ._queue import Queue, QueueRateLimit
+    from ._queue import PartitionLimits, Queue, QueueRateLimit
 
 
 def queue_from_db_row(
@@ -109,6 +109,9 @@ def queue_from_db_row(
             "limit": m["partition_rate_limit_max"],
             "period": m["partition_rate_limit_period_sec"],
         }
+    partitions: Optional[Dict[str, "PartitionLimits"]] = None
+    if m["partitions"] is not None:
+        partitions = json.loads(m["partitions"])
     return Queue(
         m["name"],
         m["concurrency"],
@@ -117,6 +120,7 @@ def queue_from_db_row(
         partition_concurrency=m["partition_concurrency"],
         partition_worker_concurrency=m["partition_worker_concurrency"],
         partition_limiter=partition_limiter,
+        partitions=partitions,
         polling_interval_sec=m["polling_interval_sec"],
         application_name=m["application_name"],
         database_backed_queue=True,
@@ -5927,6 +5931,7 @@ class SystemDatabase(ABC):
         partition_worker_concurrency: Optional[int] = None,
         partition_rate_limit_max: Optional[int] = None,
         partition_rate_limit_period_sec: Optional[float] = None,
+        partitions: Optional[Dict[str, "PartitionLimits"]] = None,
     ) -> bool:
         """Upsert a queue row. Returns True iff a new row was inserted (i.e.
         the queue did not previously exist). False if the row already existed,
@@ -5943,11 +5948,17 @@ class SystemDatabase(ABC):
             "priority_enabled": True,
             "partition_queue": partition_concurrency is not None
             or partition_worker_concurrency is not None
-            or partition_rate_limit_max is not None,
+            or partition_rate_limit_max is not None
+            or partitions is not None,
             "partition_concurrency": partition_concurrency,
             "partition_worker_concurrency": partition_worker_concurrency,
             "partition_rate_limit_max": partition_rate_limit_max,
             "partition_rate_limit_period_sec": partition_rate_limit_period_sec,
+            "partitions": (
+                json.dumps(partitions, sort_keys=True)
+                if partitions is not None
+                else None
+            ),
             "polling_interval_sec": polling_interval_sec,
             "updated_at": int(time.time() * 1000),
             "application_name": owner,

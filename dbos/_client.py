@@ -32,6 +32,7 @@ from dbos._enqueue_options import EnqueueOptions as EnqueueOptions
 from dbos._enqueue_options import build_enqueue_status
 from dbos._logger import dbos_logger
 from dbos._queue import (
+    PartitionLimits,
     Queue,
     QueueConflictResolution,
     QueueRateLimit,
@@ -374,6 +375,7 @@ class DBOSClient:
         partition_concurrency: Optional[int] = None,
         partition_worker_concurrency: Optional[int] = None,
         partition_limiter: Optional[QueueRateLimit] = None,
+        partitions: Optional[Dict[str, PartitionLimits]] = None,
         limiter: Optional[QueueRateLimit] = None,
         worker_concurrency: Optional[int] = None,
         polling_interval_sec: float = 1.0,
@@ -403,6 +405,15 @@ class DBOSClient:
             ``global_concurrency``, ``worker_concurrency``, and ``limiter`` continue
             to apply to the queue as a whole. Deduplication is not supported on
             partitioned queues.
+        :param partitions: Compound partitioning: a limit per partition dimension,
+            of the form ``{"<dimension>": {"concurrency": int}}``. Every enqueue on
+            the queue must then name one partition key per dimension, with
+            ``queue_partition_keys`` in its enqueue options. A dimension's
+            concurrency caps the workflows sharing one of its keys that may run at
+            once, across all executors, and the keys of the other dimensions apply
+            alongside it. Combines with ``global_concurrency``, ``worker_concurrency``,
+            and ``limiter``, but not with the ``partition_*`` limits, and does not
+            support deduplication.
         :param limiter: Rate limit configuration of the form
             ``{"limit": int, "period": float}``. At most ``limit`` workflows
             from the queue will start within any rolling window of ``period``
@@ -436,6 +447,7 @@ class DBOSClient:
             partition_concurrency=partition_concurrency,
             partition_worker_concurrency=partition_worker_concurrency,
             partition_limiter=partition_limiter,
+            partitions=partitions,
             polling_interval_sec=polling_interval_sec,
             limiter=limiter,
         )
@@ -467,6 +479,7 @@ class DBOSClient:
             partition_rate_limit_period_sec=(
                 partition_limiter["period"] if partition_limiter else None
             ),
+            partitions=partitions,
             polling_interval_sec=polling_interval_sec,
             update_existing=update_existing,
             application_name=application_name,
@@ -485,6 +498,7 @@ class DBOSClient:
         partition_concurrency: Optional[int] = None,
         partition_worker_concurrency: Optional[int] = None,
         partition_limiter: Optional[QueueRateLimit] = None,
+        partitions: Optional[Dict[str, PartitionLimits]] = None,
         limiter: Optional[QueueRateLimit] = None,
         worker_concurrency: Optional[int] = None,
         polling_interval_sec: float = 1.0,
@@ -501,6 +515,7 @@ class DBOSClient:
                 partition_concurrency=partition_concurrency,
                 partition_worker_concurrency=partition_worker_concurrency,
                 partition_limiter=partition_limiter,
+                partitions=partitions,
                 limiter=limiter,
                 worker_concurrency=worker_concurrency,
                 polling_interval_sec=polling_interval_sec,

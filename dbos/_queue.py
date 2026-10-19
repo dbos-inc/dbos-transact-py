@@ -8,6 +8,7 @@ from typing import (
     Any,
     Callable,
     Coroutine,
+    Dict,
     List,
     Literal,
     Optional,
@@ -75,6 +76,18 @@ class QueueRateLimit(TypedDict):
     period: float
 
 
+class PartitionLimits(TypedDict):
+    """
+    Limits for one partition dimension of a queue registered with ``partitions``.
+
+    A workflow enqueued on such a queue carries one partition key per dimension.
+    ``concurrency`` caps how many workflows sharing one key of the dimension run at
+    once, across all executors.
+    """
+
+    concurrency: int
+
+
 class Queue:
     """
     Workflow queue.
@@ -95,6 +108,7 @@ class Queue:
         partition_concurrency: Optional[int] = None,
         partition_worker_concurrency: Optional[int] = None,
         partition_limiter: Optional[QueueRateLimit] = None,
+        partitions: Optional[Dict[str, PartitionLimits]] = None,
         polling_interval_sec: float = DEFAULT_QUEUE_POLLING_INTERVAL_SEC,
         database_backed_queue: bool = False,
         client_system_database: Optional["SystemDatabase"] = None,
@@ -124,6 +138,7 @@ class Queue:
         self._partition_concurrency = partition_concurrency
         self._partition_worker_concurrency = partition_worker_concurrency
         self._partition_limiter = partition_limiter
+        self._partitions = partitions
         self._polling_interval_sec = polling_interval_sec
 
     @staticmethod
@@ -138,6 +153,7 @@ class Queue:
         partition_concurrency: Optional[int] = None,
         partition_worker_concurrency: Optional[int] = None,
         partition_limiter: Optional[QueueRateLimit] = None,
+        partitions: Optional[Dict[str, PartitionLimits]] = None,
     ) -> None:
         """Validate queue configuration parameters, raising ValueError on bad input."""
         if name.startswith(RESERVED_QUEUE_NAME_PREFIX):
@@ -204,6 +220,32 @@ class Queue:
             raise ValueError(
                 "concurrency must be greater than or equal to partition_worker_concurrency"
             )
+        if partitions is not None:
+            if not partitions:
+                raise ValueError(
+                    "partitions must name at least one partition dimension"
+                )
+            if (
+                partition_concurrency is not None
+                or partition_worker_concurrency is not None
+                or partition_limiter is not None
+            ):
+                raise ValueError(
+                    "partitions cannot be combined with partition_concurrency, "
+                    "partition_worker_concurrency, or partition_limiter"
+                )
+            for dimension, limits in partitions.items():
+                if not isinstance(dimension, str) or not dimension:
+                    raise ValueError("partition names must be non-empty strings")
+                limit = limits.get("concurrency") if isinstance(limits, dict) else None
+                if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+                    raise ValueError(
+                        f"partition {dimension!r} must set a concurrency of at least 1"
+                    )
+                if queue_concurrency is not None and limit > queue_concurrency:
+                    raise ValueError(
+                        "global_concurrency must be greater than or equal to each partition concurrency"
+                    )
         if polling_interval_sec <= 0.0:
             raise ValueError("polling_interval_sec must be positive")
         if limiter is not None and (
@@ -220,6 +262,10 @@ class Queue:
         }
         values.update(overrides)
         return any(value is not None for value in values.values())
+
+    def _has_compound_partitions(self) -> bool:
+        """True when the queue is partitioned by queue_partition_keys, one key per dimension."""
+        return self._partitions is not None
 
     def _check_concurrency_bounds(self, value: Optional[int]) -> None:
         """Validate a new concurrency against the cached sibling limits."""
@@ -242,6 +288,12 @@ class Queue:
         ):
             raise ValueError(
                 "partition_worker_concurrency must be less than or equal to concurrency"
+            )
+        if self._partitions is not None and any(
+            limits["concurrency"] > value for limits in self._partitions.values()
+        ):
+            raise ValueError(
+                "global_concurrency must be greater than or equal to each partition concurrency"
             )
 
     def _require_database_backed(self) -> None:
@@ -277,6 +329,7 @@ class Queue:
         self._partition_concurrency = latest._partition_concurrency
         self._partition_worker_concurrency = latest._partition_worker_concurrency
         self._partition_limiter = latest._partition_limiter
+        self._partitions = latest._partitions
         self._polling_interval_sec = latest._polling_interval_sec
         self.application_name = latest.application_name
 
@@ -502,6 +555,21 @@ class Queue:
     ) -> None:
         await self._configure_thread_pool()
         await asyncio.to_thread(self.set_partition_limiter, value)
+
+    @property
+    def partitions(self) -> Optional[Dict[str, PartitionLimits]]:
+        if self.database_backed_queue:
+            _warn_sync_db_call_in_async_context(
+                "Queue.partitions", "Queue.get_partitions_async"
+            )
+            self._refresh_fields(self._read_from_db())
+        return self._partitions
+
+    async def get_partitions_async(self) -> Optional[Dict[str, PartitionLimits]]:
+        if self.database_backed_queue:
+            await self._configure_thread_pool()
+            self._refresh_fields(await asyncio.to_thread(self._read_from_db))
+        return self._partitions
 
     @property
     def worker_concurrency(self) -> Optional[int]:
@@ -923,7 +991,7 @@ def log_queue(q: Queue) -> None:
     are omitted, matching ``Queue: <name> (concurrency=…, worker_concurrency=…,
     limit=N/Ts, partition_concurrency=…)``."""
     opts = []
-    if q._has_partition_limits():
+    if q._has_partition_limits() or q._has_compound_partitions():
         if q._concurrency is not None:
             opts.append(f"global_concurrency={q._concurrency}")
     elif q._concurrency is not None:
@@ -940,6 +1008,12 @@ def log_queue(q: Queue) -> None:
         opts.append(
             f"partition_limit={q._partition_limiter['limit']}/{q._partition_limiter['period']}s"
         )
+    if q._partitions is not None:
+        dimensions = ",".join(
+            f"{name}:{limits['concurrency']}"
+            for name, limits in sorted(q._partitions.items())
+        )
+        opts.append(f"partitions={dimensions}")
     opts_str = f" ({', '.join(opts)})" if opts else ""
     dbos_logger.info(f"Queue: {q.name}{opts_str}")
 

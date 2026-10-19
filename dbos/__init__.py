@@ -23,7 +23,7 @@ from ._dbos import (
 from ._dbos_config import DBOSConfig
 from ._debouncer import Debouncer, DebouncerClient
 from ._kafka_message import KafkaMessage
-from ._queue import Queue
+from ._queue import PartitionLimits, Queue
 from ._serialization import (
     DBOSPortableJSONSerializer,
     PortableWorkflowError,
@@ -74,6 +74,7 @@ __all__ = [
     "WorkflowStatusString",
     "error",
     "Queue",
+    "PartitionLimits",
     "Debouncer",
     "DebouncerClient",
     "Serializer",
