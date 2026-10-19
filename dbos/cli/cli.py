@@ -169,7 +169,15 @@ def start() -> None:
         if not _on_windows():
             signal.signal(signal.SIGINT, signal_handler)
             signal.signal(signal.SIGTERM, signal_handler)
-        process.wait()
+        returncode = process.wait()
+
+        # Stop at the first failing command and exit with its code, so supervisors see the failure.
+        if returncode != 0:
+            click.echo(f"Start command failed with exit code {returncode}: {command}")
+            # A child killed by a signal reports -N; exit with the shell convention 128+N.
+            raise click.exceptions.Exit(
+                returncode if returncode > 0 else 128 - returncode
+            )
 
 
 @app.command(
