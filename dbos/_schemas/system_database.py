@@ -187,6 +187,23 @@ class SystemSchema:
         PrimaryKeyConstraint("workflow_uuid", "key", "function_id"),
     )
 
+    # One row per dimension of a workflow enqueued with queue_partition_keys; cascades with its status row.
+    workflow_partition_keys = Table(
+        "workflow_partition_keys",
+        metadata_obj,
+        Column(
+            "workflow_uuid",
+            Text,
+            ForeignKey(
+                "workflow_status.workflow_uuid", onupdate="CASCADE", ondelete="CASCADE"
+            ),
+            nullable=False,
+        ),
+        Column("partition_name", Text, nullable=False),
+        Column("partition_key", Text, nullable=False),
+        PrimaryKeyConstraint("workflow_uuid", "partition_name"),
+    )
+
     streams = Table(
         "streams",
         metadata_obj,
@@ -266,6 +283,8 @@ class SystemSchema:
         Column("partition_worker_concurrency", Integer, nullable=True),
         Column("partition_rate_limit_max", Integer, nullable=True),
         Column("partition_rate_limit_period_sec", Float, nullable=True),
+        # Compound partitioning: JSON map of each partition dimension to its limits. NULL unless registered with partitions.
+        Column("partitions", Text, nullable=True),
         Column("polling_interval_sec", Float, nullable=False, server_default="1.0"),
         Column("created_at", BigInteger, nullable=False),
         Column("updated_at", BigInteger, nullable=False),

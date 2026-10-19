@@ -1388,6 +1388,27 @@ def get_dbos_migration_hundredtwentythree(quoted_schema: str) -> str:
     return f"""ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN IF NOT EXISTS "creator_xid" TEXT DEFAULT NULL;"""
 
 
+# PLACEHOLDER INDEX: shared migration numbering must be assigned by DBOS maintainers.
+def get_dbos_migration_hundredtwentyfour(quoted_schema: str) -> str:
+    # Compound partition keys: one row per dimension of a workflow, cascading with its status row.
+    # queues.partitions holds the queue's JSON limits per dimension.
+    return f"""
+ALTER TABLE {quoted_schema}."queues" ADD COLUMN IF NOT EXISTS "partitions" TEXT DEFAULT NULL;
+
+CREATE TABLE IF NOT EXISTS {quoted_schema}."workflow_partition_keys" (
+    "workflow_uuid" TEXT NOT NULL,
+    "partition_name" TEXT NOT NULL,
+    "partition_key" TEXT NOT NULL,
+    PRIMARY KEY ("workflow_uuid", "partition_name"),
+    FOREIGN KEY ("workflow_uuid") REFERENCES {quoted_schema}."workflow_status" ("workflow_uuid")
+        ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS "idx_workflow_partition_keys_name_key"
+    ON {quoted_schema}."workflow_partition_keys" ("partition_name", "partition_key");
+"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -1468,6 +1489,7 @@ def get_dbos_migrations(
         get_dbos_migration_hundredtwentyone(quoted_schema),
         get_dbos_migration_hundredtwentytwo(quoted_schema, is_cockroach),
         get_dbos_migration_hundredtwentythree(quoted_schema),
+        get_dbos_migration_hundredtwentyfour(quoted_schema),
     ]
 
 
@@ -1918,6 +1940,23 @@ sqlite_migration_hundredtwentythree = (
     """ALTER TABLE workflow_status ADD COLUMN "creator_xid" TEXT DEFAULT NULL;"""
 )
 
+# PLACEHOLDER INDEX: shared migration numbering must be assigned by DBOS maintainers.
+sqlite_migration_hundredtwentyfour = """
+ALTER TABLE queues ADD COLUMN "partitions" TEXT DEFAULT NULL;
+
+CREATE TABLE IF NOT EXISTS workflow_partition_keys (
+    workflow_uuid TEXT NOT NULL,
+    partition_name TEXT NOT NULL,
+    partition_key TEXT NOT NULL,
+    PRIMARY KEY (workflow_uuid, partition_name),
+    FOREIGN KEY (workflow_uuid) REFERENCES workflow_status (workflow_uuid)
+        ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_partition_keys_name_key
+    ON workflow_partition_keys (partition_name, partition_key);
+"""
+
 sqlite_migrations = [
     *_pad_to_shared_base(_sqlite_history),
     sqlite_migration_hundred,
@@ -1946,4 +1985,5 @@ sqlite_migrations = [
     sqlite_migration_hundredtwentyone,
     sqlite_migration_hundredtwentytwo,
     sqlite_migration_hundredtwentythree,
+    sqlite_migration_hundredtwentyfour,
 ]
