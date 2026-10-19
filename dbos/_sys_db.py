@@ -4749,6 +4749,15 @@ class SystemDatabase(ABC):
             rows = c.execute(query).fetchall()
             return [row[0] for row in rows]
 
+    @contextmanager
+    def _keyless_connection(self) -> Generator[sa.Connection, None, None]:
+        """A transaction for one statement not confined to a shard key. A sharded
+        system database runs it outside a transaction instead: a router holds a
+        connection on every shard such a statement reaches until the transaction ends.
+        """
+        with self.engine.begin() as c:
+            yield c
+
     def transition_delayed_workflows(self) -> None:
         """Transition DELAYED workflows whose delay has expired to ENQUEUED.
 
@@ -4758,7 +4767,7 @@ class SystemDatabase(ABC):
         bouncing this one (which is now committed to running).
         """
         now_ms = int(time.time() * 1000)
-        with self.engine.begin() as c:
+        with self._keyless_connection() as c:
             c.execute(
                 sa.update(self.tables.workflow_status)
                 .where(
