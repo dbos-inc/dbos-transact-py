@@ -997,7 +997,8 @@ class DBOS:
             once, across all executors, and the keys of the other dimensions apply
             alongside it. Combines with ``global_concurrency``, ``worker_concurrency``,
             and ``limiter``, but not with the ``partition_*`` limits, and does not
-            support deduplication.
+            support deduplication. A workflow created by forking carries no partition
+            keys, so the dimension limits do not apply to it; the queue-wide limits do.
         :param limiter: Rate limit configuration of the form
             ``{"limit": int, "period": float}``. At most ``limit`` workflows
             from the queue will start within any rolling window of ``period``
