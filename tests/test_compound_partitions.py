@@ -86,8 +86,12 @@ def test_compound_limits_bind_each_dimension(dbos: DBOS) -> None:
         ("dan", "Dan", "m2"),
     ]
     handles: Dict[str, WorkflowHandle[str]] = {}
-    for label, user, model in specs:
-        with SetEnqueueOptions(queue_partition_keys={"user": user, "model": model}):
+    # Priorities pin the admission order: back-to-back enqueues can share a created_at
+    # (SQLite before Python 3.12 stamps whole seconds), and ties fall to workflow ID.
+    for priority, (label, user, model) in enumerate(specs, start=1):
+        with SetEnqueueOptions(
+            queue_partition_keys={"user": user, "model": model}, priority=priority
+        ):
             handles[label] = queue.enqueue(blocking, label, user, model)
 
     def started_is(expected: Set[str]) -> None:
