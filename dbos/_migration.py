@@ -1391,6 +1391,7 @@ def get_dbos_migration_hundredtwentythree(quoted_schema: str) -> str:
 # PLACEHOLDER INDEX: shared migration numbering must be assigned by DBOS maintainers.
 def get_dbos_migration_hundredtwentyfour(quoted_schema: str) -> str:
     # Compound partition keys: one row per dimension of a workflow, cascading with its status row.
+    # Every read looks rows up by workflow_uuid, so the primary key is the only index needed.
     # queues.partitions holds the queue's JSON limits per dimension.
     return f"""
 ALTER TABLE {quoted_schema}."queues" ADD COLUMN IF NOT EXISTS "partitions" TEXT DEFAULT NULL;
@@ -1403,9 +1404,6 @@ CREATE TABLE IF NOT EXISTS {quoted_schema}."workflow_partition_keys" (
     FOREIGN KEY ("workflow_uuid") REFERENCES {quoted_schema}."workflow_status" ("workflow_uuid")
         ON UPDATE CASCADE ON DELETE CASCADE
 );
-
-CREATE INDEX IF NOT EXISTS "idx_workflow_partition_keys_name_key"
-    ON {quoted_schema}."workflow_partition_keys" ("partition_name", "partition_key");
 """
 
 
@@ -1952,9 +1950,6 @@ CREATE TABLE IF NOT EXISTS workflow_partition_keys (
     FOREIGN KEY (workflow_uuid) REFERENCES workflow_status (workflow_uuid)
         ON UPDATE CASCADE ON DELETE CASCADE
 );
-
-CREATE INDEX IF NOT EXISTS idx_workflow_partition_keys_name_key
-    ON workflow_partition_keys (partition_name, partition_key);
 """
 
 sqlite_migrations = [
