@@ -842,7 +842,17 @@ def queue_worker_thread(
             return
 
         try:
-            if not queue._has_partition_limits():
+            if queue._has_compound_partitions():
+                owner_xid = generate_uuid()
+                dequeued_workflows, _ = dbos._sys_db.start_queued_compound_workflows(
+                    queue,
+                    GlobalParams.executor_id,
+                    GlobalParams.app_version,
+                    dbos._active_workflows_set.count_for_queue(queue.name),
+                    owner_xid=owner_xid,
+                )
+                start_dequeued_workflows(dequeued_workflows, owner_xid)
+            elif not queue._has_partition_limits():
                 owner_xid = generate_uuid()
                 dequeued_workflows, _ = dbos._sys_db.start_queued_workflows(
                     queue,

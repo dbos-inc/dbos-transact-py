@@ -4336,45 +4336,15 @@ class SystemDatabase(ABC):
                 limiter: "QueueRateLimit", partition_scoped: bool
             ) -> int:
                 """Slots left in this limiter's rolling window, at the scope it applies to."""
-                query = (
-                    sa.select(sa.func.count())
-                    .select_from(ws)
-                    .where(ws.c.queue_name == queue.name)
-                    .where(ws.c.rate_limited == sa.literal_column("TRUE"))
-                    .where(
-                        ws.c.status.notin_(
-                            [
-                                WorkflowStatusString.ENQUEUED.value,
-                                WorkflowStatusString.DELAYED.value,
-                            ]
-                        )
-                    )
-                    # Database clock on both sides, as the claim stamps started_at_epoch_ms with it.
-                    .where(
-                        ws.c.started_at_epoch_ms
-                        > self._now_ms_sql() - int(limiter["period"] * 1000)
-                    )
-                    # Count only what this application would dequeue, matching the select below.
-                    .where(self._name_filter(ws.c.application_name, self.app_name))
+                return self._rate_limit_remaining(
+                    c, queue, limiter, partition_scoped, queue_partition_key
                 )
-                if partition_scoped:
-                    query = query.where(ws.c.queue_partition_key == queue_partition_key)
-                return limiter["limit"] - (c.execute(query).scalar() or 0)
 
             def pending_count(partition_scoped: bool) -> int:
-                """Workflows already running, which peer workers count against too.
-
-                Kept as its own query per scope: the partition-scoped predicate rides
-                idx_workflow_status_partition_dequeue_v3, which a queue-wide scan loses.
-                """
-                query = (
-                    sa.select(sa.func.count())
-                    .select_from(ws)
-                    .where(self._queue_pending_filter(queue.name))
+                """Workflows already running, which peer workers count against too."""
+                return self._pending_count(
+                    c, queue, partition_scoped, queue_partition_key
                 )
-                if partition_scoped:
-                    query = query.where(ws.c.queue_partition_key == queue_partition_key)
-                return c.execute(query).scalar() or 0
 
             # Compute max_tasks under every flow control limit enforced on this queue
             max_tasks = sys.maxsize
@@ -4436,28 +4406,7 @@ class SystemDatabase(ABC):
                 if max_tasks <= 0:
                     return [], "partition_concurrency"
 
-            latest_version = c.execute(
-                sa.select(SystemSchema.application_versions.c.version_name)
-                # Own plus unclaimed: a named peer's deploy must not demote this one.
-                .where(
-                    self._name_filter(
-                        SystemSchema.application_versions.c.application_name,
-                        self.app_name,
-                    )
-                )
-                .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
-                .limit(1)
-            ).scalar()
-            is_latest_version = latest_version is None or latest_version == app_version
-
-            version_predicate = (
-                SystemSchema.workflow_status.c.application_version == app_version
-            )
-            if is_latest_version:
-                version_predicate = sa.or_(
-                    SystemSchema.workflow_status.c.application_version == app_version,
-                    SystemSchema.workflow_status.c.application_version.is_(None),
-                )
+            version_predicate = self._dequeue_version_predicate(c, app_version)
 
             # Retrieve the first max_tasks workflows in the queue.
             # Only dequeue workflows of the local version; version-less ones only when this worker runs the latest version.
@@ -4517,6 +4466,216 @@ class SystemDatabase(ABC):
 
             # Return the IDs of all functions we started, in dequeue order: RETURNING order is unspecified.
             return [id for id in dequeued_ids if id in claimed], None
+
+    def _rate_limit_remaining(
+        self,
+        c: sa.Connection,
+        queue: "Queue",
+        limiter: "QueueRateLimit",
+        partition_scoped: bool,
+        queue_partition_key: Optional[str],
+    ) -> int:
+        """Slots left in this limiter's rolling window, at the scope it applies to."""
+        ws = SystemSchema.workflow_status
+        query = (
+            sa.select(sa.func.count())
+            .select_from(ws)
+            .where(ws.c.queue_name == queue.name)
+            .where(ws.c.rate_limited == sa.literal_column("TRUE"))
+            .where(
+                ws.c.status.notin_(
+                    [
+                        WorkflowStatusString.ENQUEUED.value,
+                        WorkflowStatusString.DELAYED.value,
+                    ]
+                )
+            )
+            # Database clock on both sides, as the claim stamps started_at_epoch_ms with it.
+            .where(
+                ws.c.started_at_epoch_ms
+                > self._now_ms_sql() - int(limiter["period"] * 1000)
+            )
+            # Count only what this application would dequeue, matching the select below.
+            .where(self._name_filter(ws.c.application_name, self.app_name))
+        )
+        if partition_scoped:
+            query = query.where(ws.c.queue_partition_key == queue_partition_key)
+        return limiter["limit"] - (c.execute(query).scalar() or 0)
+
+    def _pending_count(
+        self,
+        c: sa.Connection,
+        queue: "Queue",
+        partition_scoped: bool,
+        queue_partition_key: Optional[str],
+    ) -> int:
+        """Workflows already running, which peer workers count against too.
+
+        Kept as its own query per scope: the partition-scoped predicate rides
+        idx_workflow_status_partition_dequeue_v3, which a queue-wide scan loses.
+        """
+        ws = SystemSchema.workflow_status
+        query = (
+            sa.select(sa.func.count())
+            .select_from(ws)
+            .where(self._queue_pending_filter(queue.name))
+        )
+        if partition_scoped:
+            query = query.where(ws.c.queue_partition_key == queue_partition_key)
+        return c.execute(query).scalar() or 0
+
+    def _dequeue_version_predicate(
+        self, c: sa.Connection, app_version: str
+    ) -> sa.ColumnElement[bool]:
+        """Application versions a worker may dequeue: its own, plus version-less rows when it runs the latest version."""
+        latest_version = c.execute(
+            sa.select(SystemSchema.application_versions.c.version_name)
+            # Own plus unclaimed: a named peer's deploy must not demote this one.
+            .where(
+                self._name_filter(
+                    SystemSchema.application_versions.c.application_name,
+                    self.app_name,
+                )
+            )
+            .order_by(SystemSchema.application_versions.c.version_timestamp.desc())
+            .limit(1)
+        ).scalar()
+        is_latest_version = latest_version is None or latest_version == app_version
+
+        version_predicate = (
+            SystemSchema.workflow_status.c.application_version == app_version
+        )
+        if is_latest_version:
+            version_predicate = sa.or_(
+                SystemSchema.workflow_status.c.application_version == app_version,
+                SystemSchema.workflow_status.c.application_version.is_(None),
+            )
+        return version_predicate
+
+    # Candidates one compound dequeue weighs for admission. Bounds the locks and IN lists;
+    # a backlog of blocked heads deeper than this holds back the rows behind it until it drains.
+    COMPOUND_DEQUEUE_SCAN_WINDOW = 1000
+
+    def start_queued_compound_workflows(
+        self,
+        queue: "Queue",
+        executor_id: str,
+        app_version: str,
+        local_running_count: int = 0,
+        *,
+        owner_xid: Optional[str] = None,
+    ) -> Tuple[List[str], Optional[DequeueStopReason]]:
+        """Claim this queue's next workflows under every partition dimension's limit at once.
+
+        Each dimension's limit is one budget shared by all keys of that dimension, so admission
+        reads the budgets and claims in one transaction (SERIALIZABLE on Postgres). A workflow is
+        admitted when, for each configured dimension it has a key for, that key has room; a
+        dimension it has no key for does not constrain it.
+        """
+        partitions = queue._partitions
+        assert partitions is not None
+        start_time_ms = int(time.time() * 1000)
+        ws = SystemSchema.workflow_status
+        pk = SystemSchema.workflow_partition_keys
+        dimensions = list(partitions)
+        with self.engine.begin() as c:
+            if self.engine.dialect.name == "postgresql":
+                c.execute(sa.text("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"))
+            # Compute max_tasks under the queue-wide limits, as start_queued_workflows does.
+            max_tasks = sys.maxsize
+            if queue._worker_concurrency is not None:
+                max_tasks = min(
+                    max_tasks, max(0, queue._worker_concurrency - local_running_count)
+                )
+                if max_tasks <= 0:
+                    return [], "worker_concurrency"
+            if queue._limiter is not None:
+                max_tasks = min(
+                    max_tasks,
+                    self._rate_limit_remaining(c, queue, queue._limiter, False, None),
+                )
+                if max_tasks <= 0:
+                    return [], "limiter"
+            if queue._concurrency is not None:
+                max_tasks = min(
+                    max_tasks,
+                    max(
+                        0,
+                        queue._concurrency - self._pending_count(c, queue, False, None),
+                    ),
+                )
+                if max_tasks <= 0:
+                    return [], "concurrency"
+
+            version_predicate = self._dequeue_version_predicate(c, app_version)
+            candidates = c.execute(
+                sa.select(ws.c.workflow_uuid)
+                .where(ws.c.queue_name == queue.name)
+                .where(ws.c.status == WorkflowStatusString.ENQUEUED.value)
+                .where(self._in_flight_status_prover())
+                .where(version_predicate)
+                .where(self._name_filter(ws.c.application_name, self.app_name))
+                .order_by(
+                    ws.c.priority.asc(),
+                    ws.c.created_at.asc(),
+                    ws.c.workflow_uuid.asc(),
+                )
+                .limit(self.COMPOUND_DEQUEUE_SCAN_WINDOW)
+                # Locked, not skipped: admission weighs the same rows the budgets were read against.
+                .with_for_update(nowait=True)
+            ).fetchall()
+            candidate_ids = [row[0] for row in candidates]
+            if not candidate_ids:
+                return [], None
+
+            held: Dict[str, List[Tuple[str, str]]] = {}
+            for workflow_uuid, name, key in c.execute(
+                sa.select(pk.c.workflow_uuid, pk.c.partition_name, pk.c.partition_key)
+                .where(pk.c.workflow_uuid.in_(candidate_ids))
+                .where(pk.c.partition_name.in_(dimensions))
+            ).fetchall():
+                held.setdefault(workflow_uuid, []).append((name, key))
+
+            # Workflows already running under each (dimension, key) budget, on every executor.
+            running: Dict[Tuple[str, str], int] = {
+                (name, key): count
+                for name, key, count in c.execute(
+                    sa.select(pk.c.partition_name, pk.c.partition_key, sa.func.count())
+                    .select_from(pk.join(ws, ws.c.workflow_uuid == pk.c.workflow_uuid))
+                    .where(self._queue_pending_filter(queue.name))
+                    .where(pk.c.partition_name.in_(dimensions))
+                    .group_by(pk.c.partition_name, pk.c.partition_key)
+                ).fetchall()
+            }
+
+            # Greedy in priority order: each admitted workflow takes a slot in each budget it holds.
+            admitted: List[str] = []
+            for workflow_uuid in candidate_ids:
+                if len(admitted) >= max_tasks:
+                    break
+                budgets = held.get(workflow_uuid, [])
+                if any(
+                    running.get(budget, 0) >= partitions[budget[0]]["concurrency"]
+                    for budget in budgets
+                ):
+                    continue
+                admitted.append(workflow_uuid)
+                for budget in budgets:
+                    running[budget] = running.get(budget, 0) + 1
+            if not admitted:
+                return [], "partition_concurrency"
+
+            claimed = self._claim_dequeued(
+                c,
+                queue,
+                admitted,
+                executor_id,
+                app_version,
+                owner_xid,
+                start_time_ms,
+            )
+            # In admission order, which is priority order within each budget.
+            return [id for id in admitted if id in claimed], None
 
     def _claim_dequeued(
         self,
