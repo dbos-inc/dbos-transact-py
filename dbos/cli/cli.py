@@ -355,7 +355,9 @@ def migrate(
         try:
             for command in migrate_commands:
                 click.echo(f"Executing migration command: {command}")
-                result = subprocess.run(command, shell=True, text=True)
+                result = subprocess.run(
+                    command, shell=True, text=True, capture_output=True
+                )
                 if result.returncode != 0:
                     click.echo(f"Migration command failed: {command}")
                     click.echo(result.stderr)
