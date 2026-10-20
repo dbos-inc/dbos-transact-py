@@ -139,7 +139,11 @@ def start() -> None:
     config = load_config()
     start_commands = config["runtimeConfig"]["start"]
     click.echo("Executing start commands from 'dbos-config.yaml'")
+    # The signal that asked us to stop, if any; no later command starts after it.
+    received_signal: Optional[int] = None
     for command in start_commands:
+        if received_signal is not None:
+            raise click.exceptions.Exit(128 + received_signal)
         click.echo(f"Executing: {command}")
 
         # Run the command in the child process.
@@ -151,33 +155,48 @@ def start() -> None:
             preexec_fn=os.setsid if not _on_windows() else None,
         )
 
+        def forward_signal(signum: int) -> None:
+            # Send the signal to the child's entire process group
+            if process.poll() is None:
+                try:
+                    os.killpg(os.getpgid(process.pid), signum)
+                except ProcessLookupError:
+                    pass
+
         def signal_handler(signum: int, frame: Any) -> None:
             """
             Forward kill signals to children.
 
-            When we receive a signal, send it to the entire process group of the child.
+            When we receive a signal, send it to the entire process group of the child,
+            then keep waiting so the child can shut down gracefully and we exit with its code.
             """
-            # Send the signal to the child's entire process group
-            if process.poll() is None:
-                os.killpg(os.getpgid(process.pid), signum)
-
-            # Exit
-            os._exit(process.returncode if process.returncode is not None else 1)
+            nonlocal received_signal
+            received_signal = signum
+            forward_signal(signum)
 
         # Configure the single handler only on Unix-like systems.
         # TODO: Also kill the children on Windows.
         if not _on_windows():
             signal.signal(signal.SIGINT, signal_handler)
             signal.signal(signal.SIGTERM, signal_handler)
+            # A signal that arrived while this command was launching found no child to forward to.
+            if received_signal is not None:
+                forward_signal(received_signal)
         returncode = process.wait()
 
         # Stop at the first failing command and exit with its code, so supervisors see the failure.
         if returncode != 0:
-            click.echo(f"Start command failed with exit code {returncode}: {command}")
+            if received_signal is None:
+                click.echo(
+                    f"Start command failed with exit code {returncode}: {command}"
+                )
             # A child killed by a signal reports -N; exit with the shell convention 128+N.
             raise click.exceptions.Exit(
                 returncode if returncode > 0 else 128 - returncode
             )
+        # The child shut down cleanly after a signal, so report success and start nothing else.
+        if received_signal is not None:
+            raise click.exceptions.Exit(0)
 
 
 @app.command(
