@@ -1,11 +1,14 @@
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
 import pytest
 import sqlalchemy as sa
+from psycopg import errors
+from sqlalchemy.exc import OperationalError
 
 from dbos import (
     DBOS,
@@ -21,9 +24,11 @@ from dbos import (
 from dbos._core import prepare_enqueued_workflow
 from dbos._error import DBOSException
 from dbos._migration import sqlite_migrations
+from dbos._queue import _INTERNAL_QUEUE_CONSTRUCTION
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
+from dbos._utils import GlobalParams
 from tests.conftest import queue_entries_are_cleaned_up, retry_until_success
 
 
@@ -194,6 +199,98 @@ def test_compound_queue_dequeues_by_priority(dbos: DBOS) -> None:
         handle.get_result()
     assert order == ["Ann", "Cal", "Eve"]
     assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_compound_dequeue_contention(dbos: DBOS, skip_with_sqlite: None) -> None:
+    """Executors dequeueing a compound queue at once never admit past a key's limit. Racers
+    lock the same head rows with NOWAIT (inside a SERIALIZABLE transaction), so all but one
+    lose each round with a lock or serialization error instead of over-admitting."""
+
+    @DBOS.workflow()
+    def raced(value: str) -> None:
+        pass
+
+    queue_name = _queue_name("compound_race")
+    partitions: Dict[str, PartitionLimits] = {
+        "user": {"concurrency": 2},
+        "model": {"concurrency": 3},
+    }
+    # No queue row, so no worker thread drains it: the racers below are the only dequeuers.
+    queue = Queue(
+        queue_name,
+        partitions=partitions,
+        database_backed_queue=True,
+        token=_INTERNAL_QUEUE_CONSTRUCTION,
+    )
+    statuses = []
+    for i in range(24):
+        status = prepare_enqueued_workflow(
+            dbos,
+            raced,
+            (str(i),),
+            {},
+            queue_name=queue_name,
+            workflow_id=f"{queue_name}-{i}",
+        )
+        status["queue_partition_keys"] = {"user": f"u{i % 4}", "model": f"m{i % 3}"}
+        statuses.append(status)
+    assert len(dbos._sys_db.init_workflows(statuses)) == len(statuses)
+
+    racers, rounds = 4, 5
+    barrier = threading.Barrier(racers)
+    lost = 0
+    lost_lock = threading.Lock()
+
+    def race(slot: int) -> List[str]:
+        nonlocal lost
+        admitted: List[str] = []
+        for _ in range(rounds):
+            barrier.wait()
+            try:
+                ids, _ = dbos._sys_db.start_queued_compound_workflows(
+                    queue, f"executor-{slot}", GlobalParams.app_version
+                )
+                admitted.extend(ids)
+            except OperationalError as e:
+                # Losing the race is expected; anything else fails the test.
+                if not isinstance(
+                    e.orig, (errors.LockNotAvailable, errors.SerializationFailure)
+                ):
+                    raise
+                with lost_lock:
+                    lost += 1
+        return admitted
+
+    with ThreadPoolExecutor(max_workers=racers) as pool:
+        futures = [pool.submit(race, slot) for slot in range(racers)]
+        admitted = [id for future in futures for id in future.result()]
+
+    ws = SystemSchema.workflow_status
+    keys = SystemSchema.workflow_partition_keys
+    with dbos._sys_db.engine.begin() as c:
+        pending = {
+            row[0]
+            for row in c.execute(
+                sa.select(ws.c.workflow_uuid)
+                .where(ws.c.queue_name == queue_name)
+                .where(ws.c.status == WorkflowStatusString.PENDING.value)
+            )
+        }
+        counts = c.execute(
+            sa.select(keys.c.partition_name, keys.c.partition_key, sa.func.count())
+            .select_from(keys.join(ws, ws.c.workflow_uuid == keys.c.workflow_uuid))
+            .where(ws.c.queue_name == queue_name)
+            .where(ws.c.status == WorkflowStatusString.PENDING.value)
+            .group_by(keys.c.partition_name, keys.c.partition_key)
+        ).fetchall()
+    # Every claim is reported exactly once, and nothing is claimed that was not reported.
+    assert sorted(admitted) == sorted(pending)
+    assert pending
+    for name, key, count in counts:
+        assert count <= partitions[name]["concurrency"], (name, key, count)
+    # With every user and model saturated at the end, the budgets were contended, not idle.
+    assert len(pending) == 8, (len(pending), lost)
+    DBOS.delete_workflows([s["workflow_uuid"] for s in statuses])
 
 
 @pytest.mark.parametrize(
