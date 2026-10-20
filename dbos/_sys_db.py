@@ -1153,6 +1153,47 @@ class SystemDatabase(ABC):
         names = [value] if isinstance(value, str) else value
         return sa.or_(col.in_(names), col.is_(None))
 
+    def _latest_application_version(
+        self, c: sa.Connection, application_name: Optional[str]
+    ) -> Optional[sa.Row[Any]]:
+        """Newest version an application can see: its own plus unclaimed ones, or every
+        application's when unnamed, as _name_filter scopes them."""
+        av = self.tables.application_versions
+        columns = [
+            av.c.version_id,
+            av.c.version_name,
+            av.c.version_timestamp,
+            av.c.created_at,
+            av.c.application_name,
+        ]
+        query: Union[sa.Select[Any], sa.CompoundSelect[Any]]
+        if not application_name:
+            query = (
+                sa.select(*columns)
+                .where(*self._global(av))
+                .order_by(av.c.version_timestamp.desc())
+            )
+        else:
+            # Probe each eligible owner separately; an OR filter can scan an unbounded history of newer peer versions.
+            # Keep the constant owner in the ordering so the IS NULL probe uses the composite index too.
+            # Each probe is a derived table because SQLite rejects parenthesized compound members.
+            probes = [
+                sa.select(*columns)
+                .where(*self._global(av))
+                .where(owner)
+                .order_by(av.c.application_name, av.c.version_timestamp.desc())
+                .limit(1)
+                .subquery()
+                for owner in (
+                    av.c.application_name == application_name,
+                    av.c.application_name.is_(None),
+                )
+            ]
+            query = sa.union_all(*(sa.select(*probe.c) for probe in probes)).order_by(
+                sa.desc("version_timestamp")
+            )
+        return c.execute(query.limit(1)).fetchone()
+
     def _in_flight_status_prover(self) -> sa.ColumnElement[bool]:
         """SQLite only: a literal copy of the in-flight partial indexes' predicate for its
         prepare-time prover. Omitted on Postgres, whose planner would count it twice."""
@@ -2484,11 +2525,10 @@ class SystemDatabase(ABC):
     def get_workflow_status_value(self, workflow_uuid: str) -> Optional[str]:
         """Only the status column, for callers that poll it. The full status row
         also carries the workflow's serialized inputs."""
+        ws = self.tables.workflow_status
         with self.engine.begin() as c:
             return c.execute(
-                sa.select(SystemSchema.workflow_status.c.status).where(
-                    SystemSchema.workflow_status.c.workflow_uuid == workflow_uuid
-                )
+                sa.select(ws.c.status).where(*self._wf(ws, workflow_uuid))
             ).scalar()
 
     def get_workflow_statuses(
@@ -4850,17 +4890,10 @@ class SystemDatabase(ABC):
 
     def _is_latest_version(self, app_version: str) -> bool:
         """Whether app_version is this application's latest registered version, or none is registered."""
-        av = self.tables.application_versions
         with self.engine.begin() as c:
-            latest_version = c.execute(
-                sa.select(av.c.version_name)
-                .where(*self._global(av))
-                # Own plus unclaimed: a named peer's deploy must not demote this one.
-                .where(self._name_filter(av.c.application_name, self.app_name))
-                .order_by(av.c.version_timestamp.desc())
-                .limit(1)
-            ).scalar()
-        return latest_version is None or latest_version == app_version
+            # Own plus unclaimed: a named peer's deploy must not demote this one.
+            latest = self._latest_application_version(c, self.app_name)
+        return latest is None or latest.version_name == app_version
 
     def start_queued_workflows(
         self,
@@ -6630,24 +6663,7 @@ class SystemDatabase(ABC):
         a caller acting for another one — firing its schedule — must name it."""
         owner = application_name if application_name is not None else self.app_name
         with self.engine.begin() as c:
-            row = c.execute(
-                sa.select(
-                    self.tables.application_versions.c.version_id,
-                    self.tables.application_versions.c.version_name,
-                    self.tables.application_versions.c.version_timestamp,
-                    self.tables.application_versions.c.created_at,
-                    self.tables.application_versions.c.application_name,
-                )
-                .where(*self._global(self.tables.application_versions))
-                .where(
-                    self._name_filter(
-                        self.tables.application_versions.c.application_name,
-                        owner,
-                    )
-                )
-                .order_by(self.tables.application_versions.c.version_timestamp.desc())
-                .limit(1)
-            ).fetchone()
+            row = self._latest_application_version(c, owner)
             if row is None:
                 raise DBOSException("No application versions found")
             return VersionInfo(

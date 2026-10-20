@@ -1719,3 +1719,53 @@ def test_migrate_print_migrations_refuses_sharding(tmp_path: pathlib.Path) -> No
     assert result.returncode == 1
     assert result.stdout == ""
     assert "--print-migrations is not supported with --sharding" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "index_name, columns",
+    [
+        ("idx_application_versions_timestamp", ["version_timestamp"]),
+        (
+            "idx_application_versions_owner_timestamp",
+            ["application_name", "version_timestamp"],
+        ),
+    ],
+)
+def test_application_version_indexes(
+    dbos_dropped_databases: DBOS,
+    index_name: str,
+    columns: list[str],
+) -> None:
+    sys_db = dbos_dropped_databases._sys_db
+    sqlite = sys_db.engine.dialect.name == "sqlite"
+    schema = None if sqlite else "dbos"
+    indexes = sa.inspect(sys_db.engine).get_indexes(
+        "application_versions", schema=schema
+    )
+    index = next(index for index in indexes if index["name"] == index_name)
+    assert index["column_names"] == columns
+    assert not index["unique"]
+
+    migrations = (
+        sqlite_migrations
+        if sqlite
+        else get_dbos_migrations(
+            "dbos", True, sys_db.engine.dialect.name == "cockroachdb"
+        )
+    )
+    with sys_db.engine.connect().execution_options(
+        isolation_level="AUTOCOMMIT"
+    ) as conn:
+        for migration in migrations[123:125]:
+            conn.execute(sa.text(migration))
+
+    if sqlite:
+        with sys_db.engine.connect() as conn:
+            key_columns = [
+                (row[2], row[3])
+                for row in conn.execute(sa.text(f'PRAGMA index_xinfo("{index_name}")'))
+                if row[5] == 1
+            ]
+        assert key_columns == [
+            (column, int(column == "version_timestamp")) for column in columns
+        ]
