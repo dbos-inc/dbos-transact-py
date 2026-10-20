@@ -81,6 +81,7 @@ class ShardedSystemDatabaseFactory(Protocol):
         retry_connection_errors: bool,
         observability_query_timeout_sec: Optional[float],
         idle_transaction_timeout_sec: Optional[float],
+        write_batch_interval_sec: Optional[float],
     ) -> "SystemDatabase": ...
 
 

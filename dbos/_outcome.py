@@ -62,6 +62,31 @@ class DeferredResult(Generic[T]):
     async def resolve_async(self) -> T:
         return await self._async_resolve()
 
+    @staticmethod
+    def done(value: T) -> "DeferredResult[T]":
+        """A result already in hand, for a stage that only sometimes has to wait."""
+
+        async def resolved() -> T:
+            return value
+
+        return DeferredResult(lambda: value, resolved)
+
+    def then(
+        self, next: "Callable[[T], Union[R, DeferredResult[R]]]"
+    ) -> "DeferredResult[R]":
+        """This wait, then next on its result; next may return a further wait."""
+
+        def sync_resolve() -> R:
+            return cast(R, resolve_deferred(next(self.resolve())))
+
+        async def async_resolve() -> R:
+            result = next(await self.resolve_async())
+            if isinstance(result, DeferredResult):
+                return cast(R, await result.resolve_async())
+            return result
+
+        return DeferredResult(sync_resolve, async_resolve)
+
 
 def resolve_deferred(value: R) -> R:
     """Resolve a stage result that is a wait, blocking this thread for it; pass any

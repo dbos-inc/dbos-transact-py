@@ -42,6 +42,7 @@ class DBOSConfig(TypedDict, total=False):
         conductor_metadata_only_mode (bool): If True, only send workflow metadata to Conductor, never workflow data (inputs, outputs, errors, step outputs, events, notifications, streams, or schedule context). Defaults to False.
         serializer (Serializer): A custom serializer and deserializer DBOS uses when storing program data in the system database
         use_listen_notify (bool): Whether to use LISTEN/NOTIFY or polling to listen for notifications and events.  Defaults to True. As this affects migrations, may not be changed after the system database is first created.
+        sharding_write_batch_interval_sec (float): With sharding, how long in seconds each process gathers its step and workflow-outcome writes to a shard before committing them together, in one transaction per shard. A step or workflow returns only once its write has committed, so this adds up to that much latency to each, in exchange for far fewer commits on each shard. Defaults to 0.1. Set to 0 to write each one on its own. Ignored without sharding.
         run_migrations (bool): Whether to create and migrate the system database on launch. Defaults to True. Set to False for a process that must not alter the schema, such as one whose database role cannot run DDL, or a deployment that migrates out of band with `dbos migrate`. Launch then verifies the schema instead: a system database that is missing, or behind the version this build requires, fails launch rather than being created or migrated.
         notification_listener_polling_interval_sec (float): Polling interval in seconds for the notification listener background process. Defaults to 1.0. Minimum value is 0.001. Lower values can speed up test execution.
         notification_coalesce_sec (float): Interval in seconds for coalescing LISTEN/NOTIFY notifications (streams and events) pushed off the write path. Bounds read latency and caps the rate of notifying commits independent of write throughput. Defaults to 0.01. Minimum value is 0.001.
@@ -82,6 +83,7 @@ class DBOSConfig(TypedDict, total=False):
     use_listen_notify: Optional[bool]
     # Use a sharded system database from dbos-enterprise; every workflow then lives under an explicit shard key.
     sharding: Optional[bool]
+    sharding_write_batch_interval_sec: Optional[float]
     run_migrations: Optional[bool]
     max_executor_threads: Optional[int]
     notification_listener_polling_interval_sec: Optional[float]
@@ -101,6 +103,7 @@ class RuntimeConfig(TypedDict, total=False):
     observability_query_timeout_sec: Optional[float]
     scheduler_polling_interval_sec: Optional[float]
     kafka_queue_polling_interval_sec: Optional[float]
+    sharding_write_batch_interval_sec: Optional[float]
 
 
 class DatabaseConfig(TypedDict, total=False):
@@ -257,6 +260,18 @@ def translate_dbos_config_to_config_file(config: DBOSConfig) -> ConfigFile:
         translated_config["runtimeConfig"][
             "kafka_queue_polling_interval_sec"
         ] = kafka_interval
+    if "sharding_write_batch_interval_sec" in config:
+        batch_interval = config["sharding_write_batch_interval_sec"]
+        # Reject NaN/inf too, so the writers' waits can't crash.
+        if batch_interval is not None and (
+            not math.isfinite(batch_interval) or batch_interval < 0
+        ):
+            raise DBOSInitializationError(
+                f"sharding_write_batch_interval_sec must be a finite number at least 0, got {batch_interval}"
+            )
+        translated_config["runtimeConfig"][
+            "sharding_write_batch_interval_sec"
+        ] = batch_interval
 
     # Telemetry config
     enable_otlp = config.get("enable_otlp", None)

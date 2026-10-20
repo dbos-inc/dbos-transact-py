@@ -70,7 +70,7 @@ from ._error import (
     DBOSWorkflowIDInUseError,
 )
 from ._logger import dbos_logger
-from ._outcome import NoResult
+from ._outcome import DeferredResult, NoResult
 from ._schemas import SCHEMA_PLACEHOLDER
 from ._schemas.system_database import SystemSchema
 from ._serialization import (
@@ -653,6 +653,7 @@ class SystemDatabase(ABC):
         observability_query_timeout_sec: Optional[float] = None,
         idle_transaction_timeout_sec: Optional[float] = None,
         sharding: bool = False,
+        sharding_write_batch_interval_sec: Optional[float] = None,
     ) -> "SystemDatabase":
         """Factory method to create the appropriate SystemDatabase implementation based on URL."""
         if sharding:
@@ -677,6 +678,7 @@ class SystemDatabase(ABC):
                 retry_connection_errors=retry_connection_errors,
                 observability_query_timeout_sec=observability_query_timeout_sec,
                 idle_transaction_timeout_sec=idle_transaction_timeout_sec,
+                write_batch_interval_sec=sharding_write_batch_interval_sec,
             )
         if system_database_url.startswith("sqlite"):
             from ._sys_db_sqlite import SQLiteSystemDatabase
@@ -1476,9 +1478,26 @@ class SystemDatabase(ABC):
             )
         # One statement, run in autocommit: a single round trip, where a transaction of
         # the UPDATE and the output's upsert took four (BEGIN, two statements, COMMIT).
-        # The upsert reads only the UPDATE's returned rows, so the output is written
-        # exactly when the status write lands, as before; when it does not, no orphan
-        # payload is left.
+        with self.engine.connect() as c:
+            c.execution_options(isolation_level="AUTOCOMMIT")
+            return self._update_workflow_outcome_txn(
+                c, workflow_id, status, output=output, error=error, owner_xid=owner_xid
+            )
+
+    def _update_workflow_outcome_txn(
+        self,
+        c: sa.Connection,
+        workflow_id: str,
+        status: WorkflowStatuses,
+        *,
+        output: Optional[str],
+        error: Optional[str],
+        owner_xid: Optional[str],
+    ) -> bool:
+        """update_workflow_outcome's one statement, on the caller's connection; checked
+        against owner_xid as given. The upsert reads only the UPDATE's returned rows, so
+        the output is written exactly when the status write lands; when it does not, no
+        orphan payload is left."""
         keys = self._wf_values(workflow_id)
         values: Dict[str, Any] = {
             **{f"key_{column}": value for column, value in keys.items()},
@@ -1552,15 +1571,13 @@ class SystemDatabase(ABC):
             # router see the shard key: PgDog sends an INSERT ... SELECT to every shard.
             return sa.select(sa.func.count()).select_from(updated).add_cte(stored)
 
-        with self.engine.connect() as c:
-            c.execution_options(isolation_level="AUTOCOMMIT")
-            written = self._execute_prepared(
-                c,
-                "update_workflow_outcome" + ("" if owner_xid is None else "_owned"),
-                values,
-                build,
-                insert_columns=False,
-            ).scalar()
+        written = self._execute_prepared(
+            c,
+            "update_workflow_outcome" + ("" if owner_xid is None else "_owned"),
+            values,
+            build,
+            insert_columns=False,
+        ).scalar()
         return bool(written)
 
     def _outcome_in_one_statement(self) -> bool:
@@ -3395,6 +3412,32 @@ class SystemDatabase(ABC):
             DebugTriggers.debug_trigger_point(DebugTriggers.DEBUG_TRIGGER_STEP_COMMIT)
 
         record_operation_result_retry()
+
+    def record_step_result_deferred(
+        self, result: OperationResultInternal
+    ) -> DeferredResult[None]:
+        """record_operation_result for a regular step, as a wait for the write to be
+        durable, which the step resolves before it returns. Here the write is done
+        before this returns; a database that batches these writes returns a real wait,
+        which an async step awaits on the event loop rather than in a thread."""
+        self.record_operation_result(result)
+        return DeferredResult.done(None)
+
+    def update_workflow_outcome_deferred(
+        self,
+        workflow_id: str,
+        status: WorkflowStatuses,
+        *,
+        output: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> DeferredResult[bool]:
+        """update_workflow_outcome for a workflow's own completion, as a wait, on the
+        terms of record_step_result_deferred."""
+        return DeferredResult.done(
+            self.update_workflow_outcome(
+                workflow_id, status, output=output, error=error
+            )
+        )
 
     def _record_operation_error(
         self,
