@@ -28,6 +28,7 @@ from dbos._logger import dbos_logger
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, generate_uuid
 
 from ._core import P, R, execute_dequeued_workflow, start_workflow, start_workflow_async
+from ._enqueue_options import validate_partition_keys
 
 if TYPE_CHECKING:
     from ._dbos import DBOS, WorkflowHandle, WorkflowHandleAsync
@@ -692,6 +693,27 @@ class Queue:
         # Only checks needing no queue configuration: reading it would cost a round trip per enqueue.
         if ctx and ctx.queue_partition_key and ctx.deduplication_id:
             raise Exception("Deduplication is not supported for partitioned queues")
+        # Compound keys are checked against the configuration cached on this object, so no read either.
+        keys = ctx.queue_partition_keys if ctx is not None else None
+        if self._partitions is None:
+            if keys is not None:
+                raise DBOSException(
+                    f"Queue {self.name} is not partitioned by queue_partition_keys: "
+                    "register it with partitions to enqueue with compound partition keys"
+                )
+            return
+        dimensions = ", ".join(sorted(self._partitions))
+        if ctx is None or keys is None:
+            raise DBOSException(
+                f"Queue {self.name} is partitioned by queue_partition_keys ({dimensions}): "
+                "enqueue with SetEnqueueOptions(queue_partition_keys=...) naming each dimension"
+            )
+        validate_partition_keys(ctx.queue_partition_key, keys, ctx.deduplication_id)
+        if set(keys) != set(self._partitions):
+            raise DBOSException(
+                f"queue_partition_keys for queue {self.name} must name exactly its partitions "
+                f"({dimensions}); got ({', '.join(sorted(keys))})"
+            )
 
     def enqueue(
         self, func: "Callable[P, R]", *args: P.args, **kwargs: P.kwargs
@@ -730,6 +752,27 @@ class Queue:
             queue_name=self.name,
             execute_workflow=False,
         )
+
+
+def _queue_for_enqueue(name: str) -> Queue:
+    """The queue a by-name enqueue acts on. Compound partition keys are checked against the
+    queue's configuration, so supplying them loads it; otherwise nothing is read."""
+    ctx = get_local_dbos_context()
+    if ctx is not None and ctx.queue_partition_keys is not None:
+        from ._dbos import _get_dbos_instance
+
+        loaded = _get_dbos_instance()._sys_db.get_queue(name)
+        if loaded is not None:
+            return loaded
+    return Queue(name, database_backed_queue=True, token=_INTERNAL_QUEUE_CONSTRUCTION)
+
+
+async def _queue_for_enqueue_async(name: str) -> Queue:
+    """Async counterpart of _queue_for_enqueue: its configuration read runs off the event loop."""
+    ctx = get_local_dbos_context()
+    if ctx is not None and ctx.queue_partition_keys is not None:
+        return await asyncio.to_thread(_queue_for_enqueue, name)
+    return _queue_for_enqueue(name)
 
 
 def queue_worker_thread(

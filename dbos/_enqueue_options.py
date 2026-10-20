@@ -54,6 +54,8 @@ class EnqueueOptions(_EnqueueOptionsRequired, total=False):
     duplication_policy: DuplicationPolicy
     priority: int
     queue_partition_key: str
+    # One partition key per dimension of a compound-partitioned queue; excludes queue_partition_key.
+    queue_partition_keys: Dict[str, str]
     authenticated_user: str
     authenticated_roles: list[str]
     serialization_type: WorkflowSerializationFormat
@@ -91,6 +93,29 @@ def validate_duplication_policy(
         )
 
 
+def validate_partition_keys(
+    queue_partition_key: Optional[str],
+    queue_partition_keys: Optional[Dict[str, str]],
+    deduplication_id: Optional[str],
+) -> None:
+    """Reject partition-key options that cannot be combined, whichever queue they target."""
+    if queue_partition_keys is None:
+        return
+    if queue_partition_key is not None:
+        raise DBOSException(
+            "queue_partition_key and queue_partition_keys cannot both be set"
+        )
+    if not queue_partition_keys or not all(
+        isinstance(name, str) and name and isinstance(key, str)
+        for name, key in queue_partition_keys.items()
+    ):
+        raise DBOSException(
+            "queue_partition_keys must be a non-empty dict of partition names to string partition keys"
+        )
+    if deduplication_id is not None:
+        raise DBOSException("Deduplication is not supported for partitioned queues")
+
+
 def validate_enqueue_options(options: EnqueueOptions) -> None:
     priority = options.get("priority")
     if priority is not None and (priority < MinPriority or priority > MaxPriority):
@@ -104,6 +129,11 @@ def validate_enqueue_options(options: EnqueueOptions) -> None:
     validate_duplication_policy(
         options.get("duplication_policy"),
         options.get("queue_name"),
+        options.get("deduplication_id"),
+    )
+    validate_partition_keys(
+        options.get("queue_partition_key"),
+        options.get("queue_partition_keys"),
         options.get("deduplication_id"),
     )
 
@@ -202,6 +232,7 @@ def build_enqueue_status(
         "inputs": inputs,
         "serialization": serialization,
         "queue_partition_key": options.get("queue_partition_key", None),
+        "queue_partition_keys": options.get("queue_partition_keys", None),
         "forked_from": None,
         "parent_workflow_id": None,
         "started_at_epoch_ms": None,

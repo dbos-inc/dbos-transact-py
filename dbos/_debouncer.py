@@ -276,7 +276,10 @@ class Debouncer(Generic[P, R]):
                 has_deduplication_id=ctx.deduplication_id is not None,
                 has_delay=ctx.delay_until_epoch_ms is not None,
                 has_priority=ctx.priority is not None,
-                has_partition_key=ctx.queue_partition_key is not None,
+                has_partition_key=(
+                    ctx.queue_partition_key is not None
+                    or ctx.queue_partition_keys is not None
+                ),
                 has_return_existing=ctx.duplication_policy == "return-existing",
                 has_reject_reuse_policy=pinned_reuse_policy == "reject",
             )
@@ -430,8 +433,10 @@ class DebouncerClient:
             is not None,
             has_delay=self.workflow_options.get("delay_seconds") is not None,
             has_priority=self.workflow_options.get("priority") is not None,
-            has_partition_key=self.workflow_options.get("queue_partition_key")
-            is not None,
+            has_partition_key=(
+                self.workflow_options.get("queue_partition_key") is not None
+                or self.workflow_options.get("queue_partition_keys") is not None
+            ),
             has_return_existing=self.workflow_options.get("duplication_policy")
             == "return-existing",
             has_reject_reuse_policy=self.workflow_options.get(

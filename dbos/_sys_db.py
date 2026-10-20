@@ -242,7 +242,7 @@ class WorkflowStatus:
     recovery_attempts: Optional[int]
 
 
-class WorkflowStatusInternal(TypedDict):
+class _WorkflowStatusInternalRequired(TypedDict):
     workflow_uuid: str
     status: WorkflowStatuses
     name: str
@@ -279,6 +279,13 @@ class WorkflowStatusInternal(TypedDict):
     application_name: Optional[str]
 
 
+# typing.NotRequired needs Python 3.11 and this package supports 3.10, so the optional key lives in a total=False subclass.
+class WorkflowStatusInternal(_WorkflowStatusInternalRequired, total=False):
+    # Partition key per dimension of a compound-partitioned queue. Absent unless the workflow was enqueued with
+    # queue_partition_keys, and not read back with the status row, so readers use .get().
+    queue_partition_keys: Optional[Dict[str, str]]
+
+
 class EnqueueOptionsInternal(TypedDict):
     # Unique ID for deduplication on a queue
     deduplication_id: Optional[str]
@@ -288,6 +295,8 @@ class EnqueueOptionsInternal(TypedDict):
     app_version: Optional[str]
     # If the workflow is enqueued on a partitioned queue, its partition key
     queue_partition_key: Optional[str]
+    # If the workflow is enqueued on a compound-partitioned queue, its partition key for each dimension
+    queue_partition_keys: Optional[Dict[str, str]]
     # The UNIX epoch timestamp before which the workflow should not be dequeued
     delay_until_epoch_ms: Optional[int]
     # Absolute cap (Unix epoch ms) beyond which bounces may not extend the delay; None if not debounced or no timeout.
@@ -985,6 +994,9 @@ class SystemDatabase(ABC):
         assert (
             reuse_policy != "reject" or creator_xid is not None
         ), "workflow_id_reuse_policy 'reject' requires a creator_xid"
+        assert (
+            not status.get("queue_partition_keys") or creator_xid is not None
+        ), "queue_partition_keys requires a creator_xid"
         wf_status: WorkflowStatuses = status["status"]
         should_execute = True
         _enqueued_statuses = [
@@ -1099,6 +1111,26 @@ class SystemDatabase(ABC):
                 should_execute = False
 
             status["serialization"] = m["serialization"]
+
+            # Keys go with the row this call created, or a retry of it. An existing row another enqueue made keeps its own.
+            partition_keys = status.get("queue_partition_keys")
+            if partition_keys and creator_xid == m["creator_xid"]:
+                conn.execute(
+                    self.dialect.insert(SystemSchema.workflow_partition_keys)
+                    .values(
+                        [
+                            {
+                                "workflow_uuid": status["workflow_uuid"],
+                                "partition_name": name,
+                                "partition_key": key,
+                            }
+                            for name, key in partition_keys.items()
+                        ]
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=["workflow_uuid", "partition_name"]
+                    )
+                )
 
         # After the checks above, so a rejected start writes no inputs.
         conn.execute(inputs_insert)
@@ -5096,6 +5128,25 @@ class SystemDatabase(ABC):
                     self.dialect.insert(SystemSchema.workflow_input)
                     .values(input_rows[start : start + chunk_size])
                     .on_conflict_do_nothing(index_elements=["workflow_uuid"])
+                )
+            # Keys go only with rows this call inserted; a skipped duplicate keeps its own.
+            partition_rows: List[Dict[str, Any]] = [
+                {
+                    "workflow_uuid": status["workflow_uuid"],
+                    "partition_name": name,
+                    "partition_key": key,
+                }
+                for status in statuses
+                if status["workflow_uuid"] in inserted
+                for name, key in (status.get("queue_partition_keys") or {}).items()
+            ]
+            for start in range(0, len(partition_rows), chunk_size):
+                conn.execute(
+                    self.dialect.insert(SystemSchema.workflow_partition_keys)
+                    .values(partition_rows[start : start + chunk_size])
+                    .on_conflict_do_nothing(
+                        index_elements=["workflow_uuid", "partition_name"]
+                    )
                 )
         return inserted
 

@@ -556,6 +556,11 @@ def _assemble_workflow_status(
             if enqueue_options is not None
             else None
         ),
+        "queue_partition_keys": (
+            enqueue_options["queue_partition_keys"]
+            if enqueue_options is not None
+            else None
+        ),
         "forked_from": None,
         "parent_workflow_id": (
             ctx.parent_workflow_id if len(ctx.parent_workflow_id) > 0 else None
@@ -746,6 +751,7 @@ def prepare_enqueued_workflow(
         priority=None,
         app_version=None,
         queue_partition_key=queue_partition_key,
+        queue_partition_keys=None,
         delay_until_epoch_ms=None,
         debounce_deadline_epoch_ms=None,
         is_debounced=False,
@@ -1418,6 +1424,9 @@ def start_workflow(
         queue_partition_key=(
             local_ctx.queue_partition_key if local_ctx is not None else None
         ),
+        queue_partition_keys=(
+            local_ctx.queue_partition_keys if local_ctx is not None else None
+        ),
         delay_until_epoch_ms=(
             local_ctx.delay_until_epoch_ms if local_ctx is not None else None
         ),
@@ -1543,6 +1552,9 @@ async def start_workflow_async(
         app_version=local_ctx.app_version if local_ctx is not None else None,
         queue_partition_key=(
             local_ctx.queue_partition_key if local_ctx is not None else None
+        ),
+        queue_partition_keys=(
+            local_ctx.queue_partition_keys if local_ctx is not None else None
         ),
         delay_until_epoch_ms=(
             local_ctx.delay_until_epoch_ms if local_ctx is not None else None
@@ -1680,6 +1692,11 @@ def _build_enqueue_with_options(
             and local_ctx.queue_partition_key is not None
         ):
             resolved["queue_partition_key"] = local_ctx.queue_partition_key
+        if (
+            resolved.get("queue_partition_keys") is None
+            and local_ctx.queue_partition_keys is not None
+        ):
+            resolved["queue_partition_keys"] = local_ctx.queue_partition_keys
         if (
             resolved.get("authenticated_user") is None
             and local_ctx.authenticated_user is not None
@@ -3245,6 +3262,7 @@ def _validate_enqueue_only_options(
             ("deduplication_id", ctx.deduplication_id),
             ("priority", ctx.priority),
             ("queue_partition_key", ctx.queue_partition_key),
+            ("queue_partition_keys", ctx.queue_partition_keys),
             ("delay_seconds", ctx.delay_until_epoch_ms),
         )
         if value is not None

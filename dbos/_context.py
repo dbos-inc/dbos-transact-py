@@ -158,6 +158,8 @@ class DBOSContext:
         self.otel_carrier: Optional[Dict[str, str]] = None
         # If the workflow is enqueued on a partitioned queue, its partition key
         self.queue_partition_key: Optional[str] = None
+        # If the workflow is enqueued on a compound-partitioned queue, its partition key for each dimension
+        self.queue_partition_keys: Optional[Dict[str, str]] = None
         # The UNIX epoch timestamp before which the workflow should not be dequeued
         self.delay_until_epoch_ms: Optional[int] = None
         # Absolute cap (Unix epoch ms) beyond which bounces may not extend the next enqueued workflow's delay.
@@ -211,6 +213,7 @@ class DBOSContext:
         rv.duplication_policy = self.duplication_policy
         rv.priority = self.priority
         rv.queue_partition_key = self.queue_partition_key
+        rv.queue_partition_keys = self.queue_partition_keys
         rv.delay_until_epoch_ms = self.delay_until_epoch_ms
         rv.debounce_deadline_epoch_ms = self.debounce_deadline_epoch_ms
         rv.is_debounced = self.is_debounced
@@ -797,6 +800,7 @@ class SetEnqueueOptions:
         priority: Optional[int] = None,
         app_version: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
+        queue_partition_keys: Optional[Dict[str, str]] = None,
         delay_seconds: Optional[float] = None,
         duplication_policy: Optional[DuplicationPolicy] = None,
     ) -> None:
@@ -815,6 +819,11 @@ class SetEnqueueOptions:
         self.saved_app_version: Optional[str] = None
         self.queue_partition_key = queue_partition_key
         self.saved_queue_partition_key: Optional[str] = None
+        # Copied, so a later change to the caller's dict cannot reach an enqueue made inside this scope.
+        self.queue_partition_keys: Optional[Dict[str, str]] = (
+            dict(queue_partition_keys) if queue_partition_keys is not None else None
+        )
+        self.saved_queue_partition_keys: Optional[Dict[str, str]] = None
         self.delay_until_epoch_ms: Optional[int] = (
             int((time.time() + delay_seconds) * 1000)
             if delay_seconds is not None
@@ -839,6 +848,8 @@ class SetEnqueueOptions:
         ctx.app_version = self.app_version
         self.saved_queue_partition_key = ctx.queue_partition_key
         ctx.queue_partition_key = self.queue_partition_key
+        self.saved_queue_partition_keys = ctx.queue_partition_keys
+        ctx.queue_partition_keys = self.queue_partition_keys
         self.saved_delay_until_epoch_ms = ctx.delay_until_epoch_ms
         ctx.delay_until_epoch_ms = self.delay_until_epoch_ms
         return self
@@ -855,6 +866,7 @@ class SetEnqueueOptions:
         curr_ctx.priority = self.saved_priority
         curr_ctx.app_version = self.saved_app_version
         curr_ctx.queue_partition_key = self.saved_queue_partition_key
+        curr_ctx.queue_partition_keys = self.saved_queue_partition_keys
         curr_ctx.delay_until_epoch_ms = self.saved_delay_until_epoch_ms
         # Code to clean up the basic context if we created it
         if self.created_ctx:

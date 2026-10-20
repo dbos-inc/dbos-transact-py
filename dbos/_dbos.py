@@ -85,6 +85,8 @@ from ._queue import (
     Queue,
     QueueConflictResolution,
     QueueRateLimit,
+    _queue_for_enqueue,
+    _queue_for_enqueue_async,
     log_queue,
     queue_thread,
 )
@@ -1361,9 +1363,7 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandle[R]:
         """Enqueue a workflow on a queue, returning a handle to the ongoing execution."""
-        queue = Queue(
-            queue_name, database_backed_queue=True, token=_INTERNAL_QUEUE_CONSTRUCTION
-        )
+        queue = _queue_for_enqueue(queue_name)
         return queue.enqueue(func, *args, **kwargs)
 
     @classmethod
@@ -1376,9 +1376,7 @@ class DBOS:
     ) -> WorkflowHandleAsync[R]:
         """Async version of :meth:`enqueue_workflow`."""
         await cls._configure_asyncio_thread_pool()
-        queue = Queue(
-            queue_name, database_backed_queue=True, token=_INTERNAL_QUEUE_CONSTRUCTION
-        )
+        queue = await _queue_for_enqueue_async(queue_name)
         return await queue.enqueue_async(func, *args, **kwargs)
 
     @classmethod
