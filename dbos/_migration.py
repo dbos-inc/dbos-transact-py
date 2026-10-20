@@ -37,6 +37,8 @@ _ONLINE_MIGRATIONS = {
     119,
     120,
     122,
+    124,
+    125,
 }
 
 # From this index on, every SDK defines the same migration at the same index.
@@ -1388,8 +1390,18 @@ def get_dbos_migration_hundredtwentythree(quoted_schema: str) -> str:
     return f"""ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN IF NOT EXISTS "creator_xid" TEXT DEFAULT NULL;"""
 
 
+def get_dbos_migration_hundredtwentyfour(quoted_schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_application_versions_timestamp" ON {quoted_schema}."application_versions" ("version_timestamp" DESC)'
+
+
+def get_dbos_migration_hundredtwentyfive(quoted_schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_application_versions_owner_timestamp" ON {quoted_schema}."application_versions" ("application_name", "version_timestamp" DESC)'
+
+
 # PLACEHOLDER INDEX: shared migration numbering must be assigned by DBOS maintainers.
-def get_dbos_migration_hundredtwentyfour(quoted_schema: str) -> str:
+def get_dbos_migration_hundredtwentysix(quoted_schema: str) -> str:
     # Compound partition keys: one row per dimension of a workflow, cascading with its status row.
     # Every read looks rows up by workflow_uuid, so the primary key is the only index needed.
     # queues.partitions holds the queue's JSON limits per dimension.
@@ -1487,7 +1499,9 @@ def get_dbos_migrations(
         get_dbos_migration_hundredtwentyone(quoted_schema),
         get_dbos_migration_hundredtwentytwo(quoted_schema, is_cockroach),
         get_dbos_migration_hundredtwentythree(quoted_schema),
-        get_dbos_migration_hundredtwentyfour(quoted_schema),
+        get_dbos_migration_hundredtwentyfour(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredtwentyfive(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredtwentysix(quoted_schema),
     ]
 
 
@@ -1938,8 +1952,12 @@ sqlite_migration_hundredtwentythree = (
     """ALTER TABLE workflow_status ADD COLUMN "creator_xid" TEXT DEFAULT NULL;"""
 )
 
+sqlite_migration_hundredtwentyfour = 'CREATE INDEX IF NOT EXISTS "idx_application_versions_timestamp" ON "application_versions" ("version_timestamp" DESC)'
+
+sqlite_migration_hundredtwentyfive = 'CREATE INDEX IF NOT EXISTS "idx_application_versions_owner_timestamp" ON "application_versions" ("application_name", "version_timestamp" DESC)'
+
 # PLACEHOLDER INDEX: shared migration numbering must be assigned by DBOS maintainers.
-sqlite_migration_hundredtwentyfour = """
+sqlite_migration_hundredtwentysix = """
 ALTER TABLE queues ADD COLUMN "partitions" TEXT DEFAULT NULL;
 
 CREATE TABLE IF NOT EXISTS workflow_partition_keys (
@@ -1981,4 +1999,6 @@ sqlite_migrations = [
     sqlite_migration_hundredtwentytwo,
     sqlite_migration_hundredtwentythree,
     sqlite_migration_hundredtwentyfour,
+    sqlite_migration_hundredtwentyfive,
+    sqlite_migration_hundredtwentysix,
 ]
