@@ -1,5 +1,7 @@
+import hashlib
 import time
-from typing import Any, Dict, Optional, cast
+from contextlib import contextmanager
+from typing import Any, Dict, Generator, Optional, cast
 
 import psycopg
 import sqlalchemy as sa
@@ -25,6 +27,9 @@ from ._sys_db import (
     _dbos_workflow_events_channel,
 )
 from ._utils import quote_identifier
+
+# How long a background job's lock may sit idle before Postgres ends its holder's session.
+BACKGROUND_JOB_LOCK_IDLE_TIMEOUT_MS = 5000
 
 
 def _sets_idle_transaction_timeout(url: sa.URL, engine_kwargs: Dict[str, Any]) -> bool:
@@ -160,6 +165,37 @@ class PostgresSystemDatabase(SystemDatabase):
             if self.notification_conn and self.notification_conn.dbapi_connection:
                 self.notification_conn.dbapi_connection.close()
                 self.notification_conn.invalidate()
+
+    @contextmanager
+    def background_job_lock(self, job_name: str) -> Generator[bool, None, None]:
+        # CockroachDB grants every advisory lock, so each process runs every job.
+        if self._is_cockroach:
+            yield True
+            return
+        # Leading 8 bytes of SHA-256, big-endian signed, as for the retention lock.
+        name = f"dbos.background_job.{self.schema}.{self.app_name or ''}.{job_name}"
+        key = int.from_bytes(
+            hashlib.sha256(name.encode()).digest()[:8], "big", signed=True
+        )
+        with self.engine.connect() as c:
+            # The local idle timeout ends a frozen holder's session, releasing its lock.
+            acquired = bool(
+                c.execute(
+                    sa.text(
+                        "SELECT pg_try_advisory_xact_lock(:key) FROM set_config("
+                        "'idle_in_transaction_session_timeout', :timeout, true)"
+                    ),
+                    {"key": key, "timeout": str(BACKGROUND_JOB_LOCK_IDLE_TIMEOUT_MS)},
+                ).scalar()
+            )
+            try:
+                yield acquired
+            finally:
+                try:
+                    c.rollback()
+                except Exception as e:
+                    # A session the idle timeout ended has released the lock already.
+                    dbos_logger.debug(f"Could not release the {job_name} lock: {e}")
 
     def _set_statement_timeout(self, conn: sa.Connection, timeout_ms: int) -> None:
         """SET LOCAL, so the cap covers exactly this transaction and is reverted on

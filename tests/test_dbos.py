@@ -11,7 +11,7 @@ import time
 import types
 import uuid
 from functools import wraps
-from typing import Any, Callable, List, Optional, Set, TypeVar, cast
+from typing import Any, Callable, List, Optional, Set, Tuple, TypeVar, cast
 
 import pytest
 import sqlalchemy as sa
@@ -49,10 +49,11 @@ from dbos._error import (
     DBOSNonExistentWorkflowError,
 )
 from dbos._schemas.system_database import SystemSchema
+from dbos._serialization import DefaultSerializer
 from dbos._shard_keys import bind_shard_keys, shard_key_scope
-from dbos._sys_db import _dbos_null_topic
+from dbos._sys_db import SystemDatabase, _dbos_null_topic
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
-from dbos._workflow_commands import WORKFLOW_TIMEOUT_THREAD_NAME
+from dbos._workflow_commands import WORKFLOW_TIMEOUT_THREAD_NAME, _run_background_job
 from tests.conftest import (
     reexecute_workflow_by_id,
     retry_until_success,
@@ -2609,6 +2610,67 @@ def test_timeout_sweep_query_plan(dbos: DBOS, skip_with_sharding: None) -> None:
             "Index Cond" in d and "workflow_deadline_epoch_ms" in d for d in details
         ), details
         assert not [d for d in details if "Seq Scan" in d], details
+
+
+def test_background_job_runs_once_per_interval_across_processes(
+    dbos: DBOS, config: DBOSConfig, skip_with_sqlite: None
+) -> None:
+    """Two processes' loops for one job: whichever holds its lock runs it, so its runs
+    start at least an interval apart, and when the holder stops the other takes over."""
+    peer = SystemDatabase.create(
+        system_database_url=cast(str, config["system_database_url"]),
+        engine_kwargs={},
+        engine=None,
+        schema=dbos._sys_db.schema,
+        serializer=DefaultSerializer(),
+        executor_id="peer",
+        use_listen_notify=False,
+        app_name=dbos._sys_db.app_name,
+        sharding=bool(config.get("sharding")),
+    )
+    interval = 0.2
+    runs: List[Tuple[str, float]] = []
+    stops = {"local": threading.Event(), "peer": threading.Event()}
+
+    def loop(name: str, sys_db: SystemDatabase) -> None:
+        def job() -> None:
+            runs.append((name, time.monotonic()))
+
+        process = cast(Any, types.SimpleNamespace(_sys_db=sys_db, logger=dbos.logger))
+        _run_background_job(stops[name], process, "test_job", interval, job)
+
+    threads = {
+        "local": threading.Thread(target=loop, args=("local", dbos._sys_db)),
+        "peer": threading.Thread(target=loop, args=("peer", peer)),
+    }
+    try:
+        for thread in threads.values():
+            thread.start()
+
+        def ran(times: int) -> None:
+            assert len(runs) >= times
+
+        retry_until_success(lambda: ran(8), interval=0.1, max_attempts=50)
+        # A start trails its lock's by one round trip, so gaps vary by about that much.
+        starts = [at for _, at in runs]
+        assert starts[-1] - starts[0] >= (len(starts) - 1) * interval * 0.9, runs
+        assert all(b - a >= interval / 2 for a, b in zip(starts, starts[1:])), runs
+
+        holder = runs[-1][0]
+        other = "peer" if holder == "local" else "local"
+        stops[holder].set()
+        threads[holder].join()
+
+        def taken_over() -> None:
+            assert runs[-1][0] == other
+
+        retry_until_success(taken_over, interval=0.1, max_attempts=50)
+    finally:
+        for stop in stops.values():
+            stop.set()
+        for thread in threads.values():
+            thread.join()
+        peer.destroy()
 
 
 def test_custom_names(dbos: DBOS) -> None:

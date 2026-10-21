@@ -4805,6 +4805,12 @@ class SystemDatabase(ABC):
         with self.engine.begin() as c:
             yield c
 
+    @contextmanager
+    def background_job_lock(self, job_name: str) -> Generator[bool, None, None]:
+        """Try the lock letting one of this application's processes run a background
+        job at a time, yielding whether it was taken; held until the block exits."""
+        yield True
+
     def transition_delayed_workflows(self) -> None:
         """Transition DELAYED workflows whose delay has expired to ENQUEUED.
 

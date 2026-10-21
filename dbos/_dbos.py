@@ -163,7 +163,9 @@ from ._logger import (
 )
 from ._shard_keys import bind_shard_keys
 from ._workflow_commands import (
+    DELAYED_WORKFLOW_THREAD_NAME,
     WORKFLOW_TIMEOUT_THREAD_NAME,
+    delayed_workflow_thread,
     delete_workflow,
     get_workflow,
     workflow_timeout_thread,
@@ -780,6 +782,18 @@ class DBOS:
             )
             timeout_thread.start()
             self._background_threads.append(timeout_thread)
+
+            # Start the delayed workflow thread
+            evt = threading.Event()
+            self.background_thread_stop_events.append(evt)
+            delayed_thread = threading.Thread(
+                target=delayed_workflow_thread,
+                args=(evt, self),
+                name=DELAYED_WORKFLOW_THREAD_NAME,
+                daemon=True,
+            )
+            delayed_thread.start()
+            self._background_threads.append(delayed_thread)
 
             # Start the conductor thread if requested
             if GlobalParams.dbos_cloud:

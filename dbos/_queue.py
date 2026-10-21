@@ -918,12 +918,6 @@ def queue_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
         for queue in dbos._registry.internal_queues():
             current_queues[queue.name] = queue
 
-        # Transition any DELAYED workflows whose delay has expired to ENQUEUED.
-        try:
-            dbos._sys_db.transition_delayed_workflows()
-        except Exception as e:
-            dbos.logger.warning(f"Exception transitioning delayed workflows: {e}")
-
         # Start threads for new queues
         for queue_name, queue in current_queues.items():
             if (
