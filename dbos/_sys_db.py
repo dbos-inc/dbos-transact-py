@@ -1071,6 +1071,13 @@ class SystemDatabase(ABC):
         result = conn.execute(build(rows))
         return list(result) if returning else []
 
+    def _claim_gate(
+        self, queue_name: str, partition_key: Optional[str]
+    ) -> List[sa.ColumnElement[bool]]:
+        """Predicates a queue claim must also meet, evaluated once before it scans; a
+        sharded subclass admits one claimer per key at a time."""
+        return []
+
     def _scoped(self, table: Any) -> List[sa.ColumnElement[bool]]:
         """Predicates confining a statement that names no single workflow to the current shard."""
         return []
@@ -5116,6 +5123,8 @@ class SystemDatabase(ABC):
                 # locked. With one, use no_wait so all processes see a consistent table.
                 .with_for_update(skip_locked=skip_locks, nowait=(not skip_locks))
             )
+            for gate in self._claim_gate(queue.name, queue_partition_key):
+                query = query.where(gate)
             if queue_partition_key is not None:
                 query = query.where(
                     self.tables.workflow_status.c.queue_partition_key
