@@ -412,6 +412,7 @@ def default_shard_key() -> Generator[Optional[str], Any, None]:
 FAN_OUT_FUNCTIONS = {
     "run_migrations",
     "dequeue_scopes",
+    "_discover_scopes",
     "transition_delayed_workflows",
     "cancel_timed_out_workflows",
     "get_pending_workflows",

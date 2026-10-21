@@ -14,6 +14,7 @@ from dbos._error import (
     DBOSNonExistentWorkflowError,
     DBOSWorkflowCancelledError,
 )
+from dbos._outcome import DeferredResult
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import (
     deserialize_value,
@@ -108,7 +109,8 @@ def test_active_id_released_before_outcome_write(dbos: DBOS) -> None:
 
     # Park run 1's terminal outcome write, holding open the window between the
     # function returning and its outcome becoming durable.
-    original_update_outcome = dbos._sys_db.update_workflow_outcome
+    # The deferred write, which a sharded database batches without update_workflow_outcome.
+    original_update_outcome = dbos._sys_db.update_workflow_outcome_deferred
     parked_once = threading.Event()
 
     def parking_update_outcome(
@@ -117,17 +119,14 @@ def test_active_id_released_before_outcome_write(dbos: DBOS) -> None:
         *,
         output: Any = None,
         error: Any = None,
-        owner_xid: Any = None,
-    ) -> bool:
+    ) -> DeferredResult[bool]:
         if workflow_id == wfid and not parked_once.is_set():
             parked_once.set()
             parked.set()
             assert release_stale_write.wait(timeout=30)
-        return original_update_outcome(
-            workflow_id, status, output=output, error=error, owner_xid=owner_xid
-        )
+        return original_update_outcome(workflow_id, status, output=output, error=error)
 
-    dbos._sys_db.update_workflow_outcome = parking_update_outcome  # type: ignore[method-assign]
+    dbos._sys_db.update_workflow_outcome_deferred = parking_update_outcome  # type: ignore[method-assign]
 
     try:
         with SetWorkflowID(wfid):
@@ -153,7 +152,7 @@ def test_active_id_released_before_outcome_write(dbos: DBOS) -> None:
         assert runs == 2
     finally:
         release_stale_write.set()
-        dbos._sys_db.update_workflow_outcome = original_update_outcome  # type: ignore[method-assign]
+        dbos._sys_db.update_workflow_outcome_deferred = original_update_outcome  # type: ignore[method-assign]
 
     assert queue_entries_are_cleaned_up(dbos)
 

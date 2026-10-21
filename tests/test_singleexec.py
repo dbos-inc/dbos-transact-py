@@ -13,6 +13,7 @@ from dbos import DBOS, SendMessage, SetWorkflowID
 from dbos._core import ActiveWorkflowById
 from dbos._debug_trigger import DebugAction, DebugTriggers
 from dbos._error import DBOSAwaitedWorkflowCancelledError
+from dbos._outcome import DeferredResult
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import ThreadSafeEventDict
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, LoopAwareEvent
@@ -773,14 +774,19 @@ def test_stale_owner_cannot_write_outcome(
         return "done"
 
     writes: List[bool] = []
-    real_update = dbos._sys_db.update_workflow_outcome
+    real_update = dbos._sys_db.update_workflow_outcome_deferred
 
-    def tracking_update(*args: Any, **kwargs: Any) -> bool:
-        landed = real_update(*args, **kwargs)
+    def track(landed: bool) -> bool:
         writes.append(landed)
         return landed
 
-    monkeypatch.setattr(dbos._sys_db, "update_workflow_outcome", tracking_update)
+    # The deferred write, which a sharded database batches without update_workflow_outcome.
+    def tracking_update(*args: Any, **kwargs: Any) -> DeferredResult[bool]:
+        return real_update(*args, **kwargs).then(track)
+
+    monkeypatch.setattr(
+        dbos._sys_db, "update_workflow_outcome_deferred", tracking_update
+    )
 
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
