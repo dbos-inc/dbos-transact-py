@@ -14,7 +14,6 @@ from sqlalchemy.exc import OperationalError
 from dbos import DBOS, DBOSConfig, SetWorkflowID, WorkflowHandleAsync
 from dbos._debug_trigger import DebugAction, DebugTriggers
 from dbos._error import DBOSWorkflowConflictIDError
-from dbos._outcome import DeferredResult
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import serialize_value_as
 from dbos._sys_db import OperationResultInternal, WorkflowStatuses, WorkflowStatusString
@@ -399,27 +398,6 @@ async def test_parked_duplicate_does_not_hold_a_thread(
             workflow_id, status, output=output, error=error, owner_xid=owner_xid
         )
 
-    # The deferred writes, which a sharded database batches without the two above.
-    original_record_deferred = dbos._sys_db.record_step_result_deferred
-
-    def losing_record_deferred(result: OperationResultInternal) -> DeferredResult[None]:
-        if result["workflow_uuid"] in lost_ids:
-            raise DBOSWorkflowConflictIDError(result["workflow_uuid"])
-        return original_record_deferred(result)
-
-    original_update_deferred = dbos._sys_db.update_workflow_outcome_deferred
-
-    def losing_update_deferred(
-        workflow_id: str,
-        status: WorkflowStatuses,
-        *,
-        output: Optional[str] = None,
-        error: Optional[str] = None,
-    ) -> DeferredResult[bool]:
-        if workflow_id in lost_ids:
-            return DeferredResult.done(False)
-        return original_update_deferred(workflow_id, status, output=output, error=error)
-
     original_check = dbos._sys_db.check_workflow_result
 
     def tracking_check(workflow_id: str, *, fail_if_missing: bool = False) -> Any:
@@ -430,10 +408,8 @@ async def test_parked_duplicate_does_not_hold_a_thread(
 
     if park_entry == "checkpoint_conflict":
         dbos._sys_db.record_operation_result = losing_record  # type: ignore[method-assign]
-        dbos._sys_db.record_step_result_deferred = losing_record_deferred  # type: ignore[method-assign]
     else:
         dbos._sys_db.update_workflow_outcome = losing_update  # type: ignore[method-assign]
-        dbos._sys_db.update_workflow_outcome_deferred = losing_update_deferred  # type: ignore[method-assign]
     dbos._sys_db.check_workflow_result = tracking_check  # type: ignore[method-assign]
 
     def blocked_executor_threads() -> list[str]:

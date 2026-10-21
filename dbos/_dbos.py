@@ -696,9 +696,6 @@ class DBOS:
                     "sys_db_idle_transaction_timeout_sec"
                 ),
                 sharding=self._config.get("sharding", False),
-                sharding_write_batch_interval_sec=self._config.get(
-                    "runtimeConfig", {}
-                ).get("sharding_write_batch_interval_sec"),
             )
 
             # Run migrations for the system database

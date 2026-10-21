@@ -951,39 +951,22 @@ def _get_wf_invoke_func(
             error_str = _serialize_exception_for_persistence(
                 error, status["serialization"], dbos._serializer
             )
-            # Python unbinds error when this block ends, before the wait below resolves.
-            failure = error
-
-            def raise_recorded(written: bool) -> R:
-                if not written:
-                    # We couldn't update the workflow status: park the execution.
-                    return adopt_recorded_outcome(not_recorded_warning())
-                raise failure
-
-            # A wait, which an async workflow resolves on the event loop.
-            return cast(
-                R,
-                dbos._sys_db.update_workflow_outcome_deferred(
-                    status["workflow_uuid"],
-                    WorkflowStatusString.ERROR.value,
-                    error=error_str,
-                ).then(raise_recorded),
-            )
-
-        def return_recorded(written: bool) -> R:
-            if not written:
+            if not dbos._sys_db.update_workflow_outcome(
+                status["workflow_uuid"],
+                WorkflowStatusString.ERROR.value,
+                error=error_str,
+            ):
                 # We couldn't update the workflow status: park the execution.
                 return adopt_recorded_outcome(not_recorded_warning())
-            return output
-
-        return cast(
-            R,
-            dbos._sys_db.update_workflow_outcome_deferred(
-                status["workflow_uuid"],
-                WorkflowStatusString.SUCCESS.value,
-                output=serval,
-            ).then(return_recorded),
-        )
+            raise
+        if not dbos._sys_db.update_workflow_outcome(
+            status["workflow_uuid"],
+            WorkflowStatusString.SUCCESS.value,
+            output=serval,
+        ):
+            # We couldn't update the workflow status: park the execution.
+            return adopt_recorded_outcome(not_recorded_warning())
+        return output
 
     return persist
 
@@ -2460,28 +2443,13 @@ def invoke_step(
             )
             step_output["error"] = serialized_e
             step_output["serialization"] = serialization
-            # Python unbinds error when this block ends, before the wait below resolves.
-            failure = error
-
-            def raise_failure(_: None) -> R:
-                raise failure
-
-            # A wait, which an async step resolves on the event loop.
-            return cast(
-                R,
-                dbos._sys_db.record_step_result_deferred(step_output).then(
-                    raise_failure
-                ),
-            )
+            dbos._sys_db.record_operation_result(step_output)
+            raise
         serialized_r, serialization = serialize_value(output, None, dbos._serializer)
         step_output["output"] = serialized_r
         step_output["serialization"] = serialization
-        return cast(
-            R,
-            dbos._sys_db.record_step_result_deferred(step_output).then(
-                lambda _: output
-            ),
-        )
+        dbos._sys_db.record_operation_result(step_output)
+        return output
 
     def check_existing_result() -> Union[NoResult, R]:
         ctx = assert_current_dbos_context()
