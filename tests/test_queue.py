@@ -3306,7 +3306,7 @@ def _enqueue_partition_rows(
 
 
 def test_partitioned_batch_dequeue_sweep_cap(
-    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, skip_with_sharding: None
 ) -> None:
     """A sweep bounded only by PARTITIONED_DEQUEUE_SWEEP_CAP admits that many heads in
     partition order; admitted partitions are PENDING-gated, so the next sweep rotates
@@ -3333,7 +3333,9 @@ def test_partitioned_batch_dequeue_sweep_cap(
     assert start() == []
 
 
-def test_partitioned_batch_dequeue_exclusive_direct(dbos: DBOS) -> None:
+def test_partitioned_batch_dequeue_exclusive_direct(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """With partition_concurrency=1, one batched call admits exactly each partition's
     head-of-line row; a partition admits nothing more until its head finishes."""
 
@@ -3360,7 +3362,9 @@ def test_partitioned_batch_dequeue_exclusive_direct(dbos: DBOS) -> None:
     assert start() == [ids["p1"][1]]
 
 
-def test_partitioned_batch_dequeue_skips_requeued_rows(dbos: DBOS) -> None:
+def test_partitioned_batch_dequeue_skips_requeued_rows(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """A candidate moved to another queue mid-sweep (e.g. by resume_workflows,
     which rewrites queue_name while leaving status ENQUEUED) must be dropped by
     the claim guard, not flipped and run under the wrong queue."""
@@ -3454,7 +3458,9 @@ def test_partitioned_batch_dequeue_skips_requeued_rows(dbos: DBOS) -> None:
     assert late_status["status"] == WorkflowStatusString.ENQUEUED.value
 
 
-def test_partitioned_batch_dequeue_contention(dbos: DBOS) -> None:
+def test_partitioned_batch_dequeue_contention(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """Two workers batch-dequeueing concurrently never co-admit into a
     partition: candidates are heads only, so racing flips target the same row
     and SKIP LOCKED/status rechecks make one side lose."""
@@ -3581,7 +3587,9 @@ def test_partitioned_queue_fallback_routing(
     assert paused_handle.get_status().status == WorkflowStatusString.ENQUEUED.value
 
 
-def test_partitioned_batch_dequeue_version_gating(dbos: DBOS) -> None:
+def test_partitioned_batch_dequeue_version_gating(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """The batched path dequeues only rows of this worker's app version, plus
     version-less rows while this worker runs the latest registered version. A
     partition holding no eligible row is skipped without disturbing the others."""

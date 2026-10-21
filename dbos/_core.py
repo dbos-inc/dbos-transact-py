@@ -778,7 +778,6 @@ def prepare_enqueued_workflow(
     queue_name: str,
     workflow_id: str,
     queue_partition_key: Optional[str] = None,
-    shard_key: Optional[str] = None,
 ) -> WorkflowStatusInternal:
     """Build (without persisting) an ENQUEUED status row for func on queue_name.
 
@@ -815,11 +814,9 @@ def prepare_enqueued_workflow(
         is_debounced=False,
         application_name=None,
     )
-    fresh_ctx = DBOSContext()  # fresh context: no parent, auth, or attributes
-    fresh_ctx.shard_key = shard_key
     return _assemble_workflow_status(
         dbos,
-        fresh_ctx,
+        DBOSContext(),  # fresh context: no parent, auth, or attributes
         inputs=inputs,
         wf_name=get_dbos_func_name(func),
         class_name=get_dbos_class_name(fi, func, args),

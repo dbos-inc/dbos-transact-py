@@ -53,7 +53,6 @@ from dbos import (
     DBOSClient,
     DBOSConfig,
     _enterprise,
-    _kafka,
     _workflow_commands,
     run_dbos_database_migrations,
 )
@@ -359,15 +358,6 @@ def default_shard_key() -> Generator[Optional[str], Any, None]:
     monkeypatch.setattr(ShardedSystemDatabase, "_keyed_messages", _keyed_messages)
     monkeypatch.setattr(ShardedSystemDatabase, "_schedule_values", _schedule_values)
     monkeypatch.setattr(ShardedSystemDatabase, "_scope_key", _scope_key)
-
-    kafka_consumer = _kafka.kafka_consumer
-
-    def _kafka_consumer(
-        *args: Any, shard_key: Optional[str] = None, **kwargs: Any
-    ) -> Any:
-        return kafka_consumer(*args, shard_key=shard_key or key, **kwargs)
-
-    monkeypatch.setattr(_kafka, "kafka_consumer", _kafka_consumer)
 
     # Every new workflow's context gets a key where core builds it: a top-level workflow
     # the per-test key through fall_back, so a dequeue that lost its row's key fails; a

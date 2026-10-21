@@ -1294,7 +1294,6 @@ class DBOS:
         ordering: Optional[KafkaOrdering] = None,
         batch_size: int = 250,
         queue_name: Optional[str] = None,
-        shard_key: Optional[str] = None,
     ) -> Callable[[_KafkaConsumerWorkflow], _KafkaConsumerWorkflow]:
         """Decorate a function to be used as a Kafka consumer.
 
@@ -1326,7 +1325,6 @@ class DBOS:
                 ordering=ordering,
                 batch_size=batch_size,
                 queue_name=queue_name,
-                shard_key=shard_key,
             )
         except ModuleNotFoundError as e:
             raise DBOSException(
