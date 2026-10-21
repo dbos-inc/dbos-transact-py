@@ -53,7 +53,7 @@ from dbos._serialization import DefaultSerializer
 from dbos._shard_keys import bind_shard_keys, shard_key_scope
 from dbos._sys_db import SystemDatabase, _dbos_null_topic
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
-from dbos._workflow_commands import WORKFLOW_TIMEOUT_THREAD_NAME, _run_background_job
+from dbos._workflow_commands import BACKGROUND_JOBS_THREAD_NAME, _run_background_jobs
 from tests.conftest import (
     reexecute_workflow_by_id,
     retry_until_success,
@@ -2428,10 +2428,10 @@ def test_workflow_timeout(dbos: DBOS) -> None:
 
 
 def test_timeout_cleanup_on_destroy(dbos: DBOS, config: DBOSConfig) -> None:
-    """The timeout thread stops on its own event, not the one the other background
-    threads share, so destroy has to set it."""
+    """The background jobs thread stops on its own event, not the one the other
+    background threads share, so destroy has to set it."""
     timeout_threads = [
-        t for t in dbos._background_threads if t.name == WORKFLOW_TIMEOUT_THREAD_NAME
+        t for t in dbos._background_threads if t.name == BACKGROUND_JOBS_THREAD_NAME
     ]
     assert len(timeout_threads) == 1 and timeout_threads[0].is_alive()
 
@@ -2547,7 +2547,7 @@ def test_timeout_sweep_query_plan(dbos: DBOS, skip_with_sharding: None) -> None:
         context: Any,
         executemany: bool,
     ) -> None:
-        # The background timeout thread runs the same sweep on this engine.
+        # The background jobs thread runs the same sweep on this engine.
         if (
             threading.current_thread() is test_thread
             and statement.strip().startswith("UPDATE")
@@ -2612,11 +2612,12 @@ def test_timeout_sweep_query_plan(dbos: DBOS, skip_with_sharding: None) -> None:
         assert not [d for d in details if "Seq Scan" in d], details
 
 
-def test_background_job_runs_once_per_interval_across_processes(
+def test_background_jobs_run_once_per_interval_across_processes(
     dbos: DBOS, config: DBOSConfig, skip_with_sqlite: None
 ) -> None:
-    """Two processes' loops for one job: whichever holds its lock runs it, so its runs
-    start at least an interval apart, and when the holder stops the other takes over."""
+    """Two processes' loops: whichever holds the lock runs the jobs, so their runs start
+    at least an interval apart, a failing job skips no other, and when the holder stops
+    the other takes over."""
     peer = SystemDatabase.create(
         system_database_url=cast(str, config["system_database_url"]),
         engine_kwargs={},
@@ -2633,11 +2634,15 @@ def test_background_job_runs_once_per_interval_across_processes(
     stops = {"local": threading.Event(), "peer": threading.Event()}
 
     def loop(name: str, sys_db: SystemDatabase) -> None:
+        def failing() -> None:
+            raise Exception("injected job failure")
+
         def job() -> None:
             runs.append((name, time.monotonic()))
 
         process = cast(Any, types.SimpleNamespace(_sys_db=sys_db, logger=dbos.logger))
-        _run_background_job(stops[name], process, "test_job", interval, job)
+        jobs = {"failing": failing, "job": job}
+        _run_background_jobs(stops[name], process, "test_jobs", interval, jobs)
 
     threads = {
         "local": threading.Thread(target=loop, args=("local", dbos._sys_db)),

@@ -522,13 +522,13 @@ def reset_global_params() -> None:
 
 
 @pytest.fixture(autouse=True, scope="session")
-def fast_timeout_sweep() -> Generator[None, Any, None]:
-    """Sweep for timed-out workflows every 100ms: the product's 1s poll would
-    dominate every test that waits for a timeout."""
-    original = _workflow_commands._SWEEP_POLLING_INTERVAL_SEC
-    _workflow_commands._SWEEP_POLLING_INTERVAL_SEC = 0.1
+def fast_background_jobs() -> Generator[None, Any, None]:
+    """Run the background jobs every 100ms: the product's 1s interval would dominate
+    every test that waits for a timeout or a delay."""
+    original = _workflow_commands._BACKGROUND_JOBS_INTERVAL_SEC
+    _workflow_commands._BACKGROUND_JOBS_INTERVAL_SEC = 0.1
     yield
-    _workflow_commands._SWEEP_POLLING_INTERVAL_SEC = original
+    _workflow_commands._BACKGROUND_JOBS_INTERVAL_SEC = original
 
 
 @pytest.fixture(autouse=True)

@@ -163,12 +163,10 @@ from ._logger import (
 )
 from ._shard_keys import bind_shard_keys
 from ._workflow_commands import (
-    DELAYED_WORKFLOW_THREAD_NAME,
-    WORKFLOW_TIMEOUT_THREAD_NAME,
-    delayed_workflow_thread,
+    BACKGROUND_JOBS_THREAD_NAME,
+    background_jobs_thread,
     delete_workflow,
     get_workflow,
-    workflow_timeout_thread,
 )
 
 # Most DBOS functions are just any callable F, so decorators / wrappers work on F
@@ -496,7 +494,7 @@ class DBOS:
         self._executor_field: Optional[ThreadPoolExecutor] = None
         self._background_threads: List[threading.Thread] = []
         # Set after the shutdown drain, so timeouts still fire while workflows finish.
-        self._workflow_timeout_stop_event = threading.Event()
+        self._background_jobs_stop_event = threading.Event()
         # Strong references to running async workflow tasks: the event loop
         # only keeps weak references, so without these a garbage-collection
         # pass can destroy a pending workflow task mid-execution (#710).
@@ -773,27 +771,15 @@ class DBOS:
             bg_queue_thread.start()
             self._background_threads.append(bg_queue_thread)
 
-            # Start the workflow timeout thread
-            timeout_thread = threading.Thread(
-                target=workflow_timeout_thread,
-                args=(self._workflow_timeout_stop_event, self),
-                name=WORKFLOW_TIMEOUT_THREAD_NAME,
+            # Start the background jobs thread
+            jobs_thread = threading.Thread(
+                target=background_jobs_thread,
+                args=(self._background_jobs_stop_event, self),
+                name=BACKGROUND_JOBS_THREAD_NAME,
                 daemon=True,
             )
-            timeout_thread.start()
-            self._background_threads.append(timeout_thread)
-
-            # Start the delayed workflow thread
-            evt = threading.Event()
-            self.background_thread_stop_events.append(evt)
-            delayed_thread = threading.Thread(
-                target=delayed_workflow_thread,
-                args=(evt, self),
-                name=DELAYED_WORKFLOW_THREAD_NAME,
-                daemon=True,
-            )
-            delayed_thread.start()
-            self._background_threads.append(delayed_thread)
+            jobs_thread.start()
+            self._background_threads.append(jobs_thread)
 
             # Start the conductor thread if requested
             if GlobalParams.dbos_cloud:
@@ -957,7 +943,7 @@ class DBOS:
                     )
                 else:
                     break
-        self._workflow_timeout_stop_event.set()
+        self._background_jobs_stop_event.set()
         # Disconnect from Conductor only once the wait above is over, so the executor stays visibly alive to Conductor for its whole duration.
         if self.conductor_websocket is not None:
             self.conductor_websocket.stop()
