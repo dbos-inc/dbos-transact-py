@@ -535,7 +535,8 @@ def db_retry(
     block the workflow and retry the operation until it reconnects and succeeds.
 
     In other words, if DBOS loses its database connection, everything pauses until the connection is recovered,
-    trading off availability for correctness. A system database created with
+    trading off availability for correctness. Pool checkout timeouts use the same
+    backoff, with no overall deadline. A system database created with
     retry_connection_errors=False opts out, raising connection errors instead.
 
     Args:
@@ -555,15 +556,22 @@ def db_retry(
 
                     # Determine if this is a retriable exception
                     postgres_retriable = retriable_postgres_exception(e)
+                    # Pool exhaustion happens before the operation acquires a connection.
+                    pool_retriable = isinstance(e, sa.exc.TimeoutError)
                     # The SQLite heuristic matches rendered error text, which can include program data, so only trust it on an actual SQLite database.
                     sqlite_retriable = getattr(
                         db, "_is_sqlite", True
                     ) and retriable_sqlite_exception(e)
-                    if not postgres_retriable and not sqlite_retriable:
+                    if (
+                        not postgres_retriable
+                        and not pool_retriable
+                        and not sqlite_retriable
+                    ):
                         raise
 
-                    # Connection-error retries are optional; SQLite lock contention is not a connection error and always retries.
-                    if postgres_retriable and not getattr(
+                    # Connection-error and pool retries are optional; SQLite lock
+                    # contention is not a connection error and always retries.
+                    if (postgres_retriable or pool_retriable) and not getattr(
                         db, "_retry_connection_errors", True
                     ):
                         raise
