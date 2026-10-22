@@ -3879,6 +3879,7 @@ class SystemDatabase(ABC):
             _dbos_workflow_events_channel, f"{workflow_uuid}::{key}"
         )
 
+    @db_retry()
     def set_event_from_step(
         self,
         workflow_uuid: str,
