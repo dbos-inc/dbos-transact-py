@@ -684,6 +684,17 @@ def test_db_retry_connection_error_opt_out() -> None:
         flaky(FakeSystemDatabase(False), _connection_error())
     assert calls == 1
 
+    # A pool checkout timeout is retried like a connection error, and the opt-out covers it too.
+    pool_timeout = sa.exc.TimeoutError("QueuePool limit of size 1 overflow 0 reached")
+    calls = 0
+    assert flaky(FakeSystemDatabase(True, is_sqlite=False), pool_timeout) == "ok"
+    assert calls == 3
+
+    calls = 0
+    with pytest.raises(sa.exc.TimeoutError):
+        flaky(FakeSystemDatabase(False), pool_timeout)
+    assert calls == 1
+
     calls = 0
     locked = OperationalError("SELECT 1", None, Exception("database is locked"))
     assert flaky(FakeSystemDatabase(False), locked) == "ok"

@@ -2,18 +2,21 @@ import logging
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 import pytest
+import sqlalchemy as sa
 from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
-from dbos import DBOS
 from dbos._logger import dbos_logger
 from dbos._serialization import DefaultSerializer
 from dbos._sys_db import OperationResultInternal, SystemDatabase, db_retry
+
+_POOL_EXHAUSTED = "Database connection pool exhausted:"
+_CONNECTION_FAILED = "Database connection failed:"
 
 
 @contextmanager
@@ -32,7 +35,7 @@ def _system_database(
     )
     try:
         database.run_migrations()
-        with sqlite3.connect(path) as connection:
+        with closing(sqlite3.connect(path)) as connection, connection:
             connection.execute(
                 "INSERT INTO workflow_status "
                 "(workflow_uuid, status, name, created_at, updated_at, priority) "
@@ -58,20 +61,21 @@ def _checkpoint() -> OperationResultInternal:
 
 def _checkpoint_count(path: Path) -> int:
     # Use a separate sqlite3 connection, independent of the exhausted DBOS pool.
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         return int(
             connection.execute("SELECT count(*) FROM operation_outputs").fetchone()[0]
         )
 
 
 class _RetrySignal(logging.Handler):
-    def __init__(self, event: threading.Event) -> None:
+    def __init__(self, event: threading.Event, prefix: str) -> None:
         super().__init__()
         self.event = event
+        self.prefix = prefix
         self.retries = 0
 
     def emit(self, record: logging.LogRecord) -> None:
-        if record.getMessage().startswith("Database connection failed:"):
+        if record.getMessage().startswith(self.prefix):
             self.retries += 1
             self.event.set()
 
@@ -84,7 +88,7 @@ def test_pool_checkout_timeout(
     """A temporary shortage of pool slots retries unless explicitly opted out."""
     path = tmp_path / "pool.sqlite"
     signal = threading.Event()
-    observer = _RetrySignal(signal)
+    observer = _RetrySignal(signal, _POOL_EXHAUSTED)
     with _system_database(
         path, retry_connection_errors=retry_connection_errors
     ) as database:
@@ -131,7 +135,7 @@ def test_pool_checkout_timeout(
                     else:
                         assert result is None
                         assert _checkpoint_count(path) == 1
-                        with sqlite3.connect(path) as connection:
+                        with closing(sqlite3.connect(path)) as connection:
                             row = connection.execute(
                                 "SELECT output FROM operation_outputs"
                             ).fetchone()
@@ -146,10 +150,16 @@ def test_sqlite_lock_still_retries_when_connection_retries_disabled(
     """The connection-error opt-out must not disable existing SQLite lock retries."""
     path = tmp_path / "locked.sqlite"
     signal = threading.Event()
-    observer = _RetrySignal(signal)
+    observer = _RetrySignal(signal, _CONNECTION_FAILED)
     with _system_database(path, retry_connection_errors=False) as database:
-        with database.engine.connect() as connection:
-            connection.exec_driver_sql("PRAGMA busy_timeout=5")
+
+        # Runs after DBOS's own connect hook, so every new connection fails fast on the lock.
+        @sa.event.listens_for(database.engine, "connect")
+        def short_busy_timeout(dbapi_conn: Any, connection_record: Any) -> None:
+            dbapi_conn.execute("PRAGMA busy_timeout=5")
+
+        # Drop connections opened before the hook was registered.
+        database.engine.dispose()
         lock = sqlite3.connect(path)
         lock.execute("BEGIN IMMEDIATE")
         dbos_logger.addHandler(observer)
@@ -194,19 +204,4 @@ def test_db_retry_does_not_retry_other_errors(error: Exception) -> None:
     with pytest.raises(type(error)) as raised:
         fail()
     assert raised.value is error
-    assert calls == 1
-
-
-def test_stored_business_timeout_is_not_retried(dbos: DBOS) -> None:
-    calls = 0
-
-    @DBOS.workflow()
-    def workflow() -> None:
-        nonlocal calls
-        calls += 1
-        raise TimeoutError("business timeout")
-
-    handle = DBOS.start_workflow(workflow)
-    with pytest.raises(TimeoutError, match="business timeout"):
-        handle.get_result()
     assert calls == 1

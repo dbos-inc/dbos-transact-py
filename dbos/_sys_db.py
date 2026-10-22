@@ -556,7 +556,7 @@ def db_retry(
 
                     # Determine if this is a retriable exception
                     postgres_retriable = retriable_postgres_exception(e)
-                    # Pool exhaustion happens before the operation acquires a connection.
+                    # Pool exhaustion fails a connection checkout before any statement runs on it.
                     pool_retriable = isinstance(e, sa.exc.TimeoutError)
                     # The SQLite heuristic matches rendered error text, which can include program data, so only trust it on an actual SQLite database.
                     sqlite_retriable = getattr(
@@ -579,10 +579,18 @@ def db_retry(
                     retries += 1
                     # Calculate backoff with jitter
                     actual_backoff: float = backoff * (0.5 + random.random())
-                    dbos_logger.warning(
-                        f"Database connection failed: {str(e)}. "
-                        f"Retrying in {actual_backoff:.2f}s (attempt {retries})"
-                    )
+                    if pool_retriable:
+                        # Retried without limit, so say what to look at if it never clears.
+                        dbos_logger.warning(
+                            f"Database connection pool exhausted: {str(e)}. "
+                            "If this persists, look for stalled or leaked connections or increase sys_db_pool_size. "
+                            f"Retrying in {actual_backoff:.2f}s (attempt {retries})"
+                        )
+                    else:
+                        dbos_logger.warning(
+                            f"Database connection failed: {str(e)}. "
+                            f"Retrying in {actual_backoff:.2f}s (attempt {retries})"
+                        )
                     # Sleep with backoff
                     time.sleep(actual_backoff)
                     # Increase backoff for next attempt (exponential)
