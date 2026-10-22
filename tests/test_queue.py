@@ -3939,10 +3939,7 @@ def test_partitioned_queue_global_exclusivity(
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_polling_interval(dbos: DBOS, monkeypatch: pytest.MonkeyPatch) -> None:
-    if using_sharding():
-        # Sharded, an idle queue is read again only every few seconds; this times each poll.
-        monkeypatch.setattr(dbos._sys_db, "discovery_empty_interval_sec", 0.0)
+def test_polling_interval(dbos: DBOS, skip_with_sharding: None) -> None:
     DBOS.register_queue("queue", polling_interval_sec=0.1)
 
     @DBOS.workflow()
