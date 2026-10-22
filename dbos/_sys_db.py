@@ -85,7 +85,7 @@ from ._serialization import (
     serialize_value,
     serialize_value_as,
 )
-from ._shard_keys import bind_shard_keys, bound_shard_key, validate_shard_key
+from ._shard_keys import bind_shard_keys, bound_shard_key
 
 if TYPE_CHECKING:
     from ._queue import Queue, QueueRateLimit
@@ -939,11 +939,8 @@ class SystemDatabase(ABC):
             return sa.cast(sa.func.strftime("%s", "now") * 1000, sa.BigInteger)
         return sa.cast(sa.func.extract("epoch", sa.func.now()) * 1000, sa.BigInteger)
 
-    # Key helpers: every statement locates a workflow's rows through these. A sharded
-    # subclass resolves the keys below, and the statements then carry them.
-
-    # The shard key global tables (queues, schedules, versions) live under.
-    global_shard_key: Optional[str] = None
+    # Key helpers: every statement locates a workflow's rows through these, so a sharded
+    # subclass can add the shard key without rewriting the statement.
 
     @staticmethod
     def _reject_shard_key(workflow_id: Any, shard_key: Optional[str]) -> None:
@@ -954,17 +951,6 @@ class SystemDatabase(ABC):
                 "A shard key was given, but this system database is not sharded"
             )
 
-    def _shard_key_of(
-        self, workflow_id: Any, explicit: Optional[str] = None
-    ) -> Optional[str]:
-        """The shard key a workflow lives under, which a sharded subclass requires."""
-        self._reject_shard_key(workflow_id, explicit)
-        return None
-
-    def _scope_key(self) -> Optional[str]:
-        """The shard key of a statement that names no single workflow."""
-        return None
-
     def _wf(
         self,
         table: sa.FromClause,
@@ -974,49 +960,41 @@ class SystemDatabase(ABC):
         shard_key: Optional[str] = None,
     ) -> List[sa.ColumnElement[bool]]:
         """Predicates selecting one workflow's rows in table."""
-        key = self._shard_key_of(workflow_id, shard_key)
-        keyed = [] if key is None else [table.c.shard_key == key]
-        return [*keyed, table.c[column] == workflow_id]
+        self._reject_shard_key(workflow_id, shard_key)
+        return [table.c[column] == workflow_id]
 
     def _wf_in(
         self, table: sa.FromClause, workflow_ids: Any
     ) -> List[sa.ColumnElement[bool]]:
-        """Predicates selecting several workflows' rows in table, all under one key."""
-        keys = {self._shard_key_of(workflow_id) for workflow_id in workflow_ids}
-        if len(keys) > 1:
-            raise DBOSException(
-                "One statement cannot select workflows across shard keys"
-            )
-        key = next(iter(keys), None)
-        keyed = [] if key is None else [table.c.shard_key == key]
-        return [*keyed, table.c.workflow_uuid.in_(workflow_ids)]
+        """Predicates selecting several workflows' rows in table."""
+        for workflow_id in workflow_ids:
+            self._reject_shard_key(workflow_id, None)
+        return [table.c.workflow_uuid.in_(workflow_ids)]
 
     def _wf_join(self, left: Any, right: Any) -> sa.ColumnElement[bool]:
         """Condition joining two tables' rows of the same workflow."""
-        same = left.c.workflow_uuid == right.c.workflow_uuid
-        if self.sharded:
-            return sa.and_(left.c.shard_key == right.c.shard_key, same)
-        return cast(sa.ColumnElement[bool], same)
+        return cast(
+            sa.ColumnElement[bool], left.c.workflow_uuid == right.c.workflow_uuid
+        )
 
     def _wf_values(
         self, workflow_id: str, *, shard_key: Optional[str] = None
     ) -> Dict[str, Any]:
         """Extra column values for a new row of this workflow."""
-        key = self._shard_key_of(workflow_id, shard_key)
-        return {} if key is None else {"shard_key": key}
+        self._reject_shard_key(workflow_id, shard_key)
+        return {}
 
     def _parent_values(self, parent_workflow_id: Optional[str]) -> Dict[str, Any]:
         """Extra column values storing the shard key of a new workflow's parent."""
-        key = (
-            None
-            if parent_workflow_id is None
-            else self._shard_key_of(parent_workflow_id)
-        )
-        return {} if key is None else {"parent_shard_key": key}
+        return {}
 
     def _child_values(self, child_workflow_id: Optional[str]) -> Dict[str, Any]:
         """Extra column values storing the shard key of the workflow a step refers to."""
         return {}
+
+    def _wf_columns(self, workflow_id: str) -> List[Tuple[str, Any]]:
+        """Extra (column, expression) pairs for an INSERT ... SELECT of this workflow's rows."""
+        return []
 
     def _execute_prepared(
         self,
@@ -1070,9 +1048,7 @@ class SystemDatabase(ABC):
 
     def _key_conflict(self, *columns: Any) -> List[Any]:
         """Conflict target for a unique key of a workflow table."""
-        if not self.sharded:
-            return list(columns)
-        return ["shard_key", *[c if isinstance(c, str) else c.name for c in columns]]
+        return list(columns)
 
     def _insert_rows(
         self,
@@ -1096,36 +1072,31 @@ class SystemDatabase(ABC):
 
     def _scoped(self, table: Any) -> List[sa.ColumnElement[bool]]:
         """Predicates confining a statement that names no single workflow to the current shard."""
-        key = self._scope_key()
-        return [] if key is None else [table.c.shard_key == key]
+        return []
+
+    def _scoped_columns(self) -> List[Tuple[str, Any]]:
+        """Extra (column, expression) pairs for an INSERT ... SELECT confined to the current shard."""
+        return []
 
     def _global(self, table: sa.FromClause) -> List[sa.ColumnElement[bool]]:
-        """Predicates selecting a global table's rows."""
-        key = self.global_shard_key
-        return [] if key is None else [table.c.shard_key == key]
+        """Predicates selecting a global table's rows (queues, schedules, versions)."""
+        return []
 
     def _global_values(self) -> Dict[str, Any]:
         """Extra column values for a new row of a global table."""
-        key = self.global_shard_key
-        return {} if key is None else {"shard_key": key}
+        return {}
 
     def _key_in(
         self, table: sa.FromClause, shard_keys: List[str], column: str = "shard_key"
     ) -> List[sa.ColumnElement[bool]]:
         """Predicates selecting rows whose column holds one of these shard keys."""
-        if not self.sharded:
-            raise DBOSException(
-                "Filtering by shard key requires a sharded system database"
-            )
-        for shard_key in shard_keys:
-            validate_shard_key(shard_key)
-        return [table.c[column].in_(shard_keys)]
+        raise DBOSException("Filtering by shard key requires a sharded system database")
 
     def _key_column(
         self, table: sa.FromClause, column: str = "shard_key"
-    ) -> sa.ColumnElement[Any]:
-        """A shard key column to read back with a row; NULL when unsharded."""
-        return table.c[column] if self.sharded else sa.null().label(column)
+    ) -> Optional[sa.ColumnElement[Any]]:
+        """A shard key column to read back with a row, if this handle has one."""
+        return None
 
     def _schedule_values(self, schedule: "WorkflowSchedule") -> Dict[str, Any]:
         """Extra column values storing the shard key a schedule's workflows run under."""
@@ -1135,10 +1106,19 @@ class SystemDatabase(ABC):
             )
         return {}
 
+    def _schedule_key_column(self) -> Optional[sa.ColumnElement[Any]]:
+        """The column holding the shard key a schedule's workflows run under, if any."""
+        return None
+
+    def _key_hint(self, workflow_id: str) -> Optional[str]:
+        """This workflow's shard key, resolved now for a statement or waiter that needs it later."""
+        self._reject_shard_key(workflow_id, None)
+        return None
+
     def _waiter(self, workflow_id: str, name: str) -> Tuple[str, WaiterComponents]:
         """The waiter-map key for a workflow's topic or key, and what the listener checks
         for it. Keyed waiters are told apart, as one ID can live under several keys."""
-        key = self._shard_key_of(workflow_id)
+        key = self._key_hint(workflow_id)
         payload = f"{workflow_id}::{name}"
         return (payload if key is None else f"{len(key)}:{key}:{payload}"), (
             workflow_id,
@@ -2087,18 +2067,18 @@ class SystemDatabase(ABC):
                 )
                 .subquery("surviving")
             )
-            key_values = self._wf_values(workflow_id)
+            key_columns = self._wf_columns(workflow_id)
             c.execute(
                 sa.insert(events).from_select(
                     [
-                        *key_values,
+                        *[name for name, _ in key_columns],
                         "workflow_uuid",
                         "key",
                         "value",
                         "serialization",
                     ],
                     sa.select(
-                        *[sa.literal(v, sa.Text) for v in key_values.values()],
+                        *[expr for _, expr in key_columns],
                         surviving.c.workflow_uuid,
                         surviving.c.key,
                         surviving.c.value,
@@ -2323,16 +2303,15 @@ class SystemDatabase(ABC):
 
                 oo = self.tables.operation_outputs
                 # The forks live under their originals' shard key.
-                scope_key = self._scope_key()
-                key_names = [] if scope_key is None else ["shard_key"]
-                key_exprs = (
-                    [] if scope_key is None else [sa.literal(scope_key, sa.Text)]
-                )
+                key_columns = self._scoped_columns()
+                key_names = [name for name, _ in key_columns]
+                key_exprs = [expr for _, expr in key_columns]
                 # A replacement child is a fork, so it shares the replaced child's key.
-                child_key_columns = [oo.c.child_shard_key] if self.sharded else []
+                child_key = self._key_column(oo, "child_shard_key")
+                child_key_columns = [] if child_key is None else [child_key]
 
                 child_wf_expr: sa.ColumnElement[Any] = oo.c.child_workflow_id
-                if replacement_children and self.sharded:
+                if replacement_children and child_key is not None:
                     # A replacement names a child by ID, which can't pick one of several keys.
                     ambiguous = (
                         c.execute(
@@ -2353,9 +2332,7 @@ class SystemDatabase(ABC):
                                 oo.c.child_workflow_id.in_(list(replacement_children))
                             )
                             .group_by(oo.c.child_workflow_id)
-                            .having(
-                                sa.func.count(sa.distinct(oo.c.child_shard_key)) > 1
-                            )
+                            .having(sa.func.count(sa.distinct(child_key)) > 1)
                         )
                         .scalars()
                         .first()
@@ -2571,7 +2548,11 @@ class SystemDatabase(ABC):
             with self.engine.begin() as c:
                 rows = c.execute(
                     sa.select(
-                        key_column.label("shard_key"),
+                        *(
+                            [key_column.label("shard_key")]
+                            if key_column is not None
+                            else []
+                        ),
                         ws.c.workflow_uuid,
                         ws.c.status,
                         ws.c.name,
@@ -2649,7 +2630,7 @@ class SystemDatabase(ABC):
                     "debounce_deadline_epoch_ms": m["debounce_deadline_epoch_ms"],
                     "is_debounced": bool(m["is_debounced"]),
                     "application_name": m["application_name"],
-                    "shard_key": m["shard_key"],
+                    "shard_key": m["shard_key"] if key_column is not None else None,
                 }
                 for m in (row._mapping for row in rows)
             ]
@@ -2918,10 +2899,14 @@ class SystemDatabase(ABC):
             )
         if load_input or load_output:
             load_columns.append(self.tables.workflow_status.c.serialization)
-        load_columns.append(self._key_column(self.tables.workflow_status))
-        load_columns.append(
-            self._key_column(self.tables.workflow_status, "parent_shard_key")
+        key_column = self._key_column(self.tables.workflow_status)
+        if key_column is not None:
+            load_columns.append(key_column)
+        parent_key_column = self._key_column(
+            self.tables.workflow_status, "parent_shard_key"
         )
+        if parent_key_column is not None:
+            load_columns.append(parent_key_column)
 
         # Only join the payload tables the caller actually asked for.
         from_clause: Any = self.tables.workflow_status
@@ -3148,8 +3133,10 @@ class SystemDatabase(ABC):
             serialization = row[idx] if load_input or load_output else None
             if load_input or load_output:
                 idx += 1
-            info.shard_key = row[idx]
-            info.parent_shard_key = row[idx + 1]
+            info.shard_key = row[idx] if key_column is not None else None
+            if key_column is not None:
+                idx += 1
+            info.parent_shard_key = row[idx] if parent_key_column is not None else None
             inputs, output, exception = safe_deserialize(
                 self.serializer,
                 serialization,
@@ -3169,11 +3156,16 @@ class SystemDatabase(ABC):
     def get_pending_workflows(
         self, executor_id: str, app_version: str
     ) -> list[GetPendingWorkflowsOutput]:
+        key_column = self._key_column(self.tables.workflow_status)
         with self.engine.begin() as c:
             rows = c.execute(
                 sa.select(
                     self.tables.workflow_status.c.workflow_uuid,
-                    self._key_column(self.tables.workflow_status).label("shard_key"),
+                    *(
+                        [key_column.label("shard_key")]
+                        if key_column is not None
+                        else []
+                    ),
                 ).where(
                     self.tables.workflow_status.c.status
                     == WorkflowStatusString.PENDING.value,
@@ -3189,7 +3181,7 @@ class SystemDatabase(ABC):
             return [
                 GetPendingWorkflowsOutput(
                     workflow_id=row.workflow_uuid,
-                    shard_key=row.shard_key,
+                    shard_key=row.shard_key if key_column is not None else None,
                 )
                 for row in rows
             ]
@@ -3215,7 +3207,7 @@ class SystemDatabase(ABC):
                     self.tables.operation_outputs.c.started_at_epoch_ms,
                     self.tables.operation_outputs.c.completed_at_epoch_ms,
                     self.tables.operation_outputs.c.serialization,
-                    child_key,
+                    *([] if child_key is None else [child_key]),
                 )
                 .where(*self._wf(self.tables.operation_outputs, workflow_id))
                 .order_by(self.tables.operation_outputs.c.function_id)
@@ -3246,7 +3238,7 @@ class SystemDatabase(ABC):
                 output=output,
                 error=exception,
                 child_workflow_id=row[4],
-                child_shard_key=row[8],
+                child_shard_key=row[8] if child_key is not None else None,
                 started_at_epoch_ms=row[5],
                 completed_at_epoch_ms=row[6],
             )
@@ -3550,7 +3542,7 @@ class SystemDatabase(ABC):
             self.tables.operation_outputs.c.function_name,
             self.tables.operation_outputs.c.child_workflow_id,
             self.tables.operation_outputs.c.serialization,
-            child_key,
+            *([] if child_key is None else [child_key]),
         ).where(
             *self._wf(self.tables.operation_outputs, workflow_id),
             self.tables.operation_outputs.c.function_id == function_id,
@@ -3601,7 +3593,9 @@ class SystemDatabase(ABC):
             "error": error,
             "serialization": serialization,
             "child_workflow_id": child_workflow_id,
-            "child_shard_key": operation_output_rows[0][5],
+            "child_shard_key": (
+                operation_output_rows[0][5] if child_key is not None else None
+            ),
         }
         return result
 
@@ -5776,10 +5770,10 @@ class SystemDatabase(ABC):
         serialization: Optional[str],
     ) -> sa.Insert:
         """Build an atomic INSERT...SELECT that computes the next stream offset."""
-        key_values = self._wf_values(workflow_uuid)
+        key_columns = self._wf_columns(workflow_uuid)
         return sa.insert(self.tables.streams).from_select(
             [
-                *key_values,
+                *[name for name, _ in key_columns],
                 "workflow_uuid",
                 "function_id",
                 "key",
@@ -5788,7 +5782,7 @@ class SystemDatabase(ABC):
                 "offset",
             ],
             sa.select(
-                *[sa.literal(v, sa.Text) for v in key_values.values()],
+                *[expr for _, expr in key_columns],
                 sa.literal(workflow_uuid).label("workflow_uuid"),
                 sa.literal(function_id).label("function_id"),
                 sa.literal(key).label("key"),
@@ -6251,9 +6245,7 @@ class SystemDatabase(ABC):
         schedule_name_prefix: Optional[Union[str, List[str]]] = None,
         conn: Optional[sa.Connection] = None,
     ) -> List[WorkflowSchedule]:
-        key_column = self._key_column(
-            self.tables.workflow_schedules, "workflow_shard_key"
-        )
+        key_column = self._schedule_key_column()
 
         def _do(c: sa.Connection) -> List[WorkflowSchedule]:
             query = sa.select(
@@ -6269,7 +6261,7 @@ class SystemDatabase(ABC):
                 self.tables.workflow_schedules.c.cron_timezone,
                 self.tables.workflow_schedules.c.queue_name,
                 self.tables.workflow_schedules.c.application_name,
-                key_column,
+                *([key_column] if key_column is not None else []),
             ).where(*self._global(self.tables.workflow_schedules), scope)
             if status is not None:
                 vals = [status] if isinstance(status, str) else status
@@ -6310,7 +6302,7 @@ class SystemDatabase(ABC):
                     cron_timezone=row[9],
                     queue_name=row[10],
                     application_name=row[11],
-                    shard_key=row[12],
+                    shard_key=row[12] if key_column is not None else None,
                 )
                 for row in rows
             ]
@@ -6323,9 +6315,7 @@ class SystemDatabase(ABC):
     def get_schedule(
         self, name: str, conn: Optional[sa.Connection] = None
     ) -> Optional[WorkflowSchedule]:
-        key_column = self._key_column(
-            self.tables.workflow_schedules, "workflow_shard_key"
-        )
+        key_column = self._schedule_key_column()
 
         def _do(c: sa.Connection) -> Optional[WorkflowSchedule]:
             row = c.execute(
@@ -6342,7 +6332,7 @@ class SystemDatabase(ABC):
                     self.tables.workflow_schedules.c.cron_timezone,
                     self.tables.workflow_schedules.c.queue_name,
                     self.tables.workflow_schedules.c.application_name,
-                    key_column,
+                    *([key_column] if key_column is not None else []),
                 ).where(
                     *self._global(self.tables.workflow_schedules),
                     self.tables.workflow_schedules.c.schedule_name == name,
@@ -6363,7 +6353,7 @@ class SystemDatabase(ABC):
                 cron_timezone=row[9],
                 queue_name=row[10],
                 application_name=row[11],
-                shard_key=row[12],
+                shard_key=row[12] if key_column is not None else None,
             )
 
         if conn is not None:
