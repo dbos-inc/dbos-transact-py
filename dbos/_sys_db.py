@@ -535,7 +535,8 @@ def db_retry(
     block the workflow and retry the operation until it reconnects and succeeds.
 
     In other words, if DBOS loses its database connection, everything pauses until the connection is recovered,
-    trading off availability for correctness. A system database created with
+    trading off availability for correctness. Pool checkout timeouts use the same
+    backoff, with no overall deadline. A system database created with
     retry_connection_errors=False opts out, raising connection errors instead.
 
     Args:
@@ -555,15 +556,22 @@ def db_retry(
 
                     # Determine if this is a retriable exception
                     postgres_retriable = retriable_postgres_exception(e)
+                    # Pool exhaustion fails a connection checkout before any statement runs on it.
+                    pool_retriable = isinstance(e, sa.exc.TimeoutError)
                     # The SQLite heuristic matches rendered error text, which can include program data, so only trust it on an actual SQLite database.
                     sqlite_retriable = getattr(
                         db, "_is_sqlite", True
                     ) and retriable_sqlite_exception(e)
-                    if not postgres_retriable and not sqlite_retriable:
+                    if (
+                        not postgres_retriable
+                        and not pool_retriable
+                        and not sqlite_retriable
+                    ):
                         raise
 
-                    # Connection-error retries are optional; SQLite lock contention is not a connection error and always retries.
-                    if postgres_retriable and not getattr(
+                    # Connection-error and pool retries are optional; SQLite lock
+                    # contention is not a connection error and always retries.
+                    if (postgres_retriable or pool_retriable) and not getattr(
                         db, "_retry_connection_errors", True
                     ):
                         raise
@@ -571,10 +579,18 @@ def db_retry(
                     retries += 1
                     # Calculate backoff with jitter
                     actual_backoff: float = backoff * (0.5 + random.random())
-                    dbos_logger.warning(
-                        f"Database connection failed: {str(e)}. "
-                        f"Retrying in {actual_backoff:.2f}s (attempt {retries})"
-                    )
+                    if pool_retriable:
+                        # Retried without limit, so say what to look at if it never clears.
+                        dbos_logger.warning(
+                            f"Database connection pool exhausted: {str(e)}. "
+                            "If this persists, look for stalled or leaked connections or increase sys_db_pool_size. "
+                            f"Retrying in {actual_backoff:.2f}s (attempt {retries})"
+                        )
+                    else:
+                        dbos_logger.warning(
+                            f"Database connection failed: {str(e)}. "
+                            f"Retrying in {actual_backoff:.2f}s (attempt {retries})"
+                        )
                     # Sleep with backoff
                     time.sleep(actual_backoff)
                     # Increase backoff for next attempt (exponential)
@@ -3871,6 +3887,7 @@ class SystemDatabase(ABC):
             _dbos_workflow_events_channel, f"{workflow_uuid}::{key}"
         )
 
+    @db_retry()
     def set_event_from_step(
         self,
         workflow_uuid: str,
