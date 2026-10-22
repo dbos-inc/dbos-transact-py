@@ -17,6 +17,7 @@ import pytest
 import sqlalchemy as sa
 from opentelemetry import context as otel_context
 from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import Session
 
@@ -685,13 +686,13 @@ def test_db_retry_connection_error_opt_out() -> None:
     assert calls == 1
 
     # A pool checkout timeout is retried like a connection error, and the opt-out covers it too.
-    pool_timeout = sa.exc.TimeoutError("QueuePool limit of size 1 overflow 0 reached")
+    pool_timeout = PoolTimeoutError("QueuePool limit of size 1 overflow 0 reached")
     calls = 0
     assert flaky(FakeSystemDatabase(True, is_sqlite=False), pool_timeout) == "ok"
     assert calls == 3
 
     calls = 0
-    with pytest.raises(sa.exc.TimeoutError):
+    with pytest.raises(PoolTimeoutError):
         flaky(FakeSystemDatabase(False), pool_timeout)
     assert calls == 1
 

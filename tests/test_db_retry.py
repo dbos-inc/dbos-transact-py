@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 import pytest
-import sqlalchemy as sa
+from sqlalchemy import event
 from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
@@ -154,7 +154,7 @@ def test_sqlite_lock_still_retries_when_connection_retries_disabled(
     with _system_database(path, retry_connection_errors=False) as database:
 
         # Runs after DBOS's own connect hook, so every new connection fails fast on the lock.
-        @sa.event.listens_for(database.engine, "connect")
+        @event.listens_for(database.engine, "connect")
         def short_busy_timeout(dbapi_conn: Any, connection_record: Any) -> None:
             dbapi_conn.execute("PRAGMA busy_timeout=5")
 
