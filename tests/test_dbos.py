@@ -2427,16 +2427,16 @@ def test_workflow_timeout(dbos: DBOS) -> None:
     assert get_local_dbos_context() is None
 
 
-def test_timeout_cleanup_on_destroy(dbos: DBOS, config: DBOSConfig) -> None:
+def test_background_jobs_stop_on_destroy(dbos: DBOS, config: DBOSConfig) -> None:
     """The background jobs thread stops on its own event, not the one the other
     background threads share, so destroy has to set it."""
-    timeout_threads = [
+    jobs_threads = [
         t for t in dbos._background_threads if t.name == BACKGROUND_JOBS_THREAD_NAME
     ]
-    assert len(timeout_threads) == 1 and timeout_threads[0].is_alive()
+    assert len(jobs_threads) == 1 and jobs_threads[0].is_alive()
 
     DBOS.destroy(destroy_registry=True)
-    assert not timeout_threads[0].is_alive()
+    assert not jobs_threads[0].is_alive()
 
     # Re-initialize for fixture teardown
     dbos = DBOS(config=config)

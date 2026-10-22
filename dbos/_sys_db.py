@@ -964,23 +964,17 @@ class SystemDatabase(ABC):
         return [table.c[column] == workflow_id]
 
     def _wf_in(
-        self, table: sa.FromClause, workflow_ids: Any, column: str = "workflow_uuid"
+        self, table: sa.FromClause, workflow_ids: Any
     ) -> List[sa.ColumnElement[bool]]:
         """Predicates selecting several workflows' rows in table."""
         for workflow_id in workflow_ids:
             self._reject_shard_key(workflow_id, None)
-        return [table.c[column].in_(workflow_ids)]
+        return [table.c.workflow_uuid.in_(workflow_ids)]
 
-    def _wf_join(
-        self,
-        left: Any,
-        right: Any,
-        left_column: str = "workflow_uuid",
-        right_column: str = "workflow_uuid",
-    ) -> sa.ColumnElement[bool]:
+    def _wf_join(self, left: Any, right: Any) -> sa.ColumnElement[bool]:
         """Condition joining two tables' rows of the same workflow."""
         return cast(
-            sa.ColumnElement[bool], left.c[left_column] == right.c[right_column]
+            sa.ColumnElement[bool], left.c.workflow_uuid == right.c.workflow_uuid
         )
 
     def _wf_values(

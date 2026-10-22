@@ -19,7 +19,6 @@ from dbos._migration import (
 from ._datasource_migration import DATASOURCE_MIGRATIONS_TABLE
 from ._error import DBOSException
 from ._logger import dbos_logger
-from ._schemas.system_database import SystemSchema
 from ._sys_db import (
     SystemDatabase,
     _dbos_notifications_channel,
