@@ -35,7 +35,7 @@ def get_workflow(
         workflow_ids=[workflow_id],
         load_input=load_input,
         load_output=load_output,
-        shard_key=sys_db._key_hint(workflow_id),
+        shard_key=sys_db._shard_key_of(workflow_id),
     )
     if not infos:
         return None

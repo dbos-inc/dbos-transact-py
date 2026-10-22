@@ -109,7 +109,7 @@ def _checkpoint_id(workflow_id: str) -> str:
     """The checkpoint row's ID: the workflow ID, prefixed by its shard key on a sharded system database."""
     from dbos._dbos import _get_dbos_instance
 
-    key = _get_dbos_instance()._sys_db._key_hint(workflow_id)
+    key = _get_dbos_instance()._sys_db._shard_key_of(workflow_id)
     return workflow_id if key is None else f"{len(key)}:{key}:{workflow_id}"
 
 

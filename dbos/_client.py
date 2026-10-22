@@ -1406,7 +1406,7 @@ class DBOSClient:
             return WorkflowHandleClientPolling[Any](
                 forked_workflow_id,
                 self._sys_db,
-                shard_key=self._sys_db._key_hint(workflow_id),
+                shard_key=self._sys_db._shard_key_of(workflow_id),
             )
 
     async def fork_workflow_async(
@@ -1437,7 +1437,7 @@ class DBOSClient:
             return WorkflowHandleClientAsyncPolling[Any](
                 forked_workflow_id,
                 self._sys_db,
-                shard_key=self._sys_db._key_hint(workflow_id),
+                shard_key=self._sys_db._shard_key_of(workflow_id),
             )
 
     def read_stream(

@@ -1661,7 +1661,7 @@ class DBOS:
                     raise DBOSNonExistentWorkflowError("target", workflow_id)
             # The resolved key, so the handle also works outside this binding.
             return WorkflowHandlePolling(
-                workflow_id, dbos, shard_key=dbos._sys_db._key_hint(workflow_id)
+                workflow_id, dbos, shard_key=dbos._sys_db._shard_key_of(workflow_id)
             )
 
     @classmethod
@@ -1692,7 +1692,7 @@ class DBOS:
                     raise DBOSNonExistentWorkflowError("target", workflow_id)
             # The resolved key, so the handle also works outside this binding.
             return WorkflowHandleAsyncPolling(
-                workflow_id, dbos, shard_key=dbos._sys_db._key_hint(workflow_id)
+                workflow_id, dbos, shard_key=dbos._sys_db._shard_key_of(workflow_id)
             )
 
     @classmethod
@@ -2430,7 +2430,7 @@ class DBOS:
             return WorkflowHandlePolling(
                 workflow_id,
                 _get_dbos_instance(),
-                shard_key=_get_dbos_instance()._sys_db._key_hint(workflow_id),
+                shard_key=_get_dbos_instance()._sys_db._shard_key_of(workflow_id),
             )
 
     @classmethod
@@ -2463,7 +2463,7 @@ class DBOS:
             return WorkflowHandleAsyncPolling(
                 workflow_id,
                 _get_dbos_instance(),
-                shard_key=_get_dbos_instance()._sys_db._key_hint(workflow_id),
+                shard_key=_get_dbos_instance()._sys_db._shard_key_of(workflow_id),
             )
 
     @classmethod
@@ -2643,7 +2643,7 @@ class DBOS:
             return WorkflowHandlePolling(
                 workflow_id,
                 _get_dbos_instance(),
-                shard_key=_get_dbos_instance()._sys_db._key_hint(workflow_id),
+                shard_key=_get_dbos_instance()._sys_db._shard_key_of(workflow_id),
             )
 
     @classmethod
@@ -2684,7 +2684,7 @@ class DBOS:
             return WorkflowHandleAsyncPolling(
                 workflow_id,
                 _get_dbos_instance(),
-                shard_key=_get_dbos_instance()._sys_db._key_hint(workflow_id),
+                shard_key=_get_dbos_instance()._sys_db._shard_key_of(workflow_id),
             )
 
     @classmethod
@@ -2723,7 +2723,7 @@ class DBOS:
                 fn, "DBOS.forkWorkflow", snapshot_step_context(reserve_sleep_id=False)
             )
             # A fork lives under its original's shard key, however the caller supplied it.
-            fork_key = _get_dbos_instance()._sys_db._key_hint(workflow_id)
+            fork_key = _get_dbos_instance()._sys_db._shard_key_of(workflow_id)
             return cls.retrieve_workflow(new_id, shard_key=fork_key)
 
     @classmethod
@@ -2771,7 +2771,7 @@ class DBOS:
                 return get_workflow(_get_dbos_instance()._sys_db, new_id)
 
             # A fork lives under its original's shard key, however the caller supplied it.
-            fork_key = _get_dbos_instance()._sys_db._key_hint(workflow_id)
+            fork_key = _get_dbos_instance()._sys_db._shard_key_of(workflow_id)
             with bind_shard_keys({new_id: fork_key}):
                 stat = await asyncio.to_thread(
                     _get_dbos_instance()._sys_db.call_function_as_step,

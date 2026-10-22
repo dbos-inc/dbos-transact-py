@@ -4,7 +4,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, List
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -18,7 +18,6 @@ from dbos._serialization import DBOSPortableJSONSerializer
 from dbos._utils import INTERNAL_QUEUE_NAME
 
 from .conftest import (
-    lost_shard_keys,
     reexecute_workflow_by_id,
     retry_until_success,
     using_sharding,
@@ -2149,7 +2148,7 @@ def test_schedule_non_retriable_database_error_is_recorded(
     not using_sharding(), reason="Only sharded runs check for lost keys"
 )
 def test_a_key_lost_on_a_schedule_thread_is_reported(
-    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, lost_shard_keys: List[str]
 ) -> None:
     """The sharded run's lost-key check sees DBOS's own threads, so a schedule that drops
     its key fails a test instead of quietly running under the test's key."""
