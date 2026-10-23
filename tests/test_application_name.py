@@ -896,7 +896,7 @@ def owners_of_everything(dbos: DBOS) -> dict[str, set[Any]]:
         }
 
 
-def test_rename_moves_every_owned_table(dbos: DBOS) -> None:
+def test_rename_moves_every_owned_table(dbos: DBOS, skip_with_sharding: None) -> None:
     """Ownership lives on the rows, so renaming an application is a re-own of all
     five tables. Counts are reported per table so an operator can check the move."""
     insert_foreign_workflow(dbos, "rename-terminal", status="SUCCESS")
@@ -919,7 +919,9 @@ def test_rename_moves_every_owned_table(dbos: DBOS) -> None:
         assert RENAMED_APP in owners, label
 
 
-def test_rename_batches_terminal_rows_and_resumes(dbos: DBOS) -> None:
+def test_rename_batches_terminal_rows_and_resumes(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """Terminal workflows and steps move in batches, so a long history does not run
     in one transaction. The predicate shrinks as it goes, so a re-run resumes."""
     for i in range(5):
@@ -937,7 +939,9 @@ def test_rename_batches_terminal_rows_and_resumes(dbos: DBOS) -> None:
         assert application_name_of(dbos, f"rename-batched-{i}") == RENAMED_APP
 
 
-def test_rename_rejects_names_an_application_could_not_use(dbos: DBOS) -> None:
+def test_rename_rejects_names_an_application_could_not_use(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """A rename to a name the config validator rejects would strand the rows again,
     since no application could ever launch under it."""
     with pytest.raises(DBOSException, match="Invalid application name"):
@@ -957,7 +961,9 @@ def test_rename_rejects_names_an_application_could_not_use(dbos: DBOS) -> None:
         dbos._sys_db.rename_application(OTHER_APP, RENAMED_APP, batch_size=0)
 
 
-def test_rename_moves_only_the_sources_it_is_given(dbos: DBOS) -> None:
+def test_rename_moves_only_the_sources_it_is_given(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """Scope is the whole contract: a named application's rows, the unclaimed ones, or
     both. Never a peer nobody named, and never the live application's own."""
 
