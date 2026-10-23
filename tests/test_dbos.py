@@ -2804,6 +2804,28 @@ def test_destroy(dbos: DBOS, config: DBOSConfig) -> None:
         handle.get_result()
 
 
+def test_destroy_closes_connections_checked_in_late(dbos: DBOS) -> None:
+    engine = dbos._sys_db.engine
+
+    # A connection still checked out when destroy disposes the pool, as a step's write would be.
+    straggler = engine.connect()
+    straggler.execute(sa.text("SELECT 1"))
+    straggler_raw = straggler.connection.dbapi_connection
+    DBOS.destroy()
+    straggler.close()
+
+    # A checkout made through the engine after destroy, by work still holding the system database.
+    with engine.connect() as late:
+        late.execute(sa.text("SELECT 1"))
+        late_raw = late.connection.dbapi_connection
+
+    # Both are closed on checkin, not left open in a pool until GC.
+    for raw in (straggler_raw, late_raw):
+        assert raw is not None
+        with pytest.raises(Exception):
+            raw.cursor().execute("SELECT 1")
+
+
 def test_custom_database(
     config: DBOSConfig,
     db_engine: sa.Engine,

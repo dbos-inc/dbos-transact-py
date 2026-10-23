@@ -823,12 +823,16 @@ class SystemDatabase(ABC):
             else None
         )
 
+        self._destroyed = False
         if engine:
             base_engine = engine
             self.created_engine = False
         else:
             base_engine = self._create_engine(system_database_url, engine_kwargs)
             self.created_engine = True
+            # dispose() closes only checked-in connections; close any a straggler checks in after destroy, or it lives until GC.
+            # Pool listeners carry over to the pool dispose() swaps in, so this also covers checkouts made after destroy.
+            sa.event.listen(base_engine, "checkin", self._close_after_destroy)
         # Translate the placeholder schema to this instance's schema per-engine (None for SQLite = unqualified).
         self.engine = base_engine.execution_options(
             schema_translate_map={SCHEMA_PLACEHOLDER: self.schema}
@@ -939,7 +943,15 @@ class SystemDatabase(ABC):
         self._run_background_processes = False
         self._cleanup_connections()
         if self.created_engine:
+            # Set before dispose, so a connection checked in during it is closed rather than left in the old pool.
+            self._destroyed = True
             self.engine.dispose()
+
+    def _close_after_destroy(
+        self, dbapi_connection: Any, connection_record: Any
+    ) -> None:
+        if self._destroyed:
+            connection_record.invalidate()
 
     @abstractmethod
     def _cleanup_connections(self) -> None:
