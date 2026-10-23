@@ -152,14 +152,12 @@ ERROR_CODE_HEADER = "X-DBOS-Error"
 PAST_LIMIT = "past_limit"
 HOSTED_UNAVAILABLE = frozenset({403, 407, 408, 425, 429})
 LICENSE_URL = "https://www.dbos.dev/conductor-license"
-# In every refusal, so whoever meets one learns what working around it means.
 LICENSE_NOTICE = (
     f"Transact Enterprise is licensed under the DBOS Conductor Software License ({LICENSE_URL}), "
     "which makes disabling or circumventing this check a material breach."
 )
 
 
-# DBOS's hosted Conductor. An outage there must not keep applications from starting.
 HOSTED_CONDUCTOR_URL = "wss://cloud.dbos.dev/conductor/v1alpha1"
 
 
@@ -240,7 +238,7 @@ def require_enterprise(
     )
     # Only a Conductor named explicitly is asked without a key, and never DBOS's hosted one.
     if key is None and (not conductor_url or target == HOSTED_CONDUCTOR_URL):
-        raise _refusal(f"{names} requires a DBOS key. {key_hint}")
+        raise DBOSInitializationError(f"{names} requires a DBOS key. {key_hint}")
     url = entitlement_url(target)
     headers = {"User-Agent": f"dbos-transact-py/{GlobalParams.dbos_version}"}
     if key is not None:
@@ -264,7 +262,7 @@ def require_enterprise(
                 "entitlements route (HTTP 404). Upgrade Conductor, or check its URL."
             ) from e
         elif e.code == 401 and key is None:
-            raise _refusal(
+            raise DBOSInitializationError(
                 f"{names} requires a DBOS key: Conductor at {url} refused to check "
                 f"without one (HTTP 401): {reason}. {key_hint}"
             ) from e
@@ -316,8 +314,7 @@ def load(feature: str = CONDUCTOR) -> Enterprise:
     except ImportError as e:
         if isinstance(e, ModuleNotFoundError) and e.name == "dbos_enterprise":
             raise DBOSInitializationError(
-                f'{feature} requires the dbos-enterprise package. Install it with `pip install "dbos[enterprise]"`. '
-                f"It is proprietary, licensed under the DBOS Conductor Software License ({LICENSE_URL})."
+                f'{feature} requires the dbos-enterprise package. Install it with `pip install "dbos[enterprise]"`.'
             ) from e
         # The package is present; it imports dbos internals, so this is almost always a version mismatch.
         raise DBOSInitializationError(
