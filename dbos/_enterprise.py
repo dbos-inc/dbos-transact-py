@@ -5,7 +5,8 @@ name only when a feature needs it. Enterprise imports these types and checks tha
 it satisfies them, so each side is verified against the contract on its own.
 
 Transact Enterprise (the dbos-enterprise package) is proprietary, not MIT-licensed like
-this project: it may be used only as https://www.dbos.dev/conductor-license permits.
+this project. Its license (https://www.dbos.dev/conductor-license) forbids modifying it, and
+makes disabling or circumventing the entitlement checks here a material breach.
 """
 
 from __future__ import annotations
@@ -150,6 +151,12 @@ ENTITLEMENT_TIMEOUT_SEC = 10.0
 ERROR_CODE_HEADER = "X-DBOS-Error"
 PAST_LIMIT = "past_limit"
 HOSTED_UNAVAILABLE = frozenset({403, 407, 408, 425, 429})
+LICENSE_URL = "https://www.dbos.dev/conductor-license"
+# In every refusal, so whoever meets one learns what working around it means.
+LICENSE_NOTICE = (
+    f"Transact Enterprise is licensed under the DBOS Conductor Software License ({LICENSE_URL}), "
+    "which makes disabling or circumventing this check a material breach."
+)
 
 
 # DBOS's hosted Conductor. An outage there must not keep applications from starting.
@@ -206,7 +213,11 @@ def _problem_detail(error: urllib.error.HTTPError) -> Optional[str]:
     return str(detail) if detail else None
 
 
-# Enterprise features are licensed Transact Enterprise code; this check enforces their entitlements.
+def _refusal(message: str) -> DBOSInitializationError:
+    return DBOSInitializationError(f"{message} {LICENSE_NOTICE}")
+
+
+# A license control: the Transact Enterprise license makes disabling or circumventing it a material breach.
 def require_enterprise(
     features: Sequence[Feature],
     *,
@@ -229,7 +240,7 @@ def require_enterprise(
     )
     # Only a Conductor named explicitly is asked without a key, and never DBOS's hosted one.
     if key is None and (not conductor_url or target == HOSTED_CONDUCTOR_URL):
-        raise DBOSInitializationError(f"{names} requires a DBOS key. {key_hint}")
+        raise _refusal(f"{names} requires a DBOS key. {key_hint}")
     url = entitlement_url(target)
     headers = {"User-Agent": f"dbos-transact-py/{GlobalParams.dbos_version}"}
     if key is not None:
@@ -239,7 +250,7 @@ def require_enterprise(
     except urllib.error.HTTPError as e:
         detail = _problem_detail(e)
         if e.code == 403 and e.headers.get(ERROR_CODE_HEADER) == PAST_LIMIT:
-            raise DBOSInitializationError(
+            raise _refusal(
                 f"Your DBOS organization is past its plan limit, so it is not entitled "
                 f"to {entitlements} ({names}). Upgrade its plan to continue."
             ) from e
@@ -248,24 +259,24 @@ def require_enterprise(
             pass  # An outage, handled below.
         elif e.code == 404 and detail is None:
             # A bare 404 is a missing route: a Conductor predating per-feature entitlements.
-            raise DBOSInitializationError(
+            raise _refusal(
                 f"{names} requires an entitled DBOS key, but Conductor at {url} has no "
                 "entitlements route (HTTP 404). Upgrade Conductor, or check its URL."
             ) from e
         elif e.code == 401 and key is None:
-            raise DBOSInitializationError(
+            raise _refusal(
                 f"{names} requires a DBOS key: Conductor at {url} refused to check "
                 f"without one (HTTP 401): {reason}. {key_hint}"
             ) from e
         elif e.code == 401:
             # An unknown key, or a user credential instead of an API key.
-            raise DBOSInitializationError(
+            raise _refusal(
                 f"{names} requires a valid DBOS key. Conductor at {url} rejected the "
                 f"key (HTTP 401): {reason}"
             ) from e
         elif e.code < 500:
             # Any other refusal, such as the key's organization being gone, or a redirect.
-            raise DBOSInitializationError(
+            raise _refusal(
                 f"{names} requires an entitled DBOS key, but Conductor at {url} refused "
                 f"the check (HTTP {e.code}): {reason}"
             ) from e
@@ -277,7 +288,7 @@ def require_enterprise(
     else:
         missing = [f for f in features if not granted.get(f.entitlement, False)]
         if missing:
-            raise DBOSInitializationError(
+            raise _refusal(
                 f"Your DBOS organization is not entitled to "
                 f"{' and '.join(f.entitlement for f in missing)} "
                 f"({' and '.join(f.description for f in missing)}): its plan does not "
@@ -291,7 +302,7 @@ def require_enterprise(
         )
         return
     # Any other Conductor fails closed, so an unreachable URL cannot stand in for a key.
-    raise DBOSInitializationError(
+    raise _refusal(
         f"{names} requires an entitled DBOS key, but checking it with Conductor at {url} "
         f"failed ({failure}). Retry once Conductor is reachable."
     ) from cause
@@ -299,13 +310,14 @@ def require_enterprise(
 
 def load(feature: str = CONDUCTOR) -> Enterprise:
     """Import dbos_enterprise, telling an absent package apart from one that fails to import."""
-    # dbos_enterprise is proprietary, not MIT: it may be used only as its license permits.
+    # dbos_enterprise is proprietary: its license forbids modifying it or copying it beyond authorized use.
     try:
         return cast(Enterprise, importlib.import_module("dbos_enterprise"))
     except ImportError as e:
         if isinstance(e, ModuleNotFoundError) and e.name == "dbos_enterprise":
             raise DBOSInitializationError(
-                f'{feature} requires the dbos-enterprise package. Install it with `pip install "dbos[enterprise]"`.'
+                f'{feature} requires the dbos-enterprise package. Install it with `pip install "dbos[enterprise]"`. '
+                f"It is proprietary, licensed under the DBOS Conductor Software License ({LICENSE_URL})."
             ) from e
         # The package is present; it imports dbos internals, so this is almost always a version mismatch.
         raise DBOSInitializationError(
