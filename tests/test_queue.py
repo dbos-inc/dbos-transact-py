@@ -3383,6 +3383,8 @@ def test_partitioned_batch_dequeue_skips_requeued_rows(
 
     # Fire between the candidate snapshot (starts WITH RECURSIVE) and the lock select, which is the sweep's only SELECT keyed on workflow_uuid.
     moved = threading.Event()
+    # Only the sweep's own statements fire: background jobs share the engine.
+    sweeper = threading.get_ident()
 
     def before_cursor_execute(
         conn: Any,
@@ -3394,7 +3396,8 @@ def test_partitioned_batch_dequeue_skips_requeued_rows(
     ) -> None:
         stmt = statement.lstrip().upper()
         if (
-            not moved.is_set()
+            threading.get_ident() == sweeper
+            and not moved.is_set()
             and stmt.startswith("SELECT")
             and "WORKFLOW_UUID IN" in stmt
         ):
@@ -3438,7 +3441,11 @@ def test_partitioned_batch_dequeue_skips_requeued_rows(
         context: Any,
         executemany: bool,
     ) -> None:
-        if not moved_late.is_set() and statement.lstrip().upper().startswith("UPDATE"):
+        if (
+            threading.get_ident() == sweeper
+            and not moved_late.is_set()
+            and statement.lstrip().upper().startswith("UPDATE")
+        ):
             moved_late.set()  # Set first: resume_workflows itself runs an UPDATE
             dbos._sys_db.resume_workflows([ids["p0"][2]], queue_name=resume_target)
 
