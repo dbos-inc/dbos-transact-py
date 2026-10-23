@@ -3,6 +3,9 @@
 Core declares here exactly what it uses from enterprise, and loads the package by
 name only when a feature needs it. Enterprise imports these types and checks that
 it satisfies them, so each side is verified against the contract on its own.
+
+Transact Enterprise (the dbos-enterprise package) is proprietary, not MIT-licensed like
+this project: it may be used only as https://www.dbos.dev/conductor-license permits.
 """
 
 from __future__ import annotations
@@ -203,6 +206,7 @@ def _problem_detail(error: urllib.error.HTTPError) -> Optional[str]:
     return str(detail) if detail else None
 
 
+# Enterprise features are licensed Transact Enterprise code; this check enforces their entitlements.
 def require_enterprise(
     features: Sequence[Feature],
     *,
@@ -295,6 +299,7 @@ def require_enterprise(
 
 def load(feature: str = CONDUCTOR) -> Enterprise:
     """Import dbos_enterprise, telling an absent package apart from one that fails to import."""
+    # dbos_enterprise is proprietary, not MIT: it may be used only as its license permits.
     try:
         return cast(Enterprise, importlib.import_module("dbos_enterprise"))
     except ImportError as e:
