@@ -1,8 +1,7 @@
 """The seam to dbos-enterprise: what core reports when the package is absent or
-broken, and that a refused construction leaves nothing behind."""
+broken, that a refused construction leaves nothing behind, and the entitlement check
+every enterprise feature goes through, against a local stand-in for Conductor."""
 
-import email.message
-import io
 import json
 import socket
 import threading
@@ -17,10 +16,9 @@ import pytest
 from dbos import DBOS, DBOSConfig
 from dbos import _enterprise as enterprise_module
 from dbos._error import DBOSInitializationError
-from dbos._logger import dbos_logger
 from dbos._utils import GlobalParams
 
-# Captured at import, before the sharded test harness replaces it.
+# Captured at import, before any test harness replaces it.
 _require_enterprise = enterprise_module.require_enterprise
 
 
@@ -48,6 +46,11 @@ def test_absent_package_gets_the_install_hint(
         DBOSInitializationError, match=r"pip install \"dbos\[enterprise\]\""
     ):
         enterprise_module.load()
+    # The message names what needed the package.
+    with pytest.raises(
+        DBOSInitializationError, match="Auto-upgrading workflows requires the"
+    ):
+        enterprise_module.load(enterprise_module.AUTO_UPGRADE.description)
 
 
 @pytest.mark.parametrize(
@@ -106,6 +109,8 @@ def test_cloud_always_requires_the_package(
         DBOS(config=config)
     DBOS.destroy(destroy_registry=True)
 
+
+# --- Entitlements -------------------------------------------------------------
 
 # A feature for exercising the check itself, entitled under a name Conductor may not know.
 SOME_FEATURE = enterprise_module.Feature("someFeature", "Some feature")
@@ -199,6 +204,21 @@ def test_entitlement_url_sits_beside_the_conductor_url() -> None:
     )
 
 
+def test_the_default_conductor_follows_the_dbos_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DBOS_DOMAIN", raising=False)
+    assert (
+        enterprise_module.default_conductor_url()
+        == enterprise_module.HOSTED_CONDUCTOR_URL
+    )
+    monkeypatch.setenv("DBOS_DOMAIN", "staging.dbos.dev")
+    assert (
+        enterprise_module.default_conductor_url()
+        == "wss://staging.dbos.dev/conductor/v1alpha1"
+    )
+
+
 def test_an_entitled_key_unlocks_enterprise_features(
     conductor: FakeConductor,
 ) -> None:
@@ -214,17 +234,17 @@ def test_an_entitled_key_unlocks_enterprise_features(
 
 
 def test_each_feature_needs_its_own_entitlement(conductor: FakeConductor) -> None:
-    conductor.entitle(sharding=False, autoUpgrade=True, someFeature=True)
+    conductor.entitle(sharding=True, autoUpgrade=False, someFeature=True)
     check(conductor, enterprise_key="enterprise-key")
     with pytest.raises(DBOSInitializationError) as raised:
         check(
             conductor,
             enterprise_key="enterprise-key",
-            features=[SOME_FEATURE, enterprise_module.SHARDING],
+            features=[SOME_FEATURE, enterprise_module.AUTO_UPGRADE],
         )
     message = str(raised.value)
     # Names only what the org lacks, by entitlement and by what it does.
-    assert "not entitled to sharding (Using a sharded system database)" in message
+    assert "not entitled to autoUpgrade (Auto-upgrading workflows)" in message
     assert "plan does not include it" in message
     assert "someFeature" not in message and "enterprise-key" not in message
     # One request answers for every feature.
@@ -333,7 +353,13 @@ def test_a_rejected_key_is_refused(conductor: FakeConductor, detail: str) -> Non
 
 @pytest.mark.parametrize(
     "status, detail",
-    [(403, "forbidden"), (404, "organization not found"), (409, "conflict")],
+    [
+        (403, "forbidden"),
+        (404, "organization not found"),
+        (409, "conflict"),
+        # Throttling is a refusal too: the check is not retried, and never skipped.
+        (429, "slow down"),
+    ],
 )
 def test_any_other_refusal_quotes_conductor(
     conductor: FakeConductor, status: int, detail: str
@@ -359,6 +385,8 @@ def test_a_conductor_without_the_route_is_refused(conductor: FakeConductor) -> N
 def test_a_redirect_is_refused_and_never_carries_the_key(
     conductor: FakeConductor,
 ) -> None:
+    # urllib follows a redirect by re-sending the request, headers included, to the
+    # host the Location names. That would hand the key to whoever answered.
     elsewhere = FakeConductor()
     try:
         target = elsewhere.url.replace("ws://", "http://")
@@ -378,9 +406,7 @@ def test_a_redirect_is_refused_and_never_carries_the_key(
 @pytest.mark.parametrize(
     "body", [[], {"entitlements": None}, {"entitled": True}, "not json"]
 )
-def test_a_malformed_answer_counts_as_an_outage(
-    conductor: FakeConductor, body: Any
-) -> None:
+def test_a_malformed_answer_blocks_startup(conductor: FakeConductor, body: Any) -> None:
     conductor.body = body
     with pytest.raises(DBOSInitializationError, match="Retry once Conductor"):
         check(conductor, enterprise_key="enterprise-key")
@@ -414,9 +440,11 @@ def test_an_unreachable_conductor_blocks_startup(conductor: FakeConductor) -> No
     assert "enterprise-key" not in message
 
 
-def test_a_hosted_conductor_outage_does_not_block_startup(
+def test_a_hosted_conductor_outage_blocks_startup_too(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Whether to start anyway when DBOS's hosted Conductor is down is still being
+    # decided; until then every Conductor fails closed, the hosted one included.
     monkeypatch.setattr(GlobalParams, "dbos_cloud", False)
     monkeypatch.delenv("DBOS_DOMAIN", raising=False)
     requested: List[str] = []
@@ -425,21 +453,7 @@ def test_a_hosted_conductor_outage_does_not_block_startup(
         requested.append(request.full_url)
         raise urllib.error.URLError("connection refused")
 
-    warnings: List[str] = []
     monkeypatch.setattr(enterprise_module, "_fetch_entitlements", unreachable)
-    monkeypatch.setattr(dbos_logger, "warning", lambda msg: warnings.append(msg))
-    # No Conductor URL means DBOS's hosted one, whose outage only warns.
-    _require_enterprise(
-        [SOME_FEATURE],
-        enterprise_key="enterprise-key",
-        conductor_key=None,
-        conductor_url=None,
-    )
-    assert requested == ["https://cloud.dbos.dev/conductor/v2/entitlements"]
-    assert len(warnings) == 1 and "Could not verify the DBOS key" in warnings[0]
-    assert "enterprise-key" not in warnings[0]
-    # Another domain is not DBOS's hosted Conductor, so its outage still refuses.
-    monkeypatch.setenv("DBOS_DOMAIN", "unreachable.example.com")
     with pytest.raises(
         DBOSInitializationError, match="Retry once Conductor is reachable"
     ):
@@ -449,64 +463,7 @@ def test_a_hosted_conductor_outage_does_not_block_startup(
             conductor_key=None,
             conductor_url=None,
         )
-
-
-def _hosted_answers(
-    monkeypatch: pytest.MonkeyPatch, status: int, headers: Dict[str, str]
-) -> List[str]:
-    """Make the hosted Conductor answer with this error; returns the warnings logged."""
-    monkeypatch.setattr(GlobalParams, "dbos_cloud", False)
-    monkeypatch.delenv("DBOS_DOMAIN", raising=False)
-
-    def answer(request: urllib.request.Request) -> Dict[str, bool]:
-        hdrs = email.message.Message()
-        for name, value in headers.items():
-            hdrs[name] = value
-        raise urllib.error.HTTPError(
-            request.full_url, status, "error", hdrs, io.BytesIO(b"")
-        )
-
-    warnings: List[str] = []
-    monkeypatch.setattr(enterprise_module, "_fetch_entitlements", answer)
-    monkeypatch.setattr(dbos_logger, "warning", lambda msg: warnings.append(msg))
-    return warnings
-
-
-def _check_hosted() -> None:
-    _require_enterprise(
-        [SOME_FEATURE],
-        enterprise_key="enterprise-key",
-        conductor_key=None,
-        conductor_url=None,
-    )
-
-
-@pytest.mark.parametrize("status", [403, 407, 408, 425, 429])
-def test_hosted_throttling_and_proxies_count_as_outages(
-    monkeypatch: pytest.MonkeyPatch, status: int
-) -> None:
-    """From the hosted Conductor these mean it couldn't answer, not that it refused the
-    key, so startup warns and goes on as for any hosted outage."""
-    warnings = _hosted_answers(monkeypatch, status, {})
-    _check_hosted()
-    assert len(warnings) == 1 and f"(HTTP {status})" in warnings[0]
-
-
-def test_hosted_refusals_still_refuse(monkeypatch: pytest.MonkeyPatch) -> None:
-    _hosted_answers(monkeypatch, 403, {"X-DBOS-Error": "past_limit"})
-    with pytest.raises(DBOSInitializationError, match="past its plan limit"):
-        _check_hosted()
-    _hosted_answers(monkeypatch, 401, {})
-    with pytest.raises(DBOSInitializationError, match=r"rejected the key \(HTTP 401\)"):
-        _check_hosted()
-
-
-def test_another_conductors_throttling_still_refuses(conductor: FakeConductor) -> None:
-    conductor.reject(429, "slow down")
-    with pytest.raises(
-        DBOSInitializationError, match=r"refused the check \(HTTP 429\)"
-    ):
-        check(conductor, enterprise_key="enterprise-key")
+    assert requested == ["https://cloud.dbos.dev/conductor/v2/entitlements"]
 
 
 def test_dbos_cloud_passes_without_a_check(
@@ -519,6 +476,10 @@ def test_dbos_cloud_passes_without_a_check(
 
 def test_config_turns_on_enterprise_features() -> None:
     assert enterprise_module.enabled_features({}) == []
+    assert enterprise_module.enabled_features({"auto_upgrade": False}) == []
+    assert enterprise_module.enabled_features({"auto_upgrade": True}) == [
+        enterprise_module.AUTO_UPGRADE
+    ]
     assert enterprise_module.enabled_features({"sharding": False}) == []
     assert enterprise_module.enabled_features({"sharding": True}) == [
         enterprise_module.SHARDING
@@ -526,6 +487,30 @@ def test_config_turns_on_enterprise_features() -> None:
     # Every registered feature has a distinct entitlement name.
     names = [f.entitlement for f in enterprise_module.FEATURES]
     assert len(names) == len(set(names))
+
+
+def test_an_auto_upgrading_executor_checks_its_entitlement(
+    config: DBOSConfig, conductor: FakeConductor, skip_with_sharding: None
+) -> None:
+    DBOS.destroy(destroy_registry=True)
+    # Refused before the package is even loaded, so this holds without dbos-enterprise.
+    with pytest.raises(
+        DBOSInitializationError,
+        match=f": {enterprise_module.AUTO_UPGRADE.description} requires a DBOS key",
+    ):
+        DBOS(config={**config, "auto_upgrade": True})
+    DBOS.destroy(destroy_registry=True)
+    upgrading = {
+        **config,
+        "auto_upgrade": True,
+        "transact_enterprise_key": "enterprise-key",
+        "conductor_url": conductor.url,
+    }
+    conductor.entitle(**{**ALL_ENTITLED, "autoUpgrade": False})
+    with pytest.raises(DBOSInitializationError, match="not entitled to autoUpgrade"):
+        DBOS(config=upgrading)  # type: ignore[arg-type]
+    DBOS.destroy(destroy_registry=True)
+    assert conductor.requests == [("/v2/entitlements", "Bearer enterprise-key")]
 
 
 def test_sharded_executor_checks_its_entitlement(

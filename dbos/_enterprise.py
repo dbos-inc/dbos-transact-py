@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import threading
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -29,7 +30,6 @@ from typing import (
 from urllib.parse import urlsplit, urlunsplit
 
 from ._error import DBOSInitializationError
-from ._logger import dbos_logger
 from ._utils import GlobalParams
 
 if TYPE_CHECKING:
@@ -63,6 +63,18 @@ class ConductorFactory(Protocol):
     ) -> ConductorThread: ...
 
 
+class AutoUpgradePass(Protocol):
+    """One tick of auto-upgrade"""
+
+    def run(self, stop_event: threading.Event) -> int: ...
+
+    def close(self) -> None: ...
+
+
+class AutoUpgradePassFactory(Protocol):
+    def __call__(self, dbos: DBOS, *, grace_sec: float) -> AutoUpgradePass: ...
+
+
 class ShardedSystemDatabaseFactory(Protocol):
     """Builds the system database a sharded deployment uses, in place of core's Postgres one."""
 
@@ -87,9 +99,12 @@ class ShardedSystemDatabaseFactory(Protocol):
 class Enterprise(Protocol):
     """What the top-level dbos_enterprise module must provide."""
 
-    # A property rather than an attribute, so implementations may provide any compatible callable.
+    # Properties rather than attributes, so implementations may provide any compatible callable.
     @property
     def ConductorWebsocket(self) -> ConductorFactory: ...
+
+    @property
+    def AutoUpgradePass(self) -> AutoUpgradePassFactory: ...
 
     @property
     def ShardedSystemDatabase(self) -> ShardedSystemDatabaseFactory: ...
@@ -109,10 +124,13 @@ class Feature:
     config_key: Optional[str] = None
 
 
+AUTO_UPGRADE = Feature(
+    "autoUpgrade", "Auto-upgrading workflows", config_key="auto_upgrade"
+)
 SHARDING = Feature("sharding", "Using a sharded system database", config_key="sharding")
 
 # Every entitled feature; a new one is a Feature here, named by Conductor's camelCase key.
-FEATURES: Tuple[Feature, ...] = (SHARDING,)
+FEATURES: Tuple[Feature, ...] = (AUTO_UPGRADE, SHARDING)
 
 
 def enabled_features(config: Mapping[str, object]) -> List[Feature]:
@@ -127,10 +145,8 @@ ENTITLEMENT_TIMEOUT_SEC = 10.0
 # Conductor's machine-readable error code, in this header, for an org past its plan limit.
 ERROR_CODE_HEADER = "X-DBOS-Error"
 PAST_LIMIT = "past_limit"
-HOSTED_UNAVAILABLE = frozenset({403, 407, 408, 425, 429})
 
-
-# DBOS's hosted Conductor. An outage there must not keep applications from starting.
+# DBOS's hosted Conductor, which is never asked about entitlements without a key.
 HOSTED_CONDUCTOR_URL = "wss://cloud.dbos.dev/conductor/v1alpha1"
 
 
@@ -193,6 +209,9 @@ def require_enterprise(
 ) -> None:
     """Enterprise features need Conductor to report the org entitled to each of them. A
     self-hosted Conductor may answer without a key; DBOS Cloud passes without a check.
+
+    Any failure to get an answer refuses to start: an unreachable Conductor cannot
+    stand in for an entitlement.
     """
     if not features or GlobalParams.dbos_cloud:
         return
@@ -221,26 +240,24 @@ def require_enterprise(
                 f"to {entitlements} ({names}). Upgrade its plan to continue."
             ) from e
         reason = detail or str(e.reason)
-        if target == HOSTED_CONDUCTOR_URL and e.code in HOSTED_UNAVAILABLE:
-            pass  # An outage, handled below.
-        elif e.code == 404 and detail is None:
+        if e.code == 404 and detail is None:
             # A bare 404 is a missing route: a Conductor predating per-feature entitlements.
             raise DBOSInitializationError(
                 f"{names} requires an entitled DBOS key, but Conductor at {url} has no "
                 "entitlements route (HTTP 404). Upgrade Conductor, or check its URL."
             ) from e
-        elif e.code == 401 and key is None:
+        if e.code == 401 and key is None:
             raise DBOSInitializationError(
                 f"{names} requires a DBOS key: Conductor at {url} refused to check "
                 f"without one (HTTP 401): {reason}. {key_hint}"
             ) from e
-        elif e.code == 401:
+        if e.code == 401:
             # An unknown key, or a user credential instead of an API key.
             raise DBOSInitializationError(
                 f"{names} requires a valid DBOS key. Conductor at {url} rejected the "
                 f"key (HTTP 401): {reason}"
             ) from e
-        elif e.code < 500:
+        if e.code < 500:
             # Any other refusal, such as the key's organization being gone, or a redirect.
             raise DBOSInitializationError(
                 f"{names} requires an entitled DBOS key, but Conductor at {url} refused "
@@ -261,13 +278,7 @@ def require_enterprise(
                 "include it. Contact DBOS to enable it."
             )
         return
-    if target == HOSTED_CONDUCTOR_URL:
-        dbos_logger.warning(
-            f"Could not verify the DBOS key's entitlements with Conductor at {url} "
-            f"({failure}); starting anyway."
-        )
-        return
-    # Any other Conductor fails closed, so an unreachable URL cannot stand in for a key.
+    # Fail closed, so an unreachable URL cannot stand in for a key.
     raise DBOSInitializationError(
         f"{names} requires an entitled DBOS key, but checking it with Conductor at {url} "
         f"failed ({failure}). Retry once Conductor is reachable."
