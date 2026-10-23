@@ -4626,6 +4626,8 @@ def test_queue_backs_off_once_per_poll_across_scopes() -> None:
     polls: List[int] = []
 
     class ConflictingSysDb:
+        sharded = True
+
         def dequeue_scopes(self, queue_name: str) -> List[Optional[str]]:
             # One full poll over three conflicting scopes, then stop.
             polls.append(1)
@@ -4679,6 +4681,8 @@ def test_queue_stops_visiting_scopes_once_the_worker_is_full() -> None:
     claimed_scopes: List[Optional[str]] = []
 
     class ClaimingSysDb:
+        sharded = True
+
         def dequeue_scopes(self, queue_name: str) -> List[Optional[str]]:
             polls.append(1)
             if len(polls) > 1:

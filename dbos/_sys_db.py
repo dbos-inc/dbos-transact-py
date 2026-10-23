@@ -4924,11 +4924,15 @@ class SystemDatabase(ABC):
         """Whether a dequeue failed on a serialization conflict with a concurrent one."""
         return isinstance(error.orig, pg_errors.SerializationFailure)
 
-    def _is_latest_version(self, app_version: str) -> bool:
+    def _is_latest_version(
+        self, app_version: str, c: Optional[sa.Connection] = None
+    ) -> bool:
         """Whether app_version is this application's latest registered version, or none is registered."""
-        with self.engine.begin() as c:
-            # Own plus unclaimed: a named peer's deploy must not demote this one.
-            latest = self._latest_application_version(c, self.app_name)
+        if c is None:
+            with self.engine.begin() as c:
+                return self._is_latest_version(app_version, c)
+        # Own plus unclaimed: a named peer's deploy must not demote this one.
+        latest = self._latest_application_version(c, self.app_name)
         return latest is None or latest.version_name == app_version
 
     def start_queued_workflows(
@@ -4959,9 +4963,6 @@ class SystemDatabase(ABC):
         has_write_skew = queue_partition_key is not None and (
             queue._concurrency is not None or queue._limiter is not None
         )
-        # The queue thread reads it once per poll; read before the claim's transaction, as the version row is global.
-        if is_latest_version is None:
-            is_latest_version = self._is_latest_version(app_version)
         with self.engine.begin() as c:
             # Otherwise READ COMMITTED
             if self.engine.dialect.name == "postgresql" and has_shared_budget:
@@ -5073,6 +5074,9 @@ class SystemDatabase(ABC):
                 if max_tasks <= 0:
                     return [], "partition_concurrency"
 
+            # Unless the queue thread read it for this poll, as on a sharded database.
+            if is_latest_version is None:
+                is_latest_version = self._is_latest_version(app_version, c)
             version_predicate = (
                 self.tables.workflow_status.c.application_version == app_version
             )
@@ -5218,10 +5222,10 @@ class SystemDatabase(ABC):
         assert queue._partition_limiter is None
         start_time_ms = int(time.time() * 1000)
         ws = self.tables.workflow_status
-        # The queue thread reads it once per poll; read before the claim's transaction, as the version row is global.
-        if is_latest_version is None:
-            is_latest_version = self._is_latest_version(app_version)
         with self.engine.begin() as c:
+            # Unless the queue thread read it for this poll, as on a sharded database.
+            if is_latest_version is None:
+                is_latest_version = self._is_latest_version(app_version, c)
             version_predicate = ws.c.application_version == app_version
             if is_latest_version:
                 version_predicate = sa.or_(

@@ -855,11 +855,11 @@ def queue_worker_thread(
                     )
 
         # Each scope dequeues independently; a sharded system database has one per shard key with work.
-        is_latest_version = False
+        is_latest_version: Optional[bool] = None
         try:
             scopes = dbos._sys_db.dequeue_scopes(queue.name)
-            # Once per poll, for every scope and partition: whether unversioned work is ours to claim.
-            if scopes:
+            # A sharded database keeps the version row under another key, so read it once per poll outside the claims.
+            if scopes and dbos._sys_db.sharded:
                 is_latest_version = dbos._sys_db._is_latest_version(
                     GlobalParams.app_version
                 )
