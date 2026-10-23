@@ -2,6 +2,8 @@
 broken, that a refused construction leaves nothing behind, and the entitlement check
 every enterprise feature goes through, against a local stand-in for Conductor."""
 
+import email.message
+import io
 import json
 import socket
 import threading
@@ -16,6 +18,7 @@ import pytest
 from dbos import DBOS, DBOSConfig
 from dbos import _enterprise as enterprise_module
 from dbos._error import DBOSInitializationError
+from dbos._logger import dbos_logger
 from dbos._utils import GlobalParams
 
 # Captured at import, before any test harness replaces it.
@@ -353,13 +356,7 @@ def test_a_rejected_key_is_refused(conductor: FakeConductor, detail: str) -> Non
 
 @pytest.mark.parametrize(
     "status, detail",
-    [
-        (403, "forbidden"),
-        (404, "organization not found"),
-        (409, "conflict"),
-        # Throttling is a refusal too: the check is not retried, and never skipped.
-        (429, "slow down"),
-    ],
+    [(403, "forbidden"), (404, "organization not found"), (409, "conflict")],
 )
 def test_any_other_refusal_quotes_conductor(
     conductor: FakeConductor, status: int, detail: str
@@ -406,7 +403,9 @@ def test_a_redirect_is_refused_and_never_carries_the_key(
 @pytest.mark.parametrize(
     "body", [[], {"entitlements": None}, {"entitled": True}, "not json"]
 )
-def test_a_malformed_answer_blocks_startup(conductor: FakeConductor, body: Any) -> None:
+def test_a_malformed_answer_counts_as_an_outage(
+    conductor: FakeConductor, body: Any
+) -> None:
     conductor.body = body
     with pytest.raises(DBOSInitializationError, match="Retry once Conductor"):
         check(conductor, enterprise_key="enterprise-key")
@@ -440,11 +439,9 @@ def test_an_unreachable_conductor_blocks_startup(conductor: FakeConductor) -> No
     assert "enterprise-key" not in message
 
 
-def test_a_hosted_conductor_outage_blocks_startup_too(
+def test_a_hosted_conductor_outage_does_not_block_startup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Whether to start anyway when DBOS's hosted Conductor is down is still being
-    # decided; until then every Conductor fails closed, the hosted one included.
     monkeypatch.setattr(GlobalParams, "dbos_cloud", False)
     monkeypatch.delenv("DBOS_DOMAIN", raising=False)
     requested: List[str] = []
@@ -453,7 +450,21 @@ def test_a_hosted_conductor_outage_blocks_startup_too(
         requested.append(request.full_url)
         raise urllib.error.URLError("connection refused")
 
+    warnings: List[str] = []
     monkeypatch.setattr(enterprise_module, "_fetch_entitlements", unreachable)
+    monkeypatch.setattr(dbos_logger, "warning", lambda msg: warnings.append(msg))
+    # No Conductor URL means DBOS's hosted one, whose outage only warns.
+    _require_enterprise(
+        [SOME_FEATURE],
+        enterprise_key="enterprise-key",
+        conductor_key=None,
+        conductor_url=None,
+    )
+    assert requested == ["https://cloud.dbos.dev/conductor/v2/entitlements"]
+    assert len(warnings) == 1 and "Could not verify the DBOS key" in warnings[0]
+    assert "enterprise-key" not in warnings[0]
+    # Another domain is not DBOS's hosted Conductor, so its outage still refuses.
+    monkeypatch.setenv("DBOS_DOMAIN", "unreachable.example.com")
     with pytest.raises(
         DBOSInitializationError, match="Retry once Conductor is reachable"
     ):
@@ -463,7 +474,64 @@ def test_a_hosted_conductor_outage_blocks_startup_too(
             conductor_key=None,
             conductor_url=None,
         )
-    assert requested == ["https://cloud.dbos.dev/conductor/v2/entitlements"]
+
+
+def _hosted_answers(
+    monkeypatch: pytest.MonkeyPatch, status: int, headers: Dict[str, str]
+) -> List[str]:
+    """Make the hosted Conductor answer with this error; returns the warnings logged."""
+    monkeypatch.setattr(GlobalParams, "dbos_cloud", False)
+    monkeypatch.delenv("DBOS_DOMAIN", raising=False)
+
+    def answer(request: urllib.request.Request) -> Dict[str, bool]:
+        hdrs = email.message.Message()
+        for name, value in headers.items():
+            hdrs[name] = value
+        raise urllib.error.HTTPError(
+            request.full_url, status, "error", hdrs, io.BytesIO(b"")
+        )
+
+    warnings: List[str] = []
+    monkeypatch.setattr(enterprise_module, "_fetch_entitlements", answer)
+    monkeypatch.setattr(dbos_logger, "warning", lambda msg: warnings.append(msg))
+    return warnings
+
+
+def _check_hosted() -> None:
+    _require_enterprise(
+        [SOME_FEATURE],
+        enterprise_key="enterprise-key",
+        conductor_key=None,
+        conductor_url=None,
+    )
+
+
+@pytest.mark.parametrize("status", [403, 407, 408, 425, 429])
+def test_hosted_throttling_and_proxies_count_as_outages(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    """From the hosted Conductor these mean it couldn't answer, not that it refused the
+    key, so startup warns and goes on as for any hosted outage."""
+    warnings = _hosted_answers(monkeypatch, status, {})
+    _check_hosted()
+    assert len(warnings) == 1 and f"(HTTP {status})" in warnings[0]
+
+
+def test_hosted_refusals_still_refuse(monkeypatch: pytest.MonkeyPatch) -> None:
+    _hosted_answers(monkeypatch, 403, {"X-DBOS-Error": "past_limit"})
+    with pytest.raises(DBOSInitializationError, match="past its plan limit"):
+        _check_hosted()
+    _hosted_answers(monkeypatch, 401, {})
+    with pytest.raises(DBOSInitializationError, match=r"rejected the key \(HTTP 401\)"):
+        _check_hosted()
+
+
+def test_another_conductors_throttling_still_refuses(conductor: FakeConductor) -> None:
+    conductor.reject(429, "slow down")
+    with pytest.raises(
+        DBOSInitializationError, match=r"refused the check \(HTTP 429\)"
+    ):
+        check(conductor, enterprise_key="enterprise-key")
 
 
 def test_dbos_cloud_passes_without_a_check(
