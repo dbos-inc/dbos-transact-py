@@ -4935,6 +4935,14 @@ class SystemDatabase(ABC):
         latest = self._latest_application_version(c, self.app_name)
         return latest is None or latest.version_name == app_version
 
+    @contextmanager
+    def _begin(self, isolation: Optional[str]) -> Generator[sa.Connection, None, None]:
+        with self.engine.connect() as c:
+            if isolation is not None:
+                c.execution_options(isolation_level=isolation)
+            with c.begin():
+                yield c
+
     def start_queued_workflows(
         self,
         queue: "Queue",
@@ -4966,11 +4974,11 @@ class SystemDatabase(ABC):
         # A sharded database keeps the version row under another key, which the claim's transaction cannot span.
         if is_latest_version is None and self.sharded:
             is_latest_version = self._is_latest_version(app_version)
-        with self.engine.begin() as c:
-            # Otherwise READ COMMITTED
-            if self.engine.dialect.name == "postgresql" and has_shared_budget:
-                isolation = "SERIALIZABLE" if has_write_skew else "REPEATABLE READ"
-                c.execute(sa.text(f"SET TRANSACTION ISOLATION LEVEL {isolation}"))
+        # Otherwise READ COMMITTED
+        isolation: Optional[str] = None
+        if self.engine.dialect.name == "postgresql" and has_shared_budget:
+            isolation = "SERIALIZABLE" if has_write_skew else "REPEATABLE READ"
+        with self._begin(isolation) as c:
 
             def rate_limit_remaining(
                 limiter: "QueueRateLimit", partition_scoped: bool
