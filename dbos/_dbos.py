@@ -488,6 +488,9 @@ class DBOS:
         key = config.get("conductor_key") or conductor_key
         # Every enterprise feature requires Conductor to report the org entitled to it.
         features = _enterprise.enabled_features(config)
+        if config.get("sharding"):
+            # Auto-upgrade is disabled on a sharded system database, so it needs no entitlement.
+            features = [f for f in features if f is not _enterprise.AUTO_UPGRADE]
         _enterprise.require_enterprise(
             features,
             enterprise_key=config.get("transact_enterprise_key"),
@@ -858,7 +861,14 @@ class DBOS:
             self._registry.pollers = []
 
             # Start the auto-upgrade pass if any workflow takes part.
-            if self._auto_upgradable_workflows():
+            auto_upgradable = bool(self._auto_upgradable_workflows())
+            if auto_upgradable and self._sys_db.sharded:
+                # Its queries aren't keyed by shard, so it doesn't run on a sharded database.
+                dbos_logger.warning(
+                    "Auto-upgrade is disabled: it is not supported on a sharded "
+                    "system database."
+                )
+            elif auto_upgradable:
                 # Workflows enroll one by one through DBOS.workflow(auto_upgrade=True),
                 # which only launch can see; the config flag was checked at construction.
                 if not self._auto_upgrade:
