@@ -583,6 +583,44 @@ def test_translate_dbosconfig_notification_coalesce_sec():
         assert "notification_coalesce_sec" in str(exc_info.value)
 
 
+def test_translate_dbosconfig_auto_upgrade_interval_sec():
+    # A valid value is threaded into runtimeConfig.
+    ok: DBOSConfig = {"name": "test-app", "auto_upgrade_interval_sec": 0.5}
+    translated = translate_dbos_config_to_config_file(ok)
+    assert translated["runtimeConfig"]["auto_upgrade_interval_sec"] == 0.5
+
+    # Unset leaves the default to the thread.
+    translated = translate_dbos_config_to_config_file({"name": "test-app"})
+    assert "auto_upgrade_interval_sec" not in translated["runtimeConfig"]
+
+    # Invalid values are rejected, including NaN/inf which would otherwise break the poller's wait.
+    for bad in [0.0, -1.0, float("nan"), float("inf")]:
+        with pytest.raises(DBOSInitializationError) as exc_info:
+            translate_dbos_config_to_config_file(
+                {"name": "test-app", "auto_upgrade_interval_sec": bad}
+            )
+        assert "auto_upgrade_interval_sec" in str(exc_info.value)
+
+
+def test_translate_dbosconfig_auto_upgrade_grace_sec():
+    # A valid value is threaded into runtimeConfig; zero is valid and means no grace.
+    for ok_value in [60.0, 0.0]:
+        ok: DBOSConfig = {"name": "test-app", "auto_upgrade_grace_sec": ok_value}
+        translated = translate_dbos_config_to_config_file(ok)
+        assert translated["runtimeConfig"]["auto_upgrade_grace_sec"] == ok_value
+
+    # Unset leaves the default to the pass.
+    translated = translate_dbos_config_to_config_file({"name": "test-app"})
+    assert "auto_upgrade_grace_sec" not in translated["runtimeConfig"]
+
+    for bad in [-1.0, float("nan"), float("inf")]:
+        with pytest.raises(DBOSInitializationError) as exc_info:
+            translate_dbos_config_to_config_file(
+                {"name": "test-app", "auto_upgrade_grace_sec": bad}
+            )
+        assert "auto_upgrade_grace_sec" in str(exc_info.value)
+
+
 def test_translate_dbosconfig_observability_query_timeout_sec():
     # A valid value is threaded into runtimeConfig, including a non-positive one, which disables the cap.
     for ok_value in [5.0, 0]:
