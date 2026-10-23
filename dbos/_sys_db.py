@@ -4963,6 +4963,9 @@ class SystemDatabase(ABC):
         has_write_skew = queue_partition_key is not None and (
             queue._concurrency is not None or queue._limiter is not None
         )
+        # A sharded database keeps the version row under another key, which the claim's transaction cannot span.
+        if is_latest_version is None and self.sharded:
+            is_latest_version = self._is_latest_version(app_version)
         with self.engine.begin() as c:
             # Otherwise READ COMMITTED
             if self.engine.dialect.name == "postgresql" and has_shared_budget:
@@ -5074,7 +5077,6 @@ class SystemDatabase(ABC):
                 if max_tasks <= 0:
                     return [], "partition_concurrency"
 
-            # Unless the queue thread read it for this poll, as on a sharded database.
             if is_latest_version is None:
                 is_latest_version = self._is_latest_version(app_version, c)
             version_predicate = (
@@ -5222,8 +5224,10 @@ class SystemDatabase(ABC):
         assert queue._partition_limiter is None
         start_time_ms = int(time.time() * 1000)
         ws = self.tables.workflow_status
+        # A sharded database keeps the version row under another key, which the claim's transaction cannot span.
+        if is_latest_version is None and self.sharded:
+            is_latest_version = self._is_latest_version(app_version)
         with self.engine.begin() as c:
-            # Unless the queue thread read it for this poll, as on a sharded database.
             if is_latest_version is None:
                 is_latest_version = self._is_latest_version(app_version, c)
             version_predicate = ws.c.application_version == app_version
