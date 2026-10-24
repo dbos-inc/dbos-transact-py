@@ -100,9 +100,19 @@ def _validate_consumer_queue(dbos: "DBOS", func_name: str, queue_name: str) -> N
         )
 
 
+def _validate_consumer_database(dbos: "DBOS", func_name: str) -> None:
+    """Raise if the system database is sharded, which Kafka consumers do not support."""
+    if dbos._sys_db.sharded:
+        raise DBOSInitializationError(
+            f"Error: Kafka consumer {func_name} cannot be registered: Kafka consumers "
+            "are not supported on a sharded system database."
+        )
+
+
 def validate_kafka_consumers(dbos: "DBOS") -> None:
-    """Validate the custom queue of every consumer registered before launch."""
+    """Validate the system database and custom queue of every consumer registered before launch."""
     for reg in dbos._registry.kafka_registrations:
+        _validate_consumer_database(dbos, reg.func_name)
         if reg.queue_name is not None:
             _validate_consumer_queue(dbos, reg.func_name, reg.queue_name)
 
@@ -366,12 +376,10 @@ def kafka_consumer(
     def decorator(func: _KafkaConsumerWorkflow) -> _KafkaConsumerWorkflow:
         func_name = get_dbos_func_name(func)
         # Validate before registering anything below, so a rejected consumer leaves no trace; a consumer declared pre-launch is validated at launch instead, once its queue is resolvable.
-        if (
-            queue_name is not None
-            and dbosreg.dbos is not None
-            and dbosreg.dbos._launched
-        ):
-            _validate_consumer_queue(dbosreg.dbos, func_name, queue_name)
+        if dbosreg.dbos is not None and dbosreg.dbos._launched:
+            _validate_consumer_database(dbosreg.dbos, func_name)
+            if queue_name is not None:
+                _validate_consumer_queue(dbosreg.dbos, func_name, queue_name)
         cfg = dict(config)  # copy: never mutate the caller's dict
 
         if "auto.offset.reset" not in cfg:

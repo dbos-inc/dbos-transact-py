@@ -3,6 +3,10 @@
 Core declares here exactly what it uses from enterprise, and loads the package by
 name only when a feature needs it. Enterprise imports these types and checks that
 it satisfies them, so each side is verified against the contract on its own.
+
+Transact Enterprise (the dbos-enterprise package) is proprietary, not MIT-licensed like
+this project. Its license (https://www.dbos.dev/conductor-license) forbids modifying it, and
+makes disabling or circumventing the entitlement checks here a material breach.
 """
 
 from __future__ import annotations
@@ -30,10 +34,13 @@ from typing import (
 from urllib.parse import urlsplit, urlunsplit
 
 from ._error import DBOSInitializationError
+from ._logger import dbos_logger
 from ._utils import GlobalParams
 
 if TYPE_CHECKING:
     from ._dbos import DBOS
+    from ._serialization import Serializer
+    from ._sys_db import SystemDatabase
 
 # Receives a Conductor alert as (name, message, metadata).
 AlertHandler = Callable[[str, str, Dict[str, str]], None]
@@ -73,6 +80,27 @@ class AutoUpgradePassFactory(Protocol):
     def __call__(self, dbos: DBOS, *, grace_sec: float) -> AutoUpgradePass: ...
 
 
+class ShardedSystemDatabaseFactory(Protocol):
+    """Builds the system database a sharded deployment uses, in place of core's Postgres one."""
+
+    def __call__(
+        self,
+        *,
+        system_database_url: str,
+        engine_kwargs: Dict[str, Any],
+        engine: Optional[Any],
+        schema: Optional[str],
+        serializer: "Serializer",
+        executor_id: Optional[str],
+        notification_listener_polling_interval_sec: float,
+        polling_concurrency: Optional[int],
+        app_name: Optional[str],
+        retry_connection_errors: bool,
+        observability_query_timeout_sec: Optional[float],
+        idle_transaction_timeout_sec: Optional[float],
+    ) -> "SystemDatabase": ...
+
+
 class Enterprise(Protocol):
     """What the top-level dbos_enterprise module must provide."""
 
@@ -82,6 +110,9 @@ class Enterprise(Protocol):
 
     @property
     def AutoUpgradePass(self) -> AutoUpgradePassFactory: ...
+
+    @property
+    def ShardedSystemDatabase(self) -> ShardedSystemDatabaseFactory: ...
 
 
 # What needs the package without being an entitlement, for load()'s messages.
@@ -101,9 +132,10 @@ class Feature:
 AUTO_UPGRADE = Feature(
     "autoUpgrade", "Auto-upgrading workflows", config_key="auto_upgrade"
 )
+SHARDING = Feature("sharding", "Using a sharded system database", config_key="sharding")
 
 # Every entitled feature; a new one is a Feature here, named by Conductor's camelCase key.
-FEATURES: Tuple[Feature, ...] = (AUTO_UPGRADE,)
+FEATURES: Tuple[Feature, ...] = (AUTO_UPGRADE, SHARDING)
 
 
 def enabled_features(config: Mapping[str, object]) -> List[Feature]:
@@ -118,8 +150,14 @@ ENTITLEMENT_TIMEOUT_SEC = 10.0
 # Conductor's machine-readable error code, in this header, for an org past its plan limit.
 ERROR_CODE_HEADER = "X-DBOS-Error"
 PAST_LIMIT = "past_limit"
+HOSTED_UNAVAILABLE = frozenset({403, 407, 408, 425, 429})
+LICENSE_URL = "https://www.dbos.dev/conductor-license"
+LICENSE_NOTICE = (
+    f"Transact Enterprise is licensed under the DBOS Conductor Software License ({LICENSE_URL}), "
+    "which makes disabling or circumventing this check a material breach."
+)
 
-# DBOS's hosted Conductor, which is never asked about entitlements without a key.
+
 HOSTED_CONDUCTOR_URL = "wss://cloud.dbos.dev/conductor/v1alpha1"
 
 
@@ -173,6 +211,11 @@ def _problem_detail(error: urllib.error.HTTPError) -> Optional[str]:
     return str(detail) if detail else None
 
 
+def _refusal(message: str) -> DBOSInitializationError:
+    return DBOSInitializationError(f"{message} {LICENSE_NOTICE}")
+
+
+# A license control: the Transact Enterprise license makes disabling or circumventing it a material breach.
 def require_enterprise(
     features: Sequence[Feature],
     *,
@@ -182,9 +225,6 @@ def require_enterprise(
 ) -> None:
     """Enterprise features need Conductor to report the org entitled to each of them. A
     self-hosted Conductor may answer without a key; DBOS Cloud passes without a check.
-
-    Any failure to get an answer refuses to start: an unreachable Conductor cannot
-    stand in for an entitlement.
     """
     if not features or GlobalParams.dbos_cloud:
         return
@@ -208,31 +248,33 @@ def require_enterprise(
     except urllib.error.HTTPError as e:
         detail = _problem_detail(e)
         if e.code == 403 and e.headers.get(ERROR_CODE_HEADER) == PAST_LIMIT:
-            raise DBOSInitializationError(
+            raise _refusal(
                 f"Your DBOS organization is past its plan limit, so it is not entitled "
                 f"to {entitlements} ({names}). Upgrade its plan to continue."
             ) from e
         reason = detail or str(e.reason)
-        if e.code == 404 and detail is None:
+        if target == HOSTED_CONDUCTOR_URL and e.code in HOSTED_UNAVAILABLE:
+            pass  # An outage, handled below.
+        elif e.code == 404 and detail is None:
             # A bare 404 is a missing route: a Conductor predating per-feature entitlements.
-            raise DBOSInitializationError(
+            raise _refusal(
                 f"{names} requires an entitled DBOS key, but Conductor at {url} has no "
                 "entitlements route (HTTP 404). Upgrade Conductor, or check its URL."
             ) from e
-        if e.code == 401 and key is None:
+        elif e.code == 401 and key is None:
             raise DBOSInitializationError(
                 f"{names} requires a DBOS key: Conductor at {url} refused to check "
                 f"without one (HTTP 401): {reason}. {key_hint}"
             ) from e
-        if e.code == 401:
+        elif e.code == 401:
             # An unknown key, or a user credential instead of an API key.
-            raise DBOSInitializationError(
+            raise _refusal(
                 f"{names} requires a valid DBOS key. Conductor at {url} rejected the "
                 f"key (HTTP 401): {reason}"
             ) from e
-        if e.code < 500:
+        elif e.code < 500:
             # Any other refusal, such as the key's organization being gone, or a redirect.
-            raise DBOSInitializationError(
+            raise _refusal(
                 f"{names} requires an entitled DBOS key, but Conductor at {url} refused "
                 f"the check (HTTP {e.code}): {reason}"
             ) from e
@@ -244,15 +286,21 @@ def require_enterprise(
     else:
         missing = [f for f in features if not granted.get(f.entitlement, False)]
         if missing:
-            raise DBOSInitializationError(
+            raise _refusal(
                 f"Your DBOS organization is not entitled to "
                 f"{' and '.join(f.entitlement for f in missing)} "
                 f"({' and '.join(f.description for f in missing)}): its plan does not "
                 "include it. Contact DBOS to enable it."
             )
         return
-    # Fail closed, so an unreachable URL cannot stand in for a key.
-    raise DBOSInitializationError(
+    if target == HOSTED_CONDUCTOR_URL:
+        dbos_logger.warning(
+            f"Could not verify the DBOS key's entitlements with Conductor at {url} "
+            f"({failure}); starting anyway."
+        )
+        return
+    # Any other Conductor fails closed, so an unreachable URL cannot stand in for a key.
+    raise _refusal(
         f"{names} requires an entitled DBOS key, but checking it with Conductor at {url} "
         f"failed ({failure}). Retry once Conductor is reachable."
     ) from cause
@@ -260,6 +308,7 @@ def require_enterprise(
 
 def load(feature: str = CONDUCTOR) -> Enterprise:
     """Import dbos_enterprise, telling an absent package apart from one that fails to import."""
+    # dbos_enterprise is proprietary: its license forbids modifying it or copying it beyond authorized use.
     try:
         return cast(Enterprise, importlib.import_module("dbos_enterprise"))
     except ImportError as e:

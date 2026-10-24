@@ -1,6 +1,17 @@
 import asyncio
+import random
 import threading
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, Sequence, Union
+import time
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Coroutine,
+    Dict,
+    Optional,
+    Sequence,
+    Union,
+)
 
 from dbos._context import DBOSContext, get_local_dbos_context
 from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
@@ -24,6 +35,7 @@ def get_workflow(
         workflow_ids=[workflow_id],
         load_input=load_input,
         load_output=load_output,
+        shard_key=sys_db._key_hint(workflow_id),
     )
     if not infos:
         return None
@@ -76,36 +88,74 @@ def delete_workflow(
 
     If delete_children is True, also deletes all child workflows recursively.
     """
-    all_ids = list(workflow_ids)
-    if delete_children:
-        for wfid in workflow_ids:
-            all_ids.extend(dbos._sys_db.get_workflow_children(wfid))
-    dbos._sys_db.delete_workflows(all_ids)
+    dbos._sys_db.delete_workflows(workflow_ids, delete_children=delete_children)
 
 
 # Most workflows one sweep transaction cancels; a full batch sweeps again at once.
 _SWEEP_BATCH_SIZE = 1000
 
-# How often the timeout thread looks for workflows past their deadline.
-_SWEEP_POLLING_INTERVAL_SEC = 1.0
+# How often one of an application's processes runs its background jobs.
+_BACKGROUND_JOBS_INTERVAL_SEC = 1.0
 
-WORKFLOW_TIMEOUT_THREAD_NAME = "dbos-workflow-timeout"
+BACKGROUND_JOBS_THREAD_NAME = "dbos-background-jobs"
 
 
-def workflow_timeout_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
-    """Cancel this application's active workflows once their deadline passes."""
+def _run_background_jobs(
+    stop_event: threading.Event,
+    dbos: "DBOS",
+    lock_name: str,
+    interval_sec: float,
+    jobs: Dict[str, Callable[[], None]],
+) -> None:
+    """Run jobs once per interval across all of this application's processes: whichever
+    takes their lock runs them, holding the lock for the rest of the interval."""
     while not stop_event.is_set():
+        started = time.monotonic()
+        held = False
         try:
-            while not stop_event.is_set():
-                cancelled = dbos._sys_db.cancel_timed_out_workflows(_SWEEP_BATCH_SIZE)
-                for workflow_id in cancelled:
-                    dbos.logger.debug(f"Cancelled workflow {workflow_id}: timed out")
-                if len(cancelled) < _SWEEP_BATCH_SIZE:
-                    break
+            with dbos._sys_db.background_job_lock(lock_name) as acquired:
+                if acquired:
+                    for job_name, job in jobs.items():
+                        try:
+                            job()
+                        except Exception as e:
+                            dbos.logger.warning(
+                                f"Exception in background job {job_name}: {e}"
+                            )
+                    stop_event.wait(
+                        max(0.0, interval_sec - (time.monotonic() - started))
+                    )
+                    held = True
         except Exception as e:
-            dbos.logger.warning(f"Exception cancelling timed-out workflows: {e}")
-        if stop_event.wait(timeout=_SWEEP_POLLING_INTERVAL_SEC):
+            dbos.logger.warning(f"Exception taking the {lock_name} lock: {e}")
+        # The holder tries again at once and so keeps the jobs; the rest poll for them.
+        wait = 0.0 if held else interval_sec * random.uniform(0.9, 1.1)
+        if stop_event.wait(timeout=wait):
             break
+
+
+def background_jobs_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
+    """Enqueue DELAYED workflows whose delay has expired, and cancel this application's
+    active workflows once their deadline passes."""
+
+    def sweep() -> None:
+        while not stop_event.is_set():
+            cancelled = dbos._sys_db.cancel_timed_out_workflows(_SWEEP_BATCH_SIZE)
+            for workflow_id in cancelled:
+                dbos.logger.debug(f"Cancelled workflow {workflow_id}: timed out")
+            if len(cancelled) < _SWEEP_BATCH_SIZE:
+                break
+
+    _run_background_jobs(
+        stop_event,
+        dbos,
+        "background_jobs",
+        _BACKGROUND_JOBS_INTERVAL_SEC,
+        {
+            "delayed_workflows": lambda: dbos._sys_db.transition_delayed_workflows(),
+            "workflow_timeout": sweep,
+        },
+    )
 
 
 Datasource = Union[SQLAlchemyDatasource, AsyncSQLAlchemyDatasource]

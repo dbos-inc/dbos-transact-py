@@ -15,7 +15,12 @@ import sqlalchemy as sa
 import yaml
 
 from dbos._dbos_config import DBOSConfig
-from tests.conftest import retry_until_success, using_sqlite
+from tests.conftest import retry_until_success, using_sharding, using_sqlite
+
+pytestmark = pytest.mark.skipif(
+    using_sharding(),
+    reason="Runs the CLI against unsharded databases it creates and resets itself",
+)
 
 
 @pytest.mark.timeout(600)

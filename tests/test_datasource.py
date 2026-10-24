@@ -29,7 +29,7 @@ from dbos import (
     SQLAlchemyDatasource,
 )
 from dbos._context import get_local_dbos_context
-from dbos._datasource import RecordedResult
+from dbos._datasource import RecordedResult, _checkpoint_id
 from dbos._datasource_migration import (
     DATASOURCE_MIGRATIONS_TABLE,
     get_postgres_datasource_migrations,
@@ -155,14 +155,22 @@ def _skip_if_pg_unreachable(raw_pg_url: str) -> None:
 def _ds_rows(ds: SQLAlchemyDatasource, wfid: str) -> list[Any]:
     t = ds._outputs_table
     with ds.engine.connect() as conn:
-        query = sa.select(t).where(t.c.workflow_id == wfid).order_by(t.c.step_id)
+        query = (
+            sa.select(t)
+            .where(t.c.workflow_id == _checkpoint_id(wfid))
+            .order_by(t.c.step_id)
+        )
         return list(conn.execute(query).fetchall())
 
 
 async def _ds_rows_async(ds: AsyncSQLAlchemyDatasource, wfid: str) -> list[Any]:
     t = ds._outputs_table
     async with ds.engine.connect() as conn:
-        query = sa.select(t).where(t.c.workflow_id == wfid).order_by(t.c.step_id)
+        query = (
+            sa.select(t)
+            .where(t.c.workflow_id == _checkpoint_id(wfid))
+            .order_by(t.c.step_id)
+        )
         return list((await conn.execute(query)).fetchall())
 
 
@@ -603,7 +611,7 @@ def test_sync_ds_custom_sessionmaker(
         with ds.engine.connect() as conn:
             assert conn.execute(
                 sa.select(ds._outputs_table.c.step_id).where(
-                    ds._outputs_table.c.workflow_id == wfid
+                    ds._outputs_table.c.workflow_id == _checkpoint_id(wfid)
                 )
             ).scalars().all() == [1]
     finally:
@@ -753,7 +761,7 @@ def test_sync_ds_conflicts_when_duplicate_execution_wins(
                 sync_ds._outputs_table.c.output,
                 sync_ds._outputs_table.c.error,
                 sync_ds._outputs_table.c.serialization,
-            ).where(sync_ds._outputs_table.c.workflow_id == wfid)
+            ).where(sync_ds._outputs_table.c.workflow_id == _checkpoint_id(wfid))
         ).one()
     assert tags == ["run-1"]
     assert ds_row.error is None  # no loser error was ever recorded
@@ -794,7 +802,7 @@ def test_sync_ds_rolls_back_once_ownership_moves(
         tags = list(conn.execute(sa.select(race.c.tag)).scalars())
         ds_rows = conn.execute(
             sa.select(sync_ds._outputs_table.c.error).where(
-                sync_ds._outputs_table.c.workflow_id == wfid
+                sync_ds._outputs_table.c.workflow_id == _checkpoint_id(wfid)
             )
         ).all()
     assert tags == []
@@ -843,7 +851,7 @@ def test_sync_ds_stale_error_not_recorded(
     with sync_ds.engine.connect() as conn:
         ds_rows = conn.execute(
             sa.select(sync_ds._outputs_table.c.error).where(
-                sync_ds._outputs_table.c.workflow_id == wfid
+                sync_ds._outputs_table.c.workflow_id == _checkpoint_id(wfid)
             )
         ).all()
     assert ds_rows == [], "the stale execution recorded its error"
@@ -866,7 +874,7 @@ def test_sync_ds_completion_clears_checkpoints(
             return list(
                 conn.execute(
                     sa.select(sync_ds._outputs_table.c.step_id).where(
-                        sync_ds._outputs_table.c.workflow_id == wfid
+                        sync_ds._outputs_table.c.workflow_id == _checkpoint_id(wfid)
                     )
                 ).scalars()
             )
@@ -970,7 +978,7 @@ def test_sync_ds_replays_its_own_lost_commit(
                 sync_ds._outputs_table.c.output,
                 sync_ds._outputs_table.c.error,
                 sync_ds._outputs_table.c.serialization,
-            ).where(sync_ds._outputs_table.c.workflow_id == wfid)
+            ).where(sync_ds._outputs_table.c.workflow_id == _checkpoint_id(wfid))
         ).one()
     assert tags == ["run-1"]  # only the committed attempt's write survives
     assert ds_row.error is None
@@ -990,6 +998,7 @@ def test_sync_ds_duplicate_execution_stops_at_the_lost_race(
     winner_checkpoints: bool,
     expected_emails: int,
     expected_replays: int,
+    skip_with_sharding: None,
 ) -> None:
     """A duplicate execution that loses the datasource race parks where an ordinary
     step's loser parks, instead of replaying the winner's result and going on to run
@@ -1390,7 +1399,7 @@ async def test_async_ds_custom_sessionmaker(
         async with ds.engine.connect() as conn:
             result = await conn.execute(
                 sa.select(ds._outputs_table.c.step_id).where(
-                    ds._outputs_table.c.workflow_id == wfid
+                    ds._outputs_table.c.workflow_id == _checkpoint_id(wfid)
                 )
             )
             assert result.scalars().all() == [1]
@@ -1536,7 +1545,7 @@ async def test_async_ds_conflicts_when_duplicate_execution_wins(
                     async_ds._outputs_table.c.output,
                     async_ds._outputs_table.c.error,
                     async_ds._outputs_table.c.serialization,
-                ).where(async_ds._outputs_table.c.workflow_id == wfid)
+                ).where(async_ds._outputs_table.c.workflow_id == _checkpoint_id(wfid))
             )
         ).one()
     assert tags == ["run-1"]
@@ -1584,7 +1593,7 @@ async def test_async_ds_completion_clears_checkpoints(
         rows = (
             await conn.execute(
                 sa.select(async_ds._outputs_table.c.step_id).where(
-                    async_ds._outputs_table.c.workflow_id == wfid
+                    async_ds._outputs_table.c.workflow_id == _checkpoint_id(wfid)
                 )
             )
         ).all()
@@ -1624,7 +1633,7 @@ async def test_async_ds_rolls_back_once_ownership_moves(
         ds_rows = (
             await conn.execute(
                 sa.select(async_ds._outputs_table.c.error).where(
-                    async_ds._outputs_table.c.workflow_id == wfid
+                    async_ds._outputs_table.c.workflow_id == _checkpoint_id(wfid)
                 )
             )
         ).all()
@@ -1676,7 +1685,7 @@ async def test_async_ds_stale_error_not_recorded(
         ds_rows = (
             await conn.execute(
                 sa.select(async_ds._outputs_table.c.error).where(
-                    async_ds._outputs_table.c.workflow_id == wfid
+                    async_ds._outputs_table.c.workflow_id == _checkpoint_id(wfid)
                 )
             )
         ).all()
@@ -1696,6 +1705,7 @@ async def test_async_ds_duplicate_execution_stops_at_the_lost_race(
     winner_checkpoints: bool,
     expected_emails: int,
     expected_replays: int,
+    skip_with_sharding: None,
 ) -> None:
     """Async sibling of test_sync_ds_duplicate_execution_stops_at_the_lost_race (#818)."""
     reserve_calls = {"n": 0}
@@ -1887,7 +1897,7 @@ async def test_async_ds_replays_its_own_lost_commit(
                     async_ds._outputs_table.c.output,
                     async_ds._outputs_table.c.error,
                     async_ds._outputs_table.c.serialization,
-                ).where(async_ds._outputs_table.c.workflow_id == wfid)
+                ).where(async_ds._outputs_table.c.workflow_id == _checkpoint_id(wfid))
             )
         ).one()
     assert tags == ["run-1"]  # only the committed attempt's write survives
@@ -1908,7 +1918,7 @@ def _checkpoint_step_ids(ds: SQLAlchemyDatasource, wfid: str) -> list[int]:
         return sorted(
             conn.execute(
                 sa.select(ds._outputs_table.c.step_id).where(
-                    ds._outputs_table.c.workflow_id == wfid
+                    ds._outputs_table.c.workflow_id == _checkpoint_id(wfid)
                 )
             ).scalars()
         )
@@ -1960,7 +1970,7 @@ async def test_async_ds_delete_checkpoints(
         async with async_ds.engine.begin() as conn:
             result = await conn.execute(
                 sa.select(async_ds._outputs_table.c.step_id).where(
-                    async_ds._outputs_table.c.workflow_id == wfid
+                    async_ds._outputs_table.c.workflow_id == _checkpoint_id(wfid)
                 )
             )
             return sorted(result.scalars())
@@ -2168,7 +2178,12 @@ def test_ds_adopts_unversioned_table(
             SQLAlchemyDatasource.create(url, schema=schema, run_migrations=False)
         ds = SQLAlchemyDatasource.create(url, schema=schema)
         assert _ds_version(ds) == _LATEST_DS_VERSION
-        assert _checkpoint_step_ids(ds, "w") == [1]
+        with ds.engine.connect() as conn:
+            t = ds._outputs_table
+            # The legacy row is read by its stored ID: no DBOS runs here to resolve one.
+            assert conn.execute(
+                sa.select(t.c.step_id).where(t.c.workflow_id == "w")
+            ).scalars().all() == [1]
         ds.engine.dispose()
     finally:
         if schema is not None:

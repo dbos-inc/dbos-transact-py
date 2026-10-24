@@ -16,6 +16,9 @@ from dbos._error import DBOSInitializationError
 
 from .conftest import retry_until_success
 
+# The stand-in package has no sharded system database, and auto-upgrade isn't shard-aware.
+pytestmark = pytest.mark.usefixtures("skip_with_sharding")
+
 
 class _NoopConductor:
     def __init__(self, *args: object, **kwargs: object) -> None:

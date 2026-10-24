@@ -51,7 +51,7 @@ from dbos._core import execute_dequeued_workflow
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 from dbos._sys_db_postgres import PostgresSystemDatabase
-from dbos._utils import GlobalParams
+from dbos._utils import GlobalParams, quote_identifier
 
 if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle
@@ -69,10 +69,30 @@ def using_sqlite() -> bool:
     return os.environ.get("DBOS_DATABASE", None) == "SQLITE"
 
 
+def using_sharding() -> bool:
+    """Whether the system database is a sharded one behind a router (requires dbos-enterprise)."""
+    return os.environ.get("DBOS_DATABASE", None) == "SHARDED"
+
+
+def sharded_system_url() -> str:
+    return os.environ.get(
+        "DBOS_SHARDED_SYSTEM_URL",
+        "postgresql+psycopg://postgres:dbos@localhost:6432/dbos",
+    )
+
+
 @pytest.fixture()
 def skip_with_sqlite() -> None:
     if using_sqlite():
         pytest.skip("Skipping test when testing SQLite")
+
+
+@pytest.fixture()
+def skip_with_sharding() -> None:
+    """For tests of features sharding refuses (deduplication, debouncing), that write
+    core's unkeyed tables directly, manage databases, or time batched inserts."""
+    if using_sharding():
+        pytest.skip("Skipping test when testing a sharded system database")
 
 
 def imprecise_timestamps() -> bool:
@@ -94,7 +114,11 @@ def postgres_urls() -> Tuple[str, str]:
     password = quote(os.environ.get("PGPASSWORD", "dbos"), safe="")
     return (
         f"postgresql://postgres:{password}@localhost:5432/dbostestpy",
-        f"postgresql+psycopg://postgres:{password}@localhost:5432/dbostestpy_dbos_sys",
+        (
+            sharded_system_url()
+            if using_sharding()
+            else f"postgresql+psycopg://postgres:{password}@localhost:5432/dbostestpy_dbos_sys"
+        ),
     )
 
 
@@ -114,6 +138,7 @@ def default_config(sqlite_path: Path) -> DBOSConfig:
         # otherwise dominates every consumer test. Tests asserting on that default
         # pop this key.
         "kafka_queue_polling_interval_sec": 0.05,
+        "sharding": using_sharding(),
     }
 
 
@@ -151,6 +176,58 @@ def db_engine() -> Generator[sa.Engine, Any, None]:
         )
     yield engine
     engine.dispose()
+
+
+def _reset_sharded_system_database() -> None:
+    """Drop the sharded schema through the router, which runs DDL on every shard; launch recreates it."""
+    engine = sa.create_engine(sharded_system_url())
+    try:
+        with engine.connect() as connection:
+            connection.execution_options(isolation_level="AUTOCOMMIT")
+            # Only schemas DBOS created, including custom system schemas a test
+            # configured; a coordinator's own schemas (citus, columnar) stay.
+            schemas = connection.execute(
+                sa.text(
+                    "SELECT DISTINCT table_schema FROM information_schema.tables "
+                    "WHERE table_name = 'dbos_migrations' "
+                    "UNION SELECT 'dbos'"
+                )
+            ).scalars()
+            for schema in list(schemas):
+                # Escaped for the driver, which reads a bare % as a placeholder.
+                name = quote_identifier(schema).replace("%", "%%")
+                connection.exec_driver_sql(f"DROP SCHEMA IF EXISTS {name} CASCADE")
+    finally:
+        engine.dispose()
+
+
+def _reset_sharded_run_user_database(drop: bool) -> None:
+    """The user database stays plain local Postgres in sharded runs, reset as in any other."""
+    user_db_url = postgres_urls()[0]
+    name = str(sa.make_url(user_db_url).database)
+    # db_engine points at the router in sharded runs, which serves only the system database.
+    engine = sa.create_engine(
+        sa.make_url(user_db_url).set(
+            drivername="postgresql+psycopg", database="postgres"
+        ),
+        connect_args={"connect_timeout": 30},
+    )
+    try:
+        with engine.connect() as connection:
+            connection.execution_options(isolation_level="AUTOCOMMIT")
+            if drop:
+                connection.execute(
+                    sa.text(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
+                )
+                return
+            present = connection.execute(
+                sa.text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                {"name": name},
+            ).scalar()
+    finally:
+        engine.dispose()
+    if present:
+        _truncate_user_database(user_db_url)
 
 
 def _truncate_user_database(user_database_url: str) -> None:
@@ -196,13 +273,13 @@ def reset_global_params() -> None:
 
 
 @pytest.fixture(autouse=True, scope="session")
-def fast_timeout_sweep() -> Generator[None, Any, None]:
-    """Sweep for timed-out workflows every 100ms: the product's 1s poll would
-    dominate every test that waits for a timeout."""
-    original = _workflow_commands._SWEEP_POLLING_INTERVAL_SEC
-    _workflow_commands._SWEEP_POLLING_INTERVAL_SEC = 0.1
+def fast_background_jobs() -> Generator[None, Any, None]:
+    """Run the background jobs every 100ms: the product's 1s interval would dominate
+    every test that waits for a timeout or a delay."""
+    original = _workflow_commands._BACKGROUND_JOBS_INTERVAL_SEC
+    _workflow_commands._BACKGROUND_JOBS_INTERVAL_SEC = 0.1
     yield
-    _workflow_commands._SWEEP_POLLING_INTERVAL_SEC = original
+    _workflow_commands._BACKGROUND_JOBS_INTERVAL_SEC = original
 
 
 @pytest.fixture(autouse=True)
@@ -230,13 +307,17 @@ def _reset_test_databases(db_engine: sa.Engine, *, drop: bool) -> None:
     # SQLite needs no reset here: sqlite_path is a fresh file per test.
     if using_sqlite():
         return
-
     # A run killed mid-test can leave the schema half-migrated, which truncation
     # spares and the next launch then fails on. One drop per session repairs it.
     global _databases_dropped
     if not _databases_dropped:
         _databases_dropped = True
         drop = True
+
+    if using_sharding():
+        _reset_sharded_system_database()
+        _reset_sharded_run_user_database(drop)
+        return
 
     user_db_url, sys_db_url = postgres_urls()
     names = [str(sa.make_url(url).database) for url in (user_db_url, sys_db_url)]
@@ -289,7 +370,7 @@ def migrated_system_database(db_engine: sa.Engine) -> None:
     drop_test_databases test leaves the shared databases absent."""
     _reset_test_databases(db_engine, drop=False)
     if not using_sqlite():
-        run_dbos_database_migrations(postgres_urls()[1])
+        run_dbos_database_migrations(postgres_urls()[1], sharding=using_sharding())
 
 
 def ensure_user_database() -> None:
@@ -345,7 +426,9 @@ def dbos_dropped_databases(
 @pytest.fixture()
 def client(config: DBOSConfig, dbos: DBOS) -> Generator[DBOSClient, Any, None]:
     assert config["system_database_url"] is not None
-    client = DBOSClient(system_database_url=config["system_database_url"])
+    client = DBOSClient(
+        system_database_url=config["system_database_url"], sharding=using_sharding()
+    )
     yield client
     client.destroy()
 
@@ -382,6 +465,15 @@ def setup_in_memory_otlp_collector() -> Generator[
 
 
 # Pretty-print test names
+def pytest_configure(config: pytest.Config) -> None:
+    # dbos-enterprise's plugin supplies the keys core's tests don't pass.
+    if using_sharding() and not config.pluginmanager.has_plugin("core_harness"):
+        raise pytest.UsageError(
+            "A sharded run needs dbos-enterprise's harness: put its tests/sharding "
+            "on PYTHONPATH and pass -p core_harness"
+        )
+
+
 def pytest_collection_modifyitems(session: Any, config: Any, items: Any) -> None:
     for item in items:
         item._nodeid = "\n" + item.nodeid + "\n"

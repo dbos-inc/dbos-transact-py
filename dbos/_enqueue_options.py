@@ -22,6 +22,7 @@ from dbos._context import (
 )
 from dbos._error import DBOSException
 from dbos._serialization import Serializer, WorkflowSerializationFormat, serialize_args
+from dbos._shard_keys import validate_shard_key
 from dbos._sys_db import WorkflowStatusInternal, WorkflowStatusString
 from dbos._utils import generate_uuid
 
@@ -65,6 +66,8 @@ class EnqueueOptions(_EnqueueOptionsRequired, total=False):
     # Parents the enqueued workflow's span to this OpenTelemetry context, so it joins
     # this trace when it runs. The client-side PropagateOtelContext.
     otel_context: "OtelContext"
+    # The shard key the workflow lives under; required on a sharded system database.
+    shard_key: str
 
 
 def validate_duplication_policy(
@@ -101,6 +104,7 @@ def validate_enqueue_options(options: EnqueueOptions) -> None:
     if workflow_id is not None:
         validate_workflow_id(workflow_id)
     validate_workflow_id_reuse_policy(options.get("workflow_id_reuse_policy"))
+    validate_shard_key(options.get("shard_key"))
     validate_duplication_policy(
         options.get("duplication_policy"),
         options.get("queue_name"),
@@ -212,5 +216,6 @@ def build_enqueue_status(
         "debounce_deadline_epoch_ms": None,
         "is_debounced": False,
         "application_name": options.get("application_name"),
+        "shard_key": options.get("shard_key"),
     }
     return workflow_id, status

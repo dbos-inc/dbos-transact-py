@@ -26,6 +26,13 @@ from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
 from dbos.cli.migration import print_dbos_migrations, print_dbos_user_role_sql
 
+from .conftest import using_sharding
+
+pytestmark = pytest.mark.skipif(
+    using_sharding(),
+    reason="Tests core's unsharded schema migrations, which a sharded system database replaces",
+)
+
 
 def test_systemdb_migration(
     dbos_dropped_databases: DBOS, skip_with_sqlite: None
@@ -1697,6 +1704,21 @@ def test_sqlite_verify_migrations(tmp_path: pathlib.Path) -> None:
         sys_db.verify_migrations()
     finally:
         sys_db.destroy()
+
+
+def test_migrate_print_migrations_refuses_sharding(tmp_path: pathlib.Path) -> None:
+    """Sharded migrations run only live, where they can distribute tables on Citus."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("DBOS")}
+    result = subprocess.run(
+        ["dbos", "migrate", "--print-migrations", "all", "--sharding"],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env=env,
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "--print-migrations is not supported with --sharding" in result.stderr
 
 
 @pytest.mark.parametrize(

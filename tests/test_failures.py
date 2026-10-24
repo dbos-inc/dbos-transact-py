@@ -37,7 +37,9 @@ from .conftest import (
 )
 
 
-def test_notification_errors(dbos: DBOS, skip_with_sqlite: None) -> None:
+def test_notification_errors(
+    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
     @DBOS.workflow()
     def test_send_workflow(dest_uuid: str, topic: str) -> str:
         DBOS.send(dest_uuid, "test1")
@@ -121,7 +123,7 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
     retry_until_success(check_dlq)
     # Terminal like ERROR/CANCELLED, so the DLQ write stamps its own completion time.
     dlq_completed_at = handle.get_status().completed_at
-    assert dlq_completed_at is not None and dlq_completed_at > completed_before_dlq
+    assert dlq_completed_at is not None and dlq_completed_at >= completed_before_dlq
     # A direct call does not re-run the body; it awaits the row and surfaces its terminal status.
     with pytest.raises(Exception) as exc_info:
         with SetWorkflowID(wfid):

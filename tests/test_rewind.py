@@ -18,6 +18,7 @@ from dbos import (
     SetWorkflowID,
     SQLAlchemyDatasource,
 )
+from dbos._datasource import _checkpoint_id
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSException,
@@ -665,7 +666,7 @@ def datasource_checkpoints(ds: SQLAlchemyDatasource, workflow_id: str) -> List[i
         return sorted(
             c.execute(
                 sa.select(ds._outputs_table.c.step_id).where(
-                    ds._outputs_table.c.workflow_id == workflow_id
+                    ds._outputs_table.c.workflow_id == _checkpoint_id(workflow_id)
                 )
             ).scalars()
         )
@@ -677,7 +678,7 @@ async def datasource_checkpoints_async(
     async with ds.engine.begin() as c:
         result = await c.execute(
             sa.select(ds._outputs_table.c.step_id).where(
-                ds._outputs_table.c.workflow_id == workflow_id
+                ds._outputs_table.c.workflow_id == _checkpoint_id(workflow_id)
             )
         )
         return sorted(result.scalars())
@@ -960,7 +961,7 @@ def test_rewind_with_datasources_refuses_an_active_workflow(
         def blocker() -> None:
             ds.run_tx_step(None, insert, "a")
             checkpointed.set()
-            release.wait()
+            release.wait(10)
 
         handle = DBOS.start_workflow(blocker)
         assert checkpointed.wait(10)

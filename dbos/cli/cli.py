@@ -24,6 +24,7 @@ from .._docker_pg_helper import start_docker_pg, stop_docker_pg
 from .._error import DBOSInitializationError
 from .._logger import dbos_logger, init_logger
 from .._sys_db import DEFAULT_RENAME_BATCH_SIZE, SystemDatabase
+from .._sys_db_postgres import PostgresSystemDatabase
 from .._utils import GlobalParams
 from ..cli._github_init import create_template_from_github
 from ._template_init import copy_template, get_project_name, get_templates_directory
@@ -78,8 +79,11 @@ def _resolve_db_url(*, system_database_url: Optional[str]) -> Optional[str]:
             raise click.ClickException(str(e))
 
 
-def _get_db_url(*, system_database_url: Optional[str]) -> str:
-    """Like _resolve_db_url, but exits when no database URL can be resolved."""
+def _get_db_url(
+    *, system_database_url: Optional[str], allow_sharded: bool = False
+) -> str:
+    """Like _resolve_db_url, but exits when no database URL can be resolved, or when it
+    names a sharded system database and the command doesn't support one."""
     url = _resolve_db_url(system_database_url=system_database_url)
     if url is None:
         click.echo(
@@ -87,7 +91,26 @@ def _get_db_url(*, system_database_url: Optional[str]) -> str:
             err=True,
         )
         raise click.exceptions.Exit(code=1)
+    if not allow_sharded and _is_sharded(url):
+        click.echo(
+            "Error: this command does not support a sharded system database; "
+            "only `dbos migrate` does.",
+            err=True,
+        )
+        raise click.exceptions.Exit(code=1)
     return url
+
+
+def _is_sharded(system_database_url: str) -> bool:
+    """Whether the configuration enables sharding or the database holds a sharded schema."""
+    try:
+        if load_config().get("sharding"):
+            return True
+    except Exception:
+        pass
+    if system_database_url.startswith("sqlite"):
+        return False
+    return PostgresSystemDatabase.holds_sharded_schema(system_database_url)
 
 
 @click.group(
@@ -294,12 +317,18 @@ def _resolve_project_name_and_template(
     is_flag=True,
     help="Print the SQL granting the application role (--app-role) access to DBOS system tables instead of executing it",
 )
+@click.option(
+    "--sharding",
+    is_flag=True,
+    help="Create or migrate a sharded system database (requires dbos-enterprise)",
+)
 def migrate(
     system_database_url: Optional[str],
     application_role: Optional[str],
     schema: Optional[str],
     print_migrations: Optional[str],
     print_user_role: bool,
+    sharding: bool,
 ) -> None:
     if schema is None:
         schema = "dbos"
@@ -313,6 +342,14 @@ def migrate(
         if print_user_role and application_role is None:
             click.echo("--print-user-role requires --app-role", err=True)
             raise click.exceptions.Exit(code=1)
+        if print_migrations is not None and sharding:
+            # Sharded migrations also distribute tables (on Citus), which only a live run does.
+            click.echo(
+                "--print-migrations is not supported with --sharding; run "
+                "`dbos migrate --sharding` against the database instead",
+                err=True,
+            )
+            raise click.exceptions.Exit(code=1)
         if print_migrations is not None:
             # Print modes never connect, so a missing database URL is fine.
             print_dbos_migrations(
@@ -325,7 +362,9 @@ def migrate(
             print_dbos_user_role_sql(schema=schema, role_name=application_role)
         return
 
-    system_database_url = _get_db_url(system_database_url=system_database_url)
+    system_database_url = _get_db_url(
+        system_database_url=system_database_url, allow_sharded=True
+    )
 
     migrate_commands: List[str] = []
     if os.path.exists("dbos-config.yaml"):
@@ -347,6 +386,7 @@ def migrate(
         system_database_url=system_database_url,
         schema=schema,
         application_role=application_role,
+        sharding=sharding,
     )
 
     # Next, run any custom migration commands specified in the configuration
@@ -376,6 +416,7 @@ def reset(
     yes: bool,
     system_database_url: Optional[str],
 ) -> None:
+    system_database_url = _get_db_url(system_database_url=system_database_url)
     if not yes:
         confirm = click.confirm(
             "This command resets your DBOS system database, deleting metadata about past workflows and steps. Are you sure you want to proceed?"
@@ -384,7 +425,6 @@ def reset(
             click.echo("Operation cancelled.")
             raise click.exceptions.Exit()
     try:
-        system_database_url = _get_db_url(system_database_url=system_database_url)
         SystemDatabase.reset_system_database(system_database_url)
     except (click.ClickException, click.exceptions.Exit):
         raise
@@ -448,6 +488,7 @@ def rename_application(
         raise click.UsageError(
             "Nothing to re-own: pass --from, --adopt-unclaimed-rows, or both."
         )
+    system_database_url = _get_db_url(system_database_url=system_database_url)
     if not yes:
         confirm = click.confirm(
             f"This command re-owns {' and '.join(sources)} in your DBOS system "
@@ -457,7 +498,6 @@ def rename_application(
         if not confirm:
             click.echo("Operation cancelled.")
             raise click.exceptions.Exit()
-    system_database_url = _get_db_url(system_database_url=system_database_url)
     client = DBOSClient(
         system_database_url=system_database_url, dbos_system_schema=schema
     )

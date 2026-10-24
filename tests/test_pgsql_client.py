@@ -23,6 +23,13 @@ from dbos._dbos import WorkflowHandle
 from tests import client_collateral
 from tests.client_collateral import send_test
 
+from .conftest import using_sharding
+
+pytestmark = pytest.mark.skipif(
+    using_sharding(),
+    reason="Calls the unsharded schema's Postgres functions, which the sharded schema does not define",
+)
+
 
 class Person(TypedDict):
     first: str

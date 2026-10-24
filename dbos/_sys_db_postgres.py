@@ -1,5 +1,7 @@
+import hashlib
 import time
-from typing import Any, Dict, Optional, cast
+from contextlib import contextmanager
+from typing import Any, Dict, Generator, Optional, cast
 
 import psycopg
 import sqlalchemy as sa
@@ -15,8 +17,8 @@ from dbos._migration import (
 )
 
 from ._datasource_migration import DATASOURCE_MIGRATIONS_TABLE
+from ._error import DBOSException
 from ._logger import dbos_logger
-from ._schemas.system_database import SystemSchema
 from ._sys_db import (
     SystemDatabase,
     _dbos_notifications_channel,
@@ -24,6 +26,9 @@ from ._sys_db import (
     _dbos_workflow_events_channel,
 )
 from ._utils import quote_identifier
+
+# How long a background job's lock may sit idle before Postgres ends its holder's session.
+BACKGROUND_JOB_LOCK_IDLE_TIMEOUT_MS = 5000
 
 
 def _sets_idle_transaction_timeout(url: sa.URL, engine_kwargs: Dict[str, Any]) -> bool:
@@ -100,6 +105,7 @@ class PostgresSystemDatabase(SystemDatabase):
                 conn.execute(sa.text("SELECT 1"))
 
         assert self.schema
+        self._refuse_sharded_schema()
         # Skip the advisory lock and migration work entirely if the schema
         # and dbos_migrations table already exist and are at the latest version.
         if not should_migrate(self.engine, self.schema, self.use_listen_notify):
@@ -159,6 +165,37 @@ class PostgresSystemDatabase(SystemDatabase):
                 self.notification_conn.dbapi_connection.close()
                 self.notification_conn.invalidate()
 
+    @contextmanager
+    def background_job_lock(self, job_name: str) -> Generator[bool, None, None]:
+        # CockroachDB grants every advisory lock, so each process runs every job.
+        if self._is_cockroach:
+            yield True
+            return
+        # Leading 8 bytes of SHA-256, big-endian signed, as for the retention lock.
+        name = f"dbos.background_job.{self.schema}.{self.app_name or ''}.{job_name}"
+        key = int.from_bytes(
+            hashlib.sha256(name.encode()).digest()[:8], "big", signed=True
+        )
+        with self.engine.connect() as c:
+            # The local idle timeout ends a frozen holder's session, releasing its lock.
+            acquired = bool(
+                c.execute(
+                    sa.text(
+                        "SELECT pg_try_advisory_xact_lock(:key) FROM set_config("
+                        "'idle_in_transaction_session_timeout', :timeout, true)"
+                    ),
+                    {"key": key, "timeout": str(BACKGROUND_JOB_LOCK_IDLE_TIMEOUT_MS)},
+                ).scalar()
+            )
+            try:
+                yield acquired
+            finally:
+                try:
+                    c.rollback()
+                except Exception as e:
+                    # A session the idle timeout ended has released the lock already.
+                    dbos_logger.debug(f"Could not release the {job_name} lock: {e}")
+
     def _set_statement_timeout(self, conn: sa.Connection, timeout_ms: int) -> None:
         """SET LOCAL, so the cap covers exactly this transaction and is reverted on
         commit: a session-level SET would ride the pooled connection into unrelated
@@ -186,9 +223,9 @@ class PostgresSystemDatabase(SystemDatabase):
         # Coerce to JSONB so contains() renders the @> containment operator,
         # which is served by the GIN index on the attributes column. The
         # column's generic JSON type would render contains() as a string LIKE.
-        return sa.type_coerce(
-            SystemSchema.workflow_status.c.attributes, JSONB
-        ).contains(attributes)
+        return sa.type_coerce(self.tables.workflow_status.c.attributes, JSONB).contains(
+            attributes
+        )
 
     def _is_foreign_key_violation(self, dbapi_error: DBAPIError) -> bool:
         """Check if the error is a foreign key violation in PostgreSQL."""
@@ -290,6 +327,54 @@ class PostgresSystemDatabase(SystemDatabase):
         except Exception as e:
             dbos_logger.error(f"Error resetting PostgreSQL system database: {str(e)}")
             raise e
+
+    def check_connection(self) -> None:
+        super().check_connection()
+        if not self.sharded:
+            self._refuse_sharded_schema()
+
+    def _refuse_sharded_schema(self) -> None:
+        """Raise if this unsharded handle's schema is sharded: its statements name no shard
+        key, so they would read and write across every tenant's rows."""
+        with self.engine.connect() as c:
+            sharded_schema = c.execute(
+                sa.text(
+                    "SELECT 1 FROM information_schema.columns WHERE table_schema = :schema "
+                    "AND table_name = 'workflow_status' AND column_name = 'shard_key'"
+                ),
+                {"schema": self.schema},
+            ).first()
+        if sharded_schema is not None:
+            raise DBOSException(
+                f"The DBOS system schema {self.schema} is sharded. Enable sharding to use "
+                "it: set sharding in DBOSConfig, or pass sharding=True to DBOSClient."
+            )
+
+    @staticmethod
+    def holds_sharded_schema(database_url: str) -> bool:
+        """Whether this database holds a sharded DBOS system schema. False when it can't be
+        reached or doesn't exist yet, leaving the caller to report that."""
+        url = sa.make_url(database_url)
+        if not url.drivername.startswith("cockroachdb"):
+            url = url.set(drivername="postgresql+psycopg")
+        # Bounded like the reset's own connection, so an unreachable host fails as fast.
+        engine = sa.create_engine(url, connect_args={"connect_timeout": 10})
+        try:
+            with engine.connect() as c:
+                return (
+                    c.execute(
+                        sa.text(
+                            "SELECT 1 FROM information_schema.columns WHERE "
+                            "table_name = 'workflow_status' AND column_name = 'shard_key' "
+                            "LIMIT 1"
+                        )
+                    ).first()
+                    is not None
+                )
+        except Exception:
+            return False
+        finally:
+            engine.dispose()
 
     def _notification_listener(self) -> None:
         """Listen for PostgreSQL notifications using psycopg."""

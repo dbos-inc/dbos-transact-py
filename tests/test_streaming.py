@@ -714,7 +714,7 @@ async def test_stream_low_latency_delivery_async(
 
 
 def test_stream_notifier_delivers_without_trigger(
-    dbos: DBOS, skip_with_sqlite: None
+    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
 ) -> None:
     """The per-row NOTIFY trigger is dropped (migration 43) and wakeups come from the coalescing app-side notifier: assert the trigger is gone and a reader on a long poll fallback is still woken by the notifier."""
     import sqlalchemy as sa
@@ -768,7 +768,7 @@ def test_stream_notifier_delivers_without_trigger(
 
 
 def test_stream_notifier_drops_unsendable_payload(
-    dbos: DBOS, skip_with_sqlite: None
+    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
 ) -> None:
     """A batch pg_notify rejects (e.g. a payload over the 8000-byte limit) is dropped, not requeued, so a poison payload can't permanently stall the notifier (H1); the notifier keeps delivering afterward and polling covers the dropped values."""
     sys_db = cast(PostgresSystemDatabase, dbos._sys_db)
@@ -838,7 +838,10 @@ def test_stream_reader_keeps_notifications_after_another_joins(dbos: DBOS) -> No
 
 
 def test_stream_notifier_survives_flush_error(
-    dbos: DBOS, skip_with_sqlite: None, monkeypatch: pytest.MonkeyPatch
+    dbos: DBOS,
+    skip_with_sqlite: None,
+    monkeypatch: pytest.MonkeyPatch,
+    skip_with_sharding: None,
 ) -> None:
     """An exception escaping a flush must not kill the notifier thread (M1): it logs, backs off, and resumes delivering. Without the loop guard the thread would die and stop all stream push notifications for the process."""
     sys_db = cast(PostgresSystemDatabase, dbos._sys_db)
@@ -1361,7 +1364,7 @@ def test_client_read_stream(dbos: DBOS, client: DBOSClient) -> None:
 
 
 def test_client_read_stream_listen_notify(
-    config: DBOSConfig, dbos: DBOS, skip_with_sqlite: None
+    config: DBOSConfig, dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
 ) -> None:
     """A client with use_listen_notify=True has the app's notifications wake its
     blocked stream reader, rather than the reader noticing values only on its own

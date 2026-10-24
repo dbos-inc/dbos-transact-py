@@ -2,15 +2,26 @@ import logging
 import random
 import threading
 import time
-from typing import Any, NoReturn, Optional
+from types import SimpleNamespace
+from typing import Any, NoReturn, Optional, cast
 
 import pytest
 from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 
 from dbos import DBOS, DBOSConfig, KafkaMessage
-from dbos._kafka import _describe_kafka_error, _make_error_cb
+from dbos._error import DBOSInitializationError
+from dbos._kafka import (
+    _describe_kafka_error,
+    _make_error_cb,
+    _validate_consumer_database,
+)
 from dbos._logger import dbos_logger
-from tests.conftest import retry_until_success
+from tests.conftest import retry_until_success, using_sharding
+
+pytestmark = pytest.mark.skipif(
+    using_sharding(),
+    reason="Kafka consumers are not supported on a sharded system database",
+)
 
 # These tests require local Kafka to run.
 # Without it, they're automatically skipped.
@@ -501,7 +512,10 @@ def test_kafka_listen_queues_excludes_custom_consumer_queue(
 
 
 def test_kafka_throughput(
-    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, skip_with_sqlite: None
+    dbos: DBOS,
+    monkeypatch: pytest.MonkeyPatch,
+    skip_with_sqlite: None,
+    skip_with_sharding: None,
 ) -> None:
     # Ingest throughput: batched enqueue must far exceed the old one-txn-per-message path.
     server = "localhost:9092"
@@ -2083,3 +2097,11 @@ def test_kafka_custom_queue(dbos: DBOS) -> None:
     assert event.wait(timeout=60)
     assert processed == set(range(num_messages))
     assert max_active == 1  # concurrency=1 honored
+
+
+def test_consumers_are_refused_on_a_sharded_system_database() -> None:
+    sharded = cast(Any, SimpleNamespace(_sys_db=SimpleNamespace(sharded=True)))
+    unsharded = cast(Any, SimpleNamespace(_sys_db=SimpleNamespace(sharded=False)))
+    with pytest.raises(DBOSInitializationError, match="not supported on a sharded"):
+        _validate_consumer_database(sharded, "consume")
+    _validate_consumer_database(unsharded, "consume")

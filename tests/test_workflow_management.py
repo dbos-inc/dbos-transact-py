@@ -202,7 +202,9 @@ def test_cancel_after_final_step(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_workflow_outcome_is_owned_by_the_pending_row(dbos: DBOS) -> None:
+def test_workflow_outcome_is_owned_by_the_pending_row(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     # A run may record its outcome only while its workflow_status row is still
     # PENDING: that row is what says "this run is what the workflow is doing".
     # Every other status means the run lost ownership (a concurrent resume
@@ -438,7 +440,9 @@ def test_delete_workflow(dbos: DBOS) -> None:
     assert result == 10
 
     # Get the child workflow ID
-    children = dbos._sys_db.get_workflow_children(parent_wfid)
+    children = [
+        w.workflow_id for w in DBOS.list_workflows(parent_workflow_id=parent_wfid)
+    ]
     assert len(children) == 1
     child_wfid = children[0]
 
@@ -457,7 +461,9 @@ def test_delete_workflow(dbos: DBOS) -> None:
         result = parent_workflow(7)
     assert result == 14
 
-    children2 = dbos._sys_db.get_workflow_children(parent_wfid2)
+    children2 = [
+        w.workflow_id for w in DBOS.list_workflows(parent_workflow_id=parent_wfid2)
+    ]
     assert len(children2) == 1
     child_wfid2 = children2[0]
 
@@ -583,11 +589,9 @@ def test_cancel_workflow_children(dbos: DBOS) -> None:
     for i in ids:
         main_events[i].wait()
 
-    # The cascade should discover the full descendant tree
-    assert set(dbos._sys_db.get_workflow_children(parent_id)) == {
-        child_id,
-        grandchild_id,
-    }
+    # The whole descendant tree is recorded: the parent's child, and that child's child
+    tree = DBOS.list_workflows(parent_workflow_id=[parent_id, child_id])
+    assert {w.workflow_id for w in tree} == {child_id, grandchild_id}
 
     # Cancelling without cancel_children only affects the parent
     DBOS.cancel_workflow(parent_id, cancel_children=False)
@@ -744,7 +748,7 @@ def test_fork_nonexistent_workflow_replays_recorded_error(dbos: DBOS) -> None:
 
 
 def test_workflow_command_transient_error_is_retried_not_recorded(
-    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, skip_with_sharding: None
 ) -> None:
     target_id = str(uuid.uuid4())
     original_children = dbos._sys_db._get_direct_children
@@ -1435,6 +1439,28 @@ def test_fork_events(dbos: DBOS) -> None:
     for handle in [fork_one, fork_two, fork_three, fork_four, fork_five]:
         assert handle.get_result()
         assert DBOS.get_event(handle.workflow_id, key) == 2
+
+
+def test_forking_one_workflow_twice_in_one_call(dbos: DBOS) -> None:
+    """Each fork in a batch gets the original's latest events, even when one batch forks
+    the same workflow twice."""
+
+    @DBOS.workflow()
+    def workflow() -> None:
+        DBOS.set_event("key", 0)
+        DBOS.set_event("key", 1)
+
+    handle = DBOS.start_workflow(workflow)
+    handle.get_result()
+    forks = [str(uuid.uuid4()), str(uuid.uuid4())]
+    dbos._sys_db.fork_workflow(
+        [handle.workflow_id, handle.workflow_id],
+        forks,
+        [3, 3],
+        application_version=None,
+    )
+    for fork in forks:
+        assert DBOS.get_event(fork, "key", timeout_seconds=0) == 1
 
 
 def test_fork_streams(dbos: DBOS) -> None:

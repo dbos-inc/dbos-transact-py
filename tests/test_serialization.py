@@ -629,7 +629,7 @@ def test_client_send_serialization(dbos: DBOS, client: DBOSClient) -> None:
     check_msg_ser(dest_portable, "portable", DBOSPortableJSON.name())
 
 
-def test_directinsert_workflows(dbos: DBOS) -> None:
+def test_directinsert_workflows(dbos: DBOS, skip_with_sharding: None) -> None:
     dburl = dbos._config["system_database_url"]
     assert dburl is not None
     schema = "dbos." if dburl.startswith("postgres") else ""
@@ -711,7 +711,7 @@ def test_directinsert_workflows(dbos: DBOS) -> None:
     assert res == 's-1-k:v@"M"'
 
 
-def test_directinsert_invalid_json(dbos: DBOS) -> None:
+def test_directinsert_invalid_json(dbos: DBOS, skip_with_sharding: None) -> None:
     """Inserting unparseable JSON into the inputs column should cause an ERROR, not infinite retry."""
     dburl = dbos._config["system_database_url"]
     assert dburl is not None
@@ -763,7 +763,7 @@ def test_directinsert_invalid_json(dbos: DBOS) -> None:
     assert "JSONDecodeError" in exc_info.value.name
 
 
-def test_directinsert_wrong_args(dbos: DBOS) -> None:
+def test_directinsert_wrong_args(dbos: DBOS, skip_with_sharding: None) -> None:
     """Inserting valid JSON with wrong argument structure should cause an ERROR."""
     dburl = dbos._config["system_database_url"]
     assert dburl is not None
@@ -853,7 +853,7 @@ def test_directinsert_wrong_args(dbos: DBOS) -> None:
     assert "TypeError" in exc_info.value.name
 
 
-def test_directinsert_bogus_notification(dbos: DBOS) -> None:
+def test_directinsert_bogus_notification(dbos: DBOS, skip_with_sharding: None) -> None:
     """A bogus notification message (unparseable JSON) should cause the receiving
     workflow to fail with ERROR, not hang or retry forever."""
     dburl = dbos._config["system_database_url"]
@@ -970,7 +970,9 @@ def test_directinsert_bogus_notification(dbos: DBOS) -> None:
     assert result == {"unexpected": "structure"}
 
 
-def test_directinsert_with_pydantic_validation(dbos: DBOS) -> None:
+def test_directinsert_with_pydantic_validation(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """Pydantic validation catches type mismatches before workflow execution."""
     dburl = dbos._config["system_database_url"]
     assert dburl is not None
@@ -1197,7 +1199,7 @@ def test_pydantic_validator_concurrent_first_calls(
     assert validate((1, "a", "b"), {}) == ((1, "a", "b"), {})
 
 
-def test_directinsert_datetime_validation(dbos: DBOS) -> None:
+def test_directinsert_datetime_validation(dbos: DBOS, skip_with_sharding: None) -> None:
     """JSON has no native date type — pydantic should coerce ISO strings to datetime,
     and reject values that aren't valid date strings."""
     dburl = dbos._config["system_database_url"]

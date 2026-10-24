@@ -4,7 +4,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, List
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -13,10 +13,15 @@ from sqlalchemy.exc import OperationalError
 
 from dbos import DBOS, DBOSClient, DBOSConfig, DBOSConfiguredInstance
 from dbos._error import DBOSException
+from dbos._scheduler import _ScheduleThread
 from dbos._serialization import DBOSPortableJSONSerializer
 from dbos._utils import INTERNAL_QUEUE_NAME
 
-from .conftest import reexecute_workflow_by_id, retry_until_success
+from .conftest import (
+    reexecute_workflow_by_id,
+    retry_until_success,
+    using_sharding,
+)
 
 
 def daily_cron_far_from_now() -> str:
@@ -500,6 +505,7 @@ def test_schedule_thread_signature() -> None:
         "cron_timezone": None,
         "queue_name": None,
         "application_name": "app-a",
+        "shard_key": None,
     }
     sig = _ScheduleThread.compute_signature(base)
 
@@ -522,6 +528,7 @@ def test_schedule_thread_signature() -> None:
         ("context", "ctx2"),
         ("cron_timezone", "America/Los_Angeles"),
         ("queue_name", "q"),
+        ("shard_key", "tenant-a"),
     ]:
         assert _ScheduleThread.compute_signature({**base, field: value}) != sig  # type: ignore[misc]
 
@@ -1976,7 +1983,9 @@ def test_schedule_uses_latest_application_version(dbos: DBOS) -> None:
     retry_until_success(check_enqueued_on_latest_version)
 
 
-def test_schedule_survives_sysdb_downtime(dbos: DBOS, skip_with_sqlite: None) -> None:
+def test_schedule_survives_sysdb_downtime(
+    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
     late_counter: int = 0
 
     @DBOS.workflow()
@@ -2133,3 +2142,36 @@ def test_schedule_non_retriable_database_error_is_recorded(
     monkeypatch.setattr(dbos._sys_db, "create_schedule", original_create)
     assert reexecute_workflow_by_id(dbos, handle.workflow_id).get_result() == "failed"
     assert DBOS.get_schedule("nightly") is None
+
+
+@pytest.mark.skipif(
+    not using_sharding(), reason="Only sharded runs check for lost keys"
+)
+def test_a_key_lost_on_a_schedule_thread_is_reported(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, lost_shard_keys: List[str]
+) -> None:
+    """The sharded run's lost-key check sees DBOS's own threads, so a schedule that drops
+    its key fails a test instead of quietly running under the test's key."""
+    start = _ScheduleThread.__init__
+
+    def keyless(self: _ScheduleThread, *args: Any, **kwargs: Any) -> None:
+        start(self, *args, **kwargs)
+        self.shard_key = None
+
+    monkeypatch.setattr(_ScheduleThread, "__init__", keyless)
+
+    @DBOS.workflow()
+    def ticked(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    DBOS.create_schedule(
+        schedule_name="keyless", workflow_fn=ticked, schedule="* * * * * *"
+    )
+
+    def reported() -> None:
+        assert any("_loop" in lost for lost in lost_shard_keys), lost_shard_keys
+
+    retry_until_success(reported)
+    # Stop the schedule before forgiving what it reported.
+    DBOS.destroy(destroy_registry=True)
+    lost_shard_keys.clear()

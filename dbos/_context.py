@@ -11,16 +11,18 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
-    Iterator,
+    Generator,
     List,
     Literal,
     Optional,
+    Tuple,
     Type,
     TypedDict,
     Union,
 )
 
 from dbos._serialization import WorkflowSerializationFormat
+from dbos._shard_keys import clear_shard_key_state, restore_shard_key_state
 
 if TYPE_CHECKING:
     from opentelemetry.context import Context as OtelContext
@@ -101,6 +103,21 @@ class ContextSpan:
     context_manager: "AbstractContextManager[Span]"
 
 
+def child_workflow_id(
+    parent_id: str,
+    function_id: int,
+    parent_key: Optional[str],
+    child_key: Optional[str],
+) -> str:
+    """A child's default ID: its parent's, suffixed with the call number. A parent ID is
+    unique only within its shard key, so a child under another key carries the parent's.
+    """
+    base = f"{parent_id}-{function_id}"
+    if parent_key is None or child_key is None or child_key == parent_key:
+        return base
+    return f"{len(parent_key)}:{parent_key}:{base}"
+
+
 class DBOSContext:
     def __init__(self) -> None:
         self.executor_id = GlobalParams.executor_id
@@ -109,6 +126,8 @@ class DBOSContext:
         self.logger = dbos_logger
 
         self.id_assigned_for_next_workflow: str = ""
+        # (parent ID, call number, parent's shard key) when the ID above is a derived default
+        self.derived_from: Optional[Tuple[str, int, Optional[str]]] = None
         # Reuse policy for id_assigned_for_next_workflow, consumed along with it.
         self.workflow_id_reuse_policy: Optional[WorkflowIDReusePolicy] = None
         self.is_within_set_workflow_id_block: bool = False
@@ -116,6 +135,10 @@ class DBOSContext:
         self.parent_workflow_id: str = ""
         self.parent_workflow_fid: int = -1
         self.workflow_id: str = ""
+        # Shard key of the running workflow; None on an unsharded database.
+        self.shard_key: Optional[str] = None
+        # Shard key for the next workflow started from this context, set by SetShardKey.
+        self.shard_key_for_next_workflow: Optional[str] = None
         self.function_id: int = -1
         # Token this execution wrote to the row's owner_xid; checkpoints land only while it still matches.
         self.owner_xid: Optional[str] = None
@@ -184,6 +207,7 @@ class DBOSContext:
             rv.otel_carrier = (
                 dict(self.otel_carrier) if self.otel_carrier is not None else None
             )
+            rv.shard_key = self.shard_key_for_next_workflow
         rv.is_within_set_workflow_id_block = self.is_within_set_workflow_id_block
         rv.parent_workflow_id = self.workflow_id
         rv.parent_workflow_fid = self.function_id
@@ -204,6 +228,8 @@ class DBOSContext:
         rv.app_id = self.app_id
         rv.app_version = self.app_version
         rv.workflow_id = self.workflow_id
+        rv.shard_key = self.shard_key
+        rv.shard_key_for_next_workflow = self.shard_key_for_next_workflow
         rv.owner_xid = self.owner_xid
         rv.workflow_deadline_epoch_ms = self.workflow_deadline_epoch_ms
         rv.workflow_timeout_ms = self.workflow_timeout_ms
@@ -233,12 +259,18 @@ class DBOSContext:
         #      If this is a child workflow, assign parent wf id with call# suffix
         #   Make a (system) DB record for the workflow
         #   Pass the new context to a worker thread that will run the wf function
+        derived_from: Optional[Tuple[str, int, Optional[str]]] = None
         if cur_ctx is not None and cur_ctx.is_within_workflow():
             assert cur_ctx.is_workflow()  # Not in a step
             cur_ctx.function_id += 1
             if len(cur_ctx.id_assigned_for_next_workflow) == 0:
-                cur_ctx.id_assigned_for_next_workflow = (
-                    cur_ctx.workflow_id + "-" + str(cur_ctx.function_id)
+                derived_from = (
+                    cur_ctx.workflow_id,
+                    cur_ctx.function_id,
+                    cur_ctx.shard_key,
+                )
+                cur_ctx.id_assigned_for_next_workflow = child_workflow_id(
+                    *derived_from, cur_ctx.shard_key_for_next_workflow
                 )
 
         new_wf_ctx = (
@@ -247,6 +279,7 @@ class DBOSContext:
             else cur_ctx.create_child(is_for_workflow=True)
         )
         new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
+        new_wf_ctx.derived_from = derived_from
 
         return new_wf_ctx
 
@@ -764,7 +797,7 @@ class PropagateOtelContext:
 
 
 @contextmanager
-def restore_otel_carrier(carrier: Optional[Any]) -> Iterator[None]:
+def restore_otel_carrier(carrier: Optional[Any]) -> Generator[None, None, None]:
     """Put a carrier persisted by PropagateOtelContext back on the context.
 
     Dequeue and recovery rebuild the workflow status from a fresh context, so the stored
@@ -862,6 +895,40 @@ class SetEnqueueOptions:
         return False
 
 
+class SetShardKey:
+    """Set the shard key of every workflow started, enqueued, or called in the block.
+    Required on a sharded system database; a workflow never inherits its caller's key.
+    """
+
+    def __init__(self, shard_key: str) -> None:
+        if not shard_key:
+            raise ValueError("shard_key must be a non-empty string")
+        self.created_ctx = False
+        self.shard_key = shard_key
+        self.saved_shard_key: Optional[str] = None
+
+    def __enter__(self) -> SetShardKey:
+        ctx = get_local_dbos_context()
+        if ctx is None:
+            self.created_ctx = True
+            _set_local_dbos_context(DBOSContext())
+        ctx = assert_current_dbos_context()
+        self.saved_shard_key = ctx.shard_key_for_next_workflow
+        ctx.shard_key_for_next_workflow = self.shard_key
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        assert_current_dbos_context().shard_key_for_next_workflow = self.saved_shard_key
+        if self.created_ctx:
+            _clear_local_dbos_context()
+        return False
+
+
 class SetWorkflowDebounce:
     """Internal: mark the next enqueued workflow as debounced.
 
@@ -947,12 +1014,16 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         self.saved_deduplication_id: Optional[str] = None
         self.saved_duplication_policy: Optional[DuplicationPolicy] = None
         self.saved_priority: Optional[int] = None
+        self.saved_shard_key: Optional[str] = None
         self.saved_is_within_set_workflow_id_block: bool = False
         self.use_ctx = ctx
         self.prev_ctx: Optional[DBOSContext] = None
+        self.shard_key_tokens: Optional[Any] = None
 
     def __enter__(self) -> DBOSContext:
         self.prev_ctx = get_local_dbos_context()
+        # The body starts with no caller's shard keys; its own lives on the context.
+        self.shard_key_tokens = clear_shard_key_state()
         # Create a basic context if none exists
         if self.use_ctx is None:
             self.use_ctx = DBOSContext()
@@ -974,6 +1045,9 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         ctx.duplication_policy = None
         self.saved_priority = ctx.priority
         ctx.priority = None
+        # Nor the shard key set for the caller's next workflow.
+        self.saved_shard_key = ctx.shard_key_for_next_workflow
+        ctx.shard_key_for_next_workflow = None
         ctx.start_workflow(
             None, self.attributes
         )  # Will get from the context's next workflow ID
@@ -997,10 +1071,13 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         ctx.workflow_deadline_epoch_ms = None
         # Restore the saved deduplication ID, duplication policy, and priority
         ctx.priority = self.saved_priority
+        ctx.shard_key_for_next_workflow = self.saved_shard_key
         ctx.deduplication_id = self.saved_deduplication_id
         ctx.duplication_policy = self.saved_duplication_policy
         # Code to clean up the basic context if we created it
         _set_local_dbos_context(self.prev_ctx)
+        if self.shard_key_tokens is not None:
+            restore_shard_key_state(self.shard_key_tokens)
         return False  # Did not handle
 
 

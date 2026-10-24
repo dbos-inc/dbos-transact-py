@@ -136,7 +136,7 @@ def _count_notifications(client: DBOSClient, workflow_id: str) -> int:
 
 
 def test_client_no_migrate(
-    dbos: DBOS, config: DBOSConfig, skip_with_sqlite: None
+    dbos: DBOS, config: DBOSConfig, skip_with_sqlite: None, skip_with_sharding: None
 ) -> None:
     # Drop the system database
     DBOS.destroy()
@@ -488,7 +488,11 @@ def run_send_worker(
 
 
 def test_client_send_idempotent(
-    dbos: DBOS, client: DBOSClient, sqlite_path: Path, skip_with_sqlite: None
+    dbos: DBOS,
+    client: DBOSClient,
+    sqlite_path: Path,
+    skip_with_sqlite: None,
+    skip_with_sharding: None,
 ) -> None:
     run_client_collateral()
 
@@ -762,7 +766,7 @@ def test_client_no_retry_raises_on_unreachable_database() -> None:
 
 
 def test_client_listen_notify_get_event(
-    config: DBOSConfig, dbos: DBOS, skip_with_sqlite: None
+    config: DBOSConfig, dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
 ) -> None:
     """With use_listen_notify=True the client runs a listener thread, so waits stop
     polling the database and rely on notifications: the fallback re-check is 60s, so
@@ -991,7 +995,9 @@ async def test_client_fork_async(dbos: DBOS, client: DBOSClient) -> None:
     assert len(await client.list_workflows_async()) == 3
 
 
-def test_enqueue_with_deduplication(dbos: DBOS, client: DBOSClient) -> None:
+def test_enqueue_with_deduplication(
+    dbos: DBOS, client: DBOSClient, skip_with_sharding: None
+) -> None:
     run_client_collateral()
 
     wfid = str(uuid.uuid4())
@@ -1113,7 +1119,9 @@ def test_enqueue_in_transaction_pre_commit_invisible(
                 assert row is None
 
 
-def test_enqueue_in_transaction_deduplication(dbos: DBOS, client: DBOSClient) -> None:
+def test_enqueue_in_transaction_deduplication(
+    dbos: DBOS, client: DBOSClient, skip_with_sharding: None
+) -> None:
     run_client_collateral()
 
     wfid = str(uuid.uuid4())
@@ -1209,6 +1217,37 @@ def test_enqueue_in_transaction_session_after_statement(
     finally:
         engine.dispose()
     assert handle.get_result() == "after-statement"
+
+
+def test_enqueue_in_transaction_on_another_driver(
+    dbos: DBOS, client: DBOSClient, skip_with_sqlite: None
+) -> None:
+    # A caller's engine may use another driver than DBOS's, here psycopg2; its connection
+    # must compile DBOS's statements itself rather than receive psycopg 3's.
+    run_client_collateral()
+
+    url = client._sys_db.engine.url.set(drivername="postgresql+psycopg2")
+    engine = sa.create_engine(url)
+    try:
+        with engine.begin() as conn:
+            options: EnqueueOptions = {
+                "queue_name": "test_queue",
+                "workflow_name": "retrieve_test",
+                "workflow_id": str(uuid.uuid4()),
+            }
+            via_conn: WorkflowHandle[str] = client.enqueue_in_transaction(
+                conn, options, "psycopg2-connection"
+            )
+        with Session(engine) as session:
+            with session.begin():
+                options["workflow_id"] = str(uuid.uuid4())
+                via_session: WorkflowHandle[str] = client.enqueue_in_transaction(
+                    session, options, "psycopg2-session"
+                )
+    finally:
+        engine.dispose()
+    assert via_conn.get_result() == "psycopg2-connection"
+    assert via_session.get_result() == "psycopg2-session"
 
 
 @pytest.mark.asyncio

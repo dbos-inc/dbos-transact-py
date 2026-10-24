@@ -3,7 +3,7 @@ bulk delete) and filtering alike -- takes an owner's rows plus the unclaimed one
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 from unittest.mock import patch
 
 import pytest
@@ -12,13 +12,23 @@ import sqlalchemy as sa
 from dbos import DBOS, DBOSClient, DBOSConfig, Queue, WorkflowHandle
 from dbos._error import DBOSException
 from dbos._queue import _INTERNAL_QUEUE_CONSTRUCTION
-from dbos._schemas.system_database import SystemSchema
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 
 APP_NAME = "test-app"  # matches conftest.default_config
 OTHER_APP = "other-app"
 # After any row written during the test; epoch ms is ~1.7e12, so 2**40 is the past.
 FUTURE_MS = int(datetime.now(timezone.utc).timestamp() * 1000) + 10**9
+
+
+def global_values(dbos: DBOS) -> Dict[str, Any]:
+    """Key columns for a global row; none on an unsharded system database."""
+    return dbos._sys_db._global_values()
+
+
+def schedule_values(dbos: DBOS) -> Dict[str, Any]:
+    """Key columns for a schedule row: the global key, plus the key its workflows run under."""
+    keys = dbos._sys_db._wf_values("schedule")
+    return {**global_values(dbos), **{"workflow_shard_key": k for k in keys.values()}}
 
 
 def daily_cron_far_from_now() -> str:
@@ -31,19 +41,19 @@ def _column_of(dbos: DBOS, column: Any, workflow_id: str) -> Any:
     with dbos._sys_db.engine.begin() as c:
         return c.execute(
             sa.select(column).where(
-                SystemSchema.workflow_status.c.workflow_uuid == workflow_id
+                dbos._sys_db.tables.workflow_status.c.workflow_uuid == workflow_id
             )
         ).scalar()
 
 
 def application_name_of(dbos: DBOS, workflow_id: str) -> Any:
     return _column_of(
-        dbos, SystemSchema.workflow_status.c.application_name, workflow_id
+        dbos, dbos._sys_db.tables.workflow_status.c.application_name, workflow_id
     )
 
 
 def status_of(dbos: DBOS, workflow_id: str) -> Any:
-    return _column_of(dbos, SystemSchema.workflow_status.c.status, workflow_id)
+    return _column_of(dbos, dbos._sys_db.tables.workflow_status.c.status, workflow_id)
 
 
 def step_owners(dbos: DBOS, workflow_id: str) -> set[Any]:
@@ -51,8 +61,10 @@ def step_owners(dbos: DBOS, workflow_id: str) -> set[Any]:
         return {
             r[0]
             for r in c.execute(
-                sa.select(SystemSchema.operation_outputs.c.application_name).where(
-                    SystemSchema.operation_outputs.c.workflow_uuid == workflow_id
+                sa.select(
+                    dbos._sys_db.tables.operation_outputs.c.application_name
+                ).where(
+                    dbos._sys_db.tables.operation_outputs.c.workflow_uuid == workflow_id
                 )
             )
         }
@@ -70,7 +82,8 @@ def insert_foreign_workflow(
     launching another DBOS, which keeps these tests to one process."""
     with dbos._sys_db.engine.begin() as c:
         c.execute(
-            sa.insert(SystemSchema.workflow_status).values(
+            sa.insert(dbos._sys_db.tables.workflow_status).values(
+                **dbos._sys_db._wf_values(workflow_id),
                 workflow_uuid=workflow_id,
                 status=status,
                 name="foreign_workflow",
@@ -98,7 +111,8 @@ def insert_foreign_step(
 ) -> None:
     with dbos._sys_db.engine.begin() as c:
         c.execute(
-            sa.insert(SystemSchema.operation_outputs).values(
+            sa.insert(dbos._sys_db.tables.operation_outputs).values(
+                **dbos._sys_db._wf_values(workflow_id),
                 workflow_uuid=workflow_id,
                 function_id=1,
                 function_name=function_name,
@@ -147,8 +161,8 @@ def test_runtime_stamps_everything_it_writes(dbos: DBOS) -> None:
 
     with dbos._sys_db.engine.begin() as c:
         queue_owner = c.execute(
-            sa.select(SystemSchema.queues.c.application_name).where(
-                SystemSchema.queues.c.name == "registered-queue"
+            sa.select(dbos._sys_db.tables.queues.c.application_name).where(
+                dbos._sys_db.tables.queues.c.name == "registered-queue"
             )
         ).scalar()
     schedule = dbos._sys_db.get_schedule("owned-schedule")
@@ -319,7 +333,8 @@ def test_claiming_skips_another_applications_workflows(dbos: DBOS) -> None:
     # Recovery matches on executor and version, which another application shares.
     with dbos._sys_db.engine.begin() as c:
         c.execute(
-            sa.insert(SystemSchema.workflow_status).values(
+            sa.insert(dbos._sys_db.tables.workflow_status).values(
+                **dbos._sys_db._wf_values("foreign-pending"),
                 workflow_uuid="foreign-pending",
                 status="PENDING",
                 name="foreign_workflow",
@@ -358,7 +373,8 @@ def test_unclaimed_rows_belong_to_every_application(
             ("legacy-schedule-id", "unclaimed", None),
         ):
             c.execute(
-                sa.insert(SystemSchema.workflow_schedules).values(
+                sa.insert(dbos._sys_db.tables.workflow_schedules).values(
+                    **schedule_values(dbos),
                     schedule_id=schedule_id,
                     schedule_name=name,
                     workflow_name="scheduled",
@@ -373,7 +389,8 @@ def test_unclaimed_rows_belong_to_every_application(
             ("legacy-queue-id", "unclaimed-queue", None),
         ):
             c.execute(
-                sa.insert(SystemSchema.queues).values(
+                sa.insert(dbos._sys_db.tables.queues).values(
+                    **global_values(dbos),
                     queue_id=queue_id,
                     name=name,
                     created_at=1,
@@ -429,15 +446,17 @@ def test_unclaimed_rows_belong_to_every_application(
     )
     with dbos._sys_db.engine.begin() as c:
         queue_owner = c.execute(
-            sa.select(SystemSchema.queues.c.application_name).where(
-                SystemSchema.queues.c.name == "unclaimed-queue"
+            sa.select(dbos._sys_db.tables.queues.c.application_name).where(
+                dbos._sys_db.tables.queues.c.name == "unclaimed-queue"
             )
         ).scalar()
         schedule_row = c.execute(
             sa.select(
-                SystemSchema.workflow_schedules.c.application_name,
-                SystemSchema.workflow_schedules.c.schedule_id,
-            ).where(SystemSchema.workflow_schedules.c.schedule_name == "unclaimed")
+                dbos._sys_db.tables.workflow_schedules.c.application_name,
+                dbos._sys_db.tables.workflow_schedules.c.schedule_id,
+            ).where(
+                dbos._sys_db.tables.workflow_schedules.c.schedule_name == "unclaimed"
+            )
         ).fetchone()
     assert queue_owner == APP_NAME
     assert schedule_row == (APP_NAME, "legacy-schedule-id")
@@ -463,7 +482,8 @@ def test_versions_are_per_application(dbos: DBOS, client: DBOSClient) -> None:
 
     with dbos._sys_db.engine.begin() as c:
         c.execute(
-            sa.insert(SystemSchema.application_versions).values(
+            sa.insert(dbos._sys_db.tables.application_versions).values(
+                **global_values(dbos),
                 version_id="foreign-version-id",
                 version_name="foreign-version",
                 version_timestamp=FUTURE_MS,
@@ -478,7 +498,8 @@ def test_versions_are_per_application(dbos: DBOS, client: DBOSClient) -> None:
 
     with dbos._sys_db.engine.begin() as c:
         c.execute(
-            sa.insert(SystemSchema.application_versions).values(
+            sa.insert(dbos._sys_db.tables.application_versions).values(
+                **global_values(dbos),
                 version_id="unclaimed-version-id",
                 version_name="unclaimed-version",
                 version_timestamp=FUTURE_MS,
@@ -493,7 +514,8 @@ def test_versions_are_per_application(dbos: DBOS, client: DBOSClient) -> None:
 
     with dbos._sys_db.engine.begin() as c:
         c.execute(
-            sa.insert(SystemSchema.application_versions).values(
+            sa.insert(dbos._sys_db.tables.application_versions).values(
+                **global_values(dbos),
                 version_id="pinned-version-id",
                 version_name="1.0.0",
                 version_timestamp=7,
@@ -502,7 +524,8 @@ def test_versions_are_per_application(dbos: DBOS, client: DBOSClient) -> None:
             )
         )
         c.execute(
-            sa.insert(SystemSchema.application_versions).values(
+            sa.insert(dbos._sys_db.tables.application_versions).values(
+                **global_values(dbos),
                 version_id="owned-version-id",
                 version_name="2.0.0",
                 version_timestamp=7,
@@ -518,12 +541,12 @@ def test_versions_are_per_application(dbos: DBOS, client: DBOSClient) -> None:
             r[0]: (r[1], r[2], r[3])
             for r in c.execute(
                 sa.select(
-                    SystemSchema.application_versions.c.version_name,
-                    SystemSchema.application_versions.c.application_name,
-                    SystemSchema.application_versions.c.version_id,
-                    SystemSchema.application_versions.c.version_timestamp,
+                    dbos._sys_db.tables.application_versions.c.version_name,
+                    dbos._sys_db.tables.application_versions.c.application_name,
+                    dbos._sys_db.tables.application_versions.c.version_id,
+                    dbos._sys_db.tables.application_versions.c.version_timestamp,
                 ).where(
-                    SystemSchema.application_versions.c.version_name.in_(
+                    dbos._sys_db.tables.application_versions.c.version_name.in_(
                         ["1.0.0", "2.0.0"]
                     )
                 )
@@ -556,8 +579,11 @@ def test_versions_are_per_application(dbos: DBOS, client: DBOSClient) -> None:
     def owner_of(version_name: str) -> Any:
         with dbos._sys_db.engine.begin() as c:
             return c.execute(
-                sa.select(SystemSchema.application_versions.c.application_name).where(
-                    SystemSchema.application_versions.c.version_name == version_name
+                sa.select(
+                    dbos._sys_db.tables.application_versions.c.application_name
+                ).where(
+                    dbos._sys_db.tables.application_versions.c.version_name
+                    == version_name
                 )
             ).scalar()
 
@@ -587,7 +613,8 @@ def test_conflicting_names_across_applications_raise(
 
     with dbos._sys_db.engine.begin() as c:
         c.execute(
-            sa.insert(SystemSchema.queues).values(
+            sa.insert(dbos._sys_db.tables.queues).values(
+                **global_values(dbos),
                 queue_id="conflict-queue-id",
                 name="conflict-queue",
                 created_at=1,
@@ -596,7 +623,8 @@ def test_conflicting_names_across_applications_raise(
             )
         )
         c.execute(
-            sa.insert(SystemSchema.workflow_schedules).values(
+            sa.insert(dbos._sys_db.tables.workflow_schedules).values(
+                **schedule_values(dbos),
                 schedule_id="conflict-schedule-id",
                 schedule_name="conflict-schedule",
                 workflow_name="scheduled",
@@ -623,9 +651,9 @@ def test_conflicting_names_across_applications_raise(
         with dbos._sys_db.engine.begin() as c:
             return c.execute(
                 sa.select(
-                    SystemSchema.queues.c.application_name,
-                    SystemSchema.queues.c.concurrency,
-                ).where(SystemSchema.queues.c.name == "conflict-queue")
+                    dbos._sys_db.tables.queues.c.application_name,
+                    dbos._sys_db.tables.queues.c.concurrency,
+                ).where(dbos._sys_db.tables.queues.c.name == "conflict-queue")
             ).one()
 
     def upsert(sys_db: Any, concurrency: Optional[int], update_existing: bool) -> bool:
@@ -664,15 +692,18 @@ def test_conflicting_names_across_applications_raise(
     with dbos._sys_db.engine.begin() as c:
         assert c.execute(
             sa.select(
-                SystemSchema.workflow_schedules.c.application_name,
-                SystemSchema.workflow_schedules.c.schedule,
+                dbos._sys_db.tables.workflow_schedules.c.application_name,
+                dbos._sys_db.tables.workflow_schedules.c.schedule,
             ).where(
-                SystemSchema.workflow_schedules.c.schedule_name == "conflict-schedule"
+                dbos._sys_db.tables.workflow_schedules.c.schedule_name
+                == "conflict-schedule"
             )
         ).one() == (OTHER_APP, new_cron)
 
 
-def test_cli_binds_its_application_options(dbos: DBOS, config: Any) -> None:
+def test_cli_binds_its_application_options(
+    dbos: DBOS, config: Any, skip_with_sharding: None
+) -> None:
     """Click binds options to parameters by name, which mypy cannot check, so every
     command taking an application needs one real invocation."""
     from click.testing import CliRunner
@@ -759,6 +790,7 @@ def test_two_applications_share_one_system_database(dbos: DBOS, config: Any) -> 
             executor_id=f"exec-{name}",
             use_listen_notify=False,
             app_name=name,
+            sharding=bool(config.get("sharding")),
         )
         for name in names
     }
@@ -815,7 +847,8 @@ def insert_foreign_control_plane(dbos: DBOS, suffix: str = "") -> None:
     """A queue, a schedule, and a version, all held by OTHER_APP."""
     with dbos._sys_db.engine.begin() as c:
         c.execute(
-            sa.insert(SystemSchema.queues).values(
+            sa.insert(dbos._sys_db.tables.queues).values(
+                **global_values(dbos),
                 queue_id=f"rename-queue-id{suffix}",
                 name=f"rename-queue{suffix}",
                 created_at=1,
@@ -824,7 +857,8 @@ def insert_foreign_control_plane(dbos: DBOS, suffix: str = "") -> None:
             )
         )
         c.execute(
-            sa.insert(SystemSchema.workflow_schedules).values(
+            sa.insert(dbos._sys_db.tables.workflow_schedules).values(
+                **schedule_values(dbos),
                 schedule_id=f"rename-schedule-id{suffix}",
                 schedule_name=f"rename-schedule{suffix}",
                 workflow_name="foreign_workflow",
@@ -835,7 +869,8 @@ def insert_foreign_control_plane(dbos: DBOS, suffix: str = "") -> None:
             )
         )
         c.execute(
-            sa.insert(SystemSchema.application_versions).values(
+            sa.insert(dbos._sys_db.tables.application_versions).values(
+                **global_values(dbos),
                 version_id=f"rename-version-id{suffix}",
                 version_name=f"rename-version{suffix}",
                 version_timestamp=7,
@@ -848,11 +883,11 @@ def insert_foreign_control_plane(dbos: DBOS, suffix: str = "") -> None:
 def owners_of_everything(dbos: DBOS) -> dict[str, set[Any]]:
     """Every owner recorded in each of the five owned tables."""
     tables = {
-        "queues": SystemSchema.queues,
-        "schedules": SystemSchema.workflow_schedules,
-        "versions": SystemSchema.application_versions,
-        "workflows": SystemSchema.workflow_status,
-        "steps": SystemSchema.operation_outputs,
+        "queues": dbos._sys_db.tables.queues,
+        "schedules": dbos._sys_db.tables.workflow_schedules,
+        "versions": dbos._sys_db.tables.application_versions,
+        "workflows": dbos._sys_db.tables.workflow_status,
+        "steps": dbos._sys_db.tables.operation_outputs,
     }
     with dbos._sys_db.engine.begin() as c:
         return {
@@ -861,7 +896,7 @@ def owners_of_everything(dbos: DBOS) -> dict[str, set[Any]]:
         }
 
 
-def test_rename_moves_every_owned_table(dbos: DBOS) -> None:
+def test_rename_moves_every_owned_table(dbos: DBOS, skip_with_sharding: None) -> None:
     """Ownership lives on the rows, so renaming an application is a re-own of all
     five tables. Counts are reported per table so an operator can check the move."""
     insert_foreign_workflow(dbos, "rename-terminal", status="SUCCESS")
@@ -884,7 +919,9 @@ def test_rename_moves_every_owned_table(dbos: DBOS) -> None:
         assert RENAMED_APP in owners, label
 
 
-def test_rename_batches_terminal_rows_and_resumes(dbos: DBOS) -> None:
+def test_rename_batches_terminal_rows_and_resumes(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """Terminal workflows and steps move in batches, so a long history does not run
     in one transaction. The predicate shrinks as it goes, so a re-run resumes."""
     for i in range(5):
@@ -902,7 +939,9 @@ def test_rename_batches_terminal_rows_and_resumes(dbos: DBOS) -> None:
         assert application_name_of(dbos, f"rename-batched-{i}") == RENAMED_APP
 
 
-def test_rename_rejects_names_an_application_could_not_use(dbos: DBOS) -> None:
+def test_rename_rejects_names_an_application_could_not_use(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """A rename to a name the config validator rejects would strand the rows again,
     since no application could ever launch under it."""
     with pytest.raises(DBOSException, match="Invalid application name"):
@@ -922,7 +961,9 @@ def test_rename_rejects_names_an_application_could_not_use(dbos: DBOS) -> None:
         dbos._sys_db.rename_application(OTHER_APP, RENAMED_APP, batch_size=0)
 
 
-def test_rename_moves_only_the_sources_it_is_given(dbos: DBOS) -> None:
+def test_rename_moves_only_the_sources_it_is_given(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
     """Scope is the whole contract: a named application's rows, the unclaimed ones, or
     both. Never a peer nobody named, and never the live application's own."""
 

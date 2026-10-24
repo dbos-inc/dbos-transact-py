@@ -1,5 +1,6 @@
 import asyncio
 import threading
+from concurrent.futures import Executor
 from typing import Any, Coroutine, Optional, TypeVar
 
 from ._logger import dbos_logger
@@ -26,11 +27,16 @@ class BackgroundEventLoop:
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self._ready = threading.Event()
+        self._executor: Optional[Executor] = None
 
-    def start(self) -> None:
+    def start(self, executor: Optional[Executor] = None) -> None:
+        """Start the loop. Its asyncio.to_thread calls, such as each workflow's outcome
+        write, run on executor if given rather than on asyncio's default pool, which
+        max_executor_threads does not bound."""
         if self._running:
             return
 
+        self._executor = executor
         self.set_main_loop()
         self._thread = threading.Thread(target=self._run_event_loop, daemon=True)
         self._thread.start()
@@ -51,6 +57,8 @@ class BackgroundEventLoop:
     def _run_event_loop(self) -> None:
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
+        if self._executor is not None:
+            self._loop.set_default_executor(self._executor)
 
         self._running = True
         self._ready.set()  # Signal that the loop is ready
