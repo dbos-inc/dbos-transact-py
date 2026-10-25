@@ -90,6 +90,8 @@ from ._shard_keys import bind_shard_keys, bound_shard_key
 if TYPE_CHECKING:
     from ._queue import Queue, QueueRateLimit
 
+_MAX_BIGINT = 2**63 - 1
+
 
 def queue_from_db_row(
     row: sa.Row[Any],
@@ -5195,8 +5197,15 @@ class SystemDatabase(ABC):
                                         None
                                     ),
                                 ),
-                                start_time_ms
-                                + self.tables.workflow_status.c.workflow_timeout_ms,
+                                sa.case(
+                                    (
+                                        self.tables.workflow_status.c.workflow_timeout_ms
+                                        > _MAX_BIGINT - start_time_ms,
+                                        _MAX_BIGINT,
+                                    ),
+                                    else_=start_time_ms
+                                    + self.tables.workflow_status.c.workflow_timeout_ms,
+                                ),
                             ),
                             else_=self.tables.workflow_status.c.workflow_deadline_epoch_ms,
                         ),
@@ -5380,7 +5389,14 @@ class SystemDatabase(ABC):
                                 ws.c.workflow_timeout_ms.isnot(None),
                                 ws.c.workflow_deadline_epoch_ms.is_(None),
                             ),
-                            start_time_ms + ws.c.workflow_timeout_ms,
+                            sa.case(
+                                (
+                                    ws.c.workflow_timeout_ms
+                                    > _MAX_BIGINT - start_time_ms,
+                                    _MAX_BIGINT,
+                                ),
+                                else_=start_time_ms + ws.c.workflow_timeout_ms,
+                            ),
                         ),
                         else_=ws.c.workflow_deadline_epoch_ms,
                     ),
