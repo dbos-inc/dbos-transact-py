@@ -80,7 +80,7 @@ class _RetrySignal(logging.Handler):
             self.event.set()
 
 
-@pytest.mark.parametrize("operation", ["status", "checkpoint"])
+@pytest.mark.parametrize("operation", ["cancelled_ids", "checkpoint"])
 @pytest.mark.parametrize("retry_connection_errors", [True, False])
 def test_pool_checkout_timeout(
     tmp_path: Path, operation: str, retry_connection_errors: bool
@@ -92,6 +92,9 @@ def test_pool_checkout_timeout(
     with _system_database(
         path, retry_connection_errors=retry_connection_errors
     ) as database:
+        if operation == "cancelled_ids":
+            with closing(sqlite3.connect(path)) as connection, connection:
+                connection.execute("UPDATE workflow_status SET status = 'CANCELLED'")
         dbos_logger.addHandler(observer)
         try:
             with ThreadPoolExecutor(max_workers=1) as executor:
@@ -100,8 +103,8 @@ def test_pool_checkout_timeout(
 
                 def run() -> object:
                     try:
-                        if operation == "status":
-                            return database.get_workflow_status_value("workflow")
+                        if operation == "cancelled_ids":
+                            return database.get_cancelled_workflow_ids(["workflow"])
                         database.record_operation_result(_checkpoint())
                         return None
                     finally:
@@ -130,8 +133,8 @@ def test_pool_checkout_timeout(
 
                 if retry_connection_errors:
                     result = future.result(timeout=5)
-                    if operation == "status":
-                        assert result == "PENDING"
+                    if operation == "cancelled_ids":
+                        assert result == {"workflow"}
                     else:
                         assert result is None
                         assert _checkpoint_count(path) == 1
