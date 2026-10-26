@@ -50,6 +50,7 @@ from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSException,
     DBOSNonExistentWorkflowError,
+    DBOSStepTimeoutError,
 )
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import DefaultSerializer
@@ -3371,14 +3372,17 @@ async def test_reserve_step_event_stream(dbos: DBOS) -> None:
     async def get_item(item: str) -> str:
         nonlocal store_reads
         store_reads += 1
-        # Store I/O on live runs only; replays skip it, which reordered unreserved handler steps.
+        # Live-only latency, so replay timing differs from the live run.
         await asyncio.sleep(0.02)
         return f"item-{item}"
 
     async def handle_event(event: str) -> str:
         attempts[event] = attempts.get(event, 0) + 1
         await asyncio.sleep(0.01)
-        if event == "flaky" and attempts[event] == 1:
+        status = DBOS.step_status
+        assert status is not None
+        # Fails the first attempt of every live execution, so forks retry it too.
+        if event == "flaky" and status.current_attempt == 0:
             raise ConnectionError("transient handler failure")
         if event == "bad":
             raise ValueError("handler rejected event")
@@ -3448,6 +3452,24 @@ async def test_reserve_step_event_stream(dbos: DBOS) -> None:
     steps = await DBOS.list_workflow_steps_async(wfid)
     assert [(s["function_id"], s["function_name"]) for s in steps] == expected_journal
 
+    # Live attempts of the handler at each step ID, and the step IDs of the store reads.
+    handler_attempts = {
+        1: ("plan", 1),
+        2: ("plan", 1),
+        3: ("flaky", 2),
+        4: ("bad", 3),
+        8: ("progress", 1),
+    }
+    read_ids = [6, 7, 9]
+
+    def after_rerun(before: dict[str, int], rerun: List[int]) -> dict[str, int]:
+        expected_attempts = dict(before)
+        for fid in rerun:
+            if fid in handler_attempts:
+                event, n = handler_attempts[fid]
+                expected_attempts[event] += n
+        return expected_attempts
+
     # Recovery replays every step, at its reserved ID, without running it again.
     live_attempts, live_reads = dict(attempts), store_reads
     recovered = await asyncio.to_thread(
@@ -3456,10 +3478,31 @@ async def test_reserve_step_event_stream(dbos: DBOS) -> None:
     assert recovered == expected
     assert attempts == live_attempts and store_reads == live_reads
 
+    # A crash can leave reserved handlers unrecorded below recorded steps; recovery reruns only those.
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.delete(SystemSchema.operation_outputs).where(
+                SystemSchema.operation_outputs.c.workflow_uuid == wfid,
+                SystemSchema.operation_outputs.c.function_id.in_([2, 4]),
+            )
+        )
+    before = dict(attempts)
+    recovered = await asyncio.to_thread(
+        lambda: reexecute_workflow_by_id(dbos, wfid).get_result()
+    )
+    assert recovered == expected
+    assert attempts == after_rerun(before, [2, 4]) and store_reads == live_reads
+    steps = await DBOS.list_workflow_steps_async(wfid)
+    assert [(s["function_id"], s["function_name"]) for s in steps] == expected_journal
+
     # Forking at every step replays a prefix and runs the rest live, under different timing.
     for start_step in [s["function_id"] for s in steps] + [1000]:
+        before, reads_before = dict(attempts), store_reads
         handle = await DBOS.fork_workflow_async(wfid, start_step)
         assert await handle.get_result() == expected
+        rerun = [fid for fid, _ in expected_journal if fid >= start_step]
+        assert attempts == after_rerun(before, rerun)
+        assert store_reads == reads_before + len([f for f in read_ids if f in rerun])
         forked = await DBOS.list_workflow_steps_async(handle.workflow_id)
         assert [(s["function_id"], s["function_name"]) for s in forked] == (
             expected_journal
@@ -3477,12 +3520,23 @@ async def test_reserve_step_misuse(dbos: DBOS) -> None:
 
     leaked: List[StepReservation] = []
 
+    def fail() -> None:
+        raise ValueError("step failed")
+
     @DBOS.workflow()
     async def reserving_workflow() -> None:
         reservation = DBOS.reserve_step()
+        # Sync run inside an event loop is rejected without using up the reservation.
+        with pytest.raises(RuntimeError, match="run_async"):
+            reservation.run(None, lambda: None)
         await reservation.run_async(None, lambda: None)
         with pytest.raises(DBOSException, match="only be run once"):
             await reservation.run_async(None, lambda: None)
+        failing = DBOS.reserve_step()
+        with pytest.raises(ValueError, match="step failed"):
+            await failing.run_async(None, fail)
+        with pytest.raises(DBOSException, match="only be run once"):
+            await failing.run_async(None, lambda: None)
         leaked.append(DBOS.reserve_step())
 
     @DBOS.step()
@@ -3500,20 +3554,103 @@ async def test_reserve_step_misuse(dbos: DBOS) -> None:
             await step_running_reservation(DBOS.reserve_step())
 
     @DBOS.step()
-    async def reserving_step() -> Optional[int]:
-        # Inside a step, the reservation runs as a plain call like any nested step.
-        reservation = DBOS.reserve_step()
-        assert reservation.step_id is None
-        return await reservation.run_async(None, lambda: DBOS.step_id)
+    async def reserving_step() -> None:
+        DBOS.reserve_step()
 
     @DBOS.workflow()
-    async def nested_workflow() -> Optional[int]:
-        return await reserving_step()
+    async def nested_workflow() -> None:
+        with pytest.raises(DBOSException, match="within a step"):
+            await reserving_step()
 
     await reserving_workflow()
     await other_workflow()
     await step_workflow()
-    assert await nested_workflow() == 1
+    await nested_workflow()
+    with pytest.raises(DBOSException, match="must be run from that workflow"):
+        await leaked[0].run_async(None, lambda: None)
+
+
+@pytest.mark.asyncio
+async def test_reserve_step_lifecycle(dbos: DBOS) -> None:
+    # A consumer task that outlives its workflow cannot run the workflow's reservation.
+    gate = asyncio.Event()
+    orphans: List["asyncio.Task[None]"] = []
+
+    async def run_late(reservation: StepReservation) -> None:
+        await gate.wait()
+        await reservation.run_async(None, lambda: None)
+
+    @DBOS.workflow()
+    async def orphaning_workflow() -> None:
+        orphans.append(asyncio.create_task(run_late(DBOS.reserve_step())))
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        await orphaning_workflow()
+    gate.set()
+    with pytest.raises(DBOSException, match="must be run from that workflow"):
+        await orphans[0]
+    assert await DBOS.list_workflow_steps_async(wfid) == []
+
+    # Timeout and preemption options apply to a reserved step.
+    async def current_step() -> Optional[int]:
+        return DBOS.step_id
+
+    async def slow() -> None:
+        await asyncio.sleep(60)
+
+    @DBOS.workflow()
+    async def options_workflow() -> List[Any]:
+        timed = DBOS.reserve_step()
+        preemptible = DBOS.reserve_step()
+        out: List[Any] = [
+            await preemptible.run_async(
+                {"name": "preemptible", "preemptible": True}, current_step
+            )
+        ]
+        with pytest.raises(DBOSStepTimeoutError):
+            await timed.run_async({"name": "timed", "timeout_seconds": 0.2}, slow)
+        return out
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert await options_workflow() == [2]
+    steps = await DBOS.list_workflow_steps_async(wfid)
+    assert [(s["function_id"], s["function_name"]) for s in steps] == [
+        (1, "timed"),
+        (2, "preemptible"),
+    ]
+
+    # Cancelling mid-step leaves the reserved step unrecorded; resuming runs it again at the same ID.
+    started, release = asyncio.Event(), asyncio.Event()
+    blocked_calls = 0
+
+    async def blocked() -> Optional[int]:
+        nonlocal blocked_calls
+        blocked_calls += 1
+        started.set()
+        await release.wait()
+        return DBOS.step_id
+
+    @DBOS.workflow()
+    async def cancelled_workflow() -> Optional[int]:
+        DBOS.reserve_step()  # Never run, so the blocked step is not step 1.
+        return await DBOS.reserve_step().run_async({"name": "blocked"}, blocked)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        handle = await DBOS.start_workflow_async(cancelled_workflow)
+    await started.wait()
+    await DBOS.cancel_workflow_async(wfid)
+    release.set()
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        await handle.get_result()
+    assert await DBOS.list_workflow_steps_async(wfid) == []
+    resumed = await DBOS.resume_workflow_async(wfid)
+    assert await resumed.get_result() == 2
+    assert blocked_calls == 2
+    steps = await DBOS.list_workflow_steps_async(wfid)
+    assert [(s["function_id"], s["function_name"]) for s in steps] == [(2, "blocked")]
 
 
 def test_reserve_step_sync(dbos: DBOS) -> None:

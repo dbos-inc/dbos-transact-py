@@ -1705,6 +1705,8 @@ class DBOS:
         Run the reservation with `run` or `run_async`; outside a workflow, it runs the function as a plain call.
         """
         ctx = get_local_dbos_context()
+        if ctx is not None and ctx.is_step():
+            raise DBOSException("DBOS.reserve_step cannot be called from within a step")
         if ctx is not None and ctx.is_workflow():
             return StepReservation(ctx.snapshot_step_ctx())
         return StepReservation(None)
