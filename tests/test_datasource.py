@@ -5,6 +5,7 @@ import base64
 import inspect
 import pickle
 import sqlite3
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, AsyncGenerator, Generator, Optional, Union, cast
@@ -33,6 +34,7 @@ from dbos._datasource import RecordedResult, _checkpoint_id
 from dbos._datasource_migration import (
     DATASOURCE_MIGRATIONS_TABLE,
     get_postgres_datasource_migrations,
+    get_sqlite_datasource_migrations,
     migrate_datasource,
 )
 from dbos._datasource_postgres import PostgresAsyncDatasource, PostgresSyncDatasource
@@ -2236,6 +2238,25 @@ def test_ds_concurrent_creation_migrates_once(
     assert _ds_version(datasources[0]) == _LATEST_DS_VERSION
     for ds in datasources:
         ds.engine.dispose()
+
+
+def test_sqlite_ds_concurrent_creation_migrates_once(tmp_path: Any) -> None:
+    """Datasources that migrate one new SQLite file at once all succeed."""
+    num_instances = 6
+    url = f"sqlite:///{tmp_path}/concurrent_ds.sqlite"
+    barrier = threading.Barrier(num_instances)
+
+    def create_and_check(_: int) -> int:
+        barrier.wait()
+        ds = SQLAlchemyDatasource.create(url)
+        try:
+            return _ds_version(ds)
+        finally:
+            ds.engine.dispose()
+
+    with ThreadPoolExecutor(max_workers=num_instances) as pool:
+        versions = list(pool.map(create_and_check, range(num_instances)))
+    assert versions == [len(get_sqlite_datasource_migrations())] * num_instances
 
 
 def test_ds_frozen_migrator_releases_lock(

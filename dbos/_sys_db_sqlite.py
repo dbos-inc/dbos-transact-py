@@ -57,6 +57,12 @@ class SQLiteSystemDatabase(SystemDatabase):
             # Enable foreign keys for SQLite
             conn.execute(sa.text("PRAGMA foreign_keys = ON"))
 
+            # pysqlite begins a transaction only before INSERT, UPDATE, DELETE and
+            # REPLACE, so the check below and the CREATE TABLE would run in autocommit
+            # and concurrent migrators would both see an empty database. Take the write
+            # lock now; it is held until the commit that ends this block.
+            conn.execute(sa.text("BEGIN IMMEDIATE"))
+
             # Check if migrations table exists
             result = conn.execute(
                 sa.text(
