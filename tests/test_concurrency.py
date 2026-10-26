@@ -9,6 +9,7 @@ from typing import (
     Callable,
     ClassVar,
     Coroutine,
+    Dict,
     List,
     Optional,
     Tuple,
@@ -18,6 +19,8 @@ from typing import (
 
 import pytest
 import sqlalchemy as sa
+from opentelemetry import trace
+from opentelemetry.trace.span import format_span_id
 
 # Public API
 from dbos import (
@@ -32,11 +35,12 @@ from dbos import (
     StepInfo,
     WorkflowHandleAsync,
 )
+from dbos._context import OTEL_CARRIER_ATTRIBUTE
 from dbos._dbos_config import DBOSConfig
 from dbos._error import DBOSNonExistentWorkflowError, DBOSNotAuthorizedError
 from dbos._schemas.system_database import SystemSchema
 
-from .conftest import set_workflow_status, using_sharding
+from .conftest import TestOtelType, set_workflow_status, using_sharding
 
 
 def test_concurrent_workflows(dbos: DBOS) -> None:
@@ -903,6 +907,8 @@ async def test_deduplication_id_does_not_leak_across_tasks(
 ) -> None:
     @DBOS.workflow()
     async def child(i: int) -> int:
+        # Held until the parent reads its status: completion clears the dedup ID.
+        await DBOS.recv_async("release", 30)
         return i
 
     @DBOS.workflow()
@@ -910,17 +916,21 @@ async def test_deduplication_id_does_not_leak_across_tasks(
         q = await DBOS.retrieve_queue_async("ctx_queue")
         assert q is not None
 
+        async def read_and_release(h: WorkflowHandleAsync[int]) -> Optional[str]:
+            status = await h.get_status()
+            await DBOS.send_async(h.workflow_id, None, "release")
+            return status.deduplication_id
+
         async def one(i: int) -> Optional[str]:
             with SetEnqueueOptions(deduplication_id=f"dedup-{i}"):
                 await asyncio.sleep(0.01 * (3 - i))
                 h = await q.enqueue_async(child, i)
                 await asyncio.sleep(0.05 * i)
-            status = await h.get_status()
-            return status.deduplication_id
+            return await read_and_release(h)
 
         ids = list(await asyncio.gather(*(one(i) for i in range(3))))
-        last = await (await q.enqueue_async(child, 99)).get_status()
-        return ids + [last.deduplication_id]
+        last = await read_and_release(await q.enqueue_async(child, 99))
+        return ids + [last]
 
     await DBOS.register_queue_async("ctx_queue")
     ids = await (await DBOS.start_workflow_async(parent)).get_result()
@@ -969,27 +979,45 @@ async def test_unconsumed_workflow_id_does_not_leak(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
-async def test_timeout_and_attributes_do_not_leak_across_tasks(dbos: DBOS) -> None:
+async def test_timeout_and_attributes_do_not_leak_across_tasks(
+    dbos: DBOS, setup_in_memory_otlp_collector: TestOtelType
+) -> None:
+    tracer = trace.get_tracer_provider().get_tracer("dbos")
+    span_ids: Dict[int, str] = {}
+
     @DBOS.workflow()
     async def child(i: int) -> int:
         return i
 
     @DBOS.workflow()
-    async def parent() -> str:
-        async def one(i: int) -> None:
-            with (
-                SetWorkflowTimeout(100 + i),
-                SetWorkflowAttributes({"task": i}),
-                PropagateOtelContext(),
-            ):
-                await DBOS.start_workflow_async(child, i)
-                await asyncio.sleep(0.05 * i)
+    async def parent() -> List[str]:
+        async def one(i: int) -> str:
+            # A span per task, so PropagateOtelContext has a carrier to leak.
+            with tracer.start_as_current_span(
+                f"task-{i}"
+            ) as span:  # pyright: ignore[reportAttributeAccessIssue]
+                span_ids[i] = format_span_id(span.get_span_context().span_id)
+                with (
+                    SetWorkflowTimeout(100 + i),
+                    SetWorkflowAttributes({"task": i}),
+                    PropagateOtelContext(),
+                ):
+                    h = await DBOS.start_workflow_async(child, i)
+                    await asyncio.sleep(0.05 * i)
+            return h.workflow_id
 
-        await asyncio.gather(*(one(i) for i in range(3)))
-        return (await DBOS.start_workflow_async(child, 99)).workflow_id
+        ids = list(await asyncio.gather(*(one(i) for i in range(3))))
+        return ids + [(await DBOS.start_workflow_async(child, 99)).workflow_id]
 
-    wfid = await (await DBOS.start_workflow_async(parent)).get_result()
-    status = await DBOS.get_workflow_status_async(wfid)
+    wfids = await (await DBOS.start_workflow_async(parent)).get_result()
+    for i, wfid in enumerate(wfids[:3]):
+        status = await DBOS.get_workflow_status_async(wfid)
+        assert status is not None
+        assert status.workflow_timeout_ms == (100 + i) * 1000
+        assert status.attributes is not None
+        assert status.attributes["task"] == i
+        assert span_ids[i] in status.attributes[OTEL_CARRIER_ATTRIBUTE]["traceparent"]
+    status = await DBOS.get_workflow_status_async(wfids[3])
     assert status is not None
     assert status.workflow_timeout_ms is None
     assert status.workflow_deadline_epoch_ms is None
@@ -1058,21 +1086,25 @@ async def test_shard_key_does_not_leak_across_tasks(dbos: DBOS) -> None:
     assert keys == ["task-0", "task-1", "task-2", parent_status.shard_key]
 
 
-def test_dequeued_workflow_does_not_see_dequeue_options(dbos: DBOS) -> None:
+@pytest.mark.asyncio
+async def test_dequeued_workflow_does_not_see_dequeue_options(dbos: DBOS) -> None:
+    # Async, so the body's task copies the queue thread's context and its dequeue blocks.
     @DBOS.workflow()
-    def child() -> None:
+    async def child() -> None:
         pass
 
     @DBOS.workflow()
-    def parent() -> str:
+    async def parent() -> str:
         # A partition key leaking from the dequeue into the body would reject this start.
-        return DBOS.start_workflow(child).workflow_id
+        return (await DBOS.start_workflow_async(child)).workflow_id
 
-    q = DBOS.register_queue("ctx_partitioned", partition_concurrency=1)
+    q = await DBOS.register_queue_async("ctx_partitioned", partition_concurrency=1)
     with SetEnqueueOptions(queue_partition_key="p"):
-        handle = q.enqueue(parent)
-    child_id = handle.get_result()
-    child_status = DBOS.get_workflow_status(child_id)
+        handle = await q.enqueue_async(parent)
+    child_id = await handle.get_result()
+    # A leaked SetWorkflowID would hand the child its parent's ID.
+    assert child_id != handle.workflow_id
+    child_status = await DBOS.get_workflow_status_async(child_id)
     assert child_status is not None
     assert child_status.queue_partition_key is None
 
