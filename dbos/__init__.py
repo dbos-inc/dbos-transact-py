@@ -18,6 +18,7 @@ from ._dbos import (
     DBOS,
     DBOSConfiguredInstance,
     ScheduleInput,
+    StepReservation,
     WorkflowHandle,
     WorkflowHandleAsync,
 )
@@ -65,6 +66,7 @@ __all__ = [
     "SendMessage",
     "StepInfo",
     "StepOptions",
+    "StepReservation",
     "WorkflowHandle",
     "WorkflowHandleAsync",
     "WorkflowIDReusePolicy",

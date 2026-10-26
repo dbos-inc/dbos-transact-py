@@ -29,7 +29,12 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker as SyncSessionmaker
 
-from dbos._context import DBOSContextEnsure, current_owner_xid, get_local_dbos_context
+from dbos._context import (
+    DBOSContextEnsure,
+    current_owner_xid,
+    get_local_dbos_context,
+    snapshot_step_context,
+)
 from dbos._datasource_migration import migrate_datasource_database
 from dbos._error import DBOSException, DBOSWorkflowConflictIDError
 from dbos._schemas.datasource_database import datasource_outputs_table
@@ -977,7 +982,14 @@ class SQLAlchemyDatasource(ABC):
             from dbos._dbos import _get_dbos_instance
 
             step_options: StepOptions = {"name": name}
-            return run_step(_get_dbos_instance(), _body, step_options, (), {})
+            return run_step(
+                _get_dbos_instance(),
+                snapshot_step_context(),
+                _body,
+                step_options,
+                (),
+                {},
+            )
         return _body()
 
     @overload

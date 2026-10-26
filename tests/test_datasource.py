@@ -1177,6 +1177,37 @@ async def test_async_ds_rejects_misuse(tmp_path: Any) -> None:
         await ds.engine.dispose()
 
 
+def test_sync_ds_rejects_reserve_step(
+    sync_ds: SQLAlchemyDatasource, dbos: DBOS
+) -> None:
+    @sync_ds.transaction
+    def reserving() -> None:
+        DBOS.reserve_step()
+
+    @DBOS.workflow()
+    def my_workflow() -> None:
+        with pytest.raises(DBOSException, match="outside any step or transaction"):
+            reserving()
+
+    my_workflow()
+
+
+@pytest.mark.asyncio
+async def test_async_ds_rejects_reserve_step(
+    async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS
+) -> None:
+    @async_ds.transaction
+    async def reserving() -> None:
+        DBOS.reserve_step()
+
+    @DBOS.workflow()
+    async def my_workflow() -> None:
+        with pytest.raises(DBOSException, match="outside any step or transaction"):
+            await reserving()
+
+    await my_workflow()
+
+
 @pytest.mark.asyncio
 async def test_async_ds_records_and_replays(
     async_ds: AsyncSQLAlchemyDatasource, dbos: DBOS
