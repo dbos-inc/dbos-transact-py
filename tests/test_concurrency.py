@@ -22,6 +22,8 @@ import sqlalchemy as sa
 # Public API
 from dbos import (
     DBOS,
+    DBOSContextEnsure,
+    DBOSContextSetAuth,
     PropagateOtelContext,
     SetEnqueueOptions,
     SetShardKey,
@@ -32,7 +34,7 @@ from dbos import (
     WorkflowHandleAsync,
 )
 from dbos._dbos_config import DBOSConfig
-from dbos._error import DBOSNonExistentWorkflowError
+from dbos._error import DBOSNonExistentWorkflowError, DBOSNotAuthorizedError
 from dbos._schemas.system_database import SystemSchema
 
 from .conftest import set_workflow_status, using_sharding
@@ -1075,3 +1077,64 @@ def test_dequeued_workflow_does_not_see_dequeue_options(dbos: DBOS) -> None:
     child_status = DBOS.get_workflow_status(child_id)
     assert child_status is not None
     assert child_status.queue_partition_key is None
+
+
+@pytest.mark.asyncio
+async def test_authentication_does_not_leak_across_tasks(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    async def child() -> Optional[str]:
+        return DBOS.authenticated_user
+
+    @DBOS.workflow()
+    async def parent() -> List[Optional[str]]:
+        async def one(user: str) -> Optional[str]:
+            with DBOSContextSetAuth(user, [user]):
+                r = await child()
+                # admin exits first, so exits run out of entry order.
+                await asyncio.sleep(0.01 if user == "admin" else 0.1)
+                return r
+
+        users = list(await asyncio.gather(one("admin"), one("guest")))
+        return users + [await child(), DBOS.authenticated_user]
+
+    users = await (await DBOS.start_workflow_async(parent)).get_result()
+    assert users == ["admin", "guest", None, None]
+
+
+@pytest.mark.asyncio
+async def test_roles_are_not_shared_across_tasks(dbos: DBOS) -> None:
+    @DBOS.required_roles(["admin"])
+    @DBOS.step()
+    async def admin_only() -> str:
+        return "ok"
+
+    @DBOS.workflow()
+    async def parent() -> str:
+        async def guest() -> str:
+            with DBOSContextSetAuth("guest", ["guest"]):
+                # The sibling's admin block opens before this call.
+                await asyncio.sleep(0.05)
+                try:
+                    return await admin_only()
+                except DBOSNotAuthorizedError:
+                    return "denied"
+
+        async def admin() -> None:
+            with DBOSContextSetAuth("admin", ["admin"]):
+                await asyncio.sleep(0.1)
+
+        result, _ = await asyncio.gather(guest(), admin())
+        return result
+
+    assert await (await DBOS.start_workflow_async(parent)).get_result() == "denied"
+
+
+def test_set_authentication_does_not_outlive_context(dbos: DBOS) -> None:
+    with DBOSContextEnsure():
+        DBOS.set_authentication("bob", ["reader"])
+        assert DBOS.authenticated_user == "bob"
+        assert DBOS.authenticated_roles == ["reader"]
+    # A later context in the same thread starts unauthenticated.
+    with DBOSContextEnsure():
+        assert DBOS.authenticated_user is None
+        assert DBOS.authenticated_roles is None

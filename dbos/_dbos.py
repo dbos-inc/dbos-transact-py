@@ -138,8 +138,10 @@ from ._context import (
     StepStatus,
     TracedAttributes,
     assert_current_dbos_context,
+    get_authentication,
     get_local_dbos_context,
     get_workflow_start_options,
+    override_authentication,
     snapshot_step_context,
 )
 from ._dbos_config import (
@@ -3881,29 +3883,28 @@ class DBOS:
     @classproperty
     def authenticated_user(cls) -> Optional[str]:
         """Return the current authenticated user, if any, associated with the current context."""
-        ctx = assert_current_dbos_context()
-        return ctx.authenticated_user
+        return get_authentication(assert_current_dbos_context()).user
 
     @classproperty
     def authenticated_roles(cls) -> Optional[List[str]]:
         """Return the roles granted to the current authenticated user, if any, associated with the current context."""
-        ctx = assert_current_dbos_context()
-        return ctx.authenticated_roles
+        return get_authentication(assert_current_dbos_context()).roles
 
     @classproperty
     def assumed_role(cls) -> Optional[str]:
         """Return the role currently assumed by the authenticated user, if any, associated with the current context."""
-        ctx = assert_current_dbos_context()
-        return ctx.assumed_role
+        return get_authentication(assert_current_dbos_context()).assumed_role
 
     @classmethod
     def set_authentication(
         cls, authenticated_user: Optional[str], authenticated_roles: Optional[List[str]]
     ) -> None:
         """Set the current authenticated user and granted roles into the current context."""
-        ctx = assert_current_dbos_context()
-        ctx.authenticated_user = authenticated_user
-        ctx.authenticated_roles = authenticated_roles
+        override_authentication(
+            assert_current_dbos_context(),
+            user=authenticated_user,
+            roles=authenticated_roles,
+        )
 
     @classmethod
     def write_stream(

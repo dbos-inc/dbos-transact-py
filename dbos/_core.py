@@ -57,6 +57,7 @@ from ._context import (
     child_workflow_id,
     current_owner_xid,
     extract_trace_context,
+    get_authentication,
     get_local_dbos_context,
     get_workflow_start_options,
     otel_carrier_from_attributes,
@@ -527,6 +528,7 @@ def _assemble_workflow_status(
     child_workflow_id: Optional[str] = None,
 ) -> WorkflowStatusInternal:
     """Build (without persisting) the status row for a new workflow."""
+    auth = get_authentication(ctx)
     # If launching child, capture ID before to_thread dispatch, so a concurrent end_workflow() on shutdown can't blank the id read here.
     wfid = (
         child_workflow_id
@@ -592,11 +594,9 @@ def _assemble_workflow_status(
         ),
         "executor_id": ctx.executor_id,
         "recovery_attempts": None,
-        "authenticated_user": ctx.authenticated_user,
-        "authenticated_roles": (
-            json.dumps(ctx.authenticated_roles) if ctx.authenticated_roles else None
-        ),
-        "assumed_role": ctx.assumed_role,
+        "authenticated_user": auth.user,
+        "authenticated_roles": json.dumps(auth.roles) if auth.roles else None,
+        "assumed_role": auth.assumed_role,
         "queue_name": queue,
         "created_at": None,
         "updated_at": None,
