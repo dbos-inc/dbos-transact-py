@@ -4133,6 +4133,37 @@ def test_set_authentication_inside_set_auth_block_is_undone_at_exit() -> None:
         assert DBOS.authenticated_roles == ["reader"]
 
 
+def test_set_authentication_changes_the_enclosing_set_auth_block() -> None:
+    """Middleware opens a DBOSContextSetAuth block; a sync FastAPI dependency, which runs in
+    a copied contextvars Context, then sets the identity the endpoint must see."""
+    with DBOSContextSetAuth(None, None):
+        contextvars.copy_context().run(DBOS.set_authentication, "alice", ["admin"])
+        assert DBOS.authenticated_user == "alice"
+        assert DBOS.authenticated_roles == ["admin"]
+
+    async def sibling_tasks() -> List[Optional[str]]:
+        with DBOSContextSetAuth("bob", ["reader"]):
+            reader_started = asyncio.Event()
+            identity_set = asyncio.Event()
+
+            async def setter() -> None:
+                await reader_started.wait()
+                DBOS.set_authentication("carol", ["writer"])
+                identity_set.set()
+
+            async def reader() -> Optional[str]:
+                reader_started.set()
+                await identity_set.wait()
+                return DBOS.authenticated_user
+
+            _, seen = await asyncio.gather(setter(), reader())
+            return [seen, DBOS.authenticated_user]
+
+    # A task already running inside the block sees its sibling's change.
+    assert asyncio.run(sibling_tasks()) == ["carol", "carol"]
+    assert get_local_dbos_context() is None
+
+
 def test_context_accessors_inside_setter_block() -> None:
     with SetWorkflowID("accessor-test"):
         DBOS.set_authentication("bob", ["reader"])

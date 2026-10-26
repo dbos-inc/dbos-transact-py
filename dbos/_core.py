@@ -2165,8 +2165,7 @@ def workflow_wrapper(
             .intercept(check_and_init, dbos=dbos)
             .also(DBOSAssumeRole(rr))
             .also(EnterDBOSWorkflow(attributes, newwfctx))
-            # Outside EnterDBOSWorkflow so the carrier is active when the span is created.
-            # Inside record_get_result, which belongs to the caller's trace, not the workflow's.
+            # Outside EnterDBOSWorkflow so the span starts under the carrier; inside record_get_result (caller's trace).
             .also(
                 _UseOtelContext(
                     _carrier_otel_context(newwfctx.start_options.otel_carrier, None)

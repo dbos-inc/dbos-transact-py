@@ -867,8 +867,7 @@ async def test_gather_distinct_steps_deterministic_order(dbos: DBOS) -> None:
         assert names == ["step_a", "step_b", "step_c"]
 
 
-# Sibling tasks of one workflow share its context, so a setter block in one task must
-# neither be seen by the others nor leave a stale value behind when blocks exit out of order.
+# Sibling tasks of one workflow share its DBOSContext; their setter blocks must stay apart.
 
 
 @pytest.mark.asyncio
@@ -1132,13 +1131,18 @@ async def test_roles_are_not_shared_across_tasks(dbos: DBOS) -> None:
 async def test_set_authentication_applies_to_whole_workflow(dbos: DBOS) -> None:
     @DBOS.workflow()
     async def parent() -> List[Optional[str]]:
+        reader_started = asyncio.Event()
+        identity_set = asyncio.Event()
+
         async def setter() -> None:
-            await asyncio.sleep(0.01)
+            await reader_started.wait()
             DBOS.set_authentication("alice", ["admin"])
+            identity_set.set()
 
         async def reader() -> Optional[str]:
             # Already running when its sibling sets the identity.
-            await asyncio.sleep(0.05)
+            reader_started.set()
+            await identity_set.wait()
             return DBOS.authenticated_user
 
         _, seen = await asyncio.gather(setter(), reader())

@@ -116,9 +116,7 @@ class AssignedWorkflowID:
 @dataclass(frozen=True)
 class WorkflowStartOptions:
     """Options the Set* context managers apply to workflows started or enqueued in their block.
-
-    Held in a ContextVar apart from DBOSContext, which concurrent tasks of one workflow share,
-    so each task sees only its own blocks.
+    Held in a task-local ContextVar, not on the DBOSContext that concurrent tasks share.
     """
 
     assigned_id: Optional[AssignedWorkflowID] = None
@@ -217,8 +215,7 @@ class DBOSContext:
         ] = []
         self.context_spans: list[ContextSpan] = []
 
-        # The identity this context's workflow or step was created under; code running
-        # under the context sees it unless an identity override owned by the context is set.
+        # Identity this context's workflow or step was created under; a DBOSContextSetAuth block can shadow it.
         self.authenticated_user: Optional[str] = None
         self.authenticated_roles: Optional[List[str]] = None
         self.assumed_role: Optional[str] = None
@@ -228,8 +225,7 @@ class DBOSContext:
             WorkflowSerializationFormat.DEFAULT
         )
 
-        # The running workflow's deadline, propagated to its children; before a
-        # workflow starts, the deadline it inherits from its caller.
+        # Deadline of the running workflow, propagated to its children (before it starts: the caller's).
         self.workflow_deadline_epoch_ms: Optional[int] = None
 
     def create_child(self, *, is_for_workflow: bool) -> DBOSContext:
@@ -489,11 +485,17 @@ def _reject_reuse(manager: object, active: bool) -> None:
         )
 
 
-# The (user, roles) set by an enclosing DBOSContextSetAuth block in this task. Held apart
-# from the DBOSContext, which concurrent tasks share, so one task's block is not seen by
-# another; EnterDBOSWorkflow and EnterDBOSStepCtx clear it for the body they run.
-_auth_override_var: ContextVar[Optional[Tuple[Optional[str], Optional[List[str]]]]] = (
-    ContextVar("dbos_auth_override", default=None)
+@dataclass
+class _AuthScope:
+    """The identity of one DBOSContextSetAuth block, shared by everything running inside it."""
+
+    user: Optional[str]
+    roles: Optional[List[str]]
+
+
+# Innermost DBOSContextSetAuth block's identity scope, task-local; None means the DBOSContext is the scope.
+_auth_scope_var: ContextVar[Optional[_AuthScope]] = ContextVar(
+    "dbos_auth_scope", default=None
 )
 
 
@@ -504,21 +506,22 @@ def get_authentication(ctx: Optional[DBOSContext] = None) -> Authentication:
         ctx = current
         if ctx is None:
             return _NO_AUTHENTICATION
-    override = _auth_override_var.get() if ctx is current else None
-    if override is not None:
-        return Authentication(override[0], override[1], ctx.assumed_role)
+    scope = _auth_scope_var.get() if ctx is current else None
+    if scope is not None:
+        return Authentication(scope.user, scope.roles, ctx.assumed_role)
     return Authentication(
         ctx.authenticated_user, ctx.authenticated_roles, ctx.assumed_role
     )
 
 
 def set_current_authentication(user: Optional[str], roles: Optional[List[str]]) -> None:
-    """Set the identity at the innermost scope: this task's enclosing DBOSContextSetAuth
-    block if there is one, else the current context, which all its tasks share."""
+    """Change the identity of the innermost scope: the enclosing DBOSContextSetAuth block,
+    else the current context."""
     ctx = assert_current_dbos_context()
-    if _auth_override_var.get() is not None:
-        # The enclosing block's exit undoes this.
-        _auth_override_var.set((user, roles))
+    scope = _auth_scope_var.get()
+    if scope is not None:
+        scope.user = user
+        scope.roles = roles
     else:
         ctx.authenticated_user = user
         ctx.authenticated_roles = roles
@@ -968,10 +971,8 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         self.shard_key_tokens: Optional[Any] = None
         self.start_options_token: Optional[Token[WorkflowStartOptions]] = None
         self.saved_start_options: WorkflowStartOptions = _NO_START_OPTIONS
-        self.auth_token: Optional[
-            Token[Optional[Tuple[Optional[str], Optional[List[str]]]]]
-        ] = None
-        self.saved_auth: Optional[Tuple[Optional[str], Optional[List[str]]]] = None
+        self.auth_token: Optional[Token[Optional[_AuthScope]]] = None
+        self.saved_auth: Optional[_AuthScope] = None
 
     def __enter__(self) -> DBOSContext:
         self.prev_ctx = get_local_dbos_context()
@@ -980,9 +981,9 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         # Nor the caller's Set* options: they applied to this workflow, not its children.
         self.saved_start_options = _workflow_start_options_var.get()
         self.start_options_token = _workflow_start_options_var.set(_NO_START_OPTIONS)
-        # The body acts as the identity it was started under; an override it sets must not outlive it.
-        self.saved_auth = _auth_override_var.get()
-        self.auth_token = _auth_override_var.set(None)
+        # The body starts in its own context's identity scope.
+        self.saved_auth = _auth_scope_var.get()
+        self.auth_token = _auth_scope_var.set(None)
         # Create a basic context if none exists
         if self.use_ctx is None:
             self.use_ctx = DBOSContext()
@@ -1013,7 +1014,7 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
             self.start_options_token,
             self.saved_start_options,
         )
-        _reset_context_var(_auth_override_var, self.auth_token, self.saved_auth)
+        _reset_context_var(_auth_scope_var, self.auth_token, self.saved_auth)
         if self.shard_key_tokens is not None:
             restore_shard_key_state(self.shard_key_tokens)
         return False  # Did not handle
@@ -1024,10 +1025,8 @@ class EnterDBOSStepCtx:
         self.attributes = attributes
         self.prev_ctx: Optional[DBOSContext] = None
         self.use_ctx = ctx
-        self.auth_token: Optional[
-            Token[Optional[Tuple[Optional[str], Optional[List[str]]]]]
-        ] = None
-        self.saved_auth: Optional[Tuple[Optional[str], Optional[List[str]]]] = None
+        self.auth_token: Optional[Token[Optional[_AuthScope]]] = None
+        self.saved_auth: Optional[_AuthScope] = None
         self.start_options_token: Optional[Token[WorkflowStartOptions]] = None
         self.saved_start_options: WorkflowStartOptions = _NO_START_OPTIONS
 
@@ -1036,9 +1035,9 @@ class EnterDBOSStepCtx:
         assert ctx.is_workflow()
         self.prev_ctx = ctx
         _set_local_dbos_context(self.use_ctx)
-        # An override the step sets must not outlive it.
-        self.saved_auth = _auth_override_var.get()
-        self.auth_token = _auth_override_var.set(None)
+        # The step starts in its own context's identity scope.
+        self.saved_auth = _auth_scope_var.get()
+        self.auth_token = _auth_scope_var.set(None)
         # The workflow's Set* options apply to the workflows it starts, not to its steps.
         self.saved_start_options = _workflow_start_options_var.get()
         self.start_options_token = _workflow_start_options_var.set(_NO_START_OPTIONS)
@@ -1055,7 +1054,7 @@ class EnterDBOSStepCtx:
         assert ctx.is_step()
         ctx.end_step(exc_value)
         _set_local_dbos_context(self.prev_ctx)
-        _reset_context_var(_auth_override_var, self.auth_token, self.saved_auth)
+        _reset_context_var(_auth_scope_var, self.auth_token, self.saved_auth)
         _reset_context_var(
             _workflow_start_options_var,
             self.start_options_token,
@@ -1093,10 +1092,8 @@ class DBOSContextSetAuth(DBOSContextEnsure):
         self.created_ctx = False
         self.user = user
         self.roles = roles
-        self.token: Optional[
-            Token[Optional[Tuple[Optional[str], Optional[List[str]]]]]
-        ] = None
-        self.saved_auth: Optional[Tuple[Optional[str], Optional[List[str]]]] = None
+        self.token: Optional[Token[Optional[_AuthScope]]] = None
+        self.saved_auth: Optional[_AuthScope] = None
 
     def __enter__(self) -> DBOSContext:
         _reject_reuse(self, self.token is not None)
@@ -1104,8 +1101,8 @@ class DBOSContextSetAuth(DBOSContextEnsure):
         if self.created_ctx:
             _set_local_dbos_context(DBOSContext())
         ctx = assert_current_dbos_context()
-        self.saved_auth = _auth_override_var.get()
-        self.token = _auth_override_var.set((self.user, self.roles))
+        self.saved_auth = _auth_scope_var.get()
+        self.token = _auth_scope_var.set(_AuthScope(self.user, self.roles))
         return ctx
 
     def __exit__(
@@ -1115,7 +1112,7 @@ class DBOSContextSetAuth(DBOSContextEnsure):
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
         token, self.token = self.token, None
-        _reset_context_var(_auth_override_var, token, self.saved_auth)
+        _reset_context_var(_auth_scope_var, token, self.saved_auth)
         # Clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()
@@ -1123,10 +1120,8 @@ class DBOSContextSetAuth(DBOSContextEnsure):
 
 
 class DBOSAssumeRole:
-    """Internal: assume a role on the current context.
-
-    Applied around a whole workflow body, or around the synchronous creation of a child or
-    step context, so the role is the execution's identity rather than a task-local override.
+    """Internal: assume a role on the current context. Only applied around a whole workflow
+    body or a synchronous child/step context creation, so the role is execution identity.
     """
 
     def __init__(self, assume_role: Optional[str]) -> None:
