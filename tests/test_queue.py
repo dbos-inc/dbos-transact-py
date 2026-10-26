@@ -1540,6 +1540,65 @@ def test_cancelling_queued_workflows(
     assert queue_entries_are_cleaned_up(dbos)
 
 
+@pytest.mark.parametrize("partitioned", [False, True])
+def test_dequeue_saturates_overflowing_timeout(
+    dbos: DBOS, partitioned: bool, skip_with_sharding: None
+) -> None:
+    """An overflowing timeout cannot abort the claim of otherwise runnable rows."""
+    from dbos._core import prepare_enqueued_workflow
+
+    @DBOS.workflow()
+    def noop() -> None:
+        pass
+
+    maximum = 2**63 - 1
+    queue_name = f"overflow-{uuid.uuid4()}"
+    queue = unpolled_queue(
+        queue_name, **({"partition_concurrency": 1} if partitioned else {})
+    )
+    ids = [f"{queue_name}-{index}" for index in range(4)]
+    rows = []
+    for index, timeout in enumerate([maximum - 1000, 5000, None, maximum]):
+        row = prepare_enqueued_workflow(
+            dbos,
+            noop,
+            (),
+            {},
+            queue_name=queue_name,
+            workflow_id=ids[index],
+            queue_partition_key=str(index) if partitioned else None,
+        )
+        row["workflow_timeout_ms"] = timeout
+        if index == 3:
+            row["workflow_deadline_epoch_ms"] = maximum - 10000
+        rows.append(row)
+    dbos._sys_db.init_workflows(rows)
+
+    before_ms = int(time.time() * 1000)
+    if partitioned:
+        claimed = dbos._sys_db.start_queued_partitioned_workflows(
+            queue, GlobalParams.executor_id, GlobalParams.app_version
+        )
+    else:
+        claimed, _ = dbos._sys_db.start_queued_workflows(
+            queue, GlobalParams.executor_id, GlobalParams.app_version, None
+        )
+    after_ms = int(time.time() * 1000)
+
+    assert set(claimed) == set(ids)
+    statuses = [dbos._sys_db.get_workflow_status(wfid) for wfid in ids]
+    assert all(
+        status is not None and status["status"] == "PENDING" for status in statuses
+    )
+    deadlines = [status["workflow_deadline_epoch_ms"] for status in statuses if status]
+    assert deadlines[0] == maximum
+    assert isinstance(deadlines[0], int)
+    assert deadlines[1] is not None
+    assert before_ms + 5000 <= deadlines[1] <= after_ms + 5000
+    assert deadlines[2] is None
+    assert deadlines[3] == maximum - 10000
+
+
 def test_timeout_queue(dbos: DBOS) -> None:
     @DBOS.workflow()
     def blocking_workflow() -> None:
