@@ -4,18 +4,38 @@ import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any, Callable, ClassVar, Coroutine, List, Tuple, Union, cast
+from typing import (
+    Any,
+    Callable,
+    ClassVar,
+    Coroutine,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import pytest
 import sqlalchemy as sa
 
 # Public API
-from dbos import DBOS, SetWorkflowID, StepInfo, WorkflowHandleAsync
+from dbos import (
+    DBOS,
+    PropagateOtelContext,
+    SetEnqueueOptions,
+    SetShardKey,
+    SetWorkflowAttributes,
+    SetWorkflowID,
+    SetWorkflowTimeout,
+    StepInfo,
+    WorkflowHandleAsync,
+)
 from dbos._dbos_config import DBOSConfig
 from dbos._error import DBOSNonExistentWorkflowError
 from dbos._schemas.system_database import SystemSchema
 
-from .conftest import set_workflow_status
+from .conftest import set_workflow_status, using_sharding
 
 
 def test_concurrent_workflows(dbos: DBOS) -> None:
@@ -844,3 +864,214 @@ async def test_gather_distinct_steps_deterministic_order(dbos: DBOS) -> None:
         steps = await DBOS.list_workflow_steps_async(wfid)
         names = [s["function_name"].rsplit(".", 1)[-1] for s in steps]
         assert names == ["step_a", "step_b", "step_c"]
+
+
+# Sibling tasks of one workflow share its context, so a setter block in one task must
+# neither be seen by the others nor leave a stale value behind when blocks exit out of order.
+
+
+@pytest.mark.asyncio
+async def test_enqueue_options_do_not_leak_across_tasks(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    async def child(i: int) -> int:
+        return i
+
+    @DBOS.workflow()
+    async def parent() -> str:
+        q = await DBOS.retrieve_queue_async("ctx_queue")
+        assert q is not None
+
+        async def one(i: int) -> None:
+            with SetEnqueueOptions(priority=i + 1):
+                await q.enqueue_async(child, i)
+                # Task 0 exits first, so exits run out of entry order.
+                await asyncio.sleep(0.05 * i)
+
+        await asyncio.gather(*(one(i) for i in range(3)))
+        return (await q.enqueue_async(child, 99)).workflow_id
+
+    await DBOS.register_queue_async("ctx_queue")
+    wfid = await (await DBOS.start_workflow_async(parent)).get_result()
+    status = await DBOS.get_workflow_status_async(wfid)
+    assert status is not None
+    assert not status.priority
+
+
+@pytest.mark.asyncio
+async def test_deduplication_id_does_not_leak_across_tasks(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
+    @DBOS.workflow()
+    async def child(i: int) -> int:
+        return i
+
+    @DBOS.workflow()
+    async def parent() -> List[Optional[str]]:
+        q = await DBOS.retrieve_queue_async("ctx_queue")
+        assert q is not None
+
+        async def one(i: int) -> Optional[str]:
+            with SetEnqueueOptions(deduplication_id=f"dedup-{i}"):
+                await asyncio.sleep(0.01 * (3 - i))
+                h = await q.enqueue_async(child, i)
+                await asyncio.sleep(0.05 * i)
+            status = await h.get_status()
+            return status.deduplication_id
+
+        ids = list(await asyncio.gather(*(one(i) for i in range(3))))
+        last = await (await q.enqueue_async(child, 99)).get_status()
+        return ids + [last.deduplication_id]
+
+    await DBOS.register_queue_async("ctx_queue")
+    ids = await (await DBOS.start_workflow_async(parent)).get_result()
+    assert ids == ["dedup-0", "dedup-1", "dedup-2", None]
+
+
+@pytest.mark.asyncio
+async def test_workflow_id_survives_await_inside_block(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    async def child(i: int) -> int:
+        return i
+
+    @DBOS.workflow()
+    async def parent() -> List[str]:
+        wfid = DBOS.workflow_id
+        assert wfid is not None
+
+        async def one(i: int) -> str:
+            with SetWorkflowID(f"{wfid}-wanted-{i}"):
+                # Every task's block is open before any of them starts its child.
+                await asyncio.sleep(0.01 * (3 - i))
+                return (await DBOS.start_workflow_async(child, i)).workflow_id
+
+        return list(await asyncio.gather(*(one(i) for i in range(3))))
+
+    handle = await DBOS.start_workflow_async(parent)
+    ids = await handle.get_result()
+    assert ids == [f"{handle.workflow_id}-wanted-{i}" for i in range(3)]
+
+
+@pytest.mark.asyncio
+async def test_unconsumed_workflow_id_does_not_leak(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    async def child() -> None:
+        pass
+
+    @DBOS.workflow()
+    async def parent() -> str:
+        with SetWorkflowID(f"unused-{uuid.uuid4()}"):
+            pass
+        return (await DBOS.start_workflow_async(child)).workflow_id
+
+    handle = await DBOS.start_workflow_async(parent)
+    child_id = await handle.get_result()
+    assert not child_id.startswith("unused-")
+
+
+@pytest.mark.asyncio
+async def test_timeout_and_attributes_do_not_leak_across_tasks(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    async def child(i: int) -> int:
+        return i
+
+    @DBOS.workflow()
+    async def parent() -> str:
+        async def one(i: int) -> None:
+            with (
+                SetWorkflowTimeout(100 + i),
+                SetWorkflowAttributes({"task": i}),
+                PropagateOtelContext(),
+            ):
+                await DBOS.start_workflow_async(child, i)
+                await asyncio.sleep(0.05 * i)
+
+        await asyncio.gather(*(one(i) for i in range(3)))
+        return (await DBOS.start_workflow_async(child, 99)).workflow_id
+
+    wfid = await (await DBOS.start_workflow_async(parent)).get_result()
+    status = await DBOS.get_workflow_status_async(wfid)
+    assert status is not None
+    assert status.workflow_timeout_ms is None
+    assert status.workflow_deadline_epoch_ms is None
+    assert not status.attributes
+
+
+@pytest.mark.asyncio
+async def test_tasks_inherit_options_set_before_spawning(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    async def child(i: int) -> int:
+        return i
+
+    @DBOS.workflow()
+    async def parent() -> List[Any]:
+        q = await DBOS.retrieve_queue_async("ctx_queue")
+        assert q is not None
+
+        async def one(i: int) -> Any:
+            h = await q.enqueue_async(child, i)
+            return (await h.get_status()).priority
+
+        with SetEnqueueOptions(priority=7):
+            inner = list(await asyncio.gather(*(one(i) for i in range(3))))
+            with SetEnqueueOptions(priority=3):
+                nested = (
+                    await (await q.enqueue_async(child, 98)).get_status()
+                ).priority
+            outer = (await (await q.enqueue_async(child, 99)).get_status()).priority
+        return inner + [nested, outer]
+
+    await DBOS.register_queue_async("ctx_queue")
+    priorities = await (await DBOS.start_workflow_async(parent)).get_result()
+    assert priorities == [7, 7, 7, 3, 7]
+
+
+@pytest.mark.asyncio
+async def test_shard_key_does_not_leak_across_tasks(dbos: DBOS) -> None:
+    if not using_sharding():
+        pytest.skip("Shard keys need a sharded system database")
+
+    @DBOS.workflow()
+    async def child(i: int) -> int:
+        return i
+
+    @DBOS.workflow()
+    async def parent() -> List[Optional[str]]:
+        q = await DBOS.retrieve_queue_async("ctx_queue")
+        assert q is not None
+
+        # Only an enqueued child may run under a key other than its parent's.
+        async def one(i: int) -> Optional[str]:
+            with SetShardKey(f"task-{i}"):
+                await asyncio.sleep(0.01 * (3 - i))
+                h = await q.enqueue_async(child, i)
+                await asyncio.sleep(0.05 * i)
+            return (await h.get_status()).shard_key
+
+        keys = list(await asyncio.gather(*(one(i) for i in range(3))))
+        last = await (await q.enqueue_async(child, 99)).get_status()
+        return keys + [last.shard_key]
+
+    await DBOS.register_queue_async("ctx_queue")
+    handle = await DBOS.start_workflow_async(parent)
+    keys = await handle.get_result()
+    parent_status = await handle.get_status()
+    assert keys == ["task-0", "task-1", "task-2", parent_status.shard_key]
+
+
+def test_dequeued_workflow_does_not_see_dequeue_options(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def child() -> None:
+        pass
+
+    @DBOS.workflow()
+    def parent() -> str:
+        # A partition key leaking from the dequeue into the body would reject this start.
+        return DBOS.start_workflow(child).workflow_id
+
+    q = DBOS.register_queue("ctx_partitioned", partition_concurrency=1)
+    with SetEnqueueOptions(queue_partition_key="p"):
+        handle = q.enqueue(parent)
+    child_id = handle.get_result()
+    child_status = DBOS.get_workflow_status(child_id)
+    assert child_status is not None
+    assert child_status.queue_partition_key is None

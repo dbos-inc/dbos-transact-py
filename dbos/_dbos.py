@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import hashlib
 import inspect
 import json
@@ -140,6 +139,7 @@ from ._context import (
     TracedAttributes,
     assert_current_dbos_context,
     get_local_dbos_context,
+    get_workflow_start_options,
     snapshot_step_context,
 )
 from ._dbos_config import (
@@ -1532,13 +1532,11 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandleAsync[R]:
         """Invoke a workflow function on the event loop, returning a handle to the ongoing execution."""
-        ctx = get_local_dbos_context()
-        _validate_enqueue_only_options(ctx, None)
-        parent_ctx_copy = copy.copy(ctx)
-        child_ctx = DBOSContext.create_start_workflow_child(ctx)
+        _validate_enqueue_only_options(get_workflow_start_options(), None)
+        child_ctx = DBOSContext.create_start_workflow_child(get_local_dbos_context())
         await cls._configure_asyncio_thread_pool()
         return await start_workflow_async(
-            _get_dbos_instance(), parent_ctx_copy, child_ctx, func, args, kwargs
+            _get_dbos_instance(), child_ctx, func, args, kwargs
         )
 
     @classmethod
@@ -1599,12 +1597,10 @@ class DBOS:
     ) -> WorkflowHandleAsync[Any]:
         """Async version of :meth:`enqueue_workflow_with_options`."""
         # All context management runs before the first await, for concurrency safety.
-        ctx = get_local_dbos_context()
-        parent_ctx_copy = copy.copy(ctx)
-        child_ctx = DBOSContext.create_start_workflow_child(ctx)
+        child_ctx = DBOSContext.create_start_workflow_child(get_local_dbos_context())
         await cls._configure_asyncio_thread_pool()
         return await enqueue_workflow_with_options_async(
-            _get_dbos_instance(), parent_ctx_copy, child_ctx, options, args, kwargs
+            _get_dbos_instance(), child_ctx, options, args, kwargs
         )
 
     @classmethod

@@ -1,6 +1,7 @@
 import asyncio
 import time
 import types
+from contextlib import nullcontext
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -29,9 +30,10 @@ from dbos._client import (
 from dbos._context import (
     EnterDBOSStepCtx,
     SetWorkflowDebounce,
-    WorkflowIDReusePolicy,
-    get_local_dbos_context,
+    SetWorkflowID,
+    get_workflow_start_options,
     snapshot_step_context,
+    take_assigned_workflow_id,
 )
 from dbos._core import WorkflowHandleAsyncPolling, WorkflowHandlePolling
 from dbos._error import DBOSException, DBOSQueueDeduplicatedError
@@ -258,28 +260,22 @@ class Debouncer(Generic[P, R]):
 
         dbos = _get_dbos_instance()
 
-        ctx = get_local_dbos_context()
+        start_options = get_workflow_start_options()
 
         # Capture a SetWorkflowID-pinned ID once, before the option checks: it is re-applied on every enqueue attempt (a lost dedup race consumes it before raising) and must not stay armed for the caller's next workflow when a bounce coalesces, a conflict raises, or an option check rejects.
-        pinned_workflow_id: Optional[str] = None
-        pinned_reuse_policy: Optional[WorkflowIDReusePolicy] = None
-        if ctx is not None:
-            pinned_reuse_policy = ctx.workflow_id_reuse_policy
-            ctx.workflow_id_reuse_policy = None
-            if ctx.id_assigned_for_next_workflow:
-                pinned_workflow_id = ctx.id_assigned_for_next_workflow
-                ctx.id_assigned_for_next_workflow = ""
+        pinned = take_assigned_workflow_id()
+        pinned_workflow_id = pinned.workflow_id if pinned is not None else None
+        pinned_reuse_policy = pinned.reuse_policy if pinned is not None else None
 
         # The caller must not set a deduplication_id, duplication policy, reject reuse policy, delay, priority, or partition key.
-        if ctx is not None:
-            _reject_conflicting_options(
-                has_deduplication_id=ctx.deduplication_id is not None,
-                has_delay=ctx.delay_until_epoch_ms is not None,
-                has_priority=ctx.priority is not None,
-                has_partition_key=ctx.queue_partition_key is not None,
-                has_return_existing=ctx.duplication_policy == "return-existing",
-                has_reject_reuse_policy=pinned_reuse_policy == "reject",
-            )
+        _reject_conflicting_options(
+            has_deduplication_id=start_options.deduplication_id is not None,
+            has_delay=start_options.delay_until_epoch_ms is not None,
+            has_priority=start_options.priority is not None,
+            has_partition_key=start_options.queue_partition_key is not None,
+            has_return_existing=start_options.duplication_policy == "return-existing",
+            has_reject_reuse_policy=pinned_reuse_policy == "reject",
+        )
 
         # Resolve the queue the debounced workflow will run on.
         queue_name = self.options["queue_name"]
@@ -366,16 +362,20 @@ class Debouncer(Generic[P, R]):
             delay_until_ms = now_ms + int(debounce_period_sec * 1000)
             if deadline_ms is not None:
                 delay_until_ms = min(delay_until_ms, deadline_ms)
-            # Re-apply the pinned ID for this attempt; queue.enqueue consumes it.
-            if pinned_workflow_id is not None:
-                assert ctx is not None
-                ctx.id_assigned_for_next_workflow = pinned_workflow_id
             try:
-                with SetWorkflowDebounce(
-                    deduplication_id=deduplication_id,
-                    delay_until_epoch_ms=delay_until_ms,
-                    debounce_deadline_epoch_ms=deadline_ms,
-                    application_name=self.options["application_name"],
+                with (
+                    # Re-apply the pinned ID for this attempt; queue.enqueue consumes it.
+                    (
+                        SetWorkflowID(pinned_workflow_id)
+                        if pinned_workflow_id is not None
+                        else nullcontext()
+                    ),
+                    SetWorkflowDebounce(
+                        deduplication_id=deduplication_id,
+                        delay_until_epoch_ms=delay_until_ms,
+                        debounce_deadline_epoch_ms=deadline_ms,
+                        application_name=self.options["application_name"],
+                    ),
                 ):
                     return queue.enqueue(func, *args, **kwargs)
             except (DBOSQueueDeduplicatedError, PortableWorkflowError) as e:

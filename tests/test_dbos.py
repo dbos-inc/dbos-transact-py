@@ -37,13 +37,11 @@ from dbos import _enterprise as enterprise_module
 # Private API because this is a test
 from dbos._client import DBOSClient
 from dbos._context import (
-    DBOSContext,
     SetEnqueueOptions,
     SetShardKey,
-    _clear_local_dbos_context,
-    _set_local_dbos_context,
     assert_current_dbos_context,
     get_local_dbos_context,
+    get_workflow_start_options,
 )
 from dbos._enqueue_options import validate_enqueue_options
 from dbos._error import (
@@ -2335,7 +2333,7 @@ def test_workflow_timeout(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def blocked_workflow() -> None:
-        assert assert_current_dbos_context().workflow_timeout_ms is None
+        assert get_workflow_start_options().workflow_timeout_ms is None
         assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
         while True:
             DBOS.sleep(0.1)
@@ -2346,7 +2344,8 @@ def test_workflow_timeout(dbos: DBOS) -> None:
         with pytest.raises(DBOSAwaitedWorkflowCancelledError):
             with SetWorkflowID(wfid):
                 blocked_workflow()
-        assert assert_current_dbos_context().workflow_deadline_epoch_ms is None
+        # No context, and so no propagated deadline, outlives the workflow call.
+        assert get_local_dbos_context() is None
         start_time = time.time() * 1000
         handle = DBOS.start_workflow(blocked_workflow)
         status = handle.get_status()
@@ -2401,7 +2400,7 @@ def test_workflow_timeout(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def parent_workflow() -> None:
-        assert assert_current_dbos_context().workflow_timeout_ms is None
+        assert get_workflow_start_options().workflow_timeout_ms is None
         assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
         with SetWorkflowID(start_child):
             DBOS.start_workflow(blocked_workflow)
@@ -2422,12 +2421,12 @@ def test_workflow_timeout(dbos: DBOS) -> None:
 
     # Verify the context variables are set correctly
     with SetWorkflowTimeout(1.0):
-        assert assert_current_dbos_context().workflow_timeout_ms == 1000
+        assert get_workflow_start_options().workflow_timeout_ms == 1000
         with SetWorkflowTimeout(2.0):
-            assert assert_current_dbos_context().workflow_timeout_ms == 2000
+            assert get_workflow_start_options().workflow_timeout_ms == 2000
         with SetWorkflowTimeout(None):
-            assert assert_current_dbos_context().workflow_timeout_ms is None
-        assert assert_current_dbos_context().workflow_timeout_ms == 1000
+            assert get_workflow_start_options().workflow_timeout_ms is None
+        assert get_workflow_start_options().workflow_timeout_ms == 1000
     assert get_local_dbos_context() is None
 
 
@@ -4060,36 +4059,35 @@ async def test_workflow_wrapped_by_custom_decorator(
 def test_set_enqueue_options_exits_in_another_context() -> None:
     """Entry and exit may run in different contextvars Contexts, as threadpool-run
     generator dependencies do; the options must still restore cleanly."""
-    _set_local_dbos_context(DBOSContext())
-    try:
-        options = SetEnqueueOptions(priority=1)
-        contextvars.copy_context().run(options.__enter__)
-        ctx = assert_current_dbos_context()
-        assert ctx.priority == 1
-        contextvars.copy_context().run(options.__exit__, None, None, None)
-        assert ctx.priority is None
-    finally:
-        _clear_local_dbos_context()
+    options = SetEnqueueOptions(priority=1)
+    entered = contextvars.copy_context()
+    entered.run(options.__enter__)
+    assert entered.run(get_workflow_start_options).priority == 1
+    # Options are per Context, so the caller's are untouched.
+    assert get_workflow_start_options().priority is None
+    exited = contextvars.copy_context()
+    exited.run(options.__exit__, None, None, None)
+    assert exited.run(get_workflow_start_options).priority is None
+    assert get_workflow_start_options().priority is None
 
 
 def test_set_shard_key_exits_in_another_context() -> None:
-    _set_local_dbos_context(DBOSContext())
-    try:
-        with SetShardKey("tenant-a"):
-            shard_key = SetShardKey("tenant-b")
-            contextvars.copy_context().run(shard_key.__enter__)
-            ctx = assert_current_dbos_context()
-            assert ctx.shard_key_for_next_workflow == "tenant-b"
-            # Independent of the enqueue options: setting those keeps the key.
-            with SetEnqueueOptions(priority=1):
-                assert ctx.shard_key_for_next_workflow == "tenant-b"
-            contextvars.copy_context().run(shard_key.__exit__, None, None, None)
-            assert ctx.shard_key_for_next_workflow == "tenant-a"
-        assert ctx.shard_key_for_next_workflow is None
-        with pytest.raises(ValueError):
-            SetShardKey("")
-    finally:
-        _clear_local_dbos_context()
+    with SetShardKey("tenant-a"):
+        shard_key = SetShardKey("tenant-b")
+        entered = contextvars.copy_context()
+        entered.run(shard_key.__enter__)
+        assert entered.run(get_workflow_start_options).shard_key == "tenant-b"
+        assert get_workflow_start_options().shard_key == "tenant-a"
+        # Independent of the enqueue options: setting those keeps the key.
+        with SetEnqueueOptions(priority=1):
+            assert get_workflow_start_options().shard_key == "tenant-a"
+        exited = contextvars.copy_context()
+        exited.run(shard_key.__exit__, None, None, None)
+        assert exited.run(get_workflow_start_options).shard_key == "tenant-a"
+        assert get_workflow_start_options().shard_key == "tenant-a"
+    assert get_workflow_start_options().shard_key is None
+    with pytest.raises(ValueError):
+        SetShardKey("")
 
 
 def test_shard_keys_must_be_non_empty_strings() -> None:
