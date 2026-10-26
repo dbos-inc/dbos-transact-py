@@ -25,6 +25,7 @@ from dbos import (
     SendMessage,
     SetWorkflowID,
     SetWorkflowTimeout,
+    StepReservation,
     WorkflowHandle,
     WorkflowHandleAsync,
     WorkflowStatusString,
@@ -3350,6 +3351,200 @@ async def test_run_step_async(dbos: DBOS) -> None:
         assert n_thrown_errors == 5
 
     await test_errors_wf_async()
+
+
+@pytest.mark.asyncio
+async def test_reserve_step_across_tasks(dbos: DBOS) -> None:
+    # Whether the tool task yields before its own step decides which task draws the next ID unreserved.
+    tool_yields = False
+    handled: List[int] = []
+
+    @DBOS.step()
+    async def tool_step(i: int) -> str:
+        return f"tool-{i}"
+
+    async def handle_event(ev: int) -> str:
+        handled.append(ev)
+        assert DBOS.step_id == 2 * ev + 1
+        return f"handled-{ev}"
+
+    @DBOS.workflow()
+    async def agent_workflow() -> List[str]:
+        q: asyncio.Queue[Optional[Tuple[int, StepReservation]]] = asyncio.Queue()
+        out: List[str] = []
+
+        async def consumer() -> None:
+            while (item := await q.get()) is not None:
+                ev, reservation = item
+                out.append(
+                    await reservation.run_async(
+                        {"name": "handle_event"}, handle_event, ev
+                    )
+                )
+
+        task = asyncio.create_task(consumer())
+        for i in range(3):
+            reservation = DBOS.reserve_step()
+            assert reservation.step_id == 2 * i + 1
+            q.put_nowait((i, reservation))
+            if tool_yields:
+                await asyncio.sleep(0)
+            out.append(await tool_step(i))
+        q.put_nowait(None)
+        await task
+        return sorted(out)
+
+    expected = sorted(
+        [f"tool-{i}" for i in range(3)] + [f"handled-{i}" for i in range(3)]
+    )
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert await agent_workflow() == expected
+    assert handled == [0, 1, 2]
+    steps = await DBOS.list_workflow_steps_async(wfid)
+    assert [(s["function_id"], s["function_name"]) for s in steps] == [
+        (1, "handle_event"),
+        (2, tool_step.__qualname__),
+        (3, "handle_event"),
+        (4, tool_step.__qualname__),
+        (5, "handle_event"),
+        (6, tool_step.__qualname__),
+    ]
+
+    # Replay every step with the other task interleaving: reserved IDs keep it deterministic.
+    tool_yields = True
+    handle = await DBOS.fork_workflow_async(wfid, 1000)
+    assert await handle.get_result() == expected
+    assert handled == [0, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_reserve_step_gap_and_replay(dbos: DBOS) -> None:
+    calls = 0
+
+    async def count_step(x: int) -> int:
+        nonlocal calls
+        calls += 1
+        return x
+
+    def failing_step() -> None:
+        nonlocal calls
+        calls += 1
+        raise ValueError("step failed")
+
+    @DBOS.workflow()
+    async def gap_workflow() -> str:
+        DBOS.reserve_step()  # never run: leaves a gap at step 1
+        later = DBOS.reserve_step()
+        failing = DBOS.reserve_step()
+        first = await DBOS.run_step_async({"name": "first"}, count_step, 1)
+        second = await later.run_async({"name": "later"}, count_step, 2)
+        try:
+            await failing.run_async({"name": "failing"}, failing_step)
+        except ValueError as e:
+            return f"{first}-{second}-{e}"
+        raise AssertionError("expected failing_step to raise")
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert await gap_workflow() == "1-2-step failed"
+    assert calls == 3
+    steps = await DBOS.list_workflow_steps_async(wfid)
+    assert [(s["function_id"], s["function_name"]) for s in steps] == [
+        (2, "later"),
+        (3, "failing"),
+        (4, "first"),
+    ]
+
+    # Recovery and fork replay recorded outputs and errors across the gap.
+    recovered = await asyncio.to_thread(
+        lambda: reexecute_workflow_by_id(dbos, wfid).get_result()
+    )
+    assert recovered == "1-2-step failed"
+    handle = await DBOS.fork_workflow_async(wfid, 1000)
+    assert await handle.get_result() == "1-2-step failed"
+    assert calls == 3
+
+
+@pytest.mark.asyncio
+async def test_reserve_step_misuse(dbos: DBOS) -> None:
+    # Outside a workflow the reservation runs the function as a plain call.
+    plain = DBOS.reserve_step()
+    assert plain.step_id is None
+    assert await plain.run_async(None, lambda: DBOS.step_id) is None
+    with pytest.raises(DBOSException, match="only be run once"):
+        await plain.run_async(None, lambda: None)
+
+    leaked: List[StepReservation] = []
+
+    @DBOS.workflow()
+    async def reserving_workflow() -> None:
+        reservation = DBOS.reserve_step()
+        await reservation.run_async(None, lambda: None)
+        with pytest.raises(DBOSException, match="only be run once"):
+            await reservation.run_async(None, lambda: None)
+        leaked.append(DBOS.reserve_step())
+
+    @DBOS.step()
+    async def step_running_reservation(reservation: StepReservation) -> None:
+        await reservation.run_async(None, lambda: None)
+
+    @DBOS.workflow()
+    async def other_workflow() -> None:
+        with pytest.raises(DBOSException, match="must be run from that workflow"):
+            await leaked[0].run_async(None, lambda: None)
+
+    @DBOS.workflow()
+    async def step_workflow() -> None:
+        with pytest.raises(DBOSException, match="must be run from that workflow"):
+            await step_running_reservation(DBOS.reserve_step())
+
+    @DBOS.step()
+    async def reserving_step() -> Optional[int]:
+        # Inside a step, the reservation runs as a plain call like any nested step.
+        reservation = DBOS.reserve_step()
+        assert reservation.step_id is None
+        return await reservation.run_async(None, lambda: DBOS.step_id)
+
+    @DBOS.workflow()
+    async def nested_workflow() -> Optional[int]:
+        return await reserving_step()
+
+    await reserving_workflow()
+    await other_workflow()
+    await step_workflow()
+    assert await nested_workflow() == 1
+
+
+def test_reserve_step_sync(dbos: DBOS) -> None:
+    calls = 0
+
+    def numbered(name: str) -> str:
+        nonlocal calls
+        calls += 1
+        return f"{name}-{DBOS.step_id}"
+
+    async def numbered_async(name: str) -> str:
+        return numbered(name)
+
+    @DBOS.workflow()
+    def sync_workflow() -> str:
+        first = DBOS.reserve_step()
+        second = DBOS.reserve_step()
+        b = second.run({"name": "second"}, numbered_async, "b")
+        a = first.run({"name": "first"}, numbered, "a")
+        return a + b
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert sync_workflow() == "a-1b-2"
+    assert [
+        (s["function_id"], s["function_name"]) for s in DBOS.list_workflow_steps(wfid)
+    ] == [(1, "first"), (2, "second")]
+
+    assert reexecute_workflow_by_id(dbos, wfid).get_result() == "a-1b-2"
+    assert DBOS.fork_workflow(wfid, 1000).get_result() == "a-1b-2"
+    assert calls == 2
 
 
 def test_wait_first(dbos: DBOS, client: DBOSClient) -> None:

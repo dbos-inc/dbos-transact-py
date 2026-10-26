@@ -411,6 +411,113 @@ class ScheduleInput(TypedDict, total=False):
     shard_key: Optional[str]
 
 
+class StepReservation:
+    """A step ID drawn by `DBOS.reserve_step`, run exactly once later with `run` or `run_async`.
+    It must run in the workflow that reserved it; a reservation that never runs leaves a gap in the step IDs.
+    """
+
+    def __init__(self, step_ctx: Optional[DBOSContext]) -> None:
+        # None when reserved outside a workflow: the function then runs as a plain call.
+        self._step_ctx = step_ctx
+        self._used = False
+
+    @property
+    def step_id(self) -> Optional[int]:
+        """The reserved step ID, or None if the reservation was made outside a workflow."""
+        return self._step_ctx.function_id if self._step_ctx is not None else None
+
+    def _claim(self) -> None:
+        if self._used:
+            raise DBOSException("A step reservation can only be run once")
+        step_ctx = self._step_ctx
+        if step_ctx is not None:
+            ctx = get_local_dbos_context()
+            if (
+                ctx is None
+                or not ctx.is_workflow()
+                or ctx.workflow_id != step_ctx.workflow_id
+            ):
+                raise DBOSException(
+                    f"Step {step_ctx.function_id} was reserved in workflow {step_ctx.workflow_id} "
+                    "and must be run from that workflow, outside any step"
+                )
+        self._used = True
+
+    @overload
+    def run(
+        self,
+        dbos_step_options: Optional[StepOptions],
+        func: Callable[P, Coroutine[Any, Any, R]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R: ...
+
+    @overload
+    def run(
+        self,
+        dbos_step_options: Optional[StepOptions],
+        func: Callable[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R: ...
+
+    def run(
+        self,
+        dbos_step_options: Optional[StepOptions],
+        func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R:
+        """Invoke a step function at the reserved step ID and checkpoint its result."""
+        check_async("run")
+        self._claim()
+        return run_step(
+            _get_dbos_instance(),
+            self._step_ctx,
+            func,
+            dbos_step_options or {},
+            args,
+            kwargs,
+        )
+
+    @overload
+    async def run_async(
+        self,
+        dbos_step_options: Optional[StepOptions],
+        func: Callable[P, Coroutine[Any, Any, R]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R: ...
+
+    @overload
+    async def run_async(
+        self,
+        dbos_step_options: Optional[StepOptions],
+        func: Callable[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R: ...
+
+    async def run_async(
+        self,
+        dbos_step_options: Optional[StepOptions],
+        func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R:
+        """Invoke a step function on the event loop at the reserved step ID and checkpoint its result."""
+        self._claim()
+        await DBOS._configure_asyncio_thread_pool()
+        return await run_step_async(
+            _get_dbos_instance(),
+            self._step_ctx,
+            func,
+            dbos_step_options or {},
+            args,
+            kwargs,
+        )
+
+
 class DBOS:
     """
     Main access class for DBOS functionality.
@@ -1534,7 +1641,12 @@ class DBOS:
         check_async("run_step")
 
         return run_step(
-            _get_dbos_instance(), func, dbos_step_options or {}, args, kwargs
+            _get_dbos_instance(),
+            snapshot_step_context(reserve_sleep_id=False),
+            func,
+            dbos_step_options or {},
+            args,
+            kwargs,
         )
 
     @classmethod
@@ -1586,6 +1698,16 @@ class DBOS:
             args,
             kwargs,
         )
+
+    @classmethod
+    def reserve_step(cls) -> StepReservation:
+        """Draw the next step ID now, so a step can run at it later (for example, from another task).
+        Run the reservation with `run` or `run_async`; outside a workflow, it runs the function as a plain call.
+        """
+        ctx = get_local_dbos_context()
+        if ctx is not None and ctx.is_workflow():
+            return StepReservation(ctx.snapshot_step_ctx())
+        return StepReservation(None)
 
     @classmethod
     def get_workflow_status(

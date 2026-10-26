@@ -2597,6 +2597,7 @@ def invoke_step(
 
 def run_step(
     dbos: "DBOS",
+    step_ctx: Optional[DBOSContext],
     func: Callable[P, Coroutine[Any, Any, R]] | Callable[P, R],
     options: StepOptions,
     args: tuple[Any, ...],
@@ -2605,11 +2606,10 @@ def run_step(
     options = normalize_step_options(options)
     # If the step is called from a workflow, run it as a step.
     # Otherwise, run it as a normal function.
-    ctx = get_local_dbos_context()
-    if ctx and ctx.is_workflow():
+    if step_ctx and step_ctx.is_workflow():
         outcome = invoke_step(
             dbos,
-            ctx.snapshot_step_ctx(),
+            step_ctx,
             func,
             args,
             kwargs,
