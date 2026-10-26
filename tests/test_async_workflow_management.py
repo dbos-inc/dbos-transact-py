@@ -1,16 +1,27 @@
 import asyncio
+import gc
+import threading
 import uuid
-from typing import Any, List
+import weakref
+from contextlib import nullcontext
+from typing import Any, Dict, List, Optional, Set
 
 import pytest
 from sqlalchemy import event
 
-from dbos import DBOS, SetWorkflowID
+from dbos import DBOS, SetShardKey, SetWorkflowID
 from dbos import _core as dbos_core
+from dbos._context import get_local_dbos_context
 from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSException
+from dbos._shard_keys import bound_shard_key
 from dbos._sys_db import StepInfo, WorkflowStatus
 from dbos._utils import INTERNAL_QUEUE_NAME
-from tests.conftest import queue_entries_are_cleaned_up, reexecute_workflow_by_id
+from tests.conftest import (
+    queue_entries_are_cleaned_up,
+    reexecute_workflow_by_id,
+    retry_until_success_async,
+    using_sharding,
+)
 
 
 @pytest.mark.asyncio
@@ -375,45 +386,189 @@ async def test_preemptible_step_cancellation_and_resume(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
-async def test_preemptible_step_poll_reads_only_the_status(
+async def test_preemptible_step_poll_is_batched(
     dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The cancellation poll runs every second for every in-flight preemptible
-    step, so it must not load the workflow's inputs to read one status string."""
+    """All in-flight preemptible steps on a loop share one status-only query per
+    interval, run outside any step's DBOS context but with each workflow's shard key."""
     monkeypatch.setattr(dbos_core, "_PREEMPTIBLE_POLL_INTERVAL_SEC", 0.05)
-    step_started = asyncio.Event()
+    started = 0
+    step_keys: Dict[str, Optional[str]] = {}
 
     @DBOS.step(preemptible=True)
     async def long_running_step(payload: str) -> str:
-        step_started.set()
+        nonlocal started
+        started += 1
+        ctx = get_local_dbos_context()
+        assert ctx is not None and ctx.workflow_id is not None
+        step_keys[ctx.workflow_id] = ctx.shard_key
         await asyncio.sleep(60)
         return payload
 
     @DBOS.workflow()
-    async def wf(payload: str) -> str:
-        return await long_running_step(payload)
+    async def wf(payload: str) -> List[str]:
+        return list(
+            await asyncio.gather(long_running_step(payload), long_running_step(payload))
+        )
+
+    calls: List[List[str]] = []
+    contexts: List[Any] = []
+    bindings: List[Dict[str, Optional[str]]] = []
+    read = dbos._sys_db.get_cancelled_workflow_ids
+
+    def recording_read(workflow_ids: List[str]) -> Set[str]:
+        calls.append(list(workflow_ids))
+        contexts.append(get_local_dbos_context())
+        bindings.append({wfid: bound_shard_key(wfid) for wfid in workflow_ids})
+        return read(workflow_ids)
 
     statements: List[str] = []
 
     def record(_conn: Any, _cursor: Any, statement: str, *_: Any) -> None:
         statements.append(" ".join(statement.split()))
 
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        handle = await DBOS.start_workflow_async(wf, "x" * 100_000)
-    await step_started.wait()
+    wfids = [str(uuid.uuid4()), str(uuid.uuid4())]
+    # Sharded, each workflow gets its own key, so each read must bind the right one.
+    keys = [f"preempt-{wfid}" if using_sharding() else None for wfid in wfids]
+    handles = []
+    for wfid, key in zip(wfids, keys):
+        with (
+            SetWorkflowID(wfid),
+            SetShardKey(key) if key is not None else nullcontext(),
+        ):
+            handles.append(await DBOS.start_workflow_async(wf, "x" * 100_000))
+
+    def all_started() -> None:
+        assert started == 4
+
+    await retry_until_success_async(all_started, interval=0.05, max_attempts=200)
+    monkeypatch.setattr(dbos._sys_db, "get_cancelled_workflow_ids", recording_read)
     event.listen(dbos._sys_db.engine, "before_cursor_execute", record)
     try:
-        await asyncio.sleep(0.5)
+
+        def polled() -> None:
+            assert len(calls) >= 3
+
+        await retry_until_success_async(polled, interval=0.05, max_attempts=200)
     finally:
         event.remove(dbos._sys_db.engine, "before_cursor_execute", record)
-    polls = [s for s in statements if "workflow_status.workflow_uuid =" in s]
-    assert len(polls) >= 3
+    # Each read lists each workflow once, bound to its own step's key.
+    for c, b in zip(calls, bindings):
+        assert len(c) == len(set(c))
+        assert b == {wfid: step_keys[wfid] for wfid in c}
+    assert {wfid for c in calls for wfid in c} == set(wfids)
+    # Steps ran under the keys the test set, so matching bindings aren't None == None.
+    assert step_keys == dict(zip(wfids, keys))
+    if not using_sharding():
+        # Unsharded, one query per interval covers both workflows.
+        assert all(sorted(c) == sorted(wfids) for c in calls)
+    assert all(c is None for c in contexts)
+    polls = [s for s in statements if "workflow_status.workflow_uuid IN" in s]
+    assert polls
     assert not [s for s in polls if "inputs" in s]
 
-    await DBOS.cancel_workflow_async(wfid)
-    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
-        await handle.get_result()
+    for wfid, key in zip(wfids, keys):
+        await DBOS.cancel_workflow_async(wfid, shard_key=key)
+    for handle in handles:
+        with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+            await handle.get_result()
+
+
+@pytest.mark.asyncio
+async def test_preemptible_poll_ignores_steps_registered_mid_read(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A CANCELLED read only preempts steps registered before it began, so a stale
+    answer can't preempt the step of a workflow resumed during the read."""
+    monkeypatch.setattr(dbos_core, "_PREEMPTIBLE_POLL_INTERVAL_SEC", 0.05)
+    wfid = "test-stale-read-" + str(uuid.uuid4())
+    read_started = threading.Event()
+    release = threading.Event()
+    reads = 0
+
+    def blocking_read(workflow_ids: List[str]) -> Set[str]:
+        nonlocal reads
+        reads += 1
+        if reads > 1:
+            return set()
+        read_started.set()
+        assert release.wait(10)
+        return {wfid}
+
+    monkeypatch.setattr(dbos._sys_db, "get_cancelled_workflow_ids", blocking_read)
+    watcher = dbos_core._cancellation_watcher(dbos)
+    before = watcher.register(wfid, None)
+    try:
+        assert await asyncio.to_thread(read_started.wait, 10)
+        after = watcher.register(wfid, None)
+        try:
+            release.set()
+            await asyncio.wait_for(before, timeout=10)
+
+            def read_again() -> None:
+                assert reads >= 2
+
+            await retry_until_success_async(read_again, interval=0.05, max_attempts=200)
+            assert not after.done()
+        finally:
+            watcher.unregister(wfid, None, after)
+    finally:
+        release.set()
+        watcher.unregister(wfid, None, before)
+
+
+@pytest.mark.parametrize("poller_runs", [True, False])
+def test_cancellation_watcher_releases_closed_loops(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, poller_runs: bool
+) -> None:
+    """A loop's watcher is dropped once the loop is gone, so apps that run a loop per
+    call don't accumulate them, including when shutdown cancels a poller that never ran.
+    """
+    monkeypatch.setattr(dbos_core, "_PREEMPTIBLE_POLL_INTERVAL_SEC", 0.01)
+    wfid = "test-closed-loop-" + str(uuid.uuid4())
+
+    async def register_and_leave() -> "weakref.ref[asyncio.AbstractEventLoop]":
+        watcher = dbos_core._cancellation_watcher(dbos)
+        waiter = watcher.register(wfid, None)
+        poller = watcher._poller
+        assert poller is not None
+        watcher.unregister(wfid, None, waiter)
+        if poller_runs:
+            await poller
+        return weakref.ref(asyncio.get_running_loop())
+
+    loop_ref = asyncio.run(register_and_leave())
+    gc.collect()
+    assert loop_ref() is None
+    assert len(dbos._cancellation_watchers) == 0
+
+
+@pytest.mark.asyncio
+async def test_preemptible_poll_keeps_shard_keys_apart(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workflow ID is unique only within its shard key: the same ID under two keys is
+    read per key, and one key's failing read doesn't block the other's."""
+    monkeypatch.setattr(dbos_core, "_PREEMPTIBLE_POLL_INTERVAL_SEC", 0.05)
+    wfid = "test-twins-" + str(uuid.uuid4())
+
+    def read(workflow_ids: List[str]) -> Set[str]:
+        assert workflow_ids == [wfid]
+        key = bound_shard_key(wfid)
+        if key == "key-a":
+            raise RuntimeError("shard unavailable")
+        return {wfid} if key == "key-b" else set()
+
+    monkeypatch.setattr(dbos._sys_db, "get_cancelled_workflow_ids", read)
+    watcher = dbos_core._cancellation_watcher(dbos)
+    a = watcher.register(wfid, "key-a")
+    b = watcher.register(wfid, "key-b")
+    try:
+        await asyncio.wait_for(b, timeout=10)
+        assert not a.done()
+    finally:
+        watcher.unregister(wfid, "key-a", a)
+        watcher.unregister(wfid, "key-b", b)
 
 
 @pytest.mark.asyncio
@@ -488,9 +643,8 @@ async def test_preemptible_step_no_leak_on_outer_cancel(dbos: DBOS) -> None:
             step_cancelled.set()
             raise
 
-    # A workflow id that doesn't exist — the poller's status query returns
-    # None each time, so cancellation in this test comes only from the outer
-    # task being cancelled.
+    # A workflow id that doesn't exist is never seen CANCELLED, so cancellation
+    # in this test comes only from the outer task being cancelled.
     fake_wfid = "test-no-leak-" + str(uuid.uuid4())
     outer = asyncio.create_task(
         _supervise_step(
@@ -502,6 +656,7 @@ async def test_preemptible_step_no_leak_on_outer_cancel(dbos: DBOS) -> None:
             step_name="long_step",
             preemptible=True,
             timeout_seconds=None,
+            shard_key="test-no-leak" if using_sharding() else None,
         )
     )
     await step_started.wait()

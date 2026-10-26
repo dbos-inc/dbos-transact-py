@@ -9,6 +9,7 @@ import os
 import sys
 import threading
 import time
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from logging import Logger
@@ -57,6 +58,7 @@ from ._core import (
     StepOptions,
     WorkflowHandleAsyncPolling,
     WorkflowHandlePolling,
+    _CancellationWatcher,
     _validate_enqueue_only_options,
     close_stream,
     decorate_step,
@@ -520,6 +522,10 @@ class DBOS:
         # pass can destroy a pending workflow task mid-execution (#710).
         # Entries remove themselves on completion via done-callback.
         self._workflow_tasks: set["asyncio.Task[Any]"] = set()
+        # One preemptible-step cancellation watcher per event loop.
+        self._cancellation_watchers: weakref.WeakKeyDictionary[
+            asyncio.AbstractEventLoop, _CancellationWatcher
+        ] = weakref.WeakKeyDictionary()
         self.conductor_url: Optional[str] = conductor_url
         if config.get("conductor_url"):
             self.conductor_url = config.get("conductor_url")
