@@ -10,6 +10,7 @@ import threading
 import time
 import types
 import uuid
+from collections import deque
 from functools import wraps
 from typing import Any, Callable, List, Optional, Set, Tuple, TypeVar, cast
 
@@ -25,6 +26,7 @@ from dbos import (
     SendMessage,
     SetWorkflowID,
     SetWorkflowTimeout,
+    StepOptions,
     StepReservation,
     WorkflowHandle,
     WorkflowHandleAsync,
@@ -3354,116 +3356,114 @@ async def test_run_step_async(dbos: DBOS) -> None:
 
 
 @pytest.mark.asyncio
-async def test_reserve_step_across_tasks(dbos: DBOS) -> None:
-    # Whether the tool task yields before its own step decides which task draws the next ID unreserved.
-    tool_yields = False
-    handled: List[int] = []
+async def test_reserve_step_event_stream(dbos: DBOS) -> None:
+    # Models pydantic-ai's DBOS event dispatch (pydantic/pydantic-ai#10300): emit reserves a handler step that a consumer task runs later.
+    handler_options: StepOptions = {
+        "name": "event_stream_handler",
+        "retries_allowed": True,
+        "max_attempts": 3,
+        "interval_seconds": 0.01,
+    }
+    attempts: dict[str, int] = {}
+    store_reads = 0
 
-    @DBOS.step()
-    async def tool_step(i: int) -> str:
-        return f"tool-{i}"
+    @DBOS.step(name="get_item")
+    async def get_item(item: str) -> str:
+        nonlocal store_reads
+        store_reads += 1
+        # Store I/O on live runs only; replays skip it, which reordered unreserved handler steps.
+        await asyncio.sleep(0.02)
+        return f"item-{item}"
 
-    async def handle_event(ev: int) -> str:
-        handled.append(ev)
-        assert DBOS.step_id == 2 * ev + 1
-        return f"handled-{ev}"
+    async def handle_event(event: str) -> str:
+        attempts[event] = attempts.get(event, 0) + 1
+        await asyncio.sleep(0.01)
+        if event == "flaky" and attempts[event] == 1:
+            raise ConnectionError("transient handler failure")
+        if event == "bad":
+            raise ValueError("handler rejected event")
+        return f"handled-{event}"
 
     @DBOS.workflow()
-    async def agent_workflow() -> List[str]:
-        q: asyncio.Queue[Optional[Tuple[int, StepReservation]]] = asyncio.Queue()
-        out: List[str] = []
+    async def agent_run() -> List[str]:
+        queue: asyncio.Queue[Optional[Tuple[str, bool]]] = asyncio.Queue()
+        # One FIFO of reservations per event, since the same event can be emitted twice.
+        reservations: dict[str, deque[StepReservation]] = {}
+        handled: List[str] = []
 
-        async def consumer() -> None:
-            while (item := await q.get()) is not None:
-                ev, reservation = item
-                out.append(
-                    await reservation.run_async(
-                        {"name": "handle_event"}, handle_event, ev
+        def emit(event: str, deliver: bool = True) -> None:
+            reservations.setdefault(event, deque()).append(DBOS.reserve_step())
+            queue.put_nowait((event, deliver))
+
+        async def consume() -> None:
+            while (item := await queue.get()) is not None:
+                event, deliver = item
+                reservation = reservations[event].popleft()
+                if not deliver:
+                    continue  # The handler never starts, leaving a gap at its step.
+                try:
+                    handled.append(
+                        await reservation.run_async(
+                            handler_options, handle_event, event
+                        )
                     )
-                )
+                except Exception as e:
+                    handled.append(type(e).__name__)
 
-        task = asyncio.create_task(consumer())
-        for i in range(3):
-            reservation = DBOS.reserve_step()
-            assert reservation.step_id == 2 * i + 1
-            q.put_nowait((i, reservation))
-            if tool_yields:
-                await asyncio.sleep(0)
-            out.append(await tool_step(i))
-        q.put_nowait(None)
-        await task
-        return sorted(out)
+        consumer = asyncio.create_task(consume())
+        # A plan tool: emit a burst of events, then make durable store reads while the handlers run.
+        for event in ("plan", "plan", "flaky", "bad", "dropped"):
+            emit(event, deliver=event != "dropped")
+        reads = [await get_item("a"), await get_item("b")]
+        emit("progress")
+        reads.append(await get_item("c"))
+        queue.put_nowait(None)
+        await consumer
+        return reads + handled
 
-    expected = sorted(
-        [f"tool-{i}" for i in range(3)] + [f"handled-{i}" for i in range(3)]
-    )
+    expected = [
+        "item-a",
+        "item-b",
+        "item-c",
+        "handled-plan",
+        "handled-plan",
+        "handled-flaky",
+        "DBOSMaxStepRetriesExceeded",
+        "handled-progress",
+    ]
+    expected_journal = [
+        (1, "event_stream_handler"),
+        (2, "event_stream_handler"),
+        (3, "event_stream_handler"),
+        (4, "event_stream_handler"),
+        (6, "get_item"),
+        (7, "get_item"),
+        (8, "event_stream_handler"),
+        (9, "get_item"),
+    ]
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        assert await agent_workflow() == expected
-    assert handled == [0, 1, 2]
+        assert await agent_run() == expected
+    assert attempts == {"plan": 2, "flaky": 2, "bad": 3, "progress": 1}
     steps = await DBOS.list_workflow_steps_async(wfid)
-    assert [(s["function_id"], s["function_name"]) for s in steps] == [
-        (1, "handle_event"),
-        (2, tool_step.__qualname__),
-        (3, "handle_event"),
-        (4, tool_step.__qualname__),
-        (5, "handle_event"),
-        (6, tool_step.__qualname__),
-    ]
+    assert [(s["function_id"], s["function_name"]) for s in steps] == expected_journal
 
-    # Replay every step with the other task interleaving: reserved IDs keep it deterministic.
-    tool_yields = True
-    handle = await DBOS.fork_workflow_async(wfid, 1000)
-    assert await handle.get_result() == expected
-    assert handled == [0, 1, 2]
-
-
-@pytest.mark.asyncio
-async def test_reserve_step_gap_and_replay(dbos: DBOS) -> None:
-    calls = 0
-
-    async def count_step(x: int) -> int:
-        nonlocal calls
-        calls += 1
-        return x
-
-    def failing_step() -> None:
-        nonlocal calls
-        calls += 1
-        raise ValueError("step failed")
-
-    @DBOS.workflow()
-    async def gap_workflow() -> str:
-        DBOS.reserve_step()  # never run: leaves a gap at step 1
-        later = DBOS.reserve_step()
-        failing = DBOS.reserve_step()
-        first = await DBOS.run_step_async({"name": "first"}, count_step, 1)
-        second = await later.run_async({"name": "later"}, count_step, 2)
-        try:
-            await failing.run_async({"name": "failing"}, failing_step)
-        except ValueError as e:
-            return f"{first}-{second}-{e}"
-        raise AssertionError("expected failing_step to raise")
-
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        assert await gap_workflow() == "1-2-step failed"
-    assert calls == 3
-    steps = await DBOS.list_workflow_steps_async(wfid)
-    assert [(s["function_id"], s["function_name"]) for s in steps] == [
-        (2, "later"),
-        (3, "failing"),
-        (4, "first"),
-    ]
-
-    # Recovery and fork replay recorded outputs and errors across the gap.
+    # Recovery replays every step, at its reserved ID, without running it again.
+    live_attempts, live_reads = dict(attempts), store_reads
     recovered = await asyncio.to_thread(
         lambda: reexecute_workflow_by_id(dbos, wfid).get_result()
     )
-    assert recovered == "1-2-step failed"
-    handle = await DBOS.fork_workflow_async(wfid, 1000)
-    assert await handle.get_result() == "1-2-step failed"
-    assert calls == 3
+    assert recovered == expected
+    assert attempts == live_attempts and store_reads == live_reads
+
+    # Forking at every step replays a prefix and runs the rest live, under different timing.
+    for start_step in [s["function_id"] for s in steps] + [1000]:
+        handle = await DBOS.fork_workflow_async(wfid, start_step)
+        assert await handle.get_result() == expected
+        forked = await DBOS.list_workflow_steps_async(handle.workflow_id)
+        assert [(s["function_id"], s["function_name"]) for s in forked] == (
+            expected_journal
+        )
 
 
 @pytest.mark.asyncio
