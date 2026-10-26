@@ -141,7 +141,7 @@ from ._context import (
     get_authentication,
     get_local_dbos_context,
     get_workflow_start_options,
-    override_authentication,
+    set_current_authentication,
     snapshot_step_context,
 )
 from ._dbos_config import (
@@ -3900,11 +3900,7 @@ class DBOS:
         cls, authenticated_user: Optional[str], authenticated_roles: Optional[List[str]]
     ) -> None:
         """Set the current authenticated user and granted roles into the current context."""
-        override_authentication(
-            assert_current_dbos_context(),
-            user=authenticated_user,
-            roles=authenticated_roles,
-        )
+        set_current_authentication(authenticated_user, authenticated_roles)
 
     @classmethod
     def write_stream(

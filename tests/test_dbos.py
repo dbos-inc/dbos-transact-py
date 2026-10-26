@@ -22,6 +22,7 @@ from sqlalchemy.exc import OperationalError
 from dbos import (
     DBOS,
     DBOSConfig,
+    DBOSContextEnsure,
     DBOSContextSetAuth,
     EnqueueOptions,
     SendMessage,
@@ -4110,6 +4111,26 @@ def test_setter_instance_rejects_overlapping_use() -> None:
                 pass
         assert DBOS.authenticated_user == "alice"
     assert get_local_dbos_context() is None
+
+
+def test_set_authentication_reaches_the_enclosing_context() -> None:
+    """A sync FastAPI dependency runs in a copied contextvars Context; the identity it
+    sets must still reach the endpoint, which shares its DBOSContext."""
+    with DBOSContextEnsure():
+        contextvars.copy_context().run(DBOS.set_authentication, "alice", ["admin"])
+        assert DBOS.authenticated_user == "alice"
+        assert DBOS.authenticated_roles == ["admin"]
+
+
+def test_set_authentication_inside_set_auth_block_is_undone_at_exit() -> None:
+    with DBOSContextEnsure():
+        DBOS.set_authentication("bob", ["reader"])
+        with DBOSContextSetAuth("carol", ["writer"]):
+            DBOS.set_authentication("dave", ["admin"])
+            assert DBOS.authenticated_user == "dave"
+            assert DBOS.authenticated_roles == ["admin"]
+        assert DBOS.authenticated_user == "bob"
+        assert DBOS.authenticated_roles == ["reader"]
 
 
 def test_context_accessors_inside_setter_block() -> None:

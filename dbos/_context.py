@@ -489,33 +489,39 @@ def _reject_reuse(manager: object, active: bool) -> None:
         )
 
 
-# An identity set by DBOSContextSetAuth, DBOS.set_authentication, or DBOSAssumeRole, and the
-# DBOSContext that owns it. Held apart from the context, which concurrent tasks share, so it
-# stays task-local; it applies only while its owner is current, so it never outlives the context.
-_auth_override_var: ContextVar[Optional[Tuple[DBOSContext, Authentication]]] = (
+# The (user, roles) set by an enclosing DBOSContextSetAuth block in this task. Held apart
+# from the DBOSContext, which concurrent tasks share, so one task's block is not seen by
+# another; EnterDBOSWorkflow and EnterDBOSStepCtx clear it for the body they run.
+_auth_override_var: ContextVar[Optional[Tuple[Optional[str], Optional[List[str]]]]] = (
     ContextVar("dbos_auth_override", default=None)
 )
 
 
 def get_authentication(ctx: Optional[DBOSContext] = None) -> Authentication:
     """The identity code running under ctx (by default, the current context) acts as."""
+    current = get_local_dbos_context()
     if ctx is None:
-        ctx = get_local_dbos_context()
+        ctx = current
         if ctx is None:
             return _NO_AUTHENTICATION
-    override = _auth_override_var.get()
-    if override is not None and override[0] is ctx:
-        return override[1]
+    override = _auth_override_var.get() if ctx is current else None
+    if override is not None:
+        return Authentication(override[0], override[1], ctx.assumed_role)
     return Authentication(
         ctx.authenticated_user, ctx.authenticated_roles, ctx.assumed_role
     )
 
 
-def override_authentication(
-    ctx: DBOSContext, **changes: Any
-) -> Token[Optional[Tuple[DBOSContext, Authentication]]]:
-    """Change the identity of code running under ctx in the current task."""
-    return _auth_override_var.set((ctx, replace(get_authentication(ctx), **changes)))
+def set_current_authentication(user: Optional[str], roles: Optional[List[str]]) -> None:
+    """Set the identity at the innermost scope: this task's enclosing DBOSContextSetAuth
+    block if there is one, else the current context, which all its tasks share."""
+    ctx = assert_current_dbos_context()
+    if _auth_override_var.get() is not None:
+        # The enclosing block's exit undoes this.
+        _auth_override_var.set((user, roles))
+    else:
+        ctx.authenticated_user = user
+        ctx.authenticated_roles = roles
 
 
 def current_owner_xid(
@@ -963,9 +969,9 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         self.start_options_token: Optional[Token[WorkflowStartOptions]] = None
         self.saved_start_options: WorkflowStartOptions = _NO_START_OPTIONS
         self.auth_token: Optional[
-            Token[Optional[Tuple[DBOSContext, Authentication]]]
+            Token[Optional[Tuple[Optional[str], Optional[List[str]]]]]
         ] = None
-        self.saved_auth: Optional[Tuple[DBOSContext, Authentication]] = None
+        self.saved_auth: Optional[Tuple[Optional[str], Optional[List[str]]]] = None
 
     def __enter__(self) -> DBOSContext:
         self.prev_ctx = get_local_dbos_context()
@@ -1019,9 +1025,9 @@ class EnterDBOSStepCtx:
         self.prev_ctx: Optional[DBOSContext] = None
         self.use_ctx = ctx
         self.auth_token: Optional[
-            Token[Optional[Tuple[DBOSContext, Authentication]]]
+            Token[Optional[Tuple[Optional[str], Optional[List[str]]]]]
         ] = None
-        self.saved_auth: Optional[Tuple[DBOSContext, Authentication]] = None
+        self.saved_auth: Optional[Tuple[Optional[str], Optional[List[str]]]] = None
         self.start_options_token: Optional[Token[WorkflowStartOptions]] = None
         self.saved_start_options: WorkflowStartOptions = _NO_START_OPTIONS
 
@@ -1087,8 +1093,10 @@ class DBOSContextSetAuth(DBOSContextEnsure):
         self.created_ctx = False
         self.user = user
         self.roles = roles
-        self.token: Optional[Token[Optional[Tuple[DBOSContext, Authentication]]]] = None
-        self.saved_auth: Optional[Tuple[DBOSContext, Authentication]] = None
+        self.token: Optional[
+            Token[Optional[Tuple[Optional[str], Optional[List[str]]]]]
+        ] = None
+        self.saved_auth: Optional[Tuple[Optional[str], Optional[List[str]]]] = None
 
     def __enter__(self) -> DBOSContext:
         _reject_reuse(self, self.token is not None)
@@ -1097,7 +1105,7 @@ class DBOSContextSetAuth(DBOSContextEnsure):
             _set_local_dbos_context(DBOSContext())
         ctx = assert_current_dbos_context()
         self.saved_auth = _auth_override_var.get()
-        self.token = override_authentication(ctx, user=self.user, roles=self.roles)
+        self.token = _auth_override_var.set((self.user, self.roles))
         return ctx
 
     def __exit__(
@@ -1115,17 +1123,21 @@ class DBOSContextSetAuth(DBOSContextEnsure):
 
 
 class DBOSAssumeRole:
+    """Internal: assume a role on the current context.
+
+    Applied around a whole workflow body, or around the synchronous creation of a child or
+    step context, so the role is the execution's identity rather than a task-local override.
+    """
+
     def __init__(self, assume_role: Optional[str]) -> None:
+        self.prior_role: Optional[str] = None
         self.assume_role = assume_role
-        self.token: Optional[Token[Optional[Tuple[DBOSContext, Authentication]]]] = None
-        self.saved_auth: Optional[Tuple[DBOSContext, Authentication]] = None
 
     def __enter__(self) -> DBOSAssumeRole:
         ctx = assert_current_dbos_context()
+        self.prior_role = ctx.assumed_role
         if self.assume_role is not None:
-            _reject_reuse(self, self.token is not None)
-            self.saved_auth = _auth_override_var.get()
-            self.token = override_authentication(ctx, assumed_role=self.assume_role)
+            ctx.assumed_role = self.assume_role
         return self
 
     def __exit__(
@@ -1134,9 +1146,10 @@ class DBOSAssumeRole:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
+        ctx = assert_current_dbos_context()
         if self.assume_role is not None:
-            token, self.token = self.token, None
-            _reset_context_var(_auth_override_var, token, self.saved_auth)
+            assert ctx.assumed_role == self.assume_role
+        ctx.assumed_role = self.prior_role
         return False  # Did not handle
 
 

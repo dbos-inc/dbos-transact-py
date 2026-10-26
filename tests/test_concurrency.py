@@ -22,7 +22,6 @@ import sqlalchemy as sa
 # Public API
 from dbos import (
     DBOS,
-    DBOSContextEnsure,
     DBOSContextSetAuth,
     PropagateOtelContext,
     SetEnqueueOptions,
@@ -1129,12 +1128,21 @@ async def test_roles_are_not_shared_across_tasks(dbos: DBOS) -> None:
     assert await (await DBOS.start_workflow_async(parent)).get_result() == "denied"
 
 
-def test_set_authentication_does_not_outlive_context(dbos: DBOS) -> None:
-    with DBOSContextEnsure():
-        DBOS.set_authentication("bob", ["reader"])
-        assert DBOS.authenticated_user == "bob"
-        assert DBOS.authenticated_roles == ["reader"]
-    # A later context in the same thread starts unauthenticated.
-    with DBOSContextEnsure():
-        assert DBOS.authenticated_user is None
-        assert DBOS.authenticated_roles is None
+@pytest.mark.asyncio
+async def test_set_authentication_applies_to_whole_workflow(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    async def parent() -> List[Optional[str]]:
+        async def setter() -> None:
+            await asyncio.sleep(0.01)
+            DBOS.set_authentication("alice", ["admin"])
+
+        async def reader() -> Optional[str]:
+            # Already running when its sibling sets the identity.
+            await asyncio.sleep(0.05)
+            return DBOS.authenticated_user
+
+        _, seen = await asyncio.gather(setter(), reader())
+        return [seen, DBOS.authenticated_user]
+
+    users = await (await DBOS.start_workflow_async(parent)).get_result()
+    assert users == ["alice", "alice"]
