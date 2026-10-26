@@ -2552,15 +2552,30 @@ class SystemDatabase(ABC):
         statuses = self.get_workflow_statuses([workflow_uuid])
         return statuses[0] if statuses else None
 
-    @db_retry()
-    def get_workflow_status_value(self, workflow_uuid: str) -> Optional[str]:
-        """Only the status column, for callers that poll it. The full status row
-        also carries the workflow's serialized inputs."""
+    def get_cancelled_workflow_ids(self, workflow_ids: List[str]) -> Set[str]:
+        """Which of these workflows are CANCELLED, for the preemptible-step poller."""
         ws = self.tables.workflow_status
-        with self.engine.begin() as c:
-            return c.execute(
-                sa.select(ws.c.status).where(*self._wf(ws, workflow_uuid))
-            ).scalar()
+
+        # Decorated per chunk so a reconnect retries one chunk; the permit frees across backoff.
+        @db_retry(sys_db=self)
+        def fetch_chunk(chunk: List[str]) -> List[str]:
+            with self.poll_limiter, self.engine.begin() as c:
+                return [
+                    row[0]
+                    for row in c.execute(
+                        sa.select(ws.c.workflow_uuid).where(
+                            *self._wf_in(ws, chunk),
+                            ws.c.status == WorkflowStatusString.CANCELLED.value,
+                        )
+                    ).fetchall()
+                ]
+
+        cancelled: Set[str] = set()
+        # Chunk the IN list to stay under bind-parameter limits, like get_workflow_statuses.
+        chunk_size = 4096
+        for start in range(0, len(workflow_ids), chunk_size):
+            cancelled.update(fetch_chunk(workflow_ids[start : start + chunk_size]))
+        return cancelled
 
     def get_workflow_statuses(
         self, workflow_ids: List[str]

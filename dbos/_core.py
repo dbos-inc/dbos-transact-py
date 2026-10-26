@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import copy
 import functools
 import inspect
@@ -2260,6 +2261,99 @@ def decorate_workflow(
 _PREEMPTIBLE_POLL_INTERVAL_SEC = 1.0
 
 
+class _CancellationWatcher:
+    """Watches, for one event loop, the workflows of all in-flight preemptible
+    steps with one status query per shard key per interval."""
+
+    def __init__(self, dbos: "DBOS") -> None:
+        self._dbos = dbos
+        # Keyed by shard key too: on a sharded database a workflow ID is unique only within its key.
+        self._waiters: dict[tuple[str, Optional[str]], set["asyncio.Future[None]"]] = {}
+        self._poller: Optional["asyncio.Task[None]"] = None
+
+    def register(
+        self, workflow_id: str, shard_key: Optional[str]
+    ) -> "asyncio.Future[None]":
+        """Return a future resolved once the workflow is observed CANCELLED."""
+        waiter: "asyncio.Future[None]" = asyncio.get_running_loop().create_future()
+        self._waiters.setdefault((workflow_id, shard_key), set()).add(waiter)
+        if self._poller is None or self._poller.done():
+            # An empty context, so the poller doesn't run as part of the registering step.
+            self._poller = contextvars.Context().run(asyncio.create_task, self._poll())
+            self._poller.add_done_callback(self._poller_done)
+        return waiter
+
+    def unregister(
+        self,
+        workflow_id: str,
+        shard_key: Optional[str],
+        waiter: "asyncio.Future[None]",
+    ) -> None:
+        waiter.cancel()
+        waiters = self._waiters.get((workflow_id, shard_key))
+        if waiters is not None:
+            waiters.discard(waiter)
+            if not waiters:
+                del self._waiters[(workflow_id, shard_key)]
+
+    def _poller_done(self, task: "asyncio.Task[None]") -> None:
+        # A finished task references its loop, so keeping it would pin closed loops.
+        if self._poller is task:
+            self._poller = None
+
+    async def _poll(self) -> None:
+        while self._waiters:
+            await asyncio.sleep(_PREEMPTIBLE_POLL_INTERVAL_SEC)
+            # Snapshot first: a read may only cancel steps already running when it began,
+            # or a stale CANCELLED could cancel the step of a since-resumed workflow.
+            snapshot = {wf: set(ws) for wf, ws in self._waiters.items()}
+            if not snapshot:
+                return
+            try:
+                cancelled = await asyncio.to_thread(
+                    self._read_cancelled, list(snapshot)
+                )
+            except Exception as e:
+                self._dbos.logger.warning(
+                    f"Error polling status for preemptible steps: {e}"
+                )
+                continue
+            for workflow in cancelled:
+                for waiter in snapshot.get(workflow, ()):
+                    if not waiter.done():
+                        waiter.set_result(None)
+
+    def _read_cancelled(
+        self, workflows: List[Tuple[str, Optional[str]]]
+    ) -> set[Tuple[str, Optional[str]]]:
+        """One read per shard key, each under its key's binding, so one key's failure
+        doesn't hide another key's cancellations."""
+        by_key: dict[Optional[str], List[str]] = {}
+        for workflow_id, shard_key in workflows:
+            by_key.setdefault(shard_key, []).append(workflow_id)
+        cancelled: set[Tuple[str, Optional[str]]] = set()
+        for shard_key, workflow_ids in by_key.items():
+            try:
+                with bind_shard_keys({wfid: shard_key for wfid in workflow_ids}):
+                    found = self._dbos._sys_db.get_cancelled_workflow_ids(workflow_ids)
+            except Exception as e:
+                self._dbos.logger.warning(
+                    f"Error polling status for preemptible steps: {e}"
+                )
+                continue
+            cancelled.update((wfid, shard_key) for wfid in found)
+        return cancelled
+
+
+def _cancellation_watcher(dbos: "DBOS") -> _CancellationWatcher:
+    loop = asyncio.get_running_loop()
+    watcher = dbos._cancellation_watchers.get(loop)
+    if watcher is None:
+        watcher = _CancellationWatcher(dbos)
+        dbos._cancellation_watchers[loop] = watcher
+    return watcher
+
+
 async def _supervise_step(
     dbos: "DBOS",
     workflow_id: str,
@@ -2270,58 +2364,35 @@ async def _supervise_step(
     step_name: str,
     preemptible: bool,
     timeout_seconds: Optional[float],
+    shard_key: Optional[str],
 ) -> R:
     """Run an async step under the watchdogs its options ask for, deciding in
     one place whether it completed, was preempted, or blew its deadline."""
 
-    async def poll_for_cancellation() -> bool:
-        """Return True once the workflow is observed CANCELLED. Never cancels
-        anything itself: the supervisor owns that decision."""
-        while True:
-            await asyncio.sleep(_PREEMPTIBLE_POLL_INTERVAL_SEC)
-            try:
-                status = await asyncio.to_thread(
-                    dbos._sys_db.get_workflow_status_value, workflow_id
-                )
-            except Exception as e:
-                dbos.logger.warning(
-                    f"Error polling status for preemptible step in workflow {workflow_id}: {e}"
-                )
-                continue
-            if status == WorkflowStatusString.CANCELLED.value:
-                return True
-
-    loop = asyncio.get_running_loop()
     step_task: asyncio.Task[R] = asyncio.create_task(func(*args, **kwargs))
-    poller_task: Optional[asyncio.Task[bool]] = (
-        asyncio.create_task(poll_for_cancellation()) if preemptible else None
+    watcher = _cancellation_watcher(dbos) if preemptible else None
+    cancelled_signal: Optional[asyncio.Future[None]] = (
+        watcher.register(workflow_id, shard_key) if watcher is not None else None
     )
-    deadline = None if timeout_seconds is None else loop.time() + timeout_seconds
-    abort: Optional[BaseException] = None
     try:
-        watched: set[asyncio.Task[Any]] = {step_task}
-        if poller_task is not None:
-            watched.add(poller_task)
-        while abort is None:
-            remaining = None if deadline is None else max(0.0, deadline - loop.time())
-            done, _ = await asyncio.wait(
-                watched, timeout=remaining, return_when=asyncio.FIRST_COMPLETED
+        watched: set[asyncio.Future[Any]] = {step_task}
+        if cancelled_signal is not None:
+            watched.add(cancelled_signal)
+        # The signal resolves only on cancellation, so one wait decides the outcome.
+        done, _ = await asyncio.wait(
+            watched, timeout=timeout_seconds, return_when=asyncio.FIRST_COMPLETED
+        )
+        # A step that finished keeps its outcome, whatever else happened.
+        if step_task in done:
+            return step_task.result()
+        abort: BaseException
+        # A cancellation outranks a deadline reached at the same moment:
+        # not checkpointing a cancelled workflow's step is the safer error.
+        if cancelled_signal is not None and cancelled_signal in done:
+            abort = DBOSWorkflowCancelledError(
+                f"Workflow {workflow_id} is cancelled. Aborting preemptible step."
             )
-            # A step that finished keeps its outcome, whatever else happened.
-            if step_task in done:
-                return step_task.result()
-            if poller_task is not None and poller_task in done:
-                watched.discard(poller_task)
-                observed = (
-                    not poller_task.cancelled() and poller_task.exception() is None
-                )
-                # A cancellation outranks a deadline reached at the same moment:
-                # not checkpointing a cancelled workflow's step is the safer error.
-                if observed and poller_task.result():
-                    abort = DBOSWorkflowCancelledError(
-                        f"Workflow {workflow_id} is cancelled. Aborting preemptible step."
-                    )
-                continue
+        else:
             assert timeout_seconds is not None
             abort = DBOSStepTimeoutError(step_name, timeout_seconds)
         # Stop the step and let its cleanup finish before surfacing the reason.
@@ -2333,19 +2404,18 @@ async def _supervise_step(
             raise outcome
         raise abort from outcome
     finally:
-        # Don't leak either task if the outer coroutine was itself cancelled,
+        if watcher is not None and cancelled_signal is not None:
+            watcher.unregister(workflow_id, shard_key, cancelled_signal)
+        # Don't leak the step if the outer coroutine was itself cancelled,
         # and retrieve any outcome so asyncio doesn't log it as unhandled.
-        for task in (step_task, poller_task):
-            if task is None:
-                continue
-            if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except BaseException:
-                    pass
-            elif not task.cancelled():
-                task.exception()
+        if not step_task.done():
+            step_task.cancel()
+            try:
+                await step_task
+            except BaseException:
+                pass
+        elif not step_task.cancelled():
+            step_task.exception()
 
 
 def invoke_step(
@@ -2501,6 +2571,7 @@ def invoke_step(
                 step_name=step_name,
                 preemptible=preemptible,
                 timeout_seconds=timeout_seconds,
+                shard_key=step_ctx.shard_key,
             )
         )
     else:
