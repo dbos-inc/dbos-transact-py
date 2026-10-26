@@ -416,31 +416,29 @@ class StepReservation:
     It must run in the workflow that reserved it; a reservation that never runs leaves a gap in the step IDs.
     """
 
-    def __init__(self, step_ctx: Optional[DBOSContext]) -> None:
-        # None when reserved outside a workflow: the function then runs as a plain call.
+    def __init__(self, step_ctx: DBOSContext) -> None:
         self._step_ctx = step_ctx
         self._used = False
 
     @property
-    def step_id(self) -> Optional[int]:
-        """The reserved step ID, or None if the reservation was made outside a workflow."""
-        return self._step_ctx.function_id if self._step_ctx is not None else None
+    def step_id(self) -> int:
+        """The reserved step ID."""
+        return self._step_ctx.function_id
 
     def _claim(self) -> None:
         if self._used:
             raise DBOSException("A step reservation can only be run once")
         step_ctx = self._step_ctx
-        if step_ctx is not None:
-            ctx = get_local_dbos_context()
-            if (
-                ctx is None
-                or not ctx.is_workflow()
-                or ctx.workflow_id != step_ctx.workflow_id
-            ):
-                raise DBOSException(
-                    f"Step {step_ctx.function_id} was reserved in workflow {step_ctx.workflow_id} "
-                    "and must be run from that workflow, outside any step"
-                )
+        ctx = get_local_dbos_context()
+        if (
+            ctx is None
+            or not ctx.is_workflow()
+            or ctx.workflow_id != step_ctx.workflow_id
+        ):
+            raise DBOSException(
+                f"Step {step_ctx.function_id} was reserved in workflow {step_ctx.workflow_id} "
+                "and must be run from that workflow, outside any step"
+            )
         self._used = True
 
     @overload
@@ -1702,14 +1700,14 @@ class DBOS:
     @classmethod
     def reserve_step(cls) -> StepReservation:
         """Draw the next step ID now, so a step can run at it later (for example, from another task).
-        Run the reservation with `run` or `run_async`; outside a workflow, it runs the function as a plain call.
+        Must be called from workflow code, not from a step or transaction; run the reservation with `run` or `run_async`.
         """
         ctx = get_local_dbos_context()
-        if ctx is not None and ctx.is_step():
-            raise DBOSException("DBOS.reserve_step cannot be called from within a step")
-        if ctx is not None and ctx.is_workflow():
-            return StepReservation(ctx.snapshot_step_ctx())
-        return StepReservation(None)
+        if ctx is None or not ctx.is_workflow():
+            raise DBOSException(
+                "DBOS.reserve_step must be called from a workflow, outside any step or transaction"
+            )
+        return StepReservation(ctx.snapshot_step_ctx())
 
     @classmethod
     def get_workflow_status(

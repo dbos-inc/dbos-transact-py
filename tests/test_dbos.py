@@ -3511,12 +3511,8 @@ async def test_reserve_step_event_stream(dbos: DBOS) -> None:
 
 @pytest.mark.asyncio
 async def test_reserve_step_misuse(dbos: DBOS) -> None:
-    # Outside a workflow the reservation runs the function as a plain call.
-    plain = DBOS.reserve_step()
-    assert plain.step_id is None
-    assert await plain.run_async(None, lambda: DBOS.step_id) is None
-    with pytest.raises(DBOSException, match="only be run once"):
-        await plain.run_async(None, lambda: None)
+    with pytest.raises(DBOSException, match="outside any step or transaction"):
+        DBOS.reserve_step()
 
     leaked: List[StepReservation] = []
 
@@ -3525,16 +3521,22 @@ async def test_reserve_step_misuse(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     async def reserving_workflow() -> None:
+        # A thread that does not inherit the workflow context cannot reserve.
+        with pytest.raises(DBOSException, match="outside any step or transaction"):
+            await asyncio.get_running_loop().run_in_executor(None, DBOS.reserve_step)
         reservation = DBOS.reserve_step()
         # Sync run inside an event loop is rejected without using up the reservation.
         with pytest.raises(RuntimeError, match="run_async"):
             reservation.run(None, lambda: None)
-        await reservation.run_async(None, lambda: None)
+        step_id = await reservation.run_async(
+            {"name": "sync_step"}, lambda: DBOS.step_id
+        )
+        assert step_id == reservation.step_id == 1
         with pytest.raises(DBOSException, match="only be run once"):
             await reservation.run_async(None, lambda: None)
         failing = DBOS.reserve_step()
         with pytest.raises(ValueError, match="step failed"):
-            await failing.run_async(None, fail)
+            await failing.run_async({"name": "fail"}, fail)
         with pytest.raises(DBOSException, match="only be run once"):
             await failing.run_async(None, lambda: None)
         leaked.append(DBOS.reserve_step())
@@ -3559,10 +3561,17 @@ async def test_reserve_step_misuse(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     async def nested_workflow() -> None:
-        with pytest.raises(DBOSException, match="within a step"):
+        with pytest.raises(DBOSException, match="outside any step or transaction"):
             await reserving_step()
 
-    await reserving_workflow()
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        await reserving_workflow()
+    steps = await DBOS.list_workflow_steps_async(wfid)
+    assert [(s["function_id"], s["function_name"]) for s in steps] == [
+        (1, "sync_step"),
+        (2, "fail"),
+    ]
     await other_workflow()
     await step_workflow()
     await nested_workflow()
@@ -3640,12 +3649,13 @@ async def test_reserve_step_lifecycle(dbos: DBOS) -> None:
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         handle = await DBOS.start_workflow_async(cancelled_workflow)
-    await started.wait()
+    await asyncio.wait_for(started.wait(), 10)
     await DBOS.cancel_workflow_async(wfid)
     release.set()
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         await handle.get_result()
     assert await DBOS.list_workflow_steps_async(wfid) == []
+    # The resumed run uses these test-loop events from another loop; that is safe only because both are already set.
     resumed = await DBOS.resume_workflow_async(wfid)
     assert await resumed.get_result() == 2
     assert blocked_calls == 2
