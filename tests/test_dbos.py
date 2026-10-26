@@ -22,6 +22,7 @@ from sqlalchemy.exc import OperationalError
 from dbos import (
     DBOS,
     DBOSConfig,
+    DBOSContextSetAuth,
     EnqueueOptions,
     SendMessage,
     SetWorkflowID,
@@ -2344,8 +2345,7 @@ def test_workflow_timeout(dbos: DBOS) -> None:
         with pytest.raises(DBOSAwaitedWorkflowCancelledError):
             with SetWorkflowID(wfid):
                 blocked_workflow()
-        # No context, and so no propagated deadline, outlives the workflow call.
-        assert get_local_dbos_context() is None
+        assert assert_current_dbos_context().workflow_deadline_epoch_ms is None
         start_time = time.time() * 1000
         handle = DBOS.start_workflow(blocked_workflow)
         status = handle.get_status()
@@ -4088,6 +4088,36 @@ def test_set_shard_key_exits_in_another_context() -> None:
     assert get_workflow_start_options().shard_key is None
     with pytest.raises(ValueError):
         SetShardKey("")
+
+
+def test_setter_instance_rejects_overlapping_use() -> None:
+    timeout = SetWorkflowTimeout(5)
+    with timeout:
+        with pytest.raises(DBOSException, match="already in use"):
+            with timeout:
+                pass
+        assert get_workflow_start_options().workflow_timeout_ms == 5000
+    assert get_workflow_start_options().workflow_timeout_ms is None
+    # Sequential reuse is fine.
+    with timeout:
+        assert get_workflow_start_options().workflow_timeout_ms == 5000
+    assert get_local_dbos_context() is None
+
+    auth = DBOSContextSetAuth("alice", ["admin"])
+    with auth:
+        with pytest.raises(DBOSException, match="already in use"):
+            with auth:
+                pass
+        assert DBOS.authenticated_user == "alice"
+    assert get_local_dbos_context() is None
+
+
+def test_context_accessors_inside_setter_block() -> None:
+    with SetWorkflowID("accessor-test"):
+        DBOS.set_authentication("bob", ["reader"])
+        assert DBOS.authenticated_user == "bob"
+        assert DBOS.authenticated_roles == ["reader"]
+    assert get_local_dbos_context() is None
 
 
 def test_shard_keys_must_be_non_empty_strings() -> None:

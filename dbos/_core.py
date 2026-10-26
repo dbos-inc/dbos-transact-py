@@ -675,8 +675,7 @@ def _init_workflow(
     duplication_policy 'return-existing', the ID of the workflow that already holds
     this deduplication ID (None if this call created the workflow itself).
     """
-    # Assembled once, outside the retry loop below: assembling consumes the
-    # context's workflow attributes and trace carrier.
+    # Assembled once, outside the retry loop below.
     status = _assemble_workflow_status(
         dbos,
         ctx,

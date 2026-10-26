@@ -482,6 +482,13 @@ def _reset_context_var(
         var.set(saved)
 
 
+def _reject_reuse(manager: object, active: bool) -> None:
+    if active:
+        raise DBOSException(
+            f"This {type(manager).__name__} is already in use; create a new one for each with block."
+        )
+
+
 # An identity set by DBOSContextSetAuth, DBOS.set_authentication, or DBOSAssumeRole, and the
 # DBOSContext that owns it. Held apart from the context, which concurrent tasks share, so it
 # stays task-local; it applies only while its owner is current, so it never outlives the context.
@@ -576,15 +583,20 @@ class _WorkflowStartOptionsBlock:
     def __init__(self) -> None:
         self._token: Optional[Token[WorkflowStartOptions]] = None
         self._saved: WorkflowStartOptions = _NO_START_OPTIONS
+        self._created_ctx = False
 
     def _overrides(self) -> Dict[str, Any]:
         raise NotImplementedError
 
     def __enter__(self: _Block) -> _Block:
+        _reject_reuse(self, self._token is not None)
+        options = replace(_workflow_start_options_var.get(), **self._overrides())
+        # Ensure a context, so DBOS context accessors work inside the block.
+        self._created_ctx = get_local_dbos_context() is None
+        if self._created_ctx:
+            _set_local_dbos_context(DBOSContext())
         self._saved = _workflow_start_options_var.get()
-        self._token = _workflow_start_options_var.set(
-            replace(self._saved, **self._overrides())
-        )
+        self._token = _workflow_start_options_var.set(options)
         return self
 
     def __exit__(
@@ -593,7 +605,10 @@ class _WorkflowStartOptionsBlock:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        _reset_context_var(_workflow_start_options_var, self._token, self._saved)
+        token, self._token = self._token, None
+        _reset_context_var(_workflow_start_options_var, token, self._saved)
+        if self._created_ctx:
+            _clear_local_dbos_context()
         return False  # Did not handle
 
 
@@ -1007,6 +1022,8 @@ class EnterDBOSStepCtx:
             Token[Optional[Tuple[DBOSContext, Authentication]]]
         ] = None
         self.saved_auth: Optional[Tuple[DBOSContext, Authentication]] = None
+        self.start_options_token: Optional[Token[WorkflowStartOptions]] = None
+        self.saved_start_options: WorkflowStartOptions = _NO_START_OPTIONS
 
     def __enter__(self) -> DBOSContext:
         ctx = assert_current_dbos_context()
@@ -1016,6 +1033,9 @@ class EnterDBOSStepCtx:
         # An override the step sets must not outlive it.
         self.saved_auth = _auth_override_var.get()
         self.auth_token = _auth_override_var.set(None)
+        # The workflow's Set* options apply to the workflows it starts, not to its steps.
+        self.saved_start_options = _workflow_start_options_var.get()
+        self.start_options_token = _workflow_start_options_var.set(_NO_START_OPTIONS)
         self.use_ctx.start_step(self.use_ctx.function_id, attributes=self.attributes)
         return self.use_ctx
 
@@ -1030,6 +1050,11 @@ class EnterDBOSStepCtx:
         ctx.end_step(exc_value)
         _set_local_dbos_context(self.prev_ctx)
         _reset_context_var(_auth_override_var, self.auth_token, self.saved_auth)
+        _reset_context_var(
+            _workflow_start_options_var,
+            self.start_options_token,
+            self.saved_start_options,
+        )
         return False  # Did not handle
 
 
@@ -1066,9 +1091,9 @@ class DBOSContextSetAuth(DBOSContextEnsure):
         self.saved_auth: Optional[Tuple[DBOSContext, Authentication]] = None
 
     def __enter__(self) -> DBOSContext:
-        ctx = get_local_dbos_context()
-        if ctx is None:
-            self.created_ctx = True
+        _reject_reuse(self, self.token is not None)
+        self.created_ctx = get_local_dbos_context() is None
+        if self.created_ctx:
             _set_local_dbos_context(DBOSContext())
         ctx = assert_current_dbos_context()
         self.saved_auth = _auth_override_var.get()
@@ -1081,7 +1106,8 @@ class DBOSContextSetAuth(DBOSContextEnsure):
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        _reset_context_var(_auth_override_var, self.token, self.saved_auth)
+        token, self.token = self.token, None
+        _reset_context_var(_auth_override_var, token, self.saved_auth)
         # Clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()
@@ -1097,6 +1123,7 @@ class DBOSAssumeRole:
     def __enter__(self) -> DBOSAssumeRole:
         ctx = assert_current_dbos_context()
         if self.assume_role is not None:
+            _reject_reuse(self, self.token is not None)
             self.saved_auth = _auth_override_var.get()
             self.token = override_authentication(ctx, assumed_role=self.assume_role)
         return self
@@ -1108,7 +1135,8 @@ class DBOSAssumeRole:
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
         if self.assume_role is not None:
-            _reset_context_var(_auth_override_var, self.token, self.saved_auth)
+            token, self.token = self.token, None
+            _reset_context_var(_auth_override_var, token, self.saved_auth)
         return False  # Did not handle
 
 
