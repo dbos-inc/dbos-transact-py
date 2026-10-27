@@ -11,7 +11,6 @@ from sqlalchemy.exc import OperationalError
 from dbos import (
     DBOS,
     DBOSClient,
-    DBOSContextEnsure,
     Debouncer,
     DebouncerClient,
     EnqueueOptions,
@@ -21,6 +20,7 @@ from dbos import (
     WorkflowHandle,
     WorkflowSerializationFormat,
 )
+from dbos._context import get_workflow_start_options
 from dbos._dbos import WorkflowHandleAsync
 from dbos._debug_trigger import DebugAction, DebugTriggers
 from dbos._error import (
@@ -1024,14 +1024,12 @@ def test_debouncer_rejects_reject_reuse_policy(dbos: DBOS, client: DBOSClient) -
     wf = _register_reuse_workflows()
 
     debouncer = Debouncer.create(wf.echo, queue=QUEUE_NAME)
-    # An outer context survives the SetWorkflowID block, as a workflow's does.
-    with DBOSContextEnsure() as ctx:
+    with SetWorkflowID(str(uuid.uuid4()), workflow_id_reuse_policy="reject"):
         with pytest.raises(DBOSException, match="workflow_id_reuse_policy 'reject'"):
-            with SetWorkflowID(str(uuid.uuid4()), workflow_id_reuse_policy="reject"):
-                debouncer.debounce("key", 0.1, "first")
+            debouncer.debounce("key", 0.1, "first")
         # The rejected debounce consumed the pinned ID, so the next start cannot inherit it.
-        assert ctx.id_assigned_for_next_workflow == ""
-        assert ctx.workflow_id_reuse_policy is None
+        assigned = get_workflow_start_options().assigned_id
+        assert assigned is not None and assigned.consumed
 
     client_debouncer = DebouncerClient(
         client,
