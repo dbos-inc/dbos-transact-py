@@ -21,7 +21,11 @@ from dbos._serialization import (
     serialize_value_as,
 )
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
-from tests.conftest import queue_entries_are_cleaned_up, reexecute_workflow_by_id
+from tests.conftest import (
+    queue_entries_are_cleaned_up,
+    reexecute_workflow_by_id,
+    retry_until_success,
+)
 
 
 def test_cancel_resume(dbos: DBOS) -> None:
@@ -62,6 +66,13 @@ def test_cancel_resume(dbos: DBOS) -> None:
     workflow_event.set()
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         cancelled_handle.get_result()
+
+    # get_result returns once the status is CANCELLED, before the cancelled run
+    # reaches step_two. Wait for it to exit, or a resume could let it run step_two.
+    def execution_left() -> None:
+        assert wfid not in dbos._active_workflows_set.activeList()
+
+    retry_until_success(execution_left, interval=0.1, max_attempts=100)
     assert steps_completed == 1
 
     # Resume the workflow. Verify it completes successfully.
@@ -841,6 +852,13 @@ def test_cancel_resume_queue(dbos: DBOS) -> None:
     workflow_event.set()
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         handle.get_result()
+
+    # get_result returns once the status is CANCELLED, before the cancelled run
+    # reaches step_two. Wait for it to exit, or a resume could let it run step_two.
+    def execution_left() -> None:
+        assert wfid not in dbos._active_workflows_set.activeList()
+
+    retry_until_success(execution_left, interval=0.1, max_attempts=100)
     assert steps_completed == 1
     assert DBOS.get_workflow_status(wfid).status == "CANCELLED"  # type: ignore[union-attr]
 
