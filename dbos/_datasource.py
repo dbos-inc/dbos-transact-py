@@ -37,6 +37,7 @@ from dbos._context import (
 )
 from dbos._datasource_migration import migrate_datasource_database
 from dbos._error import DBOSException, DBOSWorkflowConflictIDError
+from dbos._registrations import get_func_type_hints
 from dbos._schemas.datasource_database import datasource_outputs_table
 from dbos._serialization import (
     DBOSDefaultSerializer,
@@ -128,14 +129,16 @@ def _reject_session_binds(session_kw: Dict[str, Any]) -> None:
         )
 
 
-def _replay_recorded(recorded: "RecordedResult", serializer: "Serializer") -> Any:
+def _replay_recorded(
+    recorded: "RecordedResult", serializer: "Serializer", type_hint: Any
+) -> Any:
     if recorded["error"]:
         raise deserialize_exception(
             recorded["error"], recorded["serialization"], serializer
         )
     elif recorded["output"] is not None:
         return deserialize_value(
-            recorded["output"], recorded["serialization"], serializer
+            recorded["output"], recorded["serialization"], serializer, type_hint
         )
     else:
         raise DBOSException("Datasource recorded output and error are both None")
@@ -425,7 +428,9 @@ class AsyncSQLAlchemyDatasource(ABC):
         if result.first() is None:
             raise _StepAlreadyRecorded()
 
-    async def _replay_conflicting_step(self, workflow_id: str, step_id: int) -> Any:
+    async def _replay_conflicting_step(
+        self, workflow_id: str, step_id: int, type_hint: Any
+    ) -> Any:
         # The recorded row is this step's durable result, whichever execution committed it.
         recorded = await self._check_execution_with_retry(workflow_id, step_id)
         if recorded is None:
@@ -433,7 +438,7 @@ class AsyncSQLAlchemyDatasource(ABC):
                 f"Datasource step {step_id} of workflow {workflow_id} conflicted with a "
                 "concurrent execution, but no recorded result was found"
             )
-        return _replay_recorded(recorded, self.serializer)
+        return _replay_recorded(recorded, self.serializer, type_hint)
 
     async def run_tx_step_async(
         self,
@@ -466,7 +471,14 @@ class AsyncSQLAlchemyDatasource(ABC):
                 step_id = inner_ctx.curr_step_function_id
                 recorded = await self._check_execution_with_retry(workflow_id, step_id)
                 if recorded is not None:
-                    return cast(R, _replay_recorded(recorded, self.serializer))
+                    return cast(
+                        R,
+                        _replay_recorded(
+                            recorded,
+                            self.serializer,
+                            get_func_type_hints(func).return_hint,
+                        ),
+                    )
 
             output: R
             conflicted = False
@@ -552,7 +564,10 @@ class AsyncSQLAlchemyDatasource(ABC):
                     raise DBOSWorkflowConflictIDError(workflow_id)
                 # Still the owner: the recorded row is our own ambiguous commit or a stale execution's, and either is this step's result.
                 return cast(
-                    R, await self._replay_conflicting_step(workflow_id, step_id)
+                    R,
+                    await self._replay_conflicting_step(
+                        workflow_id, step_id, get_func_type_hints(func).return_hint
+                    ),
                 )
 
             return output
@@ -849,7 +864,9 @@ class SQLAlchemyDatasource(ABC):
         if result.first() is None:
             raise _StepAlreadyRecorded()
 
-    def _replay_conflicting_step(self, workflow_id: str, step_id: int) -> Any:
+    def _replay_conflicting_step(
+        self, workflow_id: str, step_id: int, type_hint: Any
+    ) -> Any:
         # The recorded row is this step's durable result, whichever execution committed it.
         recorded = self._check_execution_with_retry(workflow_id, step_id)
         if recorded is None:
@@ -857,7 +874,7 @@ class SQLAlchemyDatasource(ABC):
                 f"Datasource step {step_id} of workflow {workflow_id} conflicted with a "
                 "concurrent execution, but no recorded result was found"
             )
-        return _replay_recorded(recorded, self.serializer)
+        return _replay_recorded(recorded, self.serializer, type_hint)
 
     def run_tx_step(
         self,
@@ -890,7 +907,14 @@ class SQLAlchemyDatasource(ABC):
                 step_id = inner_ctx.curr_step_function_id
                 recorded = self._check_execution_with_retry(workflow_id, step_id)
                 if recorded is not None:
-                    return cast(R, _replay_recorded(recorded, self.serializer))
+                    return cast(
+                        R,
+                        _replay_recorded(
+                            recorded,
+                            self.serializer,
+                            get_func_type_hints(func).return_hint,
+                        ),
+                    )
 
             output: R
             conflicted = False
@@ -973,7 +997,12 @@ class SQLAlchemyDatasource(ABC):
                     # Another execution owns the workflow: stop, as an ordinary step's loser does.
                     raise DBOSWorkflowConflictIDError(workflow_id)
                 # Still the owner: the recorded row is our own ambiguous commit or a stale execution's, and either is this step's result.
-                return cast(R, self._replay_conflicting_step(workflow_id, step_id))
+                return cast(
+                    R,
+                    self._replay_conflicting_step(
+                        workflow_id, step_id, get_func_type_hints(func).return_hint
+                    ),
+                )
 
             return output
 

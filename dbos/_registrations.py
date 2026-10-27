@@ -1,10 +1,14 @@
+import functools
 import inspect
+import typing
+import weakref
 from dataclasses import dataclass
 from enum import Enum
 from types import FunctionType
-from typing import Any, Callable, List, Optional, Tuple, Type
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
 from dbos._error import DBOSWorkflowFunctionNotFoundError
+from dbos._logger import dbos_logger
 from dbos._serialization import WorkflowSerializationFormat
 
 DEFAULT_MAX_RECOVERY_ATTEMPTS = 100
@@ -104,6 +108,60 @@ def get_func_info(func: Callable[..., Any]) -> Optional[DBOSFuncInfo]:
             break
         func = func.__wrapped__
     return None
+
+
+@dataclass(frozen=True)
+class FuncTypeHints:
+    # The parameters a call's stored arguments bind to, without a leading self/cls.
+    params: List[inspect.Parameter]
+    hints: Dict[str, Any]
+
+    @property
+    def return_hint(self) -> Any:
+        return self.hints.get("return")
+
+
+# Keyed by function, with the func_type the entry was built for: a later class decorator changes the self/cls skip.
+_type_hints_cache: (
+    "weakref.WeakKeyDictionary[Any, Tuple[DBOSFuncType, FuncTypeHints]]"
+) = weakref.WeakKeyDictionary()
+
+
+def get_func_type_hints(func: Callable[..., Any]) -> FuncTypeHints:
+    """A function's resolved type hints, cached; empty if they cannot be resolved."""
+    fi = get_func_info(func)
+    func_type = fi.func_type if fi is not None else DBOSFuncType.Unknown
+    try:
+        cached = _type_hints_cache.get(func)
+    except TypeError:
+        cached = None
+    if cached is not None and cached[0] is func_type:
+        return cached[1]
+    target = inspect.unwrap(func)
+    while isinstance(target, functools.partial):
+        target = inspect.unwrap(target.func)
+    try:
+        hints = typing.get_type_hints(target)
+    except NameError as e:
+        dbos_logger.warning(
+            f"Cannot resolve type hints of {getattr(target, '__qualname__', target)}, so its stored values are not converted to them: {e}"
+        )
+        hints = {}
+    except Exception:
+        # Not introspectable, like a builtin or a callable object.
+        hints = {}
+    try:
+        params = list(inspect.signature(func).parameters.values())
+    except (TypeError, ValueError):
+        params = []
+    if func_type in (DBOSFuncType.Class, DBOSFuncType.Instance):
+        params = params[1:]
+    result = FuncTypeHints(params, hints)
+    try:
+        _type_hints_cache[func] = (func_type, result)
+    except TypeError:
+        pass
+    return result
 
 
 def get_or_create_func_info(func: Callable[..., Any]) -> DBOSFuncInfo:

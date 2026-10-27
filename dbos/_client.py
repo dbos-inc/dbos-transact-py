@@ -11,8 +11,10 @@ from typing import (
     Generic,
     List,
     Optional,
+    Type,
     TypeVar,
     Union,
+    overload,
 )
 from zoneinfo import ZoneInfo
 
@@ -75,6 +77,7 @@ from dbos._sys_db import (
 from dbos._workflow_commands import fork_workflow, get_workflow, rewind_workflow
 
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
+T = TypeVar("T")
 
 
 class WorkflowHandleClientPolling(Generic[R]):
@@ -90,13 +93,15 @@ class WorkflowHandleClientPolling(Generic[R]):
         return self.workflow_id
 
     def get_result(
-        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
-    ) -> R:
+        self,
+        *,
+        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
+        result_type: Any = None,
+    ) -> Any:
         with bind_shard_keys({self.workflow_id: self.shard_key}):
-            res: R = self._sys_db.await_workflow_result(
-                self.workflow_id, polling_interval_sec
+            return self._sys_db.await_workflow_result(
+                self.workflow_id, polling_interval_sec, result_type=result_type
             )
-        return res
 
     def get_status(self) -> WorkflowStatus:
         with bind_shard_keys({self.workflow_id: self.shard_key}):
@@ -119,13 +124,15 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
         return self.workflow_id
 
     async def get_result(
-        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
-    ) -> R:
+        self,
+        *,
+        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
+        result_type: Any = None,
+    ) -> Any:
         with bind_shard_keys({self.workflow_id: self.shard_key}):
-            res: R = await self._sys_db.await_workflow_result_async(
-                self.workflow_id, polling_interval_sec
+            return await self._sys_db.await_workflow_result_async(
+                self.workflow_id, polling_interval_sec, result_type=result_type
             )
-        return res
 
     async def get_status(self) -> WorkflowStatus:
         with bind_shard_keys({self.workflow_id: self.shard_key}):
@@ -790,6 +797,7 @@ class DBOSClient:
             send_to_forks=send_to_forks,
         )
 
+    @overload
     def get_event(
         self,
         workflow_id: str,
@@ -797,9 +805,55 @@ class DBOSClient:
         timeout_seconds: float = 60,
         *,
         shard_key: Optional[str] = None,
+        result_type: Type[T],
+    ) -> Optional[T]: ...
+
+    @overload
+    def get_event(
+        self,
+        workflow_id: str,
+        key: str,
+        timeout_seconds: float = 60,
+        *,
+        shard_key: Optional[str] = None,
+        result_type: Any = None,
+    ) -> Any: ...
+
+    def get_event(
+        self,
+        workflow_id: str,
+        key: str,
+        timeout_seconds: float = 60,
+        *,
+        shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> Any:
         with bind_shard_keys({workflow_id: shard_key}):
-            return self._sys_db.get_event(workflow_id, key, timeout_seconds)
+            return self._sys_db.get_event(
+                workflow_id, key, timeout_seconds, result_type=result_type
+            )
+
+    @overload
+    async def get_event_async(
+        self,
+        workflow_id: str,
+        key: str,
+        timeout_seconds: float = 60,
+        *,
+        shard_key: Optional[str] = None,
+        result_type: Type[T],
+    ) -> Optional[T]: ...
+
+    @overload
+    async def get_event_async(
+        self,
+        workflow_id: str,
+        key: str,
+        timeout_seconds: float = 60,
+        *,
+        shard_key: Optional[str] = None,
+        result_type: Any = None,
+    ) -> Any: ...
 
     async def get_event_async(
         self,
@@ -808,9 +862,12 @@ class DBOSClient:
         timeout_seconds: float = 60,
         *,
         shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> Any:
         with bind_shard_keys({workflow_id: shard_key}):
-            return await self._sys_db.get_event_async(workflow_id, key, timeout_seconds)
+            return await self._sys_db.get_event_async(
+                workflow_id, key, timeout_seconds, result_type=result_type
+            )
 
     def cancel_workflow(
         self,
@@ -1440,6 +1497,7 @@ class DBOSClient:
                 shard_key=self._sys_db._key_hint(workflow_id),
             )
 
+    @overload
     def read_stream(
         self,
         workflow_id: str,
@@ -1449,6 +1507,32 @@ class DBOSClient:
         polling_interval_sec: Optional[float] = None,
         timeout_seconds: Optional[float] = None,
         shard_key: Optional[str] = None,
+        result_type: Type[T],
+    ) -> Generator[T, Any, None]: ...
+
+    @overload
+    def read_stream(
+        self,
+        workflow_id: str,
+        key: str,
+        *,
+        offset: int = 0,
+        polling_interval_sec: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
+        shard_key: Optional[str] = None,
+        result_type: Any = None,
+    ) -> Generator[Any, Any, None]: ...
+
+    def read_stream(
+        self,
+        workflow_id: str,
+        key: str,
+        *,
+        offset: int = 0,
+        polling_interval_sec: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
+        shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> Generator[Any, Any, None]:
         """
         Read values from a stream as a generator.
@@ -1475,7 +1559,34 @@ class DBOSClient:
             timeout_seconds=timeout_seconds,
             shard_key=shard_key,
             checkpoint=False,
+            result_type=result_type,
         )
+
+    @overload
+    def read_stream_async(
+        self,
+        workflow_id: str,
+        key: str,
+        *,
+        offset: int = 0,
+        polling_interval_sec: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
+        shard_key: Optional[str] = None,
+        result_type: Type[T],
+    ) -> AsyncGenerator[T, None]: ...
+
+    @overload
+    def read_stream_async(
+        self,
+        workflow_id: str,
+        key: str,
+        *,
+        offset: int = 0,
+        polling_interval_sec: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
+        shard_key: Optional[str] = None,
+        result_type: Any = None,
+    ) -> AsyncGenerator[Any, None]: ...
 
     async def read_stream_async(
         self,
@@ -1486,6 +1597,7 @@ class DBOSClient:
         polling_interval_sec: Optional[float] = None,
         timeout_seconds: Optional[float] = None,
         shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> AsyncGenerator[Any, None]:
         """
         Read values from a stream as an async generator.
@@ -1512,6 +1624,7 @@ class DBOSClient:
             timeout_seconds=timeout_seconds,
             shard_key=shard_key,
             checkpoint=False,
+            result_type=result_type,
         )
         try:
             async for value in values:
@@ -1519,6 +1632,32 @@ class DBOSClient:
         finally:
             # Close rather than abandon, so the listener is unregistered here and not at collection.
             await values.aclose()
+
+    @overload
+    def read_stream_offset(
+        self,
+        workflow_id: str,
+        key: str,
+        offset: int,
+        *,
+        polling_interval_sec: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
+        shard_key: Optional[str] = None,
+        result_type: Type[T],
+    ) -> T: ...
+
+    @overload
+    def read_stream_offset(
+        self,
+        workflow_id: str,
+        key: str,
+        offset: int,
+        *,
+        polling_interval_sec: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
+        shard_key: Optional[str] = None,
+        result_type: Any = None,
+    ) -> Any: ...
 
     def read_stream_offset(
         self,
@@ -1529,6 +1668,7 @@ class DBOSClient:
         polling_interval_sec: Optional[float] = None,
         timeout_seconds: Optional[float] = None,
         shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> Any:
         """
         Read the single value at one offset of a stream, waiting for it to be written.
@@ -1557,7 +1697,34 @@ class DBOSClient:
             timeout_seconds=timeout_seconds,
             shard_key=shard_key,
             checkpoint=False,
+            result_type=result_type,
         )
+
+    @overload
+    async def read_stream_offset_async(
+        self,
+        workflow_id: str,
+        key: str,
+        offset: int,
+        *,
+        polling_interval_sec: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
+        shard_key: Optional[str] = None,
+        result_type: Type[T],
+    ) -> T: ...
+
+    @overload
+    async def read_stream_offset_async(
+        self,
+        workflow_id: str,
+        key: str,
+        offset: int,
+        *,
+        polling_interval_sec: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
+        shard_key: Optional[str] = None,
+        result_type: Any = None,
+    ) -> Any: ...
 
     async def read_stream_offset_async(
         self,
@@ -1568,6 +1735,7 @@ class DBOSClient:
         polling_interval_sec: Optional[float] = None,
         timeout_seconds: Optional[float] = None,
         shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> Any:
         """
         Read the single value at one offset of a stream, waiting for it to be written.
@@ -1596,6 +1764,7 @@ class DBOSClient:
             timeout_seconds=timeout_seconds,
             shard_key=shard_key,
             checkpoint=False,
+            result_type=result_type,
         )
 
     # ── Schedule API ──────────────────────────────────────────────

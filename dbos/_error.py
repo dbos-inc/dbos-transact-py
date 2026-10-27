@@ -69,6 +69,7 @@ class DBOSErrorCode(Enum):
     QueryTimeout = 26
     WorkflowIDInUse = 27
     StepNondeterminism = 28
+    SerializationError = 29
 
 
 #######################################
@@ -384,6 +385,15 @@ def is_workflow_id_in_use_error(e: BaseException) -> bool:
         isinstance(e, PortableWorkflowError)
         and e.name == DBOSWorkflowIDInUseError.__name__
     )
+
+
+class DBOSSerializationError(DBOSException):
+    """Exception raised when a stored value cannot be converted to the type its code expects."""
+
+    def __init__(self, message: str):
+        super().__init__(
+            message, dbos_error_code=DBOSErrorCode.SerializationError.value
+        )
 
 
 class DBOSAwaitedWorkflowCancelledError(DBOSException):

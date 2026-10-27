@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import base64
-import inspect
+import dataclasses
 import json
 import pickle
+import uuid
 from abc import ABC, abstractmethod
+from collections import deque
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import (
     Any,
-    Callable,
     Dict,
     List,
     Mapping,
@@ -20,12 +21,10 @@ from typing import (
     TypeAlias,
     TypedDict,
     cast,
-    get_type_hints,
 )
 
-from dateutil.parser import isoparse
-
 from ._logger import dbos_logger
+from ._type_convert import value_to_type
 
 
 class WorkflowInputs(TypedDict):
@@ -88,6 +87,12 @@ class Serializer(ABC):
     def deserialize(cls, serialized_data: str) -> Any:
         pass
 
+    def deserialize_typed(self, serialized_data: str, type_hint: Any) -> Any:
+        """Deserialize a value the reading code expects to have type `type_hint`.
+
+        Override to build typed values; by default the hint is ignored."""
+        return self.deserialize(serialized_data)
+
     def name(self) -> str:
         return "custom_serializer"
 
@@ -134,6 +139,9 @@ def _portableify(value: Any) -> JsonValue:
     """
     Convert common Python objects into plain JSON-serializable structures
     """
+    if isinstance(value, Enum):
+        return _portableify(value.value)
+
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
 
@@ -146,24 +154,48 @@ def _portableify(value: Any) -> JsonValue:
     if isinstance(value, Decimal):
         return format(value, "f")
 
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, uuid.UUID):
+        return str(value)
+
+    if isinstance(value, (bytes, bytearray)):
+        return base64.b64encode(value).decode("ascii")
+
+    if isinstance(value, (list, tuple, deque, set, frozenset)):
         return [_portableify(v) for v in value]
 
-    if isinstance(value, set):
-        return [_portableify(v) for v in value]
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return {
+            f.name: _portableify(getattr(value, f.name))
+            for f in dataclasses.fields(value)
+        }
+
+    # A pydantic model, detected without importing pydantic.
+    if hasattr(type(value), "model_fields") and hasattr(value, "model_dump"):
+        return _portableify(value.model_dump(mode="json"))
 
     if isinstance(value, Mapping):
         out: dict[str, JsonValue] = {}
         for k, v in value.items():
-            if not isinstance(k, str):
-                raise TypeError(
-                    "Attempt to do portable JSON serialization of a map with non-string keys"
-                )
-            out[k] = _portableify(v)
+            out[_portable_key(k)] = _portableify(v)
         return out
 
     raise TypeError(
         f"Object of type {type(value).__name__} is not portable JSON serializable"
+    )
+
+
+def _portable_key(key: Any) -> str:
+    """Encode a dict key as JSON's string key, the way Python's json writes scalars."""
+    if isinstance(key, Enum):
+        key = key.value
+    if isinstance(key, str):
+        return key
+    if key is None or isinstance(key, (bool, int, float)):
+        return json.dumps(key)
+    if isinstance(key, (datetime, date, Decimal, uuid.UUID)):
+        return cast(str, _portableify(key))
+    raise TypeError(
+        f"Attempt to do portable JSON serialization of a map with a key of type {type(key).__name__}"
     )
 
 
@@ -180,6 +212,9 @@ class DBOSPortableJSONSerializer(Serializer):
 
     def deserialize(self, text: str | None) -> Any:
         return None if text is None else json.loads(text)
+
+    def deserialize_typed(self, text: str, type_hint: Any) -> Any:
+        return value_to_type(type_hint, self.deserialize(text))
 
     def serialize(self, value: Any) -> str:
         portable = _portableify(value)
@@ -235,15 +270,20 @@ def deserialize_value(
     serialized_value: Optional[str],
     serialization: Optional[str],
     serializer: Serializer,
+    type_hint: Any = None,
 ) -> Optional[Any]:
     if serialized_value is None:
         return None
     if serialization == DBOSPortableJSON.name():
+        if type_hint is not None:
+            return DBOSPortableJSON.deserialize_typed(serialized_value, type_hint)
         return DBOSPortableJSON.deserialize(serialized_value)
     if serialization == DBOSDefaultSerializer.name():
         return DBOSDefaultSerializer.deserialize(serialized_value)
     if serialization is not None and serialization != serializer.name():
         raise TypeError(f"Serialization {serialization} is not available")
+    if type_hint is not None:
+        return serializer.deserialize_typed(serialized_value, type_hint)
     return serializer.deserialize(serialized_value)
 
 
@@ -283,52 +323,6 @@ def deserialize_args(
     if serialization is not None and serialization != serializer.name():
         raise TypeError(f"Serialization {serialization} is not available")
     return cast(WorkflowInputs, serializer.deserialize(serialized_value))
-
-
-def coerce_portable_args_to_hints(
-    wf_func: Callable[..., Any],
-    inputs: WorkflowInputs,
-) -> WorkflowInputs:
-    """Type-coerce arguments whose type is lost to portable JSON serialization.
-
-    Currently only supports datetime/date.
-    """
-    from ._registrations import DBOSFuncType, get_func_info
-
-    def coerce(value: Any, hint: Any) -> Any:
-        if not isinstance(value, str):
-            return value
-        try:
-            if hint is datetime:
-                return isoparse(value)
-            if hint is date:
-                return isoparse(value).date()
-        except (ValueError, OverflowError, TypeError):
-            return value
-        return value
-
-    try:
-        hints = get_type_hints(wf_func)
-    except Exception:
-        hints = getattr(wf_func, "__annotations__", {})
-    if not hints:
-        return inputs
-    try:
-        params = list(inspect.signature(wf_func).parameters.values())
-    except (TypeError, ValueError):
-        return inputs
-    # Drop the leading self/cls parameter for class/instance methods, whose stored
-    # arguments don't include the bound class argument.
-    fi = get_func_info(wf_func)
-    if fi is not None and fi.func_type in (DBOSFuncType.Class, DBOSFuncType.Instance):
-        params = params[1:]
-
-    args = list(inputs["args"])
-    for i, value in enumerate(args):
-        if i < len(params):
-            args[i] = coerce(value, hints.get(params[i].name))
-    kwargs = {key: coerce(val, hints.get(key)) for key, val in inputs["kwargs"].items()}
-    return {"args": tuple(args), "kwargs": kwargs}
 
 
 def _safe_str(x: Any) -> str:

@@ -19,7 +19,7 @@ from __future__ import annotations
 import inspect
 from typing import Any, Callable, Dict, Optional, Tuple
 
-from ._registrations import DBOSFuncType, ValidateArgsCallable, get_func_info
+from ._registrations import ValidateArgsCallable, get_func_type_hints
 
 
 def pydantic_args_validator(
@@ -71,18 +71,10 @@ def make_pydantic_args_validator(
     def _build_adapters() -> (
         tuple[list[tuple[str, Any, Any, Any]], tuple[str, Any], tuple[str, Any]]
     ):
-        sig = inspect.signature(func)
-        hints = _get_type_hints_safe(func)
-        params = list(sig.parameters.values())
-
-        # Determine whether to skip the first parameter (self/cls) using the
-        # function's registration info rather than sniffing parameter names.
-        fi = get_func_info(func)
-        if fi is not None and fi.func_type in (
-            DBOSFuncType.Class,
-            DBOSFuncType.Instance,
-        ):
-            params = params[1:]
+        # Skips a leading self/cls using the function's registration info.
+        type_hints = get_func_type_hints(func)
+        hints = type_hints.hints
+        params = type_hints.params
 
         adapters: list[tuple[str, Any, Any, Any]] = []
         var_args: tuple[str, Any] = ("", None)
@@ -165,13 +157,3 @@ def make_pydantic_args_validator(
         return tuple(validated_args), validated_kwargs
 
     return _validate
-
-
-def _get_type_hints_safe(func: Callable[..., Any]) -> Dict[str, Any]:
-    """Get type hints for a function, falling back to __annotations__ on failure."""
-    try:
-        import typing
-
-        return typing.get_type_hints(func)
-    except Exception:
-        return getattr(func, "__annotations__", {})
