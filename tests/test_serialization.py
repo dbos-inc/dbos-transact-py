@@ -1769,7 +1769,9 @@ def test_portable_typed_workflow_and_steps(
         assert (
             client.retrieve_workflow(wfid).get_result(result_type=TReceipt) == _RECEIPT
         )
-        renamed = client.retrieve_workflow(wfid).get_result(result_type=RenamedReceipt)
+        renamed: RenamedReceipt = client.retrieve_workflow(wfid).get_result(
+            result_type=RenamedReceipt
+        )
         assert renamed == RenamedReceipt("A1", Decimal("3.50"), _ORDER.placed)
         # An explicit type overrides the registered one.
         assert DBOS.retrieve_workflow(wfid).get_result(

@@ -1754,26 +1754,6 @@ class DBOS:
                 step_ctx,
             )
 
-    @overload
-    @classmethod
-    def get_result(
-        cls,
-        workflow_id: str,
-        *,
-        shard_key: Optional[str] = None,
-        result_type: Type[T],
-    ) -> T: ...
-
-    @overload
-    @classmethod
-    def get_result(
-        cls,
-        workflow_id: str,
-        *,
-        shard_key: Optional[str] = None,
-        result_type: Any = None,
-    ) -> Optional[Any]: ...
-
     @classmethod
     def get_result(
         cls,
@@ -1802,26 +1782,6 @@ class DBOS:
                     else dbos._workflow_return_type_by_id(workflow_id)
                 ),
             )
-
-    @overload
-    @classmethod
-    async def get_result_async(
-        cls,
-        workflow_id: str,
-        *,
-        shard_key: Optional[str] = None,
-        result_type: Type[T],
-    ) -> T: ...
-
-    @overload
-    @classmethod
-    async def get_result_async(
-        cls,
-        workflow_id: str,
-        *,
-        shard_key: Optional[str] = None,
-        result_type: Any = None,
-    ) -> Optional[Any]: ...
 
     @classmethod
     async def get_result_async(
@@ -2087,26 +2047,6 @@ class DBOS:
             send_to_forks=send_to_forks,
         )
 
-    @overload
-    @classmethod
-    def recv(
-        cls,
-        topic: Optional[str] = None,
-        timeout_seconds: float = 60,
-        *,
-        result_type: Type[T],
-    ) -> Optional[T]: ...
-
-    @overload
-    @classmethod
-    def recv(
-        cls,
-        topic: Optional[str] = None,
-        timeout_seconds: float = 60,
-        *,
-        result_type: Any = None,
-    ) -> Any: ...
-
     @classmethod
     def recv(
         cls,
@@ -2136,26 +2076,6 @@ class DBOS:
                 timeout_seconds,
                 result_type,
             )
-
-    @overload
-    @classmethod
-    async def recv_async(
-        cls,
-        topic: Optional[str] = None,
-        timeout_seconds: float = 60,
-        *,
-        result_type: Type[T],
-    ) -> Optional[T]: ...
-
-    @overload
-    @classmethod
-    async def recv_async(
-        cls,
-        topic: Optional[str] = None,
-        timeout_seconds: float = 60,
-        *,
-        result_type: Any = None,
-    ) -> Any: ...
 
     @classmethod
     async def recv_async(
@@ -2357,30 +2277,6 @@ class DBOS:
             serialization_type=serialization_type,
         )
 
-    @overload
-    @classmethod
-    def get_event(
-        cls,
-        workflow_id: str,
-        key: str,
-        timeout_seconds: float = 60,
-        *,
-        shard_key: Optional[str] = None,
-        result_type: Type[T],
-    ) -> Optional[T]: ...
-
-    @overload
-    @classmethod
-    def get_event(
-        cls,
-        workflow_id: str,
-        key: str,
-        timeout_seconds: float = 60,
-        *,
-        shard_key: Optional[str] = None,
-        result_type: Any = None,
-    ) -> Any: ...
-
     @classmethod
     def get_event(
         cls,
@@ -2424,30 +2320,6 @@ class DBOS:
                 return dbos._sys_db.get_event(
                     workflow_id, key, timeout_seconds, result_type=result_type
                 )
-
-    @overload
-    @classmethod
-    async def get_event_async(
-        cls,
-        workflow_id: str,
-        key: str,
-        timeout_seconds: float = 60,
-        *,
-        shard_key: Optional[str] = None,
-        result_type: Type[T],
-    ) -> Optional[T]: ...
-
-    @overload
-    @classmethod
-    async def get_event_async(
-        cls,
-        workflow_id: str,
-        key: str,
-        timeout_seconds: float = 60,
-        *,
-        shard_key: Optional[str] = None,
-        result_type: Any = None,
-    ) -> Any: ...
 
     @classmethod
     async def get_event_async(
@@ -4122,34 +3994,6 @@ class DBOS:
         ctx = snapshot_step_context(reserve_sleep_id=False)
         close_stream(_get_dbos_instance(), ctx, key)
 
-    @overload
-    @classmethod
-    def read_stream(
-        cls,
-        workflow_id: str,
-        key: str,
-        *,
-        offset: int = 0,
-        polling_interval_sec: Optional[float] = None,
-        timeout_seconds: Optional[float] = None,
-        shard_key: Optional[str] = None,
-        result_type: Type[T],
-    ) -> Generator[T, Any, None]: ...
-
-    @overload
-    @classmethod
-    def read_stream(
-        cls,
-        workflow_id: str,
-        key: str,
-        *,
-        offset: int = 0,
-        polling_interval_sec: Optional[float] = None,
-        timeout_seconds: Optional[float] = None,
-        shard_key: Optional[str] = None,
-        result_type: Any = None,
-    ) -> Generator[Any, Any, None]: ...
-
     @classmethod
     def read_stream(
         cls,
@@ -4191,34 +4035,6 @@ class DBOS:
             shard_key=shard_key,
             result_type=result_type,
         )
-
-    @overload
-    @classmethod
-    def read_stream_offset(
-        cls,
-        workflow_id: str,
-        key: str,
-        offset: int,
-        *,
-        polling_interval_sec: Optional[float] = None,
-        timeout_seconds: Optional[float] = None,
-        shard_key: Optional[str] = None,
-        result_type: Type[T],
-    ) -> T: ...
-
-    @overload
-    @classmethod
-    def read_stream_offset(
-        cls,
-        workflow_id: str,
-        key: str,
-        offset: int,
-        *,
-        polling_interval_sec: Optional[float] = None,
-        timeout_seconds: Optional[float] = None,
-        shard_key: Optional[str] = None,
-        result_type: Any = None,
-    ) -> Any: ...
 
     @classmethod
     def read_stream_offset(
@@ -4262,34 +4078,6 @@ class DBOS:
             shard_key=shard_key,
             result_type=result_type,
         )
-
-    @overload
-    @classmethod
-    async def read_stream_offset_async(
-        cls,
-        workflow_id: str,
-        key: str,
-        offset: int,
-        *,
-        polling_interval_sec: Optional[float] = None,
-        timeout_seconds: Optional[float] = None,
-        shard_key: Optional[str] = None,
-        result_type: Type[T],
-    ) -> T: ...
-
-    @overload
-    @classmethod
-    async def read_stream_offset_async(
-        cls,
-        workflow_id: str,
-        key: str,
-        offset: int,
-        *,
-        polling_interval_sec: Optional[float] = None,
-        timeout_seconds: Optional[float] = None,
-        shard_key: Optional[str] = None,
-        result_type: Any = None,
-    ) -> Any: ...
 
     @classmethod
     async def read_stream_offset_async(
@@ -4374,34 +4162,6 @@ class DBOS:
         ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
         await asyncio.to_thread(lambda: close_stream(_get_dbos_instance(), ctx, key))
-
-    @overload
-    @classmethod
-    def read_stream_async(
-        cls,
-        workflow_id: str,
-        key: str,
-        *,
-        offset: int = 0,
-        polling_interval_sec: Optional[float] = None,
-        timeout_seconds: Optional[float] = None,
-        shard_key: Optional[str] = None,
-        result_type: Type[T],
-    ) -> AsyncGenerator[T, None]: ...
-
-    @overload
-    @classmethod
-    def read_stream_async(
-        cls,
-        workflow_id: str,
-        key: str,
-        *,
-        offset: int = 0,
-        polling_interval_sec: Optional[float] = None,
-        timeout_seconds: Optional[float] = None,
-        shard_key: Optional[str] = None,
-        result_type: Any = None,
-    ) -> AsyncGenerator[Any, None]: ...
 
     @classmethod
     async def read_stream_async(
@@ -4644,33 +4404,12 @@ class WorkflowHandle(Generic[R], Protocol):
         """Return the applicable workflow ID."""
         ...
 
-    @overload
-    def get_result(
-        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
-    ) -> R: ...
-
-    @overload
-    def get_result(
-        self,
-        *,
-        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
-        result_type: Type[T],
-    ) -> T: ...
-
-    @overload
-    def get_result(
-        self,
-        *,
-        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
-        result_type: Any,
-    ) -> Any: ...
-
     def get_result(
         self,
         *,
         polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
         result_type: Any = None,
-    ) -> Any:
+    ) -> R:
         """Return the result of the workflow function invocation, waiting if necessary."""
         ...
 
@@ -4700,33 +4439,12 @@ class WorkflowHandleAsync(Generic[R], Protocol):
         """Return the applicable workflow ID."""
         ...
 
-    @overload
-    async def get_result(
-        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
-    ) -> R: ...
-
-    @overload
-    async def get_result(
-        self,
-        *,
-        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
-        result_type: Type[T],
-    ) -> T: ...
-
-    @overload
-    async def get_result(
-        self,
-        *,
-        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
-        result_type: Any,
-    ) -> Any: ...
-
     async def get_result(
         self,
         *,
         polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
         result_type: Any = None,
-    ) -> Any:
+    ) -> R:
         """Return the result of the workflow function invocation, waiting if necessary."""
         ...
 

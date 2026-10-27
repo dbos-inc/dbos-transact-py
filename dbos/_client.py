@@ -11,10 +11,8 @@ from typing import (
     Generic,
     List,
     Optional,
-    Type,
     TypeVar,
     Union,
-    overload,
 )
 from zoneinfo import ZoneInfo
 
@@ -77,7 +75,6 @@ from dbos._sys_db import (
 from dbos._workflow_commands import fork_workflow, get_workflow, rewind_workflow
 
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
-T = TypeVar("T")
 
 
 class WorkflowHandleClientPolling(Generic[R]):
@@ -97,11 +94,12 @@ class WorkflowHandleClientPolling(Generic[R]):
         *,
         polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
         result_type: Any = None,
-    ) -> Any:
+    ) -> R:
         with bind_shard_keys({self.workflow_id: self.shard_key}):
-            return self._sys_db.await_workflow_result(
+            res: R = self._sys_db.await_workflow_result(
                 self.workflow_id, polling_interval_sec, result_type=result_type
             )
+        return res
 
     def get_status(self) -> WorkflowStatus:
         with bind_shard_keys({self.workflow_id: self.shard_key}):
@@ -128,11 +126,12 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
         *,
         polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
         result_type: Any = None,
-    ) -> Any:
+    ) -> R:
         with bind_shard_keys({self.workflow_id: self.shard_key}):
-            return await self._sys_db.await_workflow_result_async(
+            res: R = await self._sys_db.await_workflow_result_async(
                 self.workflow_id, polling_interval_sec, result_type=result_type
             )
+        return res
 
     async def get_status(self) -> WorkflowStatus:
         with bind_shard_keys({self.workflow_id: self.shard_key}):
@@ -797,28 +796,6 @@ class DBOSClient:
             send_to_forks=send_to_forks,
         )
 
-    @overload
-    def get_event(
-        self,
-        workflow_id: str,
-        key: str,
-        timeout_seconds: float = 60,
-        *,
-        shard_key: Optional[str] = None,
-        result_type: Type[T],
-    ) -> Optional[T]: ...
-
-    @overload
-    def get_event(
-        self,
-        workflow_id: str,
-        key: str,
-        timeout_seconds: float = 60,
-        *,
-        shard_key: Optional[str] = None,
-        result_type: Any = None,
-    ) -> Any: ...
-
     def get_event(
         self,
         workflow_id: str,
@@ -832,28 +809,6 @@ class DBOSClient:
             return self._sys_db.get_event(
                 workflow_id, key, timeout_seconds, result_type=result_type
             )
-
-    @overload
-    async def get_event_async(
-        self,
-        workflow_id: str,
-        key: str,
-        timeout_seconds: float = 60,
-        *,
-        shard_key: Optional[str] = None,
-        result_type: Type[T],
-    ) -> Optional[T]: ...
-
-    @overload
-    async def get_event_async(
-        self,
-        workflow_id: str,
-        key: str,
-        timeout_seconds: float = 60,
-        *,
-        shard_key: Optional[str] = None,
-        result_type: Any = None,
-    ) -> Any: ...
 
     async def get_event_async(
         self,
@@ -1497,32 +1452,6 @@ class DBOSClient:
                 shard_key=self._sys_db._key_hint(workflow_id),
             )
 
-    @overload
-    def read_stream(
-        self,
-        workflow_id: str,
-        key: str,
-        *,
-        offset: int = 0,
-        polling_interval_sec: Optional[float] = None,
-        timeout_seconds: Optional[float] = None,
-        shard_key: Optional[str] = None,
-        result_type: Type[T],
-    ) -> Generator[T, Any, None]: ...
-
-    @overload
-    def read_stream(
-        self,
-        workflow_id: str,
-        key: str,
-        *,
-        offset: int = 0,
-        polling_interval_sec: Optional[float] = None,
-        timeout_seconds: Optional[float] = None,
-        shard_key: Optional[str] = None,
-        result_type: Any = None,
-    ) -> Generator[Any, Any, None]: ...
-
     def read_stream(
         self,
         workflow_id: str,
@@ -1561,32 +1490,6 @@ class DBOSClient:
             checkpoint=False,
             result_type=result_type,
         )
-
-    @overload
-    def read_stream_async(
-        self,
-        workflow_id: str,
-        key: str,
-        *,
-        offset: int = 0,
-        polling_interval_sec: Optional[float] = None,
-        timeout_seconds: Optional[float] = None,
-        shard_key: Optional[str] = None,
-        result_type: Type[T],
-    ) -> AsyncGenerator[T, None]: ...
-
-    @overload
-    def read_stream_async(
-        self,
-        workflow_id: str,
-        key: str,
-        *,
-        offset: int = 0,
-        polling_interval_sec: Optional[float] = None,
-        timeout_seconds: Optional[float] = None,
-        shard_key: Optional[str] = None,
-        result_type: Any = None,
-    ) -> AsyncGenerator[Any, None]: ...
 
     async def read_stream_async(
         self,
@@ -1633,32 +1536,6 @@ class DBOSClient:
             # Close rather than abandon, so the listener is unregistered here and not at collection.
             await values.aclose()
 
-    @overload
-    def read_stream_offset(
-        self,
-        workflow_id: str,
-        key: str,
-        offset: int,
-        *,
-        polling_interval_sec: Optional[float] = None,
-        timeout_seconds: Optional[float] = None,
-        shard_key: Optional[str] = None,
-        result_type: Type[T],
-    ) -> T: ...
-
-    @overload
-    def read_stream_offset(
-        self,
-        workflow_id: str,
-        key: str,
-        offset: int,
-        *,
-        polling_interval_sec: Optional[float] = None,
-        timeout_seconds: Optional[float] = None,
-        shard_key: Optional[str] = None,
-        result_type: Any = None,
-    ) -> Any: ...
-
     def read_stream_offset(
         self,
         workflow_id: str,
@@ -1699,32 +1576,6 @@ class DBOSClient:
             checkpoint=False,
             result_type=result_type,
         )
-
-    @overload
-    async def read_stream_offset_async(
-        self,
-        workflow_id: str,
-        key: str,
-        offset: int,
-        *,
-        polling_interval_sec: Optional[float] = None,
-        timeout_seconds: Optional[float] = None,
-        shard_key: Optional[str] = None,
-        result_type: Type[T],
-    ) -> T: ...
-
-    @overload
-    async def read_stream_offset_async(
-        self,
-        workflow_id: str,
-        key: str,
-        offset: int,
-        *,
-        polling_interval_sec: Optional[float] = None,
-        timeout_seconds: Optional[float] = None,
-        shard_key: Optional[str] = None,
-        result_type: Any = None,
-    ) -> Any: ...
 
     async def read_stream_offset_async(
         self,

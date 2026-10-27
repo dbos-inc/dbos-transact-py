@@ -205,7 +205,7 @@ class WorkflowHandleFuture(Generic[R]):
         *,
         polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
         result_type: Any = None,
-    ) -> Any:
+    ) -> R:
         with bind_shard_keys({self.workflow_id: self.shard_key}):
             return self._get_result(polling_interval_sec, result_type)
 
@@ -263,7 +263,7 @@ class WorkflowHandlePolling(Generic[R]):
         *,
         polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
         result_type: Any = None,
-    ) -> Any:
+    ) -> R:
         with bind_shard_keys({self.workflow_id: self.shard_key}):
             return self._get_result(polling_interval_sec, result_type)
 
@@ -324,7 +324,7 @@ class WorkflowHandleAsyncTask(Generic[R]):
         *,
         polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
         result_type: Any = None,
-    ) -> Any:
+    ) -> R:
         with bind_shard_keys({self.workflow_id: self.shard_key}):
             return await self._get_result(polling_interval_sec, result_type)
 
@@ -391,7 +391,7 @@ class WorkflowHandleAsyncPolling(Generic[R]):
         *,
         polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
         result_type: Any = None,
-    ) -> Any:
+    ) -> R:
         with bind_shard_keys({self.workflow_id: self.shard_key}):
             return await self._get_result(polling_interval_sec, result_type)
 
