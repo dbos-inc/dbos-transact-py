@@ -69,6 +69,7 @@ class DBOSErrorCode(Enum):
     QueryTimeout = 26
     WorkflowIDInUse = 27
     StepNondeterminism = 28
+    WorkflowSuspended = 29
 
 
 #######################################
@@ -424,6 +425,20 @@ class DBOSWorkflowCancelledError(DBOSBaseException):
         super().__init__(
             msg,
             dbos_error_code=DBOSErrorCode.WorkflowCancelled.value,
+        )
+
+
+class DBOSWorkflowSuspendedError(DBOSBaseException):
+    """BaseException raised by a suspend-mode recv or sleep once the workflow is parked in
+    the database. The execution must exit: a send on the topic, the recv timeout, or the end
+    of the sleep re-enqueues the workflow.
+    """
+
+    def __init__(self, workflow_id: str, topic: Optional[str]) -> None:
+        waiting = f"waiting on topic {topic}" if topic is not None else "sleeping"
+        super().__init__(
+            f"Workflow {workflow_id} suspended {waiting}",
+            dbos_error_code=DBOSErrorCode.WorkflowSuspended.value,
         )
 
 

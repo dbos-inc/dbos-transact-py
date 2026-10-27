@@ -552,6 +552,10 @@ def test_config_turns_on_enterprise_features() -> None:
     assert enterprise_module.enabled_features({"sharding": True}) == [
         enterprise_module.SHARDING
     ]
+    assert enterprise_module.enabled_features({"suspend_mode": False}) == []
+    assert enterprise_module.enabled_features({"suspend_mode": True}) == [
+        enterprise_module.SUSPEND
+    ]
     # Every registered feature has a distinct entitlement name.
     names = [f.entitlement for f in enterprise_module.FEATURES]
     assert len(names) == len(set(names))
@@ -603,5 +607,31 @@ def test_sharded_executor_checks_its_entitlement(
     conductor.entitle(**{**ALL_ENTITLED, "sharding": False})
     with pytest.raises(DBOSInitializationError, match="not entitled to sharding"):
         DBOS(config=sharded)  # type: ignore[arg-type]
+    DBOS.destroy(destroy_registry=True)
+    assert conductor.requests == [("/v2/entitlements", "Bearer enterprise-key")]
+
+
+def test_a_suspend_mode_executor_checks_its_entitlement(
+    config: DBOSConfig, conductor: FakeConductor
+) -> None:
+    DBOS.destroy(destroy_registry=True)
+    # Refused before the package is even loaded, so this holds without dbos-enterprise.
+    with pytest.raises(
+        DBOSInitializationError,
+        match=f": {enterprise_module.SUSPEND.description} requires a DBOS key",
+    ):
+        DBOS(config={**config, "suspend_mode": True})
+    DBOS.destroy(destroy_registry=True)
+    suspending = {
+        **config,
+        "suspend_mode": True,
+        "transact_enterprise_key": "enterprise-key",
+        "conductor_url": conductor.url,
+    }
+    conductor.entitle(**{**ALL_ENTITLED, "suspendWorkflows": False})
+    with pytest.raises(
+        DBOSInitializationError, match="not entitled to suspendWorkflows"
+    ):
+        DBOS(config=suspending)  # type: ignore[arg-type]
     DBOS.destroy(destroy_registry=True)
     assert conductor.requests == [("/v2/entitlements", "Bearer enterprise-key")]

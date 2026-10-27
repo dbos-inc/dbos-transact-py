@@ -82,6 +82,7 @@ from ._error import (
     DBOSWorkflowConflictIDError,
     DBOSWorkflowFunctionNotFoundError,
     DBOSWorkflowIDInUseError,
+    DBOSWorkflowSuspendedError,
     MaxRecoveryAttemptsExceededError,
 )
 from ._event_loop import retrieve_future_exception
@@ -213,7 +214,11 @@ class WorkflowHandleFuture(Generic[R]):
             try:
                 r = self.future.result()
             # If the handle was cancelled, check the database
-            except (DBOSWorkflowCancelledError, DBOSAwaitedWorkflowCancelledError):
+            except (
+                DBOSWorkflowCancelledError,
+                DBOSAwaitedWorkflowCancelledError,
+                DBOSWorkflowSuspendedError,
+            ):
                 r = self.dbos._sys_db.await_workflow_result(
                     self.workflow_id, polling_interval_sec
                 )
@@ -327,7 +332,11 @@ class WorkflowHandleAsyncTask(Generic[R]):
                 # A cancelled waiter must not cancel the shared result future.
                 r = await asyncio.shield(self.task)
             # If the handle was cancelled, check the database
-            except (DBOSWorkflowCancelledError, DBOSAwaitedWorkflowCancelledError):
+            except (
+                DBOSWorkflowCancelledError,
+                DBOSAwaitedWorkflowCancelledError,
+                DBOSWorkflowSuspendedError,
+            ):
                 r = await self.dbos._sys_db.await_workflow_result_async(
                     self.workflow_id, polling_interval_sec
                 )
@@ -943,6 +952,10 @@ def _get_wf_invoke_func(
             return adopt_recorded_outcome(
                 f"Workflow {status['workflow_uuid']} is no longer owned by this execution. Waiting for the owner's recorded outcome"
             )
+        except DBOSWorkflowSuspendedError:
+            # The workflow is parked in the database; free this slot and exit.
+            release_active()
+            raise
         except DBOSWorkflowCancelledError:
             # The run observed its own cancellation. Park the execution.
             return adopt_recorded_outcome(

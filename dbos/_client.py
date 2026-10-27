@@ -19,6 +19,9 @@ from zoneinfo import ZoneInfo
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
+from dbos import _enterprise
+
+# Re-exported: EnqueueOptions is public as dbos.EnqueueOptions but is shared with _core.
 from dbos._core import (
     DEFAULT_POLLING_INTERVAL,
     read_stream,
@@ -26,8 +29,6 @@ from dbos._core import (
     read_stream_offset,
     read_stream_offset_async,
 )
-
-# Re-exported: EnqueueOptions is public as dbos.EnqueueOptions but is shared with _core.
 from dbos._enqueue_options import EnqueueOptions as EnqueueOptions
 from dbos._enqueue_options import build_enqueue_status
 from dbos._logger import dbos_logger
@@ -159,6 +160,7 @@ class DBOSClient:
         observability_query_timeout_sec: Optional[float] = None,
         sys_db_idle_transaction_timeout_sec: Optional[float] = None,
         sharding: bool = False,
+        suspend_mode: bool = False,
     ):
         """Create a client for interacting with a DBOS application from outside it.
 
@@ -184,6 +186,7 @@ class DBOSClient:
             retry_connection_errors (bool): Whether an operation that loses its database connection blocks and retries until the connection recovers. Defaults to True. Set to False to raise instead, so an unreachable database surfaces as an error rather than a wait.
             observability_query_timeout_sec (float): Statement timeout, in seconds, for read-only observability queries against the system database. Defaults to 30.0.
             sys_db_idle_transaction_timeout_sec (float): Postgres idle_in_transaction_session_timeout, in seconds, for the system database connections this client creates. Defaults to 60.0. Set to a non-positive value to leave the server's setting in place. Not applied to a custom system_database_engine.
+            suspend_mode (bool): Whether the application uses suspend mode (Transact Enterprise). Set it so this client wakes workflows suspended by recv.
 
         Raises:
             Exception: If the system database cannot be reached, unless lazy is True.
@@ -231,6 +234,10 @@ class DBOSClient:
             idle_transaction_timeout_sec=sys_db_idle_transaction_timeout_sec,
             sharding=sharding,
         )
+        if suspend_mode:
+            self._sys_db.suspend = _enterprise.load(
+                _enterprise.SUSPEND.description
+            ).Suspend(self._sys_db)
         self._notification_listener_thread: Optional[threading.Thread] = None
         if not lazy:
             self._sys_db.check_connection()

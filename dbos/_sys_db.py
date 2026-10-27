@@ -89,6 +89,7 @@ from ._serialization import (
 from ._shard_keys import bind_shard_keys, bound_shard_key
 
 if TYPE_CHECKING:
+    from ._enterprise import Suspend
     from ._queue import Queue, QueueRateLimit
 
 _MAX_BIGINT = 2**63 - 1
@@ -152,6 +153,7 @@ class WorkflowStatusString(Enum):
     CANCELLED = "CANCELLED"
     ENQUEUED = "ENQUEUED"
     DELAYED = "DELAYED"
+    SUSPENDED = "SUSPENDED"
 
 
 def workflow_is_active(status: str) -> bool:
@@ -159,6 +161,7 @@ def workflow_is_active(status: str) -> bool:
         status == WorkflowStatusString.ENQUEUED.value
         or status == WorkflowStatusString.PENDING.value
         or status == WorkflowStatusString.DELAYED.value
+        or status == WorkflowStatusString.SUSPENDED.value
     )
 
 
@@ -170,6 +173,7 @@ WorkflowStatuses = Literal[
     "CANCELLED",
     "ENQUEUED",
     "DELAYED",
+    "SUSPENDED",
 ]
 
 # The reason start_queued_workflows did not dequeue workflows: a limit with no room, or
@@ -668,6 +672,9 @@ class SystemDatabase(ABC):
     tables: type[SystemSchema] = SystemSchema
     # Whether this handle routes every statement by shard key.
     sharded: bool = False
+    # Suspend mode (Transact Enterprise), installed by DBOS or DBOSClient when it is on:
+    # send then serializes with and wakes suspended receivers, and recv may park.
+    suspend: Optional["Suspend"] = None
 
     @staticmethod
     def create(
@@ -3928,6 +3935,14 @@ class SystemDatabase(ABC):
                 )
             raise
 
+        # Suspend mode (Transact Enterprise).
+        if rows and self.suspend is not None:
+            self.suspend.wake_receivers(
+                conn,
+                sorted({r["destination_uuid"] for r in rows}),
+                sorted({r["topic"] for r in rows}),
+            )
+
         if workflow_id is not None:
             assert function_id is not None
             output: OperationResultInternal = {
@@ -4931,6 +4946,7 @@ class SystemDatabase(ABC):
                         sa.literal_column(f"'{WorkflowStatusString.ENQUEUED.value}'"),
                         sa.literal_column(f"'{WorkflowStatusString.PENDING.value}'"),
                         sa.literal_column(f"'{WorkflowStatusString.DELAYED.value}'"),
+                        sa.literal_column(f"'{WorkflowStatusString.SUSPENDED.value}'"),
                     ]
                 ),
                 ws.c.workflow_deadline_epoch_ms.isnot(None),

@@ -39,6 +39,9 @@ _ONLINE_MIGRATIONS = {
     122,
     124,
     125,
+    127,
+    128,
+    129,
 }
 
 # From this index on, every SDK defines the same migration at the same index.
@@ -1400,6 +1403,31 @@ def get_dbos_migration_hundredtwentyfive(quoted_schema: str, is_cockroach: bool)
     return f'CREATE INDEX {c} IF NOT EXISTS "idx_application_versions_owner_timestamp" ON {quoted_schema}."application_versions" ("application_name", "version_timestamp" DESC)'
 
 
+def get_dbos_migration_hundredtwentysix(quoted_schema: str) -> str:
+    # Topic a SUSPENDED recv waits on.
+    return f"""ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN IF NOT EXISTS "suspend_key" TEXT DEFAULT NULL;"""
+
+
+def get_dbos_migration_hundredtwentyseven(
+    quoted_schema: str, is_cockroach: bool
+) -> str:
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_suspended" ON {quoted_schema}."workflow_status" ("delay_until_epoch_ms") WHERE "status" = \'SUSPENDED\' AND "delay_until_epoch_ms" IS NOT NULL'
+
+
+def get_dbos_migration_hundredtwentyeight(
+    quoted_schema: str, is_cockroach: bool
+) -> str:
+    # Replaced by 129, whose predicate also covers SUSPENDED workflows.
+    c = _concurrently(is_cockroach)
+    return f'DROP INDEX {c} IF EXISTS {quoted_schema}."idx_workflow_status_deadline"'
+
+
+def get_dbos_migration_hundredtwentynine(quoted_schema: str, is_cockroach: bool) -> str:
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_deadline" ON {quoted_schema}."workflow_status" ("workflow_deadline_epoch_ms") WHERE "status" IN (\'ENQUEUED\', \'PENDING\', \'DELAYED\', \'SUSPENDED\') AND "workflow_deadline_epoch_ms" IS NOT NULL'
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -1482,6 +1510,10 @@ def get_dbos_migrations(
         get_dbos_migration_hundredtwentythree(quoted_schema),
         get_dbos_migration_hundredtwentyfour(quoted_schema, is_cockroach),
         get_dbos_migration_hundredtwentyfive(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredtwentysix(quoted_schema),
+        get_dbos_migration_hundredtwentyseven(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredtwentyeight(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredtwentynine(quoted_schema, is_cockroach),
     ]
 
 
@@ -1936,6 +1968,18 @@ sqlite_migration_hundredtwentyfour = 'CREATE INDEX IF NOT EXISTS "idx_applicatio
 
 sqlite_migration_hundredtwentyfive = 'CREATE INDEX IF NOT EXISTS "idx_application_versions_owner_timestamp" ON "application_versions" ("application_name", "version_timestamp" DESC)'
 
+sqlite_migration_hundredtwentysix = (
+    """ALTER TABLE workflow_status ADD COLUMN "suspend_key" TEXT DEFAULT NULL;"""
+)
+
+sqlite_migration_hundredtwentyseven = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_suspended" ON "workflow_status" ("delay_until_epoch_ms") WHERE "status" = \'SUSPENDED\' AND "delay_until_epoch_ms" IS NOT NULL'
+
+sqlite_migration_hundredtwentyeight = (
+    'DROP INDEX IF EXISTS "idx_workflow_status_deadline"'
+)
+
+sqlite_migration_hundredtwentynine = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_deadline" ON "workflow_status" ("workflow_deadline_epoch_ms") WHERE "status" IN (\'ENQUEUED\', \'PENDING\', \'DELAYED\', \'SUSPENDED\') AND "workflow_deadline_epoch_ms" IS NOT NULL'
+
 sqlite_migrations = [
     *_pad_to_shared_base(_sqlite_history),
     sqlite_migration_hundred,
@@ -1966,4 +2010,8 @@ sqlite_migrations = [
     sqlite_migration_hundredtwentythree,
     sqlite_migration_hundredtwentyfour,
     sqlite_migration_hundredtwentyfive,
+    sqlite_migration_hundredtwentysix,
+    sqlite_migration_hundredtwentyseven,
+    sqlite_migration_hundredtwentyeight,
+    sqlite_migration_hundredtwentynine,
 ]
