@@ -1,5 +1,6 @@
 import functools
 import inspect
+import sys
 import typing
 import weakref
 from dataclasses import dataclass
@@ -115,6 +116,8 @@ class FuncTypeHints:
     # The parameters a call's stored arguments bind to, without a leading self/cls.
     params: List[inspect.Parameter]
     hints: Dict[str, Any]
+    # Why the hints could not be resolved, or None if they were.
+    unresolved: Optional[str] = None
 
     @property
     def return_hint(self) -> Any:
@@ -125,6 +128,36 @@ class FuncTypeHints:
 _type_hints_cache: (
     "weakref.WeakKeyDictionary[Any, Tuple[DBOSFuncType, FuncTypeHints]]"
 ) = weakref.WeakKeyDictionary()
+
+
+# Functions already warned about, so an unresolvable one warns once rather than on every replay.
+_unresolved_warned: "weakref.WeakSet[Any]" = weakref.WeakSet()
+
+if sys.version_info >= (3, 14):
+    from annotationlib import Format
+
+    _FORWARDREF: Any = Format.FORWARDREF
+else:
+    _FORWARDREF = None
+
+
+def _signature_params(func: Callable[..., Any]) -> List[inspect.Parameter]:
+    try:
+        return list(inspect.signature(func).parameters.values())
+    except (TypeError, ValueError):
+        return []
+    except Exception:
+        # On 3.14 a signature evaluates its annotations, which may name a TYPE_CHECKING-only import.
+        if _FORWARDREF is None:
+            return []
+        try:
+            return list(
+                inspect.signature(
+                    func, annotation_format=_FORWARDREF
+                ).parameters.values()
+            )
+        except Exception:
+            return []
 
 
 def get_func_type_hints(func: Callable[..., Any]) -> FuncTypeHints:
@@ -140,23 +173,28 @@ def get_func_type_hints(func: Callable[..., Any]) -> FuncTypeHints:
     target = inspect.unwrap(func)
     while isinstance(target, functools.partial):
         target = inspect.unwrap(target.func)
+    unresolved: Optional[str] = None
     try:
         hints = typing.get_type_hints(target)
     except NameError as e:
-        dbos_logger.warning(
-            f"Cannot resolve type hints of {getattr(target, '__qualname__', target)}, so its stored values are not converted to them: {e}"
-        )
         hints = {}
+        unresolved = f"cannot resolve the type hints of {getattr(target, '__qualname__', target)}: {e}"
+        try:
+            warn = target not in _unresolved_warned
+            _unresolved_warned.add(target)
+        except TypeError:
+            warn = True
+        if warn:
+            dbos_logger.warning(
+                f"DBOS {unresolved}, so values read back for it are not converted to its annotated types"
+            )
     except Exception:
         # Not introspectable, like a builtin or a callable object.
         hints = {}
-    try:
-        params = list(inspect.signature(func).parameters.values())
-    except (TypeError, ValueError):
-        params = []
+    params = _signature_params(func)
     if func_type in (DBOSFuncType.Class, DBOSFuncType.Instance):
         params = params[1:]
-    result = FuncTypeHints(params, hints)
+    result = FuncTypeHints(params, hints, unresolved)
     try:
         _type_hints_cache[func] = (func_type, result)
     except TypeError:

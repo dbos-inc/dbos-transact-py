@@ -42,6 +42,7 @@ from dbos._schemas.datasource_database import datasource_outputs_table
 from dbos._serialization import (
     DBOSDefaultSerializer,
     Serializer,
+    as_replayed,
     deserialize_exception,
     deserialize_value,
     serialize_exception,
@@ -481,6 +482,9 @@ class AsyncSQLAlchemyDatasource(ABC):
                     )
 
             output: R
+            # The checkpoint written for the output, which a replay decodes.
+            serialized: Optional[str] = None
+            serialization: Optional[str] = None
             conflicted = False
             retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
             try:
@@ -570,7 +574,15 @@ class AsyncSQLAlchemyDatasource(ABC):
                     ),
                 )
 
-            return output
+            return cast(
+                R,
+                as_replayed(
+                    output,
+                    serialized,
+                    serialization,
+                    get_func_type_hints(func).return_hint,
+                ),
+            )
 
         if in_wf:
             from dbos._core import StepOptions, run_step_async
@@ -917,6 +929,9 @@ class SQLAlchemyDatasource(ABC):
                     )
 
             output: R
+            # The checkpoint written for the output, which a replay decodes.
+            serialized: Optional[str] = None
+            serialization: Optional[str] = None
             conflicted = False
             retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
             try:
@@ -1004,7 +1019,15 @@ class SQLAlchemyDatasource(ABC):
                     ),
                 )
 
-            return output
+            return cast(
+                R,
+                as_replayed(
+                    output,
+                    serialized,
+                    serialization,
+                    get_func_type_hints(func).return_hint,
+                ),
+            )
 
         if in_wf:
             from dbos._core import StepOptions, run_step

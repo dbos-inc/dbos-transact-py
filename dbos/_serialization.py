@@ -171,12 +171,18 @@ def _portableify(value: Any) -> JsonValue:
 
     # A pydantic model, detected without importing pydantic.
     if hasattr(type(value), "model_fields") and hasattr(value, "model_dump"):
-        return _portableify(value.model_dump(mode="json"))
+        # Aliases are the model's JSON names, and what model_validate reads back.
+        return _portableify(value.model_dump(mode="json", by_alias=True))
 
     if isinstance(value, Mapping):
         out: dict[str, JsonValue] = {}
         for k, v in value.items():
-            out[_portable_key(k)] = _portableify(v)
+            key = _portable_key(k)
+            if key in out:
+                raise TypeError(
+                    f"Attempt to do portable JSON serialization of a map whose keys {k!r} and another both encode as {key!r}"
+                )
+            out[key] = _portableify(v)
         return out
 
     raise TypeError(
@@ -252,6 +258,41 @@ def serialize_value(
     )
 
 
+def serialize_value_or_portable(
+    value: Optional[Any], serializer: Serializer
+) -> tuple[Optional[str], str]:
+    """Serialize a checkpoint in the app's serializer, or in portable JSON when that cannot encode it.
+
+    Typed values decoded from portable JSON, like dataclasses, may be beyond a custom serializer.
+    """
+    try:
+        return serialize_value(value, None, serializer)
+    except Exception as e:
+        error = e
+    try:
+        return DBOSPortableJSON.serialize(value), DBOSPortableJSON.name()
+    except Exception:
+        raise error
+
+
+def as_replayed(
+    output: Any,
+    serialized: Optional[str],
+    serialization: Optional[str],
+    return_hint: Any,
+) -> Any:
+    """A checkpointed output as a replay will decode it, so the first run sees the same value.
+
+    Only a portable checkpoint read with a return type can decode differently."""
+    if (
+        serialization != DBOSPortableJSON.name()
+        or return_hint is None
+        or serialized is None
+    ):
+        return output
+    return DBOSPortableJSON.deserialize_typed(serialized, return_hint)
+
+
 def serialize_value_as(
     value: Optional[Any],
     serialization: Optional[str],
@@ -283,7 +324,10 @@ def deserialize_value(
     if serialization is not None and serialization != serializer.name():
         raise TypeError(f"Serialization {serialization} is not available")
     if type_hint is not None:
-        return serializer.deserialize_typed(serialized_value, type_hint)
+        # A serializer that only duck-types Serializer may lack deserialize_typed.
+        deserialize_typed = getattr(serializer, "deserialize_typed", None)
+        if deserialize_typed is not None:
+            return deserialize_typed(serialized_value, type_hint)
     return serializer.deserialize(serialized_value)
 
 

@@ -1,5 +1,7 @@
+import collections
 import functools
 import json
+import sys
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
@@ -9,22 +11,28 @@ from enum import Enum, IntEnum
 from typing import (
     Annotated,
     Any,
+    Counter,
     Dict,
     FrozenSet,
+    Generic,
     List,
     Literal,
     NamedTuple,
     NewType,
     Optional,
+    Sequence,
     Set,
     Tuple,
     TypedDict,
+    TypeVar,
     Union,
+    cast,
 )
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from dbos import KafkaMessage, make_pydantic_args_validator
 from dbos._error import DBOSSerializationError
 from dbos._registrations import get_func_type_hints
 from dbos._serialization import (
@@ -257,11 +265,219 @@ def test_function_hints() -> None:
     assert hints.return_hint is Item
     assert [p.name for p in hints.params] == ["order", "rush"]
     # A partial reports its function's hints, without the bound arguments.
-    partial_hints = get_func_type_hints(functools.partial(priced, rush=True))
+    partial_hints = get_func_type_hints(functools.partial(priced, cast(Order, None)))
     assert partial_hints.return_hint is Item
+    assert [p.name for p in partial_hints.params] == ["rush"]
 
     # An unresolvable annotation falls back to no conversion.
     def unresolved(x: "NoSuchType") -> "NoSuchType":  # type: ignore[name-defined] # noqa: F821
         return x
 
-    assert get_func_type_hints(unresolved).hints == {}
+    unresolved_hints = get_func_type_hints(unresolved)
+    assert unresolved_hints.hints == {}
+    assert unresolved_hints.unresolved is not None and (
+        "NoSuchType" in unresolved_hints.unresolved
+    )
+    # The pydantic validator refuses to run without hints instead of accepting anything.
+    with pytest.raises(ValueError, match="NoSuchType"):
+        make_pydantic_args_validator(unresolved)(("x",), {})
+
+
+@pytest.mark.skipif(sys.version_info < (3, 14), reason="needs lazy annotations")
+def test_function_hints_type_checking_only_name() -> None:
+    # On 3.14 an unquoted TYPE_CHECKING-only name is legal until something evaluates it.
+    namespace: Dict[str, Any] = {}
+    exec("def step(x: int) -> MissingAtRuntime:\n    return x\n", namespace)
+    hints = get_func_type_hints(namespace["step"])
+    assert hints.hints == {} and hints.unresolved is not None
+    assert [p.name for p in hints.params] == ["x"]
+
+
+def test_union_members_convert_before_primitives() -> None:
+    order_item = Item("a", 1)
+    # A primitive member accepts only its own JSON type, so it never swallows another member's value.
+    assert roundtrip(order_item, Union[str, Item]) == order_item
+    assert roundtrip(order_item, Union[Literal["auto"], Item]) == order_item
+    assert roundtrip([order_item], Union[int, List[Item]]) == [order_item]
+    when = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert roundtrip(when, Union[int, datetime]) == when
+    assert roundtrip(Decimal("1.5"), Union[float, Decimal]) == Decimal("1.5")
+    assert roundtrip("auto", Union[Literal["auto"], Item]) == "auto"
+    assert roundtrip(2.5, Union[int, float]) == 2.5
+    # A str stored for a union that also holds str stays a str: JSON cannot tell them apart.
+    assert roundtrip("aGk=", Union[str, bytes]) == "aGk="
+    with pytest.raises(DBOSSerializationError):
+        value_to_type(Union[int, datetime], "not a date")
+
+
+@dataclass
+class Plain:
+    name: str
+
+
+@dataclass
+class Tagged:
+    name: str
+    tags: List[str]
+
+
+class Kind(Enum):
+    A = "a"
+    B = "b"
+
+
+@dataclass
+class KindA:
+    kind: Literal[Kind.A]
+    x: int
+
+
+@dataclass
+class KindB:
+    kind: Literal[Kind.B]
+    x: int
+    when: datetime
+
+
+def test_union_picks_best_fitting_record() -> None:
+    tagged = Tagged("n", ["t"])
+    assert roundtrip(tagged, Union[Plain, Tagged]) == tagged
+    assert roundtrip(Plain("n"), Union[Tagged, Plain]) == Plain("n")
+    # A Literal discriminator of a plain Enum matches its stored value.
+    kind_b = KindB(Kind.B, 1, datetime(2026, 1, 1, tzinfo=timezone.utc))
+    assert roundtrip(kind_b, Union[KindA, KindB]) == kind_b
+    assert roundtrip(KindA(Kind.A, 2), Union[KindA, KindB]) == KindA(Kind.A, 2)
+
+
+@dataclass
+class NonNegative:
+    n: int
+
+    def __post_init__(self) -> None:
+        if self.n < 0:
+            raise ValueError("negative")
+
+
+@dataclass
+class Signed:
+    n: int
+
+
+def test_union_member_constructor_errors_fall_through() -> None:
+    assert roundtrip(Signed(-1), Union[NonNegative, Signed]) == Signed(-1)
+    with pytest.raises(DBOSSerializationError, match="negative"):
+        value_to_type(NonNegative, {"n": -1})
+
+
+@dataclass
+class Cents:
+    amount: int
+
+    def __post_init__(self) -> None:
+        self.amount *= 100
+
+
+@dataclass
+class Job:
+    id: str
+    status: str = field(default="new", init=False)
+
+
+def test_dataclass_restores_stored_state() -> None:
+    # A __post_init__ that changes a field, and an init=False field, keep their stored values.
+    cents = Cents(2)
+    assert cents.amount == 200
+    assert roundtrip(cents, Cents).amount == 200
+    job = Job("a")
+    job.status = "done"
+    assert roundtrip(job, Job).status == "done"
+
+
+class Aliased(BaseModel):
+    user_name: str = Field(alias="userName")
+
+
+def test_pydantic_alias_roundtrip() -> None:
+    model = Aliased(userName="bob")
+    assert json.loads(DBOSPortableJSON.serialize(model)) == {"userName": "bob"}
+    assert roundtrip(model, Aliased) == model
+
+
+class Colour(Enum):
+    RED = 1
+    PAIR = (1, 2)
+
+
+def test_enum_keys_and_values() -> None:
+    assert roundtrip({Priority.LOW: "x"}, Dict[Priority, str]) == {Priority.LOW: "x"}
+    assert roundtrip({Colour.RED: "x"}, Dict[Colour, str]) == {Colour.RED: "x"}
+    # Enum values with no native JSON form decode back to their member.
+    assert roundtrip(Colour.PAIR, Colour) is Colour.PAIR
+    assert roundtrip({1: "a", None: "b"}, Dict[Optional[int], str]) == {
+        1: "a",
+        None: "b",
+    }
+    assert roundtrip({1: "a"}, Dict[Literal[1, 2], str]) == {1: "a"}
+    counts = roundtrip(collections.Counter({3: 2}), Counter[int])
+    assert counts == collections.Counter({3: 2}) and isinstance(
+        counts, collections.Counter
+    )
+    # Keys that would encode alike are refused rather than one silently dropped.
+    with pytest.raises(TypeError, match="encode as"):
+        DBOSPortableJSON.serialize({1: "a", "1": "b"})
+
+
+T = TypeVar("T")
+
+
+@dataclass
+class Box(Generic[T]):
+    item: T
+    items: List[T]
+
+
+class Pair(NamedTuple):
+    a: int
+    b: int
+
+
+def test_generic_and_structural_edges() -> None:
+    when = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert roundtrip(Box(when, [when]), Box[datetime]) == Box(when, [when])
+    # A str is a valid Sequence, so only arrays are rebuilt.
+    assert value_to_type(Sequence[str], "abc") == "abc"
+    assert value_to_type(Tuple[()], []) == ()
+    with pytest.raises(DBOSSerializationError):
+        value_to_type(Tuple[()], [1])
+    with pytest.raises(DBOSSerializationError):
+        value_to_type(Pair, [1, 2, 3])
+
+
+def test_kafka_message_bytes_roundtrip() -> None:
+    msg = KafkaMessage(
+        headers=[("h", b"\x00\xff")],
+        key=b"k",
+        latency=None,
+        leader_epoch=None,
+        offset=1,
+        partition=0,
+        timestamp=(0, 0),
+        topic="t",
+        value=b"hello",
+    )
+    assert roundtrip(msg, KafkaMessage) == msg
+
+
+def test_duck_typed_serializer_without_deserialize_typed() -> None:
+    class DuckSerializer:
+        def serialize(self, data: Any) -> str:
+            return json.dumps(data)
+
+        def deserialize(self, serialized_data: str) -> Any:
+            return json.loads(serialized_data)
+
+        def name(self) -> str:
+            return "duck"
+
+    duck: Any = DuckSerializer()
+    assert deserialize_value("[1]", "duck", duck, List[int]) == [1]

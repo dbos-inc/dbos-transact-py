@@ -1560,7 +1560,7 @@ def test_workflow_read_stream_checkpointing(dbos: DBOS) -> None:
     read rather than re-reading a stream that has moved on. Reads from a step are not recorded.
     """
     stream_key = "checkpointed_stream"
-    # The bytes have no portable JSON form, so they only checkpoint under the app's serializer.
+    # Written under the app's serializer, so the bytes are checkpointed as pickled bytes.
     test_values: list[Any] = ["a", None, {"k": "v"}, b"bytes"]
     reader_calls = 0
     crashing_reader_attempts = 0
@@ -1649,8 +1649,8 @@ def test_workflow_read_stream_checkpointing(dbos: DBOS) -> None:
     ]
     assert step_calls == 1
 
-    # Checkpoints use the app's serializer, not the workflow's declared interop format, so a
-    # portable workflow reads a value with no portable form just as any other workflow does.
+    # Checkpoints keep each value's own serialization, not the workflow's declared interop
+    # format, so a portable workflow reads a pickled value just as any other workflow does.
     portable_reader_id = str(uuid.uuid4())
     with SetWorkflowID(portable_reader_id):
         handle = DBOS.register_queue("portable_reader_queue").enqueue(

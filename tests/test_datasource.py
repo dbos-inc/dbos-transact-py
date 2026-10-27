@@ -8,6 +8,8 @@ import sqlite3
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Generator, Optional, Union, cast
 
 import psycopg
@@ -26,6 +28,7 @@ from dbos import (
     DBOS,
     AsyncSQLAlchemyDatasource,
     DBOSConfig,
+    DBOSPortableJSONSerializer,
     SetWorkflowID,
     SQLAlchemyDatasource,
 )
@@ -77,16 +80,18 @@ def _count_replays(
 
     if inspect.iscoroutinefunction(real_replay):
 
-        async def counting_replay_async(workflow_id: str, step_id: int) -> Any:
+        async def counting_replay_async(
+            workflow_id: str, step_id: int, type_hint: Any
+        ) -> Any:
             replays["n"] += 1
-            return await real_replay(workflow_id, step_id)
+            return await real_replay(workflow_id, step_id, type_hint)
 
         monkeypatch.setattr(ds, "_replay_conflicting_step", counting_replay_async)
         return
 
-    def counting_replay(workflow_id: str, step_id: int) -> Any:
+    def counting_replay(workflow_id: str, step_id: int, type_hint: Any) -> Any:
         replays["n"] += 1
-        return real_replay(workflow_id, step_id)
+        return real_replay(workflow_id, step_id, type_hint)
 
     monkeypatch.setattr(ds, "_replay_conflicting_step", counting_replay)
 
@@ -2317,3 +2322,49 @@ async def test_async_ds_run_migrations_false(
                 await conn.execute(
                     text(f'DROP SCHEMA IF EXISTS "{fresh_schema}" CASCADE')
                 )
+
+
+@dataclass
+class Stamped:
+    label: str
+    at: datetime
+
+
+def test_sync_ds_replays_typed_portable_output(
+    config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
+) -> None:
+    DBOS.destroy(destroy_registry=True)
+    ds = SQLAlchemyDatasource.create(
+        f"sqlite:///{tmp_path}/ds_typed.sqlite",
+        serializer=DBOSPortableJSONSerializer(),
+    )
+    dbos = DBOS(config=config)
+    DBOS.launch()
+    calls = 0
+
+    @ds.transaction
+    def stamp(label: str) -> Stamped:
+        nonlocal calls
+        calls += 1
+        return Stamped(label, datetime(2026, 1, 1, 12, 0))
+
+    @DBOS.workflow()
+    def typed_workflow() -> str:
+        stamped = stamp("x")
+        # Live and replayed alike: the annotated type, with the datetime normalized to UTC.
+        assert stamped == Stamped("x", datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
+        return stamped.label
+
+    try:
+        wfid = str(uuid.uuid4())
+        with SetWorkflowID(wfid):
+            assert typed_workflow() == "x"
+        # Lose the sysdb records so the datasource checkpoint alone replays the transaction.
+        dbos._sys_db.delete_workflows([wfid])
+        with SetWorkflowID(wfid):
+            assert typed_workflow() == "x"
+        assert calls == 1
+    finally:
+        DBOS.destroy(destroy_registry=True)
+        if ds.created_engine:
+            ds.engine.dispose()

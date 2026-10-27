@@ -84,6 +84,7 @@ from ._serialization import (
     serialize_exception,
     serialize_value,
     serialize_value_as,
+    serialize_value_or_portable,
 )
 from ._shard_keys import bind_shard_keys, bound_shard_key
 
@@ -4023,49 +4024,8 @@ class SystemDatabase(ABC):
                 return deserialize_value(
                     recorded[0][0], recorded[0][1], self.serializer, result_type
                 )
-
-            consume_stmt = (
-                sa.update(self.tables.notifications)
-                .where(
-                    *self._wf(
-                        self.tables.notifications, workflow_uuid, "destination_uuid"
-                    ),
-                    self.tables.notifications.c.topic == topic,
-                    self.tables.notifications.c.consumed == False,
-                    self.tables.notifications.c.message_uuid
-                    == (
-                        sa.select(self.tables.notifications.c.message_uuid)
-                        .where(
-                            *self._wf(
-                                self.tables.notifications,
-                                workflow_uuid,
-                                "destination_uuid",
-                            ),
-                            self.tables.notifications.c.topic == topic,
-                            self.tables.notifications.c.consumed == False,
-                        )
-                        .order_by(self.tables.notifications.c.created_at_epoch_ms.asc())
-                        .limit(1)
-                        .scalar_subquery()
-                    ),
-                )
-                .values(consumed=True, consumed_by_function_id=function_id)
-                .returning(
-                    self.tables.notifications.c.message,
-                    self.tables.notifications.c.serialization,
-                )
-            )
-            rows = c.execute(consume_stmt).fetchall()
-            message: Any = None
-            serialization: Optional[str] = None
-            if len(rows) > 0:
-                message = deserialize_value(
-                    rows[0][0], rows[0][1], self.serializer, result_type
-                )
-                serialization = rows[0][1]
-
-            sermsg, serialization = serialize_value_as(
-                message, serialization, self.serializer
+            sermsg, serialization = self._consume_message(
+                c, workflow_uuid, function_id, topic
             )
             self._record_operation_result_txn(
                 {
@@ -4081,7 +4041,47 @@ class SystemDatabase(ABC):
                 int(time.time() * 1000),
                 conn=c,
             )
-        return message
+        # Converted once consumed and recorded, so a message that fails to convert neither blocks its topic nor replays differently.
+        return deserialize_value(sermsg, serialization, self.serializer, result_type)
+
+    def _consume_message(
+        self, c: sa.Connection, workflow_uuid: str, function_id: int, topic: str
+    ) -> tuple[Optional[str], str]:
+        """Mark the topic's oldest unconsumed message consumed, returning it as written (or a serialized None)."""
+        consume_stmt = (
+            sa.update(self.tables.notifications)
+            .where(
+                *self._wf(self.tables.notifications, workflow_uuid, "destination_uuid"),
+                self.tables.notifications.c.topic == topic,
+                self.tables.notifications.c.consumed == False,
+                self.tables.notifications.c.message_uuid
+                == (
+                    sa.select(self.tables.notifications.c.message_uuid)
+                    .where(
+                        *self._wf(
+                            self.tables.notifications,
+                            workflow_uuid,
+                            "destination_uuid",
+                        ),
+                        self.tables.notifications.c.topic == topic,
+                        self.tables.notifications.c.consumed == False,
+                    )
+                    .order_by(self.tables.notifications.c.created_at_epoch_ms.asc())
+                    .limit(1)
+                    .scalar_subquery()
+                ),
+            )
+            .values(consumed=True, consumed_by_function_id=function_id)
+            .returning(
+                self.tables.notifications.c.message,
+                self.tables.notifications.c.serialization,
+            )
+        )
+        rows = c.execute(consume_stmt).fetchall()
+        if len(rows) > 0 and rows[0][0] is not None:
+            # Checkpointed as written, so a replay decodes exactly what this read did.
+            return rows[0][0], rows[0][1] or self.serializer.name()
+        return serialize_value_as(None, None, self.serializer)
 
     def recv_check(
         self,
@@ -4689,19 +4689,16 @@ class SystemDatabase(ABC):
                 )
             ).fetchall()
 
-        value: Any = None
-        serialization: Optional[str] = None
-        if len(rows) > 0:
-            serialization = rows[0][1]
-            value = deserialize_value(
-                rows[0][0], serialization, self.serializer, result_type
-            )
+        serval: Optional[str]
+        serialization: str
+        if len(rows) > 0 and rows[0][0] is not None:
+            # Checkpointed as written, so a replay decodes exactly what this read did.
+            serval, serialization = rows[0][0], rows[0][1] or self.serializer.name()
+        else:
+            serval, serialization = serialize_value_as(None, None, self.serializer)
 
         # Record the output if it's in a workflow
         if caller_ctx is not None:
-            serval, serialization = serialize_value_as(
-                value, serialization, self.serializer
-            )
             self.record_operation_result(
                 {
                     "workflow_uuid": caller_ctx["workflow_uuid"],
@@ -4714,7 +4711,8 @@ class SystemDatabase(ABC):
                     "child_workflow_id": None,
                 }
             )
-        return value
+        # Converted after recording, so a value that fails to convert replays the same failure.
+        return deserialize_value(serval, serialization, self.serializer, result_type)
 
     def get_event_check(
         self,
@@ -5525,7 +5523,8 @@ class SystemDatabase(ABC):
             ctx.workflow_id, ctx.function_id, function_name
         )
         if res is not None:
-            # Resolved only on replay, as it may cost a query.
+            # Resolved only to replay an output, as it may cost a query.
+            self._raise_recorded_error(res)
             type_hint = resolve_type_hint() if resolve_type_hint is not None else None
             return cast(
                 SystemDatabase.T, self._replay_recorded(res, function_name, type_hint)
@@ -5538,7 +5537,7 @@ class SystemDatabase(ABC):
                 ctx.workflow_id, ctx.function_id, function_name, start_time, e
             )
             raise
-        serval, serialization = serialize_value(result, None, self.serializer)
+        serval, serialization = serialize_value_or_portable(result, self.serializer)
         self.record_operation_result(
             {
                 "workflow_uuid": ctx.workflow_id,
@@ -5570,7 +5569,8 @@ class SystemDatabase(ABC):
             function_name,
         )
         if res is not None:
-            # Resolved only on replay, as it may cost a query.
+            # Resolved only to replay an output, as it may cost a query.
+            self._raise_recorded_error(res)
             type_hint = (
                 await asyncio.to_thread(resolve_type_hint)
                 if resolve_type_hint is not None
@@ -5592,7 +5592,7 @@ class SystemDatabase(ABC):
                 e,
             )
             raise
-        serval, serialization = serialize_value(result, None, self.serializer)
+        serval, serialization = serialize_value_or_portable(result, self.serializer)
         await asyncio.to_thread(
             self.record_operation_result,
             {

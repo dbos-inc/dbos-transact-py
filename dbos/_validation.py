@@ -73,6 +73,11 @@ def make_pydantic_args_validator(
     ):
         # Skips a leading self/cls using the function's registration info.
         type_hints = get_func_type_hints(func)
+        if type_hints.unresolved is not None:
+            # Validating against no hints would silently accept anything.
+            raise ValueError(
+                f"Argument validation failed for workflow: {type_hints.unresolved}"
+            )
         hints = type_hints.hints
         params = type_hints.params
 

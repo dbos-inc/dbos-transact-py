@@ -105,6 +105,7 @@ from ._serialization import (
     WorkflowInputs,
     WorkflowSerializationFormat,
     _safe_str,
+    as_replayed,
     deserialize_args,
     deserialize_exception,
     deserialize_value,
@@ -112,6 +113,7 @@ from ._serialization import (
     serialize_exception,
     serialize_value,
     serialize_value_as,
+    serialize_value_or_portable,
 )
 from ._shard_keys import bind_shard_keys
 from ._sys_db import (
@@ -183,6 +185,11 @@ def _deferred_workflow_result(
     return DeferredResult(wait, wait_async)
 
 
+def _in_workflow() -> bool:
+    ctx = get_local_dbos_context()
+    return ctx is not None and ctx.is_workflow()
+
+
 class WorkflowHandleFuture(Generic[R]):
 
     def __init__(
@@ -214,24 +221,35 @@ class WorkflowHandleFuture(Generic[R]):
         try:
             try:
                 r = self.future.result()
+                # An explicit type decodes the stored result, as a polling handle does.
+                if result_type is not None:
+                    r = self.dbos._sys_db.await_workflow_result(
+                        self.workflow_id, polling_interval_sec, result_type=result_type
+                    )
             # If the handle was cancelled, check the database
             except (DBOSWorkflowCancelledError, DBOSAwaitedWorkflowCancelledError):
                 r = self.dbos._sys_db.await_workflow_result(
                     self.workflow_id, polling_interval_sec, result_type=result_type
                 )
         except Exception as e:
-            serialized_e, serialization = serialize_exception(
-                e, None, self.dbos._serializer
-            )
-            self.dbos._sys_db.record_get_result(
-                self.workflow_id,
-                None,
-                serialized_e,
-                serialization,
-                started_at_epoch_ms=start_time,
-            )
+            # Only a workflow records its get_result, so nothing is serialized outside one.
+            if _in_workflow():
+                serialized_e, serialization = serialize_exception(
+                    e, None, self.dbos._serializer
+                )
+                self.dbos._sys_db.record_get_result(
+                    self.workflow_id,
+                    None,
+                    serialized_e,
+                    serialization,
+                    started_at_epoch_ms=start_time,
+                )
             raise
-        serialized_r, serialization = serialize_value(r, None, self.dbos._serializer)
+        if not _in_workflow():
+            return r
+        serialized_r, serialization = serialize_value_or_portable(
+            r, self.dbos._serializer
+        )
         self.dbos._sys_db.record_get_result(
             self.workflow_id,
             serialized_r,
@@ -274,18 +292,24 @@ class WorkflowHandlePolling(Generic[R]):
                 self.workflow_id, polling_interval_sec, result_type=result_type
             )
         except Exception as e:
-            serialized_e, serialization = serialize_exception(
-                e, None, self.dbos._serializer
-            )
-            self.dbos._sys_db.record_get_result(
-                self.workflow_id,
-                None,
-                serialized_e,
-                serialization,
-                started_at_epoch_ms=start_time,
-            )
+            # Only a workflow records its get_result, so nothing is serialized outside one.
+            if _in_workflow():
+                serialized_e, serialization = serialize_exception(
+                    e, None, self.dbos._serializer
+                )
+                self.dbos._sys_db.record_get_result(
+                    self.workflow_id,
+                    None,
+                    serialized_e,
+                    serialization,
+                    started_at_epoch_ms=start_time,
+                )
             raise
-        serialized_r, serialization = serialize_value(r, None, self.dbos._serializer)
+        if not _in_workflow():
+            return r
+        serialized_r, serialization = serialize_value_or_portable(
+            r, self.dbos._serializer
+        )
         self.dbos._sys_db.record_get_result(
             self.workflow_id,
             serialized_r,
@@ -334,25 +358,36 @@ class WorkflowHandleAsyncTask(Generic[R]):
             try:
                 # A cancelled waiter must not cancel the shared result future.
                 r = await asyncio.shield(self.task)
+                # An explicit type decodes the stored result, as a polling handle does.
+                if result_type is not None:
+                    r = await self.dbos._sys_db.await_workflow_result_async(
+                        self.workflow_id, polling_interval_sec, result_type=result_type
+                    )
             # If the handle was cancelled, check the database
             except (DBOSWorkflowCancelledError, DBOSAwaitedWorkflowCancelledError):
                 r = await self.dbos._sys_db.await_workflow_result_async(
                     self.workflow_id, polling_interval_sec, result_type=result_type
                 )
         except Exception as e:
-            serialized_e, serialization = serialize_exception(
-                e, None, self.dbos._serializer
-            )
-            await asyncio.to_thread(
-                self.dbos._sys_db.record_get_result,
-                self.workflow_id,
-                None,
-                serialized_e,
-                serialization,
-                started_at_epoch_ms=start_time,
-            )
+            # Only a workflow records its get_result, so nothing is serialized outside one.
+            if _in_workflow():
+                serialized_e, serialization = serialize_exception(
+                    e, None, self.dbos._serializer
+                )
+                await asyncio.to_thread(
+                    self.dbos._sys_db.record_get_result,
+                    self.workflow_id,
+                    None,
+                    serialized_e,
+                    serialization,
+                    started_at_epoch_ms=start_time,
+                )
             raise
-        serialized_r, serialization = serialize_value(r, None, self.dbos._serializer)
+        if not _in_workflow():
+            return r
+        serialized_r, serialization = serialize_value_or_portable(
+            r, self.dbos._serializer
+        )
         await asyncio.to_thread(
             self.dbos._sys_db.record_get_result,
             self.workflow_id,
@@ -404,19 +439,25 @@ class WorkflowHandleAsyncPolling(Generic[R]):
                 result_type=result_type,
             )
         except Exception as e:
-            serialized_e, serialization = serialize_exception(
-                e, None, self.dbos._serializer
-            )
-            await asyncio.to_thread(
-                self.dbos._sys_db.record_get_result,
-                self.workflow_id,
-                None,
-                serialized_e,
-                serialization,
-                started_at_epoch_ms=start_time,
-            )
+            # Only a workflow records its get_result, so nothing is serialized outside one.
+            if _in_workflow():
+                serialized_e, serialization = serialize_exception(
+                    e, None, self.dbos._serializer
+                )
+                await asyncio.to_thread(
+                    self.dbos._sys_db.record_get_result,
+                    self.workflow_id,
+                    None,
+                    serialized_e,
+                    serialization,
+                    started_at_epoch_ms=start_time,
+                )
             raise
-        serialized_r, serialization = serialize_value(r, None, self.dbos._serializer)
+        if not _in_workflow():
+            return r
+        serialized_r, serialization = serialize_value_or_portable(
+            r, self.dbos._serializer
+        )
         await asyncio.to_thread(
             self.dbos._sys_db.record_get_result,
             self.workflow_id,
@@ -2545,6 +2586,8 @@ def invoke_step(
             max_retry_interval_seconds,
         )
 
+    step_func = func
+
     def record_step_result(func: Callable[[], R]) -> R:
         ctx = assert_current_dbos_context()
         step_output: OperationResultInternal = {
@@ -2576,7 +2619,15 @@ def invoke_step(
         step_output["output"] = serialized_r
         step_output["serialization"] = serialization
         dbos._sys_db.record_operation_result(step_output)
-        return output
+        return cast(
+            R,
+            as_replayed(
+                output,
+                serialized_r,
+                serialization,
+                get_func_type_hints(step_func).return_hint,
+            ),
+        )
 
     def check_existing_result() -> Union[NoResult, R]:
         ctx = assert_current_dbos_context()
@@ -3167,14 +3218,26 @@ class _StreamReadCheckpoint:
             )
 
     def record(self, step_ctx: Optional[DBOSContext], value: Any) -> None:
-        """Record a value delivered to the workflow, in the app's serializer as step outputs are.
-
-        Checkpoints are read back only by this runtime replaying this workflow, never across
-        languages, so they do not follow the workflow's declared interop format.
-        """
+        """Record a value delivered to the workflow, in the app's serializer as step outputs are."""
         if step_ctx is None:
             return
         output, serialization = serialize_value(value, None, self._sys_db.serializer)
+        self._record(step_ctx, output, serialization)
+
+    def record_as_written(
+        self, step_ctx: Optional[DBOSContext], row: Tuple[Optional[str], Optional[str]]
+    ) -> None:
+        """Record a stream value exactly as it was written, so a replay decodes what this read did."""
+        if step_ctx is None:
+            return
+        if row[0] is None:
+            self.record(step_ctx, None)
+            return
+        self._record(step_ctx, row[0], row[1] or self._sys_db.serializer.name())
+
+    def _record(
+        self, step_ctx: DBOSContext, output: Optional[str], serialization: str
+    ) -> None:
         result: OperationResultInternal = {
             "workflow_uuid": step_ctx.workflow_id,
             "function_id": step_ctx.function_id,
@@ -3400,7 +3463,8 @@ def read_stream(
                 recorder.record(step_ctx, _dbos_stream_closed_sentinel)
                 return
             # Recorded before the yield, so a crash after the workflow acts on the value still replays it.
-            recorder.record(step_ctx, value)
+            assert row is not None
+            recorder.record_as_written(step_ctx, row)
             yield value
             offset += 1
     finally:
@@ -3528,7 +3592,8 @@ async def read_stream_async(
                 )
                 return
             # Recorded before the yield, so a crash after the workflow acts on the value still replays it.
-            await asyncio.to_thread(recorder.record, step_ctx, value)
+            assert row is not None
+            await asyncio.to_thread(recorder.record_as_written, step_ctx, row)
             yield value
             offset += 1
     finally:
