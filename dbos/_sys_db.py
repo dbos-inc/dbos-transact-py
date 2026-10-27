@@ -6909,6 +6909,7 @@ class SystemDatabase(ABC):
         WorkflowStatusString.PENDING.value,
         WorkflowStatusString.ENQUEUED.value,
         WorkflowStatusString.DELAYED.value,
+        WorkflowStatusString.SUSPENDED.value,
     ]
 
     @staticmethod
