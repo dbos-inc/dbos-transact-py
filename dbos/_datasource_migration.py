@@ -128,15 +128,24 @@ def migrate_datasource(conn: sa.Connection, schema: Optional[str]) -> None:
         return
 
     if conn.dialect.name == "sqlite":
-        # Connections begin IMMEDIATE transactions, so concurrent migrators already serialize.
         migrations = get_sqlite_datasource_migrations()
         table = DATASOURCE_MIGRATIONS_TABLE
+        # pysqlite begins a transaction only before INSERT, UPDATE, DELETE and REPLACE,
+        # so the version read above ran in autocommit and concurrent migrators can all
+        # see an empty database. Take the write lock, then read the version again. If
+        # the caller's transaction is already open, it began before a write and holds
+        # that write lock; a BEGIN would fail inside it.
+        driver_conn = conn.connection.driver_connection
+        if driver_conn is not None and not driver_conn.in_transaction:
+            conn.execute(sa.text("BEGIN IMMEDIATE"))
+        current = _sqlite_version(conn)
+        if current >= latest:
+            return
         conn.execute(
             sa.text(
                 f"CREATE TABLE IF NOT EXISTS {table} (version INTEGER NOT NULL PRIMARY KEY)"
             )
         )
-        current = _sqlite_version(conn)
     else:
         assert schema is not None
         quoted_schema = quote_identifier(schema)

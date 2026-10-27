@@ -3,11 +3,13 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import click
 import pytest
 import sqlalchemy as sa
+from sqlalchemy import event
 from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 
 # Public API
@@ -932,6 +934,69 @@ def test_concurrent_migrations(db_engine: sa.Engine, skip_with_sqlite: None) -> 
         pytest.fail(
             f"{len(errors)}/{num_instances} concurrent migrations failed:\n{error_details}"
         )
+
+
+def test_sqlite_migration_holds_write_lock_before_checking_version(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The version check runs inside the write transaction, not in autocommit."""
+    sys_db = SystemDatabase.create(
+        system_database_url=f"sqlite:///{tmp_path / 'locked.sqlite'}",
+        engine_kwargs={},
+        engine=None,
+        schema=None,
+        executor_id=None,
+        serializer=DefaultSerializer(),
+    )
+    in_transaction_at_check: list[bool] = []
+
+    @event.listens_for(sys_db.engine, "before_cursor_execute")
+    def record(
+        conn: sa.Connection, cursor: object, statement: str, *args: object
+    ) -> None:
+        if "FROM sqlite_master" in statement:
+            raw = conn.connection.driver_connection
+            assert raw is not None
+            in_transaction_at_check.append(raw.in_transaction)
+
+    try:
+        sys_db.run_migrations()
+    finally:
+        sys_db.destroy()
+    assert in_transaction_at_check == [True]
+
+
+def test_sqlite_concurrent_migrations(tmp_path: pathlib.Path) -> None:
+    """Engines that migrate one new SQLite file at once all succeed."""
+    num_instances = 6
+    sys_url = f"sqlite:///{tmp_path / 'concurrent.sqlite'}"
+    barrier = threading.Barrier(num_instances)
+
+    def create_and_migrate(_: int) -> None:
+        sys_db = SystemDatabase.create(
+            system_database_url=sys_url,
+            engine_kwargs={"connect_args": {"check_same_thread": False}},
+            engine=None,
+            schema=None,
+            executor_id=None,
+            serializer=DefaultSerializer(),
+        )
+        try:
+            barrier.wait()
+            sys_db.run_migrations()
+            with sys_db.engine.connect() as conn:
+                rows = conn.execute(
+                    sa.text("SELECT version FROM dbos_migrations")
+                ).fetchall()
+            assert [row[0] for row in rows] == [len(sqlite_migrations)]
+        finally:
+            sys_db.destroy()
+
+    with ThreadPoolExecutor(max_workers=num_instances) as executor:
+        for future in [
+            executor.submit(create_and_migrate, i) for i in range(num_instances)
+        ]:
+            future.result()
 
 
 def test_online_migrations_are_idempotent(
