@@ -13,7 +13,7 @@ from typing import (
     Union,
 )
 
-from dbos._context import DBOSContext, get_local_dbos_context
+from dbos._context import DBOSContext, take_assigned_workflow_id
 from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 from dbos._utils import generate_uuid
@@ -61,13 +61,10 @@ def fork_workflow(
         int(timeout_seconds * 1000) if timeout_seconds is not None else None
     )
 
-    ctx = get_local_dbos_context()
-    if ctx is not None and len(ctx.id_assigned_for_next_workflow) > 0:
-        forked_workflow_id = ctx.id_assigned_for_next_workflow
-        ctx.id_assigned_for_next_workflow = ""
-        ctx.workflow_id_reuse_policy = None
-    else:
-        forked_workflow_id = generate_uuid()
+    assigned = take_assigned_workflow_id()
+    forked_workflow_id = (
+        assigned.workflow_id if assigned is not None else generate_uuid()
+    )
     sys_db.fork_workflow(
         [workflow_id],
         [forked_workflow_id],

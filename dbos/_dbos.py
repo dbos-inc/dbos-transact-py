@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import hashlib
 import inspect
 import json
@@ -139,7 +138,10 @@ from ._context import (
     StepStatus,
     TracedAttributes,
     assert_current_dbos_context,
+    get_authentication,
     get_local_dbos_context,
+    get_workflow_start_options,
+    set_current_authentication,
     snapshot_step_context,
 )
 from ._dbos_config import (
@@ -1532,13 +1534,11 @@ class DBOS:
         **kwargs: P.kwargs,
     ) -> WorkflowHandleAsync[R]:
         """Invoke a workflow function on the event loop, returning a handle to the ongoing execution."""
-        ctx = get_local_dbos_context()
-        _validate_enqueue_only_options(ctx, None)
-        parent_ctx_copy = copy.copy(ctx)
-        child_ctx = DBOSContext.create_start_workflow_child(ctx)
+        _validate_enqueue_only_options(get_workflow_start_options(), None)
+        child_ctx = DBOSContext.create_start_workflow_child(get_local_dbos_context())
         await cls._configure_asyncio_thread_pool()
         return await start_workflow_async(
-            _get_dbos_instance(), parent_ctx_copy, child_ctx, func, args, kwargs
+            _get_dbos_instance(), child_ctx, func, args, kwargs
         )
 
     @classmethod
@@ -1599,12 +1599,10 @@ class DBOS:
     ) -> WorkflowHandleAsync[Any]:
         """Async version of :meth:`enqueue_workflow_with_options`."""
         # All context management runs before the first await, for concurrency safety.
-        ctx = get_local_dbos_context()
-        parent_ctx_copy = copy.copy(ctx)
-        child_ctx = DBOSContext.create_start_workflow_child(ctx)
+        child_ctx = DBOSContext.create_start_workflow_child(get_local_dbos_context())
         await cls._configure_asyncio_thread_pool()
         return await enqueue_workflow_with_options_async(
-            _get_dbos_instance(), parent_ctx_copy, child_ctx, options, args, kwargs
+            _get_dbos_instance(), child_ctx, options, args, kwargs
         )
 
     @classmethod
@@ -3885,29 +3883,24 @@ class DBOS:
     @classproperty
     def authenticated_user(cls) -> Optional[str]:
         """Return the current authenticated user, if any, associated with the current context."""
-        ctx = assert_current_dbos_context()
-        return ctx.authenticated_user
+        return get_authentication(assert_current_dbos_context()).user
 
     @classproperty
     def authenticated_roles(cls) -> Optional[List[str]]:
         """Return the roles granted to the current authenticated user, if any, associated with the current context."""
-        ctx = assert_current_dbos_context()
-        return ctx.authenticated_roles
+        return get_authentication(assert_current_dbos_context()).roles
 
     @classproperty
     def assumed_role(cls) -> Optional[str]:
         """Return the role currently assumed by the authenticated user, if any, associated with the current context."""
-        ctx = assert_current_dbos_context()
-        return ctx.assumed_role
+        return get_authentication(assert_current_dbos_context()).assumed_role
 
     @classmethod
     def set_authentication(
         cls, authenticated_user: Optional[str], authenticated_roles: Optional[List[str]]
     ) -> None:
         """Set the current authenticated user and granted roles into the current context."""
-        ctx = assert_current_dbos_context()
-        ctx.authenticated_user = authenticated_user
-        ctx.authenticated_roles = authenticated_roles
+        set_current_authentication(authenticated_user, authenticated_roles)
 
     @classmethod
     def write_stream(

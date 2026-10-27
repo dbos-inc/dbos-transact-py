@@ -26,7 +26,7 @@ def test_required_roles(dbos: DBOS) -> None:
     @DBOS.required_roles(["user"])
     @DBOS.workflow(name="tfunc")
     def tfunc(var: str) -> str:
-        assert assert_current_dbos_context().assumed_role == "user"
+        assert DBOS.assumed_role == "user"
         return var
 
     with pytest.raises(Exception) as exc_info:
@@ -69,59 +69,59 @@ def test_required_roles_class(dbos: DBOS) -> None:
 
         @DBOS.workflow()
         def test_func_user(self, var: str) -> str:
-            assert assert_current_dbos_context().assumed_role == "user"
+            assert DBOS.assumed_role == "user"
             return var
 
         @DBOS.workflow()
         @DBOS.required_roles(["admin"])
         def test_func_admin(self, var: str) -> str:
-            assert assert_current_dbos_context().assumed_role == "admin"
+            assert DBOS.assumed_role == "admin"
             return var
 
         @DBOS.required_roles(["admin"])
         @DBOS.workflow()
         def test_func_admin_r(self, var: str) -> str:
-            assert assert_current_dbos_context().assumed_role == "admin"
+            assert DBOS.assumed_role == "admin"
             return var
 
         @classmethod
         @DBOS.workflow()
         def test_func_user_c(cls, var: str) -> str:
-            assert assert_current_dbos_context().assumed_role == "user"
+            assert DBOS.assumed_role == "user"
             return var
 
         @classmethod
         @DBOS.workflow()
         @DBOS.required_roles(["admin"])
         def test_func_admin_c(cls, var: str) -> str:
-            assert assert_current_dbos_context().assumed_role == "admin"
+            assert DBOS.assumed_role == "admin"
             return var
 
         @classmethod
         @DBOS.required_roles(["admin"])
         @DBOS.workflow()
         def test_func_admin_r_c(cls, var: str) -> str:
-            assert assert_current_dbos_context().assumed_role == "admin"
+            assert DBOS.assumed_role == "admin"
             return var
 
         @staticmethod
         @DBOS.workflow()
         def test_func_user_s(var: str) -> str:
-            assert assert_current_dbos_context().assumed_role == "user"
+            assert DBOS.assumed_role == "user"
             return var
 
         @staticmethod
         @DBOS.workflow()
         @DBOS.required_roles(["admin"])
         def test_func_admin_s(var: str) -> str:
-            assert assert_current_dbos_context().assumed_role == "admin"
+            assert DBOS.assumed_role == "admin"
             return var
 
         @staticmethod
         @DBOS.required_roles(["admin"])
         @DBOS.workflow()
         def test_func_admin_r_s(var: str) -> str:
-            assert assert_current_dbos_context().assumed_role == "admin"
+            assert DBOS.assumed_role == "admin"
             return var
 
     # This checks that the interception occurs in all methods
