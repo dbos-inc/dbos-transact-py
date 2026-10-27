@@ -22,6 +22,8 @@ from sqlalchemy.exc import OperationalError
 from dbos import (
     DBOS,
     DBOSConfig,
+    DBOSContextEnsure,
+    DBOSContextSetAuth,
     EnqueueOptions,
     SendMessage,
     SetWorkflowID,
@@ -37,13 +39,11 @@ from dbos import _enterprise as enterprise_module
 # Private API because this is a test
 from dbos._client import DBOSClient
 from dbos._context import (
-    DBOSContext,
     SetEnqueueOptions,
     SetShardKey,
-    _clear_local_dbos_context,
-    _set_local_dbos_context,
     assert_current_dbos_context,
     get_local_dbos_context,
+    get_workflow_start_options,
 )
 from dbos._enqueue_options import validate_enqueue_options
 from dbos._error import (
@@ -2335,7 +2335,7 @@ def test_workflow_timeout(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def blocked_workflow() -> None:
-        assert assert_current_dbos_context().workflow_timeout_ms is None
+        assert get_workflow_start_options().workflow_timeout_ms is None
         assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
         while True:
             DBOS.sleep(0.1)
@@ -2401,7 +2401,7 @@ def test_workflow_timeout(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def parent_workflow() -> None:
-        assert assert_current_dbos_context().workflow_timeout_ms is None
+        assert get_workflow_start_options().workflow_timeout_ms is None
         assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
         with SetWorkflowID(start_child):
             DBOS.start_workflow(blocked_workflow)
@@ -2422,12 +2422,12 @@ def test_workflow_timeout(dbos: DBOS) -> None:
 
     # Verify the context variables are set correctly
     with SetWorkflowTimeout(1.0):
-        assert assert_current_dbos_context().workflow_timeout_ms == 1000
+        assert get_workflow_start_options().workflow_timeout_ms == 1000
         with SetWorkflowTimeout(2.0):
-            assert assert_current_dbos_context().workflow_timeout_ms == 2000
+            assert get_workflow_start_options().workflow_timeout_ms == 2000
         with SetWorkflowTimeout(None):
-            assert assert_current_dbos_context().workflow_timeout_ms is None
-        assert assert_current_dbos_context().workflow_timeout_ms == 1000
+            assert get_workflow_start_options().workflow_timeout_ms is None
+        assert get_workflow_start_options().workflow_timeout_ms == 1000
     assert get_local_dbos_context() is None
 
 
@@ -4060,36 +4060,116 @@ async def test_workflow_wrapped_by_custom_decorator(
 def test_set_enqueue_options_exits_in_another_context() -> None:
     """Entry and exit may run in different contextvars Contexts, as threadpool-run
     generator dependencies do; the options must still restore cleanly."""
-    _set_local_dbos_context(DBOSContext())
-    try:
-        options = SetEnqueueOptions(priority=1)
-        contextvars.copy_context().run(options.__enter__)
-        ctx = assert_current_dbos_context()
-        assert ctx.priority == 1
-        contextvars.copy_context().run(options.__exit__, None, None, None)
-        assert ctx.priority is None
-    finally:
-        _clear_local_dbos_context()
+    options = SetEnqueueOptions(priority=1)
+    entered = contextvars.copy_context()
+    entered.run(options.__enter__)
+    assert entered.run(get_workflow_start_options).priority == 1
+    # Options are per Context, so the caller's are untouched.
+    assert get_workflow_start_options().priority is None
+    exited = contextvars.copy_context()
+    exited.run(options.__exit__, None, None, None)
+    assert exited.run(get_workflow_start_options).priority is None
+    assert get_workflow_start_options().priority is None
 
 
 def test_set_shard_key_exits_in_another_context() -> None:
-    _set_local_dbos_context(DBOSContext())
-    try:
-        with SetShardKey("tenant-a"):
-            shard_key = SetShardKey("tenant-b")
-            contextvars.copy_context().run(shard_key.__enter__)
-            ctx = assert_current_dbos_context()
-            assert ctx.shard_key_for_next_workflow == "tenant-b"
-            # Independent of the enqueue options: setting those keeps the key.
-            with SetEnqueueOptions(priority=1):
-                assert ctx.shard_key_for_next_workflow == "tenant-b"
-            contextvars.copy_context().run(shard_key.__exit__, None, None, None)
-            assert ctx.shard_key_for_next_workflow == "tenant-a"
-        assert ctx.shard_key_for_next_workflow is None
-        with pytest.raises(ValueError):
-            SetShardKey("")
-    finally:
-        _clear_local_dbos_context()
+    with SetShardKey("tenant-a"):
+        shard_key = SetShardKey("tenant-b")
+        entered = contextvars.copy_context()
+        entered.run(shard_key.__enter__)
+        assert entered.run(get_workflow_start_options).shard_key == "tenant-b"
+        assert get_workflow_start_options().shard_key == "tenant-a"
+        # Independent of the enqueue options: setting those keeps the key.
+        with SetEnqueueOptions(priority=1):
+            assert get_workflow_start_options().shard_key == "tenant-a"
+        exited = contextvars.copy_context()
+        exited.run(shard_key.__exit__, None, None, None)
+        assert exited.run(get_workflow_start_options).shard_key == "tenant-a"
+        assert get_workflow_start_options().shard_key == "tenant-a"
+    assert get_workflow_start_options().shard_key is None
+    with pytest.raises(ValueError):
+        SetShardKey("")
+
+
+def test_setter_instance_rejects_overlapping_use() -> None:
+    timeout = SetWorkflowTimeout(5)
+    with timeout:
+        with pytest.raises(DBOSException, match="already in use"):
+            with timeout:
+                pass
+        assert get_workflow_start_options().workflow_timeout_ms == 5000
+    assert get_workflow_start_options().workflow_timeout_ms is None
+    # Sequential reuse is fine.
+    with timeout:
+        assert get_workflow_start_options().workflow_timeout_ms == 5000
+    assert get_local_dbos_context() is None
+
+    auth = DBOSContextSetAuth("alice", ["admin"])
+    with auth:
+        with pytest.raises(DBOSException, match="already in use"):
+            with auth:
+                pass
+        assert DBOS.authenticated_user == "alice"
+    assert get_local_dbos_context() is None
+
+
+def test_set_authentication_reaches_the_enclosing_context() -> None:
+    """A sync FastAPI dependency runs in a copied contextvars Context; the identity it
+    sets must still reach the endpoint, which shares its DBOSContext."""
+    with DBOSContextEnsure():
+        contextvars.copy_context().run(DBOS.set_authentication, "alice", ["admin"])
+        assert DBOS.authenticated_user == "alice"
+        assert DBOS.authenticated_roles == ["admin"]
+
+
+def test_set_authentication_inside_set_auth_block_is_undone_at_exit() -> None:
+    with DBOSContextEnsure():
+        DBOS.set_authentication("bob", ["reader"])
+        with DBOSContextSetAuth("carol", ["writer"]):
+            DBOS.set_authentication("dave", ["admin"])
+            assert DBOS.authenticated_user == "dave"
+            assert DBOS.authenticated_roles == ["admin"]
+        assert DBOS.authenticated_user == "bob"
+        assert DBOS.authenticated_roles == ["reader"]
+
+
+def test_set_authentication_changes_the_enclosing_set_auth_block() -> None:
+    """Middleware opens a DBOSContextSetAuth block; a sync FastAPI dependency, which runs in
+    a copied contextvars Context, then sets the identity the endpoint must see."""
+    with DBOSContextSetAuth(None, None):
+        contextvars.copy_context().run(DBOS.set_authentication, "alice", ["admin"])
+        assert DBOS.authenticated_user == "alice"
+        assert DBOS.authenticated_roles == ["admin"]
+
+    async def sibling_tasks() -> List[Optional[str]]:
+        with DBOSContextSetAuth("bob", ["reader"]):
+            reader_started = asyncio.Event()
+            identity_set = asyncio.Event()
+
+            async def setter() -> None:
+                await reader_started.wait()
+                DBOS.set_authentication("carol", ["writer"])
+                identity_set.set()
+
+            async def reader() -> Optional[str]:
+                reader_started.set()
+                await identity_set.wait()
+                return DBOS.authenticated_user
+
+            _, seen = await asyncio.gather(setter(), reader())
+            return [seen, DBOS.authenticated_user]
+
+    # A task already running inside the block sees its sibling's change.
+    assert asyncio.run(sibling_tasks()) == ["carol", "carol"]
+    assert get_local_dbos_context() is None
+
+
+def test_context_accessors_inside_setter_block() -> None:
+    with SetWorkflowID("accessor-test"):
+        DBOS.set_authentication("bob", ["reader"])
+        assert DBOS.authenticated_user == "bob"
+        assert DBOS.authenticated_roles == ["reader"]
+    assert get_local_dbos_context() is None
 
 
 def test_shard_keys_must_be_non_empty_strings() -> None:

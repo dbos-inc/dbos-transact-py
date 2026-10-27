@@ -52,11 +52,13 @@ from ._context import (
     SetWorkflowID,
     TracedAttributes,
     WorkflowIDReusePolicy,
+    WorkflowStartOptions,
     assert_current_dbos_context,
     child_workflow_id,
     current_owner_xid,
     extract_trace_context,
     get_local_dbos_context,
+    get_workflow_start_options,
     otel_carrier_from_attributes,
     restore_otel_carrier,
 )
@@ -496,13 +498,16 @@ def normalize_step_options(opts: Optional[StepOptions]) -> StepOptions:
 def _attributes_with_otel_carrier(ctx: DBOSContext) -> Optional[dict[str, Any]]:
     """Fold a PropagateOtelContext carrier into the workflow's persisted attributes.
 
-    Held outside ctx.workflow_attributes so PropagateOtelContext and
+    Held outside the workflow_attributes option so PropagateOtelContext and
     SetWorkflowAttributes nest in either order without clobbering each other.
     """
-    if ctx.otel_carrier is None:
-        return ctx.workflow_attributes
-    attributes = dict(ctx.workflow_attributes) if ctx.workflow_attributes else {}
-    attributes[OTEL_CARRIER_ATTRIBUTE] = ctx.otel_carrier
+    options = ctx.start_options
+    if options.otel_carrier is None:
+        return options.workflow_attributes
+    attributes = (
+        dict(options.workflow_attributes) if options.workflow_attributes else {}
+    )
+    attributes[OTEL_CARRIER_ATTRIBUTE] = options.otel_carrier
     return attributes
 
 
@@ -641,10 +646,6 @@ def _assemble_workflow_status(
         "application_name": owner_app,
         "shard_key": ctx.shard_key,
     }
-    # Consume the attributes from the workflow's context so that workflows
-    # started inside this workflow do not inherit them.
-    ctx.workflow_attributes = None
-    ctx.otel_carrier = None
     return status
 
 
@@ -674,8 +675,7 @@ def _init_workflow(
     duplication_policy 'return-existing', the ID of the workflow that already holds
     this deduplication ID (None if this call created the workflow itself).
     """
-    # Assembled once, outside the retry loop below: assembling consumes the
-    # context's workflow attributes and trace carrier.
+    # Assembled once, outside the retry loop below.
     status = _assemble_workflow_status(
         dbos,
         ctx,
@@ -1400,9 +1400,6 @@ def execute_dequeued_workflow(
             # ambient SetWorkflowID, so the run adopts the claimed row's ID.
             ctx = DBOSContext.create_start_workflow_child(get_local_dbos_context())
             ctx.owner_xid = owner_xid
-            # Consume the restored carrier so workflows started inside this one do not inherit it.
-            ctx.workflow_attributes = None
-            ctx.otel_carrier = None
             # The row is authoritative: a workflow enqueued under another serializer must replay under it.
             serialization_type = (
                 fi.serialization_type or WorkflowSerializationFormat.DEFAULT
@@ -1481,34 +1478,15 @@ def start_workflow(
         "kwargs": kwargs,
     }
 
-    local_ctx = get_local_dbos_context()
-    _validate_enqueue_only_options(local_ctx, queue_name)
-    duplication_policy = _resolve_duplication_policy(local_ctx, queue_name)
+    start_options = get_workflow_start_options()
+    _validate_enqueue_only_options(start_options, queue_name)
+    duplication_policy = _resolve_duplication_policy(start_options, queue_name)
+    new_wf_ctx = DBOSContext.create_start_workflow_child(get_local_dbos_context())
     workflow_timeout_ms, workflow_deadline_epoch_ms = _get_timeout_deadline(
-        local_ctx, queue_name
+        new_wf_ctx, queue_name
     )
-    workflow_timeout_ms = (
-        local_ctx.workflow_timeout_ms if local_ctx is not None else None
-    )
-    enqueue_options = EnqueueOptionsInternal(
-        deduplication_id=local_ctx.deduplication_id if local_ctx is not None else None,
-        priority=local_ctx.priority if local_ctx is not None else None,
-        app_version=local_ctx.app_version if local_ctx is not None else None,
-        queue_partition_key=(
-            local_ctx.queue_partition_key if local_ctx is not None else None
-        ),
-        delay_until_epoch_ms=(
-            local_ctx.delay_until_epoch_ms if local_ctx is not None else None
-        ),
-        debounce_deadline_epoch_ms=(
-            local_ctx.debounce_deadline_epoch_ms if local_ctx is not None else None
-        ),
-        is_debounced=(local_ctx.is_debounced if local_ctx is not None else False),
-        application_name=(
-            local_ctx.debounce_application_name if local_ctx is not None else None
-        ),
-    )
-    new_wf_ctx = DBOSContext.create_start_workflow_child(local_ctx)
+    workflow_timeout_ms = new_wf_ctx.start_options.workflow_timeout_ms
+    enqueue_options = _enqueue_options_internal(new_wf_ctx.start_options)
     new_child_workflow_id = new_wf_ctx.id_assigned_for_next_workflow
 
     child_start_time = int(time.time() * 1000)
@@ -1587,7 +1565,6 @@ def start_workflow(
 
 async def start_workflow_async(
     dbos: "DBOS",
-    local_ctx: Optional[DBOSContext],
     new_wf_ctx: DBOSContext,
     func: "Callable[P, Coroutine[Any, Any, R]]",
     args: tuple[Any, ...],
@@ -1619,29 +1596,14 @@ async def start_workflow_async(
         "kwargs": kwargs,
     }
 
-    _validate_enqueue_only_options(local_ctx, queue_name)
-    duplication_policy = _resolve_duplication_policy(local_ctx, queue_name)
+    _validate_enqueue_only_options(new_wf_ctx.start_options, queue_name)
+    duplication_policy = _resolve_duplication_policy(
+        new_wf_ctx.start_options, queue_name
+    )
     workflow_timeout_ms, workflow_deadline_epoch_ms = _get_timeout_deadline(
-        local_ctx, queue_name
+        new_wf_ctx, queue_name
     )
-    enqueue_options = EnqueueOptionsInternal(
-        deduplication_id=local_ctx.deduplication_id if local_ctx is not None else None,
-        priority=local_ctx.priority if local_ctx is not None else None,
-        app_version=local_ctx.app_version if local_ctx is not None else None,
-        queue_partition_key=(
-            local_ctx.queue_partition_key if local_ctx is not None else None
-        ),
-        delay_until_epoch_ms=(
-            local_ctx.delay_until_epoch_ms if local_ctx is not None else None
-        ),
-        debounce_deadline_epoch_ms=(
-            local_ctx.debounce_deadline_epoch_ms if local_ctx is not None else None
-        ),
-        is_debounced=(local_ctx.is_debounced if local_ctx is not None else False),
-        application_name=(
-            local_ctx.debounce_application_name if local_ctx is not None else None
-        ),
-    )
+    enqueue_options = _enqueue_options_internal(new_wf_ctx.start_options)
     new_child_workflow_id = new_wf_ctx.id_assigned_for_next_workflow
 
     child_start_time = int(time.time() * 1000)
@@ -1725,7 +1687,6 @@ async def start_workflow_async(
 
 def _build_enqueue_with_options(
     dbos: "DBOS",
-    local_ctx: Optional[DBOSContext],
     new_wf_ctx: DBOSContext,
     options: "EnqueueOptions",
     args: tuple[Any, ...],
@@ -1763,36 +1724,36 @@ def _build_enqueue_with_options(
         resolved["workflow_id"] = child_workflow_id(
             *new_wf_ctx.derived_from, resolved.get("shard_key")
         )
-    if local_ctx is not None:
-        if (
-            resolved.get("deduplication_id") is None
-            and local_ctx.deduplication_id is not None
-        ):
-            resolved["deduplication_id"] = local_ctx.deduplication_id
-        if (
-            resolved.get("duplication_policy") is None
-            and local_ctx.duplication_policy is not None
-        ):
-            resolved["duplication_policy"] = local_ctx.duplication_policy
-        if resolved.get("priority") is None and local_ctx.priority is not None:
-            resolved["priority"] = local_ctx.priority
-        if resolved.get("app_version") is None and local_ctx.app_version is not None:
-            resolved["app_version"] = local_ctx.app_version
-        if (
-            resolved.get("queue_partition_key") is None
-            and local_ctx.queue_partition_key is not None
-        ):
-            resolved["queue_partition_key"] = local_ctx.queue_partition_key
-        if (
-            resolved.get("authenticated_user") is None
-            and local_ctx.authenticated_user is not None
-        ):
-            resolved["authenticated_user"] = local_ctx.authenticated_user
-        if (
-            resolved.get("authenticated_roles") is None
-            and local_ctx.authenticated_roles is not None
-        ):
-            resolved["authenticated_roles"] = local_ctx.authenticated_roles
+    start_options = new_wf_ctx.start_options
+    if (
+        resolved.get("deduplication_id") is None
+        and start_options.deduplication_id is not None
+    ):
+        resolved["deduplication_id"] = start_options.deduplication_id
+    if (
+        resolved.get("duplication_policy") is None
+        and start_options.duplication_policy is not None
+    ):
+        resolved["duplication_policy"] = start_options.duplication_policy
+    if resolved.get("priority") is None and start_options.priority is not None:
+        resolved["priority"] = start_options.priority
+    if resolved.get("app_version") is None and start_options.app_version is not None:
+        resolved["app_version"] = start_options.app_version
+    if (
+        resolved.get("queue_partition_key") is None
+        and start_options.queue_partition_key is not None
+    ):
+        resolved["queue_partition_key"] = start_options.queue_partition_key
+    if (
+        resolved.get("authenticated_user") is None
+        and new_wf_ctx.authenticated_user is not None
+    ):
+        resolved["authenticated_user"] = new_wf_ctx.authenticated_user
+    if (
+        resolved.get("authenticated_roles") is None
+        and new_wf_ctx.authenticated_roles is not None
+    ):
+        resolved["authenticated_roles"] = new_wf_ctx.authenticated_roles
     if (
         resolved.get("queue_partition_key") is not None
         and resolved.get("deduplication_id") is not None
@@ -1811,14 +1772,13 @@ def _build_enqueue_with_options(
     if resolved.get("workflow_timeout") is None:
         # Inherit an explicit SetWorkflowTimeout, else the parent's propagated deadline.
         status["workflow_timeout_ms"], status["workflow_deadline_epoch_ms"] = (
-            _get_timeout_deadline(local_ctx, resolved["queue_name"])
+            _get_timeout_deadline(new_wf_ctx, resolved["queue_name"])
         )
     if (
         resolved.get("delay_seconds") is None
-        and local_ctx is not None
-        and local_ctx.delay_until_epoch_ms is not None
+        and start_options.delay_until_epoch_ms is not None
     ):
-        status["delay_until_epoch_ms"] = local_ctx.delay_until_epoch_ms
+        status["delay_until_epoch_ms"] = start_options.delay_until_epoch_ms
         status["status"] = WorkflowStatusString.DELAYED.value
     ambient_attributes = _attributes_with_otel_carrier(new_wf_ctx)
     if ambient_attributes is not None:
@@ -1953,8 +1913,7 @@ def enqueue_workflow_with_options(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
 ) -> "WorkflowHandle[Any]":
-    local_ctx = get_local_dbos_context()
-    new_wf_ctx = DBOSContext.create_start_workflow_child(local_ctx)
+    new_wf_ctx = DBOSContext.create_start_workflow_child(get_local_dbos_context())
     recorded = _check_recorded_enqueue(dbos, new_wf_ctx, options["workflow_name"])
     if recorded is not None:
         child_id, child_key = recorded
@@ -1964,7 +1923,7 @@ def enqueue_workflow_with_options(
             shard_key=child_key or options.get("shard_key") or new_wf_ctx.shard_key,
         )
     status, resolved = _build_enqueue_with_options(
-        dbos, local_ctx, new_wf_ctx, options, args, kwargs
+        dbos, new_wf_ctx, options, args, kwargs
     )
     workflow_id = _persist_enqueue_with_options(dbos, new_wf_ctx, status, resolved)
     return WorkflowHandlePolling(workflow_id, dbos, shard_key=status["shard_key"])
@@ -1972,7 +1931,6 @@ def enqueue_workflow_with_options(
 
 async def enqueue_workflow_with_options_async(
     dbos: "DBOS",
-    local_ctx: Optional[DBOSContext],
     new_wf_ctx: DBOSContext,
     options: "EnqueueOptions",
     args: tuple[Any, ...],
@@ -1989,7 +1947,7 @@ async def enqueue_workflow_with_options_async(
             shard_key=child_key or options.get("shard_key") or new_wf_ctx.shard_key,
         )
     status, resolved = _build_enqueue_with_options(
-        dbos, local_ctx, new_wf_ctx, options, args, kwargs
+        dbos, new_wf_ctx, options, args, kwargs
     )
     workflow_id = await asyncio.to_thread(
         _persist_enqueue_with_options, dbos, new_wf_ctx, status, resolved
@@ -2070,7 +2028,7 @@ def workflow_wrapper(
             parent_owner_xid = current_owner_xid(parent_wfid, cctx)
             parent_shard_key = cctx.shard_key
         workflow_timeout_ms, workflow_deadline_epoch_ms = _get_timeout_deadline(
-            cctx, queue=None
+            newwfctx, queue=None
         )
 
         wfOutcome = Outcome[R].make(
@@ -2207,10 +2165,12 @@ def workflow_wrapper(
             .intercept(check_and_init, dbos=dbos)
             .also(DBOSAssumeRole(rr))
             .also(EnterDBOSWorkflow(attributes, newwfctx))
-            # Outside EnterDBOSWorkflow so the carrier is active when the span is created,
-            # and read now: check_and_init consumes the carrier off newwfctx. Inside
-            # record_get_result, which belongs to the caller's trace, not the workflow's.
-            .also(_UseOtelContext(_carrier_otel_context(newwfctx.otel_carrier, None)))
+            # Outside EnterDBOSWorkflow so the span starts under the carrier; inside record_get_result (caller's trace).
+            .also(
+                _UseOtelContext(
+                    _carrier_otel_context(newwfctx.start_options.otel_carrier, None)
+                )
+            )
             .then(record_get_result, dbos=dbos)
         )
         return outcome()  # type: ignore
@@ -3455,18 +3415,18 @@ async def read_stream_async(
 
 
 def _validate_enqueue_only_options(
-    ctx: Optional[DBOSContext], queue: Optional[str]
+    options: WorkflowStartOptions, queue: Optional[str]
 ) -> None:
     """Reject enqueue options on a workflow that is not being enqueued."""
-    if queue is not None or ctx is None:
+    if queue is not None:
         return
     set_options = [
         name
         for name, value in (
-            ("deduplication_id", ctx.deduplication_id),
-            ("priority", ctx.priority),
-            ("queue_partition_key", ctx.queue_partition_key),
-            ("delay_seconds", ctx.delay_until_epoch_ms),
+            ("deduplication_id", options.deduplication_id),
+            ("priority", options.priority),
+            ("queue_partition_key", options.queue_partition_key),
+            ("delay_seconds", options.delay_until_epoch_ms),
         )
         if value is not None
     ]
@@ -3478,31 +3438,45 @@ def _validate_enqueue_only_options(
 
 
 def _resolve_duplication_policy(
-    ctx: Optional[DBOSContext], queue: Optional[str]
+    options: WorkflowStartOptions, queue: Optional[str]
 ) -> Optional[DuplicationPolicy]:
     """Validate the ambient duplication policy for this enqueue and return it."""
-    if ctx is None:
-        return None
-    validate_duplication_policy(ctx.duplication_policy, queue, ctx.deduplication_id)
-    return ctx.duplication_policy
+    validate_duplication_policy(
+        options.duplication_policy, queue, options.deduplication_id
+    )
+    return options.duplication_policy
+
+
+def _enqueue_options_internal(options: WorkflowStartOptions) -> EnqueueOptionsInternal:
+    return EnqueueOptionsInternal(
+        deduplication_id=options.deduplication_id,
+        priority=options.priority,
+        app_version=options.app_version,
+        queue_partition_key=options.queue_partition_key,
+        delay_until_epoch_ms=options.delay_until_epoch_ms,
+        debounce_deadline_epoch_ms=options.debounce_deadline_epoch_ms,
+        is_debounced=options.is_debounced,
+        application_name=options.debounce_application_name,
+    )
 
 
 def _get_timeout_deadline(
-    ctx: Optional[DBOSContext], queue: Optional[str]
+    new_wf_ctx: DBOSContext, queue: Optional[str]
 ) -> tuple[Optional[int], Optional[int]]:
-    if ctx is None:
-        return None, None
+    """The timeout and deadline of the workflow new_wf_ctx was built to start."""
+    options = new_wf_ctx.start_options
     # If a timeout is explicitly specified, use it over any propagated deadline
-    if ctx.workflow_timeout_ms:
+    if options.workflow_timeout_ms:
         if queue:
             # Queued workflows are assigned a deadline on dequeue
-            return ctx.workflow_timeout_ms, None
+            return options.workflow_timeout_ms, None
         else:
             # Otherwise, compute the deadline immediately
             return (
-                ctx.workflow_timeout_ms,
-                int(time.time() * 1000) + ctx.workflow_timeout_ms,
+                options.workflow_timeout_ms,
+                int(time.time() * 1000) + options.workflow_timeout_ms,
             )
+    if options.ignore_propagated_deadline:
+        return None, None
     # Otherwise, return the propagated deadline, if any
-    else:
-        return None, ctx.workflow_deadline_epoch_ms
+    return None, new_wf_ctx.workflow_deadline_epoch_ms

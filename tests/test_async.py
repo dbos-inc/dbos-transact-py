@@ -19,7 +19,11 @@ from dbos import (
     SetWorkflowTimeout,
     WorkflowHandleAsync,
 )
-from dbos._context import assert_current_dbos_context, get_local_dbos_context
+from dbos._context import (
+    assert_current_dbos_context,
+    get_local_dbos_context,
+    get_workflow_start_options,
+)
 from dbos._dbos import WorkflowHandle
 from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSPatchNondeterminismError
 from dbos._event_loop import BackgroundEventLoop
@@ -762,7 +766,7 @@ async def test_workflow_timeout_async(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     async def blocked_workflow() -> None:
-        assert assert_current_dbos_context().workflow_timeout_ms is None
+        assert get_workflow_start_options().workflow_timeout_ms is None
         while True:
             await DBOS.sleep_async(0.1)
 
@@ -791,7 +795,7 @@ async def test_workflow_timeout_async(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     async def parent_workflow() -> None:
-        assert assert_current_dbos_context().workflow_timeout_ms is None
+        assert get_workflow_start_options().workflow_timeout_ms is None
         assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
         with SetWorkflowID(start_child):
             await DBOS.start_workflow_async(blocked_workflow)

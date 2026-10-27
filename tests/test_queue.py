@@ -34,7 +34,7 @@ from dbos import (
     SetWorkflowTimeout,
     WorkflowHandle,
 )
-from dbos._context import assert_current_dbos_context
+from dbos._context import assert_current_dbos_context, get_workflow_start_options
 from dbos._dbos import WorkflowHandleAsync
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
@@ -1602,14 +1602,14 @@ def test_dequeue_saturates_overflowing_timeout(
 def test_timeout_queue(dbos: DBOS) -> None:
     @DBOS.workflow()
     def blocking_workflow() -> None:
-        assert assert_current_dbos_context().workflow_timeout_ms is None
+        assert get_workflow_start_options().workflow_timeout_ms is None
         assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
         while True:
             DBOS.sleep(0.1)
 
     @DBOS.workflow()
     def normal_workflow() -> None:
-        assert assert_current_dbos_context().workflow_timeout_ms is None
+        assert get_workflow_start_options().workflow_timeout_ms is None
         assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
         return
 
@@ -1713,14 +1713,14 @@ async def test_timeout_queue_async(dbos: DBOS, config: DBOSConfig) -> None:
 
     @DBOS.workflow()
     async def blocking_workflow() -> None:
-        assert assert_current_dbos_context().workflow_timeout_ms is None
+        assert get_workflow_start_options().workflow_timeout_ms is None
         assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
         while True:
             await DBOS.sleep_async(0.1)
 
     @DBOS.workflow()
     async def normal_workflow() -> None:
-        assert assert_current_dbos_context().workflow_timeout_ms is None
+        assert get_workflow_start_options().workflow_timeout_ms is None
         assert assert_current_dbos_context().workflow_deadline_epoch_ms is not None
         return
 
@@ -2275,7 +2275,7 @@ def test_priority_queue(dbos: DBOS) -> None:
     def test_workflow(priority: int) -> int:
         wf_priority_list.append(priority)
         # Make sure the priority is not propagated
-        assert assert_current_dbos_context().priority == None
+        assert get_workflow_start_options().priority == None
         child_handle = DBOS.enqueue_workflow(
             "test_queue_child", child_workflow, priority
         )
@@ -2332,7 +2332,7 @@ async def test_priority_queue_async(dbos: DBOS) -> None:
     async def test_workflow(priority: int) -> int:
         wf_priority_list.append(priority)
         # Make sure the priority is not propagated
-        assert assert_current_dbos_context().priority == None
+        assert get_workflow_start_options().priority == None
         child_handle = await DBOS.enqueue_workflow_async(
             "test_queue_child_async", child_workflow, priority
         )

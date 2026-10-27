@@ -1,7 +1,7 @@
 import threading
 import time
 import uuid
-from typing import Any
+from typing import Any, List
 
 import pytest
 import sqlalchemy as sa
@@ -1669,3 +1669,33 @@ def test_legacy_payload_rows_still_read(dbos: DBOS) -> None:
     assert handle.get_result() == 11
     forked: WorkflowHandle[int] = DBOS.fork_workflow(workflow_id, 1)
     assert forked.get_result() == 11
+
+
+def test_fork_in_step_keeps_workflow_id_for_child(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def source() -> str:
+        return "source"
+
+    @DBOS.workflow()
+    def child() -> None:
+        pass
+
+    @DBOS.step()
+    def fork_step(workflow_id: str) -> str:
+        return DBOS.fork_workflow(workflow_id, 1).workflow_id
+
+    @DBOS.workflow()
+    def parent(source_id: str, child_id: str) -> List[str]:
+        with SetWorkflowID(child_id):
+            # A step's fork must not take the ID the block assigns to the next workflow.
+            forked_id = fork_step(source_id)
+            return [forked_id, DBOS.start_workflow(child).workflow_id]
+
+    source_id = source.__name__ + str(uuid.uuid4())
+    with SetWorkflowID(source_id):
+        source()
+    child_id = str(uuid.uuid4())
+    forked_id, started_id = parent(source_id, child_id)
+    assert started_id == child_id
+    assert forked_id != child_id
+    assert DBOS.retrieve_workflow(forked_id).get_result() == "source"

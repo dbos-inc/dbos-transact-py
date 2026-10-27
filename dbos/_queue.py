@@ -1,5 +1,4 @@
 import asyncio
-import copy
 import random
 import sys
 import threading
@@ -20,7 +19,12 @@ QueueConflictResolution = Literal[
 
 from sqlalchemy.exc import DBAPIError, OperationalError
 
-from dbos._context import DBOSContext, get_local_dbos_context
+from dbos._context import (
+    DBOSContext,
+    WorkflowStartOptions,
+    get_local_dbos_context,
+    get_workflow_start_options,
+)
 from dbos._error import DBOSException, DBOSRecoveryError
 from dbos._logger import dbos_logger
 from dbos._shard_keys import shard_key_scope
@@ -619,10 +623,10 @@ class Queue:
                 "object. Use DBOSClient.enqueue instead."
             )
 
-    def _validate_enqueue(self, ctx: Optional[DBOSContext]) -> None:
+    def _validate_enqueue(self, options: WorkflowStartOptions) -> None:
         self._require_dbos_bound()
         # Only checks needing no queue configuration: reading it would cost a round trip per enqueue.
-        if ctx and ctx.queue_partition_key and ctx.deduplication_id:
+        if options.queue_partition_key and options.deduplication_id:
             raise Exception("Deduplication is not supported for partitioned queues")
 
     def enqueue(
@@ -630,7 +634,7 @@ class Queue:
     ) -> "WorkflowHandle[R]":
         from ._dbos import _get_dbos_instance
 
-        self._validate_enqueue(get_local_dbos_context())
+        self._validate_enqueue(get_workflow_start_options())
         dbos = _get_dbos_instance()
         return start_workflow(
             dbos, func, args, kwargs, queue_name=self.name, execute_workflow=False
@@ -646,15 +650,12 @@ class Queue:
 
         # To allow safe concurrent async operations, all context management
         # must run synchronously before the first `await`.
-        ctx = get_local_dbos_context()
-        parent_ctx_copy = copy.copy(ctx)
-        child_ctx = DBOSContext.create_start_workflow_child(ctx)
-        self._validate_enqueue(ctx)
+        child_ctx = DBOSContext.create_start_workflow_child(get_local_dbos_context())
+        self._validate_enqueue(child_ctx.start_options)
         dbos = _get_dbos_instance()
         await self._configure_thread_pool()
         return await start_workflow_async(
             dbos,
-            parent_ctx_copy,
             child_ctx,
             func,
             args,

@@ -4,8 +4,8 @@ import json
 import os
 import time
 from contextlib import AbstractContextManager, contextmanager
-from contextvars import ContextVar
-from dataclasses import dataclass
+from contextvars import ContextVar, Token
+from dataclasses import dataclass, replace
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
@@ -18,6 +18,7 @@ from typing import (
     Tuple,
     Type,
     TypedDict,
+    TypeVar,
     Union,
 )
 
@@ -103,6 +104,66 @@ class ContextSpan:
     context_manager: "AbstractContextManager[Span]"
 
 
+@dataclass
+class AssignedWorkflowID:
+    """A SetWorkflowID block's ID, taken by the first workflow started in the block."""
+
+    workflow_id: str
+    reuse_policy: Optional[WorkflowIDReusePolicy]
+    consumed: bool = False
+
+
+@dataclass(frozen=True)
+class WorkflowStartOptions:
+    """Options the Set* context managers apply to workflows started or enqueued in their block.
+    Held in a task-local ContextVar, not on the DBOSContext that concurrent tasks share.
+    """
+
+    assigned_id: Optional[AssignedWorkflowID] = None
+    # A user-specified workflow timeout. Takes priority over a propagated deadline.
+    workflow_timeout_ms: Optional[int] = None
+    # Set when the started workflow must not inherit the caller's propagated deadline.
+    ignore_propagated_deadline: bool = False
+    # A user-specified deduplication ID for the enqueuing workflow.
+    deduplication_id: Optional[str] = None
+    # How the enqueuing workflow reacts to a collision on its deduplication ID.
+    duplication_policy: Optional[DuplicationPolicy] = None
+    # A user-specified priority for the enqueuing workflow.
+    priority: Optional[int] = None
+    app_version: Optional[str] = None
+    # If the workflow is enqueued on a partitioned queue, its partition key
+    queue_partition_key: Optional[str] = None
+    # The UNIX epoch timestamp before which the workflow should not be dequeued
+    delay_until_epoch_ms: Optional[int] = None
+    # Absolute cap (Unix epoch ms) beyond which bounces may not extend the next enqueued workflow's delay.
+    debounce_deadline_epoch_ms: Optional[int] = None
+    # Whether the next enqueued workflow is debounced (its dedup ID is a debounce key cleared on DELAYED->ENQUEUED).
+    is_debounced: bool = False
+    # The application the next debounced enqueue acts for; None means this one.
+    debounce_application_name: Optional[str] = None
+    # User-specified attributes to attach to the next started workflow.
+    workflow_attributes: Optional[Dict[str, Any]] = None
+    # Trace carrier for the next started workflow, set by PropagateOtelContext.
+    otel_carrier: Optional[Dict[str, str]] = None
+    # Shard key for the next workflow, set by SetShardKey.
+    shard_key: Optional[str] = None
+
+
+_NO_START_OPTIONS = WorkflowStartOptions()
+
+
+@dataclass(frozen=True)
+class Authentication:
+    """The identity code acts as: an authenticated user, their granted roles, and the role assumed."""
+
+    user: Optional[str] = None
+    roles: Optional[List[str]] = None
+    assumed_role: Optional[str] = None
+
+
+_NO_AUTHENTICATION = Authentication()
+
+
 def child_workflow_id(
     parent_id: str,
     function_id: int,
@@ -125,20 +186,20 @@ class DBOSContext:
 
         self.logger = dbos_logger
 
+        # The ID a context built by create_start_workflow_child will run its workflow under.
         self.id_assigned_for_next_workflow: str = ""
         # (parent ID, call number, parent's shard key) when the ID above is a derived default
         self.derived_from: Optional[Tuple[str, int, Optional[str]]] = None
         # Reuse policy for id_assigned_for_next_workflow, consumed along with it.
         self.workflow_id_reuse_policy: Optional[WorkflowIDReusePolicy] = None
-        self.is_within_set_workflow_id_block: bool = False
+        # The ambient Set* options this context's workflow was started under.
+        self.start_options: WorkflowStartOptions = _NO_START_OPTIONS
 
         self.parent_workflow_id: str = ""
         self.parent_workflow_fid: int = -1
         self.workflow_id: str = ""
         # Shard key of the running workflow; None on an unsharded database.
         self.shard_key: Optional[str] = None
-        # Shard key for the next workflow started from this context, set by SetShardKey.
-        self.shard_key_for_next_workflow: Optional[str] = None
         self.function_id: int = -1
         # Token this execution wrote to the row's owner_xid; checkpoints land only while it still matches.
         self.owner_xid: Optional[str] = None
@@ -154,70 +215,28 @@ class DBOSContext:
         ] = []
         self.context_spans: list[ContextSpan] = []
 
+        # Identity this context's workflow or step was created under; a DBOSContextSetAuth block can shadow it.
         self.authenticated_user: Optional[str] = None
         self.authenticated_roles: Optional[List[str]] = None
         self.assumed_role: Optional[str] = None
         self.step_status: Optional[StepStatus] = None
 
-        self.app_version: Optional[str] = None
         self.serialization_type: WorkflowSerializationFormat = (
             WorkflowSerializationFormat.DEFAULT
         )
 
-        # A user-specified workflow timeout. Takes priority over a propagated deadline.
-        self.workflow_timeout_ms: Optional[int] = None
-        # A propagated workflow deadline.
+        # Deadline of the running workflow, propagated to its children (before it starts: the caller's).
         self.workflow_deadline_epoch_ms: Optional[int] = None
-
-        # A user-specified deduplication ID for the enqueuing workflow.
-        self.deduplication_id: Optional[str] = None
-        # How the enqueuing workflow reacts to a collision on its deduplication ID.
-        self.duplication_policy: Optional[DuplicationPolicy] = None
-        # A user-specified priority for the enqueuing workflow.
-        self.priority: Optional[int] = None
-        # User-specified attributes to attach to the next started workflow.
-        self.workflow_attributes: Optional[Dict[str, Any]] = None
-        # Trace carrier for the next started workflow, set by PropagateOtelContext.
-        self.otel_carrier: Optional[Dict[str, str]] = None
-        # If the workflow is enqueued on a partitioned queue, its partition key
-        self.queue_partition_key: Optional[str] = None
-        # The UNIX epoch timestamp before which the workflow should not be dequeued
-        self.delay_until_epoch_ms: Optional[int] = None
-        # Absolute cap (Unix epoch ms) beyond which bounces may not extend the next enqueued workflow's delay.
-        self.debounce_deadline_epoch_ms: Optional[int] = None
-        # Whether the next enqueued workflow is debounced (its dedup ID is a debounce key cleared on DELAYED->ENQUEUED).
-        self.is_debounced: bool = False
-        # The application the next debounced enqueue acts for; None means this one.
-        self.debounce_application_name: Optional[str] = None
 
     def create_child(self, *, is_for_workflow: bool) -> DBOSContext:
         rv = DBOSContext()
         rv.logger = self.logger
-        if is_for_workflow:
-            rv.id_assigned_for_next_workflow = self.id_assigned_for_next_workflow
-            self.id_assigned_for_next_workflow = ""
-            rv.workflow_id_reuse_policy = self.workflow_id_reuse_policy
-            self.workflow_id_reuse_policy = None
-            # Copy so later mutation of the caller's dict cannot affect the child
-            rv.workflow_attributes = (
-                dict(self.workflow_attributes)
-                if self.workflow_attributes is not None
-                else None
-            )
-            rv.otel_carrier = (
-                dict(self.otel_carrier) if self.otel_carrier is not None else None
-            )
-            rv.shard_key = self.shard_key_for_next_workflow
-        rv.is_within_set_workflow_id_block = self.is_within_set_workflow_id_block
         rv.parent_workflow_id = self.workflow_id
         rv.parent_workflow_fid = self.function_id
-        rv.authenticated_user = self.authenticated_user
-        rv.authenticated_roles = (
-            self.authenticated_roles[:]
-            if self.authenticated_roles is not None
-            else None
-        )
-        rv.assumed_role = self.assumed_role
+        auth = get_authentication(self)
+        rv.authenticated_user = auth.user
+        rv.authenticated_roles = auth.roles[:] if auth.roles is not None else None
+        rv.assumed_role = auth.assumed_role
         if not is_for_workflow:
             rv.serialization_type = self.serialization_type
         return rv
@@ -226,23 +245,10 @@ class DBOSContext:
         rv = self.create_child(is_for_workflow=False)
         rv.executor_id = self.executor_id
         rv.app_id = self.app_id
-        rv.app_version = self.app_version
         rv.workflow_id = self.workflow_id
         rv.shard_key = self.shard_key
-        rv.shard_key_for_next_workflow = self.shard_key_for_next_workflow
         rv.owner_xid = self.owner_xid
         rv.workflow_deadline_epoch_ms = self.workflow_deadline_epoch_ms
-        rv.workflow_timeout_ms = self.workflow_timeout_ms
-        rv.deduplication_id = self.deduplication_id
-        rv.duplication_policy = self.duplication_policy
-        rv.priority = self.priority
-        rv.queue_partition_key = self.queue_partition_key
-        rv.delay_until_epoch_ms = self.delay_until_epoch_ms
-        rv.debounce_deadline_epoch_ms = self.debounce_deadline_epoch_ms
-        rv.is_debounced = self.is_debounced
-        rv.debounce_application_name = self.debounce_application_name
-        rv.workflow_attributes = self.workflow_attributes
-        rv.otel_carrier = self.otel_carrier
         self.function_id += 1
         rv.function_id = self.function_id
         if reserve_sleep_id:
@@ -259,43 +265,51 @@ class DBOSContext:
         #      If this is a child workflow, assign parent wf id with call# suffix
         #   Make a (system) DB record for the workflow
         #   Pass the new context to a worker thread that will run the wf function
+        options = get_workflow_start_options()
+        if options.workflow_attributes is not None:
+            # Copy so later mutation of the caller's dict cannot affect the child
+            options = replace(
+                options, workflow_attributes=dict(options.workflow_attributes)
+            )
+        in_set_workflow_id_block = options.assigned_id is not None
+        assigned = take_assigned_workflow_id()
+        wfid = assigned.workflow_id if assigned is not None else ""
+        reuse_policy = assigned.reuse_policy if assigned is not None else None
         derived_from: Optional[Tuple[str, int, Optional[str]]] = None
         if cur_ctx is not None and cur_ctx.is_within_workflow():
             assert cur_ctx.is_workflow()  # Not in a step
             cur_ctx.function_id += 1
-            if len(cur_ctx.id_assigned_for_next_workflow) == 0:
+            if not wfid:
                 derived_from = (
                     cur_ctx.workflow_id,
                     cur_ctx.function_id,
                     cur_ctx.shard_key,
                 )
-                cur_ctx.id_assigned_for_next_workflow = child_workflow_id(
-                    *derived_from, cur_ctx.shard_key_for_next_workflow
+                wfid = child_workflow_id(*derived_from, options.shard_key)
+        if not wfid:
+            if in_set_workflow_id_block:
+                dbos_logger.warning(
+                    f"Multiple workflows started in the same SetWorkflowID block. Only the first workflow is assigned the specified workflow ID; subsequent workflows will use a generated workflow ID."
                 )
+            wfid = generate_uuid()
 
         new_wf_ctx = (
             DBOSContext()
             if cur_ctx is None
             else cur_ctx.create_child(is_for_workflow=True)
         )
-        new_wf_ctx.id_assigned_for_next_workflow = new_wf_ctx.assign_workflow_id()
+        new_wf_ctx.id_assigned_for_next_workflow = wfid
+        new_wf_ctx.workflow_id_reuse_policy = reuse_policy
         new_wf_ctx.derived_from = derived_from
+        new_wf_ctx.shard_key = options.shard_key
+        new_wf_ctx.start_options = options
+        if cur_ctx is not None:
+            new_wf_ctx.workflow_deadline_epoch_ms = cur_ctx.workflow_deadline_epoch_ms
 
         return new_wf_ctx
 
     def has_parent(self) -> bool:
         return len(self.parent_workflow_id) > 0
-
-    def assign_workflow_id(self) -> str:
-        if len(self.id_assigned_for_next_workflow) > 0:
-            wfid = self.id_assigned_for_next_workflow
-        else:
-            if self.is_within_set_workflow_id_block:
-                self.logger.warning(
-                    f"Multiple workflows started in the same SetWorkflowID block. Only the first workflow is assigned the specified workflow ID; subsequent workflows will use a generated workflow ID."
-                )
-            wfid = generate_uuid()
-        return wfid
 
     def start_workflow(
         self,
@@ -303,7 +317,7 @@ class DBOSContext:
         attributes: TracedAttributes,
     ) -> None:
         if wfid is None or len(wfid) == 0:
-            wfid = self.assign_workflow_id()
+            wfid = self.id_assigned_for_next_workflow or generate_uuid()
             self.id_assigned_for_next_workflow = ""
             self.workflow_id_reuse_policy = None
         self.workflow_id = wfid
@@ -409,12 +423,6 @@ class DBOSContext:
         dbos_tracer.end_span(context_span.span)
         context_span.context_manager.__exit__(None, None, None)
 
-    def set_authentication(
-        self, user: Optional[str], roles: Optional[List[str]]
-    ) -> None:
-        self.authenticated_user = user
-        self.authenticated_roles = roles
-
 
 ##############################################################
 ##### Low-level context management (using contextvars)
@@ -436,6 +444,87 @@ def _clear_local_dbos_context() -> None:
 
 def get_local_dbos_context() -> Optional[DBOSContext]:
     return _dbos_context_var.get()
+
+
+_workflow_start_options_var: ContextVar[WorkflowStartOptions] = ContextVar(
+    "dbos_workflow_start_options", default=_NO_START_OPTIONS
+)
+
+
+def get_workflow_start_options() -> WorkflowStartOptions:
+    return _workflow_start_options_var.get()
+
+
+def take_assigned_workflow_id() -> Optional[AssignedWorkflowID]:
+    """Consume the enclosing SetWorkflowID block's ID, or None if there is none left."""
+    assigned = _workflow_start_options_var.get().assigned_id
+    if assigned is None or assigned.consumed:
+        return None
+    assigned.consumed = True
+    return assigned
+
+
+_Value = TypeVar("_Value")
+
+
+def _reset_context_var(
+    var: ContextVar[_Value], token: Optional[Token[_Value]], saved: _Value
+) -> None:
+    try:
+        assert token is not None
+        var.reset(token)
+    except ValueError:
+        # The block exited in another context than it entered (e.g. an async generator resumed by another task).
+        var.set(saved)
+
+
+def _reject_reuse(manager: object, active: bool) -> None:
+    if active:
+        raise DBOSException(
+            f"This {type(manager).__name__} is already in use; create a new one for each with block."
+        )
+
+
+@dataclass
+class _AuthScope:
+    """The identity of one DBOSContextSetAuth block, shared by everything running inside it."""
+
+    user: Optional[str]
+    roles: Optional[List[str]]
+
+
+# Innermost DBOSContextSetAuth block's identity scope, task-local; None means the DBOSContext is the scope.
+_auth_scope_var: ContextVar[Optional[_AuthScope]] = ContextVar(
+    "dbos_auth_scope", default=None
+)
+
+
+def get_authentication(ctx: Optional[DBOSContext] = None) -> Authentication:
+    """The identity code running under ctx (by default, the current context) acts as."""
+    current = get_local_dbos_context()
+    if ctx is None:
+        ctx = current
+        if ctx is None:
+            return _NO_AUTHENTICATION
+    scope = _auth_scope_var.get() if ctx is current else None
+    if scope is not None:
+        return Authentication(scope.user, scope.roles, ctx.assumed_role)
+    return Authentication(
+        ctx.authenticated_user, ctx.authenticated_roles, ctx.assumed_role
+    )
+
+
+def set_current_authentication(user: Optional[str], roles: Optional[List[str]]) -> None:
+    """Change the identity of the innermost scope: the enclosing DBOSContextSetAuth block,
+    else the current context."""
+    ctx = assert_current_dbos_context()
+    scope = _auth_scope_var.get()
+    if scope is not None:
+        scope.user = user
+        scope.roles = roles
+    else:
+        ctx.authenticated_user = user
+        ctx.authenticated_roles = roles
 
 
 def current_owner_xid(
@@ -497,6 +586,44 @@ class DBOSContextEnsure:
         return False  # Did not handle
 
 
+class _WorkflowStartOptionsBlock:
+    """Base for the Set* context managers: overrides WorkflowStartOptions fields within the block."""
+
+    def __init__(self) -> None:
+        self._token: Optional[Token[WorkflowStartOptions]] = None
+        self._saved: WorkflowStartOptions = _NO_START_OPTIONS
+        self._created_ctx = False
+
+    def _overrides(self) -> Dict[str, Any]:
+        raise NotImplementedError
+
+    def __enter__(self: _Block) -> _Block:
+        _reject_reuse(self, self._token is not None)
+        options = replace(_workflow_start_options_var.get(), **self._overrides())
+        # Ensure a context, so DBOS context accessors work inside the block.
+        self._created_ctx = get_local_dbos_context() is None
+        if self._created_ctx:
+            _set_local_dbos_context(DBOSContext())
+        self._saved = _workflow_start_options_var.get()
+        self._token = _workflow_start_options_var.set(options)
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> Literal[False]:
+        token, self._token = self._token, None
+        _reset_context_var(_workflow_start_options_var, token, self._saved)
+        if self._created_ctx:
+            _clear_local_dbos_context()
+        return False  # Did not handle
+
+
+_Block = TypeVar("_Block", bound=_WorkflowStartOptionsBlock)
+
+
 def validate_workflow_id(workflow_id: Optional[str]) -> None:
     """Reject empty or whitespace-only workflow IDs."""
     if workflow_id is None or not workflow_id.strip():
@@ -518,7 +645,7 @@ def validate_workflow_id_reuse_policy(
         )
 
 
-class SetWorkflowID:
+class SetWorkflowID(_WorkflowStartOptionsBlock):
     """
     Set the workflow ID to be used for the enclosed workflow invocation. Note: Only the first workflow will be started with the specified workflow ID within a `with SetWorkflowID` block.
 
@@ -543,36 +670,17 @@ class SetWorkflowID:
     ) -> None:
         validate_workflow_id(wfid)
         validate_workflow_id_reuse_policy(workflow_id_reuse_policy)
-        self.created_ctx = False
+        super().__init__()
         self.wfid = wfid
         self.workflow_id_reuse_policy = workflow_id_reuse_policy
 
-    def __enter__(self) -> SetWorkflowID:
-        # Code to create a basic context
-        ctx = get_local_dbos_context()
-        if ctx is None:
-            self.created_ctx = True
-            _set_local_dbos_context(DBOSContext())
-        ctx = assert_current_dbos_context()
-        ctx.id_assigned_for_next_workflow = self.wfid
-        ctx.workflow_id_reuse_policy = self.workflow_id_reuse_policy
-        ctx.is_within_set_workflow_id_block = True
-        return self
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> Literal[False]:
-        # Code to clean up the basic context if we created it
-        assert_current_dbos_context().is_within_set_workflow_id_block = False
-        if self.created_ctx:
-            _clear_local_dbos_context()
-        return False  # Did not handle
+    def _overrides(self) -> Dict[str, Any]:
+        return {
+            "assigned_id": AssignedWorkflowID(self.wfid, self.workflow_id_reuse_policy)
+        }
 
 
-class SetWorkflowTimeout:
+class SetWorkflowTimeout(_WorkflowStartOptionsBlock):
     """
     Set the workflow timeout (in seconds) to be used for the enclosed workflow invocations.
 
@@ -588,42 +696,18 @@ class SetWorkflowTimeout:
             raise Exception(
                 f"Invalid workflow timeout {workflow_timeout_sec}. Timeouts must be positive."
             )
-        self.created_ctx = False
+        super().__init__()
         self.workflow_timeout_ms = (
             int(workflow_timeout_sec * 1000)
             if workflow_timeout_sec is not None
             else None
         )
-        self.saved_workflow_timeout: Optional[int] = None
-        self.saved_workflow_deadline_epoch_ms: Optional[int] = None
 
-    def __enter__(self) -> SetWorkflowTimeout:
-        # Code to create a basic context
-        ctx = get_local_dbos_context()
-        if ctx is None:
-            self.created_ctx = True
-            _set_local_dbos_context(DBOSContext())
-        ctx = assert_current_dbos_context()
-        self.saved_workflow_timeout = ctx.workflow_timeout_ms
-        ctx.workflow_timeout_ms = self.workflow_timeout_ms
-        self.saved_workflow_deadline_epoch_ms = ctx.workflow_deadline_epoch_ms
-        ctx.workflow_deadline_epoch_ms = None
-        return self
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> Literal[False]:
-        assert_current_dbos_context().workflow_timeout_ms = self.saved_workflow_timeout
-        assert_current_dbos_context().workflow_deadline_epoch_ms = (
-            self.saved_workflow_deadline_epoch_ms
-        )
-        # Code to clean up the basic context if we created it
-        if self.created_ctx:
-            _clear_local_dbos_context()
-        return False  # Did not handle
+    def _overrides(self) -> Dict[str, Any]:
+        return {
+            "workflow_timeout_ms": self.workflow_timeout_ms,
+            "ignore_propagated_deadline": True,
+        }
 
 
 def validate_workflow_attributes(attributes: Optional[Dict[str, Any]]) -> None:
@@ -646,7 +730,7 @@ def validate_workflow_attributes(attributes: Optional[Dict[str, Any]]) -> None:
             ) from e
 
 
-class SetWorkflowAttributes:
+class SetWorkflowAttributes(_WorkflowStartOptionsBlock):
     """
     Set custom key-value attributes to be attached to workflows started or enqueued
     within the block. Attributes are recorded in the workflow status at creation and
@@ -662,32 +746,11 @@ class SetWorkflowAttributes:
 
     def __init__(self, attributes: Optional[Dict[str, Any]]) -> None:
         validate_workflow_attributes(attributes)
-        self.created_ctx = False
+        super().__init__()
         self.attributes = attributes
-        self.saved_attributes: Optional[Dict[str, Any]] = None
 
-    def __enter__(self) -> SetWorkflowAttributes:
-        # Code to create a basic context
-        ctx = get_local_dbos_context()
-        if ctx is None:
-            self.created_ctx = True
-            _set_local_dbos_context(DBOSContext())
-        ctx = assert_current_dbos_context()
-        self.saved_attributes = ctx.workflow_attributes
-        ctx.workflow_attributes = self.attributes
-        return self
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> Literal[False]:
-        assert_current_dbos_context().workflow_attributes = self.saved_attributes
-        # Code to clean up the basic context if we created it
-        if self.created_ctx:
-            _clear_local_dbos_context()
-        return False  # Did not handle
+    def _overrides(self) -> Dict[str, Any]:
+        return {"workflow_attributes": self.attributes}
 
 
 def inject_trace_context(context: "Optional[OtelContext]") -> Dict[str, str]:
@@ -747,7 +810,7 @@ def otel_carrier_from_attributes(
     return carrier if isinstance(carrier, dict) else None
 
 
-class PropagateOtelContext:
+class PropagateOtelContext(_WorkflowStartOptionsBlock):
     """
     Propagate the current OpenTelemetry context (or optionally, a passed-in context)
     to all workflows started or enqueued in this block so their spans join the caller's
@@ -766,53 +829,33 @@ class PropagateOtelContext:
     """
 
     def __init__(self, context: "Optional[OtelContext]" = None) -> None:
+        super().__init__()
         self.context = context
-        self.created_ctx = False
-        self.saved_carrier: Optional[Dict[str, str]] = None
 
-    def __enter__(self) -> PropagateOtelContext:
+    def _overrides(self) -> Dict[str, Any]:
         # Writes nothing when there is no valid context to propagate.
         carrier = inject_trace_context(self.context)
-        # Code to create a basic context
-        ctx = get_local_dbos_context()
-        if ctx is None:
-            self.created_ctx = True
-            _set_local_dbos_context(DBOSContext())
-        ctx = assert_current_dbos_context()
-        self.saved_carrier = ctx.otel_carrier
-        ctx.otel_carrier = carrier if carrier else None
-        return self
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> Literal[False]:
-        assert_current_dbos_context().otel_carrier = self.saved_carrier
-        # Code to clean up the basic context if we created it
-        if self.created_ctx:
-            _clear_local_dbos_context()
-        return False  # Did not handle
+        return {"otel_carrier": carrier if carrier else None}
 
 
 @contextmanager
 def restore_otel_carrier(carrier: Optional[Any]) -> Generator[None, None, None]:
-    """Put a carrier persisted by PropagateOtelContext back on the context.
+    """Put a carrier persisted by PropagateOtelContext back on the workflow start options.
 
     Dequeue and recovery rebuild the workflow status from a fresh context, so the stored
     carrier would not otherwise reach the executing workflow. Non-dict values are ignored.
     """
-    ctx = assert_current_dbos_context()
-    saved = ctx.otel_carrier
-    ctx.otel_carrier = carrier if isinstance(carrier, dict) else None
+    saved = _workflow_start_options_var.get()
+    token = _workflow_start_options_var.set(
+        replace(saved, otel_carrier=carrier if isinstance(carrier, dict) else None)
+    )
     try:
         yield
     finally:
-        assert_current_dbos_context().otel_carrier = saved
+        _reset_context_var(_workflow_start_options_var, token, saved)
 
 
-class SetEnqueueOptions:
+class SetEnqueueOptions(_WorkflowStartOptionsBlock):
     """
     Set the workflow enqueue options for the enclosed enqueue operation.
 
@@ -833,69 +876,34 @@ class SetEnqueueOptions:
         delay_seconds: Optional[float] = None,
         duplication_policy: Optional[DuplicationPolicy] = None,
     ) -> None:
-        self.created_ctx = False
+        super().__init__()
         self.deduplication_id: Optional[str] = deduplication_id
-        self.saved_deduplication_id: Optional[str] = None
         self.duplication_policy: Optional[DuplicationPolicy] = duplication_policy
-        self.saved_duplication_policy: Optional[DuplicationPolicy] = None
         if priority is not None and (priority < MinPriority or priority > MaxPriority):
             raise Exception(
                 f"Invalid priority {priority}. Priority must be between {MinPriority}~{MaxPriority}."
             )
         self.priority: Optional[int] = priority
-        self.saved_priority: Optional[int] = None
         self.app_version: Optional[str] = app_version
-        self.saved_app_version: Optional[str] = None
         self.queue_partition_key = queue_partition_key
-        self.saved_queue_partition_key: Optional[str] = None
         self.delay_until_epoch_ms: Optional[int] = (
             int((time.time() + delay_seconds) * 1000)
             if delay_seconds is not None
             else None
         )
-        self.saved_delay_until_epoch_ms: Optional[int] = None
 
-    def __enter__(self) -> SetEnqueueOptions:
-        # Code to create a basic context
-        ctx = get_local_dbos_context()
-        if ctx is None:
-            self.created_ctx = True
-            _set_local_dbos_context(DBOSContext())
-        ctx = assert_current_dbos_context()
-        self.saved_deduplication_id = ctx.deduplication_id
-        ctx.deduplication_id = self.deduplication_id
-        self.saved_duplication_policy = ctx.duplication_policy
-        ctx.duplication_policy = self.duplication_policy
-        self.saved_priority = ctx.priority
-        ctx.priority = self.priority
-        self.saved_app_version = ctx.app_version
-        ctx.app_version = self.app_version
-        self.saved_queue_partition_key = ctx.queue_partition_key
-        ctx.queue_partition_key = self.queue_partition_key
-        self.saved_delay_until_epoch_ms = ctx.delay_until_epoch_ms
-        ctx.delay_until_epoch_ms = self.delay_until_epoch_ms
-        return self
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> Literal[False]:
-        curr_ctx = assert_current_dbos_context()
-        curr_ctx.deduplication_id = self.saved_deduplication_id
-        curr_ctx.duplication_policy = self.saved_duplication_policy
-        curr_ctx.priority = self.saved_priority
-        curr_ctx.app_version = self.saved_app_version
-        curr_ctx.queue_partition_key = self.saved_queue_partition_key
-        curr_ctx.delay_until_epoch_ms = self.saved_delay_until_epoch_ms
-        # Code to clean up the basic context if we created it
-        if self.created_ctx:
-            _clear_local_dbos_context()
-        return False
+    def _overrides(self) -> Dict[str, Any]:
+        return {
+            "deduplication_id": self.deduplication_id,
+            "duplication_policy": self.duplication_policy,
+            "priority": self.priority,
+            "app_version": self.app_version,
+            "queue_partition_key": self.queue_partition_key,
+            "delay_until_epoch_ms": self.delay_until_epoch_ms,
+        }
 
 
-class SetShardKey:
+class SetShardKey(_WorkflowStartOptionsBlock):
     """Set the shard key of every workflow started, enqueued, or called in the block.
     Required on a sharded system database; a workflow never inherits its caller's key.
     """
@@ -903,42 +911,23 @@ class SetShardKey:
     def __init__(self, shard_key: str) -> None:
         if not shard_key:
             raise ValueError("shard_key must be a non-empty string")
-        self.created_ctx = False
+        super().__init__()
         self.shard_key = shard_key
-        self.saved_shard_key: Optional[str] = None
 
-    def __enter__(self) -> SetShardKey:
-        ctx = get_local_dbos_context()
-        if ctx is None:
-            self.created_ctx = True
-            _set_local_dbos_context(DBOSContext())
-        ctx = assert_current_dbos_context()
-        self.saved_shard_key = ctx.shard_key_for_next_workflow
-        ctx.shard_key_for_next_workflow = self.shard_key
-        return self
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> Literal[False]:
-        assert_current_dbos_context().shard_key_for_next_workflow = self.saved_shard_key
-        if self.created_ctx:
-            _clear_local_dbos_context()
-        return False
+    def _overrides(self) -> Dict[str, Any]:
+        return {"shard_key": self.shard_key}
 
 
-class SetWorkflowDebounce:
+class SetWorkflowDebounce(_WorkflowStartOptionsBlock):
     """Internal: mark the next enqueued workflow as debounced.
 
     Sets the deduplication ID (a debounce key), the initial delay, the absolute
     debounce deadline, the is_debounced flag, and the application the debounce
-    acts for on the context, restoring them on exit. Unlike SetEnqueueOptions,
-    it leaves priority/app_version/partition untouched so a debounced workflow
-    still inherits the caller's other options.
+    acts for on the workflow start options, restoring them on exit. Unlike
+    SetEnqueueOptions, it leaves priority/app_version/partition untouched so a
+    debounced workflow still inherits the caller's other options.
 
-    It also clears any propagated workflow deadline: a debounce called inside a
+    It also drops any propagated workflow deadline: a debounce called inside a
     workflow that has a timeout would otherwise pass that workflow's absolute
     deadline to the debounced workflow, which — because a debounce delay can be
     long — could expire before the debounced workflow ever runs. The debounced
@@ -954,55 +943,22 @@ class SetWorkflowDebounce:
         debounce_deadline_epoch_ms: Optional[int],
         application_name: Optional[str] = None,
     ) -> None:
-        self.created_ctx = False
+        super().__init__()
         self.deduplication_id = deduplication_id
         self.delay_until_epoch_ms = delay_until_epoch_ms
         self.debounce_deadline_epoch_ms = debounce_deadline_epoch_ms
         self.application_name = application_name
-        self.saved_deduplication_id: Optional[str] = None
-        self.saved_delay_until_epoch_ms: Optional[int] = None
-        self.saved_debounce_deadline_epoch_ms: Optional[int] = None
-        self.saved_is_debounced: bool = False
-        self.saved_workflow_deadline_epoch_ms: Optional[int] = None
-        self.saved_debounce_application_name: Optional[str] = None
 
-    def __enter__(self) -> SetWorkflowDebounce:
-        ctx = get_local_dbos_context()
-        if ctx is None:
-            self.created_ctx = True
-            _set_local_dbos_context(DBOSContext())
-        ctx = assert_current_dbos_context()
-        self.saved_deduplication_id = ctx.deduplication_id
-        self.saved_delay_until_epoch_ms = ctx.delay_until_epoch_ms
-        self.saved_debounce_deadline_epoch_ms = ctx.debounce_deadline_epoch_ms
-        self.saved_is_debounced = ctx.is_debounced
-        self.saved_workflow_deadline_epoch_ms = ctx.workflow_deadline_epoch_ms
-        self.saved_debounce_application_name = ctx.debounce_application_name
-        ctx.deduplication_id = self.deduplication_id
-        ctx.delay_until_epoch_ms = self.delay_until_epoch_ms
-        ctx.debounce_deadline_epoch_ms = self.debounce_deadline_epoch_ms
-        ctx.is_debounced = True
-        ctx.debounce_application_name = self.application_name
-        # Don't inherit the caller workflow's deadline onto the debounced workflow.
-        ctx.workflow_deadline_epoch_ms = None
-        return self
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> Literal[False]:
-        curr_ctx = assert_current_dbos_context()
-        curr_ctx.deduplication_id = self.saved_deduplication_id
-        curr_ctx.delay_until_epoch_ms = self.saved_delay_until_epoch_ms
-        curr_ctx.debounce_deadline_epoch_ms = self.saved_debounce_deadline_epoch_ms
-        curr_ctx.is_debounced = self.saved_is_debounced
-        curr_ctx.workflow_deadline_epoch_ms = self.saved_workflow_deadline_epoch_ms
-        curr_ctx.debounce_application_name = self.saved_debounce_application_name
-        if self.created_ctx:
-            _clear_local_dbos_context()
-        return False
+    def _overrides(self) -> Dict[str, Any]:
+        return {
+            "deduplication_id": self.deduplication_id,
+            "delay_until_epoch_ms": self.delay_until_epoch_ms,
+            "debounce_deadline_epoch_ms": self.debounce_deadline_epoch_ms,
+            "is_debounced": True,
+            "debounce_application_name": self.application_name,
+            # Don't inherit the caller workflow's deadline onto the debounced workflow.
+            "ignore_propagated_deadline": True,
+        }
 
 
 class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
@@ -1010,44 +966,30 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         self, attributes: TracedAttributes, ctx: Optional[DBOSContext]
     ) -> None:
         self.attributes = attributes
-        self.saved_workflow_timeout: Optional[int] = None
-        self.saved_deduplication_id: Optional[str] = None
-        self.saved_duplication_policy: Optional[DuplicationPolicy] = None
-        self.saved_priority: Optional[int] = None
-        self.saved_shard_key: Optional[str] = None
-        self.saved_is_within_set_workflow_id_block: bool = False
         self.use_ctx = ctx
         self.prev_ctx: Optional[DBOSContext] = None
         self.shard_key_tokens: Optional[Any] = None
+        self.start_options_token: Optional[Token[WorkflowStartOptions]] = None
+        self.saved_start_options: WorkflowStartOptions = _NO_START_OPTIONS
+        self.auth_token: Optional[Token[Optional[_AuthScope]]] = None
+        self.saved_auth: Optional[_AuthScope] = None
 
     def __enter__(self) -> DBOSContext:
         self.prev_ctx = get_local_dbos_context()
         # The body starts with no caller's shard keys; its own lives on the context.
         self.shard_key_tokens = clear_shard_key_state()
+        # Nor the caller's Set* options: they applied to this workflow, not its children.
+        self.saved_start_options = _workflow_start_options_var.get()
+        self.start_options_token = _workflow_start_options_var.set(_NO_START_OPTIONS)
+        # The body starts in its own context's identity scope.
+        self.saved_auth = _auth_scope_var.get()
+        self.auth_token = _auth_scope_var.set(None)
         # Create a basic context if none exists
         if self.use_ctx is None:
             self.use_ctx = DBOSContext()
         _set_local_dbos_context(self.use_ctx)
         ctx = self.use_ctx
         assert not ctx.is_within_workflow()
-        # Unset is_within_set_workflow_id_block as the workflow is not within a block
-        self.saved_is_within_set_workflow_id_block = ctx.is_within_set_workflow_id_block
-        ctx.is_within_set_workflow_id_block = False
-        # Unset the workflow_timeout_ms context var so it is not applied to this
-        # workflow's children (instead we propagate the deadline)
-        self.saved_workflow_timeout = ctx.workflow_timeout_ms
-        ctx.workflow_timeout_ms = None
-        # Unset the deduplication_id, duplication policy, and priority context vars so
-        # they are not applied to this workflow's children
-        self.saved_deduplication_id = ctx.deduplication_id
-        ctx.deduplication_id = None
-        self.saved_duplication_policy = ctx.duplication_policy
-        ctx.duplication_policy = None
-        self.saved_priority = ctx.priority
-        ctx.priority = None
-        # Nor the shard key set for the caller's next workflow.
-        self.saved_shard_key = ctx.shard_key_for_next_workflow
-        ctx.shard_key_for_next_workflow = None
         ctx.start_workflow(
             None, self.attributes
         )  # Will get from the context's next workflow ID
@@ -1063,19 +1005,16 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
         assert ctx == self.use_ctx
         assert ctx.is_within_workflow()
         ctx.end_workflow(exc_value)
-        # Restore is_within_set_workflow_id_block
-        ctx.is_within_set_workflow_id_block = self.saved_is_within_set_workflow_id_block
-        # Restore the saved workflow timeout
-        ctx.workflow_timeout_ms = self.saved_workflow_timeout
         # Clear any propagating timeout
         ctx.workflow_deadline_epoch_ms = None
-        # Restore the saved deduplication ID, duplication policy, and priority
-        ctx.priority = self.saved_priority
-        ctx.shard_key_for_next_workflow = self.saved_shard_key
-        ctx.deduplication_id = self.saved_deduplication_id
-        ctx.duplication_policy = self.saved_duplication_policy
         # Code to clean up the basic context if we created it
         _set_local_dbos_context(self.prev_ctx)
+        _reset_context_var(
+            _workflow_start_options_var,
+            self.start_options_token,
+            self.saved_start_options,
+        )
+        _reset_context_var(_auth_scope_var, self.auth_token, self.saved_auth)
         if self.shard_key_tokens is not None:
             restore_shard_key_state(self.shard_key_tokens)
         return False  # Did not handle
@@ -1086,12 +1025,22 @@ class EnterDBOSStepCtx:
         self.attributes = attributes
         self.prev_ctx: Optional[DBOSContext] = None
         self.use_ctx = ctx
+        self.auth_token: Optional[Token[Optional[_AuthScope]]] = None
+        self.saved_auth: Optional[_AuthScope] = None
+        self.start_options_token: Optional[Token[WorkflowStartOptions]] = None
+        self.saved_start_options: WorkflowStartOptions = _NO_START_OPTIONS
 
     def __enter__(self) -> DBOSContext:
         ctx = assert_current_dbos_context()
         assert ctx.is_workflow()
         self.prev_ctx = ctx
         _set_local_dbos_context(self.use_ctx)
+        # The step starts in its own context's identity scope.
+        self.saved_auth = _auth_scope_var.get()
+        self.auth_token = _auth_scope_var.set(None)
+        # The workflow's Set* options apply to the workflows it starts, not to its steps.
+        self.saved_start_options = _workflow_start_options_var.get()
+        self.start_options_token = _workflow_start_options_var.set(_NO_START_OPTIONS)
         self.use_ctx.start_step(self.use_ctx.function_id, attributes=self.attributes)
         return self.use_ctx
 
@@ -1105,6 +1054,12 @@ class EnterDBOSStepCtx:
         assert ctx.is_step()
         ctx.end_step(exc_value)
         _set_local_dbos_context(self.prev_ctx)
+        _reset_context_var(_auth_scope_var, self.auth_token, self.saved_auth)
+        _reset_context_var(
+            _workflow_start_options_var,
+            self.start_options_token,
+            self.saved_start_options,
+        )
         return False  # Did not handle
 
 
@@ -1137,18 +1092,17 @@ class DBOSContextSetAuth(DBOSContextEnsure):
         self.created_ctx = False
         self.user = user
         self.roles = roles
-        self.prev_user: Optional[str] = None
-        self.prev_roles: Optional[List[str]] = None
+        self.token: Optional[Token[Optional[_AuthScope]]] = None
+        self.saved_auth: Optional[_AuthScope] = None
 
     def __enter__(self) -> DBOSContext:
-        ctx = get_local_dbos_context()
-        if ctx is None:
-            self.created_ctx = True
+        _reject_reuse(self, self.token is not None)
+        self.created_ctx = get_local_dbos_context() is None
+        if self.created_ctx:
             _set_local_dbos_context(DBOSContext())
         ctx = assert_current_dbos_context()
-        self.prev_user = ctx.authenticated_user
-        self.prev_roles = ctx.authenticated_roles
-        ctx.set_authentication(self.user, self.roles)
+        self.saved_auth = _auth_scope_var.get()
+        self.token = _auth_scope_var.set(_AuthScope(self.user, self.roles))
         return ctx
 
     def __exit__(
@@ -1157,8 +1111,8 @@ class DBOSContextSetAuth(DBOSContextEnsure):
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> Literal[False]:
-        ctx = assert_current_dbos_context()
-        ctx.set_authentication(self.prev_user, self.prev_roles)
+        token, self.token = self.token, None
+        _reset_context_var(_auth_scope_var, token, self.saved_auth)
         # Clean up the basic context if we created it
         if self.created_ctx:
             _clear_local_dbos_context()
@@ -1166,6 +1120,10 @@ class DBOSContextSetAuth(DBOSContextEnsure):
 
 
 class DBOSAssumeRole:
+    """Internal: assume a role on the current context. Only applied around a whole workflow
+    body or a synchronous child/step context creation, so the role is execution identity.
+    """
+
     def __init__(self, assume_role: Optional[str]) -> None:
         self.prior_role: Optional[str] = None
         self.assume_role = assume_role
