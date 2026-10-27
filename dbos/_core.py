@@ -2145,33 +2145,61 @@ def workflow_wrapper(
             """
             try:
                 r = func()
+            except DBOSWorkflowSuspendedError:
+                # The child parked itself in the database. Wait for its outcome, as
+                # handle.get_result() does, instead of letting the error strand the parent.
+                return cast(R, await_suspended_child())
             except Exception as e:
+                record_child_outcome(None, e)
+                raise
+            record_child_outcome(r, None)
+            return r
+
+        def await_suspended_child() -> DeferredResult[Any]:
+            assert workflow_id is not None
+            deferred = _deferred_workflow_result(
+                dbos, workflow_id, shard_key=child_shard_key
+            )
+
+            def wait() -> Any:
+                try:
+                    r = deferred.resolve()
+                except Exception as e:
+                    record_child_outcome(None, e)
+                    raise
+                record_child_outcome(r, None)
+                return r
+
+            async def wait_async() -> Any:
+                try:
+                    r = await deferred.resolve_async()
+                except Exception as e:
+                    await asyncio.to_thread(record_child_outcome, None, e)
+                    raise
+                await asyncio.to_thread(record_child_outcome, r, None)
+                return r
+
+            return DeferredResult(wait, wait_async)
+
+        def record_child_outcome(r: Any, e: Optional[Exception]) -> None:
+            if e is not None:
+                serialized_r = None
                 serialized_e, serialization = serialize_exception(
                     e, None, dbos._serializer
                 )
-                assert workflow_id is not None
-                with bind_shard_keys({workflow_id: child_shard_key}):
-                    dbos._sys_db.record_get_result(
-                        workflow_id,
-                        None,
-                        serialized_e,
-                        serialization,
-                        resctx,
-                        started_at_epoch_ms=get_result_start_time,
-                    )
-                raise
-            serialized_r, serialization = serialize_value(r, None, dbos._serializer)
+            else:
+                serialized_e = None
+                serialized_r, serialization = serialize_value(r, None, dbos._serializer)
             assert workflow_id is not None
             with bind_shard_keys({workflow_id: child_shard_key}):
                 dbos._sys_db.record_get_result(
                     workflow_id,
                     serialized_r,
-                    None,
+                    serialized_e,
                     serialization,
                     resctx,
                     started_at_epoch_ms=get_result_start_time,
                 )
-            return r
 
         outcome = (
             wfOutcome.wrap(get_wf_invoke, dbos=dbos)
