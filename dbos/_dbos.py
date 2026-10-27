@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 import weakref
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from logging import Logger
 from typing import (
@@ -516,6 +516,29 @@ class StepReservation:
         )
 
 
+class _SharedExecutor(ThreadPoolExecutor):
+    """
+    Default executor for event loops DBOS doesn't own.
+
+    It runs work on the DBOS executor but ignores shutdown(). asyncio.run()
+    shuts down its loop's default executor on exit, and that must not shut
+    down the DBOS executor.
+    """
+
+    def __init__(self, executor: ThreadPoolExecutor) -> None:
+        # submit() is overridden, so this pool never starts a thread
+        super().__init__(max_workers=1)
+        self.executor = executor
+
+    def submit(
+        self, fn: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
+    ) -> Future[T]:
+        return self.executor.submit(fn, *args, **kwargs)
+
+    def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
+        pass
+
+
 class DBOS:
     """
     Main access class for DBOS functionality.
@@ -619,6 +642,7 @@ class DBOS:
         # Stop background threads (queue thread, pollers like the scheduler and Kafka, etc.)
         self.background_thread_stop_events: List[threading.Event] = []
         self._executor_field: Optional[ThreadPoolExecutor] = None
+        self._shared_executor_field: Optional[_SharedExecutor] = None
         self._background_threads: List[threading.Thread] = []
         # Set after the shutdown drain, so timeouts still fire while workflows finish.
         self._background_jobs_stop_event = threading.Event()
@@ -2607,7 +2631,13 @@ class DBOS:
         This function is called before the first call to asyncio.to_thread.
         """
         loop = asyncio.get_running_loop()
-        loop.set_default_executor(_get_dbos_instance()._executor)
+        dbos = _get_dbos_instance()
+        executor = dbos._executor
+        shared = dbos._shared_executor_field
+        if shared is None or shared.executor is not executor:
+            shared = _SharedExecutor(executor)
+            dbos._shared_executor_field = shared
+        loop.set_default_executor(shared)
 
     @classmethod
     def resume_workflow(
