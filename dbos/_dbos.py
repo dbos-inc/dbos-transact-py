@@ -31,6 +31,7 @@ from typing import (
     TypedDict,
     TypeVar,
     Union,
+    cast,
     overload,
 )
 from zoneinfo import ZoneInfo
@@ -151,14 +152,16 @@ from ._dbos_config import (
     process_config,
     translate_dbos_config_to_config_file,
 )
-from ._enterprise import AlertHandler, ConductorThread
+from ._enterprise import AlertHandler, ConductorThread, LargeObjects
 from ._error import (
     DBOSException,
     DBOSInitializationError,
+    DBOSLargeObjectStoreNotConfiguredError,
     DBOSNonExistentWorkflowError,
     DBOSPatchNondeterminismError,
 )
 from ._event_loop import BackgroundEventLoop
+from ._large_object import LargeObjectRef, LargeObjectStore
 from ._logger import (
     add_otlp_to_all_loggers,
     add_transformer_to_all_loggers,
@@ -204,6 +207,18 @@ def _get_or_create_dbos_registry() -> DBOSRegistry:
     if _dbos_global_registry is None:
         _dbos_global_registry = DBOSRegistry()
     return _dbos_global_registry
+
+
+def _large_object_owner(
+    ctx: Optional[DBOSContext], owner_workflow_id: Optional[str]
+) -> str:
+    if owner_workflow_id is not None:
+        return owner_workflow_id
+    if ctx is not None and ctx.is_within_workflow():
+        return ctx.workflow_id
+    raise DBOSException(
+        "store_large_object called outside a workflow requires an owner_workflow_id"
+    )
 
 
 def check_async(fn: str) -> None:
@@ -675,6 +690,10 @@ class DBOS:
         self._alert_handler: Optional[AlertHandler] = None
         serializer = config.get("serializer")
         self._serializer: Serializer = serializer if serializer else DefaultSerializer()
+        self._large_object_store: Optional[LargeObjectStore] = config.get(
+            "large_object_store"
+        )
+        self._large_objects_field: Optional[LargeObjects] = None
         self._conductor_executor_metadata: Optional[Dict[str, Any]] = config.get(
             "conductor_executor_metadata"
         )
@@ -740,6 +759,13 @@ class DBOS:
             raise DBOSException("Executor accessed before DBOS was launched")
         rv: ThreadPoolExecutor = self._executor_field
         return rv
+
+    def _large_objects(self) -> LargeObjects:
+        if self._large_object_store is None:
+            raise DBOSLargeObjectStoreNotConfiguredError(None, None)
+        if self._large_objects_field is None:
+            raise DBOSException("Large objects used before DBOS was launched")
+        return self._large_objects_field
 
     @property
     def _sys_db(self) -> SystemDatabase:
@@ -1034,6 +1060,17 @@ class DBOS:
                 )
                 self.auto_upgrader.start()
 
+            if self._large_object_store is not None:
+                self._large_objects_field = _enterprise.load(
+                    _enterprise.LARGE_OBJECTS.description
+                ).LargeObjects(
+                    self._sys_db,
+                    store=self._large_object_store,
+                    serializer=self._serializer,
+                )
+                # Collects objects whose owner workflow is gone.
+                self._large_objects_field.start()
+
             # Start the dynamic scheduler thread
             scheduler_polling_interval_sec: float = (
                 self._config.get("runtimeConfig", {}).get(
@@ -1153,6 +1190,8 @@ class DBOS:
         # The upgrader unlocks its per-application advisory lock before the system database engine is disposed.
         if self.auto_upgrader is not None:
             self.auto_upgrader.stop()
+        if self._large_objects_field is not None:
+            self._large_objects_field.stop()
         # Disconnect from Conductor only once the wait above is over, so the executor stays visibly alive to Conductor for its whole duration.
         if self.conductor_websocket is not None:
             self.conductor_websocket.stop()
@@ -2190,6 +2229,86 @@ class DBOS:
                     },
                 )
                 return done, pending
+
+    @classmethod
+    def store_large_object(
+        cls,
+        value: T,
+        *,
+        owner_workflow_id: Optional[str] = None,
+        serialization_type: Optional[
+            WorkflowSerializationFormat
+        ] = WorkflowSerializationFormat.DEFAULT,
+        name: Optional[str] = None,
+        shard_key: Optional[str] = None,
+    ) -> LargeObjectRef[T]:
+        """Upload a value to the configured large object store and return a small ref to it.
+        The object lives as long as its owner workflow: the current one by default, required outside a workflow.
+        """
+        check_async("store_large_object")
+        large_objects = _get_dbos_instance()._large_objects()
+        ctx = get_local_dbos_context()
+        owner = _large_object_owner(ctx, owner_workflow_id)
+        with bind_shard_keys({owner: shard_key}):
+            if ctx is not None and ctx.is_workflow():
+                return cls.run_step(
+                    {"name": "DBOS.storeLargeObject"},
+                    large_objects.store,
+                    value,
+                    owner_workflow_id=owner,
+                    serialization_type=serialization_type,
+                    name=name,
+                )
+            return large_objects.store(
+                value,
+                owner_workflow_id=owner,
+                serialization_type=serialization_type,
+                name=name,
+            )
+
+    @classmethod
+    async def store_large_object_async(
+        cls,
+        value: T,
+        *,
+        owner_workflow_id: Optional[str] = None,
+        serialization_type: Optional[
+            WorkflowSerializationFormat
+        ] = WorkflowSerializationFormat.DEFAULT,
+        name: Optional[str] = None,
+        shard_key: Optional[str] = None,
+    ) -> LargeObjectRef[T]:
+        """Upload a value to the configured large object store and return a small ref to it."""
+        large_objects = _get_dbos_instance()._large_objects()
+        ctx = get_local_dbos_context()
+        owner = _large_object_owner(ctx, owner_workflow_id)
+        with bind_shard_keys({owner: shard_key}):
+            if ctx is not None and ctx.is_workflow():
+                return await cls.run_step_async(
+                    {"name": "DBOS.storeLargeObject"},
+                    large_objects.store_async,
+                    value,
+                    owner_workflow_id=owner,
+                    serialization_type=serialization_type,
+                    name=name,
+                )
+            return await large_objects.store_async(
+                value,
+                owner_workflow_id=owner,
+                serialization_type=serialization_type,
+                name=name,
+            )
+
+    @classmethod
+    def get_large_object(cls, ref: LargeObjectRef[T]) -> T:
+        """Load the value a large object ref points to. Not a step, so a workflow body fetches it again on every replay."""
+        check_async("get_large_object")
+        return cast(T, _get_dbos_instance()._large_objects().get(ref))
+
+    @classmethod
+    async def get_large_object_async(cls, ref: LargeObjectRef[T]) -> T:
+        """Load the value a large object ref points to."""
+        return cast(T, await _get_dbos_instance()._large_objects().get_async(ref))
 
     @classmethod
     def set_event(

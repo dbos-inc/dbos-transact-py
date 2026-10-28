@@ -17,7 +17,10 @@ import pytest
 
 from dbos import DBOS, DBOSConfig
 from dbos import _enterprise as enterprise_module
-from dbos._error import DBOSInitializationError
+from dbos._error import (
+    DBOSInitializationError,
+    DBOSLargeObjectStoreNotConfiguredError,
+)
 from dbos._logger import dbos_logger
 from dbos._utils import GlobalParams
 
@@ -117,7 +120,12 @@ def test_cloud_always_requires_the_package(
 
 # A feature for exercising the check itself, entitled under a name Conductor may not know.
 SOME_FEATURE = enterprise_module.Feature("someFeature", "Some feature")
-ALL_ENTITLED = {"sharding": True, "autoUpgrade": True, "suspendWorkflows": True}
+ALL_ENTITLED = {
+    "sharding": True,
+    "autoUpgrade": True,
+    "suspendWorkflows": True,
+    "largeObjects": True,
+}
 
 
 class FakeConductor:
@@ -552,6 +560,9 @@ def test_config_turns_on_enterprise_features() -> None:
     assert enterprise_module.enabled_features({"sharding": True}) == [
         enterprise_module.SHARDING
     ]
+    assert enterprise_module.enabled_features({"large_object_store": object()}) == [
+        enterprise_module.LARGE_OBJECTS
+    ]
     # Every registered feature has a distinct entitlement name.
     names = [f.entitlement for f in enterprise_module.FEATURES]
     assert len(names) == len(set(names))
@@ -579,6 +590,48 @@ def test_an_auto_upgrading_executor_checks_its_entitlement(
         DBOS(config=upgrading)  # type: ignore[arg-type]
     DBOS.destroy(destroy_registry=True)
     assert conductor.requests == [("/v2/entitlements", "Bearer enterprise-key")]
+
+
+def test_large_object_store_checks_its_entitlement(
+    config: DBOSConfig, conductor: FakeConductor
+) -> None:
+    DBOS.destroy(destroy_registry=True)
+    store = object()
+    # Refused before the package is even loaded, so this holds without dbos-enterprise.
+    with pytest.raises(
+        DBOSInitializationError,
+        match=f": {enterprise_module.LARGE_OBJECTS.description} requires a DBOS key",
+    ):
+        DBOS(config={**config, "large_object_store": store})  # type: ignore[typeddict-item]
+    DBOS.destroy(destroy_registry=True)
+    storing = {
+        **config,
+        "large_object_store": store,
+        "transact_enterprise_key": "enterprise-key",
+        "conductor_url": conductor.url,
+    }
+    conductor.entitle(**{**ALL_ENTITLED, "largeObjects": False})
+    with pytest.raises(DBOSInitializationError, match="not entitled to largeObjects"):
+        DBOS(config=storing)  # type: ignore[arg-type]
+    DBOS.destroy(destroy_registry=True)
+    assert conductor.requests == [("/v2/entitlements", "Bearer enterprise-key")]
+
+
+def test_large_objects_need_a_store(dbos: DBOS) -> None:
+    with pytest.raises(DBOSLargeObjectStoreNotConfiguredError):
+        DBOS.store_large_object("value", owner_workflow_id="owner")
+    with pytest.raises(DBOSLargeObjectStoreNotConfiguredError):
+        DBOS.get_large_object(
+            {
+                "version": 1,
+                "store": "s3://bucket",
+                "key": "key",
+                "size": 0,
+                "sha256": "",
+                "serialization": "py_pickle",
+                "encoding": "raw",
+            }
+        )
 
 
 def test_sharded_executor_checks_its_entitlement(

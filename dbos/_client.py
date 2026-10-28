@@ -13,6 +13,7 @@ from typing import (
     Optional,
     TypeVar,
     Union,
+    cast,
 )
 from zoneinfo import ZoneInfo
 
@@ -47,12 +48,16 @@ if TYPE_CHECKING:
 
 from croniter import croniter
 
+from dbos import _enterprise
 from dbos._dbos_config import is_valid_database_url
+from dbos._enterprise import LargeObjects
 from dbos._error import (
     DBOSException,
+    DBOSLargeObjectStoreNotConfiguredError,
     DBOSNonExistentWorkflowError,
     DBOSQueueDeduplicatedError,
 )
+from dbos._large_object import LargeObjectRef, LargeObjectStore
 from dbos._scheduler import backfill_schedule, schedule_shard_key, trigger_schedule
 from dbos._serialization import (
     DefaultSerializer,
@@ -75,6 +80,7 @@ from dbos._sys_db import (
 from dbos._workflow_commands import fork_workflow, get_workflow, rewind_workflow
 
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
+T = TypeVar("T")
 
 
 class WorkflowHandleClientPolling(Generic[R]):
@@ -159,6 +165,7 @@ class DBOSClient:
         observability_query_timeout_sec: Optional[float] = None,
         sys_db_idle_transaction_timeout_sec: Optional[float] = None,
         sharding: bool = False,
+        large_object_store: Optional[LargeObjectStore] = None,
     ):
         """Create a client for interacting with a DBOS application from outside it.
 
@@ -184,6 +191,7 @@ class DBOSClient:
             retry_connection_errors (bool): Whether an operation that loses its database connection blocks and retries until the connection recovers. Defaults to True. Set to False to raise instead, so an unreachable database surfaces as an error rather than a wait.
             observability_query_timeout_sec (float): Statement timeout, in seconds, for read-only observability queries against the system database. Defaults to 30.0.
             sys_db_idle_transaction_timeout_sec (float): Postgres idle_in_transaction_session_timeout, in seconds, for the system database connections this client creates. Defaults to 60.0. Set to a non-positive value to leave the server's setting in place. Not applied to a custom system_database_engine.
+            large_object_store (LargeObjectStore): The object store for store_large_object and get_large_object. Must match the application's store. Requires Transact Enterprise.
 
         Raises:
             Exception: If the system database cannot be reached, unless lazy is True.
@@ -231,6 +239,13 @@ class DBOSClient:
             idle_transaction_timeout_sec=sys_db_idle_transaction_timeout_sec,
             sharding=sharding,
         )
+        self._large_objects_field: Optional[LargeObjects] = None
+        if large_object_store is not None:
+            self._large_objects_field = _enterprise.load(
+                _enterprise.LARGE_OBJECTS.description
+            ).LargeObjects(
+                self._sys_db, store=large_object_store, serializer=serializer
+            )
         self._notification_listener_thread: Optional[threading.Thread] = None
         if not lazy:
             self._sys_db.check_connection()
@@ -639,6 +654,60 @@ class DBOSClient:
                 workflow_ids, polling_interval_sec
             )
         return handle_map[completed_id]
+
+    def _large_objects(self) -> LargeObjects:
+        if self._large_objects_field is None:
+            raise DBOSLargeObjectStoreNotConfiguredError(None, None)
+        return self._large_objects_field
+
+    def store_large_object(
+        self,
+        value: T,
+        *,
+        owner_workflow_id: str,
+        serialization_type: Optional[
+            WorkflowSerializationFormat
+        ] = WorkflowSerializationFormat.DEFAULT,
+        name: Optional[str] = None,
+        shard_key: Optional[str] = None,
+    ) -> LargeObjectRef[T]:
+        """Upload a value to the large object store and return a small ref to it.
+        The object lives as long as the owner workflow, which need not exist yet."""
+        with bind_shard_keys({owner_workflow_id: shard_key}):
+            return self._large_objects().store(
+                value,
+                owner_workflow_id=owner_workflow_id,
+                serialization_type=serialization_type,
+                name=name,
+            )
+
+    async def store_large_object_async(
+        self,
+        value: T,
+        *,
+        owner_workflow_id: str,
+        serialization_type: Optional[
+            WorkflowSerializationFormat
+        ] = WorkflowSerializationFormat.DEFAULT,
+        name: Optional[str] = None,
+        shard_key: Optional[str] = None,
+    ) -> LargeObjectRef[T]:
+        """Upload a value to the large object store and return a small ref to it."""
+        with bind_shard_keys({owner_workflow_id: shard_key}):
+            return await self._large_objects().store_async(
+                value,
+                owner_workflow_id=owner_workflow_id,
+                serialization_type=serialization_type,
+                name=name,
+            )
+
+    def get_large_object(self, ref: LargeObjectRef[T]) -> T:
+        """Load the value a large object ref points to."""
+        return cast(T, self._large_objects().get(ref))
+
+    async def get_large_object_async(self, ref: LargeObjectRef[T]) -> T:
+        """Load the value a large object ref points to."""
+        return cast(T, await self._large_objects().get_async(ref))
 
     def send(
         self,

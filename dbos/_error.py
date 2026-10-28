@@ -69,6 +69,10 @@ class DBOSErrorCode(Enum):
     QueryTimeout = 26
     WorkflowIDInUse = 27
     StepNondeterminism = 28
+    LargeObjectStoreNotConfigured = 29
+    LargeObjectMissing = 30
+    LargeObjectIntegrity = 31
+    LargeObjectStoreFailed = 32
 
 
 #######################################
@@ -410,6 +414,75 @@ class DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(DBOSException):
     def __reduce__(self) -> Any:
         # Tell pickle how to reconstruct this object
         return (self.__class__, (self.workflow_id,))
+
+
+class DBOSLargeObjectStoreNotConfiguredError(DBOSException):
+    """Exception raised when no large object store is configured, or a ref names a different store than the configured one."""
+
+    def __init__(self, ref_store_id: Optional[str], configured_store_id: Optional[str]):
+        self.ref_store_id = ref_store_id
+        self.configured_store_id = configured_store_id
+        if configured_store_id is None:
+            msg = "Large objects require a large_object_store in the DBOS configuration or DBOSClient"
+        else:
+            msg = f"Large object belongs to store {ref_store_id}, but the configured store is {configured_store_id}"
+        super().__init__(
+            msg, dbos_error_code=DBOSErrorCode.LargeObjectStoreNotConfigured.value
+        )
+
+    def __reduce__(self) -> Any:
+        return (self.__class__, (self.ref_store_id, self.configured_store_id))
+
+
+class DBOSLargeObjectMissingError(DBOSException):
+    """Exception raised when a large object's ref is valid but its object no longer exists."""
+
+    def __init__(self, store_id: str, key: str):
+        self.store_id = store_id
+        self.key = key
+        super().__init__(
+            f"Large object {key} no longer exists in store {store_id}",
+            dbos_error_code=DBOSErrorCode.LargeObjectMissing.value,
+        )
+
+    def __reduce__(self) -> Any:
+        return (self.__class__, (self.store_id, self.key))
+
+
+class DBOSLargeObjectIntegrityError(DBOSException):
+    """Exception raised when a large object's stored bytes don't match its ref."""
+
+    def __init__(self, store_id: str, key: str, detail: str):
+        self.store_id = store_id
+        self.key = key
+        self.detail = detail
+        super().__init__(
+            f"Large object {key} in store {store_id} does not match its ref: {detail}",
+            dbos_error_code=DBOSErrorCode.LargeObjectIntegrity.value,
+        )
+
+    def __reduce__(self) -> Any:
+        return (self.__class__, (self.store_id, self.key, self.detail))
+
+
+class DBOSLargeObjectStoreError(DBOSException):
+    """Exception raised when a large object store keeps failing after retries; the store's error is its __cause__."""
+
+    def __init__(self, store_id: str, key: str, operation: str, detail: str):
+        self.store_id = store_id
+        self.key = key
+        self.operation = operation
+        self.detail = detail
+        super().__init__(
+            f"Large object store {store_id} failed to {operation} {key}: {detail}",
+            dbos_error_code=DBOSErrorCode.LargeObjectStoreFailed.value,
+        )
+
+    def __reduce__(self) -> Any:
+        return (
+            self.__class__,
+            (self.store_id, self.key, self.operation, self.detail),
+        )
 
 
 #######################################

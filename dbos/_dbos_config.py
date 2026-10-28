@@ -10,6 +10,7 @@ from sqlalchemy import make_url
 from dbos._serialization import Serializer
 
 from ._error import DBOSInitializationError
+from ._large_object import LargeObjectStore
 
 DBOS_CONFIG_PATH = "dbos-config.yaml"
 
@@ -46,6 +47,7 @@ class DBOSConfig(TypedDict, total=False):
         auto_upgrade_grace_sec (float): Seconds the latest application version must have been the latest before auto-upgrade re-enqueues PENDING workflows left on older versions, giving executors on those versions time to drain. ENQUEUED and DELAYED workflows are upgraded without waiting. Defaults to 0.0.
         enable_patching (bool): Deprecated. Pins the application version to "PATCHING_ENABLED" so every deployment shares one version.
         serializer (Serializer): A custom serializer and deserializer DBOS uses when storing program data in the system database
+        large_object_store (LargeObjectStore): The object store for values passed to DBOS.store_large_object. Requires Transact Enterprise.
         use_listen_notify (bool): Whether to use LISTEN/NOTIFY or polling to listen for notifications and events.  Defaults to True. As this affects migrations, may not be changed after the system database is first created.
         run_migrations (bool): Whether to create and migrate the system database on launch. Defaults to True. Set to False for a process that must not alter the schema, such as one whose database role cannot run DDL, or a deployment that migrates out of band with `dbos migrate`. Launch then verifies the schema instead: a system database that is missing, or behind the version this build requires, fails launch rather than being created or migrated.
         notification_listener_polling_interval_sec (float): Polling interval in seconds for the notification listener background process. Defaults to 1.0. Minimum value is 0.001. Lower values can speed up test execution.
@@ -86,6 +88,7 @@ class DBOSConfig(TypedDict, total=False):
     auto_upgrade_interval_sec: Optional[float]
     auto_upgrade_grace_sec: Optional[float]
     serializer: Optional[Serializer]
+    large_object_store: Optional[LargeObjectStore]
     enable_patching: Optional[bool]
     use_listen_notify: Optional[bool]
     # Use a sharded system database from dbos-enterprise; every workflow then lives under an explicit shard key.

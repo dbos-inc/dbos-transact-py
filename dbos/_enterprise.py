@@ -39,7 +39,8 @@ from ._utils import GlobalParams
 
 if TYPE_CHECKING:
     from ._dbos import DBOS
-    from ._serialization import Serializer
+    from ._large_object import LargeObjectRef, LargeObjectStore
+    from ._serialization import Serializer, WorkflowSerializationFormat
     from ._sys_db import SystemDatabase
 
 # Receives a Conductor alert as (name, message, metadata).
@@ -101,6 +102,48 @@ class ShardedSystemDatabaseFactory(Protocol):
     ) -> "SystemDatabase": ...
 
 
+class LargeObjects(Protocol):
+    """Stores and loads large objects for one DBOS instance or client. Shard keys
+    come from the caller's bindings, as for any other workflow-addressed write."""
+
+    def store(
+        self,
+        value: Any,
+        *,
+        owner_workflow_id: str,
+        serialization_type: Optional["WorkflowSerializationFormat"],
+        name: Optional[str],
+    ) -> "LargeObjectRef[Any]": ...
+
+    async def store_async(
+        self,
+        value: Any,
+        *,
+        owner_workflow_id: str,
+        serialization_type: Optional["WorkflowSerializationFormat"],
+        name: Optional[str],
+    ) -> "LargeObjectRef[Any]": ...
+
+    def get(self, ref: "LargeObjectRef[Any]") -> Any: ...
+
+    async def get_async(self, ref: "LargeObjectRef[Any]") -> Any: ...
+
+    # Background garbage collection, run by DBOS instances but not clients.
+    def start(self) -> None: ...
+
+    def stop(self) -> None: ...
+
+
+class LargeObjectsFactory(Protocol):
+    def __call__(
+        self,
+        sys_db: "SystemDatabase",
+        *,
+        store: "LargeObjectStore",
+        serializer: "Serializer",
+    ) -> LargeObjects: ...
+
+
 class Enterprise(Protocol):
     """What the top-level dbos_enterprise module must provide."""
 
@@ -113,6 +156,9 @@ class Enterprise(Protocol):
 
     @property
     def ShardedSystemDatabase(self) -> ShardedSystemDatabaseFactory: ...
+
+    @property
+    def LargeObjects(self) -> LargeObjectsFactory: ...
 
 
 # What needs the package without being an entitlement, for load()'s messages.
@@ -133,9 +179,12 @@ AUTO_UPGRADE = Feature(
     "autoUpgrade", "Auto-upgrading workflows", config_key="auto_upgrade"
 )
 SHARDING = Feature("sharding", "Using a sharded system database", config_key="sharding")
+LARGE_OBJECTS = Feature(
+    "largeObjects", "Storing large objects", config_key="large_object_store"
+)
 
 # Every entitled feature; a new one is a Feature here, named by Conductor's camelCase key.
-FEATURES: Tuple[Feature, ...] = (AUTO_UPGRADE, SHARDING)
+FEATURES: Tuple[Feature, ...] = (AUTO_UPGRADE, SHARDING, LARGE_OBJECTS)
 
 
 def enabled_features(config: Mapping[str, object]) -> List[Feature]:
