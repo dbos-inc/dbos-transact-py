@@ -1428,6 +1428,47 @@ def get_dbos_migration_hundredtwentynine(quoted_schema: str, is_cockroach: bool)
     return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_deadline" ON {quoted_schema}."workflow_status" ("workflow_deadline_epoch_ms") WHERE "status" IN (\'ENQUEUED\', \'PENDING\', \'DELAYED\', \'SUSPENDED\') AND "workflow_deadline_epoch_ms" IS NOT NULL'
 
 
+def get_dbos_migration_hundredthirty(quoted_schema: str, is_cockroach: bool) -> str:
+    # send_message also wakes a SUSPENDED recv on its topic, as every SDK send does.
+    migration = f"""
+CREATE OR REPLACE FUNCTION {quoted_schema}.send_message(
+    destination_id TEXT,
+    message JSON,
+    topic TEXT DEFAULT NULL,
+    message_id TEXT DEFAULT NULL
+) RETURNS VOID AS $$
+DECLARE
+    v_topic TEXT := COALESCE(topic, '__null__topic__');
+    v_message_id TEXT := COALESCE(message_id, gen_random_uuid()::TEXT);
+BEGIN
+    INSERT INTO {quoted_schema}.notifications (
+        destination_uuid, topic, message, message_uuid, serialization
+    ) VALUES (
+        destination_id, v_topic, message, v_message_id, 'portable_json'
+    )
+    ON CONFLICT (message_uuid) DO NOTHING;
+    UPDATE {quoted_schema}.workflow_status
+    SET delay_until_epoch_ms = 0
+    WHERE workflow_uuid = destination_id
+        AND status = 'SUSPENDED'
+        AND suspend_key = v_topic;
+EXCEPTION
+    WHEN foreign_key_violation THEN
+        RAISE EXCEPTION 'DBOS non-existent workflow'
+            USING DETAIL = format('Destination workflow %s does not exist', destination_id),
+                ERRCODE = 'foreign_key_violation';
+END;
+$$ LANGUAGE plpgsql;
+"""
+    if not is_cockroach:
+        migration += f"""
+ALTER FUNCTION {quoted_schema}.send_message(
+    TEXT, JSON, TEXT, TEXT
+) SET search_path = pg_catalog, pg_temp;
+"""
+    return migration
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -1514,6 +1555,7 @@ def get_dbos_migrations(
         get_dbos_migration_hundredtwentyseven(quoted_schema, is_cockroach),
         get_dbos_migration_hundredtwentyeight(quoted_schema, is_cockroach),
         get_dbos_migration_hundredtwentynine(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredthirty(quoted_schema, is_cockroach),
     ]
 
 
@@ -2014,4 +2056,6 @@ sqlite_migrations = [
     sqlite_migration_hundredtwentyseven,
     sqlite_migration_hundredtwentyeight,
     sqlite_migration_hundredtwentynine,
+    # Postgres migration 130 rewrites a stored function; SQLite has none.
+    "",
 ]

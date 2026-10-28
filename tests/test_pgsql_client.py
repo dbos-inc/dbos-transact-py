@@ -498,6 +498,62 @@ def test_pgsql_send_idempotent(
     assert result == message
 
 
+def test_pgsql_send_wakes_suspended_receiver(
+    dbos: DBOS, config: DBOSConfig, skip_with_sqlite: None
+) -> None:
+    """send_message wakes a SUSPENDED recv on its topic, as an SDK send does. Parks
+    finished workflows by hand, as dbos-enterprise's recv would."""
+    engine = _get_db_connection(config)
+    schema = _get_schema_name(config)
+    deadline_ms = 2**62
+
+    @DBOS.workflow()
+    def parked() -> None:
+        pass
+
+    def park(topic: str) -> str:
+        wfid = str(uuid.uuid4())
+        with SetWorkflowID(wfid):
+            parked()
+        _execute_sql(
+            engine,
+            f"""UPDATE "{schema}".workflow_status
+            SET status = 'SUSPENDED', suspend_key = :topic, delay_until_epoch_ms = :deadline
+            WHERE workflow_uuid = :wfid""",
+            {"topic": topic, "deadline": deadline_ms, "wfid": wfid},
+        )
+        return wfid
+
+    def send(wfid: str, topic: Optional[str]) -> None:
+        _execute_sql(
+            engine,
+            f"""SELECT "{schema}".send_message(
+                destination_id => :dest_id, message => :message, topic => :topic
+            )""",
+            {"dest_id": wfid, "message": json.dumps("m"), "topic": topic},
+        )
+
+    def delay(wfid: str) -> int:
+        row = _execute_sql(
+            engine,
+            f"""SELECT delay_until_epoch_ms FROM "{schema}".workflow_status
+            WHERE workflow_uuid = :wfid""",
+            {"wfid": wfid},
+        )
+        return int(row[0])
+
+    on_topic = park("approve")
+    send(on_topic, "other")
+    assert delay(on_topic) == deadline_ms
+    send(on_topic, "approve")
+    assert delay(on_topic) == 0
+
+    # A null topic matches a recv waiting with no topic.
+    no_topic = park("__null__topic__")
+    send(no_topic, None)
+    assert delay(no_topic) == 0
+
+
 def test_pgsql_enqueue_with_deduplication(
     dbos: DBOS, config: DBOSConfig, skip_with_sqlite: None
 ) -> None:
