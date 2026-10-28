@@ -81,17 +81,17 @@ def _count_replays(
     if inspect.iscoroutinefunction(real_replay):
 
         async def counting_replay_async(
-            workflow_id: str, step_id: int, type_hint: Any
+            workflow_id: str, step_id: int, func: Any
         ) -> Any:
             replays["n"] += 1
-            return await real_replay(workflow_id, step_id, type_hint)
+            return await real_replay(workflow_id, step_id, func)
 
         monkeypatch.setattr(ds, "_replay_conflicting_step", counting_replay_async)
         return
 
-    def counting_replay(workflow_id: str, step_id: int, type_hint: Any) -> Any:
+    def counting_replay(workflow_id: str, step_id: int, func: Any) -> Any:
         replays["n"] += 1
-        return real_replay(workflow_id, step_id, type_hint)
+        return real_replay(workflow_id, step_id, func)
 
     monkeypatch.setattr(ds, "_replay_conflicting_step", counting_replay)
 
@@ -2330,6 +2330,9 @@ class Stamped:
     at: datetime
 
 
+_STAMP = Stamped("x", datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
+
+
 def test_sync_ds_replays_typed_portable_output(
     config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
 ) -> None:
@@ -2343,16 +2346,15 @@ def test_sync_ds_replays_typed_portable_output(
     calls = 0
 
     @ds.transaction
-    def stamp(label: str) -> Stamped:
+    def stamp() -> Stamped:
         nonlocal calls
         calls += 1
-        return Stamped(label, datetime(2026, 1, 1, 12, 0))
+        return _STAMP
 
     @DBOS.workflow()
     def typed_workflow() -> str:
-        stamped = stamp("x")
-        # Live and replayed alike: the annotated type, with the datetime normalized to UTC.
-        assert stamped == Stamped("x", datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
+        stamped = stamp()
+        assert stamped == _STAMP
         return stamped.label
 
     try:
@@ -2368,3 +2370,76 @@ def test_sync_ds_replays_typed_portable_output(
         DBOS.destroy(destroy_registry=True)
         if ds.created_engine:
             ds.engine.dispose()
+
+
+def test_ds_step_checkpoint_replays_typed_under_portable_app(
+    config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
+) -> None:
+    DBOS.destroy(destroy_registry=True)
+    ds = SQLAlchemyDatasource.create(f"sqlite:///{tmp_path}/ds_app_typed.sqlite")
+    config["serializer"] = DBOSPortableJSONSerializer()
+    dbos = DBOS(config=config)
+    DBOS.launch()
+    calls = 0
+
+    @ds.transaction
+    def stamp() -> Stamped:
+        nonlocal calls
+        calls += 1
+        return _STAMP
+
+    @DBOS.workflow()
+    def typed_workflow() -> str:
+        stamped = stamp()
+        # The system database's step checkpoint decodes to the transaction's own return type.
+        assert stamped == _STAMP
+        return stamped.label
+
+    try:
+        handle = DBOS.start_workflow(typed_workflow)
+        assert handle.get_result() == "x"
+        assert reexecute_workflow_by_id(dbos, handle.workflow_id).get_result() == "x"
+        assert calls == 1
+    finally:
+        DBOS.destroy(destroy_registry=True)
+        if ds.created_engine:
+            ds.engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_async_ds_replays_typed_portable_output(
+    config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
+) -> None:
+    DBOS.destroy(destroy_registry=True)
+    ds = await AsyncSQLAlchemyDatasource.create(
+        f"sqlite+aiosqlite:///{tmp_path}/ds_async_typed.sqlite",
+        serializer=DBOSPortableJSONSerializer(),
+    )
+    dbos = DBOS(config=config)
+    DBOS.launch()
+    calls = 0
+
+    @ds.transaction
+    async def stamp() -> Stamped:
+        nonlocal calls
+        calls += 1
+        return _STAMP
+
+    @DBOS.workflow()
+    async def typed_workflow() -> str:
+        stamped = await stamp()
+        assert stamped == _STAMP
+        return stamped.label
+
+    try:
+        wfid = str(uuid.uuid4())
+        with SetWorkflowID(wfid):
+            assert await typed_workflow() == "x"
+        await asyncio.to_thread(dbos._sys_db.delete_workflows, [wfid])
+        with SetWorkflowID(wfid):
+            assert await typed_workflow() == "x"
+        assert calls == 1
+    finally:
+        DBOS.destroy(destroy_registry=True)
+        if ds.created_engine:
+            await ds.engine.dispose()

@@ -105,10 +105,10 @@ from ._serialization import (
     WorkflowInputs,
     WorkflowSerializationFormat,
     _safe_str,
-    as_replayed,
     deserialize_args,
     deserialize_exception,
     deserialize_value,
+    reads_type_hints,
     serialize_args,
     serialize_exception,
     serialize_value,
@@ -125,7 +125,6 @@ from ._sys_db import (
     WorkflowStatusInternal,
     WorkflowStatusString,
     _dbos_stream_closed_sentinel,
-    _no_stream_value,
     is_serialized_stream_closed_sentinel,
     is_stream_closed_sentinel,
     workflow_is_active,
@@ -223,8 +222,12 @@ class WorkflowHandleFuture(Generic[R]):
                 r = self.future.result()
                 # An explicit type decodes the stored result, as a polling handle does.
                 if result_type is not None:
+                    # The row exists, since the workflow finished, so a deleted one fails fast.
                     r = self.dbos._sys_db.await_workflow_result(
-                        self.workflow_id, polling_interval_sec, result_type=result_type
+                        self.workflow_id,
+                        polling_interval_sec,
+                        fail_if_missing=True,
+                        result_type=result_type,
                     )
             # If the handle was cancelled, check the database
             except (DBOSWorkflowCancelledError, DBOSAwaitedWorkflowCancelledError):
@@ -360,8 +363,12 @@ class WorkflowHandleAsyncTask(Generic[R]):
                 r = await asyncio.shield(self.task)
                 # An explicit type decodes the stored result, as a polling handle does.
                 if result_type is not None:
+                    # The row exists, since the workflow finished, so a deleted one fails fast.
                     r = await self.dbos._sys_db.await_workflow_result_async(
-                        self.workflow_id, polling_interval_sec, result_type=result_type
+                        self.workflow_id,
+                        polling_interval_sec,
+                        fail_if_missing=True,
+                        result_type=result_type,
                     )
             # If the handle was cancelled, check the database
             except (DBOSWorkflowCancelledError, DBOSAwaitedWorkflowCancelledError):
@@ -2283,7 +2290,9 @@ def workflow_wrapper(
                         started_at_epoch_ms=get_result_start_time,
                     )
                 raise
-            serialized_r, serialization = serialize_value(r, None, dbos._serializer)
+            serialized_r, serialization = serialize_value_or_portable(
+                r, dbos._serializer
+            )
             assert workflow_id is not None
             with bind_shard_keys({workflow_id: child_shard_key}):
                 dbos._sys_db.record_get_result(
@@ -2586,8 +2595,6 @@ def invoke_step(
             max_retry_interval_seconds,
         )
 
-    step_func = func
-
     def record_step_result(func: Callable[[], R]) -> R:
         ctx = assert_current_dbos_context()
         step_output: OperationResultInternal = {
@@ -2619,15 +2626,7 @@ def invoke_step(
         step_output["output"] = serialized_r
         step_output["serialization"] = serialization
         dbos._sys_db.record_operation_result(step_output)
-        return cast(
-            R,
-            as_replayed(
-                output,
-                serialized_r,
-                serialization,
-                get_func_type_hints(step_func).return_hint,
-            ),
-        )
+        return output
 
     def check_existing_result() -> Union[NoResult, R]:
         ctx = assert_current_dbos_context()
@@ -2646,13 +2645,19 @@ def invoke_step(
                 )
                 raise deserialized_error
             elif recorded_output["output"] is not None:
+                serialization = recorded_output["serialization"]
+                type_hint = (
+                    get_func_type_hints(func).return_hint
+                    if reads_type_hints(serialization, dbos._serializer)
+                    else None
+                )
                 return cast(
                     R,
                     deserialize_value(
                         recorded_output["output"],
-                        recorded_output["serialization"],
+                        serialization,
                         dbos._serializer,
-                        get_func_type_hints(func).return_hint,
+                        type_hint,
                     ),
                 )
             else:
@@ -3184,12 +3189,12 @@ class _StreamReadCheckpoint:
             raise deserialize_exception(
                 recorded["error"], recorded["serialization"], self._sys_db.serializer
             )
-        value = deserialize_value(
-            recorded["output"], recorded["serialization"], self._sys_db.serializer
-        )
         # The close sentinel is no value of the reader's type, so it is never converted.
-        if self._result_type is None or is_stream_closed_sentinel(value):
-            return value
+        if is_serialized_stream_closed_sentinel(
+            recorded["output"], recorded["serialization"]
+        ):
+            return _dbos_stream_closed_sentinel
+        # An older checkpoint holds the sentinel in the app's serializer, which a pickle read finds below.
         return deserialize_value(
             recorded["output"],
             recorded["serialization"],
@@ -3224,6 +3229,16 @@ class _StreamReadCheckpoint:
         output, serialization = serialize_value(value, None, self._sys_db.serializer)
         self._record(step_ctx, output, serialization)
 
+    def record_end(self, step_ctx: Optional[DBOSContext]) -> None:
+        """Record that the stream ended, in the portable form a replay recognizes undecoded."""
+        self.record_as_written(
+            step_ctx,
+            (
+                DBOSPortableJSON.serialize(_dbos_stream_closed_sentinel),
+                DBOSPortableJSON.name(),
+            ),
+        )
+
     def record_as_written(
         self, step_ctx: Optional[DBOSContext], row: Tuple[Optional[str], Optional[str]]
     ) -> None:
@@ -3231,7 +3246,10 @@ class _StreamReadCheckpoint:
         if step_ctx is None:
             return
         if row[0] is None:
-            self.record(step_ctx, None)
+            # Portable null, which every type hint decodes to None.
+            self._record(
+                step_ctx, DBOSPortableJSON.serialize(None), DBOSPortableJSON.name()
+            )
             return
         self._record(step_ctx, row[0], row[1] or self._sys_db.serializer.name())
 
@@ -3447,24 +3465,17 @@ def read_stream(
                     wait_for = min(remaining, polling_interval)
                 recorder.check_cancelled()
                 event.wait(timeout=wait_for)
-            # Deserialized only when delivered, so a value that cannot be deserialized fails its own read and no earlier one.
             # The close sentinel is checked serialized, as it is no value of the reader's type.
-            value: Any
-            if row is None:
-                value = _no_stream_value
-            elif is_serialized_stream_closed_sentinel(*row):
-                value = _dbos_stream_closed_sentinel
-            else:
-                value = deserialize_value(
-                    row[0], row[1], sys_db.serializer, result_type
-                )
-            if value is _no_stream_value or is_stream_closed_sentinel(value):
+            if row is None or is_serialized_stream_closed_sentinel(*row):
                 # The end is recorded too, so a replay stops exactly where this read did.
-                recorder.record(step_ctx, _dbos_stream_closed_sentinel)
+                recorder.record_end(step_ctx)
                 return
-            # Recorded before the yield, so a crash after the workflow acts on the value still replays it.
-            assert row is not None
+            # Recorded before the yield, so a crash after the workflow acts on the value still
+            # replays it, and before decoding, so a value that fails to decode replays the same way.
             recorder.record_as_written(step_ctx, row)
+            value = deserialize_value(row[0], row[1], sys_db.serializer, result_type)
+            if is_stream_closed_sentinel(value):
+                return
             yield value
             offset += 1
     finally:
@@ -3574,26 +3585,20 @@ async def read_stream_async(
                     wait_for = min(remaining, polling_interval)
                 await asyncio.to_thread(recorder.check_cancelled)
                 await event.wait_async(timeout=wait_for)
-            # Deserialized only when delivered, off the event loop as a custom serializer may block.
             # The close sentinel is checked serialized, as it is no value of the reader's type.
-            value: Any
-            if row is None:
-                value = _no_stream_value
-            elif is_serialized_stream_closed_sentinel(*row):
-                value = _dbos_stream_closed_sentinel
-            else:
-                value = await asyncio.to_thread(
-                    deserialize_value, row[0], row[1], sys_db.serializer, result_type
-                )
-            if value is _no_stream_value or is_stream_closed_sentinel(value):
+            if row is None or is_serialized_stream_closed_sentinel(*row):
                 # The end is recorded too, so a replay stops exactly where this read did.
-                await asyncio.to_thread(
-                    recorder.record, step_ctx, _dbos_stream_closed_sentinel
-                )
+                await asyncio.to_thread(recorder.record_end, step_ctx)
                 return
-            # Recorded before the yield, so a crash after the workflow acts on the value still replays it.
-            assert row is not None
+            # Recorded before the yield, so a crash after the workflow acts on the value still
+            # replays it, and before decoding, so a value that fails to decode replays the same way.
             await asyncio.to_thread(recorder.record_as_written, step_ctx, row)
+            # Off the event loop, as a custom serializer may block.
+            value = await asyncio.to_thread(
+                deserialize_value, row[0], row[1], sys_db.serializer, result_type
+            )
+            if is_stream_closed_sentinel(value):
+                return
             yield value
             offset += 1
     finally:

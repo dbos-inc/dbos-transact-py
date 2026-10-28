@@ -3,14 +3,15 @@ import inspect
 import sys
 import typing
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from types import FunctionType
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type
 
 from dbos._error import DBOSWorkflowFunctionNotFoundError
 from dbos._logger import dbos_logger
 from dbos._serialization import WorkflowSerializationFormat
+from dbos._type_convert import resolve_nested_strings
 
 DEFAULT_MAX_RECOVERY_ATTEMPTS = 100
 
@@ -116,27 +117,27 @@ class FuncTypeHints:
     # The parameters a call's stored arguments bind to, without a leading self/cls.
     params: List[inspect.Parameter]
     hints: Dict[str, Any]
-    # Why the hints could not be resolved, or None if they were.
-    unresolved: Optional[str] = None
+    # Annotations that could not be resolved, by name ("return" for the return type), with why.
+    unresolved: Dict[str, str] = field(default_factory=dict)
 
     @property
     def return_hint(self) -> Any:
         return self.hints.get("return")
 
 
-# Keyed by function, with the func_type the entry was built for: a later class decorator changes the self/cls skip.
+# Keyed by function, then by whether it was reached bound (its signature then drops self) and
+# the func_type the entry was built for, as a later class decorator changes the self/cls skip.
 _type_hints_cache: (
-    "weakref.WeakKeyDictionary[Any, Tuple[DBOSFuncType, FuncTypeHints]]"
+    "weakref.WeakKeyDictionary[Any, Dict[Tuple[bool, DBOSFuncType], FuncTypeHints]]"
 ) = weakref.WeakKeyDictionary()
 
-
-# Functions already warned about, so an unresolvable one warns once rather than on every replay.
-_unresolved_warned: "weakref.WeakSet[Any]" = weakref.WeakSet()
+# Qualified names already warned about, so a function warns once, however often it is rebound.
+_unresolved_warned: Set[str] = set()
 
 if sys.version_info >= (3, 14):
-    from annotationlib import Format
+    import annotationlib
 
-    _FORWARDREF: Any = Format.FORWARDREF
+    _FORWARDREF: Any = annotationlib.Format.FORWARDREF
 else:
     _FORWARDREF = None
 
@@ -144,10 +145,8 @@ else:
 def _signature_params(func: Callable[..., Any]) -> List[inspect.Parameter]:
     try:
         return list(inspect.signature(func).parameters.values())
-    except (TypeError, ValueError):
-        return []
     except Exception:
-        # On 3.14 a signature evaluates its annotations, which may name a TYPE_CHECKING-only import.
+        # On 3.14 a signature evaluates its annotations, any of which may fail to.
         if _FORWARDREF is None:
             return []
         try:
@@ -160,43 +159,111 @@ def _signature_params(func: Callable[..., Any]) -> List[inspect.Parameter]:
             return []
 
 
+def _hint_namespace(target: Any) -> Dict[str, Any]:
+    namespace = getattr(target, "__globals__", None)
+    if namespace is None:
+        namespace = getattr(getattr(target, "__func__", None), "__globals__", {})
+    return typing.cast(Dict[str, Any], namespace)
+
+
+def _safe_unwrap(func: Any) -> Any:
+    try:
+        return inspect.unwrap(func)
+    except ValueError:
+        # A __wrapped__ cycle.
+        return func
+
+
+def _hint_target(func: Callable[..., Any]) -> Any:
+    """The function whose annotations describe a callable's parameters and result."""
+    target = _safe_unwrap(func)
+    while isinstance(target, functools.partial):
+        target = _safe_unwrap(target.func)
+    if not (
+        inspect.isfunction(target)
+        or inspect.ismethod(target)
+        or inspect.isbuiltin(target)
+        or inspect.isclass(target)
+    ) and callable(target):
+        # A callable object's signature is its __call__'s, not its attributes'.
+        target = target.__call__
+    return target
+
+
+def _resolve_each(target: Any) -> Tuple[Dict[str, Any], Dict[str, str]]:
+    """Resolve a function's annotations one at a time, so one that fails spoils no other."""
+    try:
+        if sys.version_info >= (3, 14):
+            annotations = dict(
+                annotationlib.get_annotations(target, format=_FORWARDREF)
+            )
+        else:
+            annotations = dict(getattr(target, "__annotations__", None) or {})
+    except Exception as e:
+        return {}, {"*": str(e)}
+    namespace = _hint_namespace(target)
+    hints: Dict[str, Any] = {}
+    unresolved: Dict[str, str] = {}
+    for name, annotation in annotations.items():
+        probe = FunctionType(_resolve_each.__code__, namespace)
+        probe.__annotations__ = {name: annotation}
+        try:
+            hints.update(typing.get_type_hints(probe))
+        except Exception as e:
+            unresolved[name] = str(e)
+    return hints, unresolved
+
+
 def get_func_type_hints(func: Callable[..., Any]) -> FuncTypeHints:
-    """A function's resolved type hints, cached; empty if they cannot be resolved."""
+    """A function's resolved type hints, cached; any that cannot be resolved are left out."""
     fi = get_func_info(func)
     func_type = fi.func_type if fi is not None else DBOSFuncType.Unknown
+    # Keyed by the wrapped function, which outlives a wrapper made per call.
+    key = _safe_unwrap(func)
+    variant = (inspect.ismethod(func), func_type)
     try:
-        cached = _type_hints_cache.get(func)
+        cached = _type_hints_cache.get(key, {}).get(variant)
     except TypeError:
         cached = None
-    if cached is not None and cached[0] is func_type:
-        return cached[1]
-    target = inspect.unwrap(func)
-    while isinstance(target, functools.partial):
-        target = inspect.unwrap(target.func)
-    unresolved: Optional[str] = None
-    try:
-        hints = typing.get_type_hints(target)
-    except NameError as e:
-        hints = {}
-        unresolved = f"cannot resolve the type hints of {getattr(target, '__qualname__', target)}: {e}"
+    if cached is not None:
+        return cached
+    target = _hint_target(func)
+    unresolved: Dict[str, str] = {}
+    if inspect.isclass(target):
+        hints: Dict[str, Any] = {}
+    else:
         try:
-            warn = target not in _unresolved_warned
-            _unresolved_warned.add(target)
-        except TypeError:
-            warn = True
-        if warn:
+            hints = typing.get_type_hints(target)
+        except Exception:
+            hints, unresolved = _resolve_each(target)
+        if sys.version_info < (3, 11):
+            for name, hint in list(hints.items()):
+                try:
+                    hints[name] = resolve_nested_strings(hint, _hint_namespace(target))
+                except Exception as e:
+                    del hints[name]
+                    unresolved[name] = str(e)
+    if unresolved:
+        module = getattr(target, "__module__", None)
+        qualname = getattr(target, "__qualname__", str(target))
+        if module:
+            qualname = f"{module}.{qualname}"
+        if qualname not in _unresolved_warned:
+            _unresolved_warned.add(qualname)
             dbos_logger.warning(
-                f"DBOS {unresolved}, so values read back for it are not converted to its annotated types"
+                f"DBOS cannot resolve the type hints of {qualname} ({', '.join(unresolved)}): "
+                f"{next(iter(unresolved.values()))}; values read back for them are not converted to their annotated types"
             )
-    except Exception:
-        # Not introspectable, like a builtin or a callable object.
-        hints = {}
     params = _signature_params(func)
-    if func_type in (DBOSFuncType.Class, DBOSFuncType.Instance):
+    # A bound method's signature already leaves out self/cls.
+    if func_type in (
+        DBOSFuncType.Class,
+        DBOSFuncType.Instance,
+    ) and not inspect.ismethod(func):
         params = params[1:]
     result = FuncTypeHints(params, hints, unresolved)
     try:
-        _type_hints_cache[func] = (func_type, result)
+        _type_hints_cache.setdefault(key, {})[variant] = result
     except TypeError:
         pass
     return result

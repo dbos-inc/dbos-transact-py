@@ -1767,9 +1767,13 @@ class DBOS:
             check_async("get_result")
             dbos = _get_dbos_instance()
 
+            # Checkpointed as the target stored it, so a replay decodes what this read did.
             def fn() -> Optional[Any]:
                 return dbos._sys_db.await_workflow_result(
-                    workflow_id, DEFAULT_POLLING_INTERVAL, result_type=result_type
+                    workflow_id,
+                    DEFAULT_POLLING_INTERVAL,
+                    result_type=result_type,
+                    as_written=True,
                 )
 
             return dbos._sys_db.call_function_as_step(
@@ -1797,9 +1801,13 @@ class DBOS:
             await cls._configure_asyncio_thread_pool()
             dbos = _get_dbos_instance()
 
+            # Checkpointed as the target stored it, so a replay decodes what this read did.
             async def fn() -> Optional[Any]:
                 return await dbos._sys_db.await_workflow_result_async(
-                    workflow_id, DEFAULT_POLLING_INTERVAL, result_type=result_type
+                    workflow_id,
+                    DEFAULT_POLLING_INTERVAL,
+                    result_type=result_type,
+                    as_written=True,
                 )
 
             return await dbos._sys_db.call_coroutine_as_step(

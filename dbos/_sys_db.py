@@ -80,11 +80,11 @@ from ._serialization import (
     WorkflowSerializationFormat,
     deserialize_exception,
     deserialize_value,
+    reads_type_hints,
     safe_deserialize,
     serialize_exception,
     serialize_value,
     serialize_value_as,
-    serialize_value_or_portable,
 )
 from ._shard_keys import bind_shard_keys, bound_shard_key
 
@@ -441,6 +441,10 @@ _serialized_stream_closed_sentinel = DBOSPortableJSON.serialize(
 )
 
 
+def _written_value(result: Any) -> Any:
+    return result.decode() if isinstance(result, OutputAsWritten) else result
+
+
 def is_stream_closed_sentinel(value: Any) -> bool:
     """Whether a stream value is the marker a closed stream ends with."""
     return isinstance(value, str) and value == _dbos_stream_closed_sentinel
@@ -454,6 +458,18 @@ def is_serialized_stream_closed_sentinel(
         serialization == DBOSPortableJSON.name()
         and serialized_value == _serialized_stream_closed_sentinel
     )
+
+
+@dataclass
+class OutputAsWritten:
+    """A value read from another record, in the stored form to checkpoint, so a replay decodes the same bytes.
+
+    It is decoded only after it is checkpointed, so a failure to decode replays as the same failure.
+    """
+
+    output: Optional[str]
+    serialization: str
+    decode: Callable[[], Any]
 
 
 @dataclass
@@ -2726,6 +2742,7 @@ class SystemDatabase(ABC):
         *,
         fail_if_missing: bool = False,
         result_type: Any = None,
+        as_written: bool = False,
     ) -> Union[NoResult, Any]:
         """Check if a workflow has completed and return its result.
 
@@ -2740,7 +2757,8 @@ class SystemDatabase(ABC):
         DBOSNonExistentWorkflowError instead of polling forever.
 
         The output is converted to result_type, or else to the return type the
-        resolver finds for the workflow's name.
+        resolver finds for the workflow's name. With as_written, it is returned as an
+        OutputAsWritten that also carries the stored output.
         """
         row = self._read_workflow_result_row(workflow_id)
         if row is None and fail_if_missing:
@@ -2749,8 +2767,27 @@ class SystemDatabase(ABC):
             status = row[0]
             if status == WorkflowStatusString.SUCCESS.value:
                 output = row[1]
-                if result_type is None and self.result_type_resolver is not None:
+                if (
+                    result_type is None
+                    and self.result_type_resolver is not None
+                    and reads_type_hints(row[3], self.serializer)
+                ):
                     result_type = self.result_type_resolver(row[4])
+                if as_written:
+                    stored: Optional[str] = output
+                    serialization = row[3] or self.serializer.name()
+                    if stored is None:
+                        # A NULL output replays only as a recorded value, so record portable null.
+                        stored = DBOSPortableJSON.serialize(None)
+                        serialization = DBOSPortableJSON.name()
+                    hint = result_type
+                    return OutputAsWritten(
+                        stored,
+                        serialization,
+                        lambda: deserialize_value(
+                            stored, serialization, self.serializer, hint
+                        ),
+                    )
                 return deserialize_value(output, row[3], self.serializer, result_type)
             elif status == WorkflowStatusString.ERROR.value:
                 error = row[2]
@@ -2771,10 +2808,14 @@ class SystemDatabase(ABC):
         *,
         fail_if_missing: bool = False,
         result_type: Any = None,
+        as_written: bool = False,
     ) -> Any:
         while True:
             result = self.check_workflow_result(
-                workflow_id, fail_if_missing=fail_if_missing, result_type=result_type
+                workflow_id,
+                fail_if_missing=fail_if_missing,
+                result_type=result_type,
+                as_written=as_written,
             )
             if not isinstance(result, NoResult):
                 return result
@@ -2787,6 +2828,7 @@ class SystemDatabase(ABC):
         *,
         fail_if_missing: bool = False,
         result_type: Any = None,
+        as_written: bool = False,
     ) -> Any:
         while True:
             result = await asyncio.to_thread(
@@ -2794,6 +2836,7 @@ class SystemDatabase(ABC):
                 workflow_id,
                 fail_if_missing=fail_if_missing,
                 result_type=result_type,
+                as_written=as_written,
             )
             if not isinstance(result, NoResult):
                 return result
@@ -4024,8 +4067,12 @@ class SystemDatabase(ABC):
                 return deserialize_value(
                     recorded[0][0], recorded[0][1], self.serializer, result_type
                 )
-            sermsg, serialization = self._consume_message(
-                c, workflow_uuid, function_id, topic
+            consumed = self._consume_message(c, workflow_uuid, function_id, topic)
+            # Nothing found is recorded as portable null, which every type hint decodes to None.
+            sermsg, serialization = (
+                consumed
+                if consumed is not None
+                else (DBOSPortableJSON.serialize(None), DBOSPortableJSON.name())
             )
             self._record_operation_result_txn(
                 {
@@ -4041,13 +4088,15 @@ class SystemDatabase(ABC):
                 int(time.time() * 1000),
                 conn=c,
             )
+        if consumed is None:
+            return None
         # Converted once consumed and recorded, so a message that fails to convert neither blocks its topic nor replays differently.
         return deserialize_value(sermsg, serialization, self.serializer, result_type)
 
     def _consume_message(
         self, c: sa.Connection, workflow_uuid: str, function_id: int, topic: str
-    ) -> tuple[Optional[str], str]:
-        """Mark the topic's oldest unconsumed message consumed, returning it as written (or a serialized None)."""
+    ) -> Optional[tuple[str, str]]:
+        """Mark the topic's oldest unconsumed message consumed, returning it as written, or None if there is none."""
         consume_stmt = (
             sa.update(self.tables.notifications)
             .where(
@@ -4081,7 +4130,7 @@ class SystemDatabase(ABC):
         if len(rows) > 0 and rows[0][0] is not None:
             # Checkpointed as written, so a replay decodes exactly what this read did.
             return rows[0][0], rows[0][1] or self.serializer.name()
-        return serialize_value_as(None, None, self.serializer)
+        return None
 
     def recv_check(
         self,
@@ -4691,11 +4740,16 @@ class SystemDatabase(ABC):
 
         serval: Optional[str]
         serialization: str
-        if len(rows) > 0 and rows[0][0] is not None:
+        found = len(rows) > 0 and rows[0][0] is not None
+        if found:
             # Checkpointed as written, so a replay decodes exactly what this read did.
             serval, serialization = rows[0][0], rows[0][1] or self.serializer.name()
         else:
-            serval, serialization = serialize_value_as(None, None, self.serializer)
+            # Nothing found is recorded as portable null, which every type hint decodes to None.
+            serval, serialization = (
+                DBOSPortableJSON.serialize(None),
+                DBOSPortableJSON.name(),
+            )
 
         # Record the output if it's in a workflow
         if caller_ctx is not None:
@@ -4711,6 +4765,8 @@ class SystemDatabase(ABC):
                     "child_workflow_id": None,
                 }
             )
+        if not found:
+            return None
         # Converted after recording, so a value that fails to convert replays the same failure.
         return deserialize_value(serval, serialization, self.serializer, result_type)
 
@@ -5518,14 +5574,19 @@ class SystemDatabase(ABC):
     ) -> T:
         start_time = int(time.time() * 1000)
         if not (ctx and ctx.is_workflow()):
-            return fn()
+            return cast(SystemDatabase.T, _written_value(fn()))
         res = self.check_operation_execution(
             ctx.workflow_id, ctx.function_id, function_name
         )
         if res is not None:
-            # Resolved only to replay an output, as it may cost a query.
+            # Resolved only to replay an output that can use it, as it may cost a query.
             self._raise_recorded_error(res)
-            type_hint = resolve_type_hint() if resolve_type_hint is not None else None
+            type_hint = (
+                resolve_type_hint()
+                if resolve_type_hint is not None
+                and reads_type_hints(res["serialization"], self.serializer)
+                else None
+            )
             return cast(
                 SystemDatabase.T, self._replay_recorded(res, function_name, type_hint)
             )
@@ -5537,7 +5598,11 @@ class SystemDatabase(ABC):
                 ctx.workflow_id, ctx.function_id, function_name, start_time, e
             )
             raise
-        serval, serialization = serialize_value_or_portable(result, self.serializer)
+        written = result if isinstance(result, OutputAsWritten) else None
+        if written is not None:
+            serval, serialization = written.output, written.serialization
+        else:
+            serval, serialization = serialize_value(result, None, self.serializer)
         self.record_operation_result(
             {
                 "workflow_uuid": ctx.workflow_id,
@@ -5550,6 +5615,8 @@ class SystemDatabase(ABC):
                 "child_workflow_id": None,
             }
         )
+        if written is not None:
+            return cast(SystemDatabase.T, written.decode())
         return result
 
     async def call_coroutine_as_step(
@@ -5561,7 +5628,10 @@ class SystemDatabase(ABC):
     ) -> T:
         start_time = int(time.time() * 1000)
         if not (ctx and ctx.is_workflow()):
-            return await fn()
+            result = await fn()
+            if isinstance(result, OutputAsWritten):
+                return cast(SystemDatabase.T, await asyncio.to_thread(result.decode))
+            return result
         res = await asyncio.to_thread(
             self.check_operation_execution,
             ctx.workflow_id,
@@ -5569,15 +5639,20 @@ class SystemDatabase(ABC):
             function_name,
         )
         if res is not None:
-            # Resolved only to replay an output, as it may cost a query.
+            # Resolved only to replay an output that can use it, as it may cost a query.
             self._raise_recorded_error(res)
             type_hint = (
                 await asyncio.to_thread(resolve_type_hint)
                 if resolve_type_hint is not None
+                and reads_type_hints(res["serialization"], self.serializer)
                 else None
             )
+            # Off the event loop, as a custom serializer may block.
             return cast(
-                SystemDatabase.T, self._replay_recorded(res, function_name, type_hint)
+                SystemDatabase.T,
+                await asyncio.to_thread(
+                    self._replay_recorded, res, function_name, type_hint
+                ),
             )
         try:
             result = await fn()
@@ -5592,7 +5667,11 @@ class SystemDatabase(ABC):
                 e,
             )
             raise
-        serval, serialization = serialize_value_or_portable(result, self.serializer)
+        written = result if isinstance(result, OutputAsWritten) else None
+        if written is not None:
+            serval, serialization = written.output, written.serialization
+        else:
+            serval, serialization = serialize_value(result, None, self.serializer)
         await asyncio.to_thread(
             self.record_operation_result,
             {
@@ -5606,6 +5685,9 @@ class SystemDatabase(ABC):
                 "child_workflow_id": None,
             },
         )
+        if written is not None:
+            # Off the event loop, as a custom serializer may block.
+            return cast(SystemDatabase.T, await asyncio.to_thread(written.decode))
         return result
 
     @db_retry()

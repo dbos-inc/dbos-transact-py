@@ -42,9 +42,9 @@ from dbos._schemas.datasource_database import datasource_outputs_table
 from dbos._serialization import (
     DBOSDefaultSerializer,
     Serializer,
-    as_replayed,
     deserialize_exception,
     deserialize_value,
+    reads_type_hints,
     serialize_exception,
     serialize_value,
 )
@@ -131,15 +131,21 @@ def _reject_session_binds(session_kw: Dict[str, Any]) -> None:
 
 
 def _replay_recorded(
-    recorded: "RecordedResult", serializer: "Serializer", type_hint: Any
+    recorded: "RecordedResult", serializer: "Serializer", func: Callable[..., Any]
 ) -> Any:
     if recorded["error"]:
         raise deserialize_exception(
             recorded["error"], recorded["serialization"], serializer
         )
     elif recorded["output"] is not None:
+        serialization = recorded["serialization"]
+        type_hint = (
+            get_func_type_hints(func).return_hint
+            if reads_type_hints(serialization, serializer)
+            else None
+        )
         return deserialize_value(
-            recorded["output"], recorded["serialization"], serializer, type_hint
+            recorded["output"], serialization, serializer, type_hint
         )
     else:
         raise DBOSException("Datasource recorded output and error are both None")
@@ -430,7 +436,7 @@ class AsyncSQLAlchemyDatasource(ABC):
             raise _StepAlreadyRecorded()
 
     async def _replay_conflicting_step(
-        self, workflow_id: str, step_id: int, type_hint: Any
+        self, workflow_id: str, step_id: int, func: Callable[..., Any]
     ) -> Any:
         # The recorded row is this step's durable result, whichever execution committed it.
         recorded = await self._check_execution_with_retry(workflow_id, step_id)
@@ -439,7 +445,7 @@ class AsyncSQLAlchemyDatasource(ABC):
                 f"Datasource step {step_id} of workflow {workflow_id} conflicted with a "
                 "concurrent execution, but no recorded result was found"
             )
-        return _replay_recorded(recorded, self.serializer, type_hint)
+        return _replay_recorded(recorded, self.serializer, func)
 
     async def run_tx_step_async(
         self,
@@ -477,14 +483,11 @@ class AsyncSQLAlchemyDatasource(ABC):
                         _replay_recorded(
                             recorded,
                             self.serializer,
-                            get_func_type_hints(func).return_hint,
+                            func,
                         ),
                     )
 
             output: R
-            # The checkpoint written for the output, which a replay decodes.
-            serialized: Optional[str] = None
-            serialization: Optional[str] = None
             conflicted = False
             retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
             try:
@@ -569,20 +572,10 @@ class AsyncSQLAlchemyDatasource(ABC):
                 # Still the owner: the recorded row is our own ambiguous commit or a stale execution's, and either is this step's result.
                 return cast(
                     R,
-                    await self._replay_conflicting_step(
-                        workflow_id, step_id, get_func_type_hints(func).return_hint
-                    ),
+                    await self._replay_conflicting_step(workflow_id, step_id, func),
                 )
 
-            return cast(
-                R,
-                as_replayed(
-                    output,
-                    serialized,
-                    serialization,
-                    get_func_type_hints(func).return_hint,
-                ),
-            )
+            return output
 
         if in_wf:
             from dbos._core import StepOptions, run_step_async
@@ -590,6 +583,8 @@ class AsyncSQLAlchemyDatasource(ABC):
 
             assert ctx is not None
             step_options: StepOptions = {"name": name}
+            # The step checkpoint decodes to the transaction's own return type.
+            setattr(_body, "__wrapped__", func)
             return await run_step_async(
                 _get_dbos_instance(),
                 ctx.snapshot_step_ctx(),
@@ -877,7 +872,7 @@ class SQLAlchemyDatasource(ABC):
             raise _StepAlreadyRecorded()
 
     def _replay_conflicting_step(
-        self, workflow_id: str, step_id: int, type_hint: Any
+        self, workflow_id: str, step_id: int, func: Callable[..., Any]
     ) -> Any:
         # The recorded row is this step's durable result, whichever execution committed it.
         recorded = self._check_execution_with_retry(workflow_id, step_id)
@@ -886,7 +881,7 @@ class SQLAlchemyDatasource(ABC):
                 f"Datasource step {step_id} of workflow {workflow_id} conflicted with a "
                 "concurrent execution, but no recorded result was found"
             )
-        return _replay_recorded(recorded, self.serializer, type_hint)
+        return _replay_recorded(recorded, self.serializer, func)
 
     def run_tx_step(
         self,
@@ -924,14 +919,11 @@ class SQLAlchemyDatasource(ABC):
                         _replay_recorded(
                             recorded,
                             self.serializer,
-                            get_func_type_hints(func).return_hint,
+                            func,
                         ),
                     )
 
             output: R
-            # The checkpoint written for the output, which a replay decodes.
-            serialized: Optional[str] = None
-            serialization: Optional[str] = None
             conflicted = False
             retry_wait_seconds = _INITIAL_RETRY_WAIT_SECONDS
             try:
@@ -1014,26 +1006,18 @@ class SQLAlchemyDatasource(ABC):
                 # Still the owner: the recorded row is our own ambiguous commit or a stale execution's, and either is this step's result.
                 return cast(
                     R,
-                    self._replay_conflicting_step(
-                        workflow_id, step_id, get_func_type_hints(func).return_hint
-                    ),
+                    self._replay_conflicting_step(workflow_id, step_id, func),
                 )
 
-            return cast(
-                R,
-                as_replayed(
-                    output,
-                    serialized,
-                    serialization,
-                    get_func_type_hints(func).return_hint,
-                ),
-            )
+            return output
 
         if in_wf:
             from dbos._core import StepOptions, run_step
             from dbos._dbos import _get_dbos_instance
 
             step_options: StepOptions = {"name": name}
+            # The step checkpoint decodes to the transaction's own return type.
+            setattr(_body, "__wrapped__", func)
             return run_step(
                 _get_dbos_instance(),
                 snapshot_step_context(),
