@@ -593,7 +593,7 @@ def test_an_auto_upgrading_executor_checks_its_entitlement(
 
 
 def test_large_object_store_checks_its_entitlement(
-    config: DBOSConfig, conductor: FakeConductor
+    config: DBOSConfig, conductor: FakeConductor, skip_with_sharding: None
 ) -> None:
     DBOS.destroy(destroy_registry=True)
     store = object()
