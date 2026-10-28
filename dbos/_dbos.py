@@ -1816,7 +1816,7 @@ class DBOS:
         """Wait for any one of the given workflow handles to complete and return it.
 
         Polls the database until at least one workflow's status is no longer
-        PENDING, ENQUEUED, or DELAYED, then returns the corresponding handle.
+        PENDING, ENQUEUED, DELAYED, or SUSPENDED, then returns the corresponding handle.
         """
         check_async("wait_first")
         if not handles:

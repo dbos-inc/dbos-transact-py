@@ -435,7 +435,13 @@ class DBOSWorkflowSuspendedError(DBOSBaseException):
     """
 
     def __init__(self, workflow_id: str, topic: Optional[str]) -> None:
-        waiting = f"waiting on topic {topic}" if topic is not None else "sleeping"
+        if topic is None:
+            waiting = "sleeping"
+        elif topic == "__null__topic__":
+            # A recv with no topic waits on the system database's null topic.
+            waiting = "waiting on a message with no topic"
+        else:
+            waiting = f"waiting on topic {topic}"
         super().__init__(
             f"Workflow {workflow_id} suspended {waiting}",
             dbos_error_code=DBOSErrorCode.WorkflowSuspended.value,

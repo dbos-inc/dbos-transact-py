@@ -2823,8 +2823,8 @@ class SystemDatabase(ABC):
     def check_first_workflow_id(self, workflow_ids: List[str]) -> Union[NoResult, str]:
         """Check if at least one of the given workflows has completed.
 
-        A workflow is considered complete when its status is not PENDING
-        not ENQUEUED, and not DELAYED.  Returns the workflow_uuid of the first
+        A workflow is considered complete when its status is not PENDING,
+        ENQUEUED, DELAYED, or SUSPENDED.  Returns the workflow_uuid of the first
         completed workflow found, or NoResult() if none have completed.
         """
         if not workflow_ids:
@@ -2842,6 +2842,7 @@ class SystemDatabase(ABC):
                             WorkflowStatusString.PENDING.value,
                             WorkflowStatusString.ENQUEUED.value,
                             WorkflowStatusString.DELAYED.value,
+                            WorkflowStatusString.SUSPENDED.value,
                         ]
                     ),
                 )
@@ -3015,7 +3016,7 @@ class SystemDatabase(ABC):
             if not status_list:
                 query = query.where(
                     self.tables.workflow_status.c.status.in_(
-                        ["DELAYED", "ENQUEUED", "PENDING"]
+                        ["DELAYED", "ENQUEUED", "PENDING", "SUSPENDED"]
                     )
                 )
         else:

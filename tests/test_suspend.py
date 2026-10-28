@@ -9,8 +9,23 @@ import pytest
 import sqlalchemy as sa
 
 from dbos import DBOS, DBOSClient, SetWorkflowID
-from dbos._error import DBOSException
+from dbos._error import DBOSException, DBOSWorkflowSuspendedError
+from dbos._outcome import NoResult
 from dbos._sys_db import WorkflowStatusString
+
+
+def test_suspended_error_names_what_the_workflow_waits_on() -> None:
+    assert (
+        DBOSWorkflowSuspendedError("w", "approve").message
+        == "Workflow w suspended waiting on topic approve"
+    )
+    assert (
+        DBOSWorkflowSuspendedError("w", "__null__topic__").message
+        == "Workflow w suspended waiting on a message with no topic"
+    )
+    assert (
+        DBOSWorkflowSuspendedError("w", None).message == "Workflow w suspended sleeping"
+    )
 
 
 def test_recv_suspend_is_refused_without_suspend_mode(dbos: DBOS) -> None:
@@ -88,3 +103,35 @@ def test_send_wakes_suspended_receivers_without_suspend_mode(
     assert delay(by_app) == 0
     client.send(by_client, "yes", topic="approve")
     assert delay(by_client) == 0
+
+
+def test_parked_workflow_is_still_active(dbos: DBOS, skip_with_sharding: None) -> None:
+    """Parks a workflow by hand on a queue: wait_first does not take it for complete, and
+    queue listings still show it."""
+    sys_db = dbos._sys_db
+    ws = sys_db.tables.workflow_status
+
+    @DBOS.workflow()
+    def parked() -> None:
+        pass
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        parked()
+    with sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(ws)
+            .where(ws.c.workflow_uuid == wfid)
+            .values(
+                status=WorkflowStatusString.SUSPENDED.value,
+                suspend_key="approve",
+                delay_until_epoch_ms=2**62,
+                queue_name="suspend-q",
+            )
+        )
+
+    assert isinstance(sys_db.check_first_workflow_id([wfid]), NoResult)
+    queued = DBOS.list_queued_workflows(queue_name="suspend-q")
+    assert [(w.workflow_id, w.status) for w in queued] == [
+        (wfid, WorkflowStatusString.SUSPENDED.value)
+    ]
