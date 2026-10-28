@@ -515,13 +515,13 @@ def test_pgsql_send_wakes_suspended_receiver(
         wfid = str(uuid.uuid4())
         with SetWorkflowID(wfid):
             parked()
-        _execute_sql(
-            engine,
-            f"""UPDATE "{schema}".workflow_status
-            SET status = 'SUSPENDED', suspend_key = :topic, delay_until_epoch_ms = :deadline
-            WHERE workflow_uuid = :wfid""",
-            {"topic": topic, "deadline": deadline_ms, "wfid": wfid},
-        )
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(f"""UPDATE "{schema}".workflow_status
+                SET status = 'SUSPENDED', suspend_key = :topic, delay_until_epoch_ms = :deadline
+                WHERE workflow_uuid = :wfid"""),
+                {"topic": topic, "deadline": deadline_ms, "wfid": wfid},
+            )
         return wfid
 
     def send(wfid: str, topic: Optional[str]) -> None:
