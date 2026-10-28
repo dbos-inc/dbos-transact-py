@@ -672,8 +672,8 @@ class SystemDatabase(ABC):
     tables: type[SystemSchema] = SystemSchema
     # Whether this handle routes every statement by shard key.
     sharded: bool = False
-    # Suspend mode (Transact Enterprise), installed by DBOS or DBOSClient when it is on:
-    # send then serializes with and wakes suspended receivers, and recv may park.
+    # Suspend mode (Transact Enterprise), installed by DBOS when it is on: recv and sleep
+    # may park their workflow. Waking a parked recv is core: every send does it.
     suspend: Optional["Suspend"] = None
 
     @staticmethod
@@ -3828,6 +3828,31 @@ class SystemDatabase(ABC):
             send_to_forks=send_to_forks,
         )
 
+    def _wake_receivers(
+        self,
+        conn: Union[sa.Connection, Session],
+        destinations: List[str],
+        topics: List[str],
+    ) -> None:
+        """Make SUSPENDED receivers waiting on one of topics due, for the background pass
+        to re-enqueue. Runs on every send, whether or not this process uses suspend mode,
+        so any sender wakes a workflow another process parked. A primary-key probe per
+        destination; it matches nothing in the common case.
+
+        The match is destinations x topics, so a batch sending A on topic X and B on
+        topic Y also wakes A if it waits on Y. The spurious wake-up is harmless: the
+        replayed recv finds no message and parks again."""
+        ws = self.tables.workflow_status
+        conn.execute(
+            sa.update(ws)
+            .where(
+                *self._wf_in(ws, destinations),
+                ws.c.status == WorkflowStatusString.SUSPENDED.value,
+                ws.c.suspend_key.in_(topics),
+            )
+            .values(delay_until_epoch_ms=0)
+        )
+
     def _send_bulk_txn(
         self,
         messages: List[SendMessage],
@@ -3935,9 +3960,8 @@ class SystemDatabase(ABC):
                 )
             raise
 
-        # Suspend mode (Transact Enterprise).
-        if rows and self.suspend is not None:
-            self.suspend.wake_receivers(
+        if rows:
+            self._wake_receivers(
                 conn,
                 sorted({r["destination_uuid"] for r in rows}),
                 sorted({r["topic"] for r in rows}),

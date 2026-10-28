@@ -29,7 +29,6 @@ from typing import (
     Protocol,
     Sequence,
     Tuple,
-    Union,
     cast,
 )
 from urllib.parse import urlsplit, urlunsplit
@@ -39,9 +38,6 @@ from ._logger import dbos_logger
 from ._utils import GlobalParams
 
 if TYPE_CHECKING:
-    import sqlalchemy as sa
-    from sqlalchemy.orm import Session
-
     from ._dbos import DBOS
     from ._serialization import Serializer
     from ._sys_db import SystemDatabase
@@ -87,14 +83,8 @@ class AutoUpgradePassFactory(Protocol):
 class Suspend(Protocol):
     """Suspend mode for recv and sleep: a waiting recv or a sleep parks its workflow in
     the database as SUSPENDED instead of holding a thread; a send on the recv's topic,
-    the recv timeout, or the end of the sleep re-enqueues it."""
-
-    def wake_receivers(
-        self,
-        conn: Union["sa.Connection", "Session"],
-        destinations: List[str],
-        topics: List[str],
-    ) -> None: ...
+    the recv timeout, or the end of the sleep re-enqueues it. The send side is core's
+    (SystemDatabase._wake_receivers), so any sender wakes a parked recv."""
 
     def recv_suspend(
         self,
@@ -103,8 +93,7 @@ class Suspend(Protocol):
         timeout_function_id: int,
         topic: Optional[str],
         timeout_seconds: float,
-    ) -> Any:
-        ...
+    ) -> Any: ...
 
     def sleep_suspend(
         self, workflow_uuid: str, function_id: int, seconds: float
@@ -113,8 +102,7 @@ class Suspend(Protocol):
         the seconds to sleep in the thread when that end time is near or past."""
         ...
 
-    def transition_suspended_workflows(self) -> None:
-        ...
+    def transition_suspended_workflows(self) -> None: ...
 
 
 class SuspendFactory(Protocol):

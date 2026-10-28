@@ -90,8 +90,8 @@ class DBOSConfig(TypedDict, total=False):
     use_listen_notify: Optional[bool]
     # Use a sharded system database from dbos-enterprise; every workflow then lives under an explicit shard key.
     sharding: Optional[bool]
-    # Suspend mode from dbos-enterprise: recv(suspend=True) parks a waiting workflow in the
-    # database, and every send from this process wakes suspended receivers.
+    # Suspend mode from dbos-enterprise: recv(suspend=True) and sleep(suspend=True) park the
+    # workflow in the database. Any send, with or without suspend mode, wakes a parked recv.
     suspend_mode: Optional[bool]
     run_migrations: Optional[bool]
     max_executor_threads: Optional[int]
