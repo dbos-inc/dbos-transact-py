@@ -902,6 +902,16 @@ class DBOS:
                 dbos_logger.debug("Verifying system database migrations")
                 self._sys_db.verify_migrations()
 
+            # Built before recovery and queues start, as their workflows may use large objects.
+            if self._large_object_store is not None:
+                self._large_objects_field = _enterprise.load(
+                    _enterprise.LARGE_OBJECTS.description
+                ).LargeObjects(
+                    self._sys_db,
+                    store=self._large_object_store,
+                    serializer=self._serializer,
+                )
+
             # Register the current application version
             self._sys_db.create_application_version(GlobalParams.app_version)
             latest = self._sys_db.get_latest_application_version()
@@ -1060,14 +1070,7 @@ class DBOS:
                 )
                 self.auto_upgrader.start()
 
-            if self._large_object_store is not None:
-                self._large_objects_field = _enterprise.load(
-                    _enterprise.LARGE_OBJECTS.description
-                ).LargeObjects(
-                    self._sys_db,
-                    store=self._large_object_store,
-                    serializer=self._serializer,
-                )
+            if self._large_objects_field is not None:
                 # Collects objects whose owner workflow is gone.
                 self._large_objects_field.start()
 
