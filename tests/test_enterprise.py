@@ -612,7 +612,7 @@ def test_sharded_executor_checks_its_entitlement(
 
 
 def test_a_suspend_mode_executor_checks_its_entitlement(
-    config: DBOSConfig, conductor: FakeConductor
+    config: DBOSConfig, conductor: FakeConductor, skip_with_sharding: None
 ) -> None:
     DBOS.destroy(destroy_registry=True)
     # Refused before the package is even loaded, so this holds without dbos-enterprise.
