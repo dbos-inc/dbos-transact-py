@@ -1,31 +1,25 @@
 from __future__ import annotations
 
 import base64
-import inspect
 import json
 import pickle
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
-from decimal import Decimal
 from enum import Enum
 from typing import (
     Any,
-    Callable,
     Dict,
     List,
-    Mapping,
     Optional,
     Tuple,
     TypeAlias,
     TypedDict,
     cast,
-    get_type_hints,
 )
 
-from dateutil.parser import isoparse
-
 from ._logger import dbos_logger
+from ._type_convert import to_portable as _portableify
+from ._type_convert import to_portable_masked, value_to_type
 
 
 class WorkflowInputs(TypedDict):
@@ -88,6 +82,13 @@ class Serializer(ABC):
     def deserialize(cls, serialized_data: str) -> Any:
         pass
 
+    def deserialize_typed(self, serialized_data: str, type_hint: Any) -> Any:
+        """Deserialize a value the reading code expects to have type `type_hint`.
+
+        Override to build typed values; by default the hint is ignored. The data may encode None.
+        """
+        return self.deserialize(serialized_data)
+
     def name(self) -> str:
         return "custom_serializer"
 
@@ -114,59 +115,6 @@ class DefaultSerializer(Serializer):
 ############# Portable JSON ###################
 
 
-# ---------- Portable JSON conversions ----------
-def _to_rfc3339_utc(dt: datetime) -> str:
-    """
-    Canonical timestamp string: UTC RFC3339.
-    - Always emits Z, with milliseconds when present.
-    """
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        dt = dt.astimezone(timezone.utc)
-
-    # Python emits "+00:00"; canonicalize to "Z".
-    s = dt.isoformat(timespec="milliseconds").replace("+00:00", "Z")
-    return s
-
-
-def _portableify(value: Any) -> JsonValue:
-    """
-    Convert common Python objects into plain JSON-serializable structures
-    """
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-
-    if isinstance(value, datetime):
-        return _to_rfc3339_utc(value)
-
-    if isinstance(value, date):
-        return value.isoformat()
-
-    if isinstance(value, Decimal):
-        return format(value, "f")
-
-    if isinstance(value, (list, tuple)):
-        return [_portableify(v) for v in value]
-
-    if isinstance(value, set):
-        return [_portableify(v) for v in value]
-
-    if isinstance(value, Mapping):
-        out: dict[str, JsonValue] = {}
-        for k, v in value.items():
-            if not isinstance(k, str):
-                raise TypeError(
-                    "Attempt to do portable JSON serialization of a map with non-string keys"
-                )
-            out[k] = _portableify(v)
-        return out
-
-    raise TypeError(
-        f"Object of type {type(value).__name__} is not portable JSON serializable"
-    )
-
-
 # ---------- DBOS Portable JSON serializer ----------
 class DBOSPortableJSONSerializer(Serializer):
     """
@@ -180,6 +128,9 @@ class DBOSPortableJSONSerializer(Serializer):
 
     def deserialize(self, text: str | None) -> Any:
         return None if text is None else json.loads(text)
+
+    def deserialize_typed(self, text: str, type_hint: Any) -> Any:
+        return value_to_type(type_hint, self.deserialize(text))
 
     def serialize(self, value: Any) -> str:
         portable = _portableify(value)
@@ -217,6 +168,44 @@ def serialize_value(
     )
 
 
+def reads_type_hints(serialization: Optional[str], serializer: Serializer) -> bool:
+    """Whether decoding this serialization uses a type hint, so a caller can skip resolving one."""
+    if serialization is None:
+        serialization = serializer.name()
+    if serialization == DBOSPortableJSON.name():
+        return True
+    if serialization == DBOSDefaultSerializer.name():
+        return False
+    deserialize_typed = getattr(type(serializer), "deserialize_typed", None)
+    return (
+        deserialize_typed is not None
+        and deserialize_typed is not Serializer.deserialize_typed
+    )
+
+
+def serialize_value_or_portable(
+    value: Optional[Any], serializer: Serializer
+) -> tuple[Optional[str], str]:
+    """Serialize a checkpoint in the app's serializer, or in portable JSON when that cannot encode it.
+
+    Typed values decoded from portable JSON, like dataclasses, may be beyond a custom serializer.
+    """
+    try:
+        if type(serializer) is DefaultSerializer:
+            # Pickled directly, as DefaultSerializer logs a failure the fallback below recovers from.
+            return (
+                base64.b64encode(pickle.dumps(value)).decode("utf-8"),
+                serializer.name(),
+            )
+        return serialize_value(value, None, serializer)
+    except Exception as e:
+        error = e
+    try:
+        return DBOSPortableJSON.serialize(value), DBOSPortableJSON.name()
+    except Exception:
+        raise error
+
+
 def serialize_value_as(
     value: Optional[Any],
     serialization: Optional[str],
@@ -235,15 +224,23 @@ def deserialize_value(
     serialized_value: Optional[str],
     serialization: Optional[str],
     serializer: Serializer,
+    type_hint: Any = None,
 ) -> Optional[Any]:
     if serialized_value is None:
         return None
     if serialization == DBOSPortableJSON.name():
+        if type_hint is not None:
+            return DBOSPortableJSON.deserialize_typed(serialized_value, type_hint)
         return DBOSPortableJSON.deserialize(serialized_value)
     if serialization == DBOSDefaultSerializer.name():
         return DBOSDefaultSerializer.deserialize(serialized_value)
     if serialization is not None and serialization != serializer.name():
         raise TypeError(f"Serialization {serialization} is not available")
+    if type_hint is not None:
+        # A serializer that only duck-types Serializer may lack deserialize_typed.
+        deserialize_typed = getattr(serializer, "deserialize_typed", None)
+        if deserialize_typed is not None:
+            return deserialize_typed(serialized_value, type_hint)
     return serializer.deserialize(serialized_value)
 
 
@@ -283,52 +280,6 @@ def deserialize_args(
     if serialization is not None and serialization != serializer.name():
         raise TypeError(f"Serialization {serialization} is not available")
     return cast(WorkflowInputs, serializer.deserialize(serialized_value))
-
-
-def coerce_portable_args_to_hints(
-    wf_func: Callable[..., Any],
-    inputs: WorkflowInputs,
-) -> WorkflowInputs:
-    """Type-coerce arguments whose type is lost to portable JSON serialization.
-
-    Currently only supports datetime/date.
-    """
-    from ._registrations import DBOSFuncType, get_func_info
-
-    def coerce(value: Any, hint: Any) -> Any:
-        if not isinstance(value, str):
-            return value
-        try:
-            if hint is datetime:
-                return isoparse(value)
-            if hint is date:
-                return isoparse(value).date()
-        except (ValueError, OverflowError, TypeError):
-            return value
-        return value
-
-    try:
-        hints = get_type_hints(wf_func)
-    except Exception:
-        hints = getattr(wf_func, "__annotations__", {})
-    if not hints:
-        return inputs
-    try:
-        params = list(inspect.signature(wf_func).parameters.values())
-    except (TypeError, ValueError):
-        return inputs
-    # Drop the leading self/cls parameter for class/instance methods, whose stored
-    # arguments don't include the bound class argument.
-    fi = get_func_info(wf_func)
-    if fi is not None and fi.func_type in (DBOSFuncType.Class, DBOSFuncType.Instance):
-        params = params[1:]
-
-    args = list(inputs["args"])
-    for i, value in enumerate(args):
-        if i < len(params):
-            args[i] = coerce(value, hints.get(params[i].name))
-    kwargs = {key: coerce(val, hints.get(key)) for key, val in inputs["kwargs"].items()}
-    return {"args": tuple(args), "kwargs": kwargs}
 
 
 def _safe_str(x: Any) -> str:
@@ -391,7 +342,8 @@ def exception_to_workflow_error_data(
             # Only include the attribute if it is portably serializable; otherwise
             # fall back to a string so serializing the error can never itself fail
             # (which would prevent the workflow's error from being recorded at all).
-            out["data"] = _portableify(v)
+            # Secrets stay masked: unlike a checkpoint, an error report must not reveal them.
+            out["data"] = to_portable_masked(v)
         except Exception:
             out["data"] = _safe_str(v)
         break

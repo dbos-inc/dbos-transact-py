@@ -1,9 +1,13 @@
+import asyncio
 import json
 import threading
 import time
 import uuid
-from datetime import datetime
-from typing import Any, Dict, List, Optional, cast
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from decimal import Decimal
+from enum import Enum
+from typing import Any, Dict, Generator, List, Optional, cast
 
 import pytest
 import sqlalchemy as sa
@@ -14,12 +18,13 @@ from dbos import (
     DBOSPortableJSONSerializer,
     SetWorkflowID,
     WorkflowHandle,
+    WorkflowHandleAsync,
     make_pydantic_args_validator,
     pydantic_args_validator,
 )
 from dbos._client import DBOSClient
 from dbos._core import _serialize_exception_for_persistence
-from dbos._error import DBOSQueryTimeoutError
+from dbos._error import DBOSQueryTimeoutError, DBOSSerializationError
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import (
     DBOSDefaultSerializer,
@@ -29,8 +34,14 @@ from dbos._serialization import (
     WorkflowSerializationFormat,
     deserialize_exception,
 )
-from dbos._sys_db import WorkflowStatusString
-from tests.conftest import set_workflow_status
+from dbos._sys_db import WorkflowStatusString, _dbos_stream_closed_sentinel
+from dbos._type_convert import value_to_type
+from tests.conftest import (
+    reexecute_workflow_by_id,
+    retry_until_success,
+    set_workflow_status,
+    using_sharding,
+)
 
 
 class JsonSerializer(Serializer):
@@ -849,8 +860,8 @@ def test_directinsert_wrong_args(dbos: DBOS, skip_with_sharding: None) -> None:
     wfh2: WorkflowHandle[str] = DBOS.retrieve_workflow(wf_id2)
     with pytest.raises(PortableWorkflowError) as exc_info:
         wfh2.get_result()
-    # 42['k'] raises TypeError
-    assert "TypeError" in exc_info.value.name
+    # The Dict[str, Any] annotation rejects 42 before the body runs.
+    assert exc_info.value.name == "DBOSSerializationError"
 
 
 def test_directinsert_bogus_notification(dbos: DBOS, skip_with_sharding: None) -> None:
@@ -1652,3 +1663,554 @@ def test_portable_default_step_error_not_masked(
     assert stored_exc_info.value.message == "Custom error message"
 
     DBOS.destroy(destroy_registry=True)
+
+
+class TStatus(Enum):
+    PAID = "paid"
+    SHIPPED = "shipped"
+
+
+@dataclass
+class TItem:
+    sku: str
+    qty: int
+
+
+@dataclass
+class TOrder:
+    id: str
+    placed: datetime
+    status: TStatus
+    items: List[TItem]
+
+
+@dataclass
+class TReceipt:
+    order_id: str
+    total: Decimal
+    placed: datetime
+
+
+# The same shape under another name, as if the class had been renamed or moved.
+@dataclass
+class RenamedReceipt:
+    order_id: str
+    total: Decimal
+    placed: datetime
+
+
+_ORDER = TOrder(
+    id="A1",
+    placed=datetime(2026, 10, 27, 14, 0, tzinfo=timezone.utc),
+    status=TStatus.PAID,
+    items=[TItem("x", 2), TItem("y", 1)],
+)
+_RECEIPT = TReceipt("A1", Decimal("3.50"), _ORDER.placed)
+
+
+@pytest.fixture()
+def portable_dbos(
+    config: DBOSConfig, cleanup_test_databases: None
+) -> Generator[DBOS, Any, None]:
+    """DBOS launched with portable JSON as its default serializer, destroyed even if the test fails."""
+    DBOS.destroy(destroy_registry=True)
+    config["serializer"] = DBOSPortableJSONSerializer()
+    dbos = DBOS(config=config)
+    DBOS.launch()
+    yield dbos
+    DBOS.destroy(destroy_registry=True)
+
+
+def _portable_client(config: DBOSConfig) -> DBOSClient:
+    assert config["system_database_url"] is not None
+    return DBOSClient(
+        system_database_url=config["system_database_url"], sharding=using_sharding()
+    )
+
+
+def test_portable_typed_workflow_and_steps(
+    config: DBOSConfig, portable_dbos: DBOS
+) -> None:
+    dbos = portable_dbos
+    step_calls = 0
+
+    @DBOS.step()
+    def price(order: TOrder) -> TReceipt:
+        nonlocal step_calls
+        step_calls += 1
+        return TReceipt(order.id, Decimal("3.50"), order.placed)
+
+    @DBOS.workflow()
+    def process(
+        order: TOrder, by_sku: Dict[int, TItem], rush: bool = False
+    ) -> TReceipt:
+        # Arguments, including on recovery, arrive as the annotated types.
+        assert isinstance(order, TOrder) and isinstance(order.placed, datetime)
+        assert order.status is TStatus.PAID and isinstance(order.items[0], TItem)
+        assert isinstance(by_sku[1], TItem)
+        receipt = price(order)
+        # A replayed step returns its annotated type too.
+        assert isinstance(receipt, TReceipt)
+        return receipt
+
+    handle = DBOS.start_workflow(process, _ORDER, {1: TItem("x", 2)}, rush=True)
+    assert handle.get_result() == _RECEIPT
+    wfid = handle.workflow_id
+
+    # Results read back from the database use the registered return type.
+    assert DBOS.retrieve_workflow(wfid).get_result() == _RECEIPT
+    assert DBOS.get_result(wfid) == _RECEIPT
+
+    # Recovery decodes the stored arguments and replays the step.
+    assert reexecute_workflow_by_id(dbos, wfid).get_result() == _RECEIPT
+    assert step_calls == 1
+
+    # A client has no registry, so it decodes to the type it is given.
+    client = _portable_client(config)
+    try:
+        assert client.retrieve_workflow(wfid).get_result() == {
+            "order_id": "A1",
+            "total": "3.50",
+            "placed": "2026-10-27T14:00:00.000Z",
+        }
+        assert (
+            client.retrieve_workflow(wfid).get_result(result_type=TReceipt) == _RECEIPT
+        )
+        renamed: RenamedReceipt = client.retrieve_workflow(wfid).get_result(
+            result_type=RenamedReceipt
+        )
+        assert renamed == RenamedReceipt("A1", Decimal("3.50"), _ORDER.placed)
+        # An explicit type overrides the registered one.
+        assert DBOS.retrieve_workflow(wfid).get_result(
+            result_type=RenamedReceipt
+        ) == RenamedReceipt("A1", Decimal("3.50"), _ORDER.placed)
+    finally:
+        client.destroy()
+        DBOS.destroy(destroy_registry=True)
+
+
+def test_portable_typed_messages_events_streams(
+    config: DBOSConfig, portable_dbos: DBOS
+) -> None:
+    dbos = portable_dbos
+
+    @DBOS.workflow()
+    def producer() -> None:
+        DBOS.set_event("order", _ORDER)
+        for item in _ORDER.items:
+            DBOS.write_stream("items", item)
+        DBOS.close_stream("items")
+
+    @DBOS.workflow()
+    def consumer(producer_id: str) -> str:
+        msg = DBOS.recv("orders", result_type=TOrder)
+        evt = DBOS.get_event(producer_id, "order", result_type=TOrder)
+        streamed = list(DBOS.read_stream(producer_id, "items", result_type=TItem))
+        second = DBOS.read_stream_offset(producer_id, "items", 1, result_type=TItem)
+        untyped = DBOS.get_event(producer_id, "order")
+        # Checked in the body, so the replayed reads are checked on recovery too.
+        assert msg == _ORDER and evt == _ORDER
+        assert streamed == _ORDER.items and second == _ORDER.items[1]
+        assert isinstance(untyped, dict)
+        return "ok"
+
+    producer_handle = DBOS.start_workflow(producer)
+    producer_handle.get_result()
+    pid = producer_handle.workflow_id
+    consumer_handle = DBOS.start_workflow(consumer, pid)
+    DBOS.send(consumer_handle.workflow_id, _ORDER, "orders")
+    assert consumer_handle.get_result() == "ok"
+    assert (
+        reexecute_workflow_by_id(dbos, consumer_handle.workflow_id).get_result() == "ok"
+    )
+
+    client = _portable_client(config)
+    try:
+        assert client.get_event(pid, "order", result_type=TOrder) == _ORDER
+        assert list(client.read_stream(pid, "items", result_type=TItem)) == (
+            _ORDER.items
+        )
+        assert client.read_stream_offset(pid, "items", 0, result_type=TItem) == (
+            _ORDER.items[0]
+        )
+    finally:
+        client.destroy()
+        DBOS.destroy(destroy_registry=True)
+
+
+@pytest.mark.asyncio
+async def test_portable_typed_async(config: DBOSConfig, portable_dbos: DBOS) -> None:
+    dbos = portable_dbos
+
+    @DBOS.workflow()
+    async def producer() -> TReceipt:
+        await DBOS.set_event_async("order", _ORDER)
+        await DBOS.write_stream_async("items", _ORDER.items[0])
+        await DBOS.close_stream_async("items")
+        return _RECEIPT
+
+    item_calls = 0
+
+    @DBOS.step()
+    async def fetch_item() -> TItem:
+        nonlocal item_calls
+        item_calls += 1
+        return TItem("z", 9)
+
+    @DBOS.workflow()
+    async def consumer(producer_id: str) -> str:
+        # An async step replays its annotated type too.
+        item = await fetch_item()
+        assert item == TItem("z", 9)
+        msg = await DBOS.recv_async("orders", result_type=TOrder)
+        evt = await DBOS.get_event_async(producer_id, "order", result_type=TOrder)
+        streamed = [
+            v
+            async for v in DBOS.read_stream_async(
+                producer_id, "items", result_type=TItem
+            )
+        ]
+        second = await DBOS.read_stream_offset_async(
+            producer_id, "items", 0, result_type=TItem
+        )
+        result = await DBOS.get_result_async(producer_id, result_type=TReceipt)
+        assert msg == _ORDER and evt == _ORDER and result == _RECEIPT
+        assert streamed == [_ORDER.items[0]] and second == _ORDER.items[0]
+        return "ok"
+
+    producer_handle = await DBOS.start_workflow_async(producer)
+    assert await producer_handle.get_result() == _RECEIPT
+    pid = producer_handle.workflow_id
+    assert await (await DBOS.retrieve_workflow_async(pid)).get_result() == _RECEIPT
+    renamed = RenamedReceipt(_RECEIPT.order_id, _RECEIPT.total, _RECEIPT.placed)
+    # An explicit type applies to in-process and polling async handles alike.
+    renamed_result: Any = await producer_handle.get_result(result_type=RenamedReceipt)
+    assert renamed_result == renamed
+    polling: WorkflowHandleAsync[Any] = await DBOS.retrieve_workflow_async(pid)
+    assert await polling.get_result(result_type=RenamedReceipt) == renamed
+    consumer_handle = await DBOS.start_workflow_async(consumer, pid)
+    await DBOS.send_async(consumer_handle.workflow_id, _ORDER, "orders")
+    assert await consumer_handle.get_result() == "ok"
+    replayed = await asyncio.to_thread(
+        reexecute_workflow_by_id, dbos, consumer_handle.workflow_id
+    )
+    assert await asyncio.to_thread(replayed.get_result) == "ok"
+    assert item_calls == 1
+
+    client = _portable_client(config)
+    try:
+        handle: WorkflowHandleAsync[Any] = await client.retrieve_workflow_async(pid)
+        assert await handle.get_result(result_type=TReceipt) == _RECEIPT
+        assert await client.get_event_async(pid, "order", result_type=TOrder) == (
+            _ORDER
+        )
+        assert [
+            v async for v in client.read_stream_async(pid, "items", result_type=TItem)
+        ] == [_ORDER.items[0]]
+        assert await client.read_stream_offset_async(
+            pid, "items", 0, result_type=TItem
+        ) == (_ORDER.items[0])
+    finally:
+        client.destroy()
+        DBOS.destroy(destroy_registry=True)
+
+
+def test_portable_typed_args_mismatch(dbos: DBOS, skip_with_sharding: None) -> None:
+    dburl = dbos._config["system_database_url"]
+    assert dburl is not None
+    schema = "dbos." if dburl.startswith("postgres") else ""
+
+    @DBOS.workflow(
+        name="typedItemWorkflow",
+        serialization_type=WorkflowSerializationFormat.PORTABLE,
+    )
+    def typed_item_workflow(item: TItem) -> str:
+        assert isinstance(item, TItem)
+        return f"{item.sku}x{item.qty}"
+
+    DBOS.register_queue("testq_typed")
+
+    def insert(args: List[Any]) -> str:
+        wfid = str(uuid.uuid4())
+        with dbos._sys_db.engine.begin() as c:
+            c.execute(
+                sa.text(
+                    f"""
+                INSERT INTO {schema}workflow_status(
+                  workflow_uuid, name, queue_name, status, inputs, created_at, serialization
+                )
+                VALUES (:workflow_uuid, :name, :queue_name, :status, :inputs,
+                        :created_at, :serialization);
+                """
+                ),
+                {
+                    "workflow_uuid": wfid,
+                    "name": "typedItemWorkflow",
+                    "queue_name": "testq_typed",
+                    "status": "ENQUEUED",
+                    "inputs": json.dumps({"positionalArgs": args}),
+                    "created_at": int(time.time() * 1000),
+                    "serialization": "portable_json",
+                },
+            )
+        return wfid
+
+    # Another language enqueues plain JSON; the parameter's annotation rebuilds it.
+    ok_id = insert([{"sku": "a", "qty": 2}])
+    assert DBOS.retrieve_workflow(ok_id).get_result() == "ax2"
+
+    # A shape the annotation cannot accept fails the workflow instead of running it.
+    bad_id = insert([{"sku": "a"}])
+    with pytest.raises(PortableWorkflowError) as exc_info:
+        DBOS.retrieve_workflow(bad_id).get_result()
+    assert exc_info.value.name == "DBOSSerializationError"
+    assert "qty" in exc_info.value.message
+    status = DBOS.get_workflow_status(bad_id)
+    assert status is not None and status.status == WorkflowStatusString.ERROR.value
+
+
+def test_portable_typed_children_and_live_results(
+    config: DBOSConfig, portable_dbos: DBOS
+) -> None:
+    dbos = portable_dbos
+
+    @DBOS.workflow()
+    def child(n: int) -> TReceipt:
+        return TReceipt(f"c{n}", Decimal(n), _ORDER.placed)
+
+    @DBOS.step()
+    def stamped_item() -> TItem:
+        return TItem("s", 1)
+
+    @DBOS.workflow()
+    def parent() -> str:
+        direct = child(1)
+        handle = DBOS.start_workflow(child, 2)
+        # An explicit type applies to an in-process handle as to a polling one.
+        renamed: Any = handle.get_result(result_type=RenamedReceipt)
+        fetched = DBOS.get_result(handle.workflow_id)
+        item = stamped_item()
+        assert item == TItem("s", 1)
+        assert direct == TReceipt("c1", Decimal(1), _ORDER.placed)
+        assert renamed == RenamedReceipt("c2", Decimal(2), _ORDER.placed)
+        assert fetched == TReceipt("c2", Decimal(2), _ORDER.placed)
+        return "ok"
+
+    try:
+        handle = DBOS.start_workflow(parent)
+        assert handle.get_result() == "ok"
+        # Recovery replays the child results, the get_result and the step with the same types.
+        assert reexecute_workflow_by_id(dbos, handle.workflow_id).get_result() == "ok"
+    finally:
+        DBOS.destroy(destroy_registry=True)
+
+
+def test_portable_recv_conversion_failure_does_not_block(
+    config: DBOSConfig, portable_dbos: DBOS
+) -> None:
+    dbos = portable_dbos
+
+    @DBOS.workflow()
+    def receiver() -> List[str]:
+        outcomes: List[str] = []
+        for _ in range(2):
+            try:
+                item = DBOS.recv("items", timeout_seconds=10, result_type=TItem)
+                outcomes.append(item.sku if item is not None else "none")
+            except DBOSSerializationError:
+                outcomes.append("bad")
+        return outcomes
+
+    try:
+        handle = DBOS.start_workflow(receiver)
+        DBOS.send(handle.workflow_id, {"sku": "a"}, "items")
+
+        def first_consumed() -> None:
+            steps = DBOS.list_workflow_steps(handle.workflow_id)
+            assert any(s["function_name"] == "DBOS.recv" for s in steps)
+
+        # Sent once the first is consumed, as messages sent in one millisecond may tie.
+        retry_until_success(first_consumed)
+        DBOS.send(handle.workflow_id, TItem("b", 1), "items")
+        # The malformed message is consumed and fails its own read, not every later one.
+        assert handle.get_result() == ["bad", "b"]
+        assert reexecute_workflow_by_id(dbos, handle.workflow_id).get_result() == [
+            "bad",
+            "b",
+        ]
+    finally:
+        DBOS.destroy(destroy_registry=True)
+
+
+def test_custom_serializer_reads_typed_portable_results(
+    config: DBOSConfig, cleanup_test_databases: None
+) -> None:
+    DBOS.destroy(destroy_registry=True)
+    config["serializer"] = JsonSerializer()
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    @DBOS.workflow(serialization_type=WorkflowSerializationFormat.PORTABLE)
+    def portable_child() -> TReceipt:
+        return _RECEIPT
+
+    @DBOS.workflow()
+    def json_parent(child_id: str) -> str:
+        # The typed result is beyond json.dumps, so its checkpoint falls back to portable JSON.
+        result = DBOS.get_result(child_id)
+        assert result == _RECEIPT
+        # So is the result a directly called child records for its parent.
+        assert portable_child() == _RECEIPT
+        return "ok"
+
+    try:
+        child_handle = DBOS.start_workflow(portable_child)
+        child_handle.get_result()
+        child_id = child_handle.workflow_id
+        # Outside a workflow nothing is checkpointed, so nothing is re-serialized.
+        assert DBOS.retrieve_workflow(child_id).get_result() == _RECEIPT
+        parent_handle = DBOS.start_workflow(json_parent, child_id)
+        assert parent_handle.get_result() == "ok"
+        assert (
+            reexecute_workflow_by_id(dbos, parent_handle.workflow_id).get_result()
+            == "ok"
+        )
+    finally:
+        DBOS.destroy(destroy_registry=True)
+
+
+class TypedJsonSerializer(JsonSerializer):
+    """A custom serializer that builds the requested type and, like many would, rejects null."""
+
+    def deserialize_typed(self, serialized_data: str, type_hint: Any) -> Any:
+        value = json.loads(serialized_data)
+        if value is None:
+            raise ValueError(f"cannot build {type_hint} from null")
+        return value_to_type(type_hint, value)
+
+    def name(self) -> Any:
+        return "typed_json"
+
+
+def test_custom_typed_serializer_replays_timeouts_as_none(
+    config: DBOSConfig, cleanup_test_databases: None
+) -> None:
+    DBOS.destroy(destroy_registry=True)
+    config["serializer"] = TypedJsonSerializer()
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    @DBOS.workflow()
+    def waiter() -> str:
+        message = DBOS.recv("never", timeout_seconds=0.1, result_type=TItem)
+        event = DBOS.get_event(
+            DBOS.workflow_id or "", "never", timeout_seconds=0.1, result_type=TItem
+        )
+        assert message is None and event is None
+        return "ok"
+
+    try:
+        handle = DBOS.start_workflow(waiter)
+        assert handle.get_result() == "ok"
+        # A recorded timeout replays as None, without asking the serializer to build a type from null.
+        assert reexecute_workflow_by_id(dbos, handle.workflow_id).get_result() == "ok"
+    finally:
+        DBOS.destroy(destroy_registry=True)
+
+
+def test_typed_reads_in_pickle_app(dbos: DBOS, skip_with_sharding: None) -> None:
+    @DBOS.workflow(serialization_type=WorkflowSerializationFormat.PORTABLE)
+    def producer() -> TReceipt:
+        DBOS.set_event("order", _ORDER)
+        DBOS.write_stream("items", _ORDER.items[0])
+        DBOS.close_stream("items")
+        return _RECEIPT
+
+    @DBOS.workflow()
+    def consumer(producer_id: str) -> str:
+        # The app pickles its checkpoints; the values read are portable, recorded as written.
+        message = DBOS.recv("orders", result_type=TOrder)
+        event = DBOS.get_event(producer_id, "order", result_type=TOrder)
+        items = list(DBOS.read_stream(producer_id, "items", result_type=TItem))
+        result = DBOS.get_result(producer_id)
+        assert message == _ORDER and event == _ORDER
+        assert items == [_ORDER.items[0]] and result == _RECEIPT
+        return "ok"
+
+    producer_handle = DBOS.start_workflow(producer)
+    assert producer_handle.get_result() == _RECEIPT
+    consumer_handle = DBOS.start_workflow(consumer, producer_handle.workflow_id)
+    DBOS.send(
+        consumer_handle.workflow_id,
+        _ORDER,
+        "orders",
+        serialization_type=WorkflowSerializationFormat.PORTABLE,
+    )
+    assert consumer_handle.get_result() == "ok"
+    assert (
+        reexecute_workflow_by_id(dbos, consumer_handle.workflow_id).get_result() == "ok"
+    )
+
+    # Older code recorded the end of a stream in the app's serializer; it still ends a replay.
+    with dbos._sys_db.engine.begin() as c:
+        updated = c.execute(
+            sa.update(SystemSchema.operation_outputs)
+            .where(
+                SystemSchema.operation_outputs.c.workflow_uuid
+                == consumer_handle.workflow_id,
+                SystemSchema.operation_outputs.c.function_name == "DBOS.readStream",
+                SystemSchema.operation_outputs.c.serialization
+                == DBOSPortableJSON.name(),
+                SystemSchema.operation_outputs.c.output
+                == DBOSPortableJSON.serialize(_dbos_stream_closed_sentinel),
+            )
+            .values(
+                output=DBOSDefaultSerializer.serialize(_dbos_stream_closed_sentinel),
+                serialization=DBOSDefaultSerializer.name(),
+            )
+        )
+        assert updated.rowcount == 1
+    assert (
+        reexecute_workflow_by_id(dbos, consumer_handle.workflow_id).get_result() == "ok"
+    )
+
+
+class LossyJsonSerializer(JsonSerializer):
+    """A custom serializer that, like orjson, encodes dataclasses and datetimes its own way."""
+
+    def serialize(self, data: Any) -> str:
+        return json.dumps(
+            data,
+            default=lambda o: o.__dict__ if hasattr(o, "__dict__") else str(o),
+        )
+
+    def name(self) -> Any:
+        return "lossy_json"
+
+
+def test_get_result_checkpoint_is_stored_as_written(
+    config: DBOSConfig, cleanup_test_databases: None
+) -> None:
+    DBOS.destroy(destroy_registry=True)
+    config["serializer"] = LossyJsonSerializer()
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    @DBOS.workflow(serialization_type=WorkflowSerializationFormat.PORTABLE)
+    def portable_child() -> TReceipt:
+        return _RECEIPT
+
+    @DBOS.workflow()
+    def parent(child_id: str) -> str:
+        # Re-encoding the typed result in the app serializer would replay a dict.
+        assert DBOS.get_result(child_id) == _RECEIPT
+        return "ok"
+
+    try:
+        child = DBOS.start_workflow(portable_child)
+        child.get_result()
+        handle = DBOS.start_workflow(parent, child.workflow_id)
+        assert handle.get_result() == "ok"
+        assert reexecute_workflow_by_id(dbos, handle.workflow_id).get_result() == "ok"
+    finally:
+        DBOS.destroy(destroy_registry=True)

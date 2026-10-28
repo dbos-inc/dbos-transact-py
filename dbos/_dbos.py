@@ -97,6 +97,7 @@ from ._registrations import (
     _class_fqn,
     get_dbos_func_name,
     get_func_info,
+    get_func_type_hints,
     get_or_create_class_info,
 )
 from ._roles import default_required_roles, required_roles
@@ -748,6 +749,15 @@ class DBOS:
         rv: SystemDatabase = self._sys_db_field
         return rv
 
+    def _workflow_return_type(self, name: str) -> Any:
+        """The return type a registered workflow declares, used to decode its result."""
+        func = self._registry.workflow_info_map.get(name)
+        return get_func_type_hints(func).return_hint if func is not None else None
+
+    def _workflow_return_type_by_id(self, workflow_id: str) -> Any:
+        status = self._sys_db.get_workflow_status(workflow_id)
+        return self._workflow_return_type(status["name"]) if status else None
+
     @staticmethod
     def migrate(
         system_database_url: str,
@@ -865,6 +875,7 @@ class DBOS:
                 ),
                 sharding=self._config.get("sharding", False),
             )
+            self._sys_db_field.result_type_resolver = self._workflow_return_type
 
             # Run migrations for the system database
             if self._config.get("run_migrations", True):
@@ -1767,24 +1778,44 @@ class DBOS:
 
     @classmethod
     def get_result(
-        cls, workflow_id: str, *, shard_key: Optional[str] = None
+        cls,
+        workflow_id: str,
+        *,
+        shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> Optional[Any]:
         """Await and return the result of a workflow execution."""
         with bind_shard_keys({workflow_id: shard_key}):
             check_async("get_result")
+            dbos = _get_dbos_instance()
 
+            # Checkpointed as the target stored it, so a replay decodes what this read did.
             def fn() -> Optional[Any]:
-                return _get_dbos_instance()._sys_db.await_workflow_result(
-                    workflow_id, DEFAULT_POLLING_INTERVAL
+                return dbos._sys_db.await_workflow_result(
+                    workflow_id,
+                    DEFAULT_POLLING_INTERVAL,
+                    result_type=result_type,
+                    as_written=True,
                 )
 
-            return _get_dbos_instance()._sys_db.call_function_as_step(
-                fn, "DBOS.getResult", snapshot_step_context(reserve_sleep_id=False)
+            return dbos._sys_db.call_function_as_step(
+                fn,
+                "DBOS.getResult",
+                snapshot_step_context(reserve_sleep_id=False),
+                lambda: (
+                    result_type
+                    if result_type is not None
+                    else dbos._workflow_return_type_by_id(workflow_id)
+                ),
             )
 
     @classmethod
     async def get_result_async(
-        cls, workflow_id: str, *, shard_key: Optional[str] = None
+        cls,
+        workflow_id: str,
+        *,
+        shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> Optional[Any]:
         """Await and return the result of a workflow execution."""
         with bind_shard_keys({workflow_id: shard_key}):
@@ -1792,13 +1823,24 @@ class DBOS:
             await cls._configure_asyncio_thread_pool()
             dbos = _get_dbos_instance()
 
+            # Checkpointed as the target stored it, so a replay decodes what this read did.
             async def fn() -> Optional[Any]:
                 return await dbos._sys_db.await_workflow_result_async(
-                    workflow_id, DEFAULT_POLLING_INTERVAL
+                    workflow_id,
+                    DEFAULT_POLLING_INTERVAL,
+                    result_type=result_type,
+                    as_written=True,
                 )
 
             return await dbos._sys_db.call_coroutine_as_step(
-                fn, "DBOS.getResult", step_ctx
+                fn,
+                "DBOS.getResult",
+                step_ctx,
+                lambda: (
+                    result_type
+                    if result_type is not None
+                    else dbos._workflow_return_type_by_id(workflow_id)
+                ),
             )
 
     @classmethod
@@ -2036,7 +2078,13 @@ class DBOS:
         )
 
     @classmethod
-    def recv(cls, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
+    def recv(
+        cls,
+        topic: Optional[str] = None,
+        timeout_seconds: float = 60,
+        *,
+        result_type: Any = None,
+    ) -> Any:
         """
         Receive a workflow message.
 
@@ -2056,11 +2104,16 @@ class DBOS:
                 timeout_function_id,
                 topic,
                 timeout_seconds,
+                result_type,
             )
 
     @classmethod
     async def recv_async(
-        cls, topic: Optional[str] = None, timeout_seconds: float = 60
+        cls,
+        topic: Optional[str] = None,
+        timeout_seconds: float = 60,
+        *,
+        result_type: Any = None,
     ) -> Any:
         """
         Receive a workflow message.
@@ -2081,6 +2134,7 @@ class DBOS:
                 timeout_function_id,
                 topic,
                 timeout_seconds,
+                result_type,
             )
 
     @classmethod
@@ -2261,6 +2315,7 @@ class DBOS:
         timeout_seconds: float = 60,
         *,
         shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> Any:
         """
         Return the `value` of a workflow event, waiting for it to occur if necessary.
@@ -2289,10 +2344,12 @@ class DBOS:
                         "timeout_function_id": timeout_function_id,
                     }
                     return dbos._sys_db.get_event(
-                        workflow_id, key, timeout_seconds, caller_ctx
+                        workflow_id, key, timeout_seconds, caller_ctx, result_type
                     )
             else:
-                return dbos._sys_db.get_event(workflow_id, key, timeout_seconds)
+                return dbos._sys_db.get_event(
+                    workflow_id, key, timeout_seconds, result_type=result_type
+                )
 
     @classmethod
     async def get_event_async(
@@ -2302,6 +2359,7 @@ class DBOS:
         timeout_seconds: float = 60,
         *,
         shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> Any:
         """
         Return the `value` of a workflow event, waiting for it to occur if necessary.
@@ -2330,11 +2388,11 @@ class DBOS:
                         "timeout_function_id": timeout_function_id,
                     }
                     return await dbos._sys_db.get_event_async(
-                        workflow_id, key, timeout_seconds, caller_ctx
+                        workflow_id, key, timeout_seconds, caller_ctx, result_type
                     )
             else:
                 return await dbos._sys_db.get_event_async(
-                    workflow_id, key, timeout_seconds
+                    workflow_id, key, timeout_seconds, result_type=result_type
                 )
 
     @classmethod
@@ -3977,6 +4035,7 @@ class DBOS:
         polling_interval_sec: Optional[float] = None,
         timeout_seconds: Optional[float] = None,
         shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> Generator[Any, Any, None]:
         """
         Read values from a stream as a generator.
@@ -4005,6 +4064,7 @@ class DBOS:
             polling_interval=polling_interval_sec,
             timeout_seconds=timeout_seconds,
             shard_key=shard_key,
+            result_type=result_type,
         )
 
     @classmethod
@@ -4017,6 +4077,7 @@ class DBOS:
         polling_interval_sec: Optional[float] = None,
         timeout_seconds: Optional[float] = None,
         shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> Any:
         """
         Read the single value at one offset of a stream, waiting for it to be written.
@@ -4046,6 +4107,7 @@ class DBOS:
             polling_interval=polling_interval_sec,
             timeout_seconds=timeout_seconds,
             shard_key=shard_key,
+            result_type=result_type,
         )
 
     @classmethod
@@ -4058,6 +4120,7 @@ class DBOS:
         polling_interval_sec: Optional[float] = None,
         timeout_seconds: Optional[float] = None,
         shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> Any:
         """
         Read the single value at one offset of a stream, waiting for it to be written.
@@ -4087,6 +4150,7 @@ class DBOS:
             polling_interval=polling_interval_sec,
             timeout_seconds=timeout_seconds,
             shard_key=shard_key,
+            result_type=result_type,
         )
 
     @classmethod
@@ -4140,6 +4204,7 @@ class DBOS:
         polling_interval_sec: Optional[float] = None,
         timeout_seconds: Optional[float] = None,
         shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> AsyncGenerator[Any, None]:
         """
         Read values from a stream as an async generator.
@@ -4168,6 +4233,7 @@ class DBOS:
             polling_interval=polling_interval_sec,
             timeout_seconds=timeout_seconds,
             shard_key=shard_key,
+            result_type=result_type,
         )
         try:
             async for value in values:
@@ -4370,7 +4436,10 @@ class WorkflowHandle(Generic[R], Protocol):
         ...
 
     def get_result(
-        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+        self,
+        *,
+        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
+        result_type: Any = None,
     ) -> R:
         """Return the result of the workflow function invocation, waiting if necessary."""
         ...
@@ -4402,7 +4471,10 @@ class WorkflowHandleAsync(Generic[R], Protocol):
         ...
 
     async def get_result(
-        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+        self,
+        *,
+        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
+        result_type: Any = None,
     ) -> R:
         """Return the result of the workflow function invocation, waiting if necessary."""
         ...

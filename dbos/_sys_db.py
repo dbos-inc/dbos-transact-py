@@ -80,6 +80,7 @@ from ._serialization import (
     WorkflowSerializationFormat,
     deserialize_exception,
     deserialize_value,
+    reads_type_hints,
     safe_deserialize,
     serialize_exception,
     serialize_value,
@@ -440,6 +441,10 @@ _serialized_stream_closed_sentinel = DBOSPortableJSON.serialize(
 )
 
 
+def _written_value(result: Any) -> Any:
+    return result.decode() if isinstance(result, OutputAsWritten) else result
+
+
 def is_stream_closed_sentinel(value: Any) -> bool:
     """Whether a stream value is the marker a closed stream ends with."""
     return isinstance(value, str) and value == _dbos_stream_closed_sentinel
@@ -453,6 +458,18 @@ def is_serialized_stream_closed_sentinel(
         serialization == DBOSPortableJSON.name()
         and serialized_value == _serialized_stream_closed_sentinel
     )
+
+
+@dataclass
+class OutputAsWritten:
+    """A value read from another record, in the stored form to checkpoint, so a replay decodes the same bytes.
+
+    It is decoded only after it is checkpointed, so a failure to decode replays as the same failure.
+    """
+
+    output: Optional[str]
+    serialization: str
+    decode: Callable[[], Any]
 
 
 @dataclass
@@ -781,6 +798,8 @@ class SystemDatabase(ABC):
         # Configure and initialize the system database
         self.dialect = sq if system_database_url.startswith("sqlite") else pg
         self.serializer = serializer
+        # Maps a workflow's name to its return type, to decode its result; set by the app, not a client.
+        self.result_type_resolver: Optional[Callable[[str], Any]] = None
         self.use_listen_notify = use_listen_notify
         # Whether db_retry blocks on a lost connection until it recovers, or raises.
         self._retry_connection_errors = retry_connection_errors
@@ -2704,6 +2723,7 @@ class SystemDatabase(ABC):
                         self.tables.workflow_status.c.error,
                     ),
                     self.tables.workflow_status.c.serialization,
+                    self.tables.workflow_status.c.name,
                 )
                 .select_from(
                     self.tables.workflow_status.outerjoin(
@@ -2717,7 +2737,12 @@ class SystemDatabase(ABC):
             ).fetchone()
 
     def check_workflow_result(
-        self, workflow_id: str, *, fail_if_missing: bool = False
+        self,
+        workflow_id: str,
+        *,
+        fail_if_missing: bool = False,
+        result_type: Any = None,
+        as_written: bool = False,
     ) -> Union[NoResult, Any]:
         """Check if a workflow has completed and return its result.
 
@@ -2730,6 +2755,10 @@ class SystemDatabase(ABC):
         Callers that know the row must already exist (e.g. a run parking on an
         outcome it just failed to write) pass fail_if_missing to get a
         DBOSNonExistentWorkflowError instead of polling forever.
+
+        The output is converted to result_type, or else to the return type the
+        resolver finds for the workflow's name. With as_written, it is returned as an
+        OutputAsWritten that also carries the stored output.
         """
         row = self._read_workflow_result_row(workflow_id)
         if row is None and fail_if_missing:
@@ -2738,7 +2767,28 @@ class SystemDatabase(ABC):
             status = row[0]
             if status == WorkflowStatusString.SUCCESS.value:
                 output = row[1]
-                return deserialize_value(output, row[3], self.serializer)
+                if (
+                    result_type is None
+                    and self.result_type_resolver is not None
+                    and reads_type_hints(row[3], self.serializer)
+                ):
+                    result_type = self.result_type_resolver(row[4])
+                if as_written:
+                    stored: Optional[str] = output
+                    serialization = row[3] or self.serializer.name()
+                    if stored is None:
+                        # A NULL output replays only as a recorded value, so record portable null.
+                        stored = DBOSPortableJSON.serialize(None)
+                        serialization = DBOSPortableJSON.name()
+                    hint = result_type
+                    return OutputAsWritten(
+                        stored,
+                        serialization,
+                        lambda: deserialize_value(
+                            stored, serialization, self.serializer, hint
+                        ),
+                    )
+                return deserialize_value(output, row[3], self.serializer, result_type)
             elif status == WorkflowStatusString.ERROR.value:
                 error = row[2]
                 e: Exception = deserialize_exception(error, row[3], self.serializer)
@@ -2757,10 +2807,15 @@ class SystemDatabase(ABC):
         polling_interval: float,
         *,
         fail_if_missing: bool = False,
+        result_type: Any = None,
+        as_written: bool = False,
     ) -> Any:
         while True:
             result = self.check_workflow_result(
-                workflow_id, fail_if_missing=fail_if_missing
+                workflow_id,
+                fail_if_missing=fail_if_missing,
+                result_type=result_type,
+                as_written=as_written,
             )
             if not isinstance(result, NoResult):
                 return result
@@ -2772,10 +2827,16 @@ class SystemDatabase(ABC):
         polling_interval: float,
         *,
         fail_if_missing: bool = False,
+        result_type: Any = None,
+        as_written: bool = False,
     ) -> Any:
         while True:
             result = await asyncio.to_thread(
-                self.check_workflow_result, workflow_id, fail_if_missing=fail_if_missing
+                self.check_workflow_result,
+                workflow_id,
+                fail_if_missing=fail_if_missing,
+                result_type=result_type,
+                as_written=as_written,
             )
             if not isinstance(result, NoResult):
                 return result
@@ -3481,7 +3542,9 @@ class SystemDatabase(ABC):
                 recorded["error"], recorded["serialization"], self.serializer
             )
 
-    def _replay_recorded(self, recorded: RecordedResult, function_name: str) -> Any:
+    def _replay_recorded(
+        self, recorded: RecordedResult, function_name: str, type_hint: Any = None
+    ) -> Any:
         """Return a recorded operation's output or re-raise its recorded error."""
         self._raise_recorded_error(recorded)
         if recorded["output"] is None:
@@ -3489,7 +3552,7 @@ class SystemDatabase(ABC):
                 f"Recorded output and error are both None for {function_name}"
             )
         return deserialize_value(
-            recorded["output"], recorded["serialization"], self.serializer
+            recorded["output"], recorded["serialization"], self.serializer, type_hint
         )
 
     def record_get_result(
@@ -3927,6 +3990,7 @@ class SystemDatabase(ABC):
         timeout_function_id: int,
         topic: Optional[str],
         timeout_seconds: float = 60,
+        result_type: Any = None,
     ) -> EventSetupResult:
         """Setup phase of recv. Returns either:
         - (True, result) if a cached result was found (OAOO replay or message already available)
@@ -3947,6 +4011,7 @@ class SystemDatabase(ABC):
                     recorded_output["output"],
                     recorded_output["serialization"],
                     self.serializer,
+                    result_type,
                 )
             else:
                 raise Exception("No output recorded in the last recv")
@@ -3980,6 +4045,7 @@ class SystemDatabase(ABC):
         function_id: int,
         topic: Optional[str],
         start_time: int,
+        result_type: Any = None,
     ) -> Any:
         """Consume phase of recv. Transactionally consumes the oldest unconsumed
         message and records the operation result."""
@@ -3999,49 +4065,14 @@ class SystemDatabase(ABC):
             ).fetchall()
             if len(recorded) > 0:
                 return deserialize_value(
-                    recorded[0][0], recorded[0][1], self.serializer
+                    recorded[0][0], recorded[0][1], self.serializer, result_type
                 )
-
-            consume_stmt = (
-                sa.update(self.tables.notifications)
-                .where(
-                    *self._wf(
-                        self.tables.notifications, workflow_uuid, "destination_uuid"
-                    ),
-                    self.tables.notifications.c.topic == topic,
-                    self.tables.notifications.c.consumed == False,
-                    self.tables.notifications.c.message_uuid
-                    == (
-                        sa.select(self.tables.notifications.c.message_uuid)
-                        .where(
-                            *self._wf(
-                                self.tables.notifications,
-                                workflow_uuid,
-                                "destination_uuid",
-                            ),
-                            self.tables.notifications.c.topic == topic,
-                            self.tables.notifications.c.consumed == False,
-                        )
-                        .order_by(self.tables.notifications.c.created_at_epoch_ms.asc())
-                        .limit(1)
-                        .scalar_subquery()
-                    ),
-                )
-                .values(consumed=True, consumed_by_function_id=function_id)
-                .returning(
-                    self.tables.notifications.c.message,
-                    self.tables.notifications.c.serialization,
-                )
-            )
-            rows = c.execute(consume_stmt).fetchall()
-            message: Any = None
-            serialization: Optional[str] = None
-            if len(rows) > 0:
-                message = deserialize_value(rows[0][0], rows[0][1], self.serializer)
-                serialization = rows[0][1]
-
-            sermsg, serialization = serialize_value_as(
-                message, serialization, self.serializer
+            consumed = self._consume_message(c, workflow_uuid, function_id, topic)
+            # Nothing found is recorded as portable null, which every type hint decodes to None.
+            sermsg, serialization = (
+                consumed
+                if consumed is not None
+                else (DBOSPortableJSON.serialize(None), DBOSPortableJSON.name())
             )
             self._record_operation_result_txn(
                 {
@@ -4057,7 +4088,49 @@ class SystemDatabase(ABC):
                 int(time.time() * 1000),
                 conn=c,
             )
-        return message
+        if consumed is None:
+            return None
+        # Converted once consumed and recorded, so a message that fails to convert neither blocks its topic nor replays differently.
+        return deserialize_value(sermsg, serialization, self.serializer, result_type)
+
+    def _consume_message(
+        self, c: sa.Connection, workflow_uuid: str, function_id: int, topic: str
+    ) -> Optional[tuple[str, str]]:
+        """Mark the topic's oldest unconsumed message consumed, returning it as written, or None if there is none."""
+        consume_stmt = (
+            sa.update(self.tables.notifications)
+            .where(
+                *self._wf(self.tables.notifications, workflow_uuid, "destination_uuid"),
+                self.tables.notifications.c.topic == topic,
+                self.tables.notifications.c.consumed == False,
+                self.tables.notifications.c.message_uuid
+                == (
+                    sa.select(self.tables.notifications.c.message_uuid)
+                    .where(
+                        *self._wf(
+                            self.tables.notifications,
+                            workflow_uuid,
+                            "destination_uuid",
+                        ),
+                        self.tables.notifications.c.topic == topic,
+                        self.tables.notifications.c.consumed == False,
+                    )
+                    .order_by(self.tables.notifications.c.created_at_epoch_ms.asc())
+                    .limit(1)
+                    .scalar_subquery()
+                ),
+            )
+            .values(consumed=True, consumed_by_function_id=function_id)
+            .returning(
+                self.tables.notifications.c.message,
+                self.tables.notifications.c.serialization,
+            )
+        )
+        rows = c.execute(consume_stmt).fetchall()
+        if len(rows) > 0 and rows[0][0] is not None:
+            # Checkpointed as written, so a replay decodes exactly what this read did.
+            return rows[0][0], rows[0][1] or self.serializer.name()
+        return None
 
     def recv_check(
         self,
@@ -4124,9 +4197,15 @@ class SystemDatabase(ABC):
         timeout_function_id: int,
         topic: Optional[str],
         timeout_seconds: float = 60,
+        result_type: Any = None,
     ) -> Any:
         setup = self.recv_setup(
-            workflow_uuid, function_id, timeout_function_id, topic, timeout_seconds
+            workflow_uuid,
+            function_id,
+            timeout_function_id,
+            topic,
+            timeout_seconds,
+            result_type,
         )
         if setup[0]:
             return setup[1]
@@ -4140,7 +4219,9 @@ class SystemDatabase(ABC):
                 event.wait(timeout=min(remaining, self._event_recheck_interval()))
                 if not event.is_set():
                     self.recv_check(workflow_uuid, topic, event)
-            return self.recv_consume(workflow_uuid, function_id, topic, start_time)
+            return self.recv_consume(
+                workflow_uuid, function_id, topic, start_time, result_type
+            )
         finally:
             self.notifications_map.pop(payload, event)
 
@@ -4200,6 +4281,7 @@ class SystemDatabase(ABC):
         timeout_function_id: int,
         topic: Optional[str],
         timeout_seconds: float = 60,
+        result_type: Any = None,
     ) -> Any:
         setup = await self._run_event_setup_async(
             self.notifications_map,
@@ -4209,6 +4291,7 @@ class SystemDatabase(ABC):
             timeout_function_id,
             topic,
             timeout_seconds,
+            result_type,
         )
         if setup[0]:
             return setup[1]
@@ -4232,6 +4315,7 @@ class SystemDatabase(ABC):
                 function_id,
                 topic,
                 start_time,
+                result_type,
             )
         finally:
             self.notifications_map.pop(payload, event)
@@ -4576,6 +4660,7 @@ class SystemDatabase(ABC):
         key: str,
         timeout_seconds: float = 60,
         caller_ctx: Optional[GetEventWorkflowContext] = None,
+        result_type: Any = None,
     ) -> EventSetupResult:
         """Setup phase of get_event. Returns either:
         - (True, result) if a cached result was found (OAOO replay)
@@ -4598,6 +4683,7 @@ class SystemDatabase(ABC):
                         recorded_output["output"],
                         recorded_output["serialization"],
                         self.serializer,
+                        result_type,
                     )
                 else:
                     raise Exception("No output recorded in the last get_event")
@@ -4635,6 +4721,7 @@ class SystemDatabase(ABC):
         key: str,
         start_time: int,
         caller_ctx: Optional[GetEventWorkflowContext] = None,
+        result_type: Any = None,
     ) -> Any:
         """Consume phase of get_event. Reads the value from the database
         and records the operation result if in a workflow."""
@@ -4651,17 +4738,21 @@ class SystemDatabase(ABC):
                 )
             ).fetchall()
 
-        value: Any = None
-        serialization: Optional[str] = None
-        if len(rows) > 0:
-            serialization = rows[0][1]
-            value = deserialize_value(rows[0][0], serialization, self.serializer)
+        serval: Optional[str]
+        serialization: str
+        found = len(rows) > 0 and rows[0][0] is not None
+        if found:
+            # Checkpointed as written, so a replay decodes exactly what this read did.
+            serval, serialization = rows[0][0], rows[0][1] or self.serializer.name()
+        else:
+            # Nothing found is recorded as portable null, which every type hint decodes to None.
+            serval, serialization = (
+                DBOSPortableJSON.serialize(None),
+                DBOSPortableJSON.name(),
+            )
 
         # Record the output if it's in a workflow
         if caller_ctx is not None:
-            serval, serialization = serialize_value_as(
-                value, serialization, self.serializer
-            )
             self.record_operation_result(
                 {
                     "workflow_uuid": caller_ctx["workflow_uuid"],
@@ -4674,7 +4765,10 @@ class SystemDatabase(ABC):
                     "child_workflow_id": None,
                 }
             )
-        return value
+        if not found:
+            return None
+        # Converted after recording, so a value that fails to convert replays the same failure.
+        return deserialize_value(serval, serialization, self.serializer, result_type)
 
     def get_event_check(
         self,
@@ -4707,8 +4801,11 @@ class SystemDatabase(ABC):
         key: str,
         timeout_seconds: float = 60,
         caller_ctx: Optional[GetEventWorkflowContext] = None,
+        result_type: Any = None,
     ) -> Any:
-        setup = self.get_event_setup(target_uuid, key, timeout_seconds, caller_ctx)
+        setup = self.get_event_setup(
+            target_uuid, key, timeout_seconds, caller_ctx, result_type
+        )
         if setup[0]:
             return setup[1]
         _, event, actual_timeout, payload, start_time = setup
@@ -4721,7 +4818,9 @@ class SystemDatabase(ABC):
                 event.wait(timeout=min(remaining, self._event_recheck_interval()))
                 if not event.is_set():
                     self.get_event_check(target_uuid, key, event)
-            return self.get_event_consume(target_uuid, key, start_time, caller_ctx)
+            return self.get_event_consume(
+                target_uuid, key, start_time, caller_ctx, result_type
+            )
         finally:
             self.workflow_events_map.pop(payload, event)
 
@@ -4731,6 +4830,7 @@ class SystemDatabase(ABC):
         key: str,
         timeout_seconds: float = 60,
         caller_ctx: Optional[GetEventWorkflowContext] = None,
+        result_type: Any = None,
     ) -> Any:
         setup = await self._run_event_setup_async(
             self.workflow_events_map,
@@ -4739,6 +4839,7 @@ class SystemDatabase(ABC):
             key,
             timeout_seconds,
             caller_ctx,
+            result_type,
         )
         if setup[0]:
             return setup[1]
@@ -4762,6 +4863,7 @@ class SystemDatabase(ABC):
                 key,
                 start_time,
                 caller_ctx,
+                result_type,
             )
         finally:
             self.workflow_events_map.pop(payload, event)
@@ -5464,16 +5566,30 @@ class SystemDatabase(ABC):
     T = TypeVar("T")
 
     def call_function_as_step(
-        self, fn: Callable[[], T], function_name: str, ctx: Optional[DBOSContext]
+        self,
+        fn: Callable[[], T],
+        function_name: str,
+        ctx: Optional[DBOSContext],
+        resolve_type_hint: Optional[Callable[[], Any]] = None,
     ) -> T:
         start_time = int(time.time() * 1000)
         if not (ctx and ctx.is_workflow()):
-            return fn()
+            return cast(SystemDatabase.T, _written_value(fn()))
         res = self.check_operation_execution(
             ctx.workflow_id, ctx.function_id, function_name
         )
         if res is not None:
-            return cast(SystemDatabase.T, self._replay_recorded(res, function_name))
+            # Resolved only to replay an output that can use it, as it may cost a query.
+            self._raise_recorded_error(res)
+            type_hint = (
+                resolve_type_hint()
+                if resolve_type_hint is not None
+                and reads_type_hints(res["serialization"], self.serializer)
+                else None
+            )
+            return cast(
+                SystemDatabase.T, self._replay_recorded(res, function_name, type_hint)
+            )
         try:
             result = fn()
         except Exception as e:
@@ -5482,7 +5598,11 @@ class SystemDatabase(ABC):
                 ctx.workflow_id, ctx.function_id, function_name, start_time, e
             )
             raise
-        serval, serialization = serialize_value(result, None, self.serializer)
+        written = result if isinstance(result, OutputAsWritten) else None
+        if written is not None:
+            serval, serialization = written.output, written.serialization
+        else:
+            serval, serialization = serialize_value(result, None, self.serializer)
         self.record_operation_result(
             {
                 "workflow_uuid": ctx.workflow_id,
@@ -5495,6 +5615,8 @@ class SystemDatabase(ABC):
                 "child_workflow_id": None,
             }
         )
+        if written is not None:
+            return cast(SystemDatabase.T, written.decode())
         return result
 
     async def call_coroutine_as_step(
@@ -5502,10 +5624,14 @@ class SystemDatabase(ABC):
         fn: Callable[[], Awaitable[T]],
         function_name: str,
         ctx: Optional[DBOSContext],
+        resolve_type_hint: Optional[Callable[[], Any]] = None,
     ) -> T:
         start_time = int(time.time() * 1000)
         if not (ctx and ctx.is_workflow()):
-            return await fn()
+            result = await fn()
+            if isinstance(result, OutputAsWritten):
+                return cast(SystemDatabase.T, await asyncio.to_thread(result.decode))
+            return result
         res = await asyncio.to_thread(
             self.check_operation_execution,
             ctx.workflow_id,
@@ -5513,7 +5639,21 @@ class SystemDatabase(ABC):
             function_name,
         )
         if res is not None:
-            return cast(SystemDatabase.T, self._replay_recorded(res, function_name))
+            # Resolved only to replay an output that can use it, as it may cost a query.
+            self._raise_recorded_error(res)
+            type_hint = (
+                await asyncio.to_thread(resolve_type_hint)
+                if resolve_type_hint is not None
+                and reads_type_hints(res["serialization"], self.serializer)
+                else None
+            )
+            # Off the event loop, as a custom serializer may block.
+            return cast(
+                SystemDatabase.T,
+                await asyncio.to_thread(
+                    self._replay_recorded, res, function_name, type_hint
+                ),
+            )
         try:
             result = await fn()
         except Exception as e:
@@ -5527,7 +5667,11 @@ class SystemDatabase(ABC):
                 e,
             )
             raise
-        serval, serialization = serialize_value(result, None, self.serializer)
+        written = result if isinstance(result, OutputAsWritten) else None
+        if written is not None:
+            serval, serialization = written.output, written.serialization
+        else:
+            serval, serialization = serialize_value(result, None, self.serializer)
         await asyncio.to_thread(
             self.record_operation_result,
             {
@@ -5541,6 +5685,9 @@ class SystemDatabase(ABC):
                 "child_workflow_id": None,
             },
         )
+        if written is not None:
+            # Off the event loop, as a custom serializer may block.
+            return cast(SystemDatabase.T, await asyncio.to_thread(written.decode))
         return result
 
     @db_retry()

@@ -90,11 +90,14 @@ class WorkflowHandleClientPolling(Generic[R]):
         return self.workflow_id
 
     def get_result(
-        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+        self,
+        *,
+        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
+        result_type: Any = None,
     ) -> R:
         with bind_shard_keys({self.workflow_id: self.shard_key}):
             res: R = self._sys_db.await_workflow_result(
-                self.workflow_id, polling_interval_sec
+                self.workflow_id, polling_interval_sec, result_type=result_type
             )
         return res
 
@@ -119,11 +122,14 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
         return self.workflow_id
 
     async def get_result(
-        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+        self,
+        *,
+        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
+        result_type: Any = None,
     ) -> R:
         with bind_shard_keys({self.workflow_id: self.shard_key}):
             res: R = await self._sys_db.await_workflow_result_async(
-                self.workflow_id, polling_interval_sec
+                self.workflow_id, polling_interval_sec, result_type=result_type
             )
         return res
 
@@ -797,9 +803,12 @@ class DBOSClient:
         timeout_seconds: float = 60,
         *,
         shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> Any:
         with bind_shard_keys({workflow_id: shard_key}):
-            return self._sys_db.get_event(workflow_id, key, timeout_seconds)
+            return self._sys_db.get_event(
+                workflow_id, key, timeout_seconds, result_type=result_type
+            )
 
     async def get_event_async(
         self,
@@ -808,9 +817,12 @@ class DBOSClient:
         timeout_seconds: float = 60,
         *,
         shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> Any:
         with bind_shard_keys({workflow_id: shard_key}):
-            return await self._sys_db.get_event_async(workflow_id, key, timeout_seconds)
+            return await self._sys_db.get_event_async(
+                workflow_id, key, timeout_seconds, result_type=result_type
+            )
 
     def cancel_workflow(
         self,
@@ -1449,6 +1461,7 @@ class DBOSClient:
         polling_interval_sec: Optional[float] = None,
         timeout_seconds: Optional[float] = None,
         shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> Generator[Any, Any, None]:
         """
         Read values from a stream as a generator.
@@ -1475,6 +1488,7 @@ class DBOSClient:
             timeout_seconds=timeout_seconds,
             shard_key=shard_key,
             checkpoint=False,
+            result_type=result_type,
         )
 
     async def read_stream_async(
@@ -1486,6 +1500,7 @@ class DBOSClient:
         polling_interval_sec: Optional[float] = None,
         timeout_seconds: Optional[float] = None,
         shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> AsyncGenerator[Any, None]:
         """
         Read values from a stream as an async generator.
@@ -1512,6 +1527,7 @@ class DBOSClient:
             timeout_seconds=timeout_seconds,
             shard_key=shard_key,
             checkpoint=False,
+            result_type=result_type,
         )
         try:
             async for value in values:
@@ -1529,6 +1545,7 @@ class DBOSClient:
         polling_interval_sec: Optional[float] = None,
         timeout_seconds: Optional[float] = None,
         shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> Any:
         """
         Read the single value at one offset of a stream, waiting for it to be written.
@@ -1557,6 +1574,7 @@ class DBOSClient:
             timeout_seconds=timeout_seconds,
             shard_key=shard_key,
             checkpoint=False,
+            result_type=result_type,
         )
 
     async def read_stream_offset_async(
@@ -1568,6 +1586,7 @@ class DBOSClient:
         polling_interval_sec: Optional[float] = None,
         timeout_seconds: Optional[float] = None,
         shard_key: Optional[str] = None,
+        result_type: Any = None,
     ) -> Any:
         """
         Read the single value at one offset of a stream, waiting for it to be written.
@@ -1596,6 +1615,7 @@ class DBOSClient:
             timeout_seconds=timeout_seconds,
             shard_key=shard_key,
             checkpoint=False,
+            result_type=result_type,
         )
 
     # ── Schedule API ──────────────────────────────────────────────

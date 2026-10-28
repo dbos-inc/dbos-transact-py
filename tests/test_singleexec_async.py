@@ -400,11 +400,22 @@ async def test_parked_duplicate_does_not_hold_a_thread(
 
     original_check = dbos._sys_db.check_workflow_result
 
-    def tracking_check(workflow_id: str, *, fail_if_missing: bool = False) -> Any:
+    def tracking_check(
+        workflow_id: str,
+        *,
+        fail_if_missing: bool = False,
+        result_type: Any = None,
+        as_written: bool = False,
+    ) -> Any:
         # Every park polls this, blocking or not: a check is proof the run reached it.
         if workflow_id in lost_ids:
             parked_ids.add(workflow_id)
-        return original_check(workflow_id, fail_if_missing=fail_if_missing)
+        return original_check(
+            workflow_id,
+            fail_if_missing=fail_if_missing,
+            result_type=result_type,
+            as_written=as_written,
+        )
 
     if park_entry == "checkpoint_conflict":
         dbos._sys_db.record_operation_result = losing_record  # type: ignore[method-assign]
