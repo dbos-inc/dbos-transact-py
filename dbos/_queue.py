@@ -833,6 +833,11 @@ def queue_worker_thread(
                         # A queue-wide limit (e.g. filled by peers since the snapshot) leaves every other partition empty too.
                         if stop_reason in ("concurrency", "limiter"):
                             break
+                        # With a queue-wide limit the claim lock spans the queue, so every other partition is held too.
+                        if stop_reason == "claim_lock" and (
+                            queue._concurrency is not None or queue._limiter is not None
+                        ):
+                            break
             except DBAPIError as e:
                 if dbos._sys_db.is_lock_conflict(e):
                     # Another worker is dequeueing this queue right now; retry next
