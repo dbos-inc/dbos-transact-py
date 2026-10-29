@@ -1,5 +1,6 @@
 """Large objects: values kept in an external object store, checkpointed as small refs."""
 
+import collections.abc
 from typing import Generic, List, Optional, Protocol, Sequence, TypeVar
 
 # typing.TypedDict can't be generic before Python 3.11; SQLAlchemy already requires typing_extensions.
@@ -47,6 +48,10 @@ def check_large_object_stores(
     stores: Optional[Sequence[LargeObjectStore]],
 ) -> List[LargeObjectStore]:
     """The configured stores, each with its own store_id; empty means none."""
+    if stores is not None and not isinstance(stores, collections.abc.Sequence):
+        raise DBOSInitializationError(
+            f"large_object_stores must be a list of stores, not a single {type(stores).__name__}; pass [store]"
+        )
     configured = list(stores or [])
     ids = [store.store_id for store in configured]
     repeated = sorted({store_id for store_id in ids if ids.count(store_id) > 1})

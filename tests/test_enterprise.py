@@ -21,6 +21,7 @@ from dbos._error import (
     DBOSInitializationError,
     DBOSLargeObjectStoreNotConfiguredError,
 )
+from dbos._large_object import check_large_object_stores
 from dbos._logger import dbos_logger
 from dbos._sys_db import SystemDatabase
 from dbos._utils import GlobalParams
@@ -637,6 +638,16 @@ def test_large_object_store_checks_its_entitlement(
         DBOS(config=storing)  # type: ignore[arg-type]
     DBOS.destroy(destroy_registry=True)
     assert conductor.requests == [("/v2/entitlements", "Bearer enterprise-key")]
+
+
+def test_large_object_stores_must_be_a_list() -> None:
+    store = types.SimpleNamespace(store_id="only")
+    with pytest.raises(
+        DBOSInitializationError, match=r"not a single SimpleNamespace; pass \[store\]"
+    ):
+        check_large_object_stores(cast(Any, store))
+    assert check_large_object_stores([cast(Any, store)]) == [store]
+    assert check_large_object_stores(None) == []
 
 
 def test_large_objects_need_a_store(dbos: DBOS) -> None:
