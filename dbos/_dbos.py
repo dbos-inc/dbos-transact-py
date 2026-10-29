@@ -2277,7 +2277,7 @@ class DBOS:
         serialization_type: Optional[
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
-        name: Optional[str] = None,
+        key: Optional[str] = None,
         shard_key: Optional[str] = None,
         store_id: Optional[str] = None,
     ) -> ExternalObjectRef[T]:
@@ -2295,14 +2295,14 @@ class DBOS:
                     value,
                     owner_workflow_id=owner,
                     serialization_type=serialization_type,
-                    name=name,
+                    key=key,
                     store_id=store_id,
                 )
             return external_storage.store(
                 value,
                 owner_workflow_id=owner,
                 serialization_type=serialization_type,
-                name=name,
+                key=key,
                 store_id=store_id,
             )
 
@@ -2315,7 +2315,7 @@ class DBOS:
         serialization_type: Optional[
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
-        name: Optional[str] = None,
+        key: Optional[str] = None,
         shard_key: Optional[str] = None,
         store_id: Optional[str] = None,
     ) -> ExternalObjectRef[T]:
@@ -2332,14 +2332,14 @@ class DBOS:
                     value,
                     owner_workflow_id=owner,
                     serialization_type=serialization_type,
-                    name=name,
+                    key=key,
                     store_id=store_id,
                 )
             return await external_storage.store_async(
                 value,
                 owner_workflow_id=owner,
                 serialization_type=serialization_type,
-                name=name,
+                key=key,
                 store_id=store_id,
             )
 

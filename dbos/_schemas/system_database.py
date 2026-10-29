@@ -191,10 +191,12 @@ class SystemSchema:
     external_objects = Table(
         "external_objects",
         metadata_obj,
-        Column("object_key", Text, primary_key=True),
+        Column("object_key", Text, nullable=False),
         Column("store_id", Text, nullable=False),
         Column("workflow_uuid", Text, nullable=False),
         Column("created_at", BigInteger, nullable=False),
+        # Keys are per store: two stores may each hold an object under one key.
+        PrimaryKeyConstraint("store_id", "object_key"),
     )
 
     streams = Table(

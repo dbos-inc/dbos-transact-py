@@ -112,7 +112,7 @@ class ExternalStorage(Protocol):
         *,
         owner_workflow_id: str,
         serialization_type: Optional["WorkflowSerializationFormat"],
-        name: Optional[str],
+        key: Optional[str],
         store_id: Optional[str],
     ) -> "ExternalObjectRef[Any]": ...
 
@@ -122,7 +122,7 @@ class ExternalStorage(Protocol):
         *,
         owner_workflow_id: str,
         serialization_type: Optional["WorkflowSerializationFormat"],
-        name: Optional[str],
+        key: Optional[str],
         store_id: Optional[str],
     ) -> "ExternalObjectRef[Any]": ...
 

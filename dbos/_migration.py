@@ -1404,10 +1404,11 @@ def get_dbos_migration_hundredtwentysix(quoted_schema: str) -> str:
     # Objects stored with DBOS.store_external_object, so garbage collection can find those whose owner is gone.
     return f"""
 CREATE TABLE IF NOT EXISTS {quoted_schema}."external_objects" (
-    "object_key" TEXT PRIMARY KEY,
+    "object_key" TEXT NOT NULL,
     "store_id" TEXT NOT NULL,
     "workflow_uuid" TEXT NOT NULL,
-    "created_at" BIGINT NOT NULL
+    "created_at" BIGINT NOT NULL,
+    PRIMARY KEY ("store_id", "object_key")
 );
 CREATE INDEX IF NOT EXISTS "idx_external_objects_store_created_at" ON {quoted_schema}."external_objects" ("store_id", "created_at");
 """
@@ -1952,10 +1953,11 @@ sqlite_migration_hundredtwentyfive = 'CREATE INDEX IF NOT EXISTS "idx_applicatio
 
 sqlite_migration_hundredtwentysix = """
 CREATE TABLE IF NOT EXISTS "external_objects" (
-    "object_key" TEXT PRIMARY KEY,
+    "object_key" TEXT NOT NULL,
     "store_id" TEXT NOT NULL,
     "workflow_uuid" TEXT NOT NULL,
-    "created_at" INTEGER NOT NULL
+    "created_at" INTEGER NOT NULL,
+    PRIMARY KEY ("store_id", "object_key")
 );
 CREATE INDEX IF NOT EXISTS "idx_external_objects_store_created_at" ON "external_objects" ("store_id", "created_at");
 """

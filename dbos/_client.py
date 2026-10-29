@@ -678,7 +678,7 @@ class DBOSClient:
         serialization_type: Optional[
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
-        name: Optional[str] = None,
+        key: Optional[str] = None,
         shard_key: Optional[str] = None,
         store_id: Optional[str] = None,
     ) -> ExternalObjectRef[T]:
@@ -688,7 +688,7 @@ class DBOSClient:
                 value,
                 owner_workflow_id=owner_workflow_id,
                 serialization_type=serialization_type,
-                name=name,
+                key=key,
                 store_id=store_id,
             )
 
@@ -700,7 +700,7 @@ class DBOSClient:
         serialization_type: Optional[
             WorkflowSerializationFormat
         ] = WorkflowSerializationFormat.DEFAULT,
-        name: Optional[str] = None,
+        key: Optional[str] = None,
         shard_key: Optional[str] = None,
         store_id: Optional[str] = None,
     ) -> ExternalObjectRef[T]:
@@ -710,7 +710,7 @@ class DBOSClient:
                 value,
                 owner_workflow_id=owner_workflow_id,
                 serialization_type=serialization_type,
-                name=name,
+                key=key,
                 store_id=store_id,
             )
 
