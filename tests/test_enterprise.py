@@ -11,17 +11,18 @@ import types
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, Generator, List, Optional, Tuple
+from typing import Any, Dict, Generator, List, Optional, Tuple, cast
 
 import pytest
 
-from dbos import DBOS, DBOSConfig
+from dbos import DBOS, DBOSClient, DBOSConfig
 from dbos import _enterprise as enterprise_module
 from dbos._error import (
     DBOSInitializationError,
     DBOSLargeObjectStoreNotConfiguredError,
 )
 from dbos._logger import dbos_logger
+from dbos._sys_db import SystemDatabase
 from dbos._utils import GlobalParams
 
 # Captured at import, before any test harness replaces it.
@@ -114,6 +115,23 @@ def test_cloud_always_requires_the_package(
     with pytest.raises(DBOSInitializationError, match="refused"):
         DBOS(config=config)
     DBOS.destroy(destroy_registry=True)
+
+
+def test_refused_client_opens_no_connection(
+    config: DBOSConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _load_refuses(monkeypatch)
+    created: List[Any] = []
+    monkeypatch.setattr(
+        SystemDatabase, "create", lambda *args, **kwargs: created.append(args)
+    )
+    assert config["system_database_url"] is not None
+    with pytest.raises(DBOSInitializationError, match="refused"):
+        DBOSClient(
+            system_database_url=config["system_database_url"],
+            large_object_store=cast(Any, object()),
+        )
+    assert created == []
 
 
 # --- Entitlements -------------------------------------------------------------

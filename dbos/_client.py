@@ -50,7 +50,7 @@ from croniter import croniter
 
 from dbos import _enterprise
 from dbos._dbos_config import is_valid_database_url
-from dbos._enterprise import LargeObjects
+from dbos._enterprise import LargeObjects, LargeObjectsFactory
 from dbos._error import (
     DBOSException,
     DBOSLargeObjectStoreNotConfiguredError,
@@ -213,6 +213,12 @@ class DBOSClient:
                     "A DBOSClient requires a system_database_url or a system_database_engine."
                 )
             assert is_valid_database_url(system_database_url)
+        # Loaded before any connection exists, so a missing package leaves nothing to clean up.
+        large_objects_factory: Optional[LargeObjectsFactory] = None
+        if large_object_store is not None:
+            large_objects_factory = _enterprise.load(
+                _enterprise.LARGE_OBJECTS.description
+            ).LargeObjects
         # We only create database connections but do not run migrations
         self._sys_db = SystemDatabase.create(
             system_database_url=system_database_url,
@@ -240,10 +246,9 @@ class DBOSClient:
             sharding=sharding,
         )
         self._large_objects_field: Optional[LargeObjects] = None
-        if large_object_store is not None:
-            self._large_objects_field = _enterprise.load(
-                _enterprise.LARGE_OBJECTS.description
-            ).LargeObjects(
+        if large_objects_factory is not None:
+            assert large_object_store is not None
+            self._large_objects_field = large_objects_factory(
                 self._sys_db, store=large_object_store, serializer=serializer
             )
         self._notification_listener_thread: Optional[threading.Thread] = None
