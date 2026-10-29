@@ -161,7 +161,11 @@ from ._error import (
     DBOSPatchNondeterminismError,
 )
 from ._event_loop import BackgroundEventLoop
-from ._large_object import LargeObjectRef, LargeObjectStore
+from ._large_object import (
+    LargeObjectRef,
+    LargeObjectStore,
+    check_large_object_stores,
+)
 from ._logger import (
     add_otlp_to_all_loggers,
     add_transformer_to_all_loggers,
@@ -727,8 +731,8 @@ class DBOS:
         self._alert_handler: Optional[AlertHandler] = None
         serializer = config.get("serializer")
         self._serializer: Serializer = serializer if serializer else DefaultSerializer()
-        self._large_object_store: Optional[LargeObjectStore] = config.get(
-            "large_object_store"
+        self._large_object_stores: List[LargeObjectStore] = check_large_object_stores(
+            config.get("large_object_stores")
         )
         self._large_objects_field: Optional[LargeObjects] = None
         self._conductor_executor_metadata: Optional[Dict[str, Any]] = config.get(
@@ -798,8 +802,8 @@ class DBOS:
         return rv
 
     def _large_objects(self) -> LargeObjects:
-        if self._large_object_store is None:
-            raise DBOSLargeObjectStoreNotConfiguredError(None, None)
+        if not self._large_object_stores:
+            raise DBOSLargeObjectStoreNotConfiguredError(None, [])
         if self._large_objects_field is None:
             raise DBOSException("Large objects used before DBOS was launched")
         return self._large_objects_field
@@ -940,12 +944,12 @@ class DBOS:
                 self._sys_db.verify_migrations()
 
             # Built before recovery and queues start, as their workflows may use large objects.
-            if self._large_object_store is not None:
+            if self._large_object_stores:
                 self._large_objects_field = _enterprise.load(
                     _enterprise.LARGE_OBJECTS.description
                 ).LargeObjects(
                     self._sys_db,
-                    store=self._large_object_store,
+                    stores=self._large_object_stores,
                     serializer=self._serializer,
                 )
 
@@ -2275,8 +2279,9 @@ class DBOS:
         ] = WorkflowSerializationFormat.DEFAULT,
         name: Optional[str] = None,
         shard_key: Optional[str] = None,
+        store_id: Optional[str] = None,
     ) -> LargeObjectRef[T]:
-        """Upload a value to the configured large object store and return a small ref to it.
+        """Upload a value to a large object store (if there are multiple, specify one with store_id) and return a ref to it.
         The object lives as long as its owner workflow: the current one by default, required outside a workflow.
         """
         check_async("store_large_object")
@@ -2293,12 +2298,14 @@ class DBOS:
                     owner_workflow_id=owner,
                     serialization_type=serialization_type,
                     name=name,
+                    store_id=store_id,
                 )
             return large_objects.store(
                 value,
                 owner_workflow_id=owner,
                 serialization_type=serialization_type,
                 name=name,
+                store_id=store_id,
             )
 
     @classmethod
@@ -2312,8 +2319,9 @@ class DBOS:
         ] = WorkflowSerializationFormat.DEFAULT,
         name: Optional[str] = None,
         shard_key: Optional[str] = None,
+        store_id: Optional[str] = None,
     ) -> LargeObjectRef[T]:
-        """Upload a value to the configured large object store and return a small ref to it."""
+        """Upload a value to a large object store (if there are multiple, specify one with store_id) and return a ref to it."""
         large_objects = _get_dbos_instance()._large_objects()
         ctx = get_local_dbos_context()
         owner = _large_object_owner(ctx, owner_workflow_id, shard_key)
@@ -2327,12 +2335,14 @@ class DBOS:
                     owner_workflow_id=owner,
                     serialization_type=serialization_type,
                     name=name,
+                    store_id=store_id,
                 )
             return await large_objects.store_async(
                 value,
                 owner_workflow_id=owner,
                 serialization_type=serialization_type,
                 name=name,
+                store_id=store_id,
             )
 
     @classmethod

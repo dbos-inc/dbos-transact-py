@@ -129,7 +129,9 @@ def test_refused_client_opens_no_connection(
     with pytest.raises(DBOSInitializationError, match="refused"):
         DBOSClient(
             system_database_url=config["system_database_url"],
-            large_object_store=cast(Any, object()),
+            large_object_stores=[
+                cast(Any, types.SimpleNamespace(store_id="refused-store"))
+            ],
         )
     assert created == []
 
@@ -578,9 +580,11 @@ def test_config_turns_on_enterprise_features() -> None:
     assert enterprise_module.enabled_features({"sharding": True}) == [
         enterprise_module.SHARDING
     ]
-    assert enterprise_module.enabled_features({"large_object_store": object()}) == [
+    assert enterprise_module.enabled_features({"large_object_stores": [object()]}) == [
         enterprise_module.LARGE_OBJECTS
     ]
+    # An empty list configures no store, so it needs no entitlement.
+    assert enterprise_module.enabled_features({"large_object_stores": []}) == []
     # Every registered feature has a distinct entitlement name.
     names = [f.entitlement for f in enterprise_module.FEATURES]
     assert len(names) == len(set(names))
@@ -620,11 +624,11 @@ def test_large_object_store_checks_its_entitlement(
         DBOSInitializationError,
         match=f": {enterprise_module.LARGE_OBJECTS.description} requires a DBOS key",
     ):
-        DBOS(config={**config, "large_object_store": store})  # type: ignore[typeddict-item]
+        DBOS(config={**config, "large_object_stores": [store]})  # type: ignore[list-item]
     DBOS.destroy(destroy_registry=True)
     storing = {
         **config,
-        "large_object_store": store,
+        "large_object_stores": [store],
         "transact_enterprise_key": "enterprise-key",
         "conductor_url": conductor.url,
     }

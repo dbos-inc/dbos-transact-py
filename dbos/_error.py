@@ -1,7 +1,7 @@
 """Errors thrown by DBOS."""
 
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 
 class DBOSException(Exception):
@@ -417,21 +417,21 @@ class DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(DBOSException):
 
 
 class DBOSLargeObjectStoreNotConfiguredError(DBOSException):
-    """Exception raised when no large object store is configured, or a ref names a different store than the configured one."""
+    """Exception raised when no large object store is configured, or a ref or store_id names a store that isn't."""
 
-    def __init__(self, ref_store_id: Optional[str], configured_store_id: Optional[str]):
-        self.ref_store_id = ref_store_id
-        self.configured_store_id = configured_store_id
-        if configured_store_id is None:
-            msg = "Large objects require a large_object_store in the DBOS configuration or DBOSClient"
+    def __init__(self, store_id: Optional[str], configured_store_ids: List[str]):
+        self.store_id = store_id
+        self.configured_store_ids = configured_store_ids
+        if not configured_store_ids:
+            msg = "Large objects require large_object_stores in the DBOS configuration or DBOSClient"
         else:
-            msg = f"Large object belongs to store {ref_store_id}, but the configured store is {configured_store_id}"
+            msg = f"Large object store {store_id} is not configured; the configured stores are {', '.join(configured_store_ids)}"
         super().__init__(
             msg, dbos_error_code=DBOSErrorCode.LargeObjectStoreNotConfigured.value
         )
 
     def __reduce__(self) -> Any:
-        return (self.__class__, (self.ref_store_id, self.configured_store_id))
+        return (self.__class__, (self.store_id, self.configured_store_ids))
 
 
 class DBOSLargeObjectMissingError(DBOSException):

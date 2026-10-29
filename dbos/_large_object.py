@@ -1,9 +1,11 @@
 """Large objects: values kept in an external object store, checkpointed as small refs."""
 
-from typing import Generic, Protocol, Sequence, TypeVar
+from typing import Generic, List, Optional, Protocol, Sequence, TypeVar
 
 # typing.TypedDict can't be generic before Python 3.11; SQLAlchemy already requires typing_extensions.
 from typing_extensions import TypedDict
+
+from ._error import DBOSInitializationError
 
 T = TypeVar("T")
 
@@ -39,3 +41,17 @@ class LargeObjectStore(Protocol):
 
     # Keys with no object are ignored.
     def delete(self, keys: Sequence[str]) -> None: ...
+
+
+def check_large_object_stores(
+    stores: Optional[Sequence[LargeObjectStore]],
+) -> List[LargeObjectStore]:
+    """The configured stores, each with its own store_id; empty means none."""
+    configured = list(stores or [])
+    ids = [store.store_id for store in configured]
+    repeated = sorted({store_id for store_id in ids if ids.count(store_id) > 1})
+    if repeated:
+        raise DBOSInitializationError(
+            f"Each large object store needs its own store_id, but these repeat: {', '.join(repeated)}"
+        )
+    return configured

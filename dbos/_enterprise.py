@@ -113,6 +113,7 @@ class LargeObjects(Protocol):
         owner_workflow_id: str,
         serialization_type: Optional["WorkflowSerializationFormat"],
         name: Optional[str],
+        store_id: Optional[str],
     ) -> "LargeObjectRef[Any]": ...
 
     async def store_async(
@@ -122,6 +123,7 @@ class LargeObjects(Protocol):
         owner_workflow_id: str,
         serialization_type: Optional["WorkflowSerializationFormat"],
         name: Optional[str],
+        store_id: Optional[str],
     ) -> "LargeObjectRef[Any]": ...
 
     def get(self, ref: "LargeObjectRef[Any]") -> Any: ...
@@ -134,7 +136,7 @@ class LargeObjectsFactory(Protocol):
         self,
         sys_db: "SystemDatabase",
         *,
-        store: "LargeObjectStore",
+        stores: Sequence["LargeObjectStore"],
         serializer: "Serializer",
     ) -> LargeObjects: ...
 
@@ -175,7 +177,7 @@ AUTO_UPGRADE = Feature(
 )
 SHARDING = Feature("sharding", "Using a sharded system database", config_key="sharding")
 LARGE_OBJECTS = Feature(
-    "largeObjects", "Storing large objects", config_key="large_object_store"
+    "largeObjects", "Storing large objects", config_key="large_object_stores"
 )
 
 # Every entitled feature; a new one is a Feature here, named by Conductor's camelCase key.
