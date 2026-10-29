@@ -81,6 +81,8 @@ class SystemSchema:
         Column("is_debounced", Boolean, nullable=False, server_default="false"),
         # Owning application. NULL means unclaimed: any application may read and claim the row.
         Column("application_name", Text, nullable=True),
+        # Topic a SUSPENDED recv waits on; delay_until_epoch_ms holds its wake time.
+        Column("suspend_key", Text, nullable=True),
     )
 
     workflow_input = Table(

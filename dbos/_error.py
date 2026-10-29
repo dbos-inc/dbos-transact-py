@@ -69,11 +69,12 @@ class DBOSErrorCode(Enum):
     QueryTimeout = 26
     WorkflowIDInUse = 27
     StepNondeterminism = 28
-    ExternalStoreNotConfigured = 29
-    ExternalObjectMissing = 30
-    ExternalObjectIntegrity = 31
-    ExternalStoreFailed = 32
-    ExternalObjectKeyConflict = 33
+    WorkflowSuspended = 29
+    ExternalStoreNotConfigured = 30
+    ExternalObjectMissing = 31
+    ExternalObjectIntegrity = 32
+    ExternalStoreFailed = 33
+    ExternalObjectKeyConflict = 34
 
 
 #######################################
@@ -514,6 +515,26 @@ class DBOSWorkflowCancelledError(DBOSBaseException):
         super().__init__(
             msg,
             dbos_error_code=DBOSErrorCode.WorkflowCancelled.value,
+        )
+
+
+class DBOSWorkflowSuspendedError(DBOSBaseException):
+    """BaseException raised by a suspend-mode recv or sleep once the workflow is parked in
+    the database. The execution must exit: a send on the topic, the recv timeout, or the end
+    of the sleep re-enqueues the workflow.
+    """
+
+    def __init__(self, workflow_id: str, topic: Optional[str]) -> None:
+        if topic is None:
+            waiting = "sleeping"
+        elif topic == "__null__topic__":
+            # A recv with no topic waits on the system database's null topic.
+            waiting = "waiting on a message with no topic"
+        else:
+            waiting = f"waiting on topic {topic}"
+        super().__init__(
+            f"Workflow {workflow_id} suspended {waiting}",
+            dbos_error_code=DBOSErrorCode.WorkflowSuspended.value,
         )
 
 

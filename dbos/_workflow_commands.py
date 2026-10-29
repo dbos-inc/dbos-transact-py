@@ -143,15 +143,15 @@ def background_jobs_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
             if len(cancelled) < _SWEEP_BATCH_SIZE:
                 break
 
+    jobs: Dict[str, Callable[[], None]] = {
+        "delayed_workflows": lambda: dbos._sys_db.transition_delayed_workflows(),
+        "workflow_timeout": sweep,
+    }
+    suspend = dbos._sys_db.suspend
+    if suspend is not None:
+        jobs["suspended_workflows"] = suspend.transition_suspended_workflows
     _run_background_jobs(
-        stop_event,
-        dbos,
-        "background_jobs",
-        _BACKGROUND_JOBS_INTERVAL_SEC,
-        {
-            "delayed_workflows": lambda: dbos._sys_db.transition_delayed_workflows(),
-            "workflow_timeout": sweep,
-        },
+        stop_event, dbos, "background_jobs", _BACKGROUND_JOBS_INTERVAL_SEC, jobs
     )
 
 

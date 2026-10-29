@@ -39,6 +39,9 @@ _ONLINE_MIGRATIONS = {
     122,
     124,
     125,
+    127,
+    128,
+    129,
 }
 
 # From this index on, every SDK defines the same migration at the same index.
@@ -1401,6 +1404,73 @@ def get_dbos_migration_hundredtwentyfive(quoted_schema: str, is_cockroach: bool)
 
 
 def get_dbos_migration_hundredtwentysix(quoted_schema: str) -> str:
+    # Topic a SUSPENDED recv waits on.
+    return f"""ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN IF NOT EXISTS "suspend_key" TEXT DEFAULT NULL;"""
+
+
+def get_dbos_migration_hundredtwentyseven(
+    quoted_schema: str, is_cockroach: bool
+) -> str:
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_suspended" ON {quoted_schema}."workflow_status" ("delay_until_epoch_ms") WHERE "status" = \'SUSPENDED\' AND "delay_until_epoch_ms" IS NOT NULL'
+
+
+def get_dbos_migration_hundredtwentyeight(
+    quoted_schema: str, is_cockroach: bool
+) -> str:
+    # idx_workflow_status_deadline, with a predicate that also covers SUSPENDED workflows.
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_deadline_v2" ON {quoted_schema}."workflow_status" ("workflow_deadline_epoch_ms") WHERE "status" IN (\'ENQUEUED\', \'PENDING\', \'DELAYED\', \'SUSPENDED\') AND "workflow_deadline_epoch_ms" IS NOT NULL'
+
+
+def get_dbos_migration_hundredtwentynine(quoted_schema: str, is_cockroach: bool) -> str:
+    # Superseded by idx_workflow_status_deadline_v2
+    c = _concurrently(is_cockroach)
+    return f'DROP INDEX {c} IF EXISTS {quoted_schema}."idx_workflow_status_deadline"'
+
+
+def get_dbos_migration_hundredthirty(quoted_schema: str, is_cockroach: bool) -> str:
+    # send_message also wakes a SUSPENDED recv on its topic, as every SDK send does.
+    migration = f"""
+CREATE OR REPLACE FUNCTION {quoted_schema}.send_message(
+    destination_id TEXT,
+    message JSON,
+    topic TEXT DEFAULT NULL,
+    message_id TEXT DEFAULT NULL
+) RETURNS VOID AS $$
+DECLARE
+    v_topic TEXT := COALESCE(topic, '__null__topic__');
+    v_message_id TEXT := COALESCE(message_id, gen_random_uuid()::TEXT);
+BEGIN
+    INSERT INTO {quoted_schema}.notifications (
+        destination_uuid, topic, message, message_uuid, serialization
+    ) VALUES (
+        destination_id, v_topic, message, v_message_id, 'portable_json'
+    )
+    ON CONFLICT (message_uuid) DO NOTHING;
+    UPDATE {quoted_schema}.workflow_status
+    SET delay_until_epoch_ms = 0
+    WHERE workflow_uuid = destination_id
+        AND status = 'SUSPENDED'
+        AND suspend_key = v_topic;
+EXCEPTION
+    WHEN foreign_key_violation THEN
+        RAISE EXCEPTION 'DBOS non-existent workflow'
+            USING DETAIL = format('Destination workflow %s does not exist', destination_id),
+                ERRCODE = 'foreign_key_violation';
+END;
+$$ LANGUAGE plpgsql;
+"""
+    if not is_cockroach:
+        migration += f"""
+ALTER FUNCTION {quoted_schema}.send_message(
+    TEXT, JSON, TEXT, TEXT
+) SET search_path = pg_catalog, pg_temp;
+"""
+    return migration
+
+
+def get_dbos_migration_hundredthirtyone(quoted_schema: str) -> str:
     # Objects stored with DBOS.store_external_object, so garbage collection can find those whose owner is gone.
     return f"""
 CREATE TABLE IF NOT EXISTS {quoted_schema}."external_objects" (
@@ -1497,6 +1567,11 @@ def get_dbos_migrations(
         get_dbos_migration_hundredtwentyfour(quoted_schema, is_cockroach),
         get_dbos_migration_hundredtwentyfive(quoted_schema, is_cockroach),
         get_dbos_migration_hundredtwentysix(quoted_schema),
+        get_dbos_migration_hundredtwentyseven(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredtwentyeight(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredtwentynine(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredthirty(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredthirtyone(quoted_schema),
     ]
 
 
@@ -1951,7 +2026,19 @@ sqlite_migration_hundredtwentyfour = 'CREATE INDEX IF NOT EXISTS "idx_applicatio
 
 sqlite_migration_hundredtwentyfive = 'CREATE INDEX IF NOT EXISTS "idx_application_versions_owner_timestamp" ON "application_versions" ("application_name", "version_timestamp" DESC)'
 
-sqlite_migration_hundredtwentysix = """
+sqlite_migration_hundredtwentysix = (
+    """ALTER TABLE workflow_status ADD COLUMN "suspend_key" TEXT DEFAULT NULL;"""
+)
+
+sqlite_migration_hundredtwentyseven = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_suspended" ON "workflow_status" ("delay_until_epoch_ms") WHERE "status" = \'SUSPENDED\' AND "delay_until_epoch_ms" IS NOT NULL'
+
+sqlite_migration_hundredtwentyeight = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_deadline_v2" ON "workflow_status" ("workflow_deadline_epoch_ms") WHERE "status" IN (\'ENQUEUED\', \'PENDING\', \'DELAYED\', \'SUSPENDED\') AND "workflow_deadline_epoch_ms" IS NOT NULL'
+
+sqlite_migration_hundredtwentynine = (
+    'DROP INDEX IF EXISTS "idx_workflow_status_deadline"'
+)
+
+sqlite_migration_hundredthirtyone = """
 CREATE TABLE IF NOT EXISTS "external_objects" (
     "object_key" TEXT NOT NULL,
     "store_id" TEXT NOT NULL,
@@ -1993,4 +2080,10 @@ sqlite_migrations = [
     sqlite_migration_hundredtwentyfour,
     sqlite_migration_hundredtwentyfive,
     sqlite_migration_hundredtwentysix,
+    sqlite_migration_hundredtwentyseven,
+    sqlite_migration_hundredtwentyeight,
+    sqlite_migration_hundredtwentynine,
+    # Postgres migration 130 rewrites a stored function; SQLite has none.
+    "",
+    sqlite_migration_hundredthirtyone,
 ]

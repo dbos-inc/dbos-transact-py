@@ -92,7 +92,9 @@ def insert_foreign_workflow(
                 updated_at=1,
                 # Terminal rows carry completed_at, as ones written by DBOS itself do
                 completed_at=(
-                    None if status in ("PENDING", "ENQUEUED", "DELAYED") else 1
+                    None
+                    if status in ("PENDING", "ENQUEUED", "DELAYED", "SUSPENDED")
+                    else 1
                 ),
                 priority=0,
                 application_name=application_name,
@@ -917,6 +919,26 @@ def test_rename_moves_every_owned_table(dbos: DBOS, skip_with_sharding: None) ->
     for label, owners in owners_of_everything(dbos).items():
         assert OTHER_APP not in owners, label
         assert RENAMED_APP in owners, label
+
+
+def test_rename_moves_resumable_rows_atomically(
+    dbos: DBOS, skip_with_sharding: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every row that will be dequeued again moves in the atomic transaction, with
+    the control plane, not in the lagging terminal batches. A SUSPENDED row is one:
+    a send or its timer re-enqueues it."""
+    resumable = ["PENDING", "ENQUEUED", "DELAYED", "SUSPENDED"]
+    for status in resumable:
+        insert_foreign_workflow(dbos, f"rename-atomic-{status}", status=status)
+    # Skip the batched pass, so only the atomic transaction moves anything.
+    monkeypatch.setattr(
+        dbos._sys_db, "_rename_rows_in_batches", lambda *args, **kwargs: 0
+    )
+
+    moved = dbos._sys_db.rename_application(OTHER_APP, RENAMED_APP)
+    assert moved["workflows"] == len(resumable)
+    for status in resumable:
+        assert application_name_of(dbos, f"rename-atomic-{status}") == RENAMED_APP
 
 
 def test_rename_batches_terminal_rows_and_resumes(

@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
+# Re-exported: EnqueueOptions is public as dbos.EnqueueOptions but is shared with _core.
 from dbos._core import (
     DEFAULT_POLLING_INTERVAL,
     read_stream,
@@ -28,8 +29,6 @@ from dbos._core import (
     read_stream_offset,
     read_stream_offset_async,
 )
-
-# Re-exported: EnqueueOptions is public as dbos.EnqueueOptions but is shared with _core.
 from dbos._enqueue_options import EnqueueOptions as EnqueueOptions
 from dbos._enqueue_options import build_enqueue_status
 from dbos._logger import dbos_logger
