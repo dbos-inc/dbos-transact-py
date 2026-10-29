@@ -12,8 +12,7 @@ T = TypeVar("T")
 
 
 class ExternalObjectRef(TypedDict, Generic[T]):
-    """A reference to a value stored with DBOS.store_external_object.
-    Plain data, so every serializer and SDK carries it unchanged."""
+    """A reference to a value stored with DBOS.store_external_object."""
 
     version: int
     store: str

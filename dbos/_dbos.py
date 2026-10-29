@@ -2281,9 +2281,7 @@ class DBOS:
         shard_key: Optional[str] = None,
         store_id: Optional[str] = None,
     ) -> ExternalObjectRef[T]:
-        """Upload a value to an external store (if there are multiple, specify one with store_id) and return a ref to it.
-        The object lives as long as its owner workflow: the current one by default, required outside a workflow.
-        """
+        """Upload a value to an external store (if there are multiple, specify one with store_id) and return a ref to it."""
         check_async("store_external_object")
         external_storage = _get_dbos_instance()._external_storage()
         ctx = get_local_dbos_context()
@@ -2347,15 +2345,14 @@ class DBOS:
 
     @classmethod
     def load_external_object(cls, ref: ExternalObjectRef[T]) -> T:
-        """Load the value an external object ref points to. Call it from a step, not a workflow body,
-        and return something small from that step, as its output is checkpointed."""
+        """Load the value an external object ref points to."""
         check_async("load_external_object")
         _refuse_load_in_workflow("load_external_object")
         return cast(T, _get_dbos_instance()._external_storage().get(ref))
 
     @classmethod
     async def load_external_object_async(cls, ref: ExternalObjectRef[T]) -> T:
-        """Load the value an external object ref points to. Call it from a step, not a workflow body."""
+        """Load the value an external object ref points to."""
         _refuse_load_in_workflow("load_external_object_async")
         return cast(T, await _get_dbos_instance()._external_storage().get_async(ref))
 

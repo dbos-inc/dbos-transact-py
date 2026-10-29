@@ -682,8 +682,7 @@ class DBOSClient:
         shard_key: Optional[str] = None,
         store_id: Optional[str] = None,
     ) -> ExternalObjectRef[T]:
-        """Upload a value to an external store (if there are multiple, specify one with store_id) and return a ref to it.
-        The object lives as long as the owner workflow, which need not exist yet."""
+        """Upload a value to an external store (if there are multiple, specify one with store_id) and return a ref to it."""
         with bind_shard_keys({owner_workflow_id: shard_key}):
             return self._external_storage().store(
                 value,
