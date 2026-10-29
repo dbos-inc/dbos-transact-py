@@ -5310,7 +5310,8 @@ class SystemDatabase(ABC):
         assert queue._partition_limiter is None
         start_time_ms = int(time.time() * 1000)
         ws = self.tables.workflow_status
-        is_postgres = self.engine.dialect.name == "postgresql"
+        # CockroachDB runs under its own dialect and takes the Postgres path.
+        is_postgres = self.engine.dialect.name != "sqlite"
         # A sharded database keeps the version row under another key, which the claim's transaction cannot span.
         if is_latest_version is None and self.sharded:
             is_latest_version = self._is_latest_version(app_version)

@@ -3157,11 +3157,10 @@ def test_partition_sweep_stops_at_queue_claim_lock(
         result = real_start(queue_arg, *args, **kwargs)
         if queue_arg.name == queue_wide.name:
             with spy_lock:
-                sweeps[-1].append((len(result[0]), result[1]))
+                # A sweep begun before the spies were installed has no entry.
+                if sweeps:
+                    sweeps[-1].append((len(result[0]), result[1]))
         return result
-
-    monkeypatch.setattr(dbos._sys_db, "get_queue_partitions", spying_partitions)
-    monkeypatch.setattr(dbos._sys_db, "start_queued_workflows", spying_start)
 
     def completed_sweeps() -> List[List[Tuple[int, Optional[DequeueStopReason]]]]:
         # The last sweep may still be claiming.
@@ -3178,6 +3177,9 @@ def test_partition_sweep_stops_at_queue_claim_lock(
                 with SetEnqueueOptions(queue_partition_key=partition):
                     wide_handles.append(queue_wide.enqueue(wf, i))
                     partition_handles.append(per_partition.enqueue(wf, i))
+            # Spy only once every partition is queued, so no sweep sees a partial or empty queue.
+            monkeypatch.setattr(dbos._sys_db, "get_queue_partitions", spying_partitions)
+            monkeypatch.setattr(dbos._sys_db, "start_queued_workflows", spying_start)
 
             def swept() -> None:
                 assert len(completed_sweeps()) >= 3
