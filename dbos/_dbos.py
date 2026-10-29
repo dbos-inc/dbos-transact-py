@@ -236,6 +236,19 @@ def _large_object_owner(
     return owner
 
 
+def _large_object_serialization(
+    ctx: Optional[DBOSContext],
+    serialization_type: Optional[WorkflowSerializationFormat],
+) -> Optional[WorkflowSerializationFormat]:
+    # Like send and set_event, the default follows the current workflow's format.
+    if (
+        serialization_type is None
+        or serialization_type == WorkflowSerializationFormat.DEFAULT
+    ) and ctx is not None:
+        return ctx.serialization_type
+    return serialization_type
+
+
 def check_async(fn: str) -> None:
     try:
         asyncio.get_running_loop()
@@ -2267,6 +2280,7 @@ class DBOS:
         large_objects = _get_dbos_instance()._large_objects()
         ctx = get_local_dbos_context()
         owner = _large_object_owner(ctx, owner_workflow_id, shard_key)
+        serialization_type = _large_object_serialization(ctx, serialization_type)
         with bind_shard_keys({owner: shard_key}):
             if ctx is not None and ctx.is_workflow():
                 return cls.run_step(
@@ -2300,6 +2314,7 @@ class DBOS:
         large_objects = _get_dbos_instance()._large_objects()
         ctx = get_local_dbos_context()
         owner = _large_object_owner(ctx, owner_workflow_id, shard_key)
+        serialization_type = _large_object_serialization(ctx, serialization_type)
         with bind_shard_keys({owner: shard_key}):
             if ctx is not None and ctx.is_workflow():
                 return await cls.run_step_async(
