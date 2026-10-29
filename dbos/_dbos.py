@@ -2285,7 +2285,7 @@ class DBOS:
         The object lives as long as its owner workflow: the current one by default, required outside a workflow.
         """
         check_async("store_external_object")
-        external_objects = _get_dbos_instance()._external_storage()
+        external_storage = _get_dbos_instance()._external_storage()
         ctx = get_local_dbos_context()
         owner = _external_object_owner(ctx, owner_workflow_id, shard_key)
         serialization_type = _external_object_serialization(ctx, serialization_type)
@@ -2293,14 +2293,14 @@ class DBOS:
             if ctx is not None and ctx.is_workflow():
                 return cls.run_step(
                     {"name": "DBOS.storeExternalObject"},
-                    external_objects.store,
+                    external_storage.store,
                     value,
                     owner_workflow_id=owner,
                     serialization_type=serialization_type,
                     name=name,
                     store_id=store_id,
                 )
-            return external_objects.store(
+            return external_storage.store(
                 value,
                 owner_workflow_id=owner,
                 serialization_type=serialization_type,
@@ -2322,7 +2322,7 @@ class DBOS:
         store_id: Optional[str] = None,
     ) -> ExternalObjectRef[T]:
         """Upload a value to an external store (if there are multiple, specify one with store_id) and return a ref to it."""
-        external_objects = _get_dbos_instance()._external_storage()
+        external_storage = _get_dbos_instance()._external_storage()
         ctx = get_local_dbos_context()
         owner = _external_object_owner(ctx, owner_workflow_id, shard_key)
         serialization_type = _external_object_serialization(ctx, serialization_type)
@@ -2330,14 +2330,14 @@ class DBOS:
             if ctx is not None and ctx.is_workflow():
                 return await cls.run_step_async(
                     {"name": "DBOS.storeExternalObject"},
-                    external_objects.store_async,
+                    external_storage.store_async,
                     value,
                     owner_workflow_id=owner,
                     serialization_type=serialization_type,
                     name=name,
                     store_id=store_id,
                 )
-            return await external_objects.store_async(
+            return await external_storage.store_async(
                 value,
                 owner_workflow_id=owner,
                 serialization_type=serialization_type,
