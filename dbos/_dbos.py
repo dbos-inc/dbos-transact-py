@@ -210,15 +210,30 @@ def _get_or_create_dbos_registry() -> DBOSRegistry:
 
 
 def _large_object_owner(
-    ctx: Optional[DBOSContext], owner_workflow_id: Optional[str]
+    ctx: Optional[DBOSContext],
+    owner_workflow_id: Optional[str],
+    shard_key: Optional[str],
 ) -> str:
-    if owner_workflow_id is not None:
-        return owner_workflow_id
-    if ctx is not None and ctx.is_within_workflow():
-        return ctx.workflow_id
-    raise DBOSException(
-        "store_large_object called outside a workflow requires an owner_workflow_id"
-    )
+    owner = owner_workflow_id
+    if owner is None:
+        if ctx is None or not ctx.is_within_workflow():
+            raise DBOSException(
+                "store_large_object called outside a workflow requires an owner_workflow_id"
+            )
+        owner = ctx.workflow_id
+    # Another key would hide the object from its owner, so GC would collect it while the owner lives.
+    if (
+        ctx is not None
+        and ctx.is_within_workflow()
+        and owner == ctx.workflow_id
+        and ctx.shard_key is not None
+        and shard_key is not None
+        and shard_key != ctx.shard_key
+    ):
+        raise DBOSException(
+            f"store_large_object's shard_key {shard_key!r} differs from workflow {owner}'s shard key {ctx.shard_key!r}"
+        )
+    return owner
 
 
 def check_async(fn: str) -> None:
@@ -2251,7 +2266,7 @@ class DBOS:
         check_async("store_large_object")
         large_objects = _get_dbos_instance()._large_objects()
         ctx = get_local_dbos_context()
-        owner = _large_object_owner(ctx, owner_workflow_id)
+        owner = _large_object_owner(ctx, owner_workflow_id, shard_key)
         with bind_shard_keys({owner: shard_key}):
             if ctx is not None and ctx.is_workflow():
                 return cls.run_step(
@@ -2284,7 +2299,7 @@ class DBOS:
         """Upload a value to the configured large object store and return a small ref to it."""
         large_objects = _get_dbos_instance()._large_objects()
         ctx = get_local_dbos_context()
-        owner = _large_object_owner(ctx, owner_workflow_id)
+        owner = _large_object_owner(ctx, owner_workflow_id, shard_key)
         with bind_shard_keys({owner: shard_key}):
             if ctx is not None and ctx.is_workflow():
                 return await cls.run_step_async(
