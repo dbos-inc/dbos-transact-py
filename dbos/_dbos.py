@@ -1107,10 +1107,6 @@ class DBOS:
                 )
                 self.auto_upgrader.start()
 
-            if self._large_objects_field is not None:
-                # Collects objects whose owner workflow is gone.
-                self._large_objects_field.start()
-
             # Start the dynamic scheduler thread
             scheduler_polling_interval_sec: float = (
                 self._config.get("runtimeConfig", {}).get(
@@ -1230,8 +1226,6 @@ class DBOS:
         # The upgrader unlocks its per-application advisory lock before the system database engine is disposed.
         if self.auto_upgrader is not None:
             self.auto_upgrader.stop()
-        if self._large_objects_field is not None:
-            self._large_objects_field.stop()
         # Disconnect from Conductor only once the wait above is over, so the executor stays visibly alive to Conductor for its whole duration.
         if self.conductor_websocket is not None:
             self.conductor_websocket.stop()

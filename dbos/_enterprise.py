@@ -128,11 +128,6 @@ class LargeObjects(Protocol):
 
     async def get_async(self, ref: "LargeObjectRef[Any]") -> Any: ...
 
-    # Background garbage collection, run by DBOS instances but not clients.
-    def start(self) -> None: ...
-
-    def stop(self) -> None: ...
-
 
 class LargeObjectsFactory(Protocol):
     def __call__(
