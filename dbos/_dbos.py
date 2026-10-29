@@ -249,6 +249,15 @@ def _large_object_serialization(
     return serialization_type
 
 
+def _refuse_load_in_workflow(fn: str) -> None:
+    # A load is I/O, so it belongs in a step's retries and checkpointed errors, not a workflow body.
+    ctx = get_local_dbos_context()
+    if ctx is not None and ctx.is_workflow():
+        raise DBOSException(
+            f"{fn}() may not be called from a workflow, call it from a step instead"
+        )
+
+
 def check_async(fn: str) -> None:
     try:
         asyncio.get_running_loop()
@@ -2334,13 +2343,16 @@ class DBOS:
 
     @classmethod
     def get_large_object(cls, ref: LargeObjectRef[T]) -> T:
-        """Load the value a large object ref points to. Not a step, so a workflow body fetches it again on every replay."""
+        """Load the value a large object ref points to. Call it from a step, not a workflow body,
+        and return something small from that step, as its output is checkpointed."""
         check_async("get_large_object")
+        _refuse_load_in_workflow("get_large_object")
         return cast(T, _get_dbos_instance()._large_objects().get(ref))
 
     @classmethod
     async def get_large_object_async(cls, ref: LargeObjectRef[T]) -> T:
-        """Load the value a large object ref points to."""
+        """Load the value a large object ref points to. Call it from a step, not a workflow body."""
+        _refuse_load_in_workflow("get_large_object_async")
         return cast(T, await _get_dbos_instance()._large_objects().get_async(ref))
 
     @classmethod
