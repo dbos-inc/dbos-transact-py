@@ -1407,7 +1407,6 @@ CREATE TABLE IF NOT EXISTS {quoted_schema}."external_objects" (
     "object_key" TEXT PRIMARY KEY,
     "store_id" TEXT NOT NULL,
     "workflow_uuid" TEXT NOT NULL,
-    "size" BIGINT NOT NULL,
     "created_at" BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS "idx_external_objects_store_created_at" ON {quoted_schema}."external_objects" ("store_id", "created_at");
@@ -1956,7 +1955,6 @@ CREATE TABLE IF NOT EXISTS "external_objects" (
     "object_key" TEXT PRIMARY KEY,
     "store_id" TEXT NOT NULL,
     "workflow_uuid" TEXT NOT NULL,
-    "size" INTEGER NOT NULL,
     "created_at" INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS "idx_external_objects_store_created_at" ON "external_objects" ("store_id", "created_at");

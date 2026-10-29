@@ -194,7 +194,6 @@ class SystemSchema:
         Column("object_key", Text, primary_key=True),
         Column("store_id", Text, nullable=False),
         Column("workflow_uuid", Text, nullable=False),
-        Column("size", BigInteger, nullable=False),
         Column("created_at", BigInteger, nullable=False),
     )
 
