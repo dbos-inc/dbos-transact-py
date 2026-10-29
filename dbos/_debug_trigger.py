@@ -34,6 +34,18 @@ class DebugTriggers:
     # ----- Constants (Should use in just one place in the code) -----
     DEBUG_TRIGGER_STEP_COMMIT = "DEBUG_TRIGGER_STEP_COMMIT"
     DEBUG_TRIGGER_INITWF_COMMIT = "DEBUG_TRIGGER_INITWF_COMMIT"
+    # Fires in start_queued_workflows after the row-lock select, before the claimed rows are marked PENDING.
+    DEBUG_TRIGGER_FIND_AND_MARK_AFTER_SELECT = (
+        "DEBUG_TRIGGER_FIND_AND_MARK_AFTER_SELECT"
+    )
+    # Fires in start_queued_partitioned_workflows inside a batch's transaction, before it takes its partition locks.
+    DEBUG_TRIGGER_PARTITIONED_DEQUEUE_BEFORE_LOCKS = (
+        "DEBUG_TRIGGER_PARTITIONED_DEQUEUE_BEFORE_LOCKS"
+    )
+    # Fires in start_queued_partitioned_workflows between a batch's head re-pick and its row lock.
+    DEBUG_TRIGGER_PARTITIONED_DEQUEUE_AFTER_CANDIDATES = (
+        "DEBUG_TRIGGER_PARTITIONED_DEQUEUE_AFTER_CANDIDATES"
+    )
 
     # Internal registries
     _point_triggers: Dict[str, DebugAction] = {}

@@ -4,10 +4,11 @@ from urllib.parse import urlparse, urlunparse
 import pytest
 from sqlalchemy import create_engine, text
 
-from dbos import DBOS, DBOSConfig
+from dbos import DBOS, DBOSConfig, SetEnqueueOptions
 from dbos._error import DBOSQueryTimeoutError
 from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
+from tests.conftest import retry_until_success
 
 
 def test_cockroachdb() -> None:
@@ -50,6 +51,52 @@ def test_cockroachdb() -> None:
         assert DBOS.get_event(handle.workflow_id, key) == value
         DBOS.send(handle.workflow_id, value)
         assert handle.get_result() == value
+    finally:
+        DBOS.destroy(destroy_registry=True)
+
+
+def test_cockroachdb_partitioned_queue() -> None:
+    """The batched partition sweep (partition_concurrency=1) dequeues under the cockroachdb dialect."""
+    database_url = os.environ.get("DBOS_COCKROACHDB_URL")
+    if database_url is None:
+        pytest.skip("No CockroachDB database URL provided")
+
+    default_engine = create_engine(database_url, isolation_level="AUTOCOMMIT")
+    with default_engine.connect() as conn:
+        conn.execute(text("DROP DATABASE IF EXISTS dbos_test_partitioned CASCADE"))
+        conn.execute(text("CREATE DATABASE dbos_test_partitioned"))
+    default_engine.dispose()
+
+    parsed = urlparse(database_url)
+    test_url = urlunparse(parsed._replace(path="/dbos_test_partitioned"))
+
+    @DBOS.workflow()
+    def workflow(i: int) -> int:
+        return i
+
+    try:
+        config: DBOSConfig = {
+            "name": "cockroachdb-partitioned-test",
+            "system_database_url": test_url,
+            "use_listen_notify": False,
+            "system_database_engine": create_engine(test_url),
+        }
+        DBOS(config=config)
+        DBOS.launch()
+        queue = DBOS.register_queue(
+            "partitioned", partition_concurrency=1, polling_interval_sec=0.1
+        )
+        handles = []
+        for i, partition in enumerate(["a", "a", "b", "c"]):
+            with SetEnqueueOptions(queue_partition_key=partition):
+                handles.append(queue.enqueue(workflow, i))
+
+        # Bounded, so a sweep that fails every poll fails the test instead of hanging it.
+        def drained() -> None:
+            assert [h.get_status().status for h in handles] == ["SUCCESS"] * 4
+
+        retry_until_success(drained, interval=0.5, max_attempts=60)
+        assert [handle.get_result() for handle in handles] == [0, 1, 2, 3]
     finally:
         DBOS.destroy(destroy_registry=True)
 
