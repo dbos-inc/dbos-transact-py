@@ -80,6 +80,35 @@ class AutoUpgradePassFactory(Protocol):
     def __call__(self, dbos: DBOS, *, grace_sec: float) -> AutoUpgradePass: ...
 
 
+class Suspend(Protocol):
+    """Suspend mode for recv and sleep: a waiting recv or a sleep parks its workflow in
+    the database as SUSPENDED instead of holding a thread; a send on the recv's topic,
+    the recv timeout, or the end of the sleep re-enqueues it. The send side is core's
+    (SystemDatabase._wake_receivers), so any sender wakes a parked recv."""
+
+    def recv_suspend(
+        self,
+        workflow_uuid: str,
+        function_id: int,
+        timeout_function_id: int,
+        topic: Optional[str],
+        timeout_seconds: float,
+    ) -> Any: ...
+
+    def sleep_suspend(
+        self, workflow_uuid: str, function_id: int, seconds: float
+    ) -> float:
+        """Checkpoints the sleep and parks the workflow until its end time, or returns
+        the seconds to sleep in the thread when that end time is near or past."""
+        ...
+
+    def transition_suspended_workflows(self) -> None: ...
+
+
+class SuspendFactory(Protocol):
+    def __call__(self, sys_db: "SystemDatabase") -> Suspend: ...
+
+
 class ShardedSystemDatabaseFactory(Protocol):
     """Builds the system database a sharded deployment uses, in place of core's Postgres one."""
 
@@ -114,6 +143,9 @@ class Enterprise(Protocol):
     @property
     def ShardedSystemDatabase(self) -> ShardedSystemDatabaseFactory: ...
 
+    @property
+    def Suspend(self) -> SuspendFactory: ...
+
 
 # What needs the package without being an entitlement, for load()'s messages.
 CONDUCTOR = "Connecting to DBOS Conductor"
@@ -133,9 +165,12 @@ AUTO_UPGRADE = Feature(
     "autoUpgrade", "Auto-upgrading workflows", config_key="auto_upgrade"
 )
 SHARDING = Feature("sharding", "Using a sharded system database", config_key="sharding")
+SUSPEND = Feature(
+    "suspendWorkflows", "Suspending workflows on recv", config_key="suspend_mode"
+)
 
 # Every entitled feature; a new one is a Feature here, named by Conductor's camelCase key.
-FEATURES: Tuple[Feature, ...] = (AUTO_UPGRADE, SHARDING)
+FEATURES: Tuple[Feature, ...] = (AUTO_UPGRADE, SHARDING, SUSPEND)
 
 
 def enabled_features(config: Mapping[str, object]) -> List[Feature]:

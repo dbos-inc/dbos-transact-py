@@ -36,7 +36,7 @@ from sqlalchemy.orm import Session
 
 from dbos._utils import GlobalParams, generate_uuid
 
-from ._error import DBOSException
+from ._error import DBOSException, DBOSWorkflowSuspendedError
 from ._logger import dbos_logger
 from ._tracer import dbos_tracer
 
@@ -416,6 +416,9 @@ class DBOSContext:
         context_span = self.context_spans.pop()
         if exc_value is None:
             context_span.span.set_status(Status(StatusCode.OK))
+        elif isinstance(exc_value, DBOSWorkflowSuspendedError):
+            # Parking is not a failure: leave the status unset, as the run has no outcome yet.
+            pass
         else:
             context_span.span.set_status(
                 Status(StatusCode.ERROR, description=str(exc_value))

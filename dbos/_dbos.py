@@ -865,6 +865,11 @@ class DBOS:
                 ),
                 sharding=self._config.get("sharding", False),
             )
+            if self._config.get("suspend_mode"):
+                # Entitlement checked at construction, with the other config-enabled features.
+                self._sys_db.suspend = _enterprise.load(
+                    _enterprise.SUSPEND.description
+                ).Suspend(self._sys_db)
 
             # Run migrations for the system database
             if self._config.get("run_migrations", True):
@@ -1811,7 +1816,7 @@ class DBOS:
         """Wait for any one of the given workflow handles to complete and return it.
 
         Polls the database until at least one workflow's status is no longer
-        PENDING, ENQUEUED, or DELAYED, then returns the corresponding handle.
+        PENDING, ENQUEUED, DELAYED, or SUSPENDED, then returns the corresponding handle.
         """
         check_async("wait_first")
         if not handles:
@@ -2036,12 +2041,22 @@ class DBOS:
         )
 
     @classmethod
-    def recv(cls, topic: Optional[str] = None, timeout_seconds: float = 60) -> Any:
+    def recv(
+        cls,
+        topic: Optional[str] = None,
+        timeout_seconds: float = 60,
+        *,
+        suspend: bool = False,
+    ) -> Any:
         """
         Receive a workflow message.
 
         This function must be called from within a workflow.
         `recv` will return the message sent on `topic`, waiting if necessary.
+
+        With `suspend=True` (Transact Enterprise), a recv that has to wait parks the workflow in the database
+        and exits its execution instead of holding a thread; a `send` on the topic or the
+        timeout re-enqueues it and the replayed recv returns the message.
         """
         check_async("recv")
         cur_ctx = snapshot_step_context(reserve_sleep_id=True)
@@ -2050,6 +2065,20 @@ class DBOS:
         attributes: TracedAttributes = {"name": "recv"}
         with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
             timeout_function_id = ctx.curr_step_function_id + 1
+            if suspend:
+                hooks = _get_dbos_instance()._sys_db.suspend
+                if hooks is None:
+                    raise DBOSException(
+                        "recv(suspend=True) requires suspend mode, a Transact Enterprise "
+                        "feature: set suspend_mode to True in the DBOS configuration."
+                    )
+                return hooks.recv_suspend(
+                    ctx.workflow_id,
+                    ctx.curr_step_function_id,
+                    timeout_function_id,
+                    topic,
+                    timeout_seconds,
+                )
             return _get_dbos_instance()._sys_db.recv(
                 ctx.workflow_id,
                 ctx.curr_step_function_id,
@@ -2084,17 +2113,37 @@ class DBOS:
             )
 
     @classmethod
-    def sleep(cls, seconds: float) -> None:
+    def sleep(cls, seconds: float, *, suspend: bool = False) -> None:
         """
         Sleep for the specified time (in seconds).
 
         It is important to use `DBOS.sleep` or `DBOS.sleep_async` (as opposed to any other sleep) within workflows,
         as the DBOS sleep methods are durable and completed sleeps will be skipped during recovery.
+
+        With `suspend=True` (Transact Enterprise), the sleep parks the workflow in the database and
+        exits its execution instead of holding a thread; once the duration has passed the workflow
+        is re-enqueued and the replayed sleep returns at once.
         """
         check_async("sleep")
         if seconds <= 0:
             return
         cur_ctx = snapshot_step_context()
+        if suspend:
+            if cur_ctx is None or not cur_ctx.is_workflow():
+                raise DBOSException("sleep() must be called from within a workflow")
+            hooks = _get_dbos_instance()._sys_db.suspend
+            if hooks is None:
+                raise DBOSException(
+                    "sleep(suspend=True) requires suspend mode, a Transact Enterprise "
+                    "feature: set suspend_mode to True in the DBOS configuration."
+                )
+            attributes: TracedAttributes = {"name": "sleep"}
+            with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
+                duration = hooks.sleep_suspend(
+                    ctx.workflow_id, ctx.curr_step_function_id, seconds
+                )
+            time.sleep(duration)
+            return
         duration = record_sleep(_get_dbos_instance(), cur_ctx, seconds)
         time.sleep(duration)
 

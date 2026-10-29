@@ -89,6 +89,7 @@ from ._serialization import (
 from ._shard_keys import bind_shard_keys, bound_shard_key
 
 if TYPE_CHECKING:
+    from ._enterprise import Suspend
     from ._queue import Queue, QueueRateLimit
 
 _MAX_BIGINT = 2**63 - 1
@@ -152,6 +153,7 @@ class WorkflowStatusString(Enum):
     CANCELLED = "CANCELLED"
     ENQUEUED = "ENQUEUED"
     DELAYED = "DELAYED"
+    SUSPENDED = "SUSPENDED"
 
 
 def workflow_is_active(status: str) -> bool:
@@ -159,6 +161,7 @@ def workflow_is_active(status: str) -> bool:
         status == WorkflowStatusString.ENQUEUED.value
         or status == WorkflowStatusString.PENDING.value
         or status == WorkflowStatusString.DELAYED.value
+        or status == WorkflowStatusString.SUSPENDED.value
     )
 
 
@@ -170,6 +173,7 @@ WorkflowStatuses = Literal[
     "CANCELLED",
     "ENQUEUED",
     "DELAYED",
+    "SUSPENDED",
 ]
 
 # The reason start_queued_workflows did not dequeue workflows: a limit with no room, or
@@ -668,6 +672,9 @@ class SystemDatabase(ABC):
     tables: type[SystemSchema] = SystemSchema
     # Whether this handle routes every statement by shard key.
     sharded: bool = False
+    # Suspend mode (Transact Enterprise), installed by DBOS when it is on: recv and sleep
+    # may park their workflow. Waking a parked recv is core: every send does it.
+    suspend: Optional["Suspend"] = None
 
     @staticmethod
     def create(
@@ -2816,8 +2823,8 @@ class SystemDatabase(ABC):
     def check_first_workflow_id(self, workflow_ids: List[str]) -> Union[NoResult, str]:
         """Check if at least one of the given workflows has completed.
 
-        A workflow is considered complete when its status is not PENDING
-        not ENQUEUED, and not DELAYED.  Returns the workflow_uuid of the first
+        A workflow is considered complete when its status is not PENDING,
+        ENQUEUED, DELAYED, or SUSPENDED.  Returns the workflow_uuid of the first
         completed workflow found, or NoResult() if none have completed.
         """
         if not workflow_ids:
@@ -2835,6 +2842,7 @@ class SystemDatabase(ABC):
                             WorkflowStatusString.PENDING.value,
                             WorkflowStatusString.ENQUEUED.value,
                             WorkflowStatusString.DELAYED.value,
+                            WorkflowStatusString.SUSPENDED.value,
                         ]
                     ),
                 )
@@ -3008,7 +3016,7 @@ class SystemDatabase(ABC):
             if not status_list:
                 query = query.where(
                     self.tables.workflow_status.c.status.in_(
-                        ["DELAYED", "ENQUEUED", "PENDING"]
+                        ["DELAYED", "ENQUEUED", "PENDING", "SUSPENDED"]
                     )
                 )
         else:
@@ -3821,6 +3829,31 @@ class SystemDatabase(ABC):
             send_to_forks=send_to_forks,
         )
 
+    def _wake_receivers(
+        self,
+        conn: Union[sa.Connection, Session],
+        destinations: List[str],
+        topics: List[str],
+    ) -> None:
+        """Make SUSPENDED receivers waiting on one of topics due, for the background pass
+        to re-enqueue. Runs on every send, whether or not this process uses suspend mode,
+        so any sender wakes a workflow another process parked. A primary-key probe per
+        destination; it matches nothing in the common case.
+
+        The match is destinations x topics, so a batch sending A on topic X and B on
+        topic Y also wakes A if it waits on Y. The spurious wake-up is harmless: the
+        replayed recv finds no message and parks again."""
+        ws = self.tables.workflow_status
+        conn.execute(
+            sa.update(ws)
+            .where(
+                *self._wf_in(ws, destinations),
+                ws.c.status == WorkflowStatusString.SUSPENDED.value,
+                ws.c.suspend_key.in_(topics),
+            )
+            .values(delay_until_epoch_ms=0)
+        )
+
     def _send_bulk_txn(
         self,
         messages: List[SendMessage],
@@ -3927,6 +3960,13 @@ class SystemDatabase(ABC):
                     ", ".join(sorted({m.destination_id for m in messages})),
                 )
             raise
+
+        if rows:
+            self._wake_receivers(
+                conn,
+                sorted({r["destination_uuid"] for r in rows}),
+                sorted({r["topic"] for r in rows}),
+            )
 
         if workflow_id is not None:
             assert function_id is not None
@@ -4925,12 +4965,13 @@ class SystemDatabase(ABC):
         timed_out = (
             sa.select(ws.c.workflow_uuid)
             .where(
-                # Literals, so SQLite's prover matches idx_workflow_status_deadline's IN predicate.
+                # Literals, so SQLite's prover matches idx_workflow_status_deadline_v2's IN predicate.
                 ws.c.status.in_(
                     [
                         sa.literal_column(f"'{WorkflowStatusString.ENQUEUED.value}'"),
                         sa.literal_column(f"'{WorkflowStatusString.PENDING.value}'"),
                         sa.literal_column(f"'{WorkflowStatusString.DELAYED.value}'"),
+                        sa.literal_column(f"'{WorkflowStatusString.SUSPENDED.value}'"),
                     ]
                 ),
                 ws.c.workflow_deadline_epoch_ms.isnot(None),
@@ -6893,6 +6934,7 @@ class SystemDatabase(ABC):
         WorkflowStatusString.PENDING.value,
         WorkflowStatusString.ENQUEUED.value,
         WorkflowStatusString.DELAYED.value,
+        WorkflowStatusString.SUSPENDED.value,
     ]
 
     @staticmethod
