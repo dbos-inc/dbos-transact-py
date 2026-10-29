@@ -35,7 +35,9 @@ from dbos import (
     WorkflowHandle,
 )
 from dbos._context import assert_current_dbos_context, get_workflow_start_options
+from dbos._core import prepare_enqueued_workflow
 from dbos._dbos import WorkflowHandleAsync
+from dbos._debug_trigger import DebugAction, DebugTriggers
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSException,
@@ -914,6 +916,94 @@ def test_limiter_dequeue_blocks_on_peer_claim(
         status = dbos._sys_db.get_workflow_status(id)
         assert status is not None
         assert status["status"] == WorkflowStatusString.ENQUEUED.value
+
+
+# Claimers whose heads differ lock disjoint rows, so only the claim lock keeps them from both spending one budget.
+@pytest.mark.parametrize(
+    "limits, partition, split_versions",
+    [
+        ({"global_concurrency": 1}, None, False),
+        ({"global_concurrency": 1}, None, True),
+        (
+            {
+                "partition_concurrency": 1,
+                "partition_limiter": {"limit": 100, "period": 60},
+            },
+            "p",
+            False,
+        ),
+    ],
+    ids=["higher-priority", "other-version", "partition-higher-priority"],
+)
+def test_claim_lock_blocks_claimer_missing_new_head(
+    dbos: DBOS,
+    limits: Dict[str, Any],
+    partition: Optional[str],
+    split_versions: bool,
+    skip_with_sqlite: None,
+) -> None:
+    """A claimer that misses a new queue head does not overspend the budget."""
+
+    @DBOS.workflow()
+    def noop(value: str) -> None:
+        pass
+
+    queue_name = f"unpolled-claim-lock-{uuid.uuid4().hex[:8]}"
+    queue = unpolled_queue(queue_name, **limits)
+    version_b = "parked-version"
+    version_a = f"{version_b}-other" if split_versions else version_b
+
+    def enqueue(priority: int, app_version: str) -> str:
+        return _enqueue_row(
+            noop,
+            queue_name,
+            partition=partition,
+            priority=priority,
+            app_version=app_version,
+        )
+
+    head_b = enqueue(5, version_b)
+
+    # Pause claimer B after it has locked its head, before it marks it PENDING; other queues' polls pass through.
+    paused = threading.Event()
+    release = threading.Event()
+
+    def pause_claimer_b() -> None:
+        if threading.current_thread().name.startswith("claimer-b"):
+            paused.set()
+            release.wait(timeout=20)
+
+    DebugTriggers.set_debug_trigger(
+        DebugTriggers.DEBUG_TRIGGER_FIND_AND_MARK_AFTER_SELECT,
+        DebugAction(callback=pause_claimer_b),
+    )
+    try:
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="claimer-b") as pool:
+            claim_b = pool.submit(
+                dbos._sys_db.start_queued_workflows,
+                queue,
+                "executor-b",
+                version_b,
+                partition,
+            )
+            assert paused.wait(timeout=5)
+
+            # A head the paused claimer cannot see: it outranks the locked one, or only the other version claims it.
+            head_a = enqueue(1, version_a)
+            claim_a = dbos._sys_db.start_queued_workflows(
+                queue, "executor-a", version_a, partition
+            )
+            release.set()
+            assert claim_b.result() == ([head_b], None)
+    finally:
+        release.set()
+        DebugTriggers.clear_debug_triggers()
+
+    assert claim_a == ([], "claim_lock")
+    status_a = dbos._sys_db.get_workflow_status(head_a)
+    assert status_a is not None
+    assert status_a["status"] == WorkflowStatusString.ENQUEUED.value
+    assert _pending_by_partition(dbos, queue_name) == {partition: 1}
 
 
 def test_multiple_queues(dbos: DBOS) -> None:
@@ -3023,6 +3113,94 @@ def test_partition_sweep_stops_at_global_concurrency(
     assert peak == concurrency
 
 
+def test_partition_sweep_stops_at_queue_claim_lock(
+    dbos: DBOS,
+    monkeypatch: pytest.MonkeyPatch,
+    skip_with_sqlite: None,
+    skip_with_sharding: None,
+) -> None:
+    """A peer holding a queue-wide claim lock stops a partition sweep at its first claim;
+    a partition's own claim lock skips only that partition."""
+
+    @DBOS.workflow()
+    def wf(i: int) -> int:
+        return i
+
+    queue_wide = DBOS.register_queue(
+        f"claim_lock_queue_{uuid.uuid4().hex[:8]}",
+        concurrency=10,
+        partition_concurrency=2,
+        polling_interval_sec=0.1,
+    )
+    per_partition = DBOS.register_queue(
+        f"claim_lock_partition_{uuid.uuid4().hex[:8]}",
+        partition_concurrency=2,
+        polling_interval_sec=0.1,
+    )
+    partitions = [f"p{i}" for i in range(5)]
+
+    # One entry per sweep of queue_wide: each claim's (count, stop reason).
+    sweeps: List[List[Tuple[int, Optional[DequeueStopReason]]]] = []
+    spy_lock = threading.Lock()
+    real_partitions = dbos._sys_db.get_queue_partitions
+    real_start = dbos._sys_db.start_queued_workflows
+
+    def spying_partitions(queue_name: str) -> List[str]:
+        if queue_name == queue_wide.name:
+            with spy_lock:
+                sweeps.append([])
+        return real_partitions(queue_name)
+
+    def spying_start(
+        queue_arg: Queue, *args: Any, **kwargs: Any
+    ) -> Tuple[List[str], Optional[DequeueStopReason]]:
+        result = real_start(queue_arg, *args, **kwargs)
+        if queue_arg.name == queue_wide.name:
+            with spy_lock:
+                # A sweep begun before the spies were installed has no entry.
+                if sweeps:
+                    sweeps[-1].append((len(result[0]), result[1]))
+        return result
+
+    def completed_sweeps() -> List[List[Tuple[int, Optional[DequeueStopReason]]]]:
+        # The last sweep may still be claiming.
+        with spy_lock:
+            return list(sweeps[:-1])
+
+    with dbos._sys_db.engine.connect() as holder:
+        with holder.begin():
+            assert dbos._sys_db._claim_lock(holder, queue_wide.name, None)
+            assert dbos._sys_db._claim_lock(holder, per_partition.name, "p0")
+            wide_handles = []
+            partition_handles = []
+            for i, partition in enumerate(partitions):
+                with SetEnqueueOptions(queue_partition_key=partition):
+                    wide_handles.append(queue_wide.enqueue(wf, i))
+                    partition_handles.append(per_partition.enqueue(wf, i))
+            # Spy only once every partition is queued, so no sweep sees a partial or empty queue.
+            monkeypatch.setattr(dbos._sys_db, "get_queue_partitions", spying_partitions)
+            monkeypatch.setattr(dbos._sys_db, "start_queued_workflows", spying_start)
+
+            def swept() -> None:
+                assert len(completed_sweeps()) >= 3
+
+            retry_until_success(swept, interval=0.1, max_attempts=100)
+            # The queue-wide lock covers every partition, so each sweep stops at its first claim.
+            for sweep in completed_sweeps():
+                assert sweep == [(0, "claim_lock")], sweep
+
+            # Only p0's lock is held, so the sweep passes it by and drains the rest.
+            for handle in partition_handles[1:]:
+                assert handle.get_result() is not None
+            assert (
+                partition_handles[0].get_status().status
+                == WorkflowStatusString.ENQUEUED.value
+            )
+    # Releasing the locks lets both queues drain.
+    assert [h.get_result() for h in wide_handles] == list(range(len(partitions)))
+    assert partition_handles[0].get_result() == 0
+
+
 @pytest.mark.asyncio
 async def test_partition_worker_concurrency_async(dbos: DBOS) -> None:
     """partition_worker_concurrency is enforced *per partition*.
@@ -3340,8 +3518,6 @@ def _enqueue_partition_rows(
 ) -> dict[str, List[str]]:
     """Insert ENQUEUED rows for func across partitions of an unpolled queue.
     Returns each partition's workflow IDs in enqueue (created_at) order."""
-    from dbos._core import prepare_enqueued_workflow
-
     ids: dict[str, List[str]] = {p: [] for p in partitions}
     statuses = []
     for partition in partitions:
@@ -3362,6 +3538,33 @@ def _enqueue_partition_rows(
     inserted = dbos._sys_db.init_workflows(statuses)
     assert len(inserted) == len(partitions) * per_partition
     return ids
+
+
+def _enqueue_row(
+    func: Callable[[str], None],
+    queue_name: str,
+    *,
+    partition: Optional[str],
+    priority: int,
+    app_version: Optional[str] = None,
+) -> str:
+    """Enqueue one workflow on an unpolled queue, returning its workflow ID."""
+    with SetEnqueueOptions(
+        priority=priority, app_version=app_version, queue_partition_key=partition
+    ):
+        return DBOS.enqueue_workflow(queue_name, func, "row").workflow_id
+
+
+def _pending_by_partition(dbos: DBOS, queue_name: str) -> Dict[Optional[str], int]:
+    ws = SystemSchema.workflow_status
+    with dbos._sys_db.engine.begin() as c:
+        rows = c.execute(
+            sa.select(ws.c.queue_partition_key, sa.func.count())
+            .where(ws.c.queue_name == queue_name)
+            .where(ws.c.status == WorkflowStatusString.PENDING.value)
+            .group_by(ws.c.queue_partition_key)
+        ).fetchall()
+    return {key: count for key, count in rows}
 
 
 def test_partitioned_batch_dequeue_sweep_cap(
@@ -3569,6 +3772,166 @@ def test_partitioned_batch_dequeue_contention(
         ).fetchall()
     # The returned IDs match the rows actually flipped: one PENDING per partition
     assert {key: count for key, count in rows} == {p: 1 for p in partitions}
+
+
+# Sweeps whose heads differ lock disjoint rows, so the partition's lock and the re-picked head keep one PENDING per partition.
+@pytest.mark.parametrize(
+    "trigger, new_head_wins",
+    [
+        (DebugTriggers.DEBUG_TRIGGER_PARTITIONED_DEQUEUE_AFTER_CANDIDATES, False),
+        (DebugTriggers.DEBUG_TRIGGER_PARTITIONED_DEQUEUE_BEFORE_LOCKS, True),
+    ],
+    ids=["holding-partition-lock", "before-partition-lock"],
+)
+def test_partitioned_batch_dequeue_missed_head_never_coadmits(
+    dbos: DBOS,
+    trigger: str,
+    new_head_wins: bool,
+    skip_with_sqlite: None,
+) -> None:
+    """A sweep that misses a new partition head never co-admits into that partition."""
+
+    @DBOS.workflow()
+    def batch_wf(value: str) -> None:
+        pass
+
+    queue_name = f"unpolled-newhead-{uuid.uuid4().hex[:8]}"
+    queue = unpolled_queue(queue_name, partition_concurrency=1)
+    partition = "p0"
+    # Another partition, which the paused sweep's lock must not block.
+    other = "p1"
+
+    def enqueue(key: str, priority: int) -> str:
+        return _enqueue_row(batch_wf, queue_name, partition=key, priority=priority)
+
+    def sweep(executor_id: str) -> List[str]:
+        return dbos._sys_db.start_queued_partitioned_workflows(
+            queue, executor_id, GlobalParams.app_version
+        )
+
+    old_head = enqueue(partition, 5)
+
+    paused = threading.Event()
+    release = threading.Event()
+
+    def pause_sweep_b() -> None:
+        if threading.current_thread().name.startswith("sweep-b"):
+            paused.set()
+            release.wait(timeout=20)
+
+    DebugTriggers.set_debug_trigger(trigger, DebugAction(callback=pause_sweep_b))
+    try:
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="sweep-b") as pool:
+            sweep_b = pool.submit(sweep, "executor-b")
+            assert paused.wait(timeout=5)
+
+            # A head the paused sweep never saw, outranking the one it chose.
+            new_head = enqueue(partition, 1)
+            other_head = enqueue(other, 5)
+            claimed_a = sweep("executor-a")
+            release.set()
+            claimed_b = sweep_b.result()
+    finally:
+        release.set()
+        DebugTriggers.clear_debug_triggers()
+
+    if new_head_wins:
+        assert claimed_a == [new_head, other_head]
+        assert claimed_b == []
+    else:
+        assert claimed_a == [other_head]
+        assert claimed_b == [old_head]
+    assert _pending_by_partition(dbos, queue_name) == {partition: 1, other: 1}
+
+
+def test_partitioned_batch_dequeue_keeps_committed_batches(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, skip_with_sharding: None
+) -> None:
+    """A batch that fails after an earlier batch committed still returns the committed claims."""
+
+    @DBOS.workflow()
+    def batch_wf(value: str) -> None:
+        pass
+
+    queue_name = f"unpolled-batchfail-{uuid.uuid4().hex[:8]}"
+    queue = unpolled_queue(queue_name, partition_concurrency=1)
+    partitions = ["p0", "p1", "p2"]
+    ids = _enqueue_partition_rows(
+        dbos, batch_wf, queue_name, "batchfail", partitions, 1
+    )
+    monkeypatch.setattr(type(dbos._sys_db), "PARTITIONED_DEQUEUE_BATCH_SIZE", 1)
+
+    calls = 0
+
+    def fail_second_batch() -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("synthetic batch failure")
+
+    def sweep() -> List[str]:
+        return dbos._sys_db.start_queued_partitioned_workflows(
+            queue, GlobalParams.executor_id, GlobalParams.app_version
+        )
+
+    DebugTriggers.set_debug_trigger(
+        DebugTriggers.DEBUG_TRIGGER_PARTITIONED_DEQUEUE_AFTER_CANDIDATES,
+        DebugAction(callback=fail_second_batch),
+    )
+    try:
+        # The first batch committed, so its claim reaches dispatch; the failed batch and the one after it are left to the next poll.
+        assert sweep() == [ids["p0"][0]]
+        assert calls == 2
+    finally:
+        DebugTriggers.clear_debug_triggers()
+    for partition, status in [
+        ("p0", "PENDING"),
+        ("p1", "ENQUEUED"),
+        ("p2", "ENQUEUED"),
+    ]:
+        row = dbos._sys_db.get_workflow_status(ids[partition][0])
+        assert row is not None and row["status"] == status
+
+    # The rollback released the failed batch's partition lock, so the next sweep claims the rest.
+    assert sweep() == [ids["p1"][0], ids["p2"][0]]
+
+
+def test_partitioned_batch_dequeue_first_batch_failure_raises(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, skip_with_sharding: None
+) -> None:
+    """A batch that fails before any batch committed raises and claims nothing."""
+
+    @DBOS.workflow()
+    def batch_wf(value: str) -> None:
+        pass
+
+    queue_name = f"unpolled-batchfail-first-{uuid.uuid4().hex[:8]}"
+    queue = unpolled_queue(queue_name, partition_concurrency=1)
+    partitions = ["p0", "p1"]
+    ids = _enqueue_partition_rows(
+        dbos, batch_wf, queue_name, "batchfail-first", partitions, 1
+    )
+    monkeypatch.setattr(type(dbos._sys_db), "PARTITIONED_DEQUEUE_BATCH_SIZE", 1)
+
+    def sweep() -> List[str]:
+        return dbos._sys_db.start_queued_partitioned_workflows(
+            queue, GlobalParams.executor_id, GlobalParams.app_version
+        )
+
+    DebugTriggers.set_debug_trigger(
+        DebugTriggers.DEBUG_TRIGGER_PARTITIONED_DEQUEUE_AFTER_CANDIDATES,
+        DebugAction().set_exception_to_throw(RuntimeError("synthetic batch failure")),
+    )
+    try:
+        with pytest.raises(RuntimeError, match="synthetic batch failure"):
+            sweep()
+    finally:
+        DebugTriggers.clear_debug_triggers()
+    for partition in partitions:
+        row = dbos._sys_db.get_workflow_status(ids[partition][0])
+        assert row is not None
+        assert row["status"] == WorkflowStatusString.ENQUEUED.value
+    assert sweep() == [ids[p][0] for p in partitions]
 
 
 def test_partitioned_queue_fallback_routing(
