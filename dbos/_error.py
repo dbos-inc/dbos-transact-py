@@ -69,10 +69,10 @@ class DBOSErrorCode(Enum):
     QueryTimeout = 26
     WorkflowIDInUse = 27
     StepNondeterminism = 28
-    LargeObjectStoreNotConfigured = 29
-    LargeObjectMissing = 30
-    LargeObjectIntegrity = 31
-    LargeObjectStoreFailed = 32
+    ExternalStoreNotConfigured = 29
+    ExternalObjectMissing = 30
+    ExternalObjectIntegrity = 31
+    ExternalStoreFailed = 32
 
 
 #######################################
@@ -416,57 +416,57 @@ class DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(DBOSException):
         return (self.__class__, (self.workflow_id,))
 
 
-class DBOSLargeObjectStoreNotConfiguredError(DBOSException):
-    """Exception raised when no large object store is configured, or a ref or store_id names a store that isn't."""
+class DBOSExternalStoreNotConfiguredError(DBOSException):
+    """Exception raised when no external store is configured, or a ref or store_id names a store that isn't."""
 
     def __init__(self, store_id: Optional[str], configured_store_ids: List[str]):
         self.store_id = store_id
         self.configured_store_ids = configured_store_ids
         if not configured_store_ids:
-            msg = "Large objects require large_object_stores in the DBOS configuration or DBOSClient"
+            msg = "External objects require external_stores in the DBOS configuration or DBOSClient"
         else:
-            msg = f"Large object store {store_id} is not configured; the configured stores are {', '.join(configured_store_ids)}"
+            msg = f"External store {store_id} is not configured; the configured stores are {', '.join(configured_store_ids)}"
         super().__init__(
-            msg, dbos_error_code=DBOSErrorCode.LargeObjectStoreNotConfigured.value
+            msg, dbos_error_code=DBOSErrorCode.ExternalStoreNotConfigured.value
         )
 
     def __reduce__(self) -> Any:
         return (self.__class__, (self.store_id, self.configured_store_ids))
 
 
-class DBOSLargeObjectMissingError(DBOSException):
-    """Exception raised when a large object's ref is valid but its object no longer exists."""
+class DBOSExternalObjectMissingError(DBOSException):
+    """Exception raised when an external object's ref is valid but its object no longer exists."""
 
     def __init__(self, store_id: str, key: str):
         self.store_id = store_id
         self.key = key
         super().__init__(
-            f"Large object {key} no longer exists in store {store_id}",
-            dbos_error_code=DBOSErrorCode.LargeObjectMissing.value,
+            f"External object {key} no longer exists in store {store_id}",
+            dbos_error_code=DBOSErrorCode.ExternalObjectMissing.value,
         )
 
     def __reduce__(self) -> Any:
         return (self.__class__, (self.store_id, self.key))
 
 
-class DBOSLargeObjectIntegrityError(DBOSException):
-    """Exception raised when a large object's stored bytes don't match its ref."""
+class DBOSExternalObjectIntegrityError(DBOSException):
+    """Exception raised when an external object's stored bytes don't match its ref."""
 
     def __init__(self, store_id: str, key: str, detail: str):
         self.store_id = store_id
         self.key = key
         self.detail = detail
         super().__init__(
-            f"Large object {key} in store {store_id} does not match its ref: {detail}",
-            dbos_error_code=DBOSErrorCode.LargeObjectIntegrity.value,
+            f"External object {key} in store {store_id} does not match its ref: {detail}",
+            dbos_error_code=DBOSErrorCode.ExternalObjectIntegrity.value,
         )
 
     def __reduce__(self) -> Any:
         return (self.__class__, (self.store_id, self.key, self.detail))
 
 
-class DBOSLargeObjectStoreError(DBOSException):
-    """Exception raised when a large object store call fails after the store's own retries; the store's error is its __cause__."""
+class DBOSExternalStoreError(DBOSException):
+    """Exception raised when an external store call fails after the store's own retries; the store's error is its __cause__."""
 
     def __init__(self, store_id: str, key: str, operation: str, detail: str):
         self.store_id = store_id
@@ -474,8 +474,8 @@ class DBOSLargeObjectStoreError(DBOSException):
         self.operation = operation
         self.detail = detail
         super().__init__(
-            f"Large object store {store_id} failed to {operation} {key}: {detail}",
-            dbos_error_code=DBOSErrorCode.LargeObjectStoreFailed.value,
+            f"External store {store_id} failed to {operation} {key}: {detail}",
+            dbos_error_code=DBOSErrorCode.ExternalStoreFailed.value,
         )
 
     def __reduce__(self) -> Any:

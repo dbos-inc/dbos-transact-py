@@ -152,19 +152,19 @@ from ._dbos_config import (
     process_config,
     translate_dbos_config_to_config_file,
 )
-from ._enterprise import AlertHandler, ConductorThread, LargeObjects
+from ._enterprise import AlertHandler, ConductorThread, ExternalStorage
 from ._error import (
     DBOSException,
+    DBOSExternalStoreNotConfiguredError,
     DBOSInitializationError,
-    DBOSLargeObjectStoreNotConfiguredError,
     DBOSNonExistentWorkflowError,
     DBOSPatchNondeterminismError,
 )
 from ._event_loop import BackgroundEventLoop
-from ._large_object import (
-    LargeObjectRef,
-    LargeObjectStore,
-    check_large_object_stores,
+from ._external_storage import (
+    ExternalObjectRef,
+    ExternalStore,
+    check_external_stores,
 )
 from ._logger import (
     add_otlp_to_all_loggers,
@@ -213,7 +213,7 @@ def _get_or_create_dbos_registry() -> DBOSRegistry:
     return _dbos_global_registry
 
 
-def _large_object_owner(
+def _external_object_owner(
     ctx: Optional[DBOSContext],
     owner_workflow_id: Optional[str],
     shard_key: Optional[str],
@@ -222,7 +222,7 @@ def _large_object_owner(
     if owner is None:
         if ctx is None or not ctx.is_within_workflow():
             raise DBOSException(
-                "store_large_object called outside a workflow requires an owner_workflow_id"
+                "store_external_object called outside a workflow requires an owner_workflow_id"
             )
         owner = ctx.workflow_id
     # Another key would hide the object from its owner, so GC would collect it while the owner lives.
@@ -235,12 +235,12 @@ def _large_object_owner(
         and shard_key != ctx.shard_key
     ):
         raise DBOSException(
-            f"store_large_object's shard_key {shard_key!r} differs from workflow {owner}'s shard key {ctx.shard_key!r}"
+            f"store_external_object's shard_key {shard_key!r} differs from workflow {owner}'s shard key {ctx.shard_key!r}"
         )
     return owner
 
 
-def _large_object_serialization(
+def _external_object_serialization(
     ctx: Optional[DBOSContext],
     serialization_type: Optional[WorkflowSerializationFormat],
 ) -> Optional[WorkflowSerializationFormat]:
@@ -731,10 +731,10 @@ class DBOS:
         self._alert_handler: Optional[AlertHandler] = None
         serializer = config.get("serializer")
         self._serializer: Serializer = serializer if serializer else DefaultSerializer()
-        self._large_object_stores: List[LargeObjectStore] = check_large_object_stores(
-            config.get("large_object_stores")
+        self._external_stores: List[ExternalStore] = check_external_stores(
+            config.get("external_stores")
         )
-        self._large_objects_field: Optional[LargeObjects] = None
+        self._external_storage_field: Optional[ExternalStorage] = None
         self._conductor_executor_metadata: Optional[Dict[str, Any]] = config.get(
             "conductor_executor_metadata"
         )
@@ -801,12 +801,12 @@ class DBOS:
         rv: ThreadPoolExecutor = self._executor_field
         return rv
 
-    def _large_objects(self) -> LargeObjects:
-        if not self._large_object_stores:
-            raise DBOSLargeObjectStoreNotConfiguredError(None, [])
-        if self._large_objects_field is None:
-            raise DBOSException("Large objects used before DBOS was launched")
-        return self._large_objects_field
+    def _external_storage(self) -> ExternalStorage:
+        if not self._external_stores:
+            raise DBOSExternalStoreNotConfiguredError(None, [])
+        if self._external_storage_field is None:
+            raise DBOSException("External objects used before DBOS was launched")
+        return self._external_storage_field
 
     @property
     def _sys_db(self) -> SystemDatabase:
@@ -943,13 +943,13 @@ class DBOS:
                 dbos_logger.debug("Verifying system database migrations")
                 self._sys_db.verify_migrations()
 
-            # Built before recovery and queues start, as their workflows may use large objects.
-            if self._large_object_stores:
-                self._large_objects_field = _enterprise.load(
-                    _enterprise.LARGE_OBJECTS.description
-                ).LargeObjects(
+            # Built before recovery and queues start, as their workflows may use external objects.
+            if self._external_stores:
+                self._external_storage_field = _enterprise.load(
+                    _enterprise.EXTERNAL_STORAGE.description
+                ).ExternalStorage(
                     self._sys_db,
-                    stores=self._large_object_stores,
+                    stores=self._external_stores,
                     serializer=self._serializer,
                 )
 
@@ -2269,7 +2269,7 @@ class DBOS:
                 return done, pending
 
     @classmethod
-    def store_large_object(
+    def store_external_object(
         cls,
         value: T,
         *,
@@ -2280,27 +2280,27 @@ class DBOS:
         name: Optional[str] = None,
         shard_key: Optional[str] = None,
         store_id: Optional[str] = None,
-    ) -> LargeObjectRef[T]:
-        """Upload a value to a large object store (if there are multiple, specify one with store_id) and return a ref to it.
+    ) -> ExternalObjectRef[T]:
+        """Upload a value to an external store (if there are multiple, specify one with store_id) and return a ref to it.
         The object lives as long as its owner workflow: the current one by default, required outside a workflow.
         """
-        check_async("store_large_object")
-        large_objects = _get_dbos_instance()._large_objects()
+        check_async("store_external_object")
+        external_objects = _get_dbos_instance()._external_storage()
         ctx = get_local_dbos_context()
-        owner = _large_object_owner(ctx, owner_workflow_id, shard_key)
-        serialization_type = _large_object_serialization(ctx, serialization_type)
+        owner = _external_object_owner(ctx, owner_workflow_id, shard_key)
+        serialization_type = _external_object_serialization(ctx, serialization_type)
         with bind_shard_keys({owner: shard_key}):
             if ctx is not None and ctx.is_workflow():
                 return cls.run_step(
-                    {"name": "DBOS.storeLargeObject"},
-                    large_objects.store,
+                    {"name": "DBOS.storeExternalObject"},
+                    external_objects.store,
                     value,
                     owner_workflow_id=owner,
                     serialization_type=serialization_type,
                     name=name,
                     store_id=store_id,
                 )
-            return large_objects.store(
+            return external_objects.store(
                 value,
                 owner_workflow_id=owner,
                 serialization_type=serialization_type,
@@ -2309,7 +2309,7 @@ class DBOS:
             )
 
     @classmethod
-    async def store_large_object_async(
+    async def store_external_object_async(
         cls,
         value: T,
         *,
@@ -2320,24 +2320,24 @@ class DBOS:
         name: Optional[str] = None,
         shard_key: Optional[str] = None,
         store_id: Optional[str] = None,
-    ) -> LargeObjectRef[T]:
-        """Upload a value to a large object store (if there are multiple, specify one with store_id) and return a ref to it."""
-        large_objects = _get_dbos_instance()._large_objects()
+    ) -> ExternalObjectRef[T]:
+        """Upload a value to an external store (if there are multiple, specify one with store_id) and return a ref to it."""
+        external_objects = _get_dbos_instance()._external_storage()
         ctx = get_local_dbos_context()
-        owner = _large_object_owner(ctx, owner_workflow_id, shard_key)
-        serialization_type = _large_object_serialization(ctx, serialization_type)
+        owner = _external_object_owner(ctx, owner_workflow_id, shard_key)
+        serialization_type = _external_object_serialization(ctx, serialization_type)
         with bind_shard_keys({owner: shard_key}):
             if ctx is not None and ctx.is_workflow():
                 return await cls.run_step_async(
-                    {"name": "DBOS.storeLargeObject"},
-                    large_objects.store_async,
+                    {"name": "DBOS.storeExternalObject"},
+                    external_objects.store_async,
                     value,
                     owner_workflow_id=owner,
                     serialization_type=serialization_type,
                     name=name,
                     store_id=store_id,
                 )
-            return await large_objects.store_async(
+            return await external_objects.store_async(
                 value,
                 owner_workflow_id=owner,
                 serialization_type=serialization_type,
@@ -2346,18 +2346,18 @@ class DBOS:
             )
 
     @classmethod
-    def get_large_object(cls, ref: LargeObjectRef[T]) -> T:
-        """Load the value a large object ref points to. Call it from a step, not a workflow body,
+    def load_external_object(cls, ref: ExternalObjectRef[T]) -> T:
+        """Load the value an external object ref points to. Call it from a step, not a workflow body,
         and return something small from that step, as its output is checkpointed."""
-        check_async("get_large_object")
-        _refuse_load_in_workflow("get_large_object")
-        return cast(T, _get_dbos_instance()._large_objects().get(ref))
+        check_async("load_external_object")
+        _refuse_load_in_workflow("load_external_object")
+        return cast(T, _get_dbos_instance()._external_storage().get(ref))
 
     @classmethod
-    async def get_large_object_async(cls, ref: LargeObjectRef[T]) -> T:
-        """Load the value a large object ref points to. Call it from a step, not a workflow body."""
-        _refuse_load_in_workflow("get_large_object_async")
-        return cast(T, await _get_dbos_instance()._large_objects().get_async(ref))
+    async def load_external_object_async(cls, ref: ExternalObjectRef[T]) -> T:
+        """Load the value an external object ref points to. Call it from a step, not a workflow body."""
+        _refuse_load_in_workflow("load_external_object_async")
+        return cast(T, await _get_dbos_instance()._external_storage().get_async(ref))
 
     @classmethod
     def set_event(

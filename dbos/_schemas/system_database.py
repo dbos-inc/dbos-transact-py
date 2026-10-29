@@ -187,9 +187,9 @@ class SystemSchema:
         PrimaryKeyConstraint("workflow_uuid", "key", "function_id"),
     )
 
-    # Objects stored with DBOS.store_large_object; workflow_uuid is the owner.
-    large_objects = Table(
-        "large_objects",
+    # Objects stored with DBOS.store_external_object; workflow_uuid is the owner.
+    external_objects = Table(
+        "external_objects",
         metadata_obj,
         Column("object_key", Text, primary_key=True),
         Column("store_id", Text, nullable=False),

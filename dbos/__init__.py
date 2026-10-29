@@ -24,8 +24,8 @@ from ._dbos import (
 )
 from ._dbos_config import DBOSConfig
 from ._debouncer import Debouncer, DebouncerClient
+from ._external_storage import ExternalObjectRef, ExternalStore
 from ._kafka_message import KafkaMessage
-from ._large_object import LargeObjectRef, LargeObjectStore
 from ._queue import Queue
 from ._serialization import (
     DBOSPortableJSONSerializer,
@@ -57,8 +57,8 @@ __all__ = [
     "ScheduleInput",
     "EnqueueOptions",
     "KafkaMessage",
-    "LargeObjectRef",
-    "LargeObjectStore",
+    "ExternalObjectRef",
+    "ExternalStore",
     "PortableWorkflowError",
     "PropagateOtelContext",
     "SetWorkflowAttributes",

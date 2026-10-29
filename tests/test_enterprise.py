@@ -18,10 +18,10 @@ import pytest
 from dbos import DBOS, DBOSClient, DBOSConfig
 from dbos import _enterprise as enterprise_module
 from dbos._error import (
+    DBOSExternalStoreNotConfiguredError,
     DBOSInitializationError,
-    DBOSLargeObjectStoreNotConfiguredError,
 )
-from dbos._large_object import check_large_object_stores
+from dbos._external_storage import check_external_stores
 from dbos._logger import dbos_logger
 from dbos._sys_db import SystemDatabase
 from dbos._utils import GlobalParams
@@ -130,7 +130,7 @@ def test_refused_client_opens_no_connection(
     with pytest.raises(DBOSInitializationError, match="refused"):
         DBOSClient(
             system_database_url=config["system_database_url"],
-            large_object_stores=[
+            external_stores=[
                 cast(Any, types.SimpleNamespace(store_id="refused-store"))
             ],
         )
@@ -145,7 +145,7 @@ ALL_ENTITLED = {
     "sharding": True,
     "autoUpgrade": True,
     "suspendWorkflows": True,
-    "largeObjects": True,
+    "externalStorage": True,
 }
 
 
@@ -581,11 +581,11 @@ def test_config_turns_on_enterprise_features() -> None:
     assert enterprise_module.enabled_features({"sharding": True}) == [
         enterprise_module.SHARDING
     ]
-    assert enterprise_module.enabled_features({"large_object_stores": [object()]}) == [
-        enterprise_module.LARGE_OBJECTS
+    assert enterprise_module.enabled_features({"external_stores": [object()]}) == [
+        enterprise_module.EXTERNAL_STORAGE
     ]
     # An empty list configures no store, so it needs no entitlement.
-    assert enterprise_module.enabled_features({"large_object_stores": []}) == []
+    assert enterprise_module.enabled_features({"external_stores": []}) == []
     # Every registered feature has a distinct entitlement name.
     names = [f.entitlement for f in enterprise_module.FEATURES]
     assert len(names) == len(set(names))
@@ -615,7 +615,7 @@ def test_an_auto_upgrading_executor_checks_its_entitlement(
     assert conductor.requests == [("/v2/entitlements", "Bearer enterprise-key")]
 
 
-def test_large_object_store_checks_its_entitlement(
+def test_external_storage_checks_its_entitlement(
     config: DBOSConfig, conductor: FakeConductor, skip_with_sharding: None
 ) -> None:
     DBOS.destroy(destroy_registry=True)
@@ -623,38 +623,40 @@ def test_large_object_store_checks_its_entitlement(
     # Refused before the package is even loaded, so this holds without dbos-enterprise.
     with pytest.raises(
         DBOSInitializationError,
-        match=f": {enterprise_module.LARGE_OBJECTS.description} requires a DBOS key",
+        match=f": {enterprise_module.EXTERNAL_STORAGE.description} requires a DBOS key",
     ):
-        DBOS(config={**config, "large_object_stores": [store]})  # type: ignore[list-item]
+        DBOS(config={**config, "external_stores": [store]})  # type: ignore[list-item]
     DBOS.destroy(destroy_registry=True)
     storing = {
         **config,
-        "large_object_stores": [store],
+        "external_stores": [store],
         "transact_enterprise_key": "enterprise-key",
         "conductor_url": conductor.url,
     }
-    conductor.entitle(**{**ALL_ENTITLED, "largeObjects": False})
-    with pytest.raises(DBOSInitializationError, match="not entitled to largeObjects"):
+    conductor.entitle(**{**ALL_ENTITLED, "externalStorage": False})
+    with pytest.raises(
+        DBOSInitializationError, match="not entitled to externalStorage"
+    ):
         DBOS(config=storing)  # type: ignore[arg-type]
     DBOS.destroy(destroy_registry=True)
     assert conductor.requests == [("/v2/entitlements", "Bearer enterprise-key")]
 
 
-def test_large_object_stores_must_be_a_list() -> None:
+def test_external_stores_must_be_a_list() -> None:
     store = types.SimpleNamespace(store_id="only")
     with pytest.raises(
         DBOSInitializationError, match=r"not a single SimpleNamespace; pass \[store\]"
     ):
-        check_large_object_stores(cast(Any, store))
-    assert check_large_object_stores([cast(Any, store)]) == [store]
-    assert check_large_object_stores(None) == []
+        check_external_stores(cast(Any, store))
+    assert check_external_stores([cast(Any, store)]) == [store]
+    assert check_external_stores(None) == []
 
 
-def test_large_objects_need_a_store(dbos: DBOS) -> None:
-    with pytest.raises(DBOSLargeObjectStoreNotConfiguredError):
-        DBOS.store_large_object("value", owner_workflow_id="owner")
-    with pytest.raises(DBOSLargeObjectStoreNotConfiguredError):
-        DBOS.get_large_object(
+def test_external_storage_needs_a_store(dbos: DBOS) -> None:
+    with pytest.raises(DBOSExternalStoreNotConfiguredError):
+        DBOS.store_external_object("value", owner_workflow_id="owner")
+    with pytest.raises(DBOSExternalStoreNotConfiguredError):
+        DBOS.load_external_object(
             {
                 "version": 1,
                 "store": "s3://bucket",

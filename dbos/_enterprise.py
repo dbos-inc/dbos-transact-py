@@ -39,7 +39,7 @@ from ._utils import GlobalParams
 
 if TYPE_CHECKING:
     from ._dbos import DBOS
-    from ._large_object import LargeObjectRef, LargeObjectStore
+    from ._external_storage import ExternalObjectRef, ExternalStore
     from ._serialization import Serializer, WorkflowSerializationFormat
     from ._sys_db import SystemDatabase
 
@@ -102,8 +102,8 @@ class ShardedSystemDatabaseFactory(Protocol):
     ) -> "SystemDatabase": ...
 
 
-class LargeObjects(Protocol):
-    """Stores and loads large objects for one DBOS instance or client. Shard keys
+class ExternalStorage(Protocol):
+    """Stores and loads external objects for one DBOS instance or client. Shard keys
     come from the caller's bindings, as for any other workflow-addressed write."""
 
     def store(
@@ -114,7 +114,7 @@ class LargeObjects(Protocol):
         serialization_type: Optional["WorkflowSerializationFormat"],
         name: Optional[str],
         store_id: Optional[str],
-    ) -> "LargeObjectRef[Any]": ...
+    ) -> "ExternalObjectRef[Any]": ...
 
     async def store_async(
         self,
@@ -124,21 +124,21 @@ class LargeObjects(Protocol):
         serialization_type: Optional["WorkflowSerializationFormat"],
         name: Optional[str],
         store_id: Optional[str],
-    ) -> "LargeObjectRef[Any]": ...
+    ) -> "ExternalObjectRef[Any]": ...
 
-    def get(self, ref: "LargeObjectRef[Any]") -> Any: ...
+    def get(self, ref: "ExternalObjectRef[Any]") -> Any: ...
 
-    async def get_async(self, ref: "LargeObjectRef[Any]") -> Any: ...
+    async def get_async(self, ref: "ExternalObjectRef[Any]") -> Any: ...
 
 
-class LargeObjectsFactory(Protocol):
+class ExternalStorageFactory(Protocol):
     def __call__(
         self,
         sys_db: "SystemDatabase",
         *,
-        stores: Sequence["LargeObjectStore"],
+        stores: Sequence["ExternalStore"],
         serializer: "Serializer",
-    ) -> LargeObjects: ...
+    ) -> ExternalStorage: ...
 
 
 class Enterprise(Protocol):
@@ -155,7 +155,7 @@ class Enterprise(Protocol):
     def ShardedSystemDatabase(self) -> ShardedSystemDatabaseFactory: ...
 
     @property
-    def LargeObjects(self) -> LargeObjectsFactory: ...
+    def ExternalStorage(self) -> ExternalStorageFactory: ...
 
 
 # What needs the package without being an entitlement, for load()'s messages.
@@ -176,12 +176,12 @@ AUTO_UPGRADE = Feature(
     "autoUpgrade", "Auto-upgrading workflows", config_key="auto_upgrade"
 )
 SHARDING = Feature("sharding", "Using a sharded system database", config_key="sharding")
-LARGE_OBJECTS = Feature(
-    "largeObjects", "Storing large objects", config_key="large_object_stores"
+EXTERNAL_STORAGE = Feature(
+    "externalStorage", "Using external storage", config_key="external_stores"
 )
 
 # Every entitled feature; a new one is a Feature here, named by Conductor's camelCase key.
-FEATURES: Tuple[Feature, ...] = (AUTO_UPGRADE, SHARDING, LARGE_OBJECTS)
+FEATURES: Tuple[Feature, ...] = (AUTO_UPGRADE, SHARDING, EXTERNAL_STORAGE)
 
 
 def enabled_features(config: Mapping[str, object]) -> List[Feature]:

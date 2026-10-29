@@ -51,17 +51,17 @@ from croniter import croniter
 
 from dbos import _enterprise
 from dbos._dbos_config import is_valid_database_url
-from dbos._enterprise import LargeObjects, LargeObjectsFactory
+from dbos._enterprise import ExternalStorage, ExternalStorageFactory
 from dbos._error import (
     DBOSException,
-    DBOSLargeObjectStoreNotConfiguredError,
+    DBOSExternalStoreNotConfiguredError,
     DBOSNonExistentWorkflowError,
     DBOSQueueDeduplicatedError,
 )
-from dbos._large_object import (
-    LargeObjectRef,
-    LargeObjectStore,
-    check_large_object_stores,
+from dbos._external_storage import (
+    ExternalObjectRef,
+    ExternalStore,
+    check_external_stores,
 )
 from dbos._scheduler import backfill_schedule, schedule_shard_key, trigger_schedule
 from dbos._serialization import (
@@ -170,7 +170,7 @@ class DBOSClient:
         observability_query_timeout_sec: Optional[float] = None,
         sys_db_idle_transaction_timeout_sec: Optional[float] = None,
         sharding: bool = False,
-        large_object_stores: Optional[Sequence[LargeObjectStore]] = None,
+        external_stores: Optional[Sequence[ExternalStore]] = None,
     ):
         """Create a client for interacting with a DBOS application from outside it.
 
@@ -196,7 +196,7 @@ class DBOSClient:
             retry_connection_errors (bool): Whether an operation that loses its database connection blocks and retries until the connection recovers. Defaults to True. Set to False to raise instead, so an unreachable database surfaces as an error rather than a wait.
             observability_query_timeout_sec (float): Statement timeout, in seconds, for read-only observability queries against the system database. Defaults to 30.0.
             sys_db_idle_transaction_timeout_sec (float): Postgres idle_in_transaction_session_timeout, in seconds, for the system database connections this client creates. Defaults to 60.0. Set to a non-positive value to leave the server's setting in place. Not applied to a custom system_database_engine.
-            large_object_stores (List[LargeObjectStore]): The object stores for store_large_object and get_large_object, matching the application's. If there are multiple, store_large_object must specify one with store_id. Requires Transact Enterprise.
+            external_stores (List[ExternalStore]): The object stores for store_external_object and load_external_object, matching the application's. If there are multiple, store_external_object must specify one with store_id. Requires Transact Enterprise.
 
         Raises:
             Exception: If the system database cannot be reached, unless lazy is True.
@@ -218,13 +218,13 @@ class DBOSClient:
                     "A DBOSClient requires a system_database_url or a system_database_engine."
                 )
             assert is_valid_database_url(system_database_url)
-        stores = check_large_object_stores(large_object_stores)
+        stores = check_external_stores(external_stores)
         # Loaded before any connection exists, so a missing package leaves nothing to clean up.
-        large_objects_factory: Optional[LargeObjectsFactory] = None
+        external_storage_factory: Optional[ExternalStorageFactory] = None
         if stores:
-            large_objects_factory = _enterprise.load(
-                _enterprise.LARGE_OBJECTS.description
-            ).LargeObjects
+            external_storage_factory = _enterprise.load(
+                _enterprise.EXTERNAL_STORAGE.description
+            ).ExternalStorage
         # We only create database connections but do not run migrations
         self._sys_db = SystemDatabase.create(
             system_database_url=system_database_url,
@@ -251,9 +251,9 @@ class DBOSClient:
             idle_transaction_timeout_sec=sys_db_idle_transaction_timeout_sec,
             sharding=sharding,
         )
-        self._large_objects_field: Optional[LargeObjects] = None
-        if large_objects_factory is not None:
-            self._large_objects_field = large_objects_factory(
+        self._external_storage_field: Optional[ExternalStorage] = None
+        if external_storage_factory is not None:
+            self._external_storage_field = external_storage_factory(
                 self._sys_db, stores=stores, serializer=serializer
             )
         self._notification_listener_thread: Optional[threading.Thread] = None
@@ -665,12 +665,12 @@ class DBOSClient:
             )
         return handle_map[completed_id]
 
-    def _large_objects(self) -> LargeObjects:
-        if self._large_objects_field is None:
-            raise DBOSLargeObjectStoreNotConfiguredError(None, [])
-        return self._large_objects_field
+    def _external_storage(self) -> ExternalStorage:
+        if self._external_storage_field is None:
+            raise DBOSExternalStoreNotConfiguredError(None, [])
+        return self._external_storage_field
 
-    def store_large_object(
+    def store_external_object(
         self,
         value: T,
         *,
@@ -681,11 +681,11 @@ class DBOSClient:
         name: Optional[str] = None,
         shard_key: Optional[str] = None,
         store_id: Optional[str] = None,
-    ) -> LargeObjectRef[T]:
-        """Upload a value to a large object store (if there are multiple, specify one with store_id) and return a ref to it.
+    ) -> ExternalObjectRef[T]:
+        """Upload a value to an external store (if there are multiple, specify one with store_id) and return a ref to it.
         The object lives as long as the owner workflow, which need not exist yet."""
         with bind_shard_keys({owner_workflow_id: shard_key}):
-            return self._large_objects().store(
+            return self._external_storage().store(
                 value,
                 owner_workflow_id=owner_workflow_id,
                 serialization_type=serialization_type,
@@ -693,7 +693,7 @@ class DBOSClient:
                 store_id=store_id,
             )
 
-    async def store_large_object_async(
+    async def store_external_object_async(
         self,
         value: T,
         *,
@@ -704,10 +704,10 @@ class DBOSClient:
         name: Optional[str] = None,
         shard_key: Optional[str] = None,
         store_id: Optional[str] = None,
-    ) -> LargeObjectRef[T]:
-        """Upload a value to a large object store (if there are multiple, specify one with store_id) and return a ref to it."""
+    ) -> ExternalObjectRef[T]:
+        """Upload a value to an external store (if there are multiple, specify one with store_id) and return a ref to it."""
         with bind_shard_keys({owner_workflow_id: shard_key}):
-            return await self._large_objects().store_async(
+            return await self._external_storage().store_async(
                 value,
                 owner_workflow_id=owner_workflow_id,
                 serialization_type=serialization_type,
@@ -715,13 +715,13 @@ class DBOSClient:
                 store_id=store_id,
             )
 
-    def get_large_object(self, ref: LargeObjectRef[T]) -> T:
-        """Load the value a large object ref points to."""
-        return cast(T, self._large_objects().get(ref))
+    def load_external_object(self, ref: ExternalObjectRef[T]) -> T:
+        """Load the value an external object ref points to."""
+        return cast(T, self._external_storage().get(ref))
 
-    async def get_large_object_async(self, ref: LargeObjectRef[T]) -> T:
-        """Load the value a large object ref points to."""
-        return cast(T, await self._large_objects().get_async(ref))
+    async def load_external_object_async(self, ref: ExternalObjectRef[T]) -> T:
+        """Load the value an external object ref points to."""
+        return cast(T, await self._external_storage().get_async(ref))
 
     def send(
         self,
