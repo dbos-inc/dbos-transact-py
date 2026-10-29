@@ -4965,7 +4965,7 @@ class SystemDatabase(ABC):
         timed_out = (
             sa.select(ws.c.workflow_uuid)
             .where(
-                # Literals, so SQLite's prover matches idx_workflow_status_deadline's IN predicate.
+                # Literals, so SQLite's prover matches idx_workflow_status_deadline_v2's IN predicate.
                 ws.c.status.in_(
                     [
                         sa.literal_column(f"'{WorkflowStatusString.ENQUEUED.value}'"),

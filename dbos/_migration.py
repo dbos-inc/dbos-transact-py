@@ -1418,14 +1418,15 @@ def get_dbos_migration_hundredtwentyseven(
 def get_dbos_migration_hundredtwentyeight(
     quoted_schema: str, is_cockroach: bool
 ) -> str:
-    # Replaced by 129, whose predicate also covers SUSPENDED workflows.
+    # idx_workflow_status_deadline, with a predicate that also covers SUSPENDED workflows.
     c = _concurrently(is_cockroach)
-    return f'DROP INDEX {c} IF EXISTS {quoted_schema}."idx_workflow_status_deadline"'
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_deadline_v2" ON {quoted_schema}."workflow_status" ("workflow_deadline_epoch_ms") WHERE "status" IN (\'ENQUEUED\', \'PENDING\', \'DELAYED\', \'SUSPENDED\') AND "workflow_deadline_epoch_ms" IS NOT NULL'
 
 
 def get_dbos_migration_hundredtwentynine(quoted_schema: str, is_cockroach: bool) -> str:
+    # Superseded by idx_workflow_status_deadline_v2
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_deadline" ON {quoted_schema}."workflow_status" ("workflow_deadline_epoch_ms") WHERE "status" IN (\'ENQUEUED\', \'PENDING\', \'DELAYED\', \'SUSPENDED\') AND "workflow_deadline_epoch_ms" IS NOT NULL'
+    return f'DROP INDEX {c} IF EXISTS {quoted_schema}."idx_workflow_status_deadline"'
 
 
 def get_dbos_migration_hundredthirty(quoted_schema: str, is_cockroach: bool) -> str:
@@ -2016,11 +2017,11 @@ sqlite_migration_hundredtwentysix = (
 
 sqlite_migration_hundredtwentyseven = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_suspended" ON "workflow_status" ("delay_until_epoch_ms") WHERE "status" = \'SUSPENDED\' AND "delay_until_epoch_ms" IS NOT NULL'
 
-sqlite_migration_hundredtwentyeight = (
+sqlite_migration_hundredtwentyeight = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_deadline_v2" ON "workflow_status" ("workflow_deadline_epoch_ms") WHERE "status" IN (\'ENQUEUED\', \'PENDING\', \'DELAYED\', \'SUSPENDED\') AND "workflow_deadline_epoch_ms" IS NOT NULL'
+
+sqlite_migration_hundredtwentynine = (
     'DROP INDEX IF EXISTS "idx_workflow_status_deadline"'
 )
-
-sqlite_migration_hundredtwentynine = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_deadline" ON "workflow_status" ("workflow_deadline_epoch_ms") WHERE "status" IN (\'ENQUEUED\', \'PENDING\', \'DELAYED\', \'SUSPENDED\') AND "workflow_deadline_epoch_ms" IS NOT NULL'
 
 sqlite_migrations = [
     *_pad_to_shared_base(_sqlite_history),

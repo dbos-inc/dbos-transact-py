@@ -2537,7 +2537,7 @@ def test_timeout_sweep_cancels_unowned_workflows(dbos: DBOS) -> None:
 
 
 def test_timeout_sweep_query_plan(dbos: DBOS, skip_with_sharding: None) -> None:
-    """The sweep runs every poll, so it must reach expired rows through idx_workflow_status_deadline."""
+    """The sweep runs every poll, so it must reach expired rows through idx_workflow_status_deadline_v2."""
     from sqlalchemy import event
 
     captured: list[Any] = []
@@ -2599,7 +2599,8 @@ def test_timeout_sweep_query_plan(dbos: DBOS, skip_with_sharding: None) -> None:
             ).fetchall()
         details = [str(row[-1]) for row in plan]
         assert any(
-            "idx_workflow_status_deadline" in d and "workflow_deadline_epoch_ms<" in d
+            "idx_workflow_status_deadline_v2" in d
+            and "workflow_deadline_epoch_ms<" in d
             for d in details
         ), details
         assert not [d for d in details if d.startswith("SCAN")], details
@@ -2608,7 +2609,7 @@ def test_timeout_sweep_query_plan(dbos: DBOS, skip_with_sharding: None) -> None:
             conn.exec_driver_sql(f'ANALYZE "{dbos._sys_db.schema}".workflow_status')
             plan = conn.exec_driver_sql(f"EXPLAIN {statement}", parameters).fetchall()
         details = [str(row[0]) for row in plan]
-        assert any("idx_workflow_status_deadline" in d for d in details), details
+        assert any("idx_workflow_status_deadline_v2" in d for d in details), details
         # The deadline bound rides the index as a condition, not a filter over every active row.
         assert any(
             "Index Cond" in d and "workflow_deadline_epoch_ms" in d for d in details
