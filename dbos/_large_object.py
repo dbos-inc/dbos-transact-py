@@ -22,8 +22,8 @@ class LargeObjectRef(TypedDict, Generic[T]):
 
 
 class LargeObjectStore(Protocol):
-    """Where large objects' bytes live. Its store_id names the location, so it must
-    not change while refs to it exist."""
+    """Where large objects' bytes live; each call retries its own transient failures.
+    Its store_id names the location, so it must not change while refs to it exist."""
 
     @property
     def store_id(self) -> str: ...

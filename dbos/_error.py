@@ -466,7 +466,7 @@ class DBOSLargeObjectIntegrityError(DBOSException):
 
 
 class DBOSLargeObjectStoreError(DBOSException):
-    """Exception raised when a large object store keeps failing after retries; the store's error is its __cause__."""
+    """Exception raised when a large object store call fails after the store's own retries; the store's error is its __cause__."""
 
     def __init__(self, store_id: str, key: str, operation: str, detail: str):
         self.store_id = store_id
