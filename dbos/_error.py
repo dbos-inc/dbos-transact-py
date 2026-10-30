@@ -74,7 +74,6 @@ class DBOSErrorCode(Enum):
     ExternalObjectMissing = 31
     ExternalObjectIntegrity = 32
     ExternalStoreFailed = 33
-    ExternalObjectKeyConflict = 34
 
 
 #######################################
@@ -485,22 +484,6 @@ class DBOSExternalStoreError(DBOSException):
             self.__class__,
             (self.store_id, self.key, self.operation, self.detail),
         )
-
-
-class DBOSExternalObjectKeyConflictError(DBOSException):
-    """Exception raised when storing under a key that another workflow's object already holds."""
-
-    def __init__(self, store_id: str, key: str, owner_workflow_id: str):
-        self.store_id = store_id
-        self.key = key
-        self.owner_workflow_id = owner_workflow_id
-        super().__init__(
-            f"External object {key} in store {store_id} belongs to workflow {owner_workflow_id}",
-            dbos_error_code=DBOSErrorCode.ExternalObjectKeyConflict.value,
-        )
-
-    def __reduce__(self) -> Any:
-        return (self.__class__, (self.store_id, self.key, self.owner_workflow_id))
 
 
 #######################################
