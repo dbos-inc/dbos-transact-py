@@ -2406,8 +2406,9 @@ class DBOS:
     async def load_external_object_async(cls, ref: ExternalObjectRef[T]) -> T:
         """Load the value an external object ref points to. Call it from a step, not a workflow, and use the value in that step: a step's return value is checkpointed, so return only a small result."""
         _refuse_load_in_workflow("load_external_object_async")
+        external_storage = _get_dbos_instance()._external_storage()
         await cls._configure_asyncio_thread_pool()
-        return cast(T, await _get_dbos_instance()._external_storage().get_async(ref))
+        return cast(T, await external_storage.get_async(ref))
 
     @classmethod
     def set_event(
