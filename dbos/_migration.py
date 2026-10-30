@@ -1470,6 +1470,20 @@ ALTER FUNCTION {quoted_schema}.send_message(
     return migration
 
 
+def get_dbos_migration_hundredthirtyone(quoted_schema: str) -> str:
+    # Objects stored with DBOS.store_external_object, so garbage collection can find those whose owner is gone.
+    return f"""
+CREATE TABLE IF NOT EXISTS {quoted_schema}."external_objects" (
+    "object_key" TEXT NOT NULL,
+    "store_id" TEXT NOT NULL,
+    "workflow_uuid" TEXT NOT NULL,
+    "created_at" BIGINT NOT NULL,
+    PRIMARY KEY ("store_id", "object_key")
+);
+CREATE INDEX IF NOT EXISTS "idx_external_objects_store_created_at" ON {quoted_schema}."external_objects" ("store_id", "created_at");
+"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -1557,6 +1571,7 @@ def get_dbos_migrations(
         get_dbos_migration_hundredtwentyeight(quoted_schema, is_cockroach),
         get_dbos_migration_hundredtwentynine(quoted_schema, is_cockroach),
         get_dbos_migration_hundredthirty(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredthirtyone(quoted_schema),
     ]
 
 
@@ -2023,6 +2038,17 @@ sqlite_migration_hundredtwentynine = (
     'DROP INDEX IF EXISTS "idx_workflow_status_deadline"'
 )
 
+sqlite_migration_hundredthirtyone = """
+CREATE TABLE IF NOT EXISTS "external_objects" (
+    "object_key" TEXT NOT NULL,
+    "store_id" TEXT NOT NULL,
+    "workflow_uuid" TEXT NOT NULL,
+    "created_at" INTEGER NOT NULL,
+    PRIMARY KEY ("store_id", "object_key")
+);
+CREATE INDEX IF NOT EXISTS "idx_external_objects_store_created_at" ON "external_objects" ("store_id", "created_at");
+"""
+
 sqlite_migrations = [
     *_pad_to_shared_base(_sqlite_history),
     sqlite_migration_hundred,
@@ -2059,4 +2085,5 @@ sqlite_migrations = [
     sqlite_migration_hundredtwentynine,
     # Postgres migration 130 rewrites a stored function; SQLite has none.
     "",
+    sqlite_migration_hundredthirtyone,
 ]

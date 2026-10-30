@@ -11,14 +11,19 @@ import types
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, Generator, List, Optional, Tuple
+from typing import Any, Dict, Generator, List, Optional, Tuple, cast
 
 import pytest
 
-from dbos import DBOS, DBOSConfig
+from dbos import DBOS, DBOSClient, DBOSConfig
 from dbos import _enterprise as enterprise_module
-from dbos._error import DBOSInitializationError
+from dbos._error import (
+    DBOSExternalStoreNotConfiguredError,
+    DBOSInitializationError,
+)
+from dbos._external_storage import check_external_stores
 from dbos._logger import dbos_logger
+from dbos._sys_db import SystemDatabase
 from dbos._utils import GlobalParams
 
 # Captured at import, before any test harness replaces it.
@@ -113,11 +118,35 @@ def test_cloud_always_requires_the_package(
     DBOS.destroy(destroy_registry=True)
 
 
+def test_refused_client_opens_no_connection(
+    config: DBOSConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _load_refuses(monkeypatch)
+    created: List[Any] = []
+    monkeypatch.setattr(
+        SystemDatabase, "create", lambda *args, **kwargs: created.append(args)
+    )
+    assert config["system_database_url"] is not None
+    with pytest.raises(DBOSInitializationError, match="refused"):
+        DBOSClient(
+            system_database_url=config["system_database_url"],
+            external_stores=[
+                cast(Any, types.SimpleNamespace(store_id="refused-store"))
+            ],
+        )
+    assert created == []
+
+
 # --- Entitlements -------------------------------------------------------------
 
 # A feature for exercising the check itself, entitled under a name Conductor may not know.
 SOME_FEATURE = enterprise_module.Feature("someFeature", "Some feature")
-ALL_ENTITLED = {"sharding": True, "autoUpgrade": True, "suspendWorkflows": True}
+ALL_ENTITLED = {
+    "sharding": True,
+    "autoUpgrade": True,
+    "suspendWorkflows": True,
+    "externalStorage": True,
+}
 
 
 class FakeConductor:
@@ -556,6 +585,11 @@ def test_config_turns_on_enterprise_features() -> None:
     assert enterprise_module.enabled_features({"suspend_mode": True}) == [
         enterprise_module.SUSPEND
     ]
+    assert enterprise_module.enabled_features({"external_stores": [object()]}) == [
+        enterprise_module.EXTERNAL_STORAGE
+    ]
+    # An empty list configures no store, so it needs no entitlement.
+    assert enterprise_module.enabled_features({"external_stores": []}) == []
     # Every registered feature has a distinct entitlement name.
     names = [f.entitlement for f in enterprise_module.FEATURES]
     assert len(names) == len(set(names))
@@ -583,6 +617,60 @@ def test_an_auto_upgrading_executor_checks_its_entitlement(
         DBOS(config=upgrading)  # type: ignore[arg-type]
     DBOS.destroy(destroy_registry=True)
     assert conductor.requests == [("/v2/entitlements", "Bearer enterprise-key")]
+
+
+def test_external_storage_checks_its_entitlement(
+    config: DBOSConfig, conductor: FakeConductor, skip_with_sharding: None
+) -> None:
+    DBOS.destroy(destroy_registry=True)
+    store = object()
+    # Refused before the package is even loaded, so this holds without dbos-enterprise.
+    with pytest.raises(
+        DBOSInitializationError,
+        match=f": {enterprise_module.EXTERNAL_STORAGE.description} requires a DBOS key",
+    ):
+        DBOS(config={**config, "external_stores": [store]})  # type: ignore[list-item]
+    DBOS.destroy(destroy_registry=True)
+    storing = {
+        **config,
+        "external_stores": [store],
+        "transact_enterprise_key": "enterprise-key",
+        "conductor_url": conductor.url,
+    }
+    conductor.entitle(**{**ALL_ENTITLED, "externalStorage": False})
+    with pytest.raises(
+        DBOSInitializationError, match="not entitled to externalStorage"
+    ):
+        DBOS(config=storing)  # type: ignore[arg-type]
+    DBOS.destroy(destroy_registry=True)
+    assert conductor.requests == [("/v2/entitlements", "Bearer enterprise-key")]
+
+
+def test_external_stores_must_be_a_list() -> None:
+    store = types.SimpleNamespace(store_id="only")
+    with pytest.raises(
+        DBOSInitializationError, match=r"not a single SimpleNamespace; pass \[store\]"
+    ):
+        check_external_stores(cast(Any, store))
+    assert check_external_stores([cast(Any, store)]) == [store]
+    assert check_external_stores(None) == []
+
+
+def test_external_storage_needs_a_store(dbos: DBOS) -> None:
+    with pytest.raises(DBOSExternalStoreNotConfiguredError):
+        DBOS.store_external_object("value", owner_workflow_id="owner")
+    with pytest.raises(DBOSExternalStoreNotConfiguredError):
+        DBOS.load_external_object(
+            {
+                "version": 1,
+                "store": "s3://bucket",
+                "key": "key",
+                "size": 0,
+                "sha256": "",
+                "serialization": "py_pickle",
+                "encoding": "raw",
+            }
+        )
 
 
 def test_sharded_executor_checks_its_entitlement(
