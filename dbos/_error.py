@@ -1,7 +1,7 @@
 """Errors thrown by DBOS."""
 
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 
 class DBOSException(Exception):
@@ -70,6 +70,10 @@ class DBOSErrorCode(Enum):
     WorkflowIDInUse = 27
     StepNondeterminism = 28
     WorkflowSuspended = 29
+    ExternalStoreNotConfigured = 30
+    ExternalObjectMissing = 31
+    ExternalObjectIntegrity = 32
+    ExternalStoreFailed = 33
 
 
 #######################################
@@ -411,6 +415,75 @@ class DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(DBOSException):
     def __reduce__(self) -> Any:
         # Tell pickle how to reconstruct this object
         return (self.__class__, (self.workflow_id,))
+
+
+class DBOSExternalStoreNotConfiguredError(DBOSException):
+    """Exception raised when no external store is configured, or a ref or store_id names a store that isn't."""
+
+    def __init__(self, store_id: Optional[str], configured_store_ids: List[str]):
+        self.store_id = store_id
+        self.configured_store_ids = configured_store_ids
+        if not configured_store_ids:
+            msg = "External objects require external_stores in the DBOS configuration or DBOSClient"
+        else:
+            msg = f"External store {store_id} is not configured; the configured stores are {', '.join(configured_store_ids)}"
+        super().__init__(
+            msg, dbos_error_code=DBOSErrorCode.ExternalStoreNotConfigured.value
+        )
+
+    def __reduce__(self) -> Any:
+        return (self.__class__, (self.store_id, self.configured_store_ids))
+
+
+class DBOSExternalObjectMissingError(DBOSException):
+    """Exception raised when an external object's ref is valid but its object no longer exists."""
+
+    def __init__(self, store_id: str, key: str):
+        self.store_id = store_id
+        self.key = key
+        super().__init__(
+            f"External object {key} no longer exists in store {store_id}",
+            dbos_error_code=DBOSErrorCode.ExternalObjectMissing.value,
+        )
+
+    def __reduce__(self) -> Any:
+        return (self.__class__, (self.store_id, self.key))
+
+
+class DBOSExternalObjectIntegrityError(DBOSException):
+    """Exception raised when an external object's stored bytes don't match its ref."""
+
+    def __init__(self, store_id: str, key: str, detail: str):
+        self.store_id = store_id
+        self.key = key
+        self.detail = detail
+        super().__init__(
+            f"External object {key} in store {store_id} does not match its ref: {detail}",
+            dbos_error_code=DBOSErrorCode.ExternalObjectIntegrity.value,
+        )
+
+    def __reduce__(self) -> Any:
+        return (self.__class__, (self.store_id, self.key, self.detail))
+
+
+class DBOSExternalStoreError(DBOSException):
+    """Exception raised when an external store call fails after the store's own retries; the store's error is its __cause__."""
+
+    def __init__(self, store_id: str, key: str, operation: str, detail: str):
+        self.store_id = store_id
+        self.key = key
+        self.operation = operation
+        self.detail = detail
+        super().__init__(
+            f"External store {store_id} failed to {operation} {key}: {detail}",
+            dbos_error_code=DBOSErrorCode.ExternalStoreFailed.value,
+        )
+
+    def __reduce__(self) -> Any:
+        return (
+            self.__class__,
+            (self.store_id, self.key, self.operation, self.detail),
+        )
 
 
 #######################################

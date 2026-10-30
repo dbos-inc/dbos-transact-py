@@ -5,7 +5,7 @@
 groups = ["default", "dev", "otel"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:9f602b850dbf790c391017e6bb3b7a8f6a281d0f3f0f53983e7d4db077eb67e1"
+content_hash = "sha256:6d5e49ba64c7371600f195340b7a3d41bbc2ab61f92e5b77288a7f8fb72acd7f"
 
 [[metadata.targets]]
 requires_python = ">=3.10"
