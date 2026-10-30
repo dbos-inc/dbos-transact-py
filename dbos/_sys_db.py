@@ -192,7 +192,7 @@ DequeueStopReason = Literal[
 class WorkflowStatus:
     # The workflow ID
     workflow_id: str
-    # The workflow status. Must be one of DELAYED, ENQUEUED, PENDING, SUCCESS, ERROR, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED
+    # The workflow status. Must be one of DELAYED, ENQUEUED, PENDING, SUSPENDED, SUCCESS, ERROR, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED
     status: WorkflowStatuses
     # The name of the workflow function
     name: str

@@ -139,6 +139,7 @@ if TYPE_CHECKING:
     from opentelemetry.context import Context as OtelContext
 
     from ._dbos import DBOS, DBOSRegistry, WorkflowHandle, WorkflowHandleAsync
+    from ._enterprise import Suspend
 
 
 P = ParamSpec("P")  # A generic type for workflow parameters
@@ -2912,6 +2913,28 @@ def record_sleep(
     else:
         # Cannot call it from outside of a workflow
         raise DBOSException("sleep() must be called from within a workflow")
+
+
+def suspend_hooks(dbos: "DBOS", op: str) -> "Suspend":
+    hooks = dbos._sys_db.suspend
+    if hooks is None:
+        raise DBOSException(
+            f"{op}(suspend=True) requires suspend mode, a Transact Enterprise "
+            "feature: set suspend_mode to True in the DBOS configuration."
+        )
+    return hooks
+
+
+def record_sleep_suspend(
+    dbos: "DBOS", cur_ctx: Optional["DBOSContext"], seconds: float
+) -> float:
+    """Park the workflow for a suspend-mode sleep, or return the seconds to sleep in place."""
+    if cur_ctx is None or not cur_ctx.is_workflow():
+        raise DBOSException("sleep() must be called from within a workflow")
+    hooks = suspend_hooks(dbos, "sleep")
+    attributes: TracedAttributes = {"name": "sleep"}
+    with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
+        return hooks.sleep_suspend(ctx.workflow_id, ctx.curr_step_function_id, seconds)
 
 
 def write_stream(
