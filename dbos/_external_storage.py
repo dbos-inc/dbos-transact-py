@@ -3,7 +3,7 @@
 import collections.abc
 from typing import Generic, List, Optional, Protocol, Sequence, TypeVar
 
-# typing.TypedDict can't be generic before Python 3.11; SQLAlchemy already requires typing_extensions.
+# typing.TypedDict can't be generic before Python 3.11.
 from typing_extensions import TypedDict
 
 from ._error import DBOSInitializationError
