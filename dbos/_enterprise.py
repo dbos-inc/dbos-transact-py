@@ -167,6 +167,7 @@ class ExternalStorageFactory(Protocol):
         *,
         stores: Sequence["ExternalStore"],
         serializer: "Serializer",
+        check_caller_owner: bool = False,
     ) -> ExternalStorage: ...
 
 

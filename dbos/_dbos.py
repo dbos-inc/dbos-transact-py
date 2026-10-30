@@ -956,6 +956,7 @@ class DBOS:
                     self._sys_db,
                     stores=self._external_stores,
                     serializer=self._serializer,
+                    check_caller_owner=True,
                 )
 
             # Register the current application version
