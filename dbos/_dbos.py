@@ -258,7 +258,8 @@ def _refuse_load_in_workflow(fn: str) -> None:
     ctx = get_local_dbos_context()
     if ctx is not None and ctx.is_workflow():
         raise DBOSException(
-            f"{fn}() may not be called from a workflow, call it from a step instead"
+            f"{fn}() may not be called from a workflow. Call it from a step and use the "
+            "value there: a step's return value is checkpointed, so return only a small result."
         )
 
 
@@ -2395,14 +2396,14 @@ class DBOS:
 
     @classmethod
     def load_external_object(cls, ref: ExternalObjectRef[T]) -> T:
-        """Load the value an external object ref points to."""
+        """Load the value an external object ref points to. Call it from a step, not a workflow, and use the value in that step: a step's return value is checkpointed, so return only a small result."""
         check_async("load_external_object")
         _refuse_load_in_workflow("load_external_object")
         return cast(T, _get_dbos_instance()._external_storage().get(ref))
 
     @classmethod
     async def load_external_object_async(cls, ref: ExternalObjectRef[T]) -> T:
-        """Load the value an external object ref points to."""
+        """Load the value an external object ref points to. Call it from a step, not a workflow, and use the value in that step: a step's return value is checkpointed, so return only a small result."""
         _refuse_load_in_workflow("load_external_object_async")
         return cast(T, await _get_dbos_instance()._external_storage().get_async(ref))
 
