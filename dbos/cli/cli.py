@@ -535,7 +535,7 @@ def rename_application(
 @click.option(
     "--status",
     "-S",
-    help="Retrieve workflows with this status (PENDING, SUCCESS, ERROR, ENQUEUED, DELAYED, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED)",
+    help="Retrieve workflows with this status (PENDING, SUCCESS, ERROR, ENQUEUED, DELAYED, SUSPENDED, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED)",
 )
 @click.option(
     "--application-version",
@@ -757,7 +757,7 @@ def fork(
 @click.option(
     "--status",
     "-S",
-    help="Retrieve functions with this status (PENDING, SUCCESS, ERROR, ENQUEUED, DELAYED, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED)",
+    help="Retrieve functions with this status (PENDING, SUCCESS, ERROR, ENQUEUED, DELAYED, SUSPENDED, CANCELLED, or MAX_RECOVERY_ATTEMPTS_EXCEEDED)",
 )
 @click.option("--queue-name", "-q", help="Retrieve functions on this queue")
 @click.option("--name", "-n", help="Retrieve functions on this queue")

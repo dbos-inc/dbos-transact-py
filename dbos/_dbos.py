@@ -69,12 +69,14 @@ from ._core import (
     read_stream_offset,
     read_stream_offset_async,
     record_sleep,
+    record_sleep_suspend,
     run_step,
     run_step_async,
     send_bulk,
     set_event,
     start_workflow,
     start_workflow_async,
+    suspend_hooks,
     write_stream,
 )
 from ._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
@@ -2066,13 +2068,7 @@ class DBOS:
         with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
             timeout_function_id = ctx.curr_step_function_id + 1
             if suspend:
-                hooks = _get_dbos_instance()._sys_db.suspend
-                if hooks is None:
-                    raise DBOSException(
-                        "recv(suspend=True) requires suspend mode, a Transact Enterprise "
-                        "feature: set suspend_mode to True in the DBOS configuration."
-                    )
-                return hooks.recv_suspend(
+                return suspend_hooks(_get_dbos_instance(), "recv").recv_suspend(
                     ctx.workflow_id,
                     ctx.curr_step_function_id,
                     timeout_function_id,
@@ -2089,7 +2085,11 @@ class DBOS:
 
     @classmethod
     async def recv_async(
-        cls, topic: Optional[str] = None, timeout_seconds: float = 60
+        cls,
+        topic: Optional[str] = None,
+        timeout_seconds: float = 60,
+        *,
+        suspend: bool = False,
     ) -> Any:
         """
         Receive a workflow message.
@@ -2104,6 +2104,16 @@ class DBOS:
         attributes: TracedAttributes = {"name": "recv"}
         with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
             timeout_function_id = ctx.curr_step_function_id + 1
+            if suspend:
+                # to_thread copies the context, so the hook sees this execution's owner token.
+                return await asyncio.to_thread(
+                    suspend_hooks(_get_dbos_instance(), "recv").recv_suspend,
+                    ctx.workflow_id,
+                    ctx.curr_step_function_id,
+                    timeout_function_id,
+                    topic,
+                    timeout_seconds,
+                )
             return await _get_dbos_instance()._sys_db.recv_async(
                 ctx.workflow_id,
                 ctx.curr_step_function_id,
@@ -2128,27 +2138,12 @@ class DBOS:
         if seconds <= 0:
             return
         cur_ctx = snapshot_step_context()
-        if suspend:
-            if cur_ctx is None or not cur_ctx.is_workflow():
-                raise DBOSException("sleep() must be called from within a workflow")
-            hooks = _get_dbos_instance()._sys_db.suspend
-            if hooks is None:
-                raise DBOSException(
-                    "sleep(suspend=True) requires suspend mode, a Transact Enterprise "
-                    "feature: set suspend_mode to True in the DBOS configuration."
-                )
-            attributes: TracedAttributes = {"name": "sleep"}
-            with EnterDBOSStepCtx(attributes, cur_ctx) as ctx:
-                duration = hooks.sleep_suspend(
-                    ctx.workflow_id, ctx.curr_step_function_id, seconds
-                )
-            time.sleep(duration)
-            return
-        duration = record_sleep(_get_dbos_instance(), cur_ctx, seconds)
+        record = record_sleep_suspend if suspend else record_sleep
+        duration = record(_get_dbos_instance(), cur_ctx, seconds)
         time.sleep(duration)
 
     @classmethod
-    async def sleep_async(cls, seconds: float) -> None:
+    async def sleep_async(cls, seconds: float, *, suspend: bool = False) -> None:
         """
         Sleep for the specified time (in seconds).
 
@@ -2159,8 +2154,9 @@ class DBOS:
             return
         cur_ctx = snapshot_step_context()
         await cls._configure_asyncio_thread_pool()
+        record = record_sleep_suspend if suspend else record_sleep
         duration = await asyncio.to_thread(
-            record_sleep, _get_dbos_instance(), cur_ctx, seconds
+            record, _get_dbos_instance(), cur_ctx, seconds
         )
         await asyncio.sleep(duration)
 

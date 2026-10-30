@@ -54,6 +54,24 @@ def test_sleep_suspend_is_refused_without_suspend_mode(dbos: DBOS) -> None:
         handle.get_result()
 
 
+@pytest.mark.asyncio
+async def test_async_suspend_is_refused_without_suspend_mode(dbos: DBOS) -> None:
+    assert dbos._sys_db.suspend is None
+
+    @DBOS.workflow()
+    async def waiter() -> str:
+        return str(await DBOS.recv_async("topic", timeout_seconds=1, suspend=True))
+
+    @DBOS.workflow()
+    async def sleeper() -> None:
+        await DBOS.sleep_async(1, suspend=True)
+
+    for wf in (waiter, sleeper):
+        handle = await DBOS.start_workflow_async(wf)
+        with pytest.raises(DBOSException, match="requires suspend mode"):
+            await handle.get_result()
+
+
 def test_send_wakes_suspended_receivers_without_suspend_mode(
     dbos: DBOS, client: DBOSClient, skip_with_sharding: None
 ) -> None:
