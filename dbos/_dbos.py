@@ -2372,6 +2372,7 @@ class DBOS:
     ) -> ExternalObjectRef[T]:
         """Upload a value to an external store (if there are multiple, specify one with store_id) and return a ref to it."""
         external_storage = _get_dbos_instance()._external_storage()
+        await cls._configure_asyncio_thread_pool()
         ctx = get_local_dbos_context()
         owner = _external_object_owner(ctx, owner_workflow_id, shard_key)
         serialization_type = _external_object_serialization(ctx, serialization_type)
@@ -2405,6 +2406,7 @@ class DBOS:
     async def load_external_object_async(cls, ref: ExternalObjectRef[T]) -> T:
         """Load the value an external object ref points to. Call it from a step, not a workflow, and use the value in that step: a step's return value is checkpointed, so return only a small result."""
         _refuse_load_in_workflow("load_external_object_async")
+        await cls._configure_asyncio_thread_pool()
         return cast(T, await _get_dbos_instance()._external_storage().get_async(ref))
 
     @classmethod
