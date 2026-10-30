@@ -30,10 +30,6 @@ class ExternalStore(Protocol):
     @property
     def store_id(self) -> str: ...
 
-    # How long garbage collection keeps an object whose owner workflow doesn't exist.
-    @property
-    def orphan_ttl_sec(self) -> float: ...
-
     def put(self, key: str, data: bytes) -> None: ...
 
     # Raises KeyError if no object has this key.
