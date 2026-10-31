@@ -189,6 +189,55 @@ def test_list_schedules_undeserializable_context(
     assert bad_context == expected_raw
 
 
+def test_scheduler_skips_undeserializable_context(
+    config: DBOSConfig,
+    cleanup_test_databases: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A schedule whose context can no longer be deserialized after an application
+    # change must not stop the scheduler. Only that schedule is skipped.
+    received: list[Any] = []
+
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+
+    @DBOS.workflow()
+    def my_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        received.append(ctx)
+
+    DBOS.launch()
+
+    DBOS.create_schedule(
+        schedule_name="bad-schedule",
+        workflow_fn=my_workflow,
+        schedule=daily_cron_far_from_now(),
+        context=_StaleContext(region="us"),
+    )
+
+    # Restart after the class the context was pickled against is removed
+    DBOS.destroy()
+    monkeypatch.delattr(sys.modules[__name__], "_StaleContext")
+    DBOS(config=config)
+    DBOS.launch()
+
+    DBOS.create_schedule(
+        schedule_name="good-schedule",
+        workflow_fn=my_workflow,
+        schedule="* * * * * *",
+        context={"env": "test"},
+    )
+
+    def check_fired() -> None:
+        assert len(received) >= 2
+        assert all(c == {"env": "test"} for c in received)
+
+    retry_until_success(check_fired)
+
+    DBOS.delete_schedule("good-schedule")
+    DBOS.delete_schedule("bad-schedule")
+    DBOS.destroy(destroy_registry=True)
+
+
 def test_apply_schedules(dbos: DBOS) -> None:
     @DBOS.workflow()
     def wf_a(scheduled_at: datetime, ctx: Any) -> None:

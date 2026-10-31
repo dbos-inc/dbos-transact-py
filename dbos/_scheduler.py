@@ -33,7 +33,9 @@ class _ScheduleThread:
         self.class_name: Optional[str] = schedule["workflow_class_name"]
         self.cron: str = schedule["schedule"]
         self.serialized_context: str = schedule["context"]
-        self.context: Any = serializer.deserialize(self.serialized_context)
+        # Deserialized in the thread, so a bad context only stops this schedule
+        self.serializer = serializer
+        self.context: Any = None
         tz_name = schedule.get("cron_timezone")
         self.tzinfo = ZoneInfo(tz_name) if tz_name else timezone.utc
         self.queue_name: Optional[str] = schedule.get("queue_name")
@@ -70,6 +72,14 @@ class _ScheduleThread:
             dbos_logger.error(
                 f"Cannot run schedule '{self.schedule_name}'. "
                 f'Invalid crontab "{self.cron}"'
+            )
+            return
+        try:
+            self.context = self.serializer.deserialize(self.serialized_context)
+        except Exception as e:
+            dbos_logger.error(
+                f"Cannot run schedule '{self.schedule_name}'. "
+                f"Its context could not be deserialized: {e}"
             )
             return
         while not self._stop_event.is_set():
