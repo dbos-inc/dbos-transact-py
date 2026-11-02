@@ -272,8 +272,6 @@ class _Scheduler:
         self._sys_db = sys_db
         # Active schedules keyed by schedule_id.
         self._entries: Dict[str, _ScheduleEntry] = {}
-        # Signatures of schedules that could not be armed, so each is reported once per definition.
-        self._failed: Dict[str, tuple[Any, ...]] = {}
         # (next tick epoch, seq, entry), one item per entry in _entries; rebuilt by every poll.
         self._heap: List[Tuple[float, int, _ScheduleEntry]] = []
         self._seq = itertools.count()
@@ -301,27 +299,23 @@ class _Scheduler:
         for schedule_id in list(self._entries):
             if schedule_id not in current_ids:
                 del self._entries[schedule_id]
-        for schedule_id in list(self._failed):
-            if schedule_id not in current_ids:
-                del self._failed[schedule_id]
         for schedule in schedules:
             schedule_id = schedule["schedule_id"]
             entry = self._entries.get(schedule_id)
             if not _ScheduleEntry.is_active(schedule):
                 # Paused: drop it; resuming re-arms it, backfilling if enabled.
                 self._entries.pop(schedule_id, None)
-                self._failed.pop(schedule_id, None)
                 continue
-            signature = _ScheduleEntry.compute_signature(schedule)
             if entry is not None:
                 # Running: re-arm on a changed definition, without backfill.
-                if entry.signature != signature:
+                if entry.signature != _ScheduleEntry.compute_signature(schedule):
                     del self._entries[schedule_id]
-                    self._arm(schedule, signature)
+                    self._arm(schedule)
                 continue
-            if self._failed.get(schedule_id) == signature:
+            # Not running: arm it, then backfill missed executions if enabled; a broken one is retried next poll.
+            entry = self._arm(schedule)
+            if entry is None:
                 continue
-            # Not running: backfill missed executions first if enabled, then arm.
             if schedule.get("automatic_backfill") and schedule.get("last_fired_at"):
                 try:
                     assert schedule["last_fired_at"]
@@ -337,13 +331,12 @@ class _Scheduler:
                         f"schedule '{schedule['schedule_name']}': "
                         f"{traceback.format_exc()}"
                     )
-            self._arm(schedule, signature)
 
-    def _arm(self, schedule: WorkflowSchedule, signature: tuple[Any, ...]) -> None:
+    def _arm(self, schedule: WorkflowSchedule) -> Optional[_ScheduleEntry]:
+        """Register a new entry for this schedule, or log why it can't run and return None."""
         try:
             entry = _ScheduleEntry(schedule, self._sys_db.serializer)
         except Exception:
-            self._failed[schedule["schedule_id"]] = signature
             if not croniter.is_valid(schedule["schedule"], second_at_beginning=True):
                 dbos_logger.error(
                     f"Cannot run schedule '{schedule['schedule_name']}'. "
@@ -354,9 +347,9 @@ class _Scheduler:
                     f"Cannot run schedule '{schedule['schedule_name']}': "
                     f"{traceback.format_exc()}"
                 )
-            return
-        self._failed.pop(schedule["schedule_id"], None)
+            return None
         self._entries[entry.schedule_id] = entry
+        return entry
 
     def seconds_until_due(self) -> float:
         """Seconds until the earliest tick, inf if none."""
@@ -387,8 +380,8 @@ class _Scheduler:
             try:
                 entry.advance()
             except Exception:
+                # Dropped; the next poll tries to arm it again.
                 del self._entries[entry.schedule_id]
-                self._failed[entry.schedule_id] = entry.signature
                 dbos_logger.error(
                     f"Cannot run schedule '{entry.definition.schedule_name}': "
                     f"{traceback.format_exc()}"

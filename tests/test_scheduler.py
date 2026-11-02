@@ -2377,3 +2377,51 @@ def test_scheduler_heap_matches_armed_schedules(dbos: DBOS) -> None:
     scheduler.poll()
     assert [item[2] for item in scheduler._heap] == [entry]
     DBOS.delete_schedule("rearmed")
+
+
+def test_unarmable_schedule_is_retried_each_poll(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    @DBOS.workflow()
+    def daily(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    DBOS.apply_schedules(
+        [
+            {
+                "schedule_name": "stale",
+                "workflow_fn": daily,
+                "schedule": daily_cron_far_from_now(),
+                "context": _StaleContext(region="us"),
+                "automatic_backfill": True,
+            }
+        ]
+    )
+    two_days_ago = datetime.now(timezone.utc) - timedelta(days=2)
+    dbos._sys_db.update_last_fired_at("stale", two_days_ago.isoformat())
+    backfilled: List[str] = []
+    monkeypatch.setattr(
+        "dbos._scheduler.backfill_schedule",
+        lambda sys_db, name, start, end: backfilled.append(name),
+    )
+
+    # The context can't be deserialized, so the schedule isn't armed or backfilled.
+    stale_class = _StaleContext
+    monkeypatch.delattr(sys.modules[__name__], "_StaleContext")
+    # The background scheduler may have armed it before the class went away.
+    backfilled.clear()
+    scheduler = _Scheduler(dbos._sys_db)
+    for _ in range(2):
+        scheduler.poll()
+        assert scheduler._entries == {} and scheduler._heap == []
+    assert backfilled == []
+
+    # Once it can be, the next poll arms and backfills it with no definition change.
+    monkeypatch.setattr(
+        sys.modules[__name__], "_StaleContext", stale_class, raising=False
+    )
+    scheduler.poll()
+    (entry,) = scheduler._entries.values()
+    assert entry.definition.context.region == "us"
+    assert "stale" in backfilled
+    DBOS.delete_schedule("stale")
