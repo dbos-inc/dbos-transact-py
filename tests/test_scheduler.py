@@ -13,7 +13,7 @@ from sqlalchemy.exc import OperationalError
 
 from dbos import DBOS, DBOSClient, DBOSConfig, DBOSConfiguredInstance
 from dbos._error import DBOSException
-from dbos._scheduler import _ScheduleThread
+from dbos._scheduler import _ScheduleEntry
 from dbos._serialization import DBOSPortableJSONSerializer
 from dbos._utils import INTERNAL_QUEUE_NAME
 
@@ -401,7 +401,7 @@ def test_apply_schedules_concurrent(dbos: DBOS) -> None:
 
 
 def test_apply_schedules_live_update(dbos: DBOS) -> None:
-    # Re-applying a changed schedule must take effect live: the scheduler loop detects the modified definition and restarts the thread with the new context, preserving schedule_id.
+    # Re-applying a changed schedule must take effect live: the scheduler loop detects the modified definition and re-arms it with the new context, preserving schedule_id.
     received_contexts: list[Any] = []
 
     @DBOS.workflow()
@@ -487,9 +487,8 @@ def test_apply_schedules_preserves_runtime_state(dbos: DBOS) -> None:
     DBOS.delete_schedule("state-keep")
 
 
-def test_schedule_thread_signature() -> None:
+def test_schedule_entry_signature() -> None:
     # Signature must react to definition fields and ignore identity/lifecycle/runtime state.
-    from dbos._scheduler import _ScheduleThread
     from dbos._sys_db import WorkflowSchedule
 
     base: WorkflowSchedule = {
@@ -507,7 +506,7 @@ def test_schedule_thread_signature() -> None:
         "application_name": "app-a",
         "shard_key": None,
     }
-    sig = _ScheduleThread.compute_signature(base)
+    sig = _ScheduleEntry.compute_signature(base)
 
     # Identity / lifecycle / runtime fields must NOT change the signature.
     for field, value in [
@@ -515,12 +514,12 @@ def test_schedule_thread_signature() -> None:
         ("status", "PAUSED"),
         ("last_fired_at", "2020-01-01T00:00:00+00:00"),
         ("automatic_backfill", True),
-        # Ownership, not definition: re-owning a schedule must not restart its thread.
+        # Ownership, not definition: re-owning a schedule must not re-arm it.
         ("application_name", "app-b"),
     ]:
-        assert _ScheduleThread.compute_signature({**base, field: value}) == sig  # type: ignore[misc]
+        assert _ScheduleEntry.compute_signature({**base, field: value}) == sig  # type: ignore[misc]
 
-    # Definition fields MUST change the signature so the loop restarts the thread.
+    # Definition fields MUST change the signature so the loop re-arms the schedule.
     for field, value in [
         ("workflow_name", "wf2"),
         ("workflow_class_name", "SomeClass"),
@@ -530,7 +529,7 @@ def test_schedule_thread_signature() -> None:
         ("queue_name", "q"),
         ("shard_key", "tenant-a"),
     ]:
-        assert _ScheduleThread.compute_signature({**base, field: value}) != sig  # type: ignore[misc]
+        assert _ScheduleEntry.compute_signature({**base, field: value}) != sig  # type: ignore[misc]
 
 
 def test_schedule_crud_from_workflow(dbos: DBOS) -> None:
@@ -662,7 +661,7 @@ def test_dynamic_scheduler_delete_stops_firing(dbos: DBOS) -> None:
     retry_until_success(check_fired)
 
     DBOS.delete_schedule("delete-test")
-    # Wait for the main loop to detect the deletion and stop the thread
+    # Wait for the main loop to detect the deletion and drop the schedule
     time.sleep(3)
     count_after_delete = wf_counter
     time.sleep(3)
@@ -1302,7 +1301,7 @@ def test_pause_resume_schedule(dbos: DBOS) -> None:
     assert sched is not None
     assert sched["status"] == "PAUSED"
 
-    # Wait for the scheduler loop to detect the pause and stop the thread
+    # Wait for the scheduler loop to detect the pause and drop the schedule
     time.sleep(3)
     count_after_pause = wf_counter
     time.sleep(3)
@@ -2003,7 +2002,7 @@ def test_schedule_survives_sysdb_downtime(
         schedule="* * * * * *",
     )
 
-    # last_fired_at is stamped once per tick, so it tracks the schedule's own thread
+    # last_fired_at is stamped once per tick, so it tracks the scheduler loop
     def read_last_fired() -> datetime:
         sched = DBOS.get_schedule("downtime-schedule")
         assert sched is not None and sched["last_fired_at"] is not None
@@ -2015,7 +2014,7 @@ def test_schedule_survives_sysdb_downtime(
 
     fired_after_restart = retry_until_success(read_last_fired)
 
-    # The schedule's thread must survive the outage and keep ticking
+    # The scheduler loop must survive the outage and keep ticking
     def check_still_ticking() -> None:
         assert read_last_fired() > fired_after_restart
 
@@ -2147,18 +2146,18 @@ def test_schedule_non_retriable_database_error_is_recorded(
 @pytest.mark.skipif(
     not using_sharding(), reason="Only sharded runs check for lost keys"
 )
-def test_a_key_lost_on_a_schedule_thread_is_reported(
+def test_a_key_lost_on_the_scheduler_thread_is_reported(
     dbos: DBOS, monkeypatch: pytest.MonkeyPatch, lost_shard_keys: List[str]
 ) -> None:
     """The sharded run's lost-key check sees DBOS's own threads, so a schedule that drops
     its key fails a test instead of quietly running under the test's key."""
-    start = _ScheduleThread.__init__
+    start = _ScheduleEntry.__init__
 
-    def keyless(self: _ScheduleThread, *args: Any, **kwargs: Any) -> None:
+    def keyless(self: _ScheduleEntry, *args: Any, **kwargs: Any) -> None:
         start(self, *args, **kwargs)
-        self.shard_key = None
+        self.definition.shard_key = None
 
-    monkeypatch.setattr(_ScheduleThread, "__init__", keyless)
+    monkeypatch.setattr(_ScheduleEntry, "__init__", keyless)
 
     @DBOS.workflow()
     def ticked(scheduled_at: datetime, ctx: Any) -> None:
@@ -2175,3 +2174,122 @@ def test_a_key_lost_on_a_schedule_thread_is_reported(
     # Stop the schedule before forgiving what it reported.
     DBOS.destroy(destroy_registry=True)
     lost_shard_keys.clear()
+
+
+def test_many_schedules_fire_in_batches_from_one_thread(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    @DBOS.workflow()
+    def ticked(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    batch_sizes: List[int] = []
+    enqueue = dbos._sys_db.enqueue_scheduled_workflows
+
+    def spy(statuses: Any, fired_at: Any) -> Any:
+        batch_sizes.append(len(statuses))
+        return enqueue(statuses, fired_at)
+
+    monkeypatch.setattr(dbos._sys_db, "enqueue_scheduled_workflows", spy)
+
+    def non_executor_threads() -> int:
+        return sum(
+            1 for t in threading.enumerate() if not t.name.startswith("dbos-executor-")
+        )
+
+    threads_before = non_executor_threads()
+    names = [f"many-{i}" for i in range(100)]
+    DBOS.apply_schedules(
+        [
+            {"schedule_name": n, "workflow_fn": ticked, "schedule": "* * * * * *"}
+            for n in names
+        ]
+    )
+
+    def all_fired() -> None:
+        fired = DBOS.list_workflows(
+            schedule_name=names, load_input=False, load_output=False
+        )
+        assert {w.schedule_name for w in fired} == set(names)
+
+    retry_until_success(all_fired)
+    # Every schedule ticks on the one scheduler thread (not one each), enqueued together.
+    assert non_executor_threads() < threads_before + 10
+    assert max(batch_sizes) == len(names)
+
+    for n in names:
+        DBOS.delete_schedule(n)
+
+
+def test_failing_schedule_does_not_hold_back_its_batch(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    @DBOS.workflow()
+    def ticked(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    enqueue = dbos._sys_db.enqueue_scheduled_workflows
+
+    def poisoned(statuses: Any, fired_at: Any) -> Any:
+        if any(s["schedule_name"] == "poison" for s in statuses):
+            raise DBOSException("poisoned tick")
+        return enqueue(statuses, fired_at)
+
+    monkeypatch.setattr(dbos._sys_db, "enqueue_scheduled_workflows", poisoned)
+    for name in ("poison", "healthy"):
+        DBOS.create_schedule(
+            schedule_name=name, workflow_fn=ticked, schedule="* * * * * *"
+        )
+
+    def healthy_ticks() -> None:
+        assert len(DBOS.list_workflows(schedule_name="healthy")) >= 2
+
+    retry_until_success(healthy_ticks)
+    assert DBOS.list_workflows(schedule_name="poison") == []
+    poison = DBOS.get_schedule("poison")
+    assert poison is not None and poison["last_fired_at"] is None
+
+    DBOS.delete_schedule("poison")
+    DBOS.delete_schedule("healthy")
+
+
+def test_last_fired_at_stamped_only_by_the_enqueueing_tick(dbos: DBOS) -> None:
+    from dbos._scheduler import _enqueue_ticks, _ScheduleDefinition
+
+    @DBOS.workflow()
+    def daily(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    DBOS.create_schedule(
+        schedule_name="stamp", workflow_fn=daily, schedule=daily_cron_far_from_now()
+    )
+    now = datetime.now(timezone.utc)
+
+    # A backfill enqueues past ticks without moving last_fired_at.
+    handles = DBOS.backfill_schedule(
+        "stamp", now - timedelta(days=2), now - timedelta(hours=1)
+    )
+    assert len(handles) >= 1
+    sched = DBOS.get_schedule("stamp")
+    assert sched is not None and sched["last_fired_at"] is None
+
+    raw = dbos._sys_db.get_schedule("stamp")
+    assert raw is not None
+    definition = _ScheduleDefinition.of(raw, dbos._sys_db.serializer)
+
+    # A tick already enqueued elsewhere leaves last_fired_at alone.
+    backfilled = datetime.fromisoformat(handles[0].workflow_id[len("sched-stamp-") :])
+    _enqueue_ticks(dbos._sys_db, [(definition, backfilled)], stamp_last_fired=True)
+    sched = DBOS.get_schedule("stamp")
+    assert sched is not None and sched["last_fired_at"] is None
+
+    # Ticks this call enqueues stamp the batch's latest.
+    ticks = [now + timedelta(days=1), now + timedelta(days=1, hours=1)]
+    _enqueue_ticks(
+        dbos._sys_db, [(definition, t) for t in ticks], stamp_last_fired=True
+    )
+    sched = DBOS.get_schedule("stamp")
+    assert sched is not None and sched["last_fired_at"] is not None
+    assert datetime.fromisoformat(sched["last_fired_at"]) == ticks[-1]
+
+    DBOS.delete_schedule("stamp")
