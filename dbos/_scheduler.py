@@ -1,6 +1,5 @@
 import heapq
 import itertools
-import random
 import threading
 import time
 import traceback
@@ -76,15 +75,10 @@ class _ScheduleEntry:
         self._iter = croniter(
             schedule["schedule"], datetime.now(tzinfo), second_at_beginning=True
         )
-        self.next_time: datetime = datetime.now(timezone.utc)
-        self.max_jitter: float = 0.0
-        self.advance()
+        self.next_time: datetime = self._iter.get_next(datetime)
 
     def advance(self) -> None:
         self.next_time = self._iter.get_next(datetime)
-        # Up to 10% of the wait for this tick, capped at 10s, spreads processes firing it.
-        wait = (self.next_time - datetime.now(timezone.utc)).total_seconds()
-        self.max_jitter = max(0.0, min(wait / 10, 10.0))
 
     @staticmethod
     def compute_signature(schedule: WorkflowSchedule) -> tuple[Any, ...]:
@@ -357,22 +351,15 @@ class _Scheduler:
             return float("inf")
         return self._heap[0][0] - time.time()
 
-    def _pop_due(self, due: List[_ScheduleEntry]) -> None:
+    def _pop_due(self) -> List[_ScheduleEntry]:
         now = time.time()
+        due: List[_ScheduleEntry] = []
         while self._heap and self._heap[0][0] <= now:
             due.append(heapq.heappop(self._heap)[2])
+        return due
 
-    def fire_due(self, stop_event: threading.Event) -> None:
-        due: List[_ScheduleEntry] = []
-        self._pop_due(due)
-        if not due:
-            return
-        # One jitter per process per wakeup, bounded by the tightest due schedule's.
-        jitter = random.uniform(0, min(entry.max_jitter for entry in due))
-        if jitter > 0:
-            if stop_event.wait(timeout=jitter):
-                return
-            self._pop_due(due)
+    def fire_due(self) -> None:
+        due = self._pop_due()
         for start in range(0, len(due), _FIRE_BATCH_SIZE):
             self._fire(due[start : start + _FIRE_BATCH_SIZE])
         for entry in due:
@@ -443,6 +430,6 @@ def dynamic_scheduler_loop(
         if wait > 0 and stop_event.wait(timeout=wait):
             break
         try:
-            scheduler.fire_due(stop_event)
+            scheduler.fire_due()
         except Exception:
             dbos_logger.warning(f"Exception firing schedules: {traceback.format_exc()}")
