@@ -274,7 +274,7 @@ class _Scheduler:
         self._entries: Dict[str, _ScheduleEntry] = {}
         # Signatures of schedules that could not be armed, so each is reported once per definition.
         self._failed: Dict[str, tuple[Any, ...]] = {}
-        # (next tick epoch, seq, entry); an entry no longer in _entries is stale and dropped.
+        # (next tick epoch, seq, entry), one item per entry in _entries; rebuilt by every poll.
         self._heap: List[Tuple[float, int, _ScheduleEntry]] = []
         self._seq = itertools.count()
 
@@ -283,10 +283,19 @@ class _Scheduler:
             self._heap, (entry.next_time.timestamp(), next(self._seq), entry)
         )
 
-    def _is_live(self, entry: _ScheduleEntry) -> bool:
-        return self._entries.get(entry.schedule_id) is entry
-
     def poll(self) -> None:
+        """Sync the armed schedules with the database, then rebuild the heap from them."""
+        try:
+            self._reconcile()
+        finally:
+            # Even after a partial reconcile, so the heap never holds dropped entries or misses one.
+            self._heap = [
+                (entry.next_time.timestamp(), next(self._seq), entry)
+                for entry in self._entries.values()
+            ]
+            heapq.heapify(self._heap)
+
+    def _reconcile(self) -> None:
         schedules = self._sys_db.list_schedules(application_name=self._sys_db.app_name)
         current_ids = {s["schedule_id"] for s in schedules}
         for schedule_id in list(self._entries):
@@ -329,18 +338,6 @@ class _Scheduler:
                         f"{traceback.format_exc()}"
                     )
             self._arm(schedule, signature)
-        self._compact()
-
-    def _compact(self) -> None:
-        """Rebuild the heap once stale items, each holding a dropped entry until its tick, dominate it."""
-        if len(self._heap) <= 2 * len(self._entries) + 64:
-            return
-        # Between passes each live entry has exactly one heap item, so rebuilding from _entries loses none.
-        self._heap = [
-            (entry.next_time.timestamp(), next(self._seq), entry)
-            for entry in self._entries.values()
-        ]
-        heapq.heapify(self._heap)
 
     def _arm(self, schedule: WorkflowSchedule, signature: tuple[Any, ...]) -> None:
         try:
@@ -360,12 +357,9 @@ class _Scheduler:
             return
         self._failed.pop(schedule["schedule_id"], None)
         self._entries[entry.schedule_id] = entry
-        self._push(entry)
 
     def seconds_until_due(self) -> float:
-        """Seconds until the earliest live tick, inf if none."""
-        while self._heap and not self._is_live(self._heap[0][2]):
-            heapq.heappop(self._heap)
+        """Seconds until the earliest tick, inf if none."""
         if not self._heap:
             return float("inf")
         return self._heap[0][0] - time.time()
@@ -373,9 +367,7 @@ class _Scheduler:
     def _pop_due(self, due: List[_ScheduleEntry]) -> None:
         now = time.time()
         while self._heap and self._heap[0][0] <= now:
-            _, _, entry = heapq.heappop(self._heap)
-            if self._is_live(entry):
-                due.append(entry)
+            due.append(heapq.heappop(self._heap)[2])
 
     def fire_due(self, stop_event: threading.Event) -> None:
         due: List[_ScheduleEntry] = []

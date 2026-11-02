@@ -2344,14 +2344,12 @@ def test_scheduled_batches_insert_in_workflow_id_order(
         DBOS.delete_schedule(name)
 
 
-def test_scheduler_heap_drops_stale_items(dbos: DBOS) -> None:
+def test_scheduler_heap_matches_armed_schedules(dbos: DBOS) -> None:
     @DBOS.workflow()
     def daily(scheduled_at: datetime, ctx: Any) -> None:
         pass
 
-    scheduler = _Scheduler(dbos._sys_db)
-    # Each changed definition re-arms the schedule, leaving its old heap item behind.
-    for version in range(200):
+    def apply(version: int) -> None:
         DBOS.apply_schedules(
             [
                 {
@@ -2362,8 +2360,20 @@ def test_scheduler_heap_drops_stale_items(dbos: DBOS) -> None:
                 }
             ]
         )
+
+    scheduler = _Scheduler(dbos._sys_db)
+    # Each changed definition re-arms the schedule; the heap keeps only the current entry.
+    for version in range(20):
+        apply(version)
         scheduler.poll()
-    live = [item for item in scheduler._heap if scheduler._is_live(item[2])]
-    assert len(live) == 1
-    assert len(scheduler._heap) <= 2 * len(scheduler._entries) + 64
+        assert [item[2] for item in scheduler._heap] == list(
+            scheduler._entries.values()
+        )
+    (entry,) = scheduler._entries.values()
+
+    # A schedule that fell off the heap (e.g. popped by a pass that raised) is back after the next poll.
+    scheduler._heap.clear()
+    assert scheduler.seconds_until_due() == float("inf")
+    scheduler.poll()
+    assert [item[2] for item in scheduler._heap] == [entry]
     DBOS.delete_schedule("rearmed")
