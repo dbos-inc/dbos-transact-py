@@ -9,7 +9,7 @@ import sqlalchemy as sa
 
 from dbos import DBOS, DBOSConfig, SetWorkflowID
 from dbos._dbos import WorkflowHandleAsync, _get_dbos_instance
-from dbos._error import DBOSUnexpectedStepError
+from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSUnexpectedStepError
 from dbos._schemas.system_database import SystemSchema
 
 from .conftest import set_workflow_status
@@ -414,21 +414,6 @@ def test_patch_before_waiting_recv(dbos: DBOS, config: DBOSConfig) -> None:
     assert names[1:] == ["DBOS.patch-before-wait", "DBOS.recv", "DBOS.sleep"]
 
 
-def _simulate_crash_after(dbos_instance: DBOS, workflow_id: str, position: int) -> None:
-    """Leave the history as a crash would right after position checkpointed
-    while every other step was still running: only that checkpoint in place,
-    and the workflow pending."""
-    sys_db = dbos_instance._sys_db
-    with sys_db.engine.begin() as c:
-        c.execute(
-            sa.delete(SystemSchema.operation_outputs).where(
-                SystemSchema.operation_outputs.c.workflow_uuid == workflow_id,
-                SystemSchema.operation_outputs.c.function_id != position,
-            )
-        )
-    set_workflow_status(sys_db, workflow_id, "PENDING")
-
-
 async def _wait_all(*aws: Coroutine[Any, Any, int]) -> int:
     done, pending = await DBOS.asyncio_wait(
         list(aws), return_when=asyncio.ALL_COMPLETED
@@ -437,20 +422,39 @@ async def _wait_all(*aws: Coroutine[Any, Any, int]) -> int:
     return sum(t.result() for t in done)
 
 
+async def _wait_for_checkpoint(workflow_id: str, name_suffix: str) -> None:
+    for _ in range(200):
+        steps = await DBOS.list_workflow_steps_async(workflow_id)
+        if any(s["function_name"].endswith(name_suffix) for s in steps):
+            return
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"no checkpoint named *{name_suffix} for {workflow_id}")
+
+
 @pytest.mark.asyncio
 async def test_patch_async_before_concurrent_steps(
     dbos: DBOS, config: DBOSConfig
 ) -> None:
     # Concurrent steps take their positions up front and checkpoint in any
-    # order, so a crash can leave a later position recorded and an earlier
-    # one empty. A patch added before them must treat the later checkpoint
-    # as proof the execution passed that point on the old code.
+    # order, so an execution can stop with a later position recorded and an
+    # earlier one empty. A patch added before them must treat the later
+    # checkpoint as proof the execution passed that point on the old code.
     DBOS.destroy(destroy_registry=True)
     config["application_version"] = "test_version"
     DBOS(config=config)
 
-    @DBOS.step()
+    step_one_started = asyncio.Event()
+    step_one_release = asyncio.Event()
+    step_one_cancelled = asyncio.Event()
+
+    @DBOS.step(preemptible=True)
     async def step_one() -> int:
+        step_one_started.set()
+        try:
+            await step_one_release.wait()
+        except asyncio.CancelledError:
+            step_one_cancelled.set()
+            raise
         return 1
 
     @DBOS.step()
@@ -463,25 +467,25 @@ async def test_patch_async_before_concurrent_steps(
 
     DBOS.launch()
 
-    # v1: asyncio_wait takes position 1, the steps 2 and 3.
+    # v1: asyncio_wait takes position 1, the steps 2 and 3. step_two
+    # checkpoints while step_one is still running, then the workflow is
+    # cancelled, which preempts step_one: positions 1 and 2 stay empty.
     v1_id = str(uuid.uuid4())
     with SetWorkflowID(v1_id):
         handle = await DBOS.start_workflow_async(workflow)
-    assert await handle.get_result() == 3
-    v1_steps = await DBOS.list_workflow_steps_async(v1_id)
-    step_two_position = next(
-        s["function_id"] for s in v1_steps if s["function_name"].endswith("step_two")
-    )
-    assert step_two_position > 1
-
-    # The process died right after step_two checkpointed, before anything
-    # positioned ahead of it did.
-    _simulate_crash_after(_get_dbos_instance(), v1_id, step_two_position)
+    await step_one_started.wait()
+    await _wait_for_checkpoint(v1_id, "step_two")
+    await DBOS.cancel_workflow_async(v1_id)
+    await step_one_cancelled.wait()
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        await handle.get_result()
+    names = [s["function_name"] for s in await DBOS.list_workflow_steps_async(v1_id)]
+    assert len(names) == 1 and names[0].endswith("step_two")
 
     # v2 adds a patch before the concurrent steps.
     DBOS.destroy(destroy_registry=True)
     DBOS(config=config)
-    step_one = DBOS.step()(step_one)
+    step_one = DBOS.step(preemptible=True)(step_one)
     step_two = DBOS.step()(step_two)
     patched_runs: list[str] = []
 
@@ -491,19 +495,26 @@ async def test_patch_async_before_concurrent_steps(
             patched_runs.append(str(DBOS.workflow_id))
         return await _wait_all(step_one(), step_two())
 
-    # Launch recovers the v1 execution: step_one reruns, step_two replays.
     DBOS.launch()
-    recovered: WorkflowHandleAsync[int] = await DBOS.retrieve_workflow_async(v1_id)
-    assert await recovered.get_result() == 3
-    assert patched_runs == []
-    assert len(await DBOS.list_workflow_steps_async(v1_id)) == len(v1_steps)
 
-    # A new execution takes the patch.
+    # Resumed on v2, the v1 execution stays on the old path: the wait and
+    # step_one take positions 1 and 2, step_two replays at 3.
+    step_one_release.set()
+    resumed: WorkflowHandleAsync[int] = await DBOS.resume_workflow_async(v1_id)
+    assert await resumed.get_result() == 3
+    assert patched_runs == []
+    names = [s["function_name"] for s in await DBOS.list_workflow_steps_async(v1_id)]
+    assert len(names) == 3
+    assert names[0] == "DBOS.asyncio_wait"
+    assert names[1].endswith("step_one")
+    assert names[2].endswith("step_two")
+
+    # A new execution takes the patch and records its marker first.
     v2_id = str(uuid.uuid4())
     with SetWorkflowID(v2_id):
         handle = await DBOS.start_workflow_async(workflow)
     assert await handle.get_result() == 3
     assert patched_runs == [v2_id]
-    steps = await DBOS.list_workflow_steps_async(v2_id)
-    assert steps[0]["function_name"] == "DBOS.patch-before-steps"
-    assert len(steps) == len(v1_steps) + 1
+    names = [s["function_name"] for s in await DBOS.list_workflow_steps_async(v2_id)]
+    assert len(names) == 4
+    assert names[0] == "DBOS.patch-before-steps"
