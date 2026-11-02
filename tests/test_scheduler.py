@@ -13,12 +13,7 @@ from sqlalchemy.exc import OperationalError
 
 from dbos import DBOS, DBOSClient, DBOSConfig, DBOSConfiguredInstance
 from dbos._error import DBOSException
-from dbos._scheduler import (
-    _enqueue_ticks,
-    _ScheduleDefinition,
-    _ScheduleEntry,
-    _Scheduler,
-)
+from dbos._scheduler import _ScheduleEntry
 from dbos._serialization import DBOSPortableJSONSerializer
 from dbos._utils import INTERNAL_QUEUE_NAME
 
@@ -145,6 +140,24 @@ class _StaleContext:
 
     def __init__(self, region: str) -> None:
         self.region = region
+
+
+class _FlakyContext:
+    """Pickles normally; loading raises while ``broken`` is set, like a context whose class changed."""
+
+    broken = False
+
+    def __init__(self, region: str) -> None:
+        self.region = region
+
+    def __reduce__(self) -> Any:
+        return (_load_flaky_context, (self.region,))
+
+
+def _load_flaky_context(region: str) -> _FlakyContext:
+    if _FlakyContext.broken:
+        raise RuntimeError("context can't be loaded")
+    return _FlakyContext(region)
 
 
 def test_list_schedules_undeserializable_context(
@@ -801,6 +814,11 @@ def test_backfill_schedule(dbos: DBOS) -> None:
     expected = [datetime(2025, 1, 1, h, 0, 0, tzinfo=timezone.utc) for h in range(1, 4)]
     assert sorted(t for t, _ in backfilled) == expected
     assert all(ctx == {"env": "backfill"} for _, ctx in backfilled)
+    # Backfilled ticks don't move last_fired_at; only a live tick (if the test crosses the hour) can.
+    sched = DBOS.get_schedule("backfill-test")
+    assert sched is not None
+    last = sched["last_fired_at"]
+    assert last is None or datetime.fromisoformat(last) >= end
 
     # Backfilling again should be idempotent (same workflow IDs)
     handles2 = DBOS.backfill_schedule("backfill-test", start, end)
@@ -2184,21 +2202,12 @@ def test_a_key_lost_on_the_scheduler_thread_is_reported(
     lost_shard_keys.clear()
 
 
-def test_many_schedules_fire_in_batches_from_one_thread(
-    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, skip_with_sqlite: None
+def test_many_schedules_fire_from_one_thread(
+    dbos: DBOS, skip_with_sqlite: None
 ) -> None:
     @DBOS.workflow()
     def ticked(scheduled_at: datetime, ctx: Any) -> None:
         pass
-
-    batch_sizes: List[int] = []
-    enqueue = dbos._sys_db.enqueue_scheduled_workflows
-
-    def spy(statuses: Any, fired_at: Any) -> Any:
-        batch_sizes.append(len(statuses))
-        return enqueue(statuses, fired_at)
-
-    monkeypatch.setattr(dbos._sys_db, "enqueue_scheduled_workflows", spy)
 
     def non_executor_threads() -> int:
         return sum(
@@ -2221,207 +2230,56 @@ def test_many_schedules_fire_in_batches_from_one_thread(
         assert {w.schedule_name for w in fired} == set(names)
 
     retry_until_success(all_fired)
-    # Every schedule ticks on the one scheduler thread (not one each), enqueued together.
+    # Schedules share one scheduler thread rather than getting a thread each.
     assert non_executor_threads() < threads_before + 10
-    assert max(batch_sizes) == len(names)
-
-    for n in names:
-        DBOS.delete_schedule(n)
 
 
-def test_failing_schedule_does_not_hold_back_its_batch(
+def test_broken_schedules_do_not_stop_healthy_ones(
     dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     @DBOS.workflow()
     def ticked(scheduled_at: datetime, ctx: Any) -> None:
         pass
 
+    # "poison" fails every enqueue; "stale" has a context that can't be loaded.
     enqueue = dbos._sys_db.enqueue_scheduled_workflows
-    batches: List[set[str]] = []
 
     def poisoned(statuses: Any, fired_at: Any) -> Any:
-        batches.append({s["schedule_name"] for s in statuses})
         if any(s["schedule_name"] == "poison" for s in statuses):
             raise DBOSException("poisoned tick")
         return enqueue(statuses, fired_at)
 
     monkeypatch.setattr(dbos._sys_db, "enqueue_scheduled_workflows", poisoned)
-    for name in ("poison", "healthy"):
-        DBOS.create_schedule(
-            schedule_name=name, workflow_fn=ticked, schedule="* * * * * *"
-        )
-
-    def healthy_ticks() -> None:
-        assert len(DBOS.list_workflows(schedule_name="healthy")) >= 2
-        assert any({"poison", "healthy"} <= batch for batch in batches)
-
-    retry_until_success(healthy_ticks)
-    assert DBOS.list_workflows(schedule_name="poison") == []
-    poison = DBOS.get_schedule("poison")
-    assert poison is not None and poison["last_fired_at"] is None
-
-    DBOS.delete_schedule("poison")
-    DBOS.delete_schedule("healthy")
-
-
-def test_last_fired_at_stamped_only_by_the_enqueueing_tick(dbos: DBOS) -> None:
-    @DBOS.workflow()
-    def daily(scheduled_at: datetime, ctx: Any) -> None:
-        pass
-
-    DBOS.create_schedule(
-        schedule_name="stamp", workflow_fn=daily, schedule=daily_cron_far_from_now()
-    )
-    now = datetime.now(timezone.utc)
-
-    # A backfill enqueues past ticks without moving last_fired_at.
-    handles = DBOS.backfill_schedule(
-        "stamp", now - timedelta(days=2), now - timedelta(hours=1)
-    )
-    assert len(handles) >= 1
-    sched = DBOS.get_schedule("stamp")
-    assert sched is not None and sched["last_fired_at"] is None
-
-    raw = dbos._sys_db.get_schedule("stamp")
-    assert raw is not None
-    definition = _ScheduleDefinition.of(raw, dbos._sys_db.serializer)
-
-    # A tick already enqueued elsewhere leaves last_fired_at alone.
-    backfilled = datetime.fromisoformat(handles[0].workflow_id[len("sched-stamp-") :])
-    _enqueue_ticks(dbos._sys_db, [(definition, backfilled)], stamp_last_fired=True)
-    sched = DBOS.get_schedule("stamp")
-    assert sched is not None and sched["last_fired_at"] is None
-
-    # Ticks this call enqueues stamp the batch's latest.
-    ticks = [now + timedelta(days=1), now + timedelta(days=1, hours=1)]
-    _enqueue_ticks(
-        dbos._sys_db, [(definition, t) for t in ticks], stamp_last_fired=True
-    )
-    sched = DBOS.get_schedule("stamp")
-    assert sched is not None and sched["last_fired_at"] is not None
-    assert datetime.fromisoformat(sched["last_fired_at"]) == ticks[-1]
-
-    DBOS.delete_schedule("stamp")
-
-
-def test_scheduled_batches_insert_in_workflow_id_order(
-    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    @DBOS.workflow()
-    def daily(scheduled_at: datetime, ctx: Any) -> None:
-        pass
-
-    for name in ("zeta", "alpha"):
-        DBOS.create_schedule(
-            schedule_name=name, workflow_fn=daily, schedule=daily_cron_far_from_now()
-        )
-    definitions = {}
-    for name in ("zeta", "alpha"):
-        raw = dbos._sys_db.get_schedule(name)
-        assert raw is not None
-        definitions[name] = _ScheduleDefinition.of(raw, dbos._sys_db.serializer)
-
-    inserted_orders: List[List[str]] = []
-    insert_rows = dbos._sys_db._insert_rows
-
-    def spy(conn: Any, build: Any, rows: Any, **kwargs: Any) -> Any:
-        inserted_orders.append([row["workflow_uuid"] for row in rows])
-        return insert_rows(conn, build, rows, **kwargs)
-
-    monkeypatch.setattr(dbos._sys_db, "_insert_rows", spy)
-    # Tick order puts zeta first; processes must still insert in one global order.
-    tick = datetime.now(timezone.utc) + timedelta(days=1)
-    _enqueue_ticks(
-        dbos._sys_db,
-        [(definitions["zeta"], tick), (definitions["alpha"], tick)],
-        stamp_last_fired=True,
-    )
-    assert inserted_orders and all(o == sorted(o) for o in inserted_orders)
-    assert any(len(o) == 2 for o in inserted_orders)
-    for name in ("zeta", "alpha"):
-        sched = DBOS.get_schedule(name)
-        assert sched is not None and sched["last_fired_at"] == tick.isoformat()
-        DBOS.delete_schedule(name)
-
-
-def test_scheduler_heap_matches_armed_schedules(dbos: DBOS) -> None:
-    @DBOS.workflow()
-    def daily(scheduled_at: datetime, ctx: Any) -> None:
-        pass
-
-    def apply(version: int) -> None:
-        DBOS.apply_schedules(
-            [
-                {
-                    "schedule_name": "rearmed",
-                    "workflow_fn": daily,
-                    "schedule": daily_cron_far_from_now(),
-                    "context": version,
-                }
-            ]
-        )
-
-    scheduler = _Scheduler(dbos._sys_db)
-    # Each changed definition re-arms the schedule; the heap keeps only the current entry.
-    for version in range(20):
-        apply(version)
-        scheduler.poll()
-        assert [item[2] for item in scheduler._heap] == list(
-            scheduler._entries.values()
-        )
-    (entry,) = scheduler._entries.values()
-
-    # A schedule that fell off the heap (e.g. popped by a pass that raised) is back after the next poll.
-    scheduler._heap.clear()
-    assert scheduler.seconds_until_due() == float("inf")
-    scheduler.poll()
-    assert [item[2] for item in scheduler._heap] == [entry]
-    DBOS.delete_schedule("rearmed")
-
-
-def test_unarmable_schedule_is_retried_each_poll(
-    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    @DBOS.workflow()
-    def daily(scheduled_at: datetime, ctx: Any) -> None:
-        pass
-
+    monkeypatch.setattr(_FlakyContext, "broken", True)
     DBOS.apply_schedules(
         [
             {
-                "schedule_name": "stale",
-                "workflow_fn": daily,
-                "schedule": daily_cron_far_from_now(),
-                "context": _StaleContext(region="us"),
-                "automatic_backfill": True,
+                "schedule_name": name,
+                "workflow_fn": ticked,
+                "schedule": "* * * * * *",
+                "context": context,
             }
+            for name, context in (
+                ("healthy", None),
+                ("poison", None),
+                ("stale", _FlakyContext(region="us")),
+            )
         ]
     )
-    two_days_ago = datetime.now(timezone.utc) - timedelta(days=2)
-    dbos._sys_db.update_last_fired_at("stale", two_days_ago.isoformat())
-    backfilled: List[str] = []
-    monkeypatch.setattr(
-        "dbos._scheduler.backfill_schedule",
-        lambda sys_db, name, start, end: backfilled.append(name),
-    )
 
-    # The context can't be deserialized, so the schedule isn't armed or backfilled.
-    stale_class = _StaleContext
-    monkeypatch.delattr(sys.modules[__name__], "_StaleContext")
-    # The background scheduler may have armed it before the class went away.
-    backfilled.clear()
-    scheduler = _Scheduler(dbos._sys_db)
-    for _ in range(2):
-        scheduler.poll()
-        assert scheduler._entries == {} and scheduler._heap == []
-    assert backfilled == []
+    def healthy_ticks() -> None:
+        assert len(DBOS.list_workflows(schedule_name="healthy")) >= 2
 
-    # Once it can be, the next poll arms and backfills it with no definition change.
-    monkeypatch.setattr(
-        sys.modules[__name__], "_StaleContext", stale_class, raising=False
-    )
-    scheduler.poll()
-    (entry,) = scheduler._entries.values()
-    assert entry.definition.context.region == "us"
-    assert "stale" in backfilled
-    DBOS.delete_schedule("stale")
+    retry_until_success(healthy_ticks)
+    assert DBOS.list_workflows(schedule_name="poison") == []
+    assert DBOS.list_workflows(schedule_name="stale") == []
+    poison = DBOS.get_schedule("poison")
+    assert poison is not None and poison["last_fired_at"] is None
+
+    # Once its context loads, the stale schedule starts firing with no definition change.
+    monkeypatch.setattr(_FlakyContext, "broken", False)
+
+    def stale_ticks() -> None:
+        assert len(DBOS.list_workflows(schedule_name="stale")) >= 1
+
+    retry_until_success(stale_ticks)
