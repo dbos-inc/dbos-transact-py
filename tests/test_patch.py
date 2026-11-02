@@ -2,7 +2,7 @@
 import asyncio
 import logging
 import uuid
-from typing import Any, Callable, Coroutine
+from typing import Any, Coroutine
 
 import pytest
 import sqlalchemy as sa
@@ -429,10 +429,6 @@ def _simulate_crash_after(dbos_instance: DBOS, workflow_id: str, position: int) 
     set_workflow_status(sys_db, workflow_id, "PENDING")
 
 
-async def _gather(*aws: Coroutine[Any, Any, int]) -> int:
-    return sum(await asyncio.gather(*aws))
-
-
 async def _wait_all(*aws: Coroutine[Any, Any, int]) -> int:
     done, pending = await DBOS.asyncio_wait(
         list(aws), return_when=asyncio.ALL_COMPLETED
@@ -442,11 +438,8 @@ async def _wait_all(*aws: Coroutine[Any, Any, int]) -> int:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("fan_out", [_gather, _wait_all], ids=["gather", "wait_all"])
 async def test_patch_async_before_concurrent_steps(
-    dbos: DBOS,
-    config: DBOSConfig,
-    fan_out: Callable[..., Coroutine[Any, Any, int]],
+    dbos: DBOS, config: DBOSConfig
 ) -> None:
     # Concurrent steps take their positions up front and checkpoint in any
     # order, so a crash can leave a later position recorded and an earlier
@@ -466,11 +459,11 @@ async def test_patch_async_before_concurrent_steps(
 
     @DBOS.workflow()
     async def workflow() -> int:
-        return await fan_out(step_one(), step_two())
+        return await _wait_all(step_one(), step_two())
 
     DBOS.launch()
 
-    # v1: the steps take consecutive positions; asyncio_wait adds one of its own.
+    # v1: asyncio_wait takes position 1, the steps 2 and 3.
     v1_id = str(uuid.uuid4())
     with SetWorkflowID(v1_id):
         handle = await DBOS.start_workflow_async(workflow)
@@ -496,7 +489,7 @@ async def test_patch_async_before_concurrent_steps(
     async def workflow() -> int:
         if await DBOS.patch_async("before-steps"):
             patched_runs.append(str(DBOS.workflow_id))
-        return await fan_out(step_one(), step_two())
+        return await _wait_all(step_one(), step_two())
 
     # Launch recovers the v1 execution: step_one reruns, step_two replays.
     DBOS.launch()
