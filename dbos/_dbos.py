@@ -2328,7 +2328,7 @@ class DBOS:
         shard_key: Optional[str] = None,
         store_id: Optional[str] = None,
     ) -> ExternalObjectRef[T]:
-        """Upload a value to an external store (if there are multiple, specify one with store_id) and return a ref to it."""
+        """Upload a value to an external store (if there are multiple, specify one with store_id) and return a ref to it. A bytes value is stored as is, without serialization, which is fastest for large objects."""
         check_async("store_external_object")
         external_storage = _get_dbos_instance()._external_storage()
         ctx = get_local_dbos_context()
@@ -2366,7 +2366,7 @@ class DBOS:
         shard_key: Optional[str] = None,
         store_id: Optional[str] = None,
     ) -> ExternalObjectRef[T]:
-        """Upload a value to an external store (if there are multiple, specify one with store_id) and return a ref to it."""
+        """Upload a value to an external store (if there are multiple, specify one with store_id) and return a ref to it. A bytes value is stored as is, without serialization, which is fastest for large objects."""
         external_storage = _get_dbos_instance()._external_storage()
         await cls._configure_asyncio_thread_pool()
         ctx = get_local_dbos_context()

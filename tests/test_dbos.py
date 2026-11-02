@@ -2661,7 +2661,7 @@ def test_background_jobs_run_once_per_interval_across_processes(
             assert len(runs) >= times
 
         retry_until_success(lambda: ran(8), interval=0.1, max_attempts=50)
-        # A start trails its lock's by one round trip, so gaps vary by about that much.
+        # A holder keeps the lock an interval past its start; the bounds allow for timer slack.
         starts = [at for _, at in runs]
         assert starts[-1] - starts[0] >= (len(starts) - 1) * interval * 0.9, runs
         assert all(b - a >= interval / 2 for a, b in zip(starts, starts[1:])), runs

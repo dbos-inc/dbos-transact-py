@@ -681,7 +681,7 @@ class DBOSClient:
         shard_key: Optional[str] = None,
         store_id: Optional[str] = None,
     ) -> ExternalObjectRef[T]:
-        """Upload a value to an external store (if there are multiple, specify one with store_id) and return a ref to it."""
+        """Upload a value to an external store (if there are multiple, specify one with store_id) and return a ref to it. A bytes value is stored as is, without serialization, which is fastest for large objects."""
         with bind_shard_keys({owner_workflow_id: shard_key}):
             return self._external_storage().store(
                 value,
@@ -703,7 +703,7 @@ class DBOSClient:
         shard_key: Optional[str] = None,
         store_id: Optional[str] = None,
     ) -> ExternalObjectRef[T]:
-        """Upload a value to an external store (if there are multiple, specify one with store_id) and return a ref to it."""
+        """Upload a value to an external store (if there are multiple, specify one with store_id) and return a ref to it. A bytes value is stored as is, without serialization, which is fastest for large objects."""
         with bind_shard_keys({owner_workflow_id: shard_key}):
             return await self._external_storage().store_async(
                 value,
