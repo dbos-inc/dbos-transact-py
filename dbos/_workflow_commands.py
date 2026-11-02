@@ -107,11 +107,12 @@ def _run_background_jobs(
     """Run jobs once per interval across all of this application's processes: whichever
     takes their lock runs them, holding the lock for the rest of the interval."""
     while not stop_event.is_set():
-        started = time.monotonic()
         held = False
         try:
             with dbos._sys_db.background_job_lock(lock_name) as acquired:
                 if acquired:
+                    # Timed from the lock, so a slow acquisition can't shorten the hold.
+                    started = time.monotonic()
                     for job_name, job in jobs.items():
                         try:
                             job()
