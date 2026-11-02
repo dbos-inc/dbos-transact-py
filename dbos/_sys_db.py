@@ -5890,7 +5890,8 @@ class SystemDatabase(ABC):
             sa.update(ws)
             .where(*self._global(ws), ws.c.schedule_name == sa.bindparam("b_name"))
             .values(last_fired_at=sa.bindparam("b_fired")),
-            [{"b_name": name, "b_fired": fired} for name, fired in latest.items()],
+            # Sorted, like apply_schedules, so concurrent writers lock schedule rows in one order.
+            [{"b_name": name, "b_fired": latest[name]} for name in sorted(latest)],
         )
 
     def _batch_workflow_rows(
@@ -5990,6 +5991,9 @@ class SystemDatabase(ABC):
         input_rows: List[Dict[str, Any]],
     ) -> Set[str]:
         """Insert a batch's rows, skipping existing IDs. Returns the IDs inserted."""
+        # One global insert order, so batches overlapping across processes wait on each other instead of deadlocking.
+        rows = sorted(rows, key=lambda row: row["workflow_uuid"])
+        input_rows = sorted(input_rows, key=lambda row: row["workflow_uuid"])
         inserted: Set[str] = set()
         # Chunk to stay well under bind-parameter limits (~30 params per row).
         chunk_size = 500
@@ -6688,7 +6692,6 @@ class SystemDatabase(ABC):
     def resume_schedule(self, name: str, conn: Optional[sa.Connection] = None) -> None:
         self._set_schedule_status(name, "ACTIVE", conn)
 
-    @db_retry()
     def update_last_fired_at(self, name: str, last_fired_at: str) -> None:
         with self.engine.begin() as c:
             c.execute(

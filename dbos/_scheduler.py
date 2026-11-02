@@ -329,6 +329,18 @@ class _Scheduler:
                         f"{traceback.format_exc()}"
                     )
             self._arm(schedule, signature)
+        self._compact()
+
+    def _compact(self) -> None:
+        """Rebuild the heap once stale items, each holding a dropped entry until its tick, dominate it."""
+        if len(self._heap) <= 2 * len(self._entries) + 64:
+            return
+        # Between passes each live entry has exactly one heap item, so rebuilding from _entries loses none.
+        self._heap = [
+            (entry.next_time.timestamp(), next(self._seq), entry)
+            for entry in self._entries.values()
+        ]
+        heapq.heapify(self._heap)
 
     def _arm(self, schedule: WorkflowSchedule, signature: tuple[Any, ...]) -> None:
         try:
@@ -407,6 +419,11 @@ class _Scheduler:
                     f"{traceback.format_exc()}"
                 )
                 return
+            # Logged here, as the per-schedule retries may succeed and never show it.
+            dbos_logger.warning(
+                f"Exception enqueueing {len(batch)} scheduled workflows, "
+                f"retrying each schedule alone: {traceback.format_exc()}"
+            )
         # One failing schedule must not hold back the rest of its batch.
         for entry in batch:
             self._fire([entry])
