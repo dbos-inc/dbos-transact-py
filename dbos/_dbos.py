@@ -4426,8 +4426,8 @@ class DBOS:
         # position on the event loop, failing loudly if a sibling task
         # interleaved with the probe.
         function_id = ctx.function_id
-        checkpoint_name = await asyncio.to_thread(
-            lambda: sys_db.get_checkpoint_name(
+        checkpoint = await asyncio.to_thread(
+            lambda: sys_db.get_checkpoint_at_or_after(
                 workflow_id=workflow_id, function_id=function_id + 1
             )
         )
@@ -4441,12 +4441,12 @@ class DBOS:
                 "in the same workflow, so the position of its marker would "
                 "depend on task scheduling; call it from sequential workflow code",
             )
-        if checkpoint_name is not None and checkpoint_name != patch_name:
+        if checkpoint is not None and checkpoint != (function_id + 1, patch_name):
             # Pre-patch replay: run the old code, consuming no position.
             return False
         # Reserve the next checkpoint position.
         ctx.function_id += 1
-        if checkpoint_name == patch_name:
+        if checkpoint is not None:
             # Replay: the patch marker is already in history.
             return True
         # New execution: record the marker at the reserved position. No
