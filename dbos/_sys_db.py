@@ -6269,19 +6269,47 @@ class SystemDatabase(ABC):
             ).scalar()
             return checkpoint_name
 
+    def _checkpoint_at_or_after_txn(
+        self, c: sa.Connection, workflow_id: str, function_id: int
+    ) -> Optional[Tuple[int, str]]:
+        """The earliest checkpoint at or past this point in history, as
+        (function_id, function_name), or None if the history ends before it."""
+        row = c.execute(
+            sa.select(
+                self.tables.operation_outputs.c.function_id,
+                self.tables.operation_outputs.c.function_name,
+            )
+            .where(
+                *self._wf(self.tables.operation_outputs, workflow_id),
+                self.tables.operation_outputs.c.function_id >= function_id,
+            )
+            .order_by(self.tables.operation_outputs.c.function_id)
+            .limit(1)
+        ).first()
+        return None if row is None else (row[0], row[1])
+
+    @db_retry()
+    def get_checkpoint_at_or_after(
+        self, *, workflow_id: str, function_id: int
+    ) -> Optional[Tuple[int, str]]:
+        """The earliest checkpoint at or past this point in history, as
+        (function_id, function_name), or None if the history ends before it."""
+        with self.engine.begin() as c:
+            return self._checkpoint_at_or_after_txn(c, workflow_id, function_id)
+
     @db_retry()
     def patch(self, *, workflow_id: str, function_id: int, patch_name: str) -> bool:
-        """If there is no checkpoint for this point in history,
-        insert a patch marker and return True.
-        Otherwise, return whether the checkpoint is this patch marker."""
+        """If the history ends before this point, insert a patch marker and
+        return True. If a checkpoint is recorded here, return whether it is this
+        patch marker. If the history has a checkpoint past this point but none
+        here, the execution reached it on pre-patch code, so return False."""
         with self.engine.begin() as c:
-            checkpoint_name: str | None = c.execute(
-                sa.select(self.tables.operation_outputs.c.function_name).where(
-                    *self._wf(self.tables.operation_outputs, workflow_id),
-                    self.tables.operation_outputs.c.function_id == function_id,
-                )
-            ).scalar()
-            if checkpoint_name is None:
+            checkpoint = self._checkpoint_at_or_after_txn(c, workflow_id, function_id)
+            if checkpoint is not None:
+                checkpoint_id, checkpoint_name = checkpoint
+                # Either we found the patch (new code) or the workflow is an old execution that recorded a future checkpoint
+                return checkpoint_id == function_id and checkpoint_name == patch_name
+            else:
                 result: OperationResultInternal = {
                     "workflow_uuid": workflow_id,
                     "function_id": function_id,
@@ -6294,8 +6322,6 @@ class SystemDatabase(ABC):
                 }
                 self._record_operation_result_txn(result, int(time.time() * 1000), c)
                 return True
-            else:
-                return checkpoint_name == patch_name
 
     @db_retry()
     def deprecate_patch(
