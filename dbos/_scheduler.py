@@ -435,25 +435,13 @@ class _Scheduler:
 
 
 def dynamic_scheduler_loop(
-    stop_event: threading.Event, polling_interval_sec: float
-) -> None:
-    from ._dbos import _get_dbos_instance
-
-    dbos = _get_dbos_instance()
-    _run_scheduler(
-        stop_event, dbos._sys_db, polling_interval_sec, dbos._background_lease.held
-    )
-
-
-def _run_scheduler(
     stop_event: threading.Event,
     sys_db: "SystemDatabase",
     polling_interval_sec: float,
     leading: Callable[[], bool],
 ) -> None:
     """Poll schedules on every process, firing only while leading(). The others keep each
-    tick until a poll shows it fired, so a taker fires every tick its predecessor missed.
-    """
+    tick until a poll shows it fired, so a taker fires all its predecessor missed."""
     scheduler = _Scheduler(sys_db)
     buffer_sec = max(_BUFFER_MIN_SEC, 3 * polling_interval_sec)
 

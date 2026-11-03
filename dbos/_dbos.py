@@ -1135,7 +1135,9 @@ class DBOS:
                 target=dynamic_scheduler_loop,
                 args=(
                     self._background_jobs_stop_event,
+                    self._sys_db,
                     scheduler_polling_interval_sec,
+                    self._background_lease.held,
                 ),
                 daemon=True,
             )

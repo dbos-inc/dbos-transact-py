@@ -13,7 +13,7 @@ from sqlalchemy.exc import OperationalError
 
 from dbos import DBOS, DBOSClient, DBOSConfig, DBOSConfiguredInstance, _scheduler
 from dbos._error import DBOSException
-from dbos._scheduler import _run_scheduler, _ScheduleEntry
+from dbos._scheduler import _ScheduleEntry, dynamic_scheduler_loop
 from dbos._serialization import DBOSPortableJSONSerializer, DefaultSerializer
 from dbos._sys_db import SystemDatabase
 from dbos._utils import INTERNAL_QUEUE_NAME
@@ -2333,7 +2333,7 @@ def test_only_the_lease_holder_fires_and_a_taker_fires_what_it_missed(
     peer_leads = threading.Event()
     peer_stop = threading.Event()
     peer_thread = threading.Thread(
-        target=_run_scheduler, args=(peer_stop, peer, 1.0, peer_leads.is_set)
+        target=dynamic_scheduler_loop, args=(peer_stop, peer, 1.0, peer_leads.is_set)
     )
 
     @DBOS.workflow()
@@ -2424,7 +2424,7 @@ def test_a_holder_losing_the_lease_mid_pass_fires_the_rest(
         )
     stop = threading.Event()
     thread = threading.Thread(
-        target=_run_scheduler, args=(stop, peer, 1.0, leads.is_set)
+        target=dynamic_scheduler_loop, args=(stop, peer, 1.0, leads.is_set)
     )
     try:
         thread.start()
