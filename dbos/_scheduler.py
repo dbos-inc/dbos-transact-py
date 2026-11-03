@@ -262,7 +262,7 @@ def trigger_schedule(sys_db: "SystemDatabase", schedule_name: str) -> str:
 _STARTUP_FAST_POLL_DURATION_SEC = 60.0
 _STARTUP_FAST_POLL_INTERVAL_SEC = 1.0
 
-# How long past its last successful poll a standby keeps a tick no poll has shown fired, at least three polls.
+# How long a standby keeps a tick no poll has shown fired, or three polling intervals if longer.
 _BUFFER_MIN_SEC = 3600.0
 # How often a process that isn't firing checks whether it has taken over.
 _STANDBY_CHECK_SEC = 1.0
@@ -370,11 +370,11 @@ class _Scheduler:
         self._entries[entry.schedule_id] = entry
         return entry
 
-    def seconds_until_due(self) -> float:
-        """Seconds until the earliest tick, inf if none."""
+    def seconds_until_due(self, lag: float = 0.0) -> float:
+        """Seconds until the earliest tick is lag seconds old, inf if none."""
         if not self._heap:
             return float("inf")
-        return self._heap[0][0] - time.time()
+        return self._heap[0][0] + lag - time.time()
 
     def fire_due(self) -> None:
         """Fire every due tick, batch by batch."""
@@ -453,13 +453,10 @@ def dynamic_scheduler_loop(
         return polling_interval_sec
 
     next_poll = time.monotonic()
-    last_polled = time.time()
     while not stop_event.is_set():
         if time.monotonic() >= next_poll:
             try:
-                polled_at = time.time()
                 scheduler.poll()
-                last_polled = polled_at
             except Exception:
                 dbos_logger.warning(
                     f"Exception polling schedules: {traceback.format_exc()}"
@@ -471,14 +468,17 @@ def dynamic_scheduler_loop(
             if firing:
                 scheduler.fire_due()
             else:
-                # From the last successful poll, so an outage, whose polls fail, drops nothing.
-                scheduler.skip_due(last_polled - buffer_sec)
+                scheduler.skip_due(time.time() - buffer_sec)
         except Exception:
             dbos_logger.warning(f"Exception firing schedules: {traceback.format_exc()}")
         until_poll = next_poll - time.monotonic()
         if firing:
             wait = min(until_poll, scheduler.seconds_until_due())
         else:
-            wait = min(until_poll, _STANDBY_CHECK_SEC)
+            wait = min(
+                until_poll,
+                scheduler.seconds_until_due(buffer_sec),
+                _STANDBY_CHECK_SEC,
+            )
         if wait > 0 and stop_event.wait(timeout=wait):
             break
