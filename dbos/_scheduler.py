@@ -4,7 +4,7 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -65,16 +65,20 @@ class _ScheduleDefinition:
 class _ScheduleEntry:
     """An active schedule in the scheduler loop and its next tick."""
 
-    def __init__(self, schedule: WorkflowSchedule, serializer: Serializer):
+    def __init__(
+        self,
+        schedule: WorkflowSchedule,
+        serializer: Serializer,
+        after: Optional[datetime] = None,
+    ):
         self.schedule_id: str = schedule["schedule_id"]
         # Definition snapshot; the loop re-arms the entry when it changes.
         self.signature: tuple[Any, ...] = self.compute_signature(schedule)
         tz_name = schedule.get("cron_timezone")
         tzinfo = ZoneInfo(tz_name) if tz_name else timezone.utc
         self.definition = _ScheduleDefinition.of(schedule, serializer)
-        self._iter = croniter(
-            schedule["schedule"], datetime.now(tzinfo), second_at_beginning=True
-        )
+        start = after.astimezone(tzinfo) if after is not None else datetime.now(tzinfo)
+        self._iter = croniter(schedule["schedule"], start, second_at_beginning=True)
         self.next_time: datetime = self._iter.get_next(datetime)
 
     def advance(self) -> None:
@@ -264,6 +268,8 @@ _STARTUP_FAST_POLL_INTERVAL_SEC = 1.0
 
 # How long a standby keeps a tick no poll has shown fired, or three polling intervals if longer.
 _BUFFER_MIN_SEC = 3600.0
+# How far back a starting process arms each schedule, so a tick missed while its leader died still fires.
+_STARTUP_LOOKBACK_SEC = 30.0
 # How often a process that isn't firing checks whether it has taken over.
 _STANDBY_CHECK_SEC = 1.0
 
@@ -278,6 +284,8 @@ class _Scheduler:
         # (next tick epoch, seq, entry), one item per entry in _entries; rebuilt by every poll.
         self._heap: List[Tuple[float, int, _ScheduleEntry]] = []
         self._seq = itertools.count()
+        # Whether a poll has armed the schedules this process started with.
+        self._started = False
 
     def _push(self, entry: _ScheduleEntry) -> None:
         heapq.heappush(
@@ -318,7 +326,9 @@ class _Scheduler:
                     self._skip_fired(entry, schedule)
                 continue
             # Not running: arm it, then backfill missed executions if enabled; a broken one is retried next poll.
-            entry = self._arm(schedule)
+            entry = self._arm(
+                schedule, None if self._started else self._startup_after(schedule)
+            )
             if entry is None:
                 continue
             if schedule.get("automatic_backfill") and schedule.get("last_fired_at"):
@@ -336,6 +346,20 @@ class _Scheduler:
                         f"schedule '{schedule['schedule_name']}': "
                         f"{traceback.format_exc()}"
                     )
+        self._started = True
+
+    @staticmethod
+    def _startup_after(schedule: WorkflowSchedule) -> Optional[datetime]:
+        """Where a starting process arms a schedule: past its last fired tick, back at most
+        _STARTUP_LOOKBACK_SEC. Later arms (creates, resumes) start from now."""
+        last_fired_at = schedule.get("last_fired_at")
+        if not last_fired_at:
+            return None
+        floor = datetime.now(timezone.utc) - timedelta(seconds=_STARTUP_LOOKBACK_SEC)
+        try:
+            return max(datetime.fromisoformat(last_fired_at), floor)
+        except (TypeError, ValueError):
+            return None
 
     def _skip_fired(self, entry: _ScheduleEntry, schedule: WorkflowSchedule) -> None:
         """Pass over the ticks this schedule's last_fired_at shows some process enqueued."""
@@ -351,10 +375,12 @@ class _Scheduler:
         except Exception:
             self._drop(entry)
 
-    def _arm(self, schedule: WorkflowSchedule) -> Optional[_ScheduleEntry]:
+    def _arm(
+        self, schedule: WorkflowSchedule, after: Optional[datetime] = None
+    ) -> Optional[_ScheduleEntry]:
         """Register a new entry for this schedule, or log why it can't run and return None."""
         try:
-            entry = _ScheduleEntry(schedule, self._sys_db.serializer)
+            entry = _ScheduleEntry(schedule, self._sys_db.serializer, after)
         except Exception:
             if not croniter.is_valid(schedule["schedule"], second_at_beginning=True):
                 dbos_logger.error(
