@@ -1,7 +1,7 @@
 import hashlib
 import time
 from contextlib import contextmanager
-from typing import Any, Dict, Generator, List, Optional, cast
+from typing import Any, Callable, Dict, Generator, List, Optional, cast
 
 import psycopg
 import sqlalchemy as sa
@@ -168,10 +168,12 @@ class PostgresSystemDatabase(SystemDatabase):
                 self.notification_conn.invalidate()
 
     @contextmanager
-    def background_job_lock(self, job_name: str) -> Generator[bool, None, None]:
+    def background_job_lock(
+        self, job_name: str
+    ) -> Generator[Optional[Callable[[], None]], None, None]:
         # CockroachDB grants every advisory lock, so each process runs every job.
         if self._is_cockroach:
-            yield True
+            yield lambda: None
             return
         name = f"dbos.background_job.{self.schema}.{self.app_name or ''}.{job_name}"
         key = advisory_lock_key(name)
@@ -186,8 +188,16 @@ class PostgresSystemDatabase(SystemDatabase):
                     {"key": key, "timeout": str(BACKGROUND_JOB_LOCK_IDLE_TIMEOUT_MS)},
                 ).scalar()
             )
+
+            def renew() -> None:
+                # Retaken by its own session, which also resets the idle timeout.
+                if not c.execute(
+                    sa.text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": key}
+                ).scalar():
+                    raise DBOSException(f"Lost the {job_name} lock")
+
             try:
-                yield acquired
+                yield renew if acquired else None
             finally:
                 try:
                     c.rollback()

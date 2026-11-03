@@ -4917,10 +4917,13 @@ class SystemDatabase(ABC):
             yield c
 
     @contextmanager
-    def background_job_lock(self, job_name: str) -> Generator[bool, None, None]:
-        """Try the lock letting one of this application's processes run a background
-        job at a time, yielding whether it was taken; held until the block exits."""
-        yield True
+    def background_job_lock(
+        self, job_name: str
+    ) -> Generator[Optional[Callable[[], None]], None, None]:
+        """Try the lock letting one of this application's processes run a background job at a
+        time, yielding None if refused, else a call renewing it in place; held until the block exits.
+        """
+        yield lambda: None
 
     def transition_delayed_workflows(self) -> None:
         """Transition DELAYED workflows whose delay has expired to ENQUEUED.

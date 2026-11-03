@@ -93,6 +93,8 @@ _SWEEP_BATCH_SIZE = 1000
 
 # How often one of an application's processes runs its background jobs.
 _BACKGROUND_JOBS_INTERVAL_SEC = 1.0
+# How long a holder keeps one lock transaction before retaking the lock: a peer can win it then.
+_BACKGROUND_JOBS_HOLD_SEC = 60.0
 
 BACKGROUND_JOBS_THREAD_NAME = "dbos-background-jobs"
 
@@ -121,11 +123,14 @@ def _run_background_jobs(
     interval_sec: float,
     jobs: Dict[str, Callable[[], None]],
     lease: Optional[BackgroundLease] = None,
+    hold_sec: float = _BACKGROUND_JOBS_HOLD_SEC,
 ) -> None:
     """Run jobs once per interval across all of this application's processes: whichever
-    takes their lock runs them, holding the lock for the rest of the interval."""
+    takes their lock runs them, holding it up to hold_sec before retaking it."""
     try:
-        _hold_background_jobs(stop_event, dbos, lock_name, interval_sec, jobs, lease)
+        _hold_background_jobs(
+            stop_event, dbos, lock_name, interval_sec, jobs, lease, hold_sec
+        )
     finally:
         if lease is not None:
             lease.lose()
@@ -138,28 +143,36 @@ def _hold_background_jobs(
     interval_sec: float,
     jobs: Dict[str, Callable[[], None]],
     lease: Optional[BackgroundLease],
+    hold_sec: float,
 ) -> None:
     while not stop_event.is_set():
         held = False
         try:
-            with dbos._sys_db.background_job_lock(lock_name) as acquired:
-                if lease is not None and acquired:
+            with dbos._sys_db.background_job_lock(lock_name) as renew:
+                if lease is not None and renew is not None:
                     lease.renew()
                 elif lease is not None:
                     lease.lose()
-                if acquired:
-                    # Timed from the lock, so a slow acquisition can't shorten the hold.
-                    started = time.monotonic()
-                    for job_name, job in jobs.items():
-                        try:
-                            job()
-                        except Exception as e:
-                            dbos.logger.warning(
-                                f"Exception in background job {job_name}: {e}"
-                            )
-                    stop_event.wait(
-                        max(0.0, interval_sec - (time.monotonic() - started))
-                    )
+                if renew is not None:
+                    hold_until = time.monotonic() + hold_sec
+                    while True:
+                        # Timed from the pass's start, so slow jobs can't shorten the interval.
+                        started = time.monotonic()
+                        for job_name, job in jobs.items():
+                            try:
+                                job()
+                            except Exception as e:
+                                dbos.logger.warning(
+                                    f"Exception in background job {job_name}: {e}"
+                                )
+                        if stop_event.wait(
+                            max(0.0, interval_sec - (time.monotonic() - started))
+                        ):
+                            break
+                        if time.monotonic() >= hold_until:
+                            break
+                        # In place, so the lock is never free mid-hold.
+                        renew()
                     held = True
         except Exception as e:
             if lease is not None:

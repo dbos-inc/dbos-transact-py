@@ -35,6 +35,9 @@ from dbos import (
     WorkflowStatusString,
 )
 from dbos import _enterprise as enterprise_module
+from dbos import (
+    _sys_db_postgres,
+)
 
 # Private API because this is a test
 from dbos._client import DBOSClient
@@ -2692,6 +2695,41 @@ def test_background_jobs_run_once_per_interval_across_processes(
         for thread in threads.values():
             thread.join()
         peer.destroy()
+
+
+def test_background_jobs_hold_one_lock_session_across_intervals(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, skip_with_sqlite: None
+) -> None:
+    """A holder keeps its lock session across intervals, renewing it in place past the idle
+    timeout, so a peer retrying as fast as it can never finds the lock free mid-hold."""
+    # Short, so a hold that went idle instead of renewing would lose its session mid-test.
+    monkeypatch.setattr(_sys_db_postgres, "BACKGROUND_JOB_LOCK_IDLE_TIMEOUT_MS", 500)
+    interval = 0.1
+    runs: List[float] = []
+    stop = threading.Event()
+    lease = BackgroundLease()
+    process = cast(Any, types.SimpleNamespace(_sys_db=dbos._sys_db, logger=dbos.logger))
+    thread = threading.Thread(
+        target=_run_background_jobs,
+        args=(stop, process, "hold_jobs", interval, {"job": lambda: runs.append(1)}),
+        kwargs={"lease": lease, "hold_sec": 3.0},
+    )
+    try:
+        thread.start()
+
+        def holding() -> None:
+            assert lease.held()
+
+        retry_until_success(holding, interval=0.05, max_attempts=50)
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            with dbos._sys_db.background_job_lock("hold_jobs") as renew:
+                assert renew is None
+            assert lease.held()
+        assert len(runs) >= 10, runs
+    finally:
+        stop.set()
+        thread.join()
 
 
 def test_custom_names(dbos: DBOS) -> None:
