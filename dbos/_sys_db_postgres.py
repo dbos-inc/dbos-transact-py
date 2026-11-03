@@ -190,7 +190,9 @@ class PostgresSystemDatabase(SystemDatabase):
             return
         name = f"dbos.background_job.{self.schema}.{self.app_name or ''}.{job_name}"
         key = advisory_lock_key(name)
-        with self.engine.connect() as c:
+        with self.engine.connect().execution_options(
+            isolation_level="READ COMMITTED"
+        ) as c:
             # Begun here, as the lock statements bypass SQLAlchemy, so its rollback releases them.
             c.begin()
             # The local idle timeout ends a frozen holder's session, releasing its lock.
