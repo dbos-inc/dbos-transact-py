@@ -58,7 +58,7 @@ from dbos._error import (
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import DefaultSerializer
 from dbos._shard_keys import bind_shard_keys, shard_key_scope
-from dbos._sys_db import SystemDatabase, _dbos_null_topic
+from dbos._sys_db import SystemDatabase, _dbos_null_topic, advisory_lock_key
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 from dbos._workflow_commands import (
     BACKGROUND_JOBS_THREAD_NAME,
@@ -2730,6 +2730,59 @@ def test_background_jobs_hold_one_lock_session_across_intervals(
     finally:
         stop.set()
         thread.join()
+
+
+def test_background_job_lock_session_holds_no_snapshot(
+    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
+    """A held lock's idle session holds no xmin, even past psycopg's prepare threshold, so
+    it never holds back vacuum."""
+    sys_db = dbos._sys_db
+    key = advisory_lock_key(
+        f"dbos.background_job.{sys_db.schema}.{sys_db.app_name or ''}.xmin_job"
+    )
+    with sys_db.background_job_lock("xmin_job") as renew:
+        assert renew is not None
+        for _ in range(8):
+            renew()
+        with sys_db.engine.connect() as c:
+            sessions = c.execute(
+                sa.text(
+                    "SELECT a.backend_xmin, a.state FROM pg_stat_activity a "
+                    "JOIN pg_locks l ON l.pid = a.pid WHERE l.locktype = 'advisory' "
+                    "AND l.granted AND l.classid::int8 = :hi AND l.objid::int8 = :lo "
+                    "AND l.objsubid = 1"
+                ),
+                {"hi": (key >> 32) & 0xFFFFFFFF, "lo": key & 0xFFFFFFFF},
+            ).fetchall()
+    assert [tuple(row) for row in sessions] == [(None, "idle in transaction")], sessions
+
+
+def test_concurrent_index_builds_do_not_wait_on_the_background_job_lock(
+    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
+    """An online migration's CREATE INDEX CONCURRENTLY waits for older snapshots' transactions
+    to end; the lock's idle transaction holds none, so a build never waits out a hold.
+    """
+    # Its own engine, so the statement timeout stays off the shared pool.
+    engine = sa.create_engine(dbos._sys_db.engine.url, isolation_level="AUTOCOMMIT")
+    try:
+        with engine.connect() as c:
+            c.execute(sa.text("SET statement_timeout = '10s'"))
+            c.execute(sa.text("DROP TABLE IF EXISTS cic_probe"))
+            c.execute(sa.text("CREATE TABLE cic_probe (id int)"))
+            with dbos._sys_db.background_job_lock("cic_job") as renew:
+                assert renew is not None
+                for _ in range(8):
+                    renew()
+                started = time.monotonic()
+                c.execute(
+                    sa.text("CREATE INDEX CONCURRENTLY cic_probe_idx ON cic_probe (id)")
+                )
+                assert time.monotonic() - started < 3
+            c.execute(sa.text("DROP TABLE cic_probe"))
+    finally:
+        engine.dispose()
 
 
 def test_custom_names(dbos: DBOS) -> None:

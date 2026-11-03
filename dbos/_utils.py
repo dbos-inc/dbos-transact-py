@@ -149,6 +149,14 @@ def quote_identifier(name: str) -> str:
     return _identifier_preparer.quote_identifier(name)
 
 
+def quote_literal(value: str) -> str:
+    """Quote a string as a SQL literal, as Postgres's quote_literal does, whatever
+    standard_conforming_strings is."""
+    if "\\" in value:
+        return "E'" + value.replace("\\", "\\\\").replace("'", "''") + "'"
+    return "'" + value.replace("'", "''") + "'"
+
+
 def retriable_postgres_exception(e: Exception) -> bool:
     if not isinstance(e, DBAPIError):
         return False
