@@ -189,6 +189,57 @@ def test_list_schedules_undeserializable_context(
     assert bad_context == expected_raw
 
 
+def test_scheduler_survives_undeserializable_context(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression: a schedule whose context can no longer be deserialized must not kill
+    # the dynamic scheduler loop. Other schedules, including ones created afterwards,
+    # must keep running.
+    fired: list[str] = []
+
+    @DBOS.workflow()
+    def scheduled_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        fired.append(ctx["name"])
+
+    @DBOS.workflow()
+    def stale_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        fired.append("stale")
+
+    DBOS.apply_schedules(
+        [
+            {
+                "schedule_name": "bad-schedule",
+                "workflow_fn": stale_workflow,
+                "schedule": "* * * * * *",
+                "context": _StaleContext(region="us"),
+            }
+        ]
+    )
+    monkeypatch.delattr(sys.modules[__name__], "_StaleContext")
+
+    # Let the loop poll with the bad schedule present, then add a good one.
+    time.sleep(1.5)
+    DBOS.apply_schedules(
+        [
+            {
+                "schedule_name": "good-schedule",
+                "workflow_fn": scheduled_workflow,
+                "schedule": "* * * * * *",
+                "context": {"name": "good"},
+            }
+        ]
+    )
+
+    def check_good_fired() -> None:
+        assert fired.count("good") >= 2
+
+    retry_until_success(check_good_fired)
+    assert "stale" not in fired
+
+    DBOS.delete_schedule("good-schedule")
+    DBOS.delete_schedule("bad-schedule")
+
+
 def test_apply_schedules(dbos: DBOS) -> None:
     @DBOS.workflow()
     def wf_a(scheduled_at: datetime, ctx: Any) -> None:

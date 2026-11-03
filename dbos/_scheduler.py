@@ -263,6 +263,22 @@ _STARTUP_FAST_POLL_DURATION_SEC = 60.0
 _STARTUP_FAST_POLL_INTERVAL_SEC = 1.0
 
 
+def _start_schedule_thread(
+    schedule: WorkflowSchedule, serializer: Serializer
+) -> Optional[_ScheduleThread]:
+    """Start a schedule thread, or log and return None if the schedule cannot be
+    started (e.g. its context can no longer be deserialized), so that one bad schedule
+    does not stop the scheduler loop from managing the others."""
+    try:
+        return _ScheduleThread(schedule, serializer)
+    except Exception:
+        dbos_logger.warning(
+            f"Unable to start schedule '{schedule['schedule_name']}'; skipping it: "
+            f"{traceback.format_exc()}"
+        )
+        return None
+
+
 def dynamic_scheduler_loop(
     stop_event: threading.Event, polling_interval_sec: float
 ) -> None:
@@ -316,9 +332,12 @@ def dynamic_scheduler_loop(
                     schedule
                 ):
                     schedule_thread.stop()
-                    schedule_threads[schedule_id] = _ScheduleThread(
+                    del schedule_threads[schedule_id]
+                    new_thread = _start_schedule_thread(
                         schedule, dbos._sys_db.serializer
                     )
+                    if new_thread is not None:
+                        schedule_threads[schedule_id] = new_thread
             else:
                 # Not running — start it, backfilling missed executions first if enabled.
                 if schedule.get("automatic_backfill") and schedule.get("last_fired_at"):
@@ -339,9 +358,9 @@ def dynamic_scheduler_loop(
                             f"schedule '{schedule['schedule_name']}': "
                             f"{traceback.format_exc()}"
                         )
-                schedule_threads[schedule_id] = _ScheduleThread(
-                    schedule, dbos._sys_db.serializer
-                )
+                new_thread = _start_schedule_thread(schedule, dbos._sys_db.serializer)
+                if new_thread is not None:
+                    schedule_threads[schedule_id] = new_thread
 
         if stop_event.wait(timeout=poll_timeout()):
             break
