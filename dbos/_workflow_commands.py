@@ -16,7 +16,7 @@ from typing import (
 from dbos._context import DBOSContext, take_assigned_workflow_id
 from dbos._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 from dbos._error import DBOSException, DBOSNonExistentWorkflowError
-from dbos._utils import generate_uuid
+from dbos._utils import GlobalParams, generate_uuid
 
 from ._sys_db import SystemDatabase, WorkflowStatus, workflow_is_active
 
@@ -206,7 +206,8 @@ def background_jobs_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
     _run_background_jobs(
         stop_event,
         dbos,
-        "background_jobs",
+        # One holder per application version, so the latest code always runs them; they tolerate overlap.
+        f"background_jobs.{GlobalParams.app_version}",
         _BACKGROUND_JOBS_INTERVAL_SEC,
         jobs,
         dbos._background_lease,
