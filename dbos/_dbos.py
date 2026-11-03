@@ -179,6 +179,7 @@ from ._logger import (
 from ._shard_keys import bind_shard_keys
 from ._workflow_commands import (
     BACKGROUND_JOBS_THREAD_NAME,
+    BackgroundLease,
     background_jobs_thread,
     delete_workflow,
     get_workflow,
@@ -705,8 +706,10 @@ class DBOS:
         self._executor_field: Optional[ThreadPoolExecutor] = None
         self._shared_executor_field: Optional[_SharedExecutor] = None
         self._background_threads: List[threading.Thread] = []
-        # Set after the shutdown drain, so timeouts still fire while workflows finish.
+        # Set after the shutdown drain, so timeouts and schedules still fire while workflows finish.
         self._background_jobs_stop_event = threading.Event()
+        # Held while this process holds the background-jobs lock; the scheduler fires only then.
+        self._background_lease = BackgroundLease()
         # Strong references to running async workflow tasks: the event loop
         # only keeps weak references, so without these a garbage-collection
         # pass can destroy a pending workflow task mid-execution (#710).
@@ -1127,11 +1130,13 @@ class DBOS:
                 )
                 or 30.0
             )
-            scheduler_evt = threading.Event()
-            self.background_thread_stop_events.append(scheduler_evt)
+            # Stopped with the background jobs, as a draining holder of their lock fires for everyone.
             scheduler_thread = threading.Thread(
                 target=dynamic_scheduler_loop,
-                args=(scheduler_evt, scheduler_polling_interval_sec),
+                args=(
+                    self._background_jobs_stop_event,
+                    scheduler_polling_interval_sec,
+                ),
                 daemon=True,
             )
             scheduler_thread.start()

@@ -97,19 +97,56 @@ _BACKGROUND_JOBS_INTERVAL_SEC = 1.0
 BACKGROUND_JOBS_THREAD_NAME = "dbos-background-jobs"
 
 
+class BackgroundLease:
+    """Whether this process holds the background-jobs lock, until its loop fails to retake
+    it: kept past a stalled hold's idle timeout, as two holders only duplicate work."""
+
+    def __init__(self) -> None:
+        self._held = False
+
+    def renew(self) -> None:
+        self._held = True
+
+    def lose(self) -> None:
+        self._held = False
+
+    def held(self) -> bool:
+        return self._held
+
+
 def _run_background_jobs(
     stop_event: threading.Event,
     dbos: "DBOS",
     lock_name: str,
     interval_sec: float,
     jobs: Dict[str, Callable[[], None]],
+    lease: Optional[BackgroundLease] = None,
 ) -> None:
     """Run jobs once per interval across all of this application's processes: whichever
     takes their lock runs them, holding the lock for the rest of the interval."""
+    try:
+        _hold_background_jobs(stop_event, dbos, lock_name, interval_sec, jobs, lease)
+    finally:
+        if lease is not None:
+            lease.lose()
+
+
+def _hold_background_jobs(
+    stop_event: threading.Event,
+    dbos: "DBOS",
+    lock_name: str,
+    interval_sec: float,
+    jobs: Dict[str, Callable[[], None]],
+    lease: Optional[BackgroundLease],
+) -> None:
     while not stop_event.is_set():
         held = False
         try:
             with dbos._sys_db.background_job_lock(lock_name) as acquired:
+                if lease is not None and acquired:
+                    lease.renew()
+                elif lease is not None:
+                    lease.lose()
                 if acquired:
                     # Timed from the lock, so a slow acquisition can't shorten the hold.
                     started = time.monotonic()
@@ -125,6 +162,8 @@ def _run_background_jobs(
                     )
                     held = True
         except Exception as e:
+            if lease is not None:
+                lease.lose()
             dbos.logger.warning(f"Exception taking the {lock_name} lock: {e}")
         # The holder tries again at once and so keeps the jobs; the rest poll for them.
         wait = 0.0 if held else interval_sec * random.uniform(0.9, 1.1)
@@ -152,7 +191,12 @@ def background_jobs_thread(stop_event: threading.Event, dbos: "DBOS") -> None:
     if suspend is not None:
         jobs["suspended_workflows"] = suspend.transition_suspended_workflows
     _run_background_jobs(
-        stop_event, dbos, "background_jobs", _BACKGROUND_JOBS_INTERVAL_SEC, jobs
+        stop_event,
+        dbos,
+        "background_jobs",
+        _BACKGROUND_JOBS_INTERVAL_SEC,
+        jobs,
+        dbos._background_lease,
     )
 
 

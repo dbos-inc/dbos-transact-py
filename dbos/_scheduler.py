@@ -80,6 +80,10 @@ class _ScheduleEntry:
     def advance(self) -> None:
         self.next_time = self._iter.get_next(datetime)
 
+    def advance_past(self, last_fired: datetime) -> None:
+        while self.next_time <= last_fired:
+            self.advance()
+
     @staticmethod
     def compute_signature(schedule: WorkflowSchedule) -> tuple[Any, ...]:
         # Definition fields only; excludes identity/lifecycle/runtime state.
@@ -258,6 +262,11 @@ def trigger_schedule(sys_db: "SystemDatabase", schedule_name: str) -> str:
 _STARTUP_FAST_POLL_DURATION_SEC = 60.0
 _STARTUP_FAST_POLL_INTERVAL_SEC = 1.0
 
+# How long a standby keeps a tick no poll has shown fired, or three polling intervals if longer.
+_BUFFER_MIN_SEC = 300.0
+# How often a process that isn't firing checks whether it has taken over.
+_STANDBY_CHECK_SEC = 1.0
+
 
 class _Scheduler:
     """Fires every active schedule from one thread, enqueueing each tick's runs in batches."""
@@ -305,6 +314,8 @@ class _Scheduler:
                 if entry.signature != _ScheduleEntry.compute_signature(schedule):
                     del self._entries[schedule_id]
                     self._arm(schedule)
+                else:
+                    self._skip_fired(entry, schedule)
                 continue
             # Not running: arm it, then backfill missed executions if enabled; a broken one is retried next poll.
             entry = self._arm(schedule)
@@ -326,6 +337,20 @@ class _Scheduler:
                         f"{traceback.format_exc()}"
                     )
 
+    def _skip_fired(self, entry: _ScheduleEntry, schedule: WorkflowSchedule) -> None:
+        """Pass over the ticks this schedule's last_fired_at shows some process enqueued."""
+        last_fired_at = schedule.get("last_fired_at")
+        if not last_fired_at:
+            return
+        try:
+            last_fired = datetime.fromisoformat(last_fired_at)
+        except ValueError:
+            return  # Unreadable: the entry keeps its ticks, refired at worst.
+        try:
+            entry.advance_past(last_fired)
+        except Exception:
+            self._drop(entry)
+
     def _arm(self, schedule: WorkflowSchedule) -> Optional[_ScheduleEntry]:
         """Register a new entry for this schedule, or log why it can't run and return None."""
         try:
@@ -345,36 +370,44 @@ class _Scheduler:
         self._entries[entry.schedule_id] = entry
         return entry
 
-    def seconds_until_due(self) -> float:
-        """Seconds until the earliest tick, inf if none."""
+    def seconds_until_due(self, lag: float = 0.0) -> float:
+        """Seconds until the earliest tick is lag seconds old, inf if none."""
         if not self._heap:
             return float("inf")
-        return self._heap[0][0] - time.time()
+        return self._heap[0][0] + lag - time.time()
 
-    def _pop_due(self) -> List[_ScheduleEntry]:
+    def fire_due(self) -> None:
+        """Fire every due tick, batch by batch."""
         now = time.time()
         due: List[_ScheduleEntry] = []
         while self._heap and self._heap[0][0] <= now:
             due.append(heapq.heappop(self._heap)[2])
-        return due
-
-    def fire_due(self) -> None:
-        due = self._pop_due()
-        for start in range(0, len(due), _FIRE_BATCH_SIZE):
-            self._fire(due[start : start + _FIRE_BATCH_SIZE])
+        for i in range(0, len(due), _FIRE_BATCH_SIZE):
+            self._fire(due[i : i + _FIRE_BATCH_SIZE])
         for entry in due:
-            # A late tick's successor may already be due; it fires on the next pass.
-            try:
-                entry.advance()
-            except Exception:
-                # Dropped; the next poll tries to arm it again.
-                del self._entries[entry.schedule_id]
-                dbos_logger.error(
-                    f"Cannot run schedule '{entry.definition.schedule_name}': "
-                    f"{traceback.format_exc()}"
-                )
-                continue
-            self._push(entry)
+            self._advance(entry)
+
+    def skip_due(self, before: float) -> None:
+        """Pass over ticks older than before without firing them."""
+        while self._heap and self._heap[0][0] <= before:
+            self._advance(heapq.heappop(self._heap)[2])
+
+    def _advance(self, entry: _ScheduleEntry) -> None:
+        # A late tick's successor may already be due; it fires on the next pass.
+        try:
+            entry.advance()
+        except Exception:
+            self._drop(entry)
+            return
+        self._push(entry)
+
+    def _drop(self, entry: _ScheduleEntry) -> None:
+        # Dropped; the next poll tries to arm it again.
+        del self._entries[entry.schedule_id]
+        dbos_logger.error(
+            f"Cannot run schedule '{entry.definition.schedule_name}': "
+            f"{traceback.format_exc()}"
+        )
 
     def _fire(self, batch: List[_ScheduleEntry]) -> None:
         try:
@@ -407,7 +440,22 @@ def dynamic_scheduler_loop(
     from ._dbos import _get_dbos_instance
 
     dbos = _get_dbos_instance()
-    scheduler = _Scheduler(dbos._sys_db)
+    _run_scheduler(
+        stop_event, dbos._sys_db, polling_interval_sec, dbos._background_lease.held
+    )
+
+
+def _run_scheduler(
+    stop_event: threading.Event,
+    sys_db: "SystemDatabase",
+    polling_interval_sec: float,
+    leading: Callable[[], bool],
+) -> None:
+    """Poll schedules on every process, firing only while leading(). The others keep each
+    tick until a poll shows it fired, so a taker fires every tick its predecessor missed.
+    """
+    scheduler = _Scheduler(sys_db)
+    buffer_sec = max(_BUFFER_MIN_SEC, 3 * polling_interval_sec)
 
     startup_deadline = time.monotonic() + _STARTUP_FAST_POLL_DURATION_SEC
 
@@ -426,10 +474,23 @@ def dynamic_scheduler_loop(
                     f"Exception polling schedules: {traceback.format_exc()}"
                 )
             next_poll = time.monotonic() + poll_timeout()
-        wait = min(next_poll - time.monotonic(), scheduler.seconds_until_due())
-        if wait > 0 and stop_event.wait(timeout=wait):
-            break
+        # Checked once per pass: a holder losing the lock mid-pass still fires all it took.
+        firing = leading()
         try:
-            scheduler.fire_due()
+            if firing:
+                scheduler.fire_due()
+            else:
+                scheduler.skip_due(time.time() - buffer_sec)
         except Exception:
             dbos_logger.warning(f"Exception firing schedules: {traceback.format_exc()}")
+        until_poll = next_poll - time.monotonic()
+        if firing:
+            wait = min(until_poll, scheduler.seconds_until_due())
+        else:
+            wait = min(
+                until_poll,
+                scheduler.seconds_until_due(buffer_sec),
+                _STANDBY_CHECK_SEC,
+            )
+        if wait > 0 and stop_event.wait(timeout=wait):
+            break

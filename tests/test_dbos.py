@@ -57,7 +57,11 @@ from dbos._serialization import DefaultSerializer
 from dbos._shard_keys import bind_shard_keys, shard_key_scope
 from dbos._sys_db import SystemDatabase, _dbos_null_topic
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
-from dbos._workflow_commands import BACKGROUND_JOBS_THREAD_NAME, _run_background_jobs
+from dbos._workflow_commands import (
+    BACKGROUND_JOBS_THREAD_NAME,
+    BackgroundLease,
+    _run_background_jobs,
+)
 from tests.conftest import (
     reexecute_workflow_by_id,
     retry_until_success,
@@ -2637,17 +2641,22 @@ def test_background_jobs_run_once_per_interval_across_processes(
     interval = 0.2
     runs: List[Tuple[str, float]] = []
     stops = {"local": threading.Event(), "peer": threading.Event()}
+    leases = {"local": BackgroundLease(), "peer": BackgroundLease()}
 
     def loop(name: str, sys_db: SystemDatabase) -> None:
         def failing() -> None:
             raise Exception("injected job failure")
 
         def job() -> None:
+            # A holder's lease is held while its jobs run.
+            assert leases[name].held()
             runs.append((name, time.monotonic()))
 
         process = cast(Any, types.SimpleNamespace(_sys_db=sys_db, logger=dbos.logger))
         jobs = {"failing": failing, "job": job}
-        _run_background_jobs(stops[name], process, "test_jobs", interval, jobs)
+        _run_background_jobs(
+            stops[name], process, "test_jobs", interval, jobs, leases[name]
+        )
 
     threads = {
         "local": threading.Thread(target=loop, args=("local", dbos._sys_db)),
@@ -2670,9 +2679,11 @@ def test_background_jobs_run_once_per_interval_across_processes(
         other = "peer" if holder == "local" else "local"
         stops[holder].set()
         threads[holder].join()
+        assert not leases[holder].held()
 
         def taken_over() -> None:
             assert runs[-1][0] == other
+            assert leases[other].held()
 
         retry_until_success(taken_over, interval=0.1, max_attempts=50)
     finally:

@@ -4,17 +4,18 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Any, List
+from typing import Any, List, Tuple, cast
 
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 
-from dbos import DBOS, DBOSClient, DBOSConfig, DBOSConfiguredInstance
+from dbos import DBOS, DBOSClient, DBOSConfig, DBOSConfiguredInstance, _scheduler
 from dbos._error import DBOSException
-from dbos._scheduler import _ScheduleEntry
-from dbos._serialization import DBOSPortableJSONSerializer
+from dbos._scheduler import _run_scheduler, _ScheduleEntry
+from dbos._serialization import DBOSPortableJSONSerializer, DefaultSerializer
+from dbos._sys_db import SystemDatabase
 from dbos._utils import INTERNAL_QUEUE_NAME
 
 from .conftest import (
@@ -2283,3 +2284,206 @@ def test_broken_schedules_do_not_stop_healthy_ones(
         assert len(DBOS.list_workflows(schedule_name="stale")) >= 1
 
     retry_until_success(stale_ticks)
+
+
+def _peer_sys_db(dbos: DBOS, config: DBOSConfig) -> SystemDatabase:
+    """Another process's handle on this application's system database."""
+    return SystemDatabase.create(
+        system_database_url=cast(str, config["system_database_url"]),
+        engine_kwargs={},
+        engine=None,
+        schema=dbos._sys_db.schema,
+        serializer=DefaultSerializer(),
+        executor_id="peer",
+        use_listen_notify=False,
+        app_name=dbos._sys_db.app_name,
+        sharding=bool(config.get("sharding")),
+    )
+
+
+def test_only_the_lease_holder_fires_and_a_taker_fires_what_it_missed(
+    dbos: DBOS,
+    config: DBOSConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    skip_with_sqlite: None,
+) -> None:
+    """A second process's scheduler fires nothing while this one holds the lease; taking over
+    after an outage, it fires every tick missed and none a poll showed fired."""
+    peer = _peer_sys_db(dbos, config)
+    prefix = "sched-lease-ticks-"
+    # (process, scheduled time, wall-clock time of the attempt)
+    attempts: List[Tuple[str, datetime, float]] = []
+
+    def spy(name: str, sys_db: SystemDatabase) -> Any:
+        enqueue = sys_db.enqueue_scheduled_workflows
+
+        def recording(statuses: Any, fired_at: Any) -> Any:
+            for status in statuses:
+                if status["workflow_uuid"].startswith(prefix):
+                    at = datetime.fromisoformat(status["workflow_uuid"][len(prefix) :])
+                    attempts.append((name, at, time.time()))
+            return enqueue(statuses, fired_at)
+
+        return recording
+
+    monkeypatch.setattr(
+        dbos._sys_db, "enqueue_scheduled_workflows", spy("local", dbos._sys_db)
+    )
+    monkeypatch.setattr(peer, "enqueue_scheduled_workflows", spy("peer", peer))
+    peer_leads = threading.Event()
+    peer_stop = threading.Event()
+    peer_thread = threading.Thread(
+        target=_run_scheduler, args=(peer_stop, peer, 1.0, peer_leads.is_set)
+    )
+
+    @DBOS.workflow()
+    def lease_tick(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    try:
+        peer_thread.start()
+        DBOS.create_schedule(
+            schedule_name="lease-ticks", workflow_fn=lease_tick, schedule="* * * * * *"
+        )
+
+        def local_fired(times: int) -> None:
+            assert dbos._background_lease.held()
+            assert len([a for a in attempts if a[0] == "local"]) >= times
+
+        retry_until_success(lambda: local_fired(4), interval=0.5, max_attempts=30)
+        assert not [a for a in attempts if a[0] == "peer"], attempts
+
+        # This process stops its background jobs and scheduler, giving up the lease.
+        dbos._background_jobs_stop_event.set()
+
+        def lease_lost() -> None:
+            assert not dbos._background_lease.held()
+
+        retry_until_success(lease_lost, interval=0.1, max_attempts=50)
+        lost_at = time.time()
+        local_last = max(at for name, at, _ in attempts if name == "local")
+        # An outage: nobody fires for a while, then the peer takes over.
+        time.sleep(5)
+        peer_leads.set()
+
+        def peer_caught_up() -> None:
+            assert any(
+                name == "peer" and at.timestamp() > lost_at + 6
+                for name, at, _ in attempts
+            )
+
+        retry_until_success(peer_caught_up, interval=0.5, max_attempts=30)
+        assert not [a for a in attempts if a[0] == "local" and a[2] > lost_at]
+        # The peer's polls showed local's ticks fired, so it fired only those after them.
+        assert min(at for name, at, _ in attempts if name == "peer") > local_last
+        fired = sorted(
+            datetime.fromisoformat(w.workflow_id[len(prefix) :])
+            for w in DBOS.list_workflows(schedule_name="lease-ticks")
+        )
+        assert fired == [
+            fired[0] + timedelta(seconds=i) for i in range(len(fired))
+        ], fired
+    finally:
+        peer_stop.set()
+        peer_thread.join()
+        peer.destroy()
+
+
+def test_a_holder_losing_the_lease_mid_pass_fires_the_rest(
+    dbos: DBOS,
+    config: DBOSConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    skip_with_sqlite: None,
+) -> None:
+    """The lease is checked once per pass, so a holder losing it mid-pass still fires
+    every tick that pass took."""
+    # This process stops firing, so the peer alone fires.
+    dbos._background_jobs_stop_event.set()
+    peer = _peer_sys_db(dbos, config)
+    monkeypatch.setattr(_scheduler, "_FIRE_BATCH_SIZE", 1)
+    leads = threading.Event()
+    leads.set()
+    batches: List[str] = []
+    enqueue = peer.enqueue_scheduled_workflows
+
+    def losing_lease(statuses: Any, fired_at: Any) -> Any:
+        batches.extend(status["workflow_uuid"] for status in statuses)
+        leads.clear()
+        return enqueue(statuses, fired_at)
+
+    monkeypatch.setattr(peer, "enqueue_scheduled_workflows", losing_lease)
+
+    @DBOS.workflow()
+    def mid_pass_tick(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    names = [f"mid-pass-{i}" for i in range(3)]
+    for name in names:
+        DBOS.create_schedule(
+            schedule_name=name, workflow_fn=mid_pass_tick, schedule="* * * * * *"
+        )
+    stop = threading.Event()
+    thread = threading.Thread(
+        target=_run_scheduler, args=(stop, peer, 1.0, leads.is_set)
+    )
+    try:
+        thread.start()
+
+        def fired_all() -> None:
+            assert len(batches) >= 3
+
+        retry_until_success(fired_all, interval=0.2, max_attempts=50)
+        # One batch per schedule, all for the same tick, though the lease went after the first.
+        ticks = {
+            name: [
+                w[len(f"sched-{name}-") :]
+                for w in batches[:3]
+                if w.startswith(f"sched-{name}-")
+            ]
+            for name in names
+        }
+        assert all(len(t) == 1 for t in ticks.values()), batches
+        assert len({t[0] for t in ticks.values()}) == 1, batches
+    finally:
+        stop.set()
+        thread.join()
+        peer.destroy()
+
+
+def test_schedules_fire_through_the_shutdown_drain(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A process draining at shutdown keeps firing, as it still holds the lock others wait on."""
+    blocking_event = threading.Event()
+    attempts: List[float] = []
+    enqueue = dbos._sys_db.enqueue_scheduled_workflows
+
+    def recording(statuses: Any, fired_at: Any) -> Any:
+        attempts.append(time.time())
+        return enqueue(statuses, fired_at)
+
+    monkeypatch.setattr(dbos._sys_db, "enqueue_scheduled_workflows", recording)
+
+    @DBOS.workflow()
+    def drain_tick(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    @DBOS.workflow()
+    def blocked() -> None:
+        blocking_event.wait()
+
+    DBOS.create_schedule(
+        schedule_name="drain-ticks", workflow_fn=drain_tick, schedule="* * * * * *"
+    )
+
+    def fired() -> None:
+        assert attempts
+
+    retry_until_success(fired, interval=0.2, max_attempts=50)
+    DBOS.start_workflow(blocked)
+    started = time.time()
+    try:
+        DBOS.destroy(workflow_completion_timeout_sec=4)
+    finally:
+        blocking_event.set()
+    assert any(t > started + 2 for t in attempts), (started, attempts)
