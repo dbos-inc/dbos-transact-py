@@ -402,16 +402,21 @@ class _Scheduler:
             return float("inf")
         return self._heap[0][0] + lag - time.time()
 
-    def fire_due(self) -> None:
-        """Fire every due tick, batch by batch."""
+    def fire_due(self, stop_event: threading.Event) -> None:
+        """Fire every due tick, batch by batch, until stop_event is set."""
         now = time.time()
         due: List[_ScheduleEntry] = []
         while self._heap and self._heap[0][0] <= now:
             due.append(heapq.heappop(self._heap)[2])
-        for i in range(0, len(due), _FIRE_BATCH_SIZE):
-            self._fire(due[i : i + _FIRE_BATCH_SIZE])
-        for entry in due:
+        fired = 0
+        while fired < len(due) and not stop_event.is_set():
+            self._fire(due[fired : fired + _FIRE_BATCH_SIZE])
+            fired += _FIRE_BATCH_SIZE
+        for entry in due[:fired]:
             self._advance(entry)
+        # Left unstamped, so the process that takes over fires them.
+        for entry in due[fired:]:
+            self._push(entry)
 
     def skip_due(self, before: float) -> None:
         """Pass over ticks older than before without firing them."""
@@ -492,7 +497,7 @@ def dynamic_scheduler_loop(
         firing = leading()
         try:
             if firing:
-                scheduler.fire_due()
+                scheduler.fire_due(stop_event)
             else:
                 scheduler.skip_due(time.time() - buffer_sec)
         except Exception:
