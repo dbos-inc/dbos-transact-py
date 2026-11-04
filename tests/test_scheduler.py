@@ -2426,7 +2426,13 @@ def test_a_holder_losing_the_lease_mid_pass_fires_the_rest(
     thread = threading.Thread(
         target=dynamic_scheduler_loop, args=(stop, peer, 1.0, leads.is_set)
     )
+
+    def mid_second() -> None:
+        assert 0.1 < time.time() % 1 < 0.6
+
     try:
+        # Away from a second boundary, so the peer's first poll arms all three for one tick.
+        retry_until_success(mid_second, interval=0.01, max_attempts=200)
         thread.start()
 
         def fired_all() -> None:
@@ -2480,10 +2486,111 @@ def test_schedules_fire_through_the_shutdown_drain(
         assert attempts
 
     retry_until_success(fired, interval=0.2, max_attempts=50)
+    # Released inside the drain, so the workflow finishes before destroy returns.
+    release = threading.Timer(3.0, blocking_event.set)
     DBOS.start_workflow(blocked)
     started = time.time()
+    release.start()
     try:
-        DBOS.destroy(workflow_completion_timeout_sec=4)
+        DBOS.destroy(workflow_completion_timeout_sec=6)
     finally:
+        release.cancel()
         blocking_event.set()
     assert any(t > started + 2 for t in attempts), (started, attempts)
+
+
+def test_a_starting_process_arms_from_the_last_fired_tick(dbos: DBOS) -> None:
+    """A process's first poll arms each schedule after its last fired tick, back at most the
+    startup look-back, so a tick missed while its leader died still fires; later arms start now.
+    """
+    # This process stops firing, so nothing else stamps these schedules.
+    dbos._background_jobs_stop_event.set()
+
+    @DBOS.workflow()
+    def lookback_tick(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+
+    def create(name: str, last_fired: datetime) -> None:
+        DBOS.create_schedule(
+            schedule_name=name, workflow_fn=lookback_tick, schedule="* * * * * *"
+        )
+        dbos._sys_db.update_last_fired_at(name, last_fired.isoformat())
+
+    create("lookback-recent", now - timedelta(seconds=5))
+    create("lookback-stale", now - timedelta(hours=1))
+    scheduler = _scheduler._Scheduler(dbos._sys_db)
+    scheduler.poll()
+
+    def armed(name: str) -> datetime:
+        schedule = dbos._sys_db.get_schedule(name)
+        assert schedule is not None
+        return scheduler._entries[schedule["schedule_id"]].next_time
+
+    # The tick after the last fired one, though it is already due.
+    assert armed("lookback-recent") == now - timedelta(seconds=4)
+    # Back no further than the look-back.
+    floor = now - timedelta(seconds=_scheduler._STARTUP_LOOKBACK_SEC + 2)
+    assert floor < armed("lookback-stale") < now - timedelta(seconds=20)
+    # Armed on a later poll, as on a create or resume: from now.
+    create("lookback-later", now - timedelta(seconds=5))
+    scheduler.poll()
+    assert armed("lookback-later") > now
+
+
+def test_a_stopping_scheduler_leaves_the_rest_of_its_pass_due(
+    dbos: DBOS,
+    config: DBOSConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    skip_with_sqlite: None,
+) -> None:
+    """Firing stops between batches once stopping, leaving the rest of the pass due and
+    unstamped for the process that takes over."""
+    # This process stops firing, so only the peer's scheduler fires and stamps.
+    dbos._background_jobs_stop_event.set()
+    peer = _peer_sys_db(dbos, config)
+    monkeypatch.setattr(_scheduler, "_FIRE_BATCH_SIZE", 1)
+    stop = threading.Event()
+    batches: List[str] = []
+    enqueue = peer.enqueue_scheduled_workflows
+
+    def stopping(statuses: Any, fired_at: Any) -> Any:
+        batches.extend(status["workflow_uuid"] for status in statuses)
+        stop.set()
+        return enqueue(statuses, fired_at)
+
+    monkeypatch.setattr(peer, "enqueue_scheduled_workflows", stopping)
+
+    @DBOS.workflow()
+    def stop_tick(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    names = [f"stop-pass-{i}" for i in range(3)]
+    for name in names:
+        DBOS.create_schedule(
+            schedule_name=name, workflow_fn=stop_tick, schedule="* * * * * *"
+        )
+    try:
+        scheduler = _scheduler._Scheduler(peer)
+        scheduler.poll()
+
+        def all_due() -> None:
+            assert all(
+                entry.next_time.timestamp() <= time.time()
+                for entry in scheduler._entries.values()
+            )
+
+        retry_until_success(all_due, interval=0.1, max_attempts=50)
+        scheduler.fire_due(stop)
+        assert len(batches) == 1, batches
+        assert len(scheduler._heap) == 3
+        unstamped = [
+            name
+            for name in names
+            if (schedule := peer.get_schedule(name)) is not None
+            and schedule["last_fired_at"] is None
+        ]
+        assert len(unstamped) == 2, unstamped
+    finally:
+        peer.destroy()

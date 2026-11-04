@@ -6,6 +6,7 @@ import datetime
 import logging
 import os
 import random
+import sys
 import threading
 import time
 import types
@@ -37,6 +38,7 @@ from dbos import (
 from dbos import _enterprise as enterprise_module
 from dbos import (
     _sys_db_postgres,
+    _workflow_commands,
 )
 
 # Private API because this is a test
@@ -64,6 +66,7 @@ from dbos._workflow_commands import (
     BACKGROUND_JOBS_THREAD_NAME,
     BackgroundLease,
     _run_background_jobs,
+    background_jobs_thread,
 )
 from tests.conftest import (
     reexecute_workflow_by_id,
@@ -2643,6 +2646,8 @@ def test_background_jobs_run_once_per_interval_across_processes(
     )
     interval = 0.2
     runs: List[Tuple[str, float]] = []
+    # Recorded, as the loop catches a job's exceptions: an assert in the job could never fail the test.
+    unheld: List[str] = []
     stops = {"local": threading.Event(), "peer": threading.Event()}
     leases = {"local": BackgroundLease(), "peer": BackgroundLease()}
 
@@ -2652,7 +2657,8 @@ def test_background_jobs_run_once_per_interval_across_processes(
 
         def job() -> None:
             # A holder's lease is held while its jobs run.
-            assert leases[name].held()
+            if not leases[name].held():
+                unheld.append(name)
             runs.append((name, time.monotonic()))
 
         process = cast(Any, types.SimpleNamespace(_sys_db=sys_db, logger=dbos.logger))
@@ -2673,6 +2679,7 @@ def test_background_jobs_run_once_per_interval_across_processes(
             assert len(runs) >= times
 
         retry_until_success(lambda: ran(8), interval=0.1, max_attempts=50)
+        assert not unheld, unheld
         # A holder keeps the lock an interval past its start; the bounds allow for timer slack.
         starts = [at for _, at in runs]
         assert starts[-1] - starts[0] >= (len(starts) - 1) * interval * 0.9, runs
@@ -2702,8 +2709,12 @@ def test_background_jobs_hold_one_lock_session_across_intervals(
 ) -> None:
     """A holder keeps its lock session across intervals, renewing it in place past the idle
     timeout, so a peer retrying as fast as it can never finds the lock free mid-hold."""
-    # Short, so a hold that went idle instead of renewing would lose its session mid-test.
-    monkeypatch.setattr(_sys_db_postgres, "BACKGROUND_JOB_LOCK_IDLE_TIMEOUT_MS", 500)
+    # Short, so a hold that went idle instead of renewing would lose its session mid-test; also
+    # where an override imports it by name, as Enterprise's sharded lock does.
+    for module in {_sys_db_postgres, sys.modules[type(dbos._sys_db).__module__]}:
+        monkeypatch.setattr(
+            module, "BACKGROUND_JOB_LOCK_IDLE_TIMEOUT_MS", 500, raising=False
+        )
     interval = 0.1
     runs: List[float] = []
     stop = threading.Event()
@@ -2730,6 +2741,23 @@ def test_background_jobs_hold_one_lock_session_across_intervals(
     finally:
         stop.set()
         thread.join()
+
+
+def test_background_jobs_lock_is_per_application_version(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each application version takes its own background-jobs lock, so every live version
+    runs the jobs and fires schedules, the latest code included."""
+    names: List[str] = []
+    monkeypatch.setattr(
+        _workflow_commands,
+        "_run_background_jobs",
+        lambda stop, process, lock_name, *rest: names.append(lock_name),
+    )
+    for version in ("v1", "v2"):
+        monkeypatch.setattr(GlobalParams, "app_version", version)
+        background_jobs_thread(threading.Event(), dbos)
+    assert names == ["background_jobs.v1", "background_jobs.v2"]
 
 
 def test_background_job_lock_session_holds_no_snapshot(
