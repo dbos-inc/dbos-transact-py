@@ -1,7 +1,7 @@
 import hashlib
 import time
 from contextlib import contextmanager
-from typing import Any, Dict, Generator, List, Optional, cast
+from typing import Any, Callable, Dict, Generator, List, Optional, cast
 
 import psycopg
 import sqlalchemy as sa
@@ -31,6 +31,19 @@ from ._utils import quote_identifier
 
 # How long a background job's lock may sit idle before Postgres ends its holder's session.
 BACKGROUND_JOB_LOCK_IDLE_TIMEOUT_MS = 5000
+
+
+def unprepared_scalar(c: sa.Connection, statement: str) -> Any:
+    """Run a statement unbound and unprepared, returning its first value if any: a bound or
+    prepared statement's portal keeps its snapshot, and so an xmin, while the session idles.
+    """
+    raw = cast("psycopg.Connection[Any]", c.connection.dbapi_connection)
+    cursor = raw.execute(statement.encode(), prepare=False)
+    try:
+        row = cursor.fetchone() if cursor.description is not None else None
+    finally:
+        cursor.close()
+    return row[0] if row is not None else None
 
 
 def _sets_idle_transaction_timeout(url: sa.URL, engine_kwargs: Dict[str, Any]) -> bool:
@@ -168,26 +181,40 @@ class PostgresSystemDatabase(SystemDatabase):
                 self.notification_conn.invalidate()
 
     @contextmanager
-    def background_job_lock(self, job_name: str) -> Generator[bool, None, None]:
+    def background_job_lock(
+        self, job_name: str
+    ) -> Generator[Optional[Callable[[], None]], None, None]:
         # CockroachDB grants every advisory lock, so each process runs every job.
         if self._is_cockroach:
-            yield True
+            yield lambda: None
             return
         name = f"dbos.background_job.{self.schema}.{self.app_name or ''}.{job_name}"
         key = advisory_lock_key(name)
-        with self.engine.connect() as c:
+        with self.engine.connect().execution_options(
+            isolation_level="READ COMMITTED"
+        ) as c:
+            # Begun here, as the lock statements bypass SQLAlchemy, so its rollback releases them.
+            c.begin()
             # The local idle timeout ends a frozen holder's session, releasing its lock.
             acquired = bool(
-                c.execute(
-                    sa.text(
-                        "SELECT pg_try_advisory_xact_lock(:key) FROM set_config("
-                        "'idle_in_transaction_session_timeout', :timeout, true)"
-                    ),
-                    {"key": key, "timeout": str(BACKGROUND_JOB_LOCK_IDLE_TIMEOUT_MS)},
-                ).scalar()
+                unprepared_scalar(
+                    c,
+                    f"SELECT pg_try_advisory_xact_lock({int(key)}) FROM set_config("
+                    "'idle_in_transaction_session_timeout', "
+                    f"'{int(BACKGROUND_JOB_LOCK_IDLE_TIMEOUT_MS)}', true)",
+                )
             )
+
+            def renew() -> None:
+                # Snapshot-free, so a concurrent index build never waits on it; fails if the session ended.
+                unprepared_scalar(
+                    c,
+                    "SET LOCAL idle_in_transaction_session_timeout = "
+                    f"'{int(BACKGROUND_JOB_LOCK_IDLE_TIMEOUT_MS)}'",
+                )
+
             try:
-                yield acquired
+                yield renew if acquired else None
             finally:
                 try:
                     c.rollback()

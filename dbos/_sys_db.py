@@ -4917,10 +4917,13 @@ class SystemDatabase(ABC):
             yield c
 
     @contextmanager
-    def background_job_lock(self, job_name: str) -> Generator[bool, None, None]:
-        """Try the lock letting one of this application's processes run a background
-        job at a time, yielding whether it was taken; held until the block exits."""
-        yield True
+    def background_job_lock(
+        self, job_name: str
+    ) -> Generator[Optional[Callable[[], None]], None, None]:
+        """Try the lock letting one of this application's processes run a background job at a
+        time, yielding None if refused, else a call renewing it in place; held until the block exits.
+        """
+        yield lambda: None
 
     def transition_delayed_workflows(self) -> None:
         """Transition DELAYED workflows whose delay has expired to ENQUEUED.
@@ -5847,6 +5850,57 @@ class SystemDatabase(ABC):
         """
         if len(statuses) == 0:
             return set()
+        rows, input_rows = self._batch_workflow_rows(statuses)
+        with self.engine.begin() as conn:
+            return self._insert_workflow_batch(conn, rows, input_rows)
+
+    @db_retry()
+    def enqueue_scheduled_workflows(
+        self, statuses: List[WorkflowStatusInternal], fired_at: Dict[str, str]
+    ) -> Set[str]:
+        """Batch-enqueue scheduled runs, skipping existing IDs, and stamp last_fired_at from
+        fired_at (workflow ID -> tick) for the runs inserted, in one transaction."""
+        if len(statuses) == 0:
+            return set()
+        rows, input_rows = self._batch_workflow_rows(statuses)
+        with self.engine.begin() as conn:
+            inserted = self._insert_workflow_batch(conn, rows, input_rows)
+            self._stamp_last_fired_at(conn, statuses, fired_at, inserted)
+        return inserted
+
+    def _stamp_last_fired_at(
+        self,
+        conn: sa.Connection,
+        statuses: List[WorkflowStatusInternal],
+        fired_at: Dict[str, str],
+        inserted: Set[str],
+    ) -> None:
+        """Set each schedule's last_fired_at to its last inserted tick, statuses being in tick order."""
+        latest: Dict[str, str] = {}
+        for status in statuses:
+            workflow_id = status["workflow_uuid"]
+            schedule_name = status["schedule_name"]
+            if (
+                workflow_id in inserted
+                and workflow_id in fired_at
+                and schedule_name is not None
+            ):
+                latest[schedule_name] = fired_at[workflow_id]
+        if not latest:
+            return
+        ws = self.tables.workflow_schedules
+        conn.execute(
+            sa.update(ws)
+            .where(*self._global(ws), ws.c.schedule_name == sa.bindparam("b_name"))
+            .values(last_fired_at=sa.bindparam("b_fired")),
+            # Sorted, like apply_schedules, so concurrent writers lock schedule rows in one order.
+            [{"b_name": name, "b_fired": latest[name]} for name in sorted(latest)],
+        )
+
+    def _batch_workflow_rows(
+        self, statuses: List[WorkflowStatusInternal]
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """The status and input rows a batch insert writes for these ENQUEUED workflows."""
         # Stamp created_at monotonic within each partition key so per-key order holds across batches; unordered rows (no key) get wall-clock time.
         now_ms = int(time.time() * 1000)
         # On first sight of a key, seed its cursor from the DB high-water mark so per-key order survives a restart/rebalance instead of resetting to wall-clock.
@@ -5931,34 +5985,45 @@ class SystemDatabase(ABC):
             }
             for i, status in enumerate(statuses)
         ]
+        return rows, input_rows
+
+    def _insert_workflow_batch(
+        self,
+        conn: sa.Connection,
+        rows: List[Dict[str, Any]],
+        input_rows: List[Dict[str, Any]],
+    ) -> Set[str]:
+        """Insert a batch's rows, skipping existing IDs. Returns the IDs inserted."""
+        # One global insert order, so batches overlapping across processes wait on each other instead of deadlocking.
+        rows = sorted(rows, key=lambda row: row["workflow_uuid"])
+        input_rows = sorted(input_rows, key=lambda row: row["workflow_uuid"])
         inserted: Set[str] = set()
         # Chunk to stay well under bind-parameter limits (~30 params per row).
         chunk_size = 500
-        with self.engine.begin() as conn:
-            for start in range(0, len(rows), chunk_size):
-                chunk = rows[start : start + chunk_size]
-                result = self._insert_rows(
-                    conn,
-                    lambda batch: self.dialect.insert(self.tables.workflow_status)
-                    .values(batch)
-                    .on_conflict_do_nothing(
-                        index_elements=self._key_conflict("workflow_uuid")
-                    )
-                    .returning(self.tables.workflow_status.c.workflow_uuid),
-                    chunk,
-                    returning=True,
+        for start in range(0, len(rows), chunk_size):
+            chunk = rows[start : start + chunk_size]
+            result = self._insert_rows(
+                conn,
+                lambda batch: self.dialect.insert(self.tables.workflow_status)
+                .values(batch)
+                .on_conflict_do_nothing(
+                    index_elements=self._key_conflict("workflow_uuid")
                 )
-                inserted.update(row[0] for row in result)
-            for start in range(0, len(input_rows), chunk_size):
-                self._insert_rows(
-                    conn,
-                    lambda batch: self.dialect.insert(self.tables.workflow_input)
-                    .values(batch)
-                    .on_conflict_do_nothing(
-                        index_elements=self._key_conflict("workflow_uuid")
-                    ),
-                    input_rows[start : start + chunk_size],
-                )
+                .returning(self.tables.workflow_status.c.workflow_uuid),
+                chunk,
+                returning=True,
+            )
+            inserted.update(row[0] for row in result)
+        for start in range(0, len(input_rows), chunk_size):
+            self._insert_rows(
+                conn,
+                lambda batch: self.dialect.insert(self.tables.workflow_input)
+                .values(batch)
+                .on_conflict_do_nothing(
+                    index_elements=self._key_conflict("workflow_uuid")
+                ),
+                input_rows[start : start + chunk_size],
+            )
         return inserted
 
     def _apply_caller_schema(self, conn: Union[sa.Connection, Session]) -> None:

@@ -1,9 +1,20 @@
-import random
+import heapq
+import itertools
 import threading
 import time
 import traceback
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Coroutine,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+)
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
@@ -11,7 +22,6 @@ from croniter import croniter
 from ._error import DBOSException
 from ._logger import dbos_logger
 from ._serialization import Serializer, WorkflowInputs
-from ._shard_keys import bind_shard_keys
 from ._sys_db import WorkflowSchedule, WorkflowStatusInternal, WorkflowStatusString
 from ._utils import INTERNAL_QUEUE_NAME
 
@@ -23,27 +33,60 @@ ScheduledWorkflow = (
     | Callable[[datetime, Any], Coroutine[Any, Any, None]]
 )
 
+# Most scheduled runs enqueued in one transaction.
+_FIRE_BATCH_SIZE = 1000
 
-class _ScheduleThread:
-    """Manages a dedicated thread for a single cron schedule."""
 
-    def __init__(self, schedule: WorkflowSchedule, serializer: Serializer):
-        self.schedule_name: str = schedule["schedule_name"]
-        self.workflow_name: str = schedule["workflow_name"]
-        self.class_name: Optional[str] = schedule["workflow_class_name"]
-        self.cron: str = schedule["schedule"]
-        self.serialized_context: str = schedule["context"]
-        self.context: Any = serializer.deserialize(self.serialized_context)
-        tz_name = schedule.get("cron_timezone")
-        self.tzinfo = ZoneInfo(tz_name) if tz_name else timezone.utc
-        self.queue_name: Optional[str] = schedule.get("queue_name")
-        self.application_name: Optional[str] = schedule.get("application_name")
-        self.shard_key: Optional[str] = schedule.get("shard_key")
-        # Definition snapshot; the loop restarts the thread when it changes.
+@dataclass
+class _ScheduleDefinition:
+    """What a schedule's runs are enqueued with."""
+
+    schedule_name: str
+    workflow_name: str
+    class_name: Optional[str]
+    context: Any
+    queue_name: Optional[str]
+    application_name: Optional[str]
+    shard_key: Optional[str]
+
+    @staticmethod
+    def of(schedule: WorkflowSchedule, serializer: Serializer) -> "_ScheduleDefinition":
+        return _ScheduleDefinition(
+            schedule_name=schedule["schedule_name"],
+            workflow_name=schedule["workflow_name"],
+            class_name=schedule["workflow_class_name"],
+            context=serializer.deserialize(schedule["context"]),
+            queue_name=schedule.get("queue_name"),
+            application_name=schedule.get("application_name"),
+            shard_key=schedule.get("shard_key"),
+        )
+
+
+class _ScheduleEntry:
+    """An active schedule in the scheduler loop and its next tick."""
+
+    def __init__(
+        self,
+        schedule: WorkflowSchedule,
+        serializer: Serializer,
+        after: Optional[datetime] = None,
+    ):
+        self.schedule_id: str = schedule["schedule_id"]
+        # Definition snapshot; the loop re-arms the entry when it changes.
         self.signature: tuple[Any, ...] = self.compute_signature(schedule)
-        self._stop_event = threading.Event()
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
+        tz_name = schedule.get("cron_timezone")
+        tzinfo = ZoneInfo(tz_name) if tz_name else timezone.utc
+        self.definition = _ScheduleDefinition.of(schedule, serializer)
+        start = after.astimezone(tzinfo) if after is not None else datetime.now(tzinfo)
+        self._iter = croniter(schedule["schedule"], start, second_at_beginning=True)
+        self.next_time: datetime = self._iter.get_next(datetime)
+
+    def advance(self) -> None:
+        self.next_time = self._iter.get_next(datetime)
+
+    def advance_past(self, last_fired: datetime) -> None:
+        while self.next_time <= last_fired:
+            self.advance()
 
     @staticmethod
     def compute_signature(schedule: WorkflowSchedule) -> tuple[Any, ...]:
@@ -58,93 +101,30 @@ class _ScheduleThread:
             schedule.get("shard_key"),
         )
 
-    def _loop(self) -> None:
-        from ._dbos import _get_dbos_instance
-
-        dbos = _get_dbos_instance()
-        try:
-            it = croniter(
-                self.cron, datetime.now(self.tzinfo), second_at_beginning=True
-            )
-        except Exception:
-            dbos_logger.error(
-                f"Cannot run schedule '{self.schedule_name}'. "
-                f'Invalid crontab "{self.cron}"'
-            )
-            return
-        while not self._stop_event.is_set():
-            next_exec_time = it.get_next(datetime)
-            sleep_time = (next_exec_time - datetime.now(timezone.utc)).total_seconds()
-            # To prevent a "thundering herd" problem in a distributed setting,
-            # apply jitter of up to 10% the sleep time, capped at 10 seconds
-            sleep_time = max(0, sleep_time)
-            max_jitter = min(sleep_time / 10, 10)
-            jitter = random.uniform(0, max_jitter)
-            if self._stop_event.wait(timeout=sleep_time + jitter):
-                return
-            try:
-                workflow_id = f"sched-{self.schedule_name}-{next_exec_time.isoformat()}"
-                with bind_shard_keys({workflow_id: self.shard_key}):
-                    exists = dbos._sys_db.get_workflow_status(workflow_id)
-                if not exists:
-                    _enqueue_scheduled_workflow(
-                        dbos._sys_db,
-                        self.workflow_name,
-                        next_exec_time,
-                        workflow_id,
-                        self.schedule_name,
-                        self.context,
-                        self.class_name,
-                        self.queue_name,
-                        self.application_name,
-                        self.shard_key,
-                    )
-                dbos._sys_db.update_last_fired_at(
-                    self.schedule_name, next_exec_time.isoformat()
-                )
-            except Exception:
-                dbos_logger.warning(
-                    f"Exception in schedule '{self.schedule_name}': "
-                    f"{traceback.format_exc()}"
-                )
-
     @staticmethod
     def is_active(schedule: WorkflowSchedule) -> bool:
         return schedule.get("status", "ACTIVE") == "ACTIVE"
 
-    def stop(self, join: bool = False) -> None:
-        self._stop_event.set()
-        if join:
-            self._thread.join(timeout=5.0)
 
-
-def _enqueue_scheduled_workflow(
-    sys_db: "SystemDatabase",
-    workflow_name: str,
+def _scheduled_status(
+    definition: _ScheduleDefinition,
     scheduled_at: datetime,
     workflow_id: str,
-    schedule_name: str,
-    context: Any = None,
-    class_name: Optional[str] = None,
-    queue_name: Optional[str] = None,
-    application_name: Optional[str] = None,
-    shard_key: Optional[str] = None,
-) -> None:
-    """Enqueue a single scheduled workflow execution via init_workflow."""
-    # The schedule's owner routes its runs, whoever fires them; an unclaimed one falls back to the firing handle, which may have no identity itself.
-    owner = application_name if application_name is not None else sys_db.app_name
-    # Scheduled workflows are always enqueued to their owner's latest application version
-    latest_application_version = sys_db.get_latest_application_version(
-        application_name=owner
-    )["version_name"]
-    inputs: WorkflowInputs = {"args": (scheduled_at, context), "kwargs": {}}
-    status: WorkflowStatusInternal = {
+    app_version: str,
+    owner: Optional[str],
+    serializer: Serializer,
+) -> WorkflowStatusInternal:
+    """The ENQUEUED status row of one scheduled run."""
+    inputs: WorkflowInputs = {"args": (scheduled_at, definition.context), "kwargs": {}}
+    return {
         "workflow_uuid": workflow_id,
         "status": WorkflowStatusString.ENQUEUED.value,
-        "name": workflow_name,
-        "class_name": class_name,
-        "queue_name": queue_name if queue_name else INTERNAL_QUEUE_NAME,
-        "app_version": latest_application_version,
+        "name": definition.workflow_name,
+        "class_name": definition.class_name,
+        "queue_name": (
+            definition.queue_name if definition.queue_name else INTERNAL_QUEUE_NAME
+        ),
+        "app_version": app_version,
         "config_name": None,
         "authenticated_user": None,
         "assumed_role": None,
@@ -158,7 +138,7 @@ def _enqueue_scheduled_workflow(
         "workflow_deadline_epoch_ms": None,
         "deduplication_id": None,
         "priority": 0,
-        "inputs": sys_db.serializer.serialize(inputs),
+        "inputs": serializer.serialize(inputs),
         "serialization": None,
         "queue_partition_key": None,
         "forked_from": None,
@@ -166,17 +146,54 @@ def _enqueue_scheduled_workflow(
         "started_at_epoch_ms": None,
         "delay_until_epoch_ms": None,
         "attributes": None,
-        "schedule_name": schedule_name,
+        "schedule_name": definition.schedule_name,
         "debounce_deadline_epoch_ms": None,
         "is_debounced": False,
         # Owned where possible: the internal queue's shared name cannot route an unclaimed row.
         "application_name": owner,
-        "shard_key": shard_key,
+        "shard_key": definition.shard_key,
     }
-    sys_db.init_workflow(
-        status,
-        creator_xid=None,
-    )
+
+
+def _owner(sys_db: "SystemDatabase", definition: _ScheduleDefinition) -> Optional[str]:
+    # The schedule's owner routes its runs, whoever fires them; an unclaimed one falls back to the firing handle, which may have no identity itself.
+    if definition.application_name is not None:
+        return definition.application_name
+    return sys_db.app_name
+
+
+def _enqueue_ticks(
+    sys_db: "SystemDatabase",
+    ticks: List[Tuple[_ScheduleDefinition, datetime]],
+    *,
+    stamp_last_fired: bool,
+) -> List[str]:
+    """Enqueue these scheduled runs in one batch, skipping existing ones. Returns their workflow IDs."""
+    # Scheduled workflows are always enqueued to their owner's latest application version.
+    versions: Dict[Optional[str], str] = {}
+    statuses: List[WorkflowStatusInternal] = []
+    fired_at: Dict[str, str] = {}
+    for definition, scheduled_at in ticks:
+        owner = _owner(sys_db, definition)
+        if owner not in versions:
+            versions[owner] = sys_db.get_latest_application_version(
+                application_name=owner
+            )["version_name"]
+        workflow_id = f"sched-{definition.schedule_name}-{scheduled_at.isoformat()}"
+        statuses.append(
+            _scheduled_status(
+                definition,
+                scheduled_at,
+                workflow_id,
+                versions[owner],
+                owner,
+                sys_db.serializer,
+            )
+        )
+        if stamp_last_fired:
+            fired_at[workflow_id] = scheduled_at.isoformat()
+    sys_db.enqueue_scheduled_workflows(statuses, fired_at)
+    return [status["workflow_uuid"] for status in statuses]
 
 
 def backfill_schedule(
@@ -189,9 +206,7 @@ def backfill_schedule(
     schedule = sys_db.get_schedule(schedule_name)
     if schedule is None:
         raise DBOSException(f"Schedule '{schedule_name}' does not exist")
-    context = sys_db.serializer.deserialize(schedule["context"])
-    class_name = schedule["workflow_class_name"]
-    queue_name = schedule.get("queue_name")
+    definition = _ScheduleDefinition.of(schedule, sys_db.serializer)
     tz_name = schedule.get("cron_timezone")
     tz = ZoneInfo(tz_name) if tz_name else timezone.utc
     if start.tzinfo is None:
@@ -200,28 +215,21 @@ def backfill_schedule(
         end = end.replace(tzinfo=timezone.utc)
     start_in_tz = start.astimezone(tz)
     it = croniter(schedule["schedule"], start_in_tz, second_at_beginning=True)
-    workflow_ids: list[str] = []
+    times: List[datetime] = []
     while True:
         next_time = it.get_next(datetime)
         if next_time >= end:
             break
-        workflow_id = f"sched-{schedule_name}-{next_time.isoformat()}"
-        with bind_shard_keys({workflow_id: schedule.get("shard_key")}):
-            exists = sys_db.get_workflow_status(workflow_id)
-        if not exists:
-            _enqueue_scheduled_workflow(
+        times.append(next_time)
+    workflow_ids: list[str] = []
+    for i in range(0, len(times), _FIRE_BATCH_SIZE):
+        workflow_ids.extend(
+            _enqueue_ticks(
                 sys_db,
-                schedule["workflow_name"],
-                next_time,
-                workflow_id,
-                schedule_name,
-                context,
-                class_name,
-                queue_name,
-                schedule.get("application_name"),
-                schedule.get("shard_key"),
+                [(definition, t) for t in times[i : i + _FIRE_BATCH_SIZE]],
+                stamp_last_fired=False,
             )
-        workflow_ids.append(workflow_id)
+        )
     return workflow_ids
 
 
@@ -236,22 +244,18 @@ def trigger_schedule(sys_db: "SystemDatabase", schedule_name: str) -> str:
     schedule = sys_db.get_schedule(schedule_name)
     if schedule is None:
         raise DBOSException(f"Schedule '{schedule_name}' does not exist")
-    context = sys_db.serializer.deserialize(schedule["context"])
-    class_name = schedule["workflow_class_name"]
-    queue_name = schedule.get("queue_name")
+    definition = _ScheduleDefinition.of(schedule, sys_db.serializer)
     now = datetime.now(timezone.utc)
     workflow_id = f"sched-{schedule_name}-trigger-{now.isoformat()}"
-    _enqueue_scheduled_workflow(
-        sys_db,
-        schedule["workflow_name"],
-        now,
-        workflow_id,
-        schedule_name,
-        context,
-        class_name,
-        queue_name,
-        schedule.get("application_name"),
-        schedule.get("shard_key"),
+    owner = _owner(sys_db, definition)
+    app_version = sys_db.get_latest_application_version(application_name=owner)[
+        "version_name"
+    ]
+    sys_db.init_workflow(
+        _scheduled_status(
+            definition, now, workflow_id, app_version, owner, sys_db.serializer
+        ),
+        creator_xid=None,
     )
     return workflow_id
 
@@ -262,16 +266,215 @@ def trigger_schedule(sys_db: "SystemDatabase", schedule_name: str) -> str:
 _STARTUP_FAST_POLL_DURATION_SEC = 60.0
 _STARTUP_FAST_POLL_INTERVAL_SEC = 1.0
 
+# How long a standby keeps a tick no poll has shown fired, or three polling intervals if longer.
+_BUFFER_MIN_SEC = 3600.0
+# How far back a starting process arms each schedule, so a tick missed while its leader died still fires.
+_STARTUP_LOOKBACK_SEC = 30.0
+# How often a process that isn't firing checks whether it has taken over.
+_STANDBY_CHECK_SEC = 1.0
+
+
+class _Scheduler:
+    """Fires every active schedule from one thread, enqueueing each tick's runs in batches."""
+
+    def __init__(self, sys_db: "SystemDatabase"):
+        self._sys_db = sys_db
+        # Active schedules keyed by schedule_id.
+        self._entries: Dict[str, _ScheduleEntry] = {}
+        # (next tick epoch, seq, entry), one item per entry in _entries; rebuilt by every poll.
+        self._heap: List[Tuple[float, int, _ScheduleEntry]] = []
+        self._seq = itertools.count()
+        # Whether a poll has armed the schedules this process started with.
+        self._started = False
+
+    def _push(self, entry: _ScheduleEntry) -> None:
+        heapq.heappush(
+            self._heap, (entry.next_time.timestamp(), next(self._seq), entry)
+        )
+
+    def poll(self) -> None:
+        """Sync the armed schedules with the database, then rebuild the heap from them."""
+        try:
+            self._reconcile()
+        finally:
+            # Even after a partial reconcile, so the heap never holds dropped entries or misses one.
+            self._heap = [
+                (entry.next_time.timestamp(), next(self._seq), entry)
+                for entry in self._entries.values()
+            ]
+            heapq.heapify(self._heap)
+
+    def _reconcile(self) -> None:
+        schedules = self._sys_db.list_schedules(application_name=self._sys_db.app_name)
+        current_ids = {s["schedule_id"] for s in schedules}
+        for schedule_id in list(self._entries):
+            if schedule_id not in current_ids:
+                del self._entries[schedule_id]
+        for schedule in schedules:
+            schedule_id = schedule["schedule_id"]
+            entry = self._entries.get(schedule_id)
+            if not _ScheduleEntry.is_active(schedule):
+                # Paused: drop it; resuming re-arms it, backfilling if enabled.
+                self._entries.pop(schedule_id, None)
+                continue
+            if entry is not None:
+                # Running: re-arm on a changed definition, without backfill.
+                if entry.signature != _ScheduleEntry.compute_signature(schedule):
+                    del self._entries[schedule_id]
+                    self._arm(schedule)
+                else:
+                    self._skip_fired(entry, schedule)
+                continue
+            # Not running: arm it, then backfill missed executions if enabled; a broken one is retried next poll.
+            entry = self._arm(
+                schedule, None if self._started else self._startup_after(schedule)
+            )
+            if entry is None:
+                continue
+            if schedule.get("automatic_backfill") and schedule.get("last_fired_at"):
+                try:
+                    assert schedule["last_fired_at"]
+                    last_fired = datetime.fromisoformat(schedule["last_fired_at"])
+                    now = datetime.now(timezone.utc)
+                    if last_fired < now:
+                        backfill_schedule(
+                            self._sys_db, schedule["schedule_name"], last_fired, now
+                        )
+                except Exception:
+                    dbos_logger.warning(
+                        f"Exception during automatic backfill for "
+                        f"schedule '{schedule['schedule_name']}': "
+                        f"{traceback.format_exc()}"
+                    )
+        self._started = True
+
+    @staticmethod
+    def _startup_after(schedule: WorkflowSchedule) -> Optional[datetime]:
+        """Where a starting process arms a schedule: past its last fired tick, back at most
+        _STARTUP_LOOKBACK_SEC. Later arms (creates, resumes) start from now."""
+        last_fired_at = schedule.get("last_fired_at")
+        if not last_fired_at:
+            return None
+        floor = datetime.now(timezone.utc) - timedelta(seconds=_STARTUP_LOOKBACK_SEC)
+        try:
+            return max(datetime.fromisoformat(last_fired_at), floor)
+        except (TypeError, ValueError):
+            return None
+
+    def _skip_fired(self, entry: _ScheduleEntry, schedule: WorkflowSchedule) -> None:
+        """Pass over the ticks this schedule's last_fired_at shows some process enqueued."""
+        last_fired_at = schedule.get("last_fired_at")
+        if not last_fired_at:
+            return
+        try:
+            last_fired = datetime.fromisoformat(last_fired_at)
+        except ValueError:
+            return  # Unreadable: the entry keeps its ticks, refired at worst.
+        try:
+            entry.advance_past(last_fired)
+        except Exception:
+            self._drop(entry)
+
+    def _arm(
+        self, schedule: WorkflowSchedule, after: Optional[datetime] = None
+    ) -> Optional[_ScheduleEntry]:
+        """Register a new entry for this schedule, or log why it can't run and return None."""
+        try:
+            entry = _ScheduleEntry(schedule, self._sys_db.serializer, after)
+        except Exception:
+            if not croniter.is_valid(schedule["schedule"], second_at_beginning=True):
+                dbos_logger.error(
+                    f"Cannot run schedule '{schedule['schedule_name']}'. "
+                    f'Invalid crontab "{schedule["schedule"]}"'
+                )
+            else:
+                dbos_logger.error(
+                    f"Cannot run schedule '{schedule['schedule_name']}': "
+                    f"{traceback.format_exc()}"
+                )
+            return None
+        self._entries[entry.schedule_id] = entry
+        return entry
+
+    def seconds_until_due(self, lag: float = 0.0) -> float:
+        """Seconds until the earliest tick is lag seconds old, inf if none."""
+        if not self._heap:
+            return float("inf")
+        return self._heap[0][0] + lag - time.time()
+
+    def fire_due(self, stop_event: threading.Event) -> None:
+        """Fire every due tick, batch by batch, until stop_event is set."""
+        now = time.time()
+        due: List[_ScheduleEntry] = []
+        while self._heap and self._heap[0][0] <= now:
+            due.append(heapq.heappop(self._heap)[2])
+        fired = 0
+        while fired < len(due) and not stop_event.is_set():
+            self._fire(due[fired : fired + _FIRE_BATCH_SIZE])
+            fired += _FIRE_BATCH_SIZE
+        for entry in due[:fired]:
+            self._advance(entry)
+        # Left unstamped, so the process that takes over fires them.
+        for entry in due[fired:]:
+            self._push(entry)
+
+    def skip_due(self, before: float) -> None:
+        """Pass over ticks older than before without firing them."""
+        while self._heap and self._heap[0][0] <= before:
+            self._advance(heapq.heappop(self._heap)[2])
+
+    def _advance(self, entry: _ScheduleEntry) -> None:
+        # A late tick's successor may already be due; it fires on the next pass.
+        try:
+            entry.advance()
+        except Exception:
+            self._drop(entry)
+            return
+        self._push(entry)
+
+    def _drop(self, entry: _ScheduleEntry) -> None:
+        # Dropped; the next poll tries to arm it again.
+        del self._entries[entry.schedule_id]
+        dbos_logger.error(
+            f"Cannot run schedule '{entry.definition.schedule_name}': "
+            f"{traceback.format_exc()}"
+        )
+
+    def _fire(self, batch: List[_ScheduleEntry]) -> None:
+        try:
+            _enqueue_ticks(
+                self._sys_db,
+                [(entry.definition, entry.next_time) for entry in batch],
+                stamp_last_fired=True,
+            )
+            return
+        except Exception:
+            if len(batch) == 1:
+                dbos_logger.warning(
+                    f"Exception in schedule '{batch[0].definition.schedule_name}': "
+                    f"{traceback.format_exc()}"
+                )
+                return
+            # Logged here, as the per-schedule retries may succeed and never show it.
+            dbos_logger.warning(
+                f"Exception enqueueing {len(batch)} scheduled workflows, "
+                f"retrying each schedule alone: {traceback.format_exc()}"
+            )
+        # One failing schedule must not hold back the rest of its batch.
+        for entry in batch:
+            self._fire([entry])
+
 
 def dynamic_scheduler_loop(
-    stop_event: threading.Event, polling_interval_sec: float
+    stop_event: threading.Event,
+    sys_db: "SystemDatabase",
+    polling_interval_sec: float,
+    leading: Callable[[], bool],
 ) -> None:
-    from ._dbos import _get_dbos_instance
-
-    dbos = _get_dbos_instance()
-
-    # Active schedule threads keyed by schedule_id
-    schedule_threads: dict[str, _ScheduleThread] = {}
+    """Poll schedules on every process, firing only while leading(). The others keep each
+    tick until a poll shows it fired, so a taker fires all its predecessor missed."""
+    scheduler = _Scheduler(sys_db)
+    buffer_sec = max(_BUFFER_MIN_SEC, 3 * polling_interval_sec)
 
     startup_deadline = time.monotonic() + _STARTUP_FAST_POLL_DURATION_SEC
 
@@ -280,72 +483,33 @@ def dynamic_scheduler_loop(
             return min(_STARTUP_FAST_POLL_INTERVAL_SEC, polling_interval_sec)
         return polling_interval_sec
 
+    next_poll = time.monotonic()
     while not stop_event.is_set():
-        try:
-            schedules = dbos._sys_db.list_schedules(
-                application_name=dbos._sys_db.app_name
-            )
-        except Exception:
-            dbos_logger.warning(
-                f"Exception polling schedules: {traceback.format_exc()}"
-            )
-            if stop_event.wait(timeout=poll_timeout()):
-                break
-            continue
-
-        current_ids = {s["schedule_id"] for s in schedules}
-
-        # Stop threads for deleted schedules
-        for schedule_id in list(schedule_threads.keys()):
-            if schedule_id not in current_ids:
-                schedule_threads[schedule_id].stop()
-                del schedule_threads[schedule_id]
-
-        # Start, restart, or stop threads based on schedule state
-        for schedule in schedules:
-            schedule_id = schedule["schedule_id"]
-            schedule_thread = schedule_threads.get(schedule_id)
-            if not _ScheduleThread.is_active(schedule):
-                # Paused — stop the thread if running
-                if schedule_thread is not None:
-                    schedule_thread.stop()
-                    del schedule_threads[schedule_id]
-            elif schedule_thread is not None:
-                # Running — restart on a changed definition; no backfill needed.
-                if schedule_thread.signature != _ScheduleThread.compute_signature(
-                    schedule
-                ):
-                    schedule_thread.stop()
-                    schedule_threads[schedule_id] = _ScheduleThread(
-                        schedule, dbos._sys_db.serializer
-                    )
-            else:
-                # Not running — start it, backfilling missed executions first if enabled.
-                if schedule.get("automatic_backfill") and schedule.get("last_fired_at"):
-                    try:
-                        assert schedule["last_fired_at"]
-                        last_fired = datetime.fromisoformat(schedule["last_fired_at"])
-                        now = datetime.now(timezone.utc)
-                        if last_fired < now:
-                            backfill_schedule(
-                                dbos._sys_db,
-                                schedule["schedule_name"],
-                                last_fired,
-                                now,
-                            )
-                    except Exception:
-                        dbos_logger.warning(
-                            f"Exception during automatic backfill for "
-                            f"schedule '{schedule['schedule_name']}': "
-                            f"{traceback.format_exc()}"
-                        )
-                schedule_threads[schedule_id] = _ScheduleThread(
-                    schedule, dbos._sys_db.serializer
+        if time.monotonic() >= next_poll:
+            try:
+                scheduler.poll()
+            except Exception:
+                dbos_logger.warning(
+                    f"Exception polling schedules: {traceback.format_exc()}"
                 )
-
-        if stop_event.wait(timeout=poll_timeout()):
+            next_poll = time.monotonic() + poll_timeout()
+        # Checked once per pass: a holder losing the lock mid-pass still fires all it took.
+        firing = leading()
+        try:
+            if firing:
+                scheduler.fire_due(stop_event)
+            else:
+                scheduler.skip_due(time.time() - buffer_sec)
+        except Exception:
+            dbos_logger.warning(f"Exception firing schedules: {traceback.format_exc()}")
+        until_poll = next_poll - time.monotonic()
+        if firing:
+            wait = min(until_poll, scheduler.seconds_until_due())
+        else:
+            wait = min(
+                until_poll,
+                scheduler.seconds_until_due(buffer_sec),
+                _STANDBY_CHECK_SEC,
+            )
+        if wait > 0 and stop_event.wait(timeout=wait):
             break
-
-    # Clean up all threads on shutdown
-    for st in schedule_threads.values():
-        st.stop(join=True)

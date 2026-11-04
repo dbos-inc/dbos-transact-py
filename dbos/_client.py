@@ -1906,7 +1906,8 @@ class DBOSClient:
                 )
             )
         with self._sys_db.engine.begin() as c:
-            for sched in to_apply:
+            # Sorted, so concurrent writers lock schedule rows in one order.
+            for sched in sorted(to_apply, key=lambda s: s["schedule_name"]):
                 self._sys_db.upsert_schedule(sched, conn=c)
 
     async def apply_schedules_async(

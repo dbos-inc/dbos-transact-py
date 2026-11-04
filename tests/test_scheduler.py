@@ -4,17 +4,18 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Any, List
+from typing import Any, List, Tuple, cast
 
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 
-from dbos import DBOS, DBOSClient, DBOSConfig, DBOSConfiguredInstance
+from dbos import DBOS, DBOSClient, DBOSConfig, DBOSConfiguredInstance, _scheduler
 from dbos._error import DBOSException
-from dbos._scheduler import _ScheduleThread
-from dbos._serialization import DBOSPortableJSONSerializer
+from dbos._scheduler import _ScheduleEntry, dynamic_scheduler_loop
+from dbos._serialization import DBOSPortableJSONSerializer, DefaultSerializer
+from dbos._sys_db import SystemDatabase
 from dbos._utils import INTERNAL_QUEUE_NAME
 
 from .conftest import (
@@ -140,6 +141,24 @@ class _StaleContext:
 
     def __init__(self, region: str) -> None:
         self.region = region
+
+
+class _FlakyContext:
+    """Pickles normally; loading raises while ``broken`` is set, like a context whose class changed."""
+
+    broken = False
+
+    def __init__(self, region: str) -> None:
+        self.region = region
+
+    def __reduce__(self) -> Any:
+        return (_load_flaky_context, (self.region,))
+
+
+def _load_flaky_context(region: str) -> _FlakyContext:
+    if _FlakyContext.broken:
+        raise RuntimeError("context can't be loaded")
+    return _FlakyContext(region)
 
 
 def test_list_schedules_undeserializable_context(
@@ -401,7 +420,7 @@ def test_apply_schedules_concurrent(dbos: DBOS) -> None:
 
 
 def test_apply_schedules_live_update(dbos: DBOS) -> None:
-    # Re-applying a changed schedule must take effect live: the scheduler loop detects the modified definition and restarts the thread with the new context, preserving schedule_id.
+    # Re-applying a changed schedule must take effect live: the scheduler loop detects the modified definition and re-arms it with the new context, preserving schedule_id.
     received_contexts: list[Any] = []
 
     @DBOS.workflow()
@@ -487,9 +506,8 @@ def test_apply_schedules_preserves_runtime_state(dbos: DBOS) -> None:
     DBOS.delete_schedule("state-keep")
 
 
-def test_schedule_thread_signature() -> None:
+def test_schedule_entry_signature() -> None:
     # Signature must react to definition fields and ignore identity/lifecycle/runtime state.
-    from dbos._scheduler import _ScheduleThread
     from dbos._sys_db import WorkflowSchedule
 
     base: WorkflowSchedule = {
@@ -507,7 +525,7 @@ def test_schedule_thread_signature() -> None:
         "application_name": "app-a",
         "shard_key": None,
     }
-    sig = _ScheduleThread.compute_signature(base)
+    sig = _ScheduleEntry.compute_signature(base)
 
     # Identity / lifecycle / runtime fields must NOT change the signature.
     for field, value in [
@@ -515,12 +533,12 @@ def test_schedule_thread_signature() -> None:
         ("status", "PAUSED"),
         ("last_fired_at", "2020-01-01T00:00:00+00:00"),
         ("automatic_backfill", True),
-        # Ownership, not definition: re-owning a schedule must not restart its thread.
+        # Ownership, not definition: re-owning a schedule must not re-arm it.
         ("application_name", "app-b"),
     ]:
-        assert _ScheduleThread.compute_signature({**base, field: value}) == sig  # type: ignore[misc]
+        assert _ScheduleEntry.compute_signature({**base, field: value}) == sig  # type: ignore[misc]
 
-    # Definition fields MUST change the signature so the loop restarts the thread.
+    # Definition fields MUST change the signature so the loop re-arms the schedule.
     for field, value in [
         ("workflow_name", "wf2"),
         ("workflow_class_name", "SomeClass"),
@@ -530,7 +548,7 @@ def test_schedule_thread_signature() -> None:
         ("queue_name", "q"),
         ("shard_key", "tenant-a"),
     ]:
-        assert _ScheduleThread.compute_signature({**base, field: value}) != sig  # type: ignore[misc]
+        assert _ScheduleEntry.compute_signature({**base, field: value}) != sig  # type: ignore[misc]
 
 
 def test_schedule_crud_from_workflow(dbos: DBOS) -> None:
@@ -662,7 +680,7 @@ def test_dynamic_scheduler_delete_stops_firing(dbos: DBOS) -> None:
     retry_until_success(check_fired)
 
     DBOS.delete_schedule("delete-test")
-    # Wait for the main loop to detect the deletion and stop the thread
+    # Wait for the main loop to detect the deletion and drop the schedule
     time.sleep(3)
     count_after_delete = wf_counter
     time.sleep(3)
@@ -797,6 +815,11 @@ def test_backfill_schedule(dbos: DBOS) -> None:
     expected = [datetime(2025, 1, 1, h, 0, 0, tzinfo=timezone.utc) for h in range(1, 4)]
     assert sorted(t for t, _ in backfilled) == expected
     assert all(ctx == {"env": "backfill"} for _, ctx in backfilled)
+    # Backfilled ticks don't move last_fired_at; only a live tick (if the test crosses the hour) can.
+    sched = DBOS.get_schedule("backfill-test")
+    assert sched is not None
+    last = sched["last_fired_at"]
+    assert last is None or datetime.fromisoformat(last) >= end
 
     # Backfilling again should be idempotent (same workflow IDs)
     handles2 = DBOS.backfill_schedule("backfill-test", start, end)
@@ -1302,7 +1325,7 @@ def test_pause_resume_schedule(dbos: DBOS) -> None:
     assert sched is not None
     assert sched["status"] == "PAUSED"
 
-    # Wait for the scheduler loop to detect the pause and stop the thread
+    # Wait for the scheduler loop to detect the pause and drop the schedule
     time.sleep(3)
     count_after_pause = wf_counter
     time.sleep(3)
@@ -2003,7 +2026,7 @@ def test_schedule_survives_sysdb_downtime(
         schedule="* * * * * *",
     )
 
-    # last_fired_at is stamped once per tick, so it tracks the schedule's own thread
+    # last_fired_at is stamped once per tick, so it tracks the scheduler loop
     def read_last_fired() -> datetime:
         sched = DBOS.get_schedule("downtime-schedule")
         assert sched is not None and sched["last_fired_at"] is not None
@@ -2015,7 +2038,7 @@ def test_schedule_survives_sysdb_downtime(
 
     fired_after_restart = retry_until_success(read_last_fired)
 
-    # The schedule's thread must survive the outage and keep ticking
+    # The scheduler loop must survive the outage and keep ticking
     def check_still_ticking() -> None:
         assert read_last_fired() > fired_after_restart
 
@@ -2147,18 +2170,18 @@ def test_schedule_non_retriable_database_error_is_recorded(
 @pytest.mark.skipif(
     not using_sharding(), reason="Only sharded runs check for lost keys"
 )
-def test_a_key_lost_on_a_schedule_thread_is_reported(
+def test_a_key_lost_on_the_scheduler_thread_is_reported(
     dbos: DBOS, monkeypatch: pytest.MonkeyPatch, lost_shard_keys: List[str]
 ) -> None:
     """The sharded run's lost-key check sees DBOS's own threads, so a schedule that drops
     its key fails a test instead of quietly running under the test's key."""
-    start = _ScheduleThread.__init__
+    start = _ScheduleEntry.__init__
 
-    def keyless(self: _ScheduleThread, *args: Any, **kwargs: Any) -> None:
+    def keyless(self: _ScheduleEntry, *args: Any, **kwargs: Any) -> None:
         start(self, *args, **kwargs)
-        self.shard_key = None
+        self.definition.shard_key = None
 
-    monkeypatch.setattr(_ScheduleThread, "__init__", keyless)
+    monkeypatch.setattr(_ScheduleEntry, "__init__", keyless)
 
     @DBOS.workflow()
     def ticked(scheduled_at: datetime, ctx: Any) -> None:
@@ -2169,9 +2192,405 @@ def test_a_key_lost_on_a_schedule_thread_is_reported(
     )
 
     def reported() -> None:
-        assert any("_loop" in lost for lost in lost_shard_keys), lost_shard_keys
+        # The canary reports only service-path fallbacks, so this is the scheduler's own write.
+        assert any(
+            "sched-keyless-" in lost for lost in lost_shard_keys
+        ), lost_shard_keys
 
     retry_until_success(reported)
     # Stop the schedule before forgiving what it reported.
     DBOS.destroy(destroy_registry=True)
     lost_shard_keys.clear()
+
+
+def test_many_schedules_fire_from_one_thread(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    @DBOS.workflow()
+    def ticked(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    def non_executor_threads() -> int:
+        return sum(
+            1 for t in threading.enumerate() if not t.name.startswith("dbos-executor-")
+        )
+
+    threads_before = non_executor_threads()
+    names = [f"many-{i}" for i in range(100)]
+    DBOS.apply_schedules(
+        [
+            {"schedule_name": n, "workflow_fn": ticked, "schedule": "* * * * * *"}
+            for n in names
+        ]
+    )
+
+    def all_fired() -> None:
+        fired = DBOS.list_workflows(
+            schedule_name=names, load_input=False, load_output=False
+        )
+        assert {w.schedule_name for w in fired} == set(names)
+
+    retry_until_success(all_fired)
+    # Schedules share one scheduler thread rather than getting a thread each.
+    assert non_executor_threads() < threads_before + 10
+
+
+def test_broken_schedules_do_not_stop_healthy_ones(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    @DBOS.workflow()
+    def ticked(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    # "poison" fails every enqueue; "stale" has a context that can't be loaded.
+    enqueue = dbos._sys_db.enqueue_scheduled_workflows
+
+    def poisoned(statuses: Any, fired_at: Any) -> Any:
+        if any(s["schedule_name"] == "poison" for s in statuses):
+            raise DBOSException("poisoned tick")
+        return enqueue(statuses, fired_at)
+
+    monkeypatch.setattr(dbos._sys_db, "enqueue_scheduled_workflows", poisoned)
+    monkeypatch.setattr(_FlakyContext, "broken", True)
+    DBOS.apply_schedules(
+        [
+            {
+                "schedule_name": name,
+                "workflow_fn": ticked,
+                "schedule": "* * * * * *",
+                "context": context,
+            }
+            for name, context in (
+                ("healthy", None),
+                ("poison", None),
+                ("stale", _FlakyContext(region="us")),
+            )
+        ]
+    )
+
+    def healthy_ticks() -> None:
+        assert len(DBOS.list_workflows(schedule_name="healthy")) >= 2
+
+    retry_until_success(healthy_ticks)
+    assert DBOS.list_workflows(schedule_name="poison") == []
+    assert DBOS.list_workflows(schedule_name="stale") == []
+    poison = DBOS.get_schedule("poison")
+    assert poison is not None and poison["last_fired_at"] is None
+
+    # Once its context loads, the stale schedule starts firing with no definition change.
+    monkeypatch.setattr(_FlakyContext, "broken", False)
+
+    def stale_ticks() -> None:
+        assert len(DBOS.list_workflows(schedule_name="stale")) >= 1
+
+    retry_until_success(stale_ticks)
+
+
+def _peer_sys_db(dbos: DBOS, config: DBOSConfig) -> SystemDatabase:
+    """Another process's handle on this application's system database."""
+    return SystemDatabase.create(
+        system_database_url=cast(str, config["system_database_url"]),
+        engine_kwargs={},
+        engine=None,
+        schema=dbos._sys_db.schema,
+        serializer=DefaultSerializer(),
+        executor_id="peer",
+        use_listen_notify=False,
+        app_name=dbos._sys_db.app_name,
+        sharding=bool(config.get("sharding")),
+    )
+
+
+def test_only_the_lease_holder_fires_and_a_taker_fires_what_it_missed(
+    dbos: DBOS,
+    config: DBOSConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    skip_with_sqlite: None,
+) -> None:
+    """A second process's scheduler fires nothing while this one holds the lease; taking over
+    after an outage, it fires every tick missed and none a poll showed fired."""
+    peer = _peer_sys_db(dbos, config)
+    prefix = "sched-lease-ticks-"
+    # (process, scheduled time, wall-clock time of the attempt)
+    attempts: List[Tuple[str, datetime, float]] = []
+
+    def spy(name: str, sys_db: SystemDatabase) -> Any:
+        enqueue = sys_db.enqueue_scheduled_workflows
+
+        def recording(statuses: Any, fired_at: Any) -> Any:
+            for status in statuses:
+                if status["workflow_uuid"].startswith(prefix):
+                    at = datetime.fromisoformat(status["workflow_uuid"][len(prefix) :])
+                    attempts.append((name, at, time.time()))
+            return enqueue(statuses, fired_at)
+
+        return recording
+
+    monkeypatch.setattr(
+        dbos._sys_db, "enqueue_scheduled_workflows", spy("local", dbos._sys_db)
+    )
+    monkeypatch.setattr(peer, "enqueue_scheduled_workflows", spy("peer", peer))
+    peer_leads = threading.Event()
+    peer_stop = threading.Event()
+    peer_thread = threading.Thread(
+        target=dynamic_scheduler_loop, args=(peer_stop, peer, 1.0, peer_leads.is_set)
+    )
+
+    @DBOS.workflow()
+    def lease_tick(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    try:
+        peer_thread.start()
+        DBOS.create_schedule(
+            schedule_name="lease-ticks", workflow_fn=lease_tick, schedule="* * * * * *"
+        )
+
+        def local_fired(times: int) -> None:
+            assert dbos._background_lease.held()
+            assert len([a for a in attempts if a[0] == "local"]) >= times
+
+        retry_until_success(lambda: local_fired(4), interval=0.5, max_attempts=30)
+        assert not [a for a in attempts if a[0] == "peer"], attempts
+
+        # This process stops its background jobs and scheduler, giving up the lease.
+        dbos._background_jobs_stop_event.set()
+
+        def lease_lost() -> None:
+            assert not dbos._background_lease.held()
+
+        retry_until_success(lease_lost, interval=0.1, max_attempts=50)
+        lost_at = time.time()
+        local_last = max(at for name, at, _ in attempts if name == "local")
+        # An outage: nobody fires for a while, then the peer takes over.
+        time.sleep(5)
+        peer_leads.set()
+
+        def peer_caught_up() -> None:
+            assert any(
+                name == "peer" and at.timestamp() > lost_at + 6
+                for name, at, _ in attempts
+            )
+
+        retry_until_success(peer_caught_up, interval=0.5, max_attempts=30)
+        assert not [a for a in attempts if a[0] == "local" and a[2] > lost_at]
+        # The peer's polls showed local's ticks fired, so it fired only those after them.
+        assert min(at for name, at, _ in attempts if name == "peer") > local_last
+        fired = sorted(
+            datetime.fromisoformat(w.workflow_id[len(prefix) :])
+            for w in DBOS.list_workflows(schedule_name="lease-ticks")
+        )
+        assert fired == [
+            fired[0] + timedelta(seconds=i) for i in range(len(fired))
+        ], fired
+    finally:
+        peer_stop.set()
+        peer_thread.join()
+        peer.destroy()
+
+
+def test_a_holder_losing_the_lease_mid_pass_fires_the_rest(
+    dbos: DBOS,
+    config: DBOSConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    skip_with_sqlite: None,
+) -> None:
+    """The lease is checked once per pass, so a holder losing it mid-pass still fires
+    every tick that pass took."""
+    # This process stops firing, so the peer alone fires.
+    dbos._background_jobs_stop_event.set()
+    peer = _peer_sys_db(dbos, config)
+    monkeypatch.setattr(_scheduler, "_FIRE_BATCH_SIZE", 1)
+    leads = threading.Event()
+    leads.set()
+    batches: List[str] = []
+    enqueue = peer.enqueue_scheduled_workflows
+
+    def losing_lease(statuses: Any, fired_at: Any) -> Any:
+        batches.extend(status["workflow_uuid"] for status in statuses)
+        leads.clear()
+        return enqueue(statuses, fired_at)
+
+    monkeypatch.setattr(peer, "enqueue_scheduled_workflows", losing_lease)
+
+    @DBOS.workflow()
+    def mid_pass_tick(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    names = [f"mid-pass-{i}" for i in range(3)]
+    for name in names:
+        DBOS.create_schedule(
+            schedule_name=name, workflow_fn=mid_pass_tick, schedule="* * * * * *"
+        )
+    stop = threading.Event()
+    thread = threading.Thread(
+        target=dynamic_scheduler_loop, args=(stop, peer, 1.0, leads.is_set)
+    )
+
+    def mid_second() -> None:
+        assert 0.1 < time.time() % 1 < 0.6
+
+    try:
+        # Away from a second boundary, so the peer's first poll arms all three for one tick.
+        retry_until_success(mid_second, interval=0.01, max_attempts=200)
+        thread.start()
+
+        def fired_all() -> None:
+            assert len(batches) >= 3
+
+        retry_until_success(fired_all, interval=0.2, max_attempts=50)
+        # One batch per schedule, all for the same tick, though the lease went after the first.
+        ticks = {
+            name: [
+                w[len(f"sched-{name}-") :]
+                for w in batches[:3]
+                if w.startswith(f"sched-{name}-")
+            ]
+            for name in names
+        }
+        assert all(len(t) == 1 for t in ticks.values()), batches
+        assert len({t[0] for t in ticks.values()}) == 1, batches
+    finally:
+        stop.set()
+        thread.join()
+        peer.destroy()
+
+
+def test_schedules_fire_through_the_shutdown_drain(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A process draining at shutdown keeps firing, as it still holds the lock others wait on."""
+    blocking_event = threading.Event()
+    attempts: List[float] = []
+    enqueue = dbos._sys_db.enqueue_scheduled_workflows
+
+    def recording(statuses: Any, fired_at: Any) -> Any:
+        attempts.append(time.time())
+        return enqueue(statuses, fired_at)
+
+    monkeypatch.setattr(dbos._sys_db, "enqueue_scheduled_workflows", recording)
+
+    @DBOS.workflow()
+    def drain_tick(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    @DBOS.workflow()
+    def blocked() -> None:
+        blocking_event.wait()
+
+    DBOS.create_schedule(
+        schedule_name="drain-ticks", workflow_fn=drain_tick, schedule="* * * * * *"
+    )
+
+    def fired() -> None:
+        assert attempts
+
+    retry_until_success(fired, interval=0.2, max_attempts=50)
+    # Released inside the drain, so the workflow finishes before destroy returns.
+    release = threading.Timer(3.0, blocking_event.set)
+    DBOS.start_workflow(blocked)
+    started = time.time()
+    release.start()
+    try:
+        DBOS.destroy(workflow_completion_timeout_sec=6)
+    finally:
+        release.cancel()
+        blocking_event.set()
+    assert any(t > started + 2 for t in attempts), (started, attempts)
+
+
+def test_a_starting_process_arms_from_the_last_fired_tick(dbos: DBOS) -> None:
+    """A process's first poll arms each schedule after its last fired tick, back at most the
+    startup look-back, so a tick missed while its leader died still fires; later arms start now.
+    """
+    # This process stops firing, so nothing else stamps these schedules.
+    dbos._background_jobs_stop_event.set()
+
+    @DBOS.workflow()
+    def lookback_tick(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+
+    def create(name: str, last_fired: datetime) -> None:
+        DBOS.create_schedule(
+            schedule_name=name, workflow_fn=lookback_tick, schedule="* * * * * *"
+        )
+        dbos._sys_db.update_last_fired_at(name, last_fired.isoformat())
+
+    create("lookback-recent", now - timedelta(seconds=5))
+    create("lookback-stale", now - timedelta(hours=1))
+    scheduler = _scheduler._Scheduler(dbos._sys_db)
+    scheduler.poll()
+
+    def armed(name: str) -> datetime:
+        schedule = dbos._sys_db.get_schedule(name)
+        assert schedule is not None
+        return scheduler._entries[schedule["schedule_id"]].next_time
+
+    # The tick after the last fired one, though it is already due.
+    assert armed("lookback-recent") == now - timedelta(seconds=4)
+    # Back no further than the look-back.
+    floor = now - timedelta(seconds=_scheduler._STARTUP_LOOKBACK_SEC + 2)
+    assert floor < armed("lookback-stale") < now - timedelta(seconds=20)
+    # Armed on a later poll, as on a create or resume: from now.
+    create("lookback-later", now - timedelta(seconds=5))
+    scheduler.poll()
+    assert armed("lookback-later") > now
+
+
+def test_a_stopping_scheduler_leaves_the_rest_of_its_pass_due(
+    dbos: DBOS,
+    config: DBOSConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    skip_with_sqlite: None,
+) -> None:
+    """Firing stops between batches once stopping, leaving the rest of the pass due and
+    unstamped for the process that takes over."""
+    # This process stops firing, so only the peer's scheduler fires and stamps.
+    dbos._background_jobs_stop_event.set()
+    peer = _peer_sys_db(dbos, config)
+    monkeypatch.setattr(_scheduler, "_FIRE_BATCH_SIZE", 1)
+    stop = threading.Event()
+    batches: List[str] = []
+    enqueue = peer.enqueue_scheduled_workflows
+
+    def stopping(statuses: Any, fired_at: Any) -> Any:
+        batches.extend(status["workflow_uuid"] for status in statuses)
+        stop.set()
+        return enqueue(statuses, fired_at)
+
+    monkeypatch.setattr(peer, "enqueue_scheduled_workflows", stopping)
+
+    @DBOS.workflow()
+    def stop_tick(scheduled_at: datetime, ctx: Any) -> None:
+        pass
+
+    names = [f"stop-pass-{i}" for i in range(3)]
+    for name in names:
+        DBOS.create_schedule(
+            schedule_name=name, workflow_fn=stop_tick, schedule="* * * * * *"
+        )
+    try:
+        scheduler = _scheduler._Scheduler(peer)
+        scheduler.poll()
+
+        def all_due() -> None:
+            assert all(
+                entry.next_time.timestamp() <= time.time()
+                for entry in scheduler._entries.values()
+            )
+
+        retry_until_success(all_due, interval=0.1, max_attempts=50)
+        scheduler.fire_due(stop)
+        assert len(batches) == 1, batches
+        assert len(scheduler._heap) == 3
+        unstamped = [
+            name
+            for name in names
+            if (schedule := peer.get_schedule(name)) is not None
+            and schedule["last_fired_at"] is None
+        ]
+        assert len(unstamped) == 2, unstamped
+    finally:
+        peer.destroy()

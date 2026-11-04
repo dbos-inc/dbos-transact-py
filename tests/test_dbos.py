@@ -6,6 +6,7 @@ import datetime
 import logging
 import os
 import random
+import sys
 import threading
 import time
 import types
@@ -35,6 +36,10 @@ from dbos import (
     WorkflowStatusString,
 )
 from dbos import _enterprise as enterprise_module
+from dbos import (
+    _sys_db_postgres,
+    _workflow_commands,
+)
 
 # Private API because this is a test
 from dbos._client import DBOSClient
@@ -55,9 +60,14 @@ from dbos._error import (
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import DefaultSerializer
 from dbos._shard_keys import bind_shard_keys, shard_key_scope
-from dbos._sys_db import SystemDatabase, _dbos_null_topic
+from dbos._sys_db import SystemDatabase, _dbos_null_topic, advisory_lock_key
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
-from dbos._workflow_commands import BACKGROUND_JOBS_THREAD_NAME, _run_background_jobs
+from dbos._workflow_commands import (
+    BACKGROUND_JOBS_THREAD_NAME,
+    BackgroundLease,
+    _run_background_jobs,
+    background_jobs_thread,
+)
 from tests.conftest import (
     reexecute_workflow_by_id,
     retry_until_success,
@@ -2636,18 +2646,26 @@ def test_background_jobs_run_once_per_interval_across_processes(
     )
     interval = 0.2
     runs: List[Tuple[str, float]] = []
+    # Recorded, as the loop catches a job's exceptions: an assert in the job could never fail the test.
+    unheld: List[str] = []
     stops = {"local": threading.Event(), "peer": threading.Event()}
+    leases = {"local": BackgroundLease(), "peer": BackgroundLease()}
 
     def loop(name: str, sys_db: SystemDatabase) -> None:
         def failing() -> None:
             raise Exception("injected job failure")
 
         def job() -> None:
+            # A holder's lease is held while its jobs run.
+            if not leases[name].held():
+                unheld.append(name)
             runs.append((name, time.monotonic()))
 
         process = cast(Any, types.SimpleNamespace(_sys_db=sys_db, logger=dbos.logger))
         jobs = {"failing": failing, "job": job}
-        _run_background_jobs(stops[name], process, "test_jobs", interval, jobs)
+        _run_background_jobs(
+            stops[name], process, "test_jobs", interval, jobs, leases[name]
+        )
 
     threads = {
         "local": threading.Thread(target=loop, args=("local", dbos._sys_db)),
@@ -2661,6 +2679,7 @@ def test_background_jobs_run_once_per_interval_across_processes(
             assert len(runs) >= times
 
         retry_until_success(lambda: ran(8), interval=0.1, max_attempts=50)
+        assert not unheld, unheld
         # A holder keeps the lock an interval past its start; the bounds allow for timer slack.
         starts = [at for _, at in runs]
         assert starts[-1] - starts[0] >= (len(starts) - 1) * interval * 0.9, runs
@@ -2670,9 +2689,11 @@ def test_background_jobs_run_once_per_interval_across_processes(
         other = "peer" if holder == "local" else "local"
         stops[holder].set()
         threads[holder].join()
+        assert not leases[holder].held()
 
         def taken_over() -> None:
             assert runs[-1][0] == other
+            assert leases[other].held()
 
         retry_until_success(taken_over, interval=0.1, max_attempts=50)
     finally:
@@ -2681,6 +2702,115 @@ def test_background_jobs_run_once_per_interval_across_processes(
         for thread in threads.values():
             thread.join()
         peer.destroy()
+
+
+def test_background_jobs_hold_one_lock_session_across_intervals(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, skip_with_sqlite: None
+) -> None:
+    """A holder keeps its lock session across intervals, renewing it in place past the idle
+    timeout, so a peer retrying as fast as it can never finds the lock free mid-hold."""
+    # Short, so a hold that went idle instead of renewing would lose its session mid-test; also
+    # where an override imports it by name, as Enterprise's sharded lock does.
+    for module in {_sys_db_postgres, sys.modules[type(dbos._sys_db).__module__]}:
+        monkeypatch.setattr(
+            module, "BACKGROUND_JOB_LOCK_IDLE_TIMEOUT_MS", 500, raising=False
+        )
+    interval = 0.1
+    runs: List[float] = []
+    stop = threading.Event()
+    lease = BackgroundLease()
+    process = cast(Any, types.SimpleNamespace(_sys_db=dbos._sys_db, logger=dbos.logger))
+    thread = threading.Thread(
+        target=_run_background_jobs,
+        args=(stop, process, "hold_jobs", interval, {"job": lambda: runs.append(1)}),
+        kwargs={"lease": lease, "hold_sec": 3.0},
+    )
+    try:
+        thread.start()
+
+        def holding() -> None:
+            assert lease.held()
+
+        retry_until_success(holding, interval=0.05, max_attempts=50)
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            with dbos._sys_db.background_job_lock("hold_jobs") as renew:
+                assert renew is None
+            assert lease.held()
+        assert len(runs) >= 10, runs
+    finally:
+        stop.set()
+        thread.join()
+
+
+def test_background_jobs_lock_is_per_application_version(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each application version takes its own background-jobs lock, so every live version
+    runs the jobs and fires schedules, the latest code included."""
+    names: List[str] = []
+    monkeypatch.setattr(
+        _workflow_commands,
+        "_run_background_jobs",
+        lambda stop, process, lock_name, *rest: names.append(lock_name),
+    )
+    for version in ("v1", "v2"):
+        monkeypatch.setattr(GlobalParams, "app_version", version)
+        background_jobs_thread(threading.Event(), dbos)
+    assert names == ["background_jobs.v1", "background_jobs.v2"]
+
+
+def test_background_job_lock_session_holds_no_snapshot(
+    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
+    """A held lock's idle session holds no xmin, even past psycopg's prepare threshold, so
+    it never holds back vacuum."""
+    sys_db = dbos._sys_db
+    key = advisory_lock_key(
+        f"dbos.background_job.{sys_db.schema}.{sys_db.app_name or ''}.xmin_job"
+    )
+    with sys_db.background_job_lock("xmin_job") as renew:
+        assert renew is not None
+        for _ in range(8):
+            renew()
+        with sys_db.engine.connect() as c:
+            sessions = c.execute(
+                sa.text(
+                    "SELECT a.backend_xmin, a.state FROM pg_stat_activity a "
+                    "JOIN pg_locks l ON l.pid = a.pid WHERE l.locktype = 'advisory' "
+                    "AND l.granted AND l.classid::int8 = :hi AND l.objid::int8 = :lo "
+                    "AND l.objsubid = 1"
+                ),
+                {"hi": (key >> 32) & 0xFFFFFFFF, "lo": key & 0xFFFFFFFF},
+            ).fetchall()
+    assert [tuple(row) for row in sessions] == [(None, "idle in transaction")], sessions
+
+
+def test_concurrent_index_builds_do_not_wait_on_the_background_job_lock(
+    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
+    """An online migration's CREATE INDEX CONCURRENTLY waits for older snapshots' transactions
+    to end; the lock's idle transaction holds none, so a build never waits out a hold.
+    """
+    # Its own engine, so the statement timeout stays off the shared pool.
+    engine = sa.create_engine(dbos._sys_db.engine.url, isolation_level="AUTOCOMMIT")
+    try:
+        with engine.connect() as c:
+            c.execute(sa.text("SET statement_timeout = '10s'"))
+            c.execute(sa.text("DROP TABLE IF EXISTS cic_probe"))
+            c.execute(sa.text("CREATE TABLE cic_probe (id int)"))
+            with dbos._sys_db.background_job_lock("cic_job") as renew:
+                assert renew is not None
+                for _ in range(8):
+                    renew()
+                started = time.monotonic()
+                c.execute(
+                    sa.text("CREATE INDEX CONCURRENTLY cic_probe_idx ON cic_probe (id)")
+                )
+                assert time.monotonic() - started < 3
+            c.execute(sa.text("DROP TABLE cic_probe"))
+    finally:
+        engine.dispose()
 
 
 def test_custom_names(dbos: DBOS) -> None:
