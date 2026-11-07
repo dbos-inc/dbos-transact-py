@@ -1006,6 +1006,111 @@ def test_claim_lock_blocks_claimer_missing_new_head(
     assert _pending_by_partition(dbos, queue_name) == {partition: 1}
 
 
+def test_sqlite_global_concurrency_claim_serializes_with_budget_read(
+    dbos: DBOS,
+) -> None:
+    """#940 regression: on a SQLite system database, two claimers must not both
+    read the global-concurrency budget before either takes the write lock.
+
+    pysqlite's legacy transaction control only opens a transaction before the
+    first INSERT/UPDATE/DELETE/REPLACE, so a plain SELECT runs in autocommit.
+    Before the fix, start_queued_workflows' budget-reading SELECT ran before any
+    write lock was taken, so a second claimer's own budget read could run
+    concurrently and see the same stale room, letting both claim against one
+    shared slot. After the fix, the write lock is taken before that first read,
+    so a second claimer's own read blocks (SQLite's busy_timeout, not an
+    immediate error) until the first claimer's transaction ends.
+
+    This is deterministic, not timing-dependent: claimer A is paused with a
+    debug trigger right after its own budget read (so A's connection, win or
+    lose this race, is a real variable for the assertion), and claimer B is run
+    with a short, fixed wait. Before the fix, B's debug trigger fires almost
+    immediately even though A is still paused. After the fix, B cannot even
+    reach its own budget read until A's transaction ends - the trigger not
+    firing within the wait window is exactly what the fix makes true.
+    """
+    if not using_sqlite():
+        pytest.skip("SQLite-specific: this checks the sqlite3 driver's lazy "
+                    "transaction-start behavior, which does not apply to Postgres")
+
+    @DBOS.workflow()
+    def noop(value: str) -> None:
+        pass
+
+    queue_name = f"unpolled-sqlite-concurrency-{uuid.uuid4().hex[:8]}"
+    queue = unpolled_queue(queue_name, global_concurrency=1)
+    ids = [
+        _enqueue_row(noop, queue_name, partition=None, priority=i)
+        for i in range(1, 3)
+    ]
+
+    a_at_budget_read = threading.Event()
+    release_a = threading.Event()
+
+    def pause_a() -> None:
+        if threading.current_thread().name.startswith("claimer-a"):
+            a_at_budget_read.set()
+            release_a.wait(timeout=20)
+
+    DebugTriggers.set_debug_trigger(
+        DebugTriggers.DEBUG_TRIGGER_QUEUE_CONCURRENCY_AFTER_BUDGET_READ,
+        DebugAction(callback=pause_a),
+    )
+    try:
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="claimer-a") as pool:
+            claim_a = pool.submit(
+                dbos._sys_db.start_queued_workflows,
+                queue,
+                "executor-a",
+                GlobalParams.app_version,
+                None,
+            )
+            assert a_at_budget_read.wait(timeout=5), "claimer A never reached its budget read"
+
+            b_at_budget_read = threading.Event()
+
+            def mark_b() -> None:
+                if threading.current_thread().name.startswith("claimer-b"):
+                    b_at_budget_read.set()
+
+            DebugTriggers.set_debug_trigger(
+                DebugTriggers.DEBUG_TRIGGER_QUEUE_CONCURRENCY_AFTER_BUDGET_READ,
+                DebugAction(callback=mark_b),
+            )
+            with ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="claimer-b"
+            ) as pool_b:
+                claim_b = pool_b.submit(
+                    dbos._sys_db.start_queued_workflows,
+                    queue,
+                    "executor-b",
+                    GlobalParams.app_version,
+                    None,
+                )
+                # The fix: B cannot reach its own budget read while A still
+                # holds the write lock open, paused mid-claim.
+                assert not b_at_budget_read.wait(timeout=1), (
+                    "claimer B reached its budget read while claimer A's "
+                    "transaction was still open - the write lock was not taken "
+                    "before the read (#940)"
+                )
+                release_a.set()
+                # A claims the only slot global_concurrency=1 allows. B, reading
+                # the budget only after A's claim has committed (the fix), must
+                # correctly see it already spent - this is the actual bug: before
+                # the fix, B's stale read let it claim a second slot too.
+                assert claim_a.result(timeout=10) == ([ids[0]], None)
+                assert claim_b.result(timeout=10) == ([], "concurrency")
+    finally:
+        release_a.set()
+        DebugTriggers.clear_debug_triggers()
+
+    status_a = dbos._sys_db.get_workflow_status(ids[0])
+    status_b = dbos._sys_db.get_workflow_status(ids[1])
+    assert status_a is not None and status_a["status"] == WorkflowStatusString.PENDING.value
+    assert status_b is not None and status_b["status"] == WorkflowStatusString.ENQUEUED.value
+
+
 def test_multiple_queues(dbos: DBOS) -> None:
 
     wf_counter = 0

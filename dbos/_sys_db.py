@@ -5101,6 +5101,16 @@ class SystemDatabase(ABC):
             # CockroachDB, without advisory locks: SERIALIZABLE aborts claimers that spend the same budget.
             isolation = "SERIALIZABLE"
         with self._begin(isolation) as c:
+            if self.engine.dialect.name == "sqlite" and has_shared_budget:
+                # pysqlite only opens a transaction before the first write, so every
+                # read below (pending_count, rate_limit_remaining) would otherwise run
+                # in autocommit: several workers can each see room under the same
+                # budget before any of them reaches the claim UPDATE that finally
+                # takes the write lock. Take it now, before any read, mirroring
+                # migrate_datasource's identical guard in _datasource_migration.py.
+                driver_conn = c.connection.driver_connection
+                if driver_conn is not None and not driver_conn.in_transaction:
+                    c.execute(sa.text("BEGIN IMMEDIATE"))
             if use_claim_lock:
                 acquired = self._claim_lock(
                     c, queue.name, None if has_write_skew else queue_partition_key
@@ -5171,6 +5181,9 @@ class SystemDatabase(ABC):
             if queue._concurrency is not None:
                 # Global concurrency still requires a DB query since other workers may be running workflows too.
                 global_pending_workflows = pending_count(False)
+                DebugTriggers.debug_trigger_point(
+                    DebugTriggers.DEBUG_TRIGGER_QUEUE_CONCURRENCY_AFTER_BUDGET_READ
+                )
                 if global_pending_workflows > queue._concurrency:
                     dbos_logger.warning(
                         f"The total number of pending workflows ({global_pending_workflows}) on queue {queue.name} exceeds the global concurrency limit ({queue._concurrency})"
