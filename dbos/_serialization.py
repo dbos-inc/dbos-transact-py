@@ -323,12 +323,24 @@ def coerce_portable_args_to_hints(
     if fi is not None and fi.func_type in (DBOSFuncType.Class, DBOSFuncType.Instance):
         params = params[1:]
 
-    args = list(inputs["args"])
-    for i, value in enumerate(args):
-        if i < len(params):
-            args[i] = coerce(value, hints.get(params[i].name))
-    kwargs = {key: coerce(val, hints.get(key)) for key, val in inputs["kwargs"].items()}
-    return {"args": tuple(args), "kwargs": kwargs}
+    try:
+        bound = inspect.Signature(params).bind_partial(
+            *inputs["args"], **inputs["kwargs"]
+        )
+    except TypeError:
+        return inputs
+    for name, value in bound.arguments.items():
+        hint = hints.get(name)
+        kind = bound.signature.parameters[name].kind
+        if kind == inspect.Parameter.VAR_POSITIONAL:
+            bound.arguments[name] = tuple(coerce(item, hint) for item in value)
+        elif kind == inspect.Parameter.VAR_KEYWORD:
+            bound.arguments[name] = {
+                key: coerce(item, hint) for key, item in value.items()
+            }
+        else:
+            bound.arguments[name] = coerce(value, hint)
+    return {"args": bound.args, "kwargs": bound.kwargs}
 
 
 def _safe_str(x: Any) -> str:
