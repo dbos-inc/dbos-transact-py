@@ -582,23 +582,36 @@ class _SharedExecutor(ThreadPoolExecutor):
     """
     Default executor for event loops DBOS doesn't own.
 
-    It runs work on the DBOS executor but ignores shutdown(). asyncio.run()
-    shuts down its loop's default executor on exit, and that must not shut
-    down the DBOS executor.
+    While the DBOS executor is live, submit() forwards to it and shutdown() is
+    a no-op: asyncio.run() tears down its loop's default executor on exit, and
+    that must not shut down the DBOS executor.
+
+    After DBOS.destroy() shuts the DBOS executor down, submit() falls back to
+    this pool so in-flight async workflows can still use asyncio.to_thread /
+    the loop default executor. That matches the docs: destroy does not
+    interrupt workflows that are still running (they just can no longer
+    checkpoint). shutdown() then shuts this fallback pool normally.
     """
 
     def __init__(self, executor: ThreadPoolExecutor) -> None:
-        # submit() is overridden, so this pool never starts a thread
-        super().__init__(max_workers=1)
+        # Unused while submit() forwards to the DBOS executor; becomes the
+        # fallback pool after that executor is shut down.
+        super().__init__()
         self.executor = executor
 
     def submit(
         self, fn: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
     ) -> Future[T]:
-        return self.executor.submit(fn, *args, **kwargs)
+        try:
+            return self.executor.submit(fn, *args, **kwargs)
+        except RuntimeError:
+            # DBOS executor was shut down by destroy(); keep the loop usable.
+            return super().submit(fn, *args, **kwargs)
 
     def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
-        pass
+        if not getattr(self.executor, "_shutdown", False):
+            return
+        super().shutdown(wait=wait, cancel_futures=cancel_futures)
 
 
 class DBOS:
