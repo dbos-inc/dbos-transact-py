@@ -902,11 +902,29 @@ class SQLAlchemyDatasource(ABC):
                             exec_ctx.start_sync_ds_transaction(session)
                             try:
                                 with session.begin():
-                                    session.connection(
+                                    conn = session.connection(
                                         execution_options={
                                             "isolation_level": isolation_level
                                         }
                                     )
+                                    if self.engine.dialect.name == "sqlite":
+                                        # pysqlite only opens a transaction before the
+                                        # first INSERT/UPDATE/DELETE/REPLACE, so a step
+                                        # that reads before it writes would otherwise run
+                                        # that read in autocommit: two concurrent steps
+                                        # can each pass the same check before either
+                                        # writes (write skew), even though SERIALIZABLE
+                                        # is this datasource's documented default and the
+                                        # only isolation level SQLite supports. Take the
+                                        # write lock now, before the step body runs,
+                                        # mirroring migrate_datasource's identical guard
+                                        # in _datasource_migration.py.
+                                        driver_conn = conn.connection.driver_connection
+                                        if (
+                                            driver_conn is not None
+                                            and not driver_conn.in_transaction
+                                        ):
+                                            conn.execute(sa.text("BEGIN IMMEDIATE"))
                                     output = func(*args, **kwargs)
                                     if in_wf:
                                         # Flush first, so the checkpoint holds generated keys and defaults, as the caller sees them.
