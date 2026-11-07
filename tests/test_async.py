@@ -1290,6 +1290,45 @@ async def test_concurrent_patch_async(dbos: DBOS, config: DBOSConfig) -> None:
         assert status.status == "ERROR"
 
 
+@pytest.mark.asyncio
+async def test_destroy_leaves_loop_default_executor_usable(
+    dbos: DBOS,
+) -> None:
+    """After destroy(), in-flight async work must still use the loop default executor.
+
+    _SharedExecutor forwards to the DBOS pool; destroy() shuts that pool down.
+    Without a fallback, asyncio.to_thread / getaddrinfo raise
+    "cannot schedule new futures after shutdown" and interrupt the workflow,
+    contradicting the docs that destroy does not interrupt running workflows.
+    """
+    results: dict[str, str] = {}
+
+    @DBOS.workflow()
+    async def wf() -> None:
+        await asyncio.sleep(0.4)
+        for name, call in [
+            ("asyncio.to_thread", lambda: asyncio.to_thread(lambda: None)),
+            (
+                "loop.getaddrinfo",
+                lambda: asyncio.get_running_loop().getaddrinfo("localhost", 80),
+            ),
+        ]:
+            try:
+                await call()
+                results[name] = "ok"
+            except BaseException as e:
+                results[name] = f"{type(e).__name__}: {e}"
+
+    await DBOS.start_workflow_async(wf)
+    await asyncio.sleep(0.1)
+    DBOS.destroy()
+    await asyncio.sleep(0.8)
+    assert results == {
+        "asyncio.to_thread": "ok",
+        "loop.getaddrinfo": "ok",
+    }
+
+
 @pytest.mark.parametrize("adopt_main_loop", [False, True], ids=["owned", "adopted"])
 def test_destroy_finalizes_only_owned_async_generators(
     config: DBOSConfig,
