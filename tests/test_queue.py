@@ -1030,8 +1030,10 @@ def test_sqlite_global_concurrency_claim_serializes_with_budget_read(
     firing within the wait window is exactly what the fix makes true.
     """
     if not using_sqlite():
-        pytest.skip("SQLite-specific: this checks the sqlite3 driver's lazy "
-                    "transaction-start behavior, which does not apply to Postgres")
+        pytest.skip(
+            "SQLite-specific: this checks the sqlite3 driver's lazy "
+            "transaction-start behavior, which does not apply to Postgres"
+        )
 
     @DBOS.workflow()
     def noop(value: str) -> None:
@@ -1040,8 +1042,7 @@ def test_sqlite_global_concurrency_claim_serializes_with_budget_read(
     queue_name = f"unpolled-sqlite-concurrency-{uuid.uuid4().hex[:8]}"
     queue = unpolled_queue(queue_name, global_concurrency=1)
     ids = [
-        _enqueue_row(noop, queue_name, partition=None, priority=i)
-        for i in range(1, 3)
+        _enqueue_row(noop, queue_name, partition=None, priority=i) for i in range(1, 3)
     ]
 
     a_at_budget_read = threading.Event()
@@ -1065,7 +1066,9 @@ def test_sqlite_global_concurrency_claim_serializes_with_budget_read(
                 GlobalParams.app_version,
                 None,
             )
-            assert a_at_budget_read.wait(timeout=5), "claimer A never reached its budget read"
+            assert a_at_budget_read.wait(
+                timeout=5
+            ), "claimer A never reached its budget read"
 
             b_at_budget_read = threading.Event()
 
@@ -1107,8 +1110,14 @@ def test_sqlite_global_concurrency_claim_serializes_with_budget_read(
 
     status_a = dbos._sys_db.get_workflow_status(ids[0])
     status_b = dbos._sys_db.get_workflow_status(ids[1])
-    assert status_a is not None and status_a["status"] == WorkflowStatusString.PENDING.value
-    assert status_b is not None and status_b["status"] == WorkflowStatusString.ENQUEUED.value
+    assert (
+        status_a is not None
+        and status_a["status"] == WorkflowStatusString.PENDING.value
+    )
+    assert (
+        status_b is not None
+        and status_b["status"] == WorkflowStatusString.ENQUEUED.value
+    )
 
 
 def test_multiple_queues(dbos: DBOS) -> None:
@@ -3730,7 +3739,7 @@ def test_partitioned_batch_dequeue_exclusive_direct(
 
 
 def test_partitioned_batch_dequeue_skips_requeued_rows(
-    dbos: DBOS, skip_with_sharding: None
+    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
 ) -> None:
     """A candidate moved to another queue mid-sweep (e.g. by resume_workflows,
     which rewrites queue_name while leaving status ENQUEUED) must be dropped by
