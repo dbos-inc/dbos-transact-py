@@ -4,14 +4,17 @@ so a sender without suspend mode still wakes a workflow another process parked. 
 operations themselves are tested in dbos-enterprise."""
 
 import uuid
+from typing import Any, List, Tuple
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy import event
 
 from dbos import DBOS, DBOSClient, SetWorkflowID
 from dbos._error import DBOSException, DBOSWorkflowSuspendedError
 from dbos._outcome import NoResult
 from dbos._sys_db import WorkflowStatusString
+from tests.conftest import retry_until_success
 
 
 def test_suspended_error_names_what_the_workflow_waits_on() -> None:
@@ -153,3 +156,120 @@ def test_parked_workflow_is_still_active(dbos: DBOS, skip_with_sharding: None) -
     assert [(w.workflow_id, w.status) for w in queued] == [
         (wfid, WorkflowStatusString.SUSPENDED.value)
     ]
+
+
+def test_leaving_suspended_clears_suspend_key(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
+    """Parks workflows by hand: cancel, resume and the timeout sweep each clear the
+    suspend_key, so a later send on that topic no longer matches the row."""
+    sys_db = dbos._sys_db
+    ws = sys_db.tables.workflow_status
+
+    @DBOS.workflow()
+    def parked() -> None:
+        pass
+
+    def park(**extra: Any) -> str:
+        wfid = str(uuid.uuid4())
+        with SetWorkflowID(wfid):
+            parked()
+        with sys_db.engine.begin() as c:
+            c.execute(
+                sa.update(ws)
+                .where(ws.c.workflow_uuid == wfid)
+                .values(
+                    status=WorkflowStatusString.SUSPENDED.value,
+                    suspend_key="approve",
+                    delay_until_epoch_ms=2**62,
+                    **extra,
+                )
+            )
+        return wfid
+
+    def row(wfid: str) -> Tuple[str, Any]:
+        with sys_db.engine.connect() as c:
+            found = c.execute(
+                sa.select(ws.c.status, ws.c.suspend_key).where(
+                    ws.c.workflow_uuid == wfid
+                )
+            ).one()
+        return (found[0], found[1])
+
+    cancelled = park()
+    DBOS.cancel_workflow(cancelled)
+    assert row(cancelled) == (WorkflowStatusString.CANCELLED.value, None)
+
+    resumed = park()
+    DBOS.resume_workflow(resumed).get_result()
+    assert row(resumed) == (WorkflowStatusString.SUCCESS.value, None)
+
+    timed_out = park(workflow_deadline_epoch_ms=1)
+
+    def swept() -> None:
+        sys_db.cancel_timed_out_workflows(10)
+        assert row(timed_out) == (WorkflowStatusString.CANCELLED.value, None)
+
+    retry_until_success(swept)
+
+
+def test_send_wake_update_query_plan(
+    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
+    """Every send runs the wake update, so it must probe the primary key: planned with
+    statistics that predate the parked rows, it must not scan idx_workflow_status_suspended.
+    """
+    sys_db = dbos._sys_db
+    ws = sys_db.tables.workflow_status
+
+    @DBOS.workflow()
+    def target() -> None:
+        pass
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        target()
+
+    captured: List[Tuple[str, Any]] = []
+
+    def before_cursor_execute(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        if statement.startswith("UPDATE") and "suspend_key" in statement:
+            captured.append((statement, parameters))
+
+    event.listen(sys_db.engine, "before_cursor_execute", before_cursor_execute)
+    try:
+        DBOS.send(wfid, "m", topic="approve")
+    finally:
+        event.remove(sys_db.engine, "before_cursor_execute", before_cursor_execute)
+    assert captured
+    statement, parameters = captured[0]
+
+    rows = [
+        {
+            "workflow_uuid": f"wake-plan-{i}-{uuid.uuid4()}",
+            "name": "wake_plan_probe",
+            "status": WorkflowStatusString.SUSPENDED.value,
+            "created_at": 1,
+            "updated_at": 1,
+            "delay_until_epoch_ms": 2**62,
+            "suspend_key": "approve",
+            "application_name": sys_db.app_name,
+        }
+        for i in range(2000)
+    ]
+    with sys_db.engine.begin() as conn:
+        # Analyzed before the rows are parked, the planner takes the suspended index for empty.
+        conn.exec_driver_sql(f'ANALYZE "{sys_db.schema}".workflow_status')
+        conn.execute(sa.insert(ws), rows)
+        plan = [
+            str(r[0]) for r in conn.exec_driver_sql(f"EXPLAIN {statement}", parameters)
+        ]
+    assert not any("idx_workflow_status_suspended" in d for d in plan), plan
+    assert any("workflow_status_pkey" in d for d in plan), plan

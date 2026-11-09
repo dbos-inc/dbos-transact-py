@@ -1412,7 +1412,7 @@ def get_dbos_migration_hundredtwentyseven(
     quoted_schema: str, is_cockroach: bool
 ) -> str:
     c = _concurrently(is_cockroach)
-    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_suspended" ON {quoted_schema}."workflow_status" ("delay_until_epoch_ms") WHERE "status" = \'SUSPENDED\' AND "delay_until_epoch_ms" IS NOT NULL'
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_suspended" ON {quoted_schema}."workflow_status" ("delay_until_epoch_ms") WHERE "status" = \'SUSPENDED\''
 
 
 def get_dbos_migration_hundredtwentyeight(
@@ -1449,9 +1449,9 @@ BEGIN
     )
     ON CONFLICT (message_uuid) DO NOTHING;
     UPDATE {quoted_schema}.workflow_status
-    SET delay_until_epoch_ms = 0
+    -- Status is tested in SET, not WHERE, so the planner cannot scan idx_workflow_status_suspended.
+    SET delay_until_epoch_ms = CASE WHEN status = 'SUSPENDED' THEN 0 ELSE delay_until_epoch_ms END
     WHERE workflow_uuid = destination_id
-        AND status = 'SUSPENDED'
         AND suspend_key = v_topic;
 EXCEPTION
     WHEN foreign_key_violation THEN
@@ -2030,7 +2030,7 @@ sqlite_migration_hundredtwentysix = (
     """ALTER TABLE workflow_status ADD COLUMN "suspend_key" TEXT DEFAULT NULL;"""
 )
 
-sqlite_migration_hundredtwentyseven = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_suspended" ON "workflow_status" ("delay_until_epoch_ms") WHERE "status" = \'SUSPENDED\' AND "delay_until_epoch_ms" IS NOT NULL'
+sqlite_migration_hundredtwentyseven = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_suspended" ON "workflow_status" ("delay_until_epoch_ms") WHERE "status" = \'SUSPENDED\''
 
 sqlite_migration_hundredtwentyeight = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_deadline_v2" ON "workflow_status" ("workflow_deadline_epoch_ms") WHERE "status" IN (\'ENQUEUED\', \'PENDING\', \'DELAYED\', \'SUSPENDED\') AND "workflow_deadline_epoch_ms" IS NOT NULL'
 
