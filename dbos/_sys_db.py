@@ -1725,6 +1725,7 @@ class SystemDatabase(ABC):
                         owner_xid=None,
                         queue_name=None,
                         deduplication_id=None,
+                        suspend_key=None,
                         started_at_epoch_ms=None,
                         updated_at=now_ms,
                         completed_at=now_ms,
@@ -1785,6 +1786,7 @@ class SystemDatabase(ABC):
                     recovery_attempts=0,
                     workflow_deadline_epoch_ms=None,
                     deduplication_id=None,
+                    suspend_key=None,
                     started_at_epoch_ms=None,
                     updated_at=self._now_ms_sql(),
                     completed_at=None,
@@ -2211,6 +2213,7 @@ class SystemDatabase(ABC):
                     recovery_attempts=0,
                     workflow_deadline_epoch_ms=None,
                     deduplication_id=None,
+                    suspend_key=None,
                     started_at_epoch_ms=None,
                     updated_at=self._now_ms_sql(),
                     completed_at=None,
@@ -3845,13 +3848,17 @@ class SystemDatabase(ABC):
         replayed recv finds no message and parks again."""
         ws = self.tables.workflow_status
         conn.execute(
-            sa.update(ws)
-            .where(
+            sa.update(ws).where(
                 *self._wf_in(ws, destinations),
-                ws.c.status == WorkflowStatusString.SUSPENDED.value,
                 ws.c.suspend_key.in_(topics),
             )
-            .values(delay_until_epoch_ms=0)
+            # Status is tested here, not in WHERE, so the planner cannot scan idx_workflow_status_suspended.
+            .values(
+                delay_until_epoch_ms=sa.case(
+                    (ws.c.status == WorkflowStatusString.SUSPENDED.value, 0),
+                    else_=ws.c.delay_until_epoch_ms,
+                )
+            )
         )
 
     def _send_bulk_txn(
@@ -4996,6 +5003,7 @@ class SystemDatabase(ABC):
                     owner_xid=None,
                     queue_name=None,
                     deduplication_id=None,
+                    suspend_key=None,
                     started_at_epoch_ms=None,
                     updated_at=cancelled_at,
                     completed_at=cancelled_at,
