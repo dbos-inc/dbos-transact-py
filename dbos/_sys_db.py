@@ -5102,12 +5102,7 @@ class SystemDatabase(ABC):
             isolation = "SERIALIZABLE"
         with self._begin(isolation) as c:
             if self.engine.dialect.name == "sqlite" and has_shared_budget:
-                # pysqlite only opens a transaction before the first write, so every
-                # read below (pending_count, rate_limit_remaining) would otherwise run
-                # in autocommit: several workers can each see room under the same
-                # budget before any of them reaches the claim UPDATE that finally
-                # takes the write lock. Take it now, before any read, mirroring
-                # migrate_datasource's identical guard in _datasource_migration.py.
+                # pysqlite would run the budget reads in autocommit, letting workers overspend a shared budget.
                 driver_conn = c.connection.driver_connection
                 if driver_conn is not None and not driver_conn.in_transaction:
                     c.execute(sa.text("BEGIN IMMEDIATE"))

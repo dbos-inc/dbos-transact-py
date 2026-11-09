@@ -908,17 +908,7 @@ class SQLAlchemyDatasource(ABC):
                                         }
                                     )
                                     if self.engine.dialect.name == "sqlite":
-                                        # pysqlite only opens a transaction before the
-                                        # first INSERT/UPDATE/DELETE/REPLACE, so a step
-                                        # that reads before it writes would otherwise run
-                                        # that read in autocommit: two concurrent steps
-                                        # can each pass the same check before either
-                                        # writes (write skew), even though SERIALIZABLE
-                                        # is this datasource's documented default and the
-                                        # only isolation level SQLite supports. Take the
-                                        # write lock now, before the step body runs,
-                                        # mirroring migrate_datasource's identical guard
-                                        # in _datasource_migration.py.
+                                        # pysqlite would run reads before the first write in autocommit, allowing write skew.
                                         driver_conn = conn.connection.driver_connection
                                         if (
                                             driver_conn is not None
