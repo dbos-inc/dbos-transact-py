@@ -2,7 +2,7 @@ import json
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, cast
 
 import pytest
@@ -1101,6 +1101,26 @@ def test_directinsert_with_pydantic_validation(
         wfh_missing.get_result()
     assert "ValueError" in exc_info.value.name
     assert "missing" in exc_info.value.message.lower()
+
+
+def test_portable_datetime_variadic_args(dbos: DBOS) -> None:
+    @DBOS.workflow(serialization_type=WorkflowSerializationFormat.PORTABLE)
+    def variadic(*timestamps: datetime, label: date, **dates: date) -> list[str]:
+        assert all(isinstance(value, datetime) for value in timestamps)
+        assert isinstance(label, date)
+        assert all(isinstance(value, date) for value in dates.values())
+        return [value.isoformat() for value in timestamps] + [
+            label.isoformat(),
+            dates["due"].isoformat(),
+        ]
+
+    DBOS.register_queue("portable_dates")
+    timestamp = datetime(2026, 1, 20, 14, 0, tzinfo=timezone.utc)
+    day = date(2026, 1, 21)
+    handle = DBOS.enqueue_workflow(
+        "portable_dates", variadic, timestamp, timestamp, timestamp, label=day, due=day
+    )
+    assert handle.get_result() == [timestamp.isoformat()] * 3 + [day.isoformat()] * 2
 
 
 def test_pydantic_validation_variadic_params(dbos: DBOS) -> None:
