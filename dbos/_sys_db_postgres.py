@@ -24,6 +24,7 @@ from ._sys_db import (
     _dbos_notifications_channel,
     _dbos_streams_channel,
     _dbos_workflow_events_channel,
+    _dbos_workflow_results_channel,
     advisory_lock_key,
     lock_name,
 )
@@ -456,6 +457,7 @@ class PostgresSystemDatabase(SystemDatabase):
                     psycopg_conn.execute(f"LISTEN {_dbos_notifications_channel}")
                     psycopg_conn.execute(f"LISTEN {_dbos_workflow_events_channel}")
                     psycopg_conn.execute(f"LISTEN {_dbos_streams_channel}")
+                    psycopg_conn.execute(f"LISTEN {_dbos_workflow_results_channel}")
                 while self._run_background_processes:
                     gen = psycopg_conn.notifies()
                     for notify in gen:
@@ -489,6 +491,15 @@ class PostgresSystemDatabase(SystemDatabase):
                                 event.set()
                                 dbos_logger.debug(
                                     f"Signaled streams event for {notify.payload}"
+                                )
+                        elif channel == _dbos_workflow_results_channel:
+                            if notify.payload:
+                                event = self.workflow_results_map.get(notify.payload)
+                                if event is None:
+                                    continue
+                                event.set()
+                                dbos_logger.debug(
+                                    f"Signaled workflow result event for {notify.payload}"
                                 )
                         else:
                             dbos_logger.error(f"Unknown channel: {channel}")

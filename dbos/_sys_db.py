@@ -451,6 +451,8 @@ _dbos_stream_closed_sentinel = "__DBOS_STREAM_CLOSED__"
 _dbos_notifications_channel = "dbos_notifications_channel"
 _dbos_workflow_events_channel = "dbos_workflow_events_channel"
 _dbos_streams_channel = "dbos_streams_channel"
+# Pushed when a workflow reaches a terminal status, so get_result and wait_first wake without waiting out their polling interval.
+_dbos_workflow_results_channel = "dbos_workflow_results_channel"
 
 # Marks that a reader found nothing written at its offset. Not None, which is itself a valid stream value.
 _no_stream_value = object()
@@ -878,6 +880,8 @@ class SystemDatabase(ABC):
         self.notifications_map = ThreadSafeEventDict()
         self.workflow_events_map = ThreadSafeEventDict()
         self.streams_map = ThreadSafeEventDict()
+        # Waiters on workflow results, keyed by workflow ID.
+        self.workflow_results_map = ThreadSafeEventDict()
         self.executor_id = executor_id
         # The application this handle acts for; None writes unclaimed rows.
         self.app_name = app_name
@@ -1516,6 +1520,8 @@ class SystemDatabase(ABC):
                     completed_at=now_ms,
                 )
             )
+        # A hint only: a waiter re-reads the status, so one not dead-lettered just keeps waiting.
+        self._signal_workflow_results(workflow_ids)
 
     @db_retry()
     def update_workflow_outcome(
@@ -1540,9 +1546,12 @@ class SystemDatabase(ABC):
         if owner_xid is None:
             owner_xid = current_owner_xid(workflow_id)
         if not self._outcome_in_one_statement():
-            return self._update_workflow_outcome_in_transaction(
+            landed = self._update_workflow_outcome_in_transaction(
                 workflow_id, status, output=output, error=error, owner_xid=owner_xid
             )
+            if landed:
+                self._signal_workflow_results([workflow_id])
+            return landed
         # One statement, run in autocommit: a single round trip, where a transaction of
         # the UPDATE and the output's upsert took four (BEGIN, two statements, COMMIT).
         # The upsert reads only the UPDATE's returned rows, so the output is written
@@ -1630,6 +1639,8 @@ class SystemDatabase(ABC):
                 build,
                 insert_columns=False,
             ).scalar()
+        if written:
+            self._signal_workflow_results([workflow_id])
         return bool(written)
 
     def _outcome_in_one_statement(self) -> bool:
@@ -1730,6 +1741,8 @@ class SystemDatabase(ABC):
                         completed_at=now_ms,
                     )
                 )
+            # After commit, so a woken waiter reads the CANCELLED status.
+            self._signal_workflow_results(ids)
 
         if not cancel_children:
             _cancel_workflows(workflow_ids)
@@ -2796,13 +2809,22 @@ class SystemDatabase(ABC):
         *,
         fail_if_missing: bool = False,
     ) -> Any:
-        while True:
-            result = self.check_workflow_result(
-                workflow_id, fail_if_missing=fail_if_missing
-            )
-            if not isinstance(result, NoResult):
-                return result
-            time.sleep(polling_interval)
+        event, keys = self.register_result_listener([workflow_id])
+        try:
+            while True:
+                # Clear before checking, so a completion signalled after the check
+                # leaves the event set and the wait below returns at once.
+                event.clear()
+                result = self.check_workflow_result(
+                    workflow_id, fail_if_missing=fail_if_missing
+                )
+                if not isinstance(result, NoResult):
+                    return result
+                # The polling interval still bounds the wait, as a fallback for
+                # completions no signal reaches (e.g. without LISTEN/NOTIFY).
+                event.wait(timeout=polling_interval)
+        finally:
+            self.unregister_result_listener(keys, event)
 
     async def await_workflow_result_async(
         self,
@@ -2811,13 +2833,20 @@ class SystemDatabase(ABC):
         *,
         fail_if_missing: bool = False,
     ) -> Any:
-        while True:
-            result = await asyncio.to_thread(
-                self.check_workflow_result, workflow_id, fail_if_missing=fail_if_missing
-            )
-            if not isinstance(result, NoResult):
-                return result
-            await asyncio.sleep(polling_interval)
+        event, keys = self.register_result_listener([workflow_id])
+        try:
+            while True:
+                event.clear()
+                result = await asyncio.to_thread(
+                    self.check_workflow_result,
+                    workflow_id,
+                    fail_if_missing=fail_if_missing,
+                )
+                if not isinstance(result, NoResult):
+                    return result
+                await event.wait_async(polling_interval)
+        finally:
+            self.unregister_result_listener(keys, event)
 
     @db_retry()
     def check_first_workflow_id(self, workflow_ids: List[str]) -> Union[NoResult, str]:
@@ -2856,20 +2885,32 @@ class SystemDatabase(ABC):
     def await_first_workflow_id(
         self, workflow_ids: List[str], polling_interval: float
     ) -> str:
-        while True:
-            result = self.check_first_workflow_id(workflow_ids)
-            if not isinstance(result, NoResult):
-                return result
-            time.sleep(polling_interval)
+        event, keys = self.register_result_listener(workflow_ids)
+        try:
+            while True:
+                event.clear()
+                result = self.check_first_workflow_id(workflow_ids)
+                if not isinstance(result, NoResult):
+                    return result
+                event.wait(timeout=polling_interval)
+        finally:
+            self.unregister_result_listener(keys, event)
 
     async def await_first_workflow_id_async(
         self, workflow_ids: List[str], polling_interval: float
     ) -> str:
-        while True:
-            result = await asyncio.to_thread(self.check_first_workflow_id, workflow_ids)
-            if not isinstance(result, NoResult):
-                return result
-            await asyncio.sleep(polling_interval)
+        event, keys = self.register_result_listener(workflow_ids)
+        try:
+            while True:
+                event.clear()
+                result = await asyncio.to_thread(
+                    self.check_first_workflow_id, workflow_ids
+                )
+                if not isinstance(result, NoResult):
+                    return result
+                await event.wait_async(polling_interval)
+        finally:
+            self.unregister_result_listener(keys, event)
 
     @db_retry()
     def list_workflows(
@@ -5002,7 +5043,9 @@ class SystemDatabase(ABC):
                 )
                 .returning(ws.c.workflow_uuid)
             ).fetchall()
-        return [row[0] for row in rows]
+        cancelled = [row[0] for row in rows]
+        self._signal_workflow_results(cancelled)
+        return cancelled
 
     def dequeue_scopes(self, queue_name: str) -> List[Optional[str]]:
         """Scopes a queue's workers dequeue from in turn; one unkeyed scope unless sharded."""
@@ -6252,6 +6295,42 @@ class SystemDatabase(ABC):
             _dbos_stream_closed_sentinel,
             serialization_type=WorkflowSerializationFormat.PORTABLE,
         )
+
+    def register_result_listener(
+        self, workflow_ids: List[str]
+    ) -> Tuple[LoopAwareEvent, List[str]]:
+        """Register one event to be signalled when any of these workflows reaches a terminal status.
+
+        Returns the event and the keys to pass to unregister_result_listener. Must be called
+        before checking the result, so a completion landing between the check and the wait
+        is not lost.
+        """
+        event = LoopAwareEvent()
+        keys = list(dict.fromkeys(workflow_ids))
+        for workflow_id in keys:
+            self.workflow_results_map.add(workflow_id, event, (workflow_id, "", None))
+        return event, keys
+
+    def unregister_result_listener(
+        self, keys: List[str], event: LoopAwareEvent
+    ) -> None:
+        """Drop an event registered by register_result_listener."""
+        for workflow_id in keys:
+            self.workflow_results_map.pop(workflow_id, event)
+
+    def _signal_workflow_results(self, workflow_ids: List[str]) -> None:
+        """Wake result waiters for workflows that may have just reached a terminal status.
+
+        Call after the status write commits. Waiters in this process are signalled directly, on
+        any backend; other processes get a coalesced push on Postgres with LISTEN/NOTIFY. Either
+        way it is only a hint: waiters re-read the status and fall back to polling, so a missed
+        or spurious signal costs latency at most.
+        """
+        for workflow_id in workflow_ids:
+            signal = self.workflow_results_map.get(workflow_id)
+            if signal is not None:
+                signal.set()
+            self._signal_notification(_dbos_workflow_results_channel, workflow_id)
 
     def register_stream_listener(
         self, workflow_uuid: str, key: str
