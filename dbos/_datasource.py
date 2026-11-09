@@ -83,6 +83,11 @@ def _is_retriable_db_error(
     is_serialization_error: Callable[[Exception], bool],
 ) -> bool:
     """Transient database errors worth re-running the attempt for."""
+    if isinstance(error, sa.exc.TimeoutError):
+        dbos_logger.warning(
+            f"Datasource connection pool exhausted: {str(error)}. Retrying."
+        )
+        return True
     return isinstance(error, DBAPIError) and (
         retriable_postgres_exception(error) or is_serialization_error(error)
     )
@@ -365,10 +370,8 @@ class AsyncSQLAlchemyDatasource(ABC):
         while True:
             try:
                 return await self._check_execution(workflow_id, step_id)
-            except DBAPIError as dbapi_error:
-                if not _is_retriable_db_error(
-                    dbapi_error, self._is_serialization_error
-                ):
+            except (DBAPIError, sa.exc.TimeoutError) as db_error:
+                if not _is_retriable_db_error(db_error, self._is_serialization_error):
                     raise
                 await asyncio.sleep(retry_wait_seconds)
                 retry_wait_seconds = min(
@@ -802,10 +805,8 @@ class SQLAlchemyDatasource(ABC):
         while True:
             try:
                 return self._check_execution(workflow_id, step_id)
-            except DBAPIError as dbapi_error:
-                if not _is_retriable_db_error(
-                    dbapi_error, self._is_serialization_error
-                ):
+            except (DBAPIError, sa.exc.TimeoutError) as db_error:
+                if not _is_retriable_db_error(db_error, self._is_serialization_error):
                     raise
                 time.sleep(retry_wait_seconds)
                 retry_wait_seconds = min(
