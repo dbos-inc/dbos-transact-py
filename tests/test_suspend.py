@@ -240,7 +240,8 @@ def test_send_wake_update_query_plan(
         context: Any,
         executemany: bool,
     ) -> None:
-        if statement.startswith("UPDATE") and "suspend_key" in statement:
+        # Only the wake update sets the delay: the background timeout sweep also names suspend_key.
+        if statement.startswith("UPDATE") and "SET delay_until_epoch_ms=" in statement:
             captured.append((statement, parameters))
 
     event.listen(sys_db.engine, "before_cursor_execute", before_cursor_execute)

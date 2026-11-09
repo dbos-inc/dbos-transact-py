@@ -1389,6 +1389,12 @@ def test_resume_and_fork_to_queue(dbos: DBOS) -> None:
     workflow_event.set()
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         handle.get_result()
+
+    # The cancelled run outlives get_result; resumed before it exits, it would run step_two too.
+    def execution_left() -> None:
+        assert wfid not in dbos._active_workflows_set.activeList()
+
+    retry_until_success(execution_left, interval=0.1, max_attempts=100)
     assert DBOS.get_workflow_status(wfid).status == "CANCELLED"  # type: ignore[union-attr]
     assert step_one_count == 1
     assert step_two_count == 0
