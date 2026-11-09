@@ -5101,6 +5101,11 @@ class SystemDatabase(ABC):
             # CockroachDB, without advisory locks: SERIALIZABLE aborts claimers that spend the same budget.
             isolation = "SERIALIZABLE"
         with self._begin(isolation) as c:
+            if self.engine.dialect.name == "sqlite" and has_shared_budget:
+                # pysqlite would run the budget reads in autocommit, letting workers overspend a shared budget.
+                driver_conn = c.connection.driver_connection
+                if driver_conn is not None and not driver_conn.in_transaction:
+                    c.execute(sa.text("BEGIN IMMEDIATE"))
             if use_claim_lock:
                 acquired = self._claim_lock(
                     c, queue.name, None if has_write_skew else queue_partition_key
@@ -5171,6 +5176,9 @@ class SystemDatabase(ABC):
             if queue._concurrency is not None:
                 # Global concurrency still requires a DB query since other workers may be running workflows too.
                 global_pending_workflows = pending_count(False)
+                DebugTriggers.debug_trigger_point(
+                    DebugTriggers.DEBUG_TRIGGER_QUEUE_CONCURRENCY_AFTER_BUDGET_READ
+                )
                 if global_pending_workflows > queue._concurrency:
                     dbos_logger.warning(
                         f"The total number of pending workflows ({global_pending_workflows}) on queue {queue.name} exceeds the global concurrency limit ({queue._concurrency})"
@@ -5487,6 +5495,11 @@ class SystemDatabase(ABC):
             def claim_batch(batch: List[str]) -> List[str]:
                 """Claim the heads of these partitions inside the open transaction, returning the IDs it marked PENDING."""
                 held = batch
+                if not is_postgres:
+                    # pysqlite would run the head and no-pending reads in autocommit, letting workers co-admit a partition.
+                    driver_conn = c.connection.driver_connection
+                    if driver_conn is not None and not driver_conn.in_transaction:
+                        c.execute(sa.text("BEGIN IMMEDIATE"))
                 if use_partition_locks:
                     DebugTriggers.debug_trigger_point(
                         DebugTriggers.DEBUG_TRIGGER_PARTITIONED_DEQUEUE_BEFORE_LOCKS
@@ -5520,7 +5533,7 @@ class SystemDatabase(ABC):
                     DebugTriggers.DEBUG_TRIGGER_PARTITIONED_DEQUEUE_AFTER_CANDIDATES
                 )
 
-                # Lock the fixed candidate set -- never a LIMIT query, whose SKIP LOCKED could slide past a locked head and admit out of order. On SQLite this is an unlocked re-read; the RETURNING flip below is the guard.
+                # Lock the fixed candidate set -- never a LIMIT query, whose SKIP LOCKED could slide past a locked head and admit out of order. On SQLite this is a re-read under the write lock.
                 locked_rows = c.execute(
                     sa.select(ws.c.workflow_uuid)
                     .where(*self._wf_in(ws, candidate_ids))

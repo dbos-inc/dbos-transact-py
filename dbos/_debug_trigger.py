@@ -46,6 +46,10 @@ class DebugTriggers:
     DEBUG_TRIGGER_PARTITIONED_DEQUEUE_AFTER_CANDIDATES = (
         "DEBUG_TRIGGER_PARTITIONED_DEQUEUE_AFTER_CANDIDATES"
     )
+    # Fires in start_queued_workflows after the global-concurrency pending count is read.
+    DEBUG_TRIGGER_QUEUE_CONCURRENCY_AFTER_BUDGET_READ = (
+        "DEBUG_TRIGGER_QUEUE_CONCURRENCY_AFTER_BUDGET_READ"
+    )
 
     # Internal registries
     _point_triggers: Dict[str, DebugAction] = {}
