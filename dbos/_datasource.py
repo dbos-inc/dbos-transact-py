@@ -478,11 +478,22 @@ class AsyncSQLAlchemyDatasource(ABC):
                             exec_ctx.start_async_ds_transaction(session)
                             try:
                                 async with session.begin():
-                                    await session.connection(
+                                    conn = await session.connection(
                                         execution_options={
                                             "isolation_level": isolation_level
                                         }
                                     )
+                                    if self.engine.dialect.name == "sqlite":
+                                        # aiosqlite would run reads before the first write in autocommit, allowing write skew.
+                                        raw_conn = await conn.get_raw_connection()
+                                        driver_conn = raw_conn.driver_connection
+                                        if (
+                                            driver_conn is not None
+                                            and not driver_conn.in_transaction
+                                        ):
+                                            await conn.execute(
+                                                sa.text("BEGIN IMMEDIATE")
+                                            )
                                     output = await func(*args, **kwargs)
                                     if in_wf:
                                         # Flush first, so the checkpoint holds generated keys and defaults, as the caller sees them.

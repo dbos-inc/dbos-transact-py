@@ -1229,6 +1229,69 @@ async def test_async_ds_runs_outside_workflow(
 
 
 @pytest.mark.asyncio
+async def test_sqlite_async_ds_transaction_takes_write_lock_before_read(
+    tmp_path: Any,
+) -> None:
+    """A SQLite transaction step holds the write lock before its first read."""
+    ds = await AsyncSQLAlchemyDatasource.create(
+        f"sqlite+aiosqlite:///{tmp_path}/async_ds_lock_test.sqlite"
+    )
+    async with ds.engine.begin() as conn:
+        await conn.execute(
+            text("CREATE TABLE admission(run TEXT PRIMARY KEY, usd REAL NOT NULL)")
+        )
+
+    a_entered = asyncio.Event()
+    release_a = asyncio.Event()
+
+    async def reserve(run_id: str, amount: float) -> bool:
+        session = ds.sql_session()
+        result = await session.execute(
+            text("SELECT COALESCE(SUM(usd), 0) FROM admission")
+        )
+        used = result.scalar()
+        assert used is not None
+        if used + amount > 10.0:
+            return False
+        await session.execute(
+            text("INSERT INTO admission VALUES (:r, :u)"),
+            {"r": run_id, "u": amount},
+        )
+        return True
+
+    @ds.transaction()
+    async def reserve_a(run_id: str, amount: float) -> bool:
+        a_entered.set()
+        await release_a.wait()
+        return await reserve(run_id, amount)
+
+    @ds.transaction()
+    async def reserve_b(run_id: str, amount: float) -> bool:
+        return await reserve(run_id, amount)
+
+    task_a = asyncio.create_task(reserve_a("A", 6.0))
+    task_b: Optional[asyncio.Task[bool]] = None
+    try:
+        await asyncio.wait_for(a_entered.wait(), timeout=5)
+        task_b = asyncio.create_task(reserve_b("B", 6.0))
+        done, _ = await asyncio.wait({task_b}, timeout=1)
+        assert not done, "step B finished while step A's transaction was open"
+        release_a.set()
+        assert await asyncio.wait_for(task_a, timeout=10) is True
+        assert await asyncio.wait_for(task_b, timeout=10) is False
+    finally:
+        release_a.set()
+        await asyncio.gather(
+            task_a, *([task_b] if task_b else []), return_exceptions=True
+        )
+
+    async with ds.engine.connect() as conn:
+        total = (await conn.execute(text("SELECT SUM(usd) FROM admission"))).scalar()
+    assert total == 6.0
+    await ds.engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_async_ds_rejects_misuse(tmp_path: Any) -> None:
     """Misuse fails fast: wrong or rebinding sessionmaker, sync functions, session outside a transaction."""
     with pytest.raises(DBOSException, match="sessionmaker"):
