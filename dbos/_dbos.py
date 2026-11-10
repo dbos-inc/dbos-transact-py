@@ -82,7 +82,12 @@ from ._core import (
 )
 from ._datasource import AsyncSQLAlchemyDatasource, SQLAlchemyDatasource
 from ._enqueue_options import EnqueueOptions
-from ._migration import get_dbos_schema_permissions_sql
+from ._migration import (
+    ensure_dbos_schema,
+    get_dbos_schema_permissions_sql,
+    run_dbos_migrations,
+    should_migrate,
+)
 from ._queue import (
     _INTERNAL_QUEUE_CONSTRUCTION,
     Queue,
@@ -839,11 +844,25 @@ class DBOS:
         schema: str = "dbos",
         application_role: Optional[str] = None,
         sharding: bool = False,
+        connection: Optional[sa.Connection] = None,
     ) -> None:
         """Create or migrate the system database with a privileged role, optionally
         granting application_role access to the system schema.
 
-        Cannot be called from a workflow body; call it from a step instead."""
+        Cannot be called from a workflow body; call it from a step instead.
+
+        If `connection` is given, every step runs on that one connection
+        instead of DBOS opening its own, and DBOS's own migration advisory
+        lock is skipped entirely: a lock the caller already holds on
+        `connection` (for example a session-level advisory lock serializing
+        this migrate() call with the caller's own schema migrations) then
+        covers the DBOS steps too, since both live and die on the same
+        session. If a pending migration requires CREATE INDEX CONCURRENTLY
+        and `connection` already has a transaction open on it, this raises
+        rather than running without the caller's lock-bearing connection; see
+        run_dbos_migrations for the full explanation. Postgres only, and not
+        supported together with `sharding`.
+        """
         # Migration is a database side effect, so it belongs in a step, not a workflow body.
         ctx = get_local_dbos_context()
         if ctx is not None and ctx.is_workflow():
@@ -855,6 +874,37 @@ class DBOS:
             raise DBOSException(
                 "application_role is only supported for Postgres system databases"
             )
+        if connection is not None:
+            if is_sqlite:
+                raise DBOSException(
+                    "connection is only supported for Postgres system databases"
+                )
+            if sharding:
+                raise DBOSException(
+                    "connection is not supported for a sharded system database"
+                )
+            if should_migrate(connection, schema, use_listen_notify=True):
+                ensure_dbos_schema(connection, schema)
+                run_dbos_migrations(connection, schema, use_listen_notify=True)
+            if not application_role:
+                return
+            dbos_logger.info(
+                f"Granting permissions for the {schema} schema to {application_role}"
+            )
+            grants = get_dbos_schema_permissions_sql(schema, application_role)
+            # Join a transaction the caller already has open on connection
+            # rather than nesting another: Connection.begin() raises if one
+            # is already active.
+            if connection.in_transaction():
+                for sql in grants:
+                    dbos_logger.info(sql)
+                    connection.execute(sa.text(sql))
+            else:
+                with connection.begin():
+                    for sql in grants:
+                        dbos_logger.info(sql)
+                        connection.execute(sa.text(sql))
+            return
         sys_db = SystemDatabase.create(
             system_database_url=system_database_url,
             engine_kwargs={"pool_timeout": 30, "max_overflow": 0, "pool_size": 2},
