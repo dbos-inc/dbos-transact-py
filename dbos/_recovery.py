@@ -13,8 +13,8 @@ if TYPE_CHECKING:
 
 def _recover_workflow(
     dbos: "DBOS", workflow: GetPendingWorkflowsOutput, executor_ids: List[str]
-) -> None:
-    """Make a pending workflow eligible for execution again.
+) -> bool:
+    """Make a pending workflow eligible for execution again; return whether this call re-enqueued it.
 
     Recovery re-enqueues rather than executing directly, so that every recovered
     workflow starts through the queue's atomic ENQUEUED->PENDING dequeue. That
@@ -22,7 +22,7 @@ def _recover_workflow(
     idempotent.
     """
     with bind_shard_keys({workflow.workflow_id: workflow.shard_key}):
-        dbos._sys_db.reenqueue_for_recovery(
+        return dbos._sys_db.reenqueue_for_recovery(
             workflow.workflow_id, executor_ids, INTERNAL_QUEUE_NAME
         )
 
@@ -58,8 +58,8 @@ def recover_executor_workflows(
         pending_workflows = dbos._sys_db.get_pending_workflows(executor_id, app_version)
         for pending_workflow in pending_workflows:
             try:
-                _recover_workflow(dbos, pending_workflow, executor_ids)
-                recovered.append(pending_workflow)
+                if _recover_workflow(dbos, pending_workflow, executor_ids):
+                    recovered.append(pending_workflow)
             except Exception as e:
                 with UseLogAttributes(workflow_id=pending_workflow.workflow_id):
                     dbos.logger.error(

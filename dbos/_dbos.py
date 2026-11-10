@@ -2624,25 +2624,18 @@ class DBOS:
         cls, executor_ids: List[str], *, application_version: Optional[str] = None
     ) -> List[WorkflowHandle[Any]]:
         """Re-enqueue the given executors' PENDING workflows from application_version (default: this one).
-        Returns handles to the recovered workflows."""
+        Returns their handles; cannot be called from within a workflow or step."""
         check_async("recover_workflows")
-
-        def fn() -> List[Tuple[str, Optional[str]]]:
-            return [
-                (w.workflow_id, w.shard_key)
-                for w in recover_executor_workflows(
-                    _get_dbos_instance(), executor_ids, application_version
-                )
-            ]
-
-        recovered = _get_dbos_instance()._sys_db.call_function_as_step(
-            fn,
-            "DBOS.recoverWorkflows",
-            snapshot_step_context(reserve_sleep_id=False),
-        )
+        # Recovery can re-enqueue the calling workflow, fencing it out of its own execution.
+        ctx = get_local_dbos_context()
+        if ctx is not None and ctx.is_within_workflow():
+            raise DBOSException(
+                "DBOS.recover_workflows cannot be called from within a workflow or step"
+            )
+        dbos = _get_dbos_instance()
         return [
-            WorkflowHandlePolling(wfid, _get_dbos_instance(), shard_key=shard_key)
-            for wfid, shard_key in recovered
+            WorkflowHandlePolling(w.workflow_id, dbos, shard_key=w.shard_key)
+            for w in recover_executor_workflows(dbos, executor_ids, application_version)
         ]
 
     @classmethod
@@ -2650,27 +2643,21 @@ class DBOS:
         cls, executor_ids: List[str], *, application_version: Optional[str] = None
     ) -> List[WorkflowHandleAsync[Any]]:
         """Re-enqueue the given executors' PENDING workflows from application_version (default: this one).
-        Returns handles to the recovered workflows."""
-        step_ctx = snapshot_step_context(reserve_sleep_id=False)
+        Returns their handles; cannot be called from within a workflow or step."""
+        # Recovery can re-enqueue the calling workflow, fencing it out of its own execution.
+        ctx = get_local_dbos_context()
+        if ctx is not None and ctx.is_within_workflow():
+            raise DBOSException(
+                "DBOS.recover_workflows_async cannot be called from within a workflow or step"
+            )
         await cls._configure_asyncio_thread_pool()
-
-        def fn() -> List[Tuple[str, Optional[str]]]:
-            return [
-                (w.workflow_id, w.shard_key)
-                for w in recover_executor_workflows(
-                    _get_dbos_instance(), executor_ids, application_version
-                )
-            ]
-
+        dbos = _get_dbos_instance()
         recovered = await asyncio.to_thread(
-            _get_dbos_instance()._sys_db.call_function_as_step,
-            fn,
-            "DBOS.recoverWorkflows",
-            step_ctx,
+            recover_executor_workflows, dbos, executor_ids, application_version
         )
         return [
-            WorkflowHandleAsyncPolling(wfid, _get_dbos_instance(), shard_key=shard_key)
-            for wfid, shard_key in recovered
+            WorkflowHandleAsyncPolling(w.workflow_id, dbos, shard_key=w.shard_key)
+            for w in recovered
         ]
 
     @classmethod

@@ -2312,6 +2312,14 @@ def test_recover_workflows(dbos: DBOS) -> None:
     def recovering_workflow(executor_ids: List[str]) -> List[str]:
         return [h.get_workflow_id() for h in DBOS.recover_workflows(executor_ids)]
 
+    @DBOS.step()
+    def recovering_step(executor_ids: List[str]) -> List[str]:
+        return [h.get_workflow_id() for h in DBOS.recover_workflows(executor_ids)]
+
+    @DBOS.workflow()
+    def workflow_with_recovering_step(executor_ids: List[str]) -> List[str]:
+        return recovering_step(executor_ids)
+
     def mark_pending(wfid: str, executor_id: str) -> None:
         with dbos._sys_db.engine.begin() as c:
             c.execute(
@@ -2335,29 +2343,56 @@ def test_recover_workflows(dbos: DBOS) -> None:
     assert stat.executor_id == GlobalParams.executor_id
     assert stat.recovery_attempts == 2
 
-    # Once a live executor owns it, recovering the dead executor again is a no-op
+    # A workflow owned by a live executor is not recovered for the dead one
+    mark_pending(wfid, GlobalParams.executor_id)
     assert DBOS.recover_workflows(["dead-executor"]) == []
 
-    # Called from a workflow, recovery is checkpointed as a step
+    # Recovery is rejected from within a workflow or step and re-enqueues nothing
     mark_pending(wfid, "dead-executor")
-    recovering_id = str(uuid.uuid4())
-    with SetWorkflowID(recovering_id):
-        assert recovering_workflow(["dead-executor"]) == [wfid]
-    assert DBOS.retrieve_workflow(wfid).get_result() == 5
-    assert wf_counter == 3
-    steps = DBOS.list_workflow_steps(recovering_id)
-    assert [s["function_name"] for s in steps] == ["DBOS.recoverWorkflows"]
+    with pytest.raises(DBOSException, match="within a workflow or step"):
+        recovering_workflow(["dead-executor"])
+    with pytest.raises(DBOSException, match="within a workflow or step"):
+        workflow_with_recovering_step(["dead-executor"])
+    untouched = DBOS.get_workflow_status(wfid)
+    assert untouched is not None
+    assert untouched.status == "PENDING"
+    assert untouched.executor_id == "dead-executor"
+    assert wf_counter == 2
 
-    # Replaying the recovering workflow returns the recorded IDs without re-enqueueing
-    mark_pending(recovering_id, "dead-executor-2")
-    replays = DBOS.recover_workflows(["dead-executor-2"])
-    assert [h.get_workflow_id() for h in replays] == [recovering_id]
-    assert replays[0].get_result() == [wfid]
-    target_stat = DBOS.get_workflow_status(wfid)
-    assert target_stat is not None
-    assert target_stat.status == "SUCCESS"
-    assert target_stat.recovery_attempts == 3
-    assert wf_counter == 3
+
+def test_recover_workflows_skips_stale_rows(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    @DBOS.workflow()
+    def target_workflow(x: int) -> int:
+        return x
+
+    def set_row(wfid: str, values: dict[str, str]) -> None:
+        with dbos._sys_db.engine.begin() as c:
+            c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .values(values)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+            )
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert target_workflow(5) == 5
+    set_row(wfid, {"status": "PENDING", "executor_id": "dead-executor"})
+    stale = dbos._sys_db.get_pending_workflows(
+        "dead-executor", GlobalParams.app_version
+    )
+    assert [w.workflow_id for w in stale] == [wfid]
+
+    # The workflow completes between recovery's select and its re-enqueue
+    set_row(wfid, {"status": "SUCCESS"})
+    monkeypatch.setattr(
+        dbos._sys_db, "get_pending_workflows", lambda *args, **kwargs: stale
+    )
+    assert DBOS.recover_workflows(["dead-executor"]) == []
+    stat = DBOS.get_workflow_status(wfid)
+    assert stat is not None
+    assert stat.status == "SUCCESS"
 
 
 def test_recover_workflows_version_override(

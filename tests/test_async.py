@@ -25,7 +25,11 @@ from dbos._context import (
     get_workflow_start_options,
 )
 from dbos._dbos import WorkflowHandle
-from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSPatchNondeterminismError
+from dbos._error import (
+    DBOSAwaitedWorkflowCancelledError,
+    DBOSException,
+    DBOSPatchNondeterminismError,
+)
 from dbos._event_loop import BackgroundEventLoop
 from dbos._schemas.system_database import SystemSchema
 from tests.conftest import retry_until_success
@@ -1243,6 +1247,10 @@ async def test_recover_workflows_async(dbos: DBOS) -> None:
     async def target_workflow(x: int) -> int:
         return x
 
+    @DBOS.workflow()
+    async def recovering_workflow() -> int:
+        return len(await DBOS.recover_workflows_async(["dead-executor"]))
+
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         assert (await target_workflow(5)) == 5
@@ -1256,6 +1264,10 @@ async def test_recover_workflows_async(dbos: DBOS) -> None:
     # The sync variant refuses to run on the event loop
     with pytest.raises(RuntimeError, match="recover_workflows_async"):
         DBOS.recover_workflows(["dead-executor"])
+
+    # Recovery is rejected from within a workflow
+    with pytest.raises(DBOSException, match="within a workflow or step"):
+        await recovering_workflow()
 
     handles = await DBOS.recover_workflows_async(["dead-executor"])
     assert [h.get_workflow_id() for h in handles] == [wfid]
