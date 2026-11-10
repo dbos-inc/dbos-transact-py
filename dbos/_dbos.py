@@ -91,7 +91,7 @@ from ._queue import (
     log_queue,
     queue_thread,
 )
-from ._recovery import recover_pending_workflows, startup_recovery_thread
+from ._recovery import recover_executor_workflows, startup_recovery_thread
 from ._registrations import (
     DEFAULT_MAX_RECOVERY_ATTEMPTS,
     DBOSClassInfo,
@@ -2613,7 +2613,61 @@ class DBOS:
         cls, executor_ids: List[str] = ["local"]
     ) -> List[WorkflowHandle[Any]]:
         """Find all PENDING workflows and recover them. Internal."""
-        return recover_pending_workflows(_get_dbos_instance(), executor_ids)
+        dbos = _get_dbos_instance()
+        return [
+            WorkflowHandlePolling(w.workflow_id, dbos, shard_key=w.shard_key)
+            for w in recover_executor_workflows(dbos, executor_ids)
+        ]
+
+    @classmethod
+    def recover_pending_workflows(
+        cls, executor_ids: List[str]
+    ) -> List[WorkflowHandle[Any]]:
+        """Re-enqueue the given executors' PENDING workflows from this application version.
+        Returns handles to the recovered workflows."""
+        check_async("recover_pending_workflows")
+
+        def fn() -> List[Tuple[str, Optional[str]]]:
+            return [
+                (w.workflow_id, w.shard_key)
+                for w in recover_executor_workflows(_get_dbos_instance(), executor_ids)
+            ]
+
+        recovered = _get_dbos_instance()._sys_db.call_function_as_step(
+            fn,
+            "DBOS.recoverPendingWorkflows",
+            snapshot_step_context(reserve_sleep_id=False),
+        )
+        return [
+            WorkflowHandlePolling(wfid, _get_dbos_instance(), shard_key=shard_key)
+            for wfid, shard_key in recovered
+        ]
+
+    @classmethod
+    async def recover_pending_workflows_async(
+        cls, executor_ids: List[str]
+    ) -> List[WorkflowHandleAsync[Any]]:
+        """Re-enqueue the given executors' PENDING workflows from this application version.
+        Returns handles to the recovered workflows."""
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
+        await cls._configure_asyncio_thread_pool()
+
+        def fn() -> List[Tuple[str, Optional[str]]]:
+            return [
+                (w.workflow_id, w.shard_key)
+                for w in recover_executor_workflows(_get_dbos_instance(), executor_ids)
+            ]
+
+        recovered = await asyncio.to_thread(
+            _get_dbos_instance()._sys_db.call_function_as_step,
+            fn,
+            "DBOS.recoverPendingWorkflows",
+            step_ctx,
+        )
+        return [
+            WorkflowHandleAsyncPolling(wfid, _get_dbos_instance(), shard_key=shard_key)
+            for wfid, shard_key in recovered
+        ]
 
     @classmethod
     def cancel_workflow(

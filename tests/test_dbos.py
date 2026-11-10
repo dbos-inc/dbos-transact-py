@@ -2299,6 +2299,69 @@ def test_recovery_appversion(config: DBOSConfig) -> None:
     del os.environ["DBOS__VMID"]
 
 
+def test_recover_pending_workflows(dbos: DBOS) -> None:
+    wf_counter = 0
+
+    @DBOS.workflow()
+    def target_workflow(x: int) -> int:
+        nonlocal wf_counter
+        wf_counter += 1
+        return x
+
+    @DBOS.workflow()
+    def recovering_workflow(executor_ids: List[str]) -> List[str]:
+        return [
+            h.get_workflow_id() for h in DBOS.recover_pending_workflows(executor_ids)
+        ]
+
+    def mark_pending(wfid: str, executor_id: str) -> None:
+        with dbos._sys_db.engine.begin() as c:
+            c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .values({"status": "PENDING", "executor_id": executor_id})
+                .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+            )
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert target_workflow(5) == 5
+    mark_pending(wfid, "dead-executor")
+
+    # Only the named executors' workflows are recovered
+    assert DBOS.recover_pending_workflows(["other-executor"]) == []
+    handles = DBOS.recover_pending_workflows(["dead-executor"])
+    assert [h.get_workflow_id() for h in handles] == [wfid]
+    assert handles[0].get_result() == 5
+    assert wf_counter == 2
+    stat = handles[0].get_status()
+    assert stat.executor_id == GlobalParams.executor_id
+    assert stat.recovery_attempts == 2
+
+    # Once a live executor owns it, recovering the dead executor again is a no-op
+    assert DBOS.recover_pending_workflows(["dead-executor"]) == []
+
+    # Called from a workflow, recovery is checkpointed as a step
+    mark_pending(wfid, "dead-executor")
+    recovering_id = str(uuid.uuid4())
+    with SetWorkflowID(recovering_id):
+        assert recovering_workflow(["dead-executor"]) == [wfid]
+    assert DBOS.retrieve_workflow(wfid).get_result() == 5
+    assert wf_counter == 3
+    steps = DBOS.list_workflow_steps(recovering_id)
+    assert [s["function_name"] for s in steps] == ["DBOS.recoverPendingWorkflows"]
+
+    # Replaying the recovering workflow returns the recorded IDs without re-enqueueing
+    mark_pending(recovering_id, "dead-executor-2")
+    replays = DBOS.recover_pending_workflows(["dead-executor-2"])
+    assert [h.get_workflow_id() for h in replays] == [recovering_id]
+    assert replays[0].get_result() == [wfid]
+    target_stat = DBOS.get_workflow_status(wfid)
+    assert target_stat is not None
+    assert target_stat.status == "SUCCESS"
+    assert target_stat.recovery_attempts == 3
+    assert wf_counter == 3
+
+
 def test_conductor_key_keeps_cloud_executor_id(
     config: DBOSConfig, monkeypatch: pytest.MonkeyPatch, skip_with_sharding: None
 ) -> None:

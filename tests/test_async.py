@@ -1238,6 +1238,32 @@ async def test_workflow_recovery_async(dbos: DBOS, config: DBOSConfig) -> None:
 
 
 @pytest.mark.asyncio
+async def test_recover_pending_workflows_async(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    async def target_workflow(x: int) -> int:
+        return x
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert (await target_workflow(5)) == 5
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"status": "PENDING", "executor_id": "dead-executor"})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+        )
+
+    # The sync variant refuses to run on the event loop
+    with pytest.raises(RuntimeError, match="recover_pending_workflows_async"):
+        DBOS.recover_pending_workflows(["dead-executor"])
+
+    handles = await DBOS.recover_pending_workflows_async(["dead-executor"])
+    assert [h.get_workflow_id() for h in handles] == [wfid]
+    assert (await handles[0].get_result()) == 5
+    assert await DBOS.recover_pending_workflows_async(["dead-executor"]) == []
+
+
+@pytest.mark.asyncio
 async def test_concurrent_patch_async(dbos: DBOS, config: DBOSConfig) -> None:
     # Calling DBOS.patch_async from concurrent tasks inside one workflow is
     # inherently nondeterministic: the position each patch marker lands at
