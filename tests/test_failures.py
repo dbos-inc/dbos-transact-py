@@ -23,6 +23,7 @@ from dbos._error import (
     DBOSQueueDeduplicatedError,
     DBOSStepTimeoutError,
     DBOSUnexpectedStepError,
+    DBOSWorkflowConflictIDError,
 )
 from dbos._registrations import DEFAULT_MAX_RECOVERY_ATTEMPTS
 from dbos._schemas.system_database import SystemSchema
@@ -997,6 +998,38 @@ def test_recv_consume_idempotent_on_timeout(dbos: DBOS) -> None:
             )
         ).fetchall()
     assert len(unconsumed) == 1
+
+
+def test_recv_consume_recorded_rejects_stale_owner(dbos: DBOS) -> None:
+    """The recorded-result path of recv_consume checks ownership like the consume path does."""
+    dest_id = str(uuid.uuid4())
+    _make_status_row(dbos, dest_id)
+    owner = str(uuid.uuid4())
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .where(SystemSchema.workflow_status.c.workflow_uuid == dest_id)
+            .values(owner_xid=owner)
+        )
+    DBOS.send(dest_id, "msg")
+    function_id = 1
+    start_time = int(time.time() * 1000)
+    assert dbos._sys_db.recv_consume(dest_id, function_id, None, start_time) == "msg"
+
+    def consume_as(owner_xid: str) -> Any:
+        ctx = DBOSContext()
+        ctx.workflow_id = dest_id
+        ctx.owner_xid = owner_xid
+        prev = get_local_dbos_context()
+        _set_local_dbos_context(ctx)
+        try:
+            return dbos._sys_db.recv_consume(dest_id, function_id, None, start_time)
+        finally:
+            _set_local_dbos_context(prev)
+
+    with pytest.raises(DBOSWorkflowConflictIDError):
+        consume_as(str(uuid.uuid4()))
+    assert consume_as(owner) == "msg"
 
 
 class _RetryOnceEngine:
