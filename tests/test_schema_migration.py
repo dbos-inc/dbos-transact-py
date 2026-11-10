@@ -1918,6 +1918,61 @@ def test_migrate_with_connection_is_a_noop_when_already_migrated(
         conn.close()
 
 
+def test_migrate_with_connection_rolls_back_a_failed_migration(
+    dbos_dropped_databases: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
+    """A migration that raises mid-flight on a caller connection with no
+    transaction already open must roll back cleanly on that same
+    connection, leave the version counter unadvanced, and leave the
+    connection itself still usable -- matching the Engine path's existing
+    per-step-commit guarantee, just reusing one connection instead of a
+    fresh one per step."""
+    from unittest.mock import patch
+
+    sys_db_url = postgres_urls()[1]
+    engine = dbos_dropped_databases._sys_db.engine
+    schema = "dbos"
+    # One before migration 33, a plain (non-online) migration whose real SQL
+    # is IF NOT EXISTS -- safe to re-apply once the fixture already ran it.
+    rewind_to = 32
+    final_version = len(get_dbos_migrations(schema, True))
+
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(f'UPDATE "{schema}".dbos_migrations SET version = :v'),
+            {"v": rewind_to},
+        )
+
+    conn = engine.connect()
+    try:
+        with patch(
+            "dbos._migration.get_dbos_migration_thirtythree",
+            return_value="THIS IS NOT VALID SQL",
+        ):
+            with pytest.raises(Exception):
+                DBOS.migrate(sys_db_url, schema=schema, connection=conn)
+
+        # The connection itself survived the rollback and is still usable.
+        version = conn.execute(
+            sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+        ).scalar()
+        assert version == rewind_to
+        # That read autobegan its own transaction on conn; end it before the
+        # next migrate() call, or a later online migration in the same run
+        # would see conn as "already in a transaction" because of this read,
+        # not because of anything the caller meant to hold open.
+        conn.commit()
+
+        # Re-running with the real migration on the same connection succeeds.
+        DBOS.migrate(sys_db_url, schema=schema, connection=conn)
+        version = conn.execute(
+            sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+        ).scalar()
+        assert version == final_version
+    finally:
+        conn.close()
+
+
 def test_migrate_with_connection_grants_joining_an_open_transaction(
     dbos_dropped_databases: DBOS, skip_with_sqlite: None, skip_with_sharding: None
 ) -> None:

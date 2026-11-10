@@ -860,7 +860,11 @@ class DBOS:
         session. If a pending migration requires CREATE INDEX CONCURRENTLY
         and `connection` already has a transaction open on it, this raises
         rather than running without the caller's lock-bearing connection; see
-        run_dbos_migrations for the full explanation. Postgres only, and not
+        run_dbos_migrations for the full explanation. Note that SQLAlchemy
+        autobegins a transaction on the first statement executed on a
+        connection even without an explicit begin() -- a plain read run on
+        `connection` and left uncommitted before calling this looks the same
+        as a transaction the caller meant to hold open. Postgres only, and not
         supported together with `sharding`.
         """
         # Migration is a database side effect, so it belongs in a step, not a workflow body.
