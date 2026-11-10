@@ -236,6 +236,11 @@ def billing_workflow():
 To get started, follow the [quickstart](https://docs.dbos.dev/quickstart) to install this open-source library and connect it to a Postgres database.
 Then, check out the [programming guide](https://docs.dbos.dev/python/programming-guide) to learn how to build with durable workflows and queues.
 
+DBOS can also keep its system database in SQLite instead of Postgres.
+If you don't set `system_database_url`, DBOS defaults to a SQLite file named after your application (`sqlite:///<app_name>.sqlite`); you can also set `system_database_url` to a `sqlite:` URL explicitly.
+SQLite is great for local development and testing, but Postgres is recommended for production.
+See the [configuration reference](https://docs.dbos.dev/python/reference/configuration#database-connection-settings) for details.
+
 ## Documentation
 
 [https://docs.dbos.dev](https://docs.dbos.dev)
