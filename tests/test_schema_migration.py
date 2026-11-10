@@ -4,7 +4,10 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import cast
 
 import click
 import pytest
@@ -28,7 +31,7 @@ from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
 from dbos.cli.migration import print_dbos_migrations, print_dbos_user_role_sql
 
-from .conftest import using_sharding
+from .conftest import postgres_urls, using_sharding
 
 pytestmark = pytest.mark.skipif(
     using_sharding(),
@@ -1835,3 +1838,264 @@ def test_application_version_indexes(
         assert key_columns == [
             (column, int(column == "version_timestamp")) for column in columns
         ]
+
+
+def _backend_count(url: str) -> int:
+    """How many other backends are connected to url's database right now."""
+    observer = sa.create_engine(sa.make_url(url).set(drivername="postgresql+psycopg"))
+    try:
+        with observer.connect() as conn:
+            return cast(
+                int,
+                conn.execute(
+                    sa.text(
+                        "SELECT count(*) FROM pg_stat_activity "
+                        "WHERE datname = current_database() AND pid != pg_backend_pid()"
+                    )
+                ).scalar(),
+            )
+    finally:
+        observer.dispose()
+
+
+def test_migrate_with_connection_runs_on_that_connection(
+    dbos_dropped_databases: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
+    """DBOS.migrate(connection=conn) must bring a schema-less database fully
+    up to date using only the supplied connection, opening no other."""
+    from sqlalchemy.pool import NullPool
+
+    sys_db_url = postgres_urls()[1]
+    schema = "dbos"
+    final_version = len(get_dbos_migrations(schema, True))
+
+    with dbos_dropped_databases._sys_db.engine.begin() as setup_conn:
+        setup_conn.execute(sa.text(f'DROP SCHEMA "{schema}" CASCADE'))
+
+    # NullPool: every .connect() is a genuinely new backend connection and
+    # every close() genuinely ends it, so the count below isn't muddied by a
+    # pool quietly reusing one left idle from the setup step above.
+    test_engine = sa.create_engine(
+        sa.make_url(sys_db_url).set(drivername="postgresql+psycopg"),
+        poolclass=NullPool,
+    )
+    try:
+        before = _backend_count(sys_db_url)
+        conn = test_engine.connect()
+        try:
+            DBOS.migrate(sys_db_url, schema=schema, connection=conn)
+            # Only `conn` itself should be a new connection while migrate() ran.
+            assert _backend_count(sys_db_url) == before + 1
+            version = conn.execute(
+                sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+            ).scalar()
+            assert version == final_version
+        finally:
+            conn.close()
+        assert _backend_count(sys_db_url) == before
+    finally:
+        test_engine.dispose()
+
+
+def test_migrate_with_connection_is_a_noop_when_already_migrated(
+    dbos_dropped_databases: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
+    """An already up-to-date schema must not be touched at all: should_migrate
+    short-circuits before ensure_dbos_schema or run_dbos_migrations run."""
+    from unittest.mock import patch
+
+    sys_db_url = postgres_urls()[1]
+    conn = dbos_dropped_databases._sys_db.engine.connect()
+    try:
+        with (
+            patch("dbos._dbos.run_dbos_migrations") as mock_run,
+            patch("dbos._dbos.ensure_dbos_schema") as mock_ensure,
+        ):
+            DBOS.migrate(sys_db_url, schema="dbos", connection=conn)
+        mock_run.assert_not_called()
+        mock_ensure.assert_not_called()
+    finally:
+        conn.close()
+
+
+def test_migrate_with_connection_grants_joining_an_open_transaction(
+    dbos_dropped_databases: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
+    """application_role grants must join a transaction the caller already
+    has open on conn, not try to begin a second one on top of it."""
+    sys_db_url = postgres_urls()[1]
+    engine = dbos_dropped_databases._sys_db.engine
+    schema = "dbos"
+    role = f"migrate_conn_role_{uuid.uuid4().hex[:8]}"
+
+    with engine.begin() as conn:
+        conn.execute(sa.text(f'DROP ROLE IF EXISTS "{role}"'))
+        conn.execute(sa.text(f"CREATE ROLE \"{role}\" LOGIN PASSWORD 'pw'"))
+
+    conn = engine.connect()
+    try:
+        trans = conn.begin()
+        try:
+            DBOS.migrate(
+                sys_db_url,
+                schema=schema,
+                application_role=role,
+                connection=conn,
+            )
+            trans.commit()
+        except BaseException:
+            trans.rollback()
+            raise
+    finally:
+        conn.close()
+
+    with engine.connect() as check_conn:
+        has_usage = check_conn.execute(
+            sa.text("SELECT has_schema_privilege(:role, :schema, 'USAGE')"),
+            {"role": role, "schema": schema},
+        ).scalar()
+    assert has_usage is True
+
+    with engine.begin() as cleanup_conn:
+        cleanup_conn.execute(sa.text(f'DROP OWNED BY "{role}"'))
+        cleanup_conn.execute(sa.text(f'DROP ROLE IF EXISTS "{role}"'))
+
+
+def test_migrate_with_connection_runs_online_migration_without_open_transaction(
+    dbos_dropped_databases: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
+    """An online (CREATE INDEX CONCURRENTLY) migration must succeed on a
+    caller-supplied connection that has no transaction open, by switching
+    that connection to autocommit for the duration."""
+    from dbos._migration import _ONLINE_MIGRATIONS
+
+    sys_db_url = postgres_urls()[1]
+    engine = dbos_dropped_databases._sys_db.engine
+    schema = "dbos"
+    rewind_to = min(_ONLINE_MIGRATIONS) - 1
+
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(f'UPDATE "{schema}".dbos_migrations SET version = :v'),
+            {"v": rewind_to},
+        )
+
+    conn = engine.connect()
+    try:
+        assert conn.in_transaction() is False
+        DBOS.migrate(sys_db_url, schema=schema, connection=conn)
+        assert conn.in_transaction() is False
+        version = conn.execute(
+            sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+        ).scalar()
+        assert version == len(get_dbos_migrations(schema, True))
+    finally:
+        conn.close()
+
+
+def test_migrate_with_connection_raises_for_online_migration_in_open_transaction(
+    dbos_dropped_databases: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
+    """An online migration pending inside a transaction the caller already
+    opened on conn must raise clearly instead of silently proceeding without
+    the caller's lock-bearing connection, or corrupting the version counter."""
+    from dbos._migration import _ONLINE_MIGRATIONS
+
+    sys_db_url = postgres_urls()[1]
+    engine = dbos_dropped_databases._sys_db.engine
+    schema = "dbos"
+    rewind_to = min(_ONLINE_MIGRATIONS) - 1
+
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(f'UPDATE "{schema}".dbos_migrations SET version = :v'),
+            {"v": rewind_to},
+        )
+
+    conn = engine.connect()
+    try:
+        trans = conn.begin()
+        try:
+            with pytest.raises(
+                DBOSInitializationError, match="CREATE INDEX CONCURRENTLY"
+            ):
+                DBOS.migrate(sys_db_url, schema=schema, connection=conn)
+        finally:
+            trans.rollback()
+
+        version = conn.execute(
+            sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+        ).scalar()
+        assert version == rewind_to
+    finally:
+        conn.close()
+
+
+def test_migrate_with_connection_dies_with_the_connections_session(
+    dbos_dropped_databases: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
+    """The entire point of DBOS.migrate(connection=conn): if conn's session
+    is killed mid-migration, the migration dies with it rather than quietly
+    continuing on some other connection DBOS opened on its own.
+
+    Simulates a caller whose session-level advisory lock is lost mid-run (an
+    operator terminating the session, or a connection reset) by killing
+    conn's backend from a separate connection while a deliberately slow
+    migration is in flight on conn, then asserting the migrate() call
+    failed and the version counter was not advanced past what ran before
+    the kill."""
+    from unittest.mock import patch
+
+    sys_db_url = postgres_urls()[1]
+    engine = dbos_dropped_databases._sys_db.engine
+    schema = "dbos"
+    rewind_to = 1  # one before migration 2, a plain non-online migration
+
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(f'UPDATE "{schema}".dbos_migrations SET version = :v'),
+            {"v": rewind_to},
+        )
+
+    conn = engine.connect()
+    backend_pid = conn.execute(sa.text("SELECT pg_backend_pid()")).scalar()
+
+    errors: list[BaseException] = []
+
+    def run_migration() -> None:
+        try:
+            with patch(
+                "dbos._migration.get_dbos_migration_two",
+                return_value="SELECT pg_sleep(5)",
+            ):
+                DBOS.migrate(sys_db_url, schema=schema, connection=conn)
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+
+    thread = threading.Thread(target=run_migration)
+    thread.start()
+    try:
+        time.sleep(1)  # let the migration reach the pg_sleep(5)
+        killer = sa.create_engine(
+            sa.make_url(sys_db_url).set(drivername="postgresql+psycopg")
+        )
+        try:
+            with killer.connect().execution_options(
+                isolation_level="AUTOCOMMIT"
+            ) as kconn:
+                kconn.execute(
+                    sa.text("SELECT pg_terminate_backend(:pid)"), {"pid": backend_pid}
+                )
+        finally:
+            killer.dispose()
+    finally:
+        thread.join(timeout=15)
+
+    assert not thread.is_alive()
+    assert len(errors) == 1
+
+    with engine.connect() as check_conn:
+        version = check_conn.execute(
+            sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+        ).scalar()
+    assert version == rewind_to
