@@ -4076,6 +4076,10 @@ class SystemDatabase(ABC):
                 )
             ).fetchall()
             if len(recorded) > 0:
+                # A stale execution must not adopt the owner's recorded message.
+                owner_xid = current_owner_xid(workflow_uuid)
+                if owner_xid is not None:
+                    self._check_owner_txn(c, workflow_uuid, owner_xid)
                 return deserialize_value(
                     recorded[0][0], recorded[0][1], self.serializer
                 )

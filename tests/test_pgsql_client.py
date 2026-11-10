@@ -23,7 +23,7 @@ from dbos._dbos import WorkflowHandle
 from tests import client_collateral
 from tests.client_collateral import send_test
 
-from .conftest import using_sharding
+from .conftest import retry_until_success, using_sharding
 
 pytestmark = pytest.mark.skipif(
     using_sharding(),
@@ -517,9 +517,11 @@ def test_pgsql_send_wakes_suspended_receiver(
             parked()
         with engine.begin() as conn:
             conn.execute(
-                sa.text(f"""UPDATE "{schema}".workflow_status
+                sa.text(
+                    f"""UPDATE "{schema}".workflow_status
                 SET status = 'SUSPENDED', suspend_key = :topic, delay_until_epoch_ms = :deadline
-                WHERE workflow_uuid = :wfid"""),
+                WHERE workflow_uuid = :wfid"""
+                ),
                 {"topic": topic, "deadline": deadline_ms, "wfid": wfid},
             )
         return wfid
@@ -552,6 +554,46 @@ def test_pgsql_send_wakes_suspended_receiver(
     no_topic = park("__null__topic__")
     send(no_topic, None)
     assert delay(no_topic) == 0
+
+
+def test_pgsql_enqueue_created_at_follows_commit_order(
+    dbos: DBOS, config: DBOSConfig, skip_with_sqlite: None
+) -> None:
+    """A transaction that starts first but enqueues after another commits sorts behind it."""
+    engine = _get_db_connection(config)
+    schema = _get_schema_name(config)
+    sql = f"""
+    SELECT "{schema}".enqueue_workflow(
+        workflow_name => 'retrieve_test',
+        queue_name => 'unserved_queue',
+        workflow_id => :wfid
+    )
+    """
+    clock_sql = "SELECT (EXTRACT(epoch FROM clock_timestamp()) * 1000)::bigint"
+
+    def wait_past(ms: int) -> None:
+        def check() -> None:
+            assert _execute_sql(engine, clock_sql)[0] > ms
+
+        retry_until_success(check, interval=0.01, max_attempts=500)
+
+    early_id, late_id = str(uuid.uuid4()), str(uuid.uuid4())
+    with engine.connect() as early:
+        with early.begin():
+            early_start = early.execute(
+                sa.text("SELECT (EXTRACT(epoch FROM now()) * 1000)::bigint")
+            ).scalar_one()
+            wait_past(early_start)
+            _execute_sql(engine, sql, {"wfid": late_id})
+            late_status = _get_workflow_status(engine, schema, late_id)
+            assert late_status is not None
+            wait_past(late_status["created_at"])
+            early.execute(sa.text(sql), {"wfid": early_id})
+
+    early_status = _get_workflow_status(engine, schema, early_id)
+    assert early_status is not None
+    assert early_status["created_at"] > late_status["created_at"]
+    assert early_status["updated_at"] == early_status["created_at"]
 
 
 def test_pgsql_enqueue_with_deduplication(
