@@ -245,9 +245,23 @@ class AsyncSQLAlchemyDatasource(ABC):
         *,
         schema: Optional[str] = None,
         application_role: Optional[str] = None,
+        connection: Optional[AsyncConnection] = None,
     ) -> None:
         """Create or migrate a datasource's tables with a privileged role, optionally
-        granting application_role the minimal permissions to use them."""
+        granting application_role the minimal permissions to use them.
+
+        If `connection` is given, migrate directly on its underlying sync
+        connection instead of opening a new engine, inside whatever
+        transaction the caller already has open on it; the caller owns
+        committing it. Runs via AsyncConnection.run_sync, same as any other
+        sync-style Core call against an async connection."""
+        if connection is not None:
+            await connection.run_sync(
+                lambda sync_conn: migrate_datasource_database(
+                    database_url, schema, application_role, sync_conn
+                )
+            )
+            return
         await asyncio.to_thread(
             migrate_datasource_database, database_url, schema, application_role
         )
@@ -684,10 +698,15 @@ class SQLAlchemyDatasource(ABC):
         *,
         schema: Optional[str] = None,
         application_role: Optional[str] = None,
+        connection: Optional[sa.Connection] = None,
     ) -> None:
         """Create or migrate a datasource's tables with a privileged role, optionally
-        granting application_role the minimal permissions to use them."""
-        migrate_datasource_database(database_url, schema, application_role)
+        granting application_role the minimal permissions to use them.
+
+        If `connection` is given, migrate directly on it instead of opening
+        a new engine, inside whatever transaction the caller already has
+        open on it; the caller owns committing it."""
+        migrate_datasource_database(database_url, schema, application_role, connection)
 
     @staticmethod
     def create(
