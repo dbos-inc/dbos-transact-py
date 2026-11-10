@@ -2620,12 +2620,10 @@ class DBOS:
         ]
 
     @classmethod
-    def recover_pending_workflows(
-        cls, executor_ids: List[str]
-    ) -> List[WorkflowHandle[Any]]:
+    def recover_workflows(cls, executor_ids: List[str]) -> List[WorkflowHandle[Any]]:
         """Re-enqueue the given executors' PENDING workflows from this application version.
         Returns handles to the recovered workflows."""
-        check_async("recover_pending_workflows")
+        check_async("recover_workflows")
 
         def fn() -> List[Tuple[str, Optional[str]]]:
             return [
@@ -2635,7 +2633,7 @@ class DBOS:
 
         recovered = _get_dbos_instance()._sys_db.call_function_as_step(
             fn,
-            "DBOS.recoverPendingWorkflows",
+            "DBOS.recoverWorkflows",
             snapshot_step_context(reserve_sleep_id=False),
         )
         return [
@@ -2644,7 +2642,7 @@ class DBOS:
         ]
 
     @classmethod
-    async def recover_pending_workflows_async(
+    async def recover_workflows_async(
         cls, executor_ids: List[str]
     ) -> List[WorkflowHandleAsync[Any]]:
         """Re-enqueue the given executors' PENDING workflows from this application version.
@@ -2661,7 +2659,7 @@ class DBOS:
         recovered = await asyncio.to_thread(
             _get_dbos_instance()._sys_db.call_function_as_step,
             fn,
-            "DBOS.recoverPendingWorkflows",
+            "DBOS.recoverWorkflows",
             step_ctx,
         )
         return [

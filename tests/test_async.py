@@ -1238,7 +1238,7 @@ async def test_workflow_recovery_async(dbos: DBOS, config: DBOSConfig) -> None:
 
 
 @pytest.mark.asyncio
-async def test_recover_pending_workflows_async(dbos: DBOS) -> None:
+async def test_recover_workflows_async(dbos: DBOS) -> None:
     @DBOS.workflow()
     async def target_workflow(x: int) -> int:
         return x
@@ -1254,13 +1254,13 @@ async def test_recover_pending_workflows_async(dbos: DBOS) -> None:
         )
 
     # The sync variant refuses to run on the event loop
-    with pytest.raises(RuntimeError, match="recover_pending_workflows_async"):
-        DBOS.recover_pending_workflows(["dead-executor"])
+    with pytest.raises(RuntimeError, match="recover_workflows_async"):
+        DBOS.recover_workflows(["dead-executor"])
 
-    handles = await DBOS.recover_pending_workflows_async(["dead-executor"])
+    handles = await DBOS.recover_workflows_async(["dead-executor"])
     assert [h.get_workflow_id() for h in handles] == [wfid]
     assert (await handles[0].get_result()) == 5
-    assert await DBOS.recover_pending_workflows_async(["dead-executor"]) == []
+    assert await DBOS.recover_workflows_async(["dead-executor"]) == []
 
 
 @pytest.mark.asyncio
