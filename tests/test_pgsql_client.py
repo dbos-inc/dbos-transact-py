@@ -593,7 +593,8 @@ def test_pgsql_enqueue_created_at_follows_commit_order(
     early_status = _get_workflow_status(engine, schema, early_id)
     assert early_status is not None
     assert early_status["created_at"] > late_status["created_at"]
-    assert early_status["updated_at"] == early_status["created_at"]
+    # Each column reads clock_timestamp() separately, so they can round to adjacent ms.
+    assert 0 <= early_status["updated_at"] - early_status["created_at"] <= 1
 
 
 def test_pgsql_enqueue_with_deduplication(
