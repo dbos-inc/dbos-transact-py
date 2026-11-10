@@ -2620,15 +2620,19 @@ class DBOS:
         ]
 
     @classmethod
-    def recover_workflows(cls, executor_ids: List[str]) -> List[WorkflowHandle[Any]]:
-        """Re-enqueue the given executors' PENDING workflows from this application version.
+    def recover_workflows(
+        cls, executor_ids: List[str], *, application_version: Optional[str] = None
+    ) -> List[WorkflowHandle[Any]]:
+        """Re-enqueue the given executors' PENDING workflows from application_version (default: this one).
         Returns handles to the recovered workflows."""
         check_async("recover_workflows")
 
         def fn() -> List[Tuple[str, Optional[str]]]:
             return [
                 (w.workflow_id, w.shard_key)
-                for w in recover_executor_workflows(_get_dbos_instance(), executor_ids)
+                for w in recover_executor_workflows(
+                    _get_dbos_instance(), executor_ids, application_version
+                )
             ]
 
         recovered = _get_dbos_instance()._sys_db.call_function_as_step(
@@ -2643,9 +2647,9 @@ class DBOS:
 
     @classmethod
     async def recover_workflows_async(
-        cls, executor_ids: List[str]
+        cls, executor_ids: List[str], *, application_version: Optional[str] = None
     ) -> List[WorkflowHandleAsync[Any]]:
-        """Re-enqueue the given executors' PENDING workflows from this application version.
+        """Re-enqueue the given executors' PENDING workflows from application_version (default: this one).
         Returns handles to the recovered workflows."""
         step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
@@ -2653,7 +2657,9 @@ class DBOS:
         def fn() -> List[Tuple[str, Optional[str]]]:
             return [
                 (w.workflow_id, w.shard_key)
-                for w in recover_executor_workflows(_get_dbos_instance(), executor_ids)
+                for w in recover_executor_workflows(
+                    _get_dbos_instance(), executor_ids, application_version
+                )
             ]
 
         recovered = await asyncio.to_thread(

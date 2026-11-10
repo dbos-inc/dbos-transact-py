@@ -2360,6 +2360,49 @@ def test_recover_workflows(dbos: DBOS) -> None:
     assert wf_counter == 3
 
 
+def test_recover_workflows_version_override(
+    config: DBOSConfig, cleanup_test_databases: None
+) -> None:
+    def launch(version: str) -> Tuple[DBOS, Callable[[int], int]]:
+        config["application_version"] = version
+        DBOS.destroy(destroy_registry=True)
+        dbos = DBOS(config=config)
+
+        @DBOS.workflow()
+        def target_workflow(x: int) -> int:
+            return x
+
+        DBOS.launch()
+        return dbos, target_workflow
+
+    dbos, target_workflow = launch("v1")
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        assert target_workflow(5) == 5
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .values({"status": "PENDING", "executor_id": "dead-executor"})
+            .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
+        )
+
+    # A v2 process recovers only v2 workflows unless told otherwise
+    launch("v2")
+    assert DBOS.recover_workflows(["dead-executor"]) == []
+    handles = DBOS.recover_workflows(["dead-executor"], application_version="v1")
+    assert [h.get_workflow_id() for h in handles] == [wfid]
+
+    # Re-enqueued on its own version, so the v2 process leaves it alone
+    stat = DBOS.get_workflow_status(wfid)
+    assert stat is not None
+    assert stat.status == "ENQUEUED"
+    assert stat.app_version == "v1"
+
+    # A v1 process runs it
+    launch("v1")
+    assert DBOS.retrieve_workflow(wfid).get_result() == 5
+
+
 def test_conductor_key_keeps_cloud_executor_id(
     config: DBOSConfig, monkeypatch: pytest.MonkeyPatch, skip_with_sharding: None
 ) -> None:
