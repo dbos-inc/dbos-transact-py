@@ -2432,6 +2432,106 @@ def test_ds_frozen_migrator_releases_lock(
         engine.dispose()
 
 
+def test_sync_ds_migrate_with_connection_runs_on_that_connection(
+    fresh_pg_schema: tuple[str, str],
+) -> None:
+    """SQLAlchemyDatasource.migrate(connection=conn) must migrate using
+    exactly the supplied connection, inside whatever transaction the caller
+    already has open on it -- the caller commits, not migrate() itself."""
+    admin_url, schema = fresh_pg_schema
+    engine = sa.create_engine(admin_url)
+    try:
+        conn = engine.connect()
+        trans = conn.begin()
+        try:
+            SQLAlchemyDatasource.migrate(admin_url, schema=schema, connection=conn)
+            # Not yet visible from a separate connection: nothing committed.
+            assert _pg_schema_exists(admin_url, schema) is False
+            trans.commit()
+        except BaseException:
+            trans.rollback()
+            raise
+        finally:
+            conn.close()
+        # Now visible: the caller's commit finalized it.
+        assert _pg_schema_exists(admin_url, schema) is True
+        ds = SQLAlchemyDatasource.create(admin_url, schema=schema, run_migrations=False)
+        try:
+            assert _ds_version(ds) == _LATEST_DS_VERSION
+        finally:
+            ds.engine.dispose()
+    finally:
+        engine.dispose()
+
+
+def test_sync_ds_migrate_with_connection_grants_application_role(
+    fresh_pg_schema: tuple[str, str],
+) -> None:
+    """application_role grants must run on the same supplied connection too,
+    not a separate engine DBOS opens on its own."""
+    admin_url, schema = fresh_pg_schema
+    role = f"ds_role_{uuid.uuid4().hex[:8]}"
+    _pg_admin_exec(admin_url, f"CREATE ROLE \"{role}\" LOGIN PASSWORD 'pw'")
+    try:
+        engine = sa.create_engine(admin_url)
+        try:
+            with engine.begin() as conn:
+                SQLAlchemyDatasource.migrate(
+                    admin_url, schema=schema, application_role=role, connection=conn
+                )
+        finally:
+            engine.dispose()
+        verify_engine = sa.create_engine(admin_url)
+        try:
+            with verify_engine.connect() as conn:
+                has_select = conn.execute(
+                    sa.text("SELECT has_table_privilege(:role, :table, 'SELECT')"),
+                    {"role": role, "table": f'"{schema}".datasource_outputs'},
+                ).scalar()
+            assert has_select is True
+        finally:
+            verify_engine.dispose()
+    finally:
+        # Grants on the role's own name (not owned objects) block a plain
+        # DROP ROLE; drop the schema those grants are on first.
+        _pg_admin_exec(
+            admin_url,
+            f'DROP SCHEMA IF EXISTS "{schema}" CASCADE',
+            f'DROP ROLE IF EXISTS "{role}"',
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_ds_migrate_with_connection_runs_on_that_connection(
+    fresh_pg_schema: tuple[str, str],
+) -> None:
+    """AsyncSQLAlchemyDatasource.migrate(connection=conn) must migrate via
+    AsyncConnection.run_sync against the caller's own async connection."""
+    admin_url, schema = fresh_pg_schema
+    engine = create_async_engine(admin_url)
+    try:
+        async with engine.connect() as conn:
+            await AsyncSQLAlchemyDatasource.migrate(
+                admin_url, schema=schema, connection=conn
+            )
+            await conn.commit()
+    finally:
+        await engine.dispose()
+    assert _pg_schema_exists(admin_url, schema) is True
+    ds = await AsyncSQLAlchemyDatasource.create(
+        admin_url, schema=schema, run_migrations=False
+    )
+    try:
+        async with ds.engine.connect() as c:
+            result = await c.execute(
+                sa.text(f'SELECT version FROM "{schema}".{DATASOURCE_MIGRATIONS_TABLE}')
+            )
+            version = result.scalar_one()
+        assert version == _LATEST_DS_VERSION
+    finally:
+        await ds.engine.dispose()
+
+
 @pytest.mark.asyncio
 async def test_async_ds_run_migrations_false(
     async_ds: AsyncSQLAlchemyDatasource, tmp_path: Any
