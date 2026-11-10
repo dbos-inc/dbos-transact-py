@@ -1,10 +1,100 @@
 import sys
-from typing import List
+from contextlib import contextmanager
+from typing import Generator, List, Union
 
 import sqlalchemy as sa
 
+from ._error import DBOSInitializationError
 from ._logger import dbos_logger
 from ._utils import quote_identifier
+
+# A caller-supplied connection takes the place of an engine-managed one so a
+# caller's own lock and every DBOS migration step live and die on the same
+# session (see DBOS.migrate's connection parameter): each step still commits
+# as it goes, same as the Engine path, just without ever opening a second
+# connection. The caller must not have a transaction already open on it when
+# migrate() is called -- see _autocommit for what happens if an online
+# migration meets one anyway.
+ConnectionOrEngine = Union[sa.Engine, sa.Connection]
+
+
+@contextmanager
+def _transactional(bind: ConnectionOrEngine) -> Generator[sa.Connection, None, None]:
+    """One migration step's transaction.
+
+    For an Engine, opens a fresh Connection already in a transaction and
+    commits it on clean exit (today's behavior). For a caller-supplied
+    Connection with nothing already open on it, begins and commits a
+    transaction on that same connection instead of opening another -- each
+    step still lands durably as it goes. For a Connection where the caller
+    already has a transaction open (wrapping this call in a larger one of
+    their own), joins it instead of nesting another: no begin, no commit,
+    deferring entirely to the caller's eventual commit, same contract
+    migrate_datasource already has for the datasource schema.
+    """
+    if isinstance(bind, sa.Connection):
+        if bind.in_transaction():
+            yield bind
+        else:
+            with bind.begin():
+                yield bind
+    else:
+        with bind.begin() as conn:
+            yield conn
+
+
+@contextmanager
+def _autocommit(bind: ConnectionOrEngine) -> Generator[sa.Connection, None, None]:
+    """A connection in autocommit mode, for CREATE/DROP INDEX CONCURRENTLY.
+
+    For an Engine, opens a fresh connection (today's behavior). For a
+    Connection, flips it to autocommit in place and restores its prior
+    isolation level afterward -- there is no second connection to open
+    without defeating the point of a caller-supplied one. Postgres refuses
+    CONCURRENTLY inside a transaction block, so a Connection already in a
+    transaction can't service this at all; raise rather than silently
+    running without the caller's lock-bearing connection.
+    """
+    if isinstance(bind, sa.Engine):
+        with bind.connect() as raw_conn:
+            yield raw_conn.execution_options(isolation_level="AUTOCOMMIT")
+        return
+    # A caller who already left conn in autocommit mode is never "in a
+    # transaction" in the sense that matters here, and should not have that
+    # setting reset out from under them afterward -- leave it alone.
+    already_autocommit = (
+        bind.get_execution_options().get("isolation_level") == "AUTOCOMMIT"
+    )
+    if already_autocommit:
+        yield bind
+        return
+    if bind.in_transaction():
+        raise DBOSInitializationError(
+            "A pending DBOS system database migration requires CREATE INDEX "
+            "CONCURRENTLY, which Postgres cannot run inside a transaction. "
+            "Call DBOS.migrate(..., connection=conn) before beginning a "
+            "transaction on conn -- a session-level advisory lock already "
+            "held on conn is unaffected by this."
+        )
+    # get_isolation_level() queries the raw DBAPI connection directly rather
+    # than executing through Connection, so it does not itself start a
+    # transaction here.
+    previous_isolation_level = bind.get_isolation_level()
+    bind.execution_options(isolation_level="AUTOCOMMIT")
+    try:
+        yield bind
+    finally:
+        # Executing anything -- even under AUTOCOMMIT -- makes SQLAlchemy
+        # autobegin a logical Transaction() wrapper around it (a Core/Python
+        # bookkeeping object, independent of the DBAPI connection's actual
+        # autocommit state). execution_options refuses to change isolation
+        # level while one is open, so close it first; there is nothing to
+        # actually commit at the database level since every statement here
+        # already committed itself.
+        if bind.in_transaction():
+            bind.commit()
+        bind.execution_options(isolation_level=previous_isolation_level)
+
 
 # Migration versions that contain CONCURRENTLY index DDL and must run with
 # autocommit (CREATE/DROP INDEX CONCURRENTLY cannot run inside a transaction
@@ -62,14 +152,13 @@ def _concurrently(is_cockroach: bool) -> str:
     return "" if is_cockroach else "CONCURRENTLY"
 
 
-def _cleanup_invalid_indexes(engine: sa.Engine, schema: str) -> None:
+def _cleanup_invalid_indexes(bind: ConnectionOrEngine, schema: str) -> None:
     """Drop indexes left in an INVALID state by a prior failed CONCURRENTLY run.
 
     A failed CREATE INDEX CONCURRENTLY leaves an index marked invalid that
     will not be used by the planner but blocks recreating the same name.
     Must be called before retrying an online migration."""
-    with engine.connect() as raw_conn:
-        conn = raw_conn.execution_options(isolation_level="AUTOCOMMIT")
+    with _autocommit(bind) as conn:
         rows = conn.execute(
             sa.text(
                 "SELECT i.relname FROM pg_index ix "
@@ -92,11 +181,11 @@ def _cleanup_invalid_indexes(engine: sa.Engine, schema: str) -> None:
 
 
 def _bump_migration_version(
-    engine: sa.Engine, schema: str, version: int, last_applied: int
+    bind: ConnectionOrEngine, schema: str, version: int, last_applied: int
 ) -> None:
     """Update the dbos_migrations version row in its own transaction."""
     quoted_schema = quote_identifier(schema)
-    with engine.begin() as conn:
+    with _transactional(bind) as conn:
         if last_applied == 0:
             conn.execute(
                 sa.text(
@@ -134,13 +223,13 @@ def get_dbos_schema_permissions_sql(schema: str, role_name: str) -> List[str]:
 
 
 def get_migration_versions(
-    engine: sa.Engine, schema: str, use_listen_notify: bool
+    bind: ConnectionOrEngine, schema: str, use_listen_notify: bool
 ) -> tuple[int, int]:
     """The (recorded, latest) migration versions of this system database. Postgres-only.
 
     A missing schema or dbos_migrations table reads as version 0.
     """
-    with engine.begin() as conn:
+    with _transactional(bind) as conn:
         version_str = conn.execute(sa.text("SELECT version()")).scalar() or ""
         is_cockroach = "cockroachdb" in version_str.lower()
         latest_version = len(
@@ -164,11 +253,13 @@ def get_migration_versions(
         return current_version, latest_version
 
 
-def should_migrate(engine: sa.Engine, schema: str, use_listen_notify: bool) -> bool:
+def should_migrate(
+    bind: ConnectionOrEngine, schema: str, use_listen_notify: bool
+) -> bool:
     """Return True if the schema or dbos_migrations table is missing, or if
     the recorded migration version is behind the latest. Postgres-only."""
     current_version, latest_version = get_migration_versions(
-        engine, schema, use_listen_notify
+        bind, schema, use_listen_notify
     )
     return current_version < latest_version
 
@@ -195,10 +286,10 @@ def get_sqlite_migration_versions(engine: sa.Engine) -> tuple[int, int]:
         return current_version, latest_version
 
 
-def ensure_dbos_schema(engine: sa.Engine, schema: str) -> None:
+def ensure_dbos_schema(bind: ConnectionOrEngine, schema: str) -> None:
     """Create the DBOS schema and its dbos_migrations table if they don't exist."""
     quoted_schema = quote_identifier(schema)
-    with engine.begin() as conn:
+    with _transactional(bind) as conn:
         # Check if dbos schema exists
         schema_result = conn.execute(
             sa.text(
@@ -230,12 +321,16 @@ def ensure_dbos_schema(engine: sa.Engine, schema: str) -> None:
 
 
 def run_dbos_migrations(
-    engine: sa.Engine, schema: str, use_listen_notify: bool
+    bind: ConnectionOrEngine, schema: str, use_listen_notify: bool
 ) -> None:
-    """Run DBOS-managed migrations by executing each SQL command in dbos_migrations."""
+    """Run DBOS-managed migrations by executing each SQL command in dbos_migrations.
+
+    `bind` may be a caller-supplied Connection instead of an Engine, in which
+    case every step runs on that one connection instead of a fresh one from
+    a pool -- see ConnectionOrEngine and DBOS.migrate's connection parameter."""
     quoted_schema = quote_identifier(schema)
     # Get current migration version and detect CockroachDB via server version string
-    with engine.begin() as conn:
+    with _transactional(bind) as conn:
         result = conn.execute(
             sa.text(f"SELECT version FROM {quoted_schema}.dbos_migrations")
         )
@@ -263,17 +358,32 @@ def run_dbos_migrations(
         if i in _ONLINE_MIGRATIONS and not is_cockroach:
             # Clean up any invalid indexes left by a prior failed attempt at
             # this or a later online migration before retrying.
-            _cleanup_invalid_indexes(engine, schema)
+            _cleanup_invalid_indexes(bind, schema)
 
-            with engine.connect() as raw_conn:
-                conn = raw_conn.execution_options(isolation_level="AUTOCOMMIT")
+            # The version bump runs in the same autocommit connection as the
+            # DDL (not a separate call) so both commit immediately together --
+            # the DDL can't be rolled back by a later caller-transaction
+            # rollback, so neither should the record that it happened.
+            with _autocommit(bind) as conn:
                 conn.execute(sa.text(migration_sql))
-
-            _bump_migration_version(engine, schema, i, last_applied)
+                if last_applied == 0:
+                    conn.execute(
+                        sa.text(
+                            f"INSERT INTO {quoted_schema}.dbos_migrations (version) VALUES (:version)"
+                        ),
+                        {"version": i},
+                    )
+                else:
+                    conn.execute(
+                        sa.text(
+                            f"UPDATE {quoted_schema}.dbos_migrations SET version = :version"
+                        ),
+                        {"version": i},
+                    )
             last_applied = i
             continue
 
-        with engine.begin() as conn:
+        with _transactional(bind) as conn:
             # Migration 10 adds a primary key to the notifications table.
             # Skip it if the table already has one.
             if (
@@ -311,7 +421,7 @@ def run_dbos_migrations(
 
     # Empty migrations at the end still count as applied, so record them in one write.
     if len(migrations) > last_applied:
-        _bump_migration_version(engine, schema, len(migrations), last_applied)
+        _bump_migration_version(bind, schema, len(migrations), last_applied)
 
 
 def get_dbos_migration_one(quoted_schema: str, use_listen_notify: bool) -> str:
