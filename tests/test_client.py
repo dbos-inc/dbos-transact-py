@@ -20,6 +20,7 @@ from typing import (
     NamedTuple,
     Optional,
     TypedDict,
+    cast,
 )
 
 import psycopg
@@ -2037,6 +2038,99 @@ def test_client_enqueue_in_a_workflow_records_its_child(
         ("DBOSClient.enqueue", None)
     ]
     assert isinstance(steps[0]["error"], RuntimeError)
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_client_fork_in_a_workflow_takes_the_assigned_id(
+    dbos: DBOS, client: DBOSClient, mode: str
+) -> None:
+    @DBOS.workflow()
+    def target_workflow() -> str:
+        return "target"
+
+    @DBOS.step()
+    def a_step() -> None:
+        return None
+
+    @DBOS.workflow()
+    def forking_workflow(target_id: str, fork_id: str) -> str:
+        with SetWorkflowID(fork_id):
+            forked = client.fork_workflow(target_id, 1)
+        a_step()
+        return forked.workflow_id
+
+    @DBOS.workflow()
+    async def forking_workflow_async(target_id: str, fork_id: str) -> str:
+        with SetWorkflowID(fork_id):
+            forked = await client.fork_workflow_async(target_id, 1)
+        a_step()
+        return forked.workflow_id
+
+    target = DBOS.start_workflow(target_workflow)
+    assert target.get_result() == "target"
+
+    fork_id = str(uuid.uuid4())
+    forking = forking_workflow if mode == "sync" else forking_workflow_async
+    handle = DBOS.start_workflow(forking, target.workflow_id, fork_id)
+    assert handle.get_result() == fork_id
+    assert DBOS.retrieve_workflow(fork_id).get_result() == "target"
+
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert [s["function_name"] for s in steps] == [
+        "DBOSClient.forkWorkflow",
+        a_step.__qualname__,
+    ]
+    assert steps[0]["output"] == fork_id
+
+    # A replay returns the recorded fork instead of forking again.
+    replay = DBOS.fork_workflow(handle.workflow_id, 2)
+    assert replay.get_result() == fork_id
+    forks = client.list_workflows(forked_from=target.workflow_id)
+    assert [w.workflow_id for w in forks] == [fork_id]
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_client_fork_replay_leaves_the_assigned_id_consumed(
+    dbos: DBOS, client: DBOSClient, mode: str
+) -> None:
+    @DBOS.workflow()
+    def source() -> str:
+        return "source"
+
+    @DBOS.workflow()
+    def child() -> str:
+        return "child"
+
+    @DBOS.workflow()
+    def parent(source_id: str, fork_id: str) -> List[str]:
+        with SetWorkflowID(fork_id):
+            forked_id = client.fork_workflow(source_id, 1).workflow_id
+            # The block's ID went to the fork, so the child takes a derived ID.
+            return [forked_id, DBOS.start_workflow(child).workflow_id]
+
+    @DBOS.workflow()
+    async def parent_async(source_id: str, fork_id: str) -> List[str]:
+        with SetWorkflowID(fork_id):
+            forked = await client.fork_workflow_async(source_id, 1)
+            return [forked.workflow_id, DBOS.start_workflow(child).workflow_id]
+
+    source_handle = DBOS.start_workflow(source)
+    source_handle.get_result()
+    fork_id = str(uuid.uuid4())
+    forking = parent if mode == "sync" else parent_async
+    handle = DBOS.start_workflow(forking, source_handle.workflow_id, fork_id)
+    forked_id, child_id = cast(List[str], handle.get_result())
+    assert forked_id == fork_id
+    child_step = next(
+        s["function_id"]
+        for s in DBOS.list_workflow_steps(handle.workflow_id)
+        if s["child_workflow_id"] == child_id
+    )
+    assert child_id == f"{handle.workflow_id}-{child_step}"
+
+    # Replay the fork and start the child live, as recovery from a crash between them would.
+    replay = DBOS.fork_workflow(handle.workflow_id, child_step)
+    assert replay.get_result() == [fork_id, f"{replay.workflow_id}-{child_step}"]
 
 
 def test_client_enqueue_binds_its_parents_shard_key(

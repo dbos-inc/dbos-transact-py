@@ -3,7 +3,7 @@ import inspect
 import threading
 import time
 from datetime import datetime
-from functools import partial, wraps
+from functools import wraps
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -34,13 +34,10 @@ from dbos._context import (
 )
 from dbos._core import (
     DEFAULT_POLLING_INTERVAL,
-    StepOptions,
     read_stream,
     read_stream_async,
     read_stream_offset,
     read_stream_offset_async,
-    run_step,
-    run_step_async,
 )
 from dbos._enqueue_options import EnqueueOptions as EnqueueOptions
 from dbos._enqueue_options import build_enqueue_status
@@ -94,7 +91,12 @@ from dbos._sys_db import (
     WorkflowStatus,
     WorkflowStatusInternal,
 )
-from dbos._workflow_commands import fork_workflow, get_workflow, rewind_workflow
+from dbos._workflow_commands import (
+    fork_workflow,
+    get_workflow,
+    rewind_workflow,
+    take_fork_workflow_id,
+)
 
 R = TypeVar("R", covariant=True)  # A generic type for workflow return values
 T = TypeVar("T")
@@ -165,8 +167,7 @@ def _run_client_step(
         return fn()
     from dbos._dbos import _get_dbos_instance
 
-    options: StepOptions = {"name": step_name}
-    return run_step(_get_dbos_instance(), ctx, fn, options, (), {})
+    return _get_dbos_instance()._sys_db.call_function_as_step(fn, step_name, ctx)
 
 
 async def _run_client_step_async(
@@ -178,12 +179,17 @@ async def _run_client_step_async(
         return await fn()
     from dbos._dbos import _get_dbos_instance
 
-    options: StepOptions = {"name": step_name}
-    return await run_step_async(_get_dbos_instance(), ctx, fn, options, (), {})
+    return await _get_dbos_instance()._sys_db.call_coroutine_as_step(fn, step_name, ctx)
 
 
-def _client_step(step_name: str) -> Callable[[F], F]:
-    """Run a client method as a step when it is called from a workflow body."""
+def _client_step(
+    step_name: str,
+    *,
+    encode: Optional[Callable[[Any], Any]] = None,
+    decode: Optional[Callable[[Any, Any, bool], Any]] = None,
+) -> Callable[[F], F]:
+    """Run a client method as a step when it is called from a workflow body. The step
+    records encode(result), and the method returns decode(self, recorded, is_async)."""
 
     def decorator(func: F) -> F:
         if inspect.iscoroutinefunction(func):
@@ -191,9 +197,15 @@ def _client_step(step_name: str) -> Callable[[F], F]:
             @wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 ctx = _client_step_context(None)
-                return await _run_client_step_async(
-                    ctx, step_name, partial(func, *args, **kwargs)
-                )
+                if ctx is None:
+                    return await func(*args, **kwargs)
+
+                async def call() -> Any:
+                    result = await func(*args, **kwargs)
+                    return encode(result) if encode else result
+
+                recorded = await _run_client_step_async(ctx, step_name, call)
+                return decode(args[0], recorded, True) if decode else recorded
 
             return cast(F, async_wrapper)
 
@@ -203,7 +215,15 @@ def _client_step(step_name: str) -> Callable[[F], F]:
                 func.__name__,
                 has_async_variant=hasattr(args[0], f"{func.__name__}_async"),
             )
-            return _run_client_step(ctx, step_name, partial(func, *args, **kwargs))
+            if ctx is None:
+                return func(*args, **kwargs)
+
+            def call() -> Any:
+                result = func(*args, **kwargs)
+                return encode(result) if encode else result
+
+            recorded = _run_client_step(ctx, step_name, call)
+            return decode(args[0], recorded, False) if decode else recorded
 
         return cast(F, wrapper)
 
@@ -211,52 +231,26 @@ def _client_step(step_name: str) -> Callable[[F], F]:
 
 
 def _client_handle_step(step_name: str, *, many: bool = False) -> Callable[[F], F]:
-    """Like _client_step, for a method returning workflow handles: the step records
-    the workflow IDs, and the handles are rebuilt on the client's system database."""
+    """A _client_step for a method returning workflow handles: the step records the
+    workflow IDs, and the handles are rebuilt on the client's system database."""
 
-    def describe(result: Any) -> Any:
+    def encode(result: Any) -> Any:
         handles = result if many else [result]
         return [[h.workflow_id, h.shard_key] for h in handles]
 
-    def rebuild(self: "DBOSClient", recorded: Any, handle_class: Any) -> Any:
-        handles = [
-            handle_class(workflow_id, self._sys_db, shard_key=shard_key)
+    def decode(client: "DBOSClient", recorded: Any, is_async: bool) -> Any:
+        handle_class = (
+            WorkflowHandleClientAsyncPolling
+            if is_async
+            else WorkflowHandleClientPolling
+        )
+        handles: List[Any] = [
+            handle_class(workflow_id, client._sys_db, shard_key=shard_key)
             for workflow_id, shard_key in recorded
         ]
         return handles if many else handles[0]
 
-    def decorator(func: F) -> F:
-        if inspect.iscoroutinefunction(func):
-
-            @wraps(func)
-            async def async_wrapper(
-                self: "DBOSClient", *args: Any, **kwargs: Any
-            ) -> Any:
-                ctx = _client_step_context(None)
-                if ctx is None:
-                    return await func(self, *args, **kwargs)
-
-                async def call() -> Any:
-                    return describe(await func(self, *args, **kwargs))
-
-                recorded = await _run_client_step_async(ctx, step_name, call)
-                return rebuild(self, recorded, WorkflowHandleClientAsyncPolling)
-
-            return cast(F, async_wrapper)
-
-        @wraps(func)
-        def wrapper(self: "DBOSClient", *args: Any, **kwargs: Any) -> Any:
-            ctx = _client_step_context(func.__name__)
-            if ctx is None:
-                return func(self, *args, **kwargs)
-            recorded = _run_client_step(
-                ctx, step_name, lambda: describe(func(self, *args, **kwargs))
-            )
-            return rebuild(self, recorded, WorkflowHandleClientPolling)
-
-        return cast(F, wrapper)
-
-    return decorator
+    return _client_step(step_name, encode=encode, decode=decode)
 
 
 class WorkflowHandleClientPolling(Generic[R]):
@@ -1753,7 +1747,6 @@ class DBOSClient:
                 offset=offset,
             )
 
-    @_client_handle_step("DBOSClient.forkWorkflow")
     def fork_workflow(
         self,
         workflow_id: str,
@@ -1766,17 +1759,25 @@ class DBOSClient:
         timeout_seconds: Optional[float] = None,
         shard_key: Optional[str] = None,
     ) -> "WorkflowHandle[Any]":
+        ctx = _client_step_context("fork_workflow")
+        # Taken before the step, so a replay consumes the SetWorkflowID block's ID as the first run did.
+        assigned_id = take_fork_workflow_id()
         with bind_shard_keys({workflow_id: shard_key}):
-            forked_workflow_id = fork_workflow(
-                self._sys_db,
-                workflow_id,
-                start_step,
-                application_version=application_version,
-                queue_name=queue_name,
-                queue_partition_key=queue_partition_key,
-                replacement_children=replacement_children,
-                timeout_seconds=timeout_seconds,
-            )
+
+            def fork() -> str:
+                return fork_workflow(
+                    self._sys_db,
+                    workflow_id,
+                    start_step,
+                    application_version=application_version,
+                    queue_name=queue_name,
+                    queue_partition_key=queue_partition_key,
+                    replacement_children=replacement_children,
+                    timeout_seconds=timeout_seconds,
+                    forked_workflow_id=assigned_id,
+                )
+
+            forked_workflow_id = _run_client_step(ctx, "DBOSClient.forkWorkflow", fork)
             # A fork lives under its original's shard key, however the caller supplied it.
             return WorkflowHandleClientPolling[Any](
                 forked_workflow_id,
@@ -1784,7 +1785,6 @@ class DBOSClient:
                 shard_key=self._sys_db._key_hint(workflow_id),
             )
 
-    @_client_handle_step("DBOSClient.forkWorkflow")
     async def fork_workflow_async(
         self,
         workflow_id: str,
@@ -1797,17 +1797,27 @@ class DBOSClient:
         timeout_seconds: Optional[float] = None,
         shard_key: Optional[str] = None,
     ) -> "WorkflowHandleAsync[Any]":
+        ctx = _client_step_context(None)
+        # Taken before the step, so a replay consumes the SetWorkflowID block's ID as the first run did.
+        assigned_id = take_fork_workflow_id()
         with bind_shard_keys({workflow_id: shard_key}):
-            forked_workflow_id = await asyncio.to_thread(
-                fork_workflow,
-                self._sys_db,
-                workflow_id,
-                start_step,
-                application_version=application_version,
-                queue_name=queue_name,
-                queue_partition_key=queue_partition_key,
-                replacement_children=replacement_children,
-                timeout_seconds=timeout_seconds,
+
+            async def fork() -> str:
+                return await asyncio.to_thread(
+                    fork_workflow,
+                    self._sys_db,
+                    workflow_id,
+                    start_step,
+                    application_version=application_version,
+                    queue_name=queue_name,
+                    queue_partition_key=queue_partition_key,
+                    replacement_children=replacement_children,
+                    timeout_seconds=timeout_seconds,
+                    forked_workflow_id=assigned_id,
+                )
+
+            forked_workflow_id = await _run_client_step_async(
+                ctx, "DBOSClient.forkWorkflow", fork
             )
             # A fork lives under its original's shard key, however the caller supplied it.
             return WorkflowHandleClientAsyncPolling[Any](
