@@ -150,6 +150,44 @@ def test_multiple_debouncers(dbos: DBOS) -> None:
     assert fourth_handle.get_result() == fourth_value
 
 
+def test_debouncer_queue_from_workflow_is_replay_safe(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def target(x: int) -> int:
+        return x
+
+    queue_name = f"debounce-q-{uuid.uuid4()}"
+    DBOS.register_queue(queue_name)
+    debouncer = Debouncer.create(target, queue=queue_name)
+    bad_debouncer = Debouncer.create(target, queue=f"no-such-queue-{uuid.uuid4()}")
+
+    @DBOS.workflow()
+    def debounce_workflow(x: int) -> int:
+        return debouncer.debounce(str(uuid.uuid4()), 0.1, x).get_result()
+
+    handle = DBOS.start_workflow(debounce_workflow, 7)
+    assert handle.get_result() == 7
+    steps = [s["function_name"] for s in DBOS.list_workflow_steps(handle.workflow_id)]
+    # The queue lookup adds no step of its own.
+    assert "DBOS.retrieveQueue" not in steps
+    assert steps[0] == "DBOS.debounce_delayed_workflow"
+
+    # The queue check is recorded with the bounce, so a replay after the queue
+    # is deleted returns the recorded outcome instead of raising.
+    DBOS.delete_queue(queue_name)
+    forked = DBOS.fork_workflow(handle.workflow_id, len(steps) + 1)
+    assert forked.get_result() == 7
+
+    # An undeclared queue still raises, from a workflow and outside one.
+    @DBOS.workflow()
+    def bad_debounce_workflow() -> None:
+        bad_debouncer.debounce("key", 0.1, 1)
+
+    with pytest.raises(Exception, match="Invalid queue name provided to debouncer"):
+        bad_debounce_workflow()
+    with pytest.raises(Exception, match="Invalid queue name provided to debouncer"):
+        bad_debouncer.debounce("key", 0.1, 1)
+
+
 def test_debouncer_queue(dbos: DBOS) -> None:
 
     @DBOS.workflow()
