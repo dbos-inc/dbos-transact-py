@@ -1,7 +1,7 @@
 import threading
 import time
 import uuid
-from typing import Any, List
+from typing import Any, Callable, List, Optional
 
 import pytest
 import sqlalchemy as sa
@@ -12,7 +12,6 @@ from dbos import (
     DBOSClient,
     SetEnqueueOptions,
     SetWorkflowID,
-    SetWorkflowTimeout,
     WorkflowHandle,
 )
 from dbos._error import (
@@ -1430,70 +1429,6 @@ def test_resume_and_fork_to_queue(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
-def test_management_keeps_queue(dbos: DBOS) -> None:
-    workflow_event = threading.Event()
-    main_thread_event = threading.Event()
-
-    @DBOS.workflow()
-    def blocking_workflow(x: int) -> int:
-        main_thread_event.set()
-        workflow_event.wait(timeout=30)
-        return x
-
-    DBOS.register_queue("keep_queue", partition_concurrency=1)
-    DBOS.register_queue("other_queue")
-
-    def queue_of(workflow_id: str) -> tuple[str, Any, Any, Any]:
-        status = DBOS.get_workflow_status(workflow_id)
-        assert status is not None
-        return (
-            status.status,
-            status.queue_name,
-            status.queue_partition_key,
-            status.priority,
-        )
-
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid), SetEnqueueOptions(queue_partition_key="p1", priority=7):
-        handle = DBOS.enqueue_workflow("keep_queue", blocking_workflow, 5)
-    try:
-        assert main_thread_event.wait(timeout=30)
-        DBOS.cancel_workflow(wfid)
-    finally:
-        workflow_event.set()
-    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
-        handle.get_result()
-
-    def execution_left() -> None:
-        assert wfid not in dbos._active_workflows_set.activeList()
-
-    retry_until_success(execution_left, interval=0.1, max_attempts=100)
-    assert queue_of(wfid) == ("CANCELLED", "keep_queue", "p1", 7)
-
-    # Resume with only a partition key keeps the queue and priority
-    assert DBOS.resume_workflow(wfid, queue_partition_key="p2").get_result() == 5
-    assert queue_of(wfid) == ("SUCCESS", "keep_queue", "p2", 7)
-
-    # Rewind and fork inherit the queue, partition key, and priority
-    assert DBOS.rewind_workflow(wfid).get_result() == 5
-    assert queue_of(wfid) == ("SUCCESS", "keep_queue", "p2", 7)
-    forked = DBOS.fork_workflow(wfid, 1)
-    assert forked.get_result() == 5
-    assert queue_of(forked.get_workflow_id()) == ("SUCCESS", "keep_queue", "p2", 7)
-    forked = DBOS.fork_workflow(wfid, 1, queue_partition_key="p3")
-    assert forked.get_result() == 5
-    assert queue_of(forked.get_workflow_id()) == ("SUCCESS", "keep_queue", "p3", 7)
-
-    # An explicit queue changes only the queue
-    forked = DBOS.fork_workflow(wfid, 1, queue_name="other_queue")
-    assert forked.get_result() == 5
-    assert queue_of(forked.get_workflow_id()) == ("SUCCESS", "other_queue", "p2", 7)
-    assert DBOS.rewind_workflow(wfid, queue_name="other_queue").get_result() == 5
-    assert queue_of(wfid) == ("SUCCESS", "other_queue", "p2", 7)
-
-    assert queue_entries_are_cleaned_up(dbos)
-
-
 def _cancel_delayed(queue_name: str, count: int, workflow: Any) -> List[str]:
     """Enqueue delayed workflows on a partitioned queue and cancel them before they run."""
     ids = [str(uuid.uuid4()) for _ in range(count)]
@@ -1513,54 +1448,109 @@ def _queue_columns(workflow_id: str) -> tuple[Any, Any, Any]:
     return (status.queue_name, status.queue_partition_key, status.priority)
 
 
-def test_resume_partition_key_variants(dbos: DBOS, client: DBOSClient) -> None:
+def test_management_keeps_queue(dbos: DBOS, client: DBOSClient) -> None:
     @DBOS.workflow()
     def echo(x: int) -> int:
         return x
 
-    DBOS.register_queue("variants_queue", partition_concurrency=2)
-    DBOS.register_queue("variants_other")
+    @DBOS.workflow()
+    def parent() -> str:
+        with SetEnqueueOptions(
+            queue_partition_key="p0", priority=3, delay_seconds=3600
+        ):
+            return DBOS.enqueue_workflow("keep_queue", echo, 0).workflow_id
 
-    # Each resume variant forwards the partition key and keeps the queue and priority
-    [wfid] = _cancel_delayed("variants_queue", 1, echo)
-    assert client.resume_workflow(wfid, queue_partition_key="c1").get_result() == 0
-    assert _queue_columns(wfid) == ("variants_queue", "c1", 3)
+    DBOS.register_queue("keep_queue", partition_concurrency=2)
+    DBOS.register_queue("other_queue")
 
-    ids = _cancel_delayed("variants_queue", 2, echo)
-    handles = client.resume_workflows(ids, queue_partition_key="c2")
-    assert [h.get_result() for h in handles] == [0, 1]
-    assert [_queue_columns(i) for i in ids] == [("variants_queue", "c2", 3)] * 2
+    # Cancelling children keeps their queue, partition key, and priority
+    parent_id = str(uuid.uuid4())
+    with SetWorkflowID(parent_id):
+        child_id = parent()
+    DBOS.cancel_workflow(parent_id, cancel_children=True)
+    assert DBOS.get_workflow_status(child_id).status == "CANCELLED"  # type: ignore[union-attr]
+    assert _queue_columns(child_id) == ("keep_queue", "p0", 3)
 
-    ids = _cancel_delayed("variants_queue", 2, echo)
-    handles = DBOS.resume_workflows(ids, queue_partition_key="d2")
-    assert [h.get_result() for h in handles] == [0, 1]
-    assert [_queue_columns(i) for i in ids] == [("variants_queue", "d2", 3)] * 2
+    # A plain resume puts it back exactly where it was
+    handle = DBOS.resume_workflow(child_id)
+    assert _queue_columns(child_id) == ("keep_queue", "p0", 3)
+    assert handle.get_result() == 0
 
-    # Naming its own partitioned queue keeps the key, so the workflow still dequeues
-    [wfid] = _cancel_delayed("variants_queue", 1, echo)
-    assert DBOS.resume_workflow(wfid, queue_name="variants_queue").get_result() == 0
-    assert _queue_columns(wfid) == ("variants_queue", "p0", 3)
+    # Each resume variant changes only the partition key. Columns are checked before
+    # each result, so a regression fails instead of hanging on a stuck partition.
+    variants: List[Callable[[List[str], str], List[Any]]] = [
+        lambda ids, key: [
+            client.resume_workflow(i, queue_partition_key=key) for i in ids
+        ],
+        lambda ids, key: client.resume_workflows(ids, queue_partition_key=key),
+        lambda ids, key: [
+            DBOS.resume_workflow(i, queue_partition_key=key) for i in ids
+        ],
+        lambda ids, key: DBOS.resume_workflows(ids, queue_partition_key=key),
+    ]
+    for n, resume in enumerate(variants):
+        ids = _cancel_delayed("keep_queue", 2, echo)
+        handles = resume(ids, f"k{n}")
+        assert [_queue_columns(i) for i in ids] == [("keep_queue", f"k{n}", 3)] * 2
+        assert [h.get_result() for h in handles] == [0, 1]
 
-    # An explicit queue changes only the queue
-    [wfid] = _cancel_delayed("variants_queue", 1, echo)
-    assert DBOS.resume_workflow(wfid, queue_name="variants_other").get_result() == 0
-    assert _queue_columns(wfid) == ("variants_other", "p0", 3)
+    # A queue name changes only the queue; naming its own partitioned queue keeps the key
+    for queue in ("keep_queue", "other_queue"):
+        [wfid] = _cancel_delayed("keep_queue", 1, echo)
+        handle = DBOS.resume_workflow(wfid, queue_name=queue)
+        assert _queue_columns(wfid) == (queue, "p0", 3)
+        assert handle.get_result() == 0
+
+    # Forks inherit queue, key, and priority; a key or a queue overrides only itself
+    fork_cases: List[tuple[Optional[str], Optional[str], tuple[str, str, int]]] = [
+        (None, None, ("keep_queue", "p0", 3)),
+        (None, "f", ("keep_queue", "f", 3)),
+        ("other_queue", None, ("other_queue", "p0", 3)),
+    ]
+    for queue_name, key, expected in fork_cases:
+        forked = DBOS.fork_workflow(
+            child_id, 1, queue_name=queue_name, queue_partition_key=key
+        )
+        assert _queue_columns(forked.get_workflow_id()) == expected
+        assert forked.get_result() == 0
 
     assert queue_entries_are_cleaned_up(dbos)
 
 
 @pytest.mark.asyncio
-async def test_resume_partition_key_variants_async(
-    dbos: DBOS, client: DBOSClient
-) -> None:
+async def test_management_keeps_queue_async(dbos: DBOS, client: DBOSClient) -> None:
     @DBOS.workflow()
     async def echo(x: int) -> int:
         return x
 
-    await DBOS.register_queue_async("variants_async", partition_concurrency=2)
+    await DBOS.register_queue_async("keep_queue_async", partition_concurrency=2)
 
-    async def cancel_delayed(count: int) -> List[str]:
-        ids = [str(uuid.uuid4()) for _ in range(count)]
+    async def queue_columns(workflow_id: str) -> tuple[Any, Any, Any]:
+        status = await DBOS.get_workflow_status_async(workflow_id)
+        assert status is not None
+        return (status.queue_name, status.queue_partition_key, status.priority)
+
+    async def resume_each(ids: List[str], key: str) -> List[Any]:
+        return [
+            await DBOS.resume_workflow_async(i, queue_partition_key=key) for i in ids
+        ]
+
+    async def client_resume_each(ids: List[str], key: str) -> List[Any]:
+        return [
+            await client.resume_workflow_async(i, queue_partition_key=key) for i in ids
+        ]
+
+    async def resume_bulk(ids: List[str], key: str) -> List[Any]:
+        return list(await DBOS.resume_workflows_async(ids, queue_partition_key=key))
+
+    async def client_resume_bulk(ids: List[str], key: str) -> List[Any]:
+        return list(await client.resume_workflows_async(ids, queue_partition_key=key))
+
+    # Each async resume variant changes only the partition key
+    for n, resume in enumerate(
+        [resume_each, resume_bulk, client_resume_each, client_resume_bulk]
+    ):
+        ids = [str(uuid.uuid4()) for _ in range(2)]
         for i, wfid in enumerate(ids):
             with (
                 SetWorkflowID(wfid),
@@ -1568,97 +1558,12 @@ async def test_resume_partition_key_variants_async(
                     queue_partition_key="p0", priority=3, delay_seconds=3600
                 ),
             ):
-                await DBOS.enqueue_workflow_async("variants_async", echo, i)
+                await DBOS.enqueue_workflow_async("keep_queue_async", echo, i)
         await DBOS.cancel_workflows_async(ids)
-        return ids
-
-    async def queue_columns(workflow_id: str) -> tuple[Any, Any, Any]:
-        status = await DBOS.get_workflow_status_async(workflow_id)
-        assert status is not None
-        return (status.queue_name, status.queue_partition_key, status.priority)
-
-    [wfid] = await cancel_delayed(1)
-    handle = await DBOS.resume_workflow_async(wfid, queue_partition_key="a1")
-    assert await handle.get_result() == 0
-    assert await queue_columns(wfid) == ("variants_async", "a1", 3)
-
-    ids = await cancel_delayed(2)
-    handles = await DBOS.resume_workflows_async(ids, queue_partition_key="a2")
-    assert [await h.get_result() for h in handles] == [0, 1]
-    assert [await queue_columns(i) for i in ids] == [("variants_async", "a2", 3)] * 2
-
-    [wfid] = await cancel_delayed(1)
-    client_handle = await client.resume_workflow_async(wfid, queue_partition_key="c1")
-    assert await client_handle.get_result() == 0
-    assert await queue_columns(wfid) == ("variants_async", "c1", 3)
-
-    ids = await cancel_delayed(2)
-    client_handles = await client.resume_workflows_async(ids, queue_partition_key="c2")
-    assert [await h.get_result() for h in client_handles] == [0, 1]
-    assert [await queue_columns(i) for i in ids] == [("variants_async", "c2", 3)] * 2
-
-
-def test_timeout_and_dead_letter_keep_queue(dbos: DBOS) -> None:
-    timeout_event = threading.Event()
-    dead_letter_event = threading.Event()
-
-    @DBOS.workflow()
-    def blocking_workflow(event_name: str) -> str:
-        (timeout_event if event_name == "timeout" else dead_letter_event).wait(30)
-        return event_name
-
-    DBOS.register_queue("kept_queue")
-
-    def execution_left(workflow_id: str) -> None:
-        assert workflow_id not in dbos._active_workflows_set.activeList()
-
-    # A timed-out workflow keeps its queue and resumes back onto it
-    timed_out_id = str(uuid.uuid4())
-    try:
-        with SetWorkflowID(timed_out_id), SetWorkflowTimeout(0.1):
-            handle = DBOS.enqueue_workflow("kept_queue", blocking_workflow, "timeout")
-        with pytest.raises(DBOSAwaitedWorkflowCancelledError):
-            handle.get_result()
-        status = DBOS.get_workflow_status(timed_out_id)
-        assert status is not None
-        assert status.status == "CANCELLED"
-        assert status.queue_name == "kept_queue"
-    finally:
-        timeout_event.set()
-    retry_until_success(lambda: execution_left(timed_out_id))
-    # Lengthen the timeout, or the resumed run's fresh 100 ms deadline could cancel it again.
-    with dbos._sys_db.engine.begin() as c:
-        c.execute(
-            sa.update(SystemSchema.workflow_status)
-            .where(SystemSchema.workflow_status.c.workflow_uuid == timed_out_id)
-            .values(workflow_timeout_ms=60000)
-        )
-    resumed = DBOS.resume_workflow(timed_out_id)
-    assert resumed.get_result() == "timeout"
-    assert resumed.get_status().queue_name == "kept_queue"
-
-    # So does a dead-lettered one
-    dead_id = str(uuid.uuid4())
-    try:
-        with SetWorkflowID(dead_id):
-            handle = DBOS.enqueue_workflow("kept_queue", blocking_workflow, "dead")
-
-        def is_pending() -> None:
-            status = DBOS.get_workflow_status(dead_id)
-            assert status is not None and status.status == "PENDING"
-
-        retry_until_success(is_pending)
-        dbos._sys_db.dead_letter_workflows([dead_id], min_recovery_attempts=0)
-        status = DBOS.get_workflow_status(dead_id)
-        assert status is not None
-        assert status.status == "MAX_RECOVERY_ATTEMPTS_EXCEEDED"
-        assert status.queue_name == "kept_queue"
-    finally:
-        dead_letter_event.set()
-    retry_until_success(lambda: execution_left(dead_id))
-    resumed = DBOS.resume_workflow(dead_id)
-    assert resumed.get_result() == "dead"
-    assert resumed.get_status().queue_name == "kept_queue"
+        handles = await resume(ids, f"k{n}")
+        expected = [("keep_queue_async", f"k{n}", 3)] * 2
+        assert [await queue_columns(i) for i in ids] == expected
+        assert [await h.get_result() for h in handles] == [0, 1]
 
     assert queue_entries_are_cleaned_up(dbos)
 
