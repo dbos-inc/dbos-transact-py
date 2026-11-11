@@ -26,7 +26,12 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 # Re-exported: EnqueueOptions is public as dbos.EnqueueOptions but is shared with _core.
-from dbos._context import DBOSContext, get_local_dbos_context, snapshot_step_context
+from dbos._context import (
+    DBOSContext,
+    child_workflow_id,
+    get_local_dbos_context,
+    snapshot_step_context,
+)
 from dbos._core import (
     DEFAULT_POLLING_INTERVAL,
     StepOptions,
@@ -96,6 +101,8 @@ T = TypeVar("T")
 
 
 F = TypeVar("F", bound=Callable[..., Any])
+
+_ENQUEUE_STEP = "DBOSClient.enqueue"
 
 
 def _client_step_context(sync_method: Optional[str]) -> Optional[DBOSContext]:
@@ -431,9 +438,6 @@ class DBOSClient:
             status["application_name"] = self._sys_db.app_name
         return workflow_id, status
 
-    def _enqueue(self, options: EnqueueOptions, *args: Any, **kwargs: Any) -> str:
-        return self._enqueue_from(None, options, args, kwargs)
-
     def _enqueue_from(
         self,
         parent: Optional[DBOSContext],
@@ -445,34 +449,96 @@ class DBOSClient:
             # A child's ID derives from its parent's step, so re-running the step finds the same workflow.
             options = {
                 **options,
-                "workflow_id": f"{parent.workflow_id}-{parent.function_id}",
+                "workflow_id": child_workflow_id(
+                    parent.workflow_id,
+                    parent.function_id,
+                    parent.shard_key,
+                    options.get("shard_key"),
+                ),
             }
         workflow_id, status = self._build_enqueue_status(options, *args, **kwargs)
+        parent_keys: Dict[str, Optional[str]] = {}
         if parent is not None:
             status["parent_workflow_id"] = parent.workflow_id
+            parent_keys[parent.workflow_id] = parent.shard_key
         return_existing = options.get("duplication_policy") == "return-existing"
         # Generated once, so a retried insert recognizes a row it already committed.
         creator_xid = generate_uuid()
-        while True:
-            try:
-                self._sys_db.init_workflow(
-                    status,
-                    creator_xid=creator_xid,
-                    reuse_policy=options.get("workflow_id_reuse_policy"),
-                )
-                return workflow_id
-            except DBOSQueueDeduplicatedError:
-                if not return_existing:
-                    raise
-                queue_name, dedup_id = status["queue_name"], status["deduplication_id"]
-                assert queue_name is not None and dedup_id is not None
-                existing_id = self._sys_db.get_deduplicated_workflow(
-                    queue_name, dedup_id
-                )
-                if existing_id is not None:
-                    return existing_id
-                # The holder released the deduplication ID between our insert and this
-                # lookup (it completed or was cancelled), so retry to claim the slot.
+        with bind_shard_keys(parent_keys):
+            while True:
+                try:
+                    self._sys_db.init_workflow(
+                        status,
+                        creator_xid=creator_xid,
+                        reuse_policy=options.get("workflow_id_reuse_policy"),
+                    )
+                    return workflow_id
+                except DBOSQueueDeduplicatedError:
+                    if not return_existing:
+                        raise
+                    queue_name, dedup_id = (
+                        status["queue_name"],
+                        status["deduplication_id"],
+                    )
+                    assert queue_name is not None and dedup_id is not None
+                    existing_id = self._sys_db.get_deduplicated_workflow(
+                        queue_name, dedup_id
+                    )
+                    if existing_id is not None:
+                        return existing_id
+                    # The holder released the deduplication ID between our insert and this
+                    # lookup (it completed or was cancelled), so retry to claim the slot.
+
+    def _enqueue_step(
+        self,
+        parent: Optional[DBOSContext],
+        options: EnqueueOptions,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> str:
+        """Enqueue a workflow. From a workflow body, the enqueue is a step of the calling
+        workflow that records the enqueued workflow as its child."""
+        if parent is None:
+            return self._enqueue_from(None, options, args, kwargs)
+        from dbos._dbos import _get_dbos_instance
+
+        # The step belongs to the calling workflow, so it is recorded in that workflow's system database.
+        sys_db = _get_dbos_instance()._sys_db
+        recorded = sys_db.check_operation_execution(
+            parent.workflow_id, parent.function_id, _ENQUEUE_STEP
+        )
+        if recorded is not None:
+            sys_db._raise_recorded_error(recorded)
+            assert recorded["child_workflow_id"] is not None
+            return recorded["child_workflow_id"]
+        started_at_epoch_ms = int(time.time() * 1000)
+        try:
+            # Enqueue on the remote
+            workflow_id = self._enqueue_from(parent, options, args, kwargs)
+        except Exception as e:
+            sys_db._record_operation_error(
+                parent.workflow_id,
+                parent.function_id,
+                _ENQUEUE_STEP,
+                started_at_epoch_ms,
+                e,
+            )
+            raise
+        # Record child workflow ID in the "local" (parent DBOS context)
+        with bind_shard_keys({workflow_id: options.get("shard_key")}):
+            sys_db.record_operation_result(
+                {
+                    "workflow_uuid": parent.workflow_id,
+                    "function_id": parent.function_id,
+                    "function_name": _ENQUEUE_STEP,
+                    "started_at_epoch_ms": started_at_epoch_ms,
+                    "output": None,
+                    "error": None,
+                    "serialization": None,
+                    "child_workflow_id": workflow_id,
+                }
+            )
+        return workflow_id
 
     def _enqueue_with_connection(
         self,
@@ -522,11 +588,7 @@ class DBOSClient:
         self, options: EnqueueOptions, *args: Any, **kwargs: Any
     ) -> "WorkflowHandle[R]":
         ctx = _client_step_context("enqueue")
-        workflow_id = _run_client_step(
-            ctx,
-            "DBOSClient.enqueue",
-            partial(self._enqueue_from, ctx, options, args, kwargs),
-        )
+        workflow_id = self._enqueue_step(ctx, options, args, kwargs)
         return WorkflowHandleClientPolling[R](
             workflow_id, self._sys_db, shard_key=options.get("shard_key")
         )
@@ -535,13 +597,9 @@ class DBOSClient:
         self, options: EnqueueOptions, *args: Any, **kwargs: Any
     ) -> "WorkflowHandleAsync[R]":
         ctx = _client_step_context(None)
-
-        async def enqueue() -> str:
-            return await asyncio.to_thread(
-                self._enqueue_from, ctx, options, args, kwargs
-            )
-
-        workflow_id = await _run_client_step_async(ctx, "DBOSClient.enqueue", enqueue)
+        workflow_id = await asyncio.to_thread(
+            self._enqueue_step, ctx, options, args, kwargs
+        )
         return WorkflowHandleClientAsyncPolling[R](
             workflow_id, self._sys_db, shard_key=options.get("shard_key")
         )

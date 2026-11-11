@@ -39,10 +39,12 @@ from dbos import (
     SendMessage,
     SetWorkflowID,
 )
+from dbos._context import DBOSContext
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 from dbos._error import DBOSException, DBOSNonExistentWorkflowError
 from dbos._outcome import NoResult
 from dbos._schemas.system_database import SystemSchema
+from dbos._shard_keys import bound_shard_key
 from dbos._sys_db import db_retry
 from dbos._utils import retriable_sqlite_exception
 from tests import client_collateral
@@ -1935,7 +1937,114 @@ def test_client_calls_are_steps_in_a_workflow(
     assert [s["error"] for s in steps] == [None] * len(case.steps)
 
     if case_name == "enqueue":
-        # The enqueued workflow is a child of the calling workflow, with a child's ID.
+        # The enqueued workflow is a child of the calling workflow, with a child's ID,
+        # and the calling workflow's step names it.
         children = client.list_workflows(parent_workflow_id=handle.workflow_id)
         assert [w.workflow_id for w in children] == [f"{handle.workflow_id}-1"]
         assert children[0].parent_workflow_id == handle.workflow_id
+        assert steps[0]["child_workflow_id"] == f"{handle.workflow_id}-1"
+        assert steps[0]["output"] is None
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_client_enqueue_in_a_workflow_records_its_child(
+    dbos: DBOS,
+    client: DBOSClient,
+    mode: str,
+    monkeypatch: pytest.MonkeyPatch,
+    skip_with_sharding: None,
+) -> None:
+    inserts = 0
+    init_workflow = client._sys_db.init_workflow
+
+    def counting_init_workflow(status: Any, **kwargs: Any) -> Any:
+        nonlocal inserts
+        inserts += 1
+        return init_workflow(status, **kwargs)
+
+    monkeypatch.setattr(client._sys_db, "init_workflow", counting_init_workflow)
+
+    @DBOS.workflow()
+    def child_workflow() -> str:
+        return "child"
+
+    client.register_queue("client-child-queue")
+    options: EnqueueOptions = {
+        "queue_name": "client-child-queue",
+        "workflow_name": child_workflow.__qualname__,
+    }
+
+    @DBOS.step()
+    def a_step() -> None:
+        return None
+
+    @DBOS.workflow()
+    def parent_workflow() -> str:
+        child: WorkflowHandle[str] = client.enqueue(options)
+        a_step()
+        return child.workflow_id
+
+    @DBOS.workflow()
+    async def parent_workflow_async() -> str:
+        child: WorkflowHandleAsync[str] = await client.enqueue_async(options)
+        a_step()
+        return child.workflow_id
+
+    parent = parent_workflow if mode == "sync" else parent_workflow_async
+    handle = DBOS.start_workflow(parent)
+    child_id = handle.get_result()
+    assert child_id == f"{handle.workflow_id}-1"
+    assert inserts == 1
+
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert [(s["function_name"], s["child_workflow_id"]) for s in steps] == [
+        ("DBOSClient.enqueue", child_id),
+        (a_step.__qualname__, None),
+    ]
+
+    # A replay returns the recorded child instead of enqueueing again.
+    forked = DBOS.fork_workflow(handle.workflow_id, 2)
+    assert forked.get_result() == child_id
+    assert inserts == 1
+
+    # An enqueue that fails is recorded as the step's error, and names no child.
+    def failing_init_workflow(status: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("enqueue failed")
+
+    monkeypatch.setattr(client._sys_db, "init_workflow", failing_init_workflow)
+    failed = DBOS.start_workflow(parent)
+    with pytest.raises(RuntimeError, match="enqueue failed"):
+        failed.get_result()
+    steps = DBOS.list_workflow_steps(failed.workflow_id)
+    assert [(s["function_name"], s["child_workflow_id"]) for s in steps] == [
+        ("DBOSClient.enqueue", None)
+    ]
+    assert isinstance(steps[0]["error"], RuntimeError)
+
+
+def test_client_enqueue_binds_its_parents_shard_key(
+    client: DBOSClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: List[Any] = []
+
+    def recording_init_workflow(status: Any, **kwargs: Any) -> Any:
+        parent_id = status["parent_workflow_id"]
+        seen.append((status["workflow_uuid"], parent_id, bound_shard_key(parent_id)))
+
+    monkeypatch.setattr(client._sys_db, "init_workflow", recording_init_workflow)
+
+    parent = DBOSContext()
+    parent.workflow_id = "parent"
+    parent.function_id = 3
+    parent.shard_key = "parent-key"
+    options: EnqueueOptions = {"queue_name": "q", "workflow_name": "w"}
+
+    # The parent's key is bound while the child's row is written, and only then.
+    assert client._enqueue_from(parent, options, (), {}) == "parent-3"
+    assert seen == [("parent-3", "parent", "parent-key")]
+    assert bound_shard_key("parent") is None
+
+    # A child under another key carries its parent's key in its ID.
+    other: EnqueueOptions = {**options, "shard_key": "child-key"}
+    assert client._enqueue_from(parent, other, (), {}) == "10:parent-key:parent-3"
+    assert seen[-1] == ("10:parent-key:parent-3", "parent", "parent-key")
