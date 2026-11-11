@@ -12,6 +12,7 @@ import pytest
 
 from dbos import DBOS, DBOSConfig
 from dbos._error import DBOSException
+from dbos._registrations import get_dbos_func_name
 from dbos._serialization import DBOSPortableJSONSerializer
 
 
@@ -30,18 +31,15 @@ def test_queue_api_is_checkpointed(dbos: DBOS) -> None:
     @DBOS.workflow()
     def queue_workflow() -> Tuple[str, Optional[int], bool]:
         registered = DBOS.register_queue(queue_name, global_concurrency=3)
-        retrieved = DBOS.retrieve_queue(queue_name)
         listed = any(q.name == queue_name for q in DBOS.list_queues())
         DBOS.delete_queue(queue_name)
-        assert retrieved is not None
         # Queue's public getters re-read the live row, so check the checkpointed value.
-        return registered.name, retrieved._concurrency, listed
+        return registered.name, registered._concurrency, listed
 
     handle = DBOS.start_workflow(queue_workflow)
     assert handle.get_result() == (queue_name, 3, True)
     expected = [
         "DBOS.registerQueue",
-        "DBOS.retrieveQueue",
         "DBOS.listQueues",
         "DBOS.deleteQueue",
     ]
@@ -81,12 +79,63 @@ def test_queue_api_checkpoints_under_portable_serializer(
         assert tuple(handle.get_result()) == (queue_name, queue_name, limiter, True)
 
         # The replay rebuilds the queues from the checkpointed data.
-        forked = DBOS.fork_workflow(handle.workflow_id, 4)
+        forked = DBOS.fork_workflow(handle.workflow_id, 3)
         assert tuple(forked.get_result()) == (queue_name, queue_name, limiter, True)
         retrieved = DBOS.retrieve_queue(queue_name)
         assert retrieved is not None and retrieved.global_concurrency == 3
     finally:
         DBOS.destroy(destroy_registry=True)
+
+
+def test_retrieve_queue_takes_no_step(dbos: DBOS) -> None:
+    # retrieve_queue then enqueue keeps the step numbering it had before queue
+    # methods became steps, so in-flight workflows recover across the upgrade.
+    queue_name = f"durable-q-{uuid.uuid4()}"
+    DBOS.register_queue(queue_name)
+
+    @DBOS.workflow()
+    def child(x: int) -> int:
+        return x
+
+    @DBOS.workflow()
+    def parent() -> int:
+        queue = DBOS.retrieve_queue(queue_name)
+        assert queue is not None
+        return queue.enqueue(child, 5).get_result()
+
+    handle = DBOS.start_workflow(parent)
+    assert handle.get_result() == 5
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert [s["function_name"] for s in steps] == [
+        get_dbos_func_name(child),
+        "DBOS.getResult",
+    ]
+    assert steps[0]["function_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_retrieve_queue_async_takes_no_step(dbos: DBOS) -> None:
+    queue_name = f"durable-q-{uuid.uuid4()}"
+    await DBOS.register_queue_async(queue_name)
+
+    @DBOS.workflow()
+    async def child(x: int) -> int:
+        return x
+
+    @DBOS.workflow()
+    async def parent() -> int:
+        queue = await DBOS.retrieve_queue_async(queue_name)
+        assert queue is not None
+        return await (await queue.enqueue_async(child, 6)).get_result()
+
+    handle = await DBOS.start_workflow_async(parent)
+    assert await handle.get_result() == 6
+    steps = await DBOS.list_workflow_steps_async(handle.workflow_id)
+    assert [s["function_name"] for s in steps] == [
+        get_dbos_func_name(child),
+        "DBOS.getResult",
+    ]
+    assert steps[0]["function_id"] == 1
 
 
 @pytest.mark.asyncio
@@ -96,18 +145,15 @@ async def test_queue_api_async_is_checkpointed(dbos: DBOS) -> None:
     @DBOS.workflow()
     async def queue_workflow() -> Tuple[str, Optional[int], bool]:
         registered = await DBOS.register_queue_async(queue_name, global_concurrency=3)
-        retrieved = await DBOS.retrieve_queue_async(queue_name)
         listed = any(q.name == queue_name for q in await DBOS.list_queues_async())
         await DBOS.delete_queue_async(queue_name)
-        assert retrieved is not None
         # Queue's public getters re-read the live row, so check the checkpointed value.
-        return registered.name, retrieved._concurrency, listed
+        return registered.name, registered._concurrency, listed
 
     handle = await DBOS.start_workflow_async(queue_workflow)
     assert await handle.get_result() == (queue_name, 3, True)
     expected = [
         "DBOS.registerQueue",
-        "DBOS.retrieveQueue",
         "DBOS.listQueues",
         "DBOS.deleteQueue",
     ]
@@ -191,7 +237,6 @@ async def test_concurrent_async_calls_number_steps_in_call_order(dbos: DBOS) -> 
             DBOS.list_queues_async(),
             DBOS.get_latest_application_version_async(),
             DBOS.list_application_versions_async(),
-            DBOS.retrieve_queue_async("no-such-queue"),
         )
         await asyncio.gather(
             DBOS.get_schedule_async(schedule_name),
@@ -206,7 +251,6 @@ async def test_concurrent_async_calls_number_steps_in_call_order(dbos: DBOS) -> 
         "DBOS.listQueues",
         "DBOS.getLatestApplicationVersion",
         "DBOS.listApplicationVersions",
-        "DBOS.retrieveQueue",
         "DBOS.getSchedule",
         "DBOS.listSchedules",
         "DBOS.deleteSchedule",

@@ -1456,7 +1456,6 @@ class DBOS:
                 polling_interval_sec=polling_interval_sec,
                 update_existing=update_existing,
             )
-            # Read the row directly: DBOS.retrieve_queue would take a second step.
             queue = dbos._sys_db.get_queue(name)
             assert queue is not None, f"Queue {name} missing from database after upsert"
             if inserted:
@@ -1484,27 +1483,13 @@ class DBOS:
         system database.
         """
         check_async("retrieve_queue")
-        return cls._retrieve_queue(snapshot_step_context(reserve_sleep_id=False), name)
+        return _get_dbos_instance()._sys_db.get_queue(name)
 
     @classmethod
     async def retrieve_queue_async(cls, name: str) -> Optional[Queue]:
         """Async version of :meth:`retrieve_queue`."""
-        step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
-        return await asyncio.to_thread(cls._retrieve_queue, step_ctx, name)
-
-    @classmethod
-    def _retrieve_queue(
-        cls, step_ctx: Optional[DBOSContext], name: str
-    ) -> Optional[Queue]:
-        sys_db = _get_dbos_instance()._sys_db
-
-        def fn() -> Optional[Dict[str, Any]]:
-            queue = sys_db.get_queue(name)
-            return queue._to_checkpoint() if queue is not None else None
-
-        data = sys_db.call_function_as_step(fn, "DBOS.retrieveQueue", step_ctx)
-        return Queue._from_checkpoint(data) if data is not None else None
+        return await asyncio.to_thread(cls.retrieve_queue, name)
 
     @classmethod
     def delete_queue(cls, name: str) -> None:
