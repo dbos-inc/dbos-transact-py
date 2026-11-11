@@ -467,12 +467,12 @@ def test_rewind_onto_a_queue_with_a_partition_key(dbos: DBOS) -> None:
     assert status.queue_name == "rewind_partitioned"
     assert status.queue_partition_key == "moved"
 
-    # Naming a queue without a key clears the key
+    # Naming a queue without a key changes only the queue
     dbos._sys_db.rewind_workflow(workflow_id, 1, queue_name=INTERNAL_QUEUE_NAME)
     assert DBOS.retrieve_workflow(workflow_id).get_result() == 5
     status = DBOS.retrieve_workflow(workflow_id).get_status()
     assert status.queue_name == INTERNAL_QUEUE_NAME
-    assert status.queue_partition_key is None
+    assert status.queue_partition_key == "moved"
 
 
 def test_rewind_onto_a_different_application_version(dbos: DBOS) -> None:

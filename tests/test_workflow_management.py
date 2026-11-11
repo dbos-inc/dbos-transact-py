@@ -1484,12 +1484,12 @@ def test_management_keeps_queue(dbos: DBOS) -> None:
     assert forked.get_result() == 5
     assert queue_of(forked.get_workflow_id()) == ("SUCCESS", "keep_queue", "p3", 7)
 
-    # An explicit queue takes the given partition key and the default priority
+    # An explicit queue changes only the queue
     forked = DBOS.fork_workflow(wfid, 1, queue_name="other_queue")
     assert forked.get_result() == 5
-    assert queue_of(forked.get_workflow_id()) == ("SUCCESS", "other_queue", None, 0)
+    assert queue_of(forked.get_workflow_id()) == ("SUCCESS", "other_queue", "p2", 7)
     assert DBOS.rewind_workflow(wfid, queue_name="other_queue").get_result() == 5
-    assert queue_of(wfid) == ("SUCCESS", "other_queue", None, 0)
+    assert queue_of(wfid) == ("SUCCESS", "other_queue", "p2", 7)
 
     assert queue_entries_are_cleaned_up(dbos)
 
@@ -1536,10 +1536,15 @@ def test_resume_partition_key_variants(dbos: DBOS, client: DBOSClient) -> None:
     assert [h.get_result() for h in handles] == [0, 1]
     assert [_queue_columns(i) for i in ids] == [("variants_queue", "d2", 3)] * 2
 
-    # An explicit queue takes the given key and the default priority
+    # Naming its own partitioned queue keeps the key, so the workflow still dequeues
+    [wfid] = _cancel_delayed("variants_queue", 1, echo)
+    assert DBOS.resume_workflow(wfid, queue_name="variants_queue").get_result() == 0
+    assert _queue_columns(wfid) == ("variants_queue", "p0", 3)
+
+    # An explicit queue changes only the queue
     [wfid] = _cancel_delayed("variants_queue", 1, echo)
     assert DBOS.resume_workflow(wfid, queue_name="variants_other").get_result() == 0
-    assert _queue_columns(wfid) == ("variants_other", None, 0)
+    assert _queue_columns(wfid) == ("variants_other", "p0", 3)
 
     assert queue_entries_are_cleaned_up(dbos)
 

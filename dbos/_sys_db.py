@@ -1793,17 +1793,16 @@ class SystemDatabase(ABC):
     def _requeue_values(
         self, queue_name: Optional[str], queue_partition_key: Optional[str]
     ) -> Dict[str, Any]:
-        """Queue columns for a re-enqueue: the given queue with its own partition key and
-        default priority, else the row's queue (the internal one if it has none)."""
-        if queue_name is not None:
-            return dict(
-                queue_name=queue_name,
-                queue_partition_key=queue_partition_key,
-                priority=0,
-            )
+        """Queue columns for a re-enqueue: only what is passed changes; otherwise the row
+        keeps its queue (the internal one if it has none), partition key, and priority.
+        """
         ws = self.tables.workflow_status
         values: Dict[str, Any] = dict(
-            queue_name=sa.func.coalesce(ws.c.queue_name, INTERNAL_QUEUE_NAME)
+            queue_name=(
+                queue_name
+                if queue_name is not None
+                else sa.func.coalesce(ws.c.queue_name, INTERNAL_QUEUE_NAME)
+            )
         )
         if queue_partition_key is not None:
             values["queue_partition_key"] = queue_partition_key
@@ -2244,15 +2243,11 @@ class SystemDatabase(ABC):
     def _fork_queue_values(
         status: Any, queue_name: Optional[str], queue_partition_key: Optional[str]
     ) -> Dict[str, Any]:
-        """A fork's queue columns, inherited from its original unless a queue is given."""
-        if queue_name is not None:
-            return dict(
-                queue_name=queue_name,
-                queue_partition_key=queue_partition_key,
-                priority=0,
-            )
+        """A fork's queue columns: inherited from its original, except what is passed."""
+        if queue_name is None:
+            queue_name = status[12] if status[12] is not None else INTERNAL_QUEUE_NAME
         return dict(
-            queue_name=status[12] if status[12] is not None else INTERNAL_QUEUE_NAME,
+            queue_name=queue_name,
             queue_partition_key=(
                 queue_partition_key if queue_partition_key is not None else status[13]
             ),
