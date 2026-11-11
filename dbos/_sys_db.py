@@ -6883,8 +6883,9 @@ class SystemDatabase(ABC):
         name: str,
         *,
         client_system_database: Optional["SystemDatabase"] = None,
+        conn: Optional[sa.Connection] = None,
     ) -> Optional["Queue"]:
-        with self.engine.begin() as c:
+        def _do(c: sa.Connection) -> Optional["Queue"]:
             row = c.execute(
                 sa.select(self.tables.queues).where(
                     *self._global(self.tables.queues), self.tables.queues.c.name == name
@@ -6893,6 +6894,11 @@ class SystemDatabase(ABC):
             if row is None:
                 return None
             return queue_from_db_row(row, client_system_database=client_system_database)
+
+        if conn is not None:
+            return _do(conn)
+        with self.engine.begin() as c:
+            return _do(c)
 
     def list_queues(
         self,
