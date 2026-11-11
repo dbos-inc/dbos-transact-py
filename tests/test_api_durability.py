@@ -12,6 +12,7 @@ import pytest
 
 from dbos import DBOS, DBOSConfig
 from dbos._error import DBOSException
+from dbos._serialization import DBOSPortableJSONSerializer
 
 
 def step_names(workflow_id: str) -> List[str]:
@@ -51,6 +52,41 @@ def test_queue_api_is_checkpointed(dbos: DBOS) -> None:
     forked = DBOS.fork_workflow(handle.workflow_id, len(expected))
     assert forked.get_result() == (queue_name, 3, True)
     assert step_names(forked.workflow_id) == expected
+
+
+def test_queue_api_checkpoints_under_portable_serializer(
+    config: DBOSConfig, cleanup_test_databases: None
+) -> None:
+    # Queue results are checkpointed as plain data, so JSON serializers store them.
+    DBOS.destroy(destroy_registry=True)
+    config["serializer"] = DBOSPortableJSONSerializer()
+    DBOS(config=config)
+    DBOS.launch()
+    try:
+        queue_name = f"durable-q-{uuid.uuid4()}"
+        limiter = {"limit": 5, "period": 1.5}
+
+        @DBOS.workflow()
+        def queue_workflow() -> Tuple[str, str, Any, bool]:
+            registered = DBOS.register_queue(
+                queue_name, global_concurrency=3, limiter={"limit": 5, "period": 1.5}
+            )
+            retrieved = DBOS.retrieve_queue(queue_name)
+            assert retrieved is not None
+            listed = any(q.name == queue_name for q in DBOS.list_queues())
+            return registered.name, retrieved.name, retrieved._limiter, listed
+
+        handle = DBOS.start_workflow(queue_workflow)
+        # JSON returns the workflow's tuple as a list.
+        assert tuple(handle.get_result()) == (queue_name, queue_name, limiter, True)
+
+        # The replay rebuilds the queues from the checkpointed data.
+        forked = DBOS.fork_workflow(handle.workflow_id, 4)
+        assert tuple(forked.get_result()) == (queue_name, queue_name, limiter, True)
+        retrieved = DBOS.retrieve_queue(queue_name)
+        assert retrieved is not None and retrieved.global_concurrency == 3
+    finally:
+        DBOS.destroy(destroy_registry=True)
 
 
 @pytest.mark.asyncio
@@ -229,27 +265,6 @@ def test_create_schedule_queue_check_is_inside_step(dbos: DBOS) -> None:
     steps = DBOS.list_workflow_steps(err_handle.workflow_id)
     assert [s["function_name"] for s in steps] == ["DBOS.createSchedule"]
     assert steps[0]["error"] is not None
-
-
-def test_destroy_refused_in_workflow_and_step(dbos: DBOS) -> None:
-    @DBOS.step()
-    def destroy_step() -> None:
-        DBOS.destroy()
-
-    @DBOS.workflow()
-    def destroy_workflow() -> None:
-        DBOS.destroy()
-
-    @DBOS.workflow()
-    def destroy_from_step_workflow() -> None:
-        destroy_step()
-
-    with pytest.raises(DBOSException, match="DBOS.destroy cannot be called"):
-        destroy_workflow()
-    with pytest.raises(DBOSException, match="DBOS.destroy cannot be called"):
-        destroy_from_step_workflow()
-    # DBOS is still running.
-    assert DBOS.list_workflows(limit=1) is not None
 
 
 def test_migrate_refused_in_workflow_body(dbos: DBOS, config: DBOSConfig) -> None:

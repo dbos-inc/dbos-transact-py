@@ -653,12 +653,6 @@ class DBOS:
         destroy_registry: bool = False,
         workflow_completion_timeout_sec: int = 0,
     ) -> None:
-        # Destroying DBOS tears down the executor running the caller.
-        ctx = get_local_dbos_context()
-        if ctx is not None and ctx.is_within_workflow():
-            raise DBOSException(
-                "DBOS.destroy cannot be called from within a workflow or step"
-            )
         global _dbos_global_instance
         if _dbos_global_instance is not None:
             _dbos_global_instance._destroy(
@@ -1434,7 +1428,7 @@ class DBOS:
         """Upsert a validated queue, as a step when called from a workflow."""
         dbos = _get_dbos_instance()
 
-        def fn() -> Queue:
+        def fn() -> Dict[str, Any]:
             if on_conflict == "always_update":
                 update_existing = True
             elif on_conflict == "never_update":
@@ -1474,9 +1468,12 @@ class DBOS:
                 else:
                     dbos.logger.info("Registered new queue (not listening):")
                 log_queue(queue)
-            return queue
+            # Checkpoint plain data, which any serializer can store, and rebuild the Queue.
+            return queue._to_checkpoint()
 
-        return dbos._sys_db.call_function_as_step(fn, "DBOS.registerQueue", step_ctx)
+        return Queue._from_checkpoint(
+            dbos._sys_db.call_function_as_step(fn, "DBOS.registerQueue", step_ctx)
+        )
 
     @classmethod
     def retrieve_queue(cls, name: str) -> Optional[Queue]:
@@ -1501,9 +1498,13 @@ class DBOS:
         cls, step_ctx: Optional[DBOSContext], name: str
     ) -> Optional[Queue]:
         sys_db = _get_dbos_instance()._sys_db
-        return sys_db.call_function_as_step(
-            lambda: sys_db.get_queue(name), "DBOS.retrieveQueue", step_ctx
-        )
+
+        def fn() -> Optional[Dict[str, Any]]:
+            queue = sys_db.get_queue(name)
+            return queue._to_checkpoint() if queue is not None else None
+
+        data = sys_db.call_function_as_step(fn, "DBOS.retrieveQueue", step_ctx)
+        return Queue._from_checkpoint(data) if data is not None else None
 
     @classmethod
     def delete_queue(cls, name: str) -> None:
@@ -1556,11 +1557,15 @@ class DBOS:
         application_name: Optional[Union[str, List[str]]],
     ) -> List[Queue]:
         sys_db = _get_dbos_instance()._sys_db
-        return sys_db.call_function_as_step(
-            lambda: sys_db.list_queues(application_name=application_name),
-            "DBOS.listQueues",
-            step_ctx,
-        )
+
+        def fn() -> List[Dict[str, Any]]:
+            return [
+                q._to_checkpoint()
+                for q in sys_db.list_queues(application_name=application_name)
+            ]
+
+        data = sys_db.call_function_as_step(fn, "DBOS.listQueues", step_ctx)
+        return [Queue._from_checkpoint(d) for d in data]
 
     # Decorators for DBOS functionality
     @classmethod

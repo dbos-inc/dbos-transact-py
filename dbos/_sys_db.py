@@ -6813,6 +6813,7 @@ class SystemDatabase(ABC):
                 c, av, av.c.version_name, version_name, owner, "Application version"
             )
 
+    @db_retry()
     def update_application_version_timestamp(
         self,
         version_name: str,
@@ -6845,6 +6846,7 @@ class SystemDatabase(ABC):
                 .values(version_timestamp=new_timestamp, application_name=resolved)
             )
 
+    @db_retry()
     def list_application_versions(self) -> List[VersionInfo]:
         with self._observability_query() as c:
             rows = c.execute(
@@ -6896,10 +6898,17 @@ class SystemDatabase(ABC):
             return queue_from_db_row(row, client_system_database=client_system_database)
 
         if conn is not None:
+            # The caller's transaction owns retries: a retry here would reuse its failed connection.
             return _do(conn)
-        with self.engine.begin() as c:
-            return _do(c)
 
+        @db_retry(sys_db=self)
+        def standalone() -> Optional["Queue"]:
+            with self.engine.begin() as c:
+                return _do(c)
+
+        return standalone()
+
+    @db_retry()
     def list_queues(
         self,
         *,
@@ -6922,6 +6931,7 @@ class SystemDatabase(ABC):
                 for row in rows
             ]
 
+    @db_retry()
     def delete_queue(self, name: str) -> None:
         """Delete a queue's row, if it exists."""
         with self.engine.begin() as c:
@@ -6945,6 +6955,7 @@ class SystemDatabase(ABC):
                 .values(**values)
             )
 
+    @db_retry()
     def upsert_queue(
         self,
         *,
