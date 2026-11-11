@@ -214,55 +214,51 @@ async def test_queue_api_async_is_checkpointed(dbos: DBOS) -> None:
 
 def test_application_version_api_is_checkpointed(dbos: DBOS) -> None:
     current = DBOS.application_version
-    other_version = f"durable-v-{uuid.uuid4()}"
-    dbos._sys_db.create_application_version(other_version, application_name=OTHER_APP)
+
+    @DBOS.step()
+    def promote() -> None:
+        DBOS.set_latest_application_version(current)
 
     @DBOS.workflow()
-    def version_workflow() -> Tuple[int, str, int, str]:
-        DBOS.set_latest_application_version(current)
+    def version_workflow() -> Tuple[int, str, int]:
+        # Promoting a version is refused in a workflow body, before it takes a step
+        # ID, but allowed in a step.
+        with pytest.raises(
+            DBOSException, match="DBOS.set_latest_application_version cannot be called"
+        ):
+            DBOS.set_latest_application_version(current)
+        promote()
         listed_at = next(
             v["version_timestamp"]
             for v in DBOS.list_application_versions()
             if v["version_name"] == current
         )
         latest = DBOS.get_latest_application_version()
-        # Another application's version makes this fail, and the error is recorded.
-        try:
-            DBOS.set_latest_application_version(other_version)
-            collision = ""
-        except DBOSException as e:
-            collision = str(e)
-        return listed_at, latest["version_name"], latest["version_timestamp"], collision
+        return listed_at, latest["version_name"], latest["version_timestamp"]
 
     handle = DBOS.start_workflow(version_workflow)
     result = handle.get_result()
     promoted_at = result[2]
-    assert result[:3] == (promoted_at, current, promoted_at)
-    assert "already registered by application" in result[3]
+    assert result == (promoted_at, current, promoted_at)
     expected_steps = [
-        (1, "DBOS.setLatestApplicationVersion"),
+        (1, get_dbos_func_name(promote)),
         (2, "DBOS.listApplicationVersions"),
         (3, "DBOS.getLatestApplicationVersion"),
-        (4, "DBOS.setLatestApplicationVersion"),
     ]
     assert steps_of(handle.workflow_id) == expected_steps
-    assert DBOS.list_workflow_steps(handle.workflow_id)[3]["error"] is not None
 
-    # Replaying every step does not promote the version again: the timestamp it
-    # wrote stands, rather than moving to the replay's clock.
+    # Replaying every step does not promote the version again.
     time.sleep(0.01)
-    forked = DBOS.fork_workflow(handle.workflow_id, 5)
+    forked = DBOS.fork_workflow(handle.workflow_id, 4)
     assert forked.get_result() == result
     assert steps_of(forked.workflow_id) == expected_steps
     assert DBOS.get_latest_application_version()["version_timestamp"] == promoted_at
 
-    # Replaying from the start does run the promotion again, at a later time.
-    refork = DBOS.fork_workflow(handle.workflow_id, 1)
-    assert refork.get_result()[2] > promoted_at
-
-    # Now the live timestamp differs, so a full replay can only return the old
-    # one from the recorded reads.
-    forked = DBOS.fork_workflow(handle.workflow_id, 5)
+    # Once the live timestamp moves, a full replay can only return the old one
+    # from the recorded reads.
+    DBOS.set_latest_application_version(current)
+    assert DBOS.get_latest_application_version()["version_timestamp"] > promoted_at
+    forked = DBOS.fork_workflow(handle.workflow_id, 4)
     assert forked.get_result() == result
 
 
@@ -293,9 +289,11 @@ async def test_concurrent_async_calls_number_steps_in_call_order(
 
     @DBOS.workflow()
     async def concurrent_workflow() -> str:
-        # Validation errors raise before the calls take a step ID.
+        # Validation errors and refusals raise before the calls take a step ID.
         with pytest.raises(ValueError):
             await DBOS.register_queue_async("_dbos_reserved")
+        with pytest.raises(DBOSException, match="cannot be called from a workflow"):
+            await DBOS.set_latest_application_version_async(DBOS.application_version)
         with pytest.raises(DBOSException, match="Invalid cron schedule"):
             await DBOS.create_schedule_async(
                 schedule_name="bad", workflow_fn=target_workflow, schedule="nope"
@@ -313,7 +311,6 @@ async def test_concurrent_async_calls_number_steps_in_call_order(
             DBOS.register_queue_async(f"durable-q-{uuid.uuid4()}"),
             DBOS.list_queues_async(),
             DBOS.delete_queue_async(f"no-such-queue-{uuid.uuid4()}"),
-            DBOS.set_latest_application_version_async(DBOS.application_version),
             DBOS.get_latest_application_version_async(),
             DBOS.list_application_versions_async(),
             DBOS.list_queues_async(),
@@ -339,18 +336,17 @@ async def test_concurrent_async_calls_number_steps_in_call_order(
         (5, "DBOS.registerQueue"),
         (6, "DBOS.listQueues"),
         (7, "DBOS.deleteQueue"),
-        (8, "DBOS.setLatestApplicationVersion"),
-        (9, "DBOS.getLatestApplicationVersion"),
-        (10, "DBOS.listApplicationVersions"),
-        (11, "DBOS.listQueues"),
-        (12, "DBOS.deleteSchedule"),
-        (13, "DBOS.createSchedule"),
+        (8, "DBOS.getLatestApplicationVersion"),
+        (9, "DBOS.listApplicationVersions"),
+        (10, "DBOS.listQueues"),
+        (11, "DBOS.deleteSchedule"),
+        (12, "DBOS.createSchedule"),
     ]
     handle = await DBOS.start_workflow_async(concurrent_workflow)
     assert "is not declared" in await handle.get_result()
     assert await steps_of_async(handle.workflow_id) == expected_steps
     steps = await DBOS.list_workflow_steps_async(handle.workflow_id)
-    assert steps[12]["error"] is not None
+    assert steps[11]["error"] is not None
 
     # The queue check is recorded with createSchedule: with the queue deleted, the
     # replay returns the recorded result instead of failing the check.
