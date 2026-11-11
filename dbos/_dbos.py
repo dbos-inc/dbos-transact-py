@@ -120,6 +120,7 @@ from ._sys_db import (
     VersionInfo,
     WorkflowSchedule,
     WorkflowStatus,
+    db_retry,
 )
 from ._tracer import DBOSTracer, dbos_tracer
 
@@ -264,6 +265,16 @@ def _refuse_load_in_workflow(fn: str) -> None:
             f"{fn}() may not be called from a workflow. Call it from a step and use the "
             "value there: a step's return value is checkpointed, so return only a small result."
         )
+
+
+def _retried_as_step(
+    sys_db: SystemDatabase, step_ctx: Optional[DBOSContext], fn: Callable[[], T]
+) -> Callable[[], T]:
+    """Retry fn's transient database errors when it runs as a workflow step, whose
+    recorded error a replay would re-raise forever. Other callers fail fast."""
+    if step_ctx is not None and step_ctx.is_workflow():
+        return db_retry(sys_db=sys_db)(fn)
+    return fn
 
 
 def check_async(fn: str) -> None:
@@ -1471,7 +1482,11 @@ class DBOS:
             return queue._to_checkpoint()
 
         return Queue._from_checkpoint(
-            dbos._sys_db.call_function_as_step(fn, "DBOS.registerQueue", step_ctx)
+            dbos._sys_db.call_function_as_step(
+                _retried_as_step(dbos._sys_db, step_ctx, fn),
+                "DBOS.registerQueue",
+                step_ctx,
+            )
         )
 
     @classmethod
@@ -1508,7 +1523,9 @@ class DBOS:
     def _delete_queue(cls, step_ctx: Optional[DBOSContext], name: str) -> None:
         sys_db = _get_dbos_instance()._sys_db
         sys_db.call_function_as_step(
-            lambda: sys_db.delete_queue(name), "DBOS.deleteQueue", step_ctx
+            _retried_as_step(sys_db, step_ctx, lambda: sys_db.delete_queue(name)),
+            "DBOS.deleteQueue",
+            step_ctx,
         )
 
     @classmethod
@@ -1549,7 +1566,9 @@ class DBOS:
                 for q in sys_db.list_queues(application_name=application_name)
             ]
 
-        data = sys_db.call_function_as_step(fn, "DBOS.listQueues", step_ctx)
+        data = sys_db.call_function_as_step(
+            _retried_as_step(sys_db, step_ctx, fn), "DBOS.listQueues", step_ctx
+        )
         return [Queue._from_checkpoint(d) for d in data]
 
     # Decorators for DBOS functionality
@@ -4237,7 +4256,7 @@ class DBOS:
     ) -> List[VersionInfo]:
         sys_db = _get_dbos_instance()._sys_db
         return sys_db.call_function_as_step(
-            sys_db.list_application_versions,
+            _retried_as_step(sys_db, step_ctx, sys_db.list_application_versions),
             "DBOS.listApplicationVersions",
             step_ctx,
         )

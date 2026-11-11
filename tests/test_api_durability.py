@@ -10,10 +10,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import pytest
+import sqlalchemy as sa
 
 import dbos._dbos as dbos_module
 from dbos import DBOS, DBOSConfig, Queue
-from dbos._context import snapshot_step_context
+from dbos._context import get_local_dbos_context, snapshot_step_context
 from dbos._error import DBOSException
 from dbos._registrations import get_dbos_func_name
 from dbos._serialization import DBOSPortableJSONSerializer, DefaultSerializer
@@ -31,6 +32,36 @@ def steps_of(workflow_id: str) -> List[Tuple[int, str]]:
 async def steps_of_async(workflow_id: str) -> List[Tuple[int, str]]:
     steps = await DBOS.list_workflow_steps_async(workflow_id)
     return [(s["function_id"], s["function_name"]) for s in steps]
+
+
+def dropped_connection() -> sa.exc.DBAPIError:
+    return sa.exc.DBAPIError(
+        "SELECT 1", None, Exception("connection dropped"), connection_invalidated=True
+    )
+
+
+def fail_once_in_workflows(
+    monkeypatch: pytest.MonkeyPatch, dbos: DBOS, *names: str
+) -> Dict[str, int]:
+    """Make each system database method drop its connection once when a workflow calls
+    it, leaving DBOS's own background callers alone. Returns the failures left."""
+    remaining = {name: 1 for name in names}
+    for name in names:
+
+        def flaky(
+            *args: Any,
+            _name: str = name,
+            _real: Any = getattr(dbos._sys_db, name),
+            **kwargs: Any,
+        ) -> Any:
+            ctx = get_local_dbos_context()
+            if ctx is not None and ctx.is_within_workflow() and remaining[_name] > 0:
+                remaining[_name] -= 1
+                raise dropped_connection()
+            return _real(*args, **kwargs)
+
+        monkeypatch.setattr(dbos._sys_db, name, flaky)
+    return remaining
 
 
 def queue_fields(queue: Queue) -> Dict[str, Any]:
@@ -135,7 +166,9 @@ def test_queue_api_is_checkpointed(
 
 
 @pytest.mark.asyncio
-async def test_queue_api_async_is_checkpointed(dbos: DBOS) -> None:
+async def test_queue_api_async_is_checkpointed(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
     queue_name = f"durable-q-{uuid.uuid4()}"
     other_queue = f"durable-q-{uuid.uuid4()}"
     dbos._sys_db.upsert_queue(
@@ -147,6 +180,10 @@ async def test_queue_api_async_is_checkpointed(dbos: DBOS) -> None:
         polling_interval_sec=1.0,
         update_existing=True,
         application_name=OTHER_APP,
+    )
+    # Steps retry a dropped connection rather than record it as their result.
+    remaining = fail_once_in_workflows(
+        monkeypatch, dbos, "upsert_queue", "list_queues", "delete_queue"
     )
     # A partitioned queue, so the partition fields go through the checkpoint too.
     fields = {
@@ -202,6 +239,18 @@ async def test_queue_api_async_is_checkpointed(dbos: DBOS) -> None:
     assert await steps_of_async(handle.workflow_id) == expected_steps
     steps = await DBOS.list_workflow_steps_async(handle.workflow_id)
     assert steps[0]["error"] is not None
+    assert remaining == {"upsert_queue": 0, "list_queues": 0, "delete_queue": 0}
+    assert all(s["error"] is None for s in steps[1:])
+
+    # Outside a workflow the same calls fail fast instead of retrying.
+    def always_drops(*args: Any, **kwargs: Any) -> Any:
+        raise dropped_connection()
+
+    real_list_queues = dbos._sys_db.list_queues
+    monkeypatch.setattr(dbos._sys_db, "list_queues", always_drops)
+    with pytest.raises(sa.exc.DBAPIError):
+        await asyncio.wait_for(DBOS.list_queues_async(), timeout=5)
+    monkeypatch.setattr(dbos._sys_db, "list_queues", real_list_queues)
 
     # With both queues gone, a replay returns the recorded results, including the
     # recorded error, instead of registering the other queue.
@@ -212,8 +261,12 @@ async def test_queue_api_async_is_checkpointed(dbos: DBOS) -> None:
     assert await DBOS.retrieve_queue_async(other_queue) is None
 
 
-def test_application_version_api_is_checkpointed(dbos: DBOS) -> None:
+def test_application_version_api_is_checkpointed(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
     current = DBOS.application_version
+    # The read step retries a dropped connection rather than record it.
+    remaining = fail_once_in_workflows(monkeypatch, dbos, "list_application_versions")
 
     @DBOS.step()
     def promote() -> None:
@@ -246,6 +299,7 @@ def test_application_version_api_is_checkpointed(dbos: DBOS) -> None:
         (3, "DBOS.getLatestApplicationVersion"),
     ]
     assert steps_of(handle.workflow_id) == expected_steps
+    assert remaining == {"list_application_versions": 0}
 
     # Replaying every step does not promote the version again.
     time.sleep(0.01)
