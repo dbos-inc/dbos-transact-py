@@ -14,6 +14,19 @@ from sqlalchemy.exc import DBAPIError
 INTERNAL_QUEUE_NAME = "_dbos_internal_queue"
 
 
+def check_async(fn: str, *, has_async_variant: bool = True) -> None:
+    """Raise if fn, a blocking call, was called on a running event loop, which it would
+    stall. The message points to fn's async variant when it has one."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    message = f"{fn}() was called while an event loop is running."
+    if has_async_variant:
+        message += f" Use await {fn}_async(...) instead."
+    raise RuntimeError(message)
+
+
 class LoopAwareEvent(threading.Event):
     """A ``threading.Event`` that async callers can also await.
 

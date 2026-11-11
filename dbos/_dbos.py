@@ -48,7 +48,7 @@ from dbos._serialization import (
     serialize_value,
 )
 from dbos._sys_db import SystemDatabase, WorkflowStatus
-from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, generate_uuid
+from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, check_async, generate_uuid
 from dbos._workflow_commands import (
     fork_workflow,
     rewind_workflow,
@@ -267,18 +267,6 @@ def _refuse_load_in_workflow(fn: str) -> None:
         raise DBOSException(
             f"{fn}() may not be called from a workflow. Call it from a step and use the "
             "value there: a step's return value is checkpointed, so return only a small result."
-        )
-
-
-def check_async(fn: str) -> None:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        pass
-    else:
-        raise RuntimeError(
-            f"{fn}() was called while an event loop is running. "
-            f"Use await {fn}_async(...) instead."
         )
 
 

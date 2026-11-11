@@ -51,7 +51,7 @@ from dbos._queue import (
 )
 from dbos._shard_keys import bind_shard_keys
 from dbos._sys_db import SystemDatabase
-from dbos._utils import generate_uuid
+from dbos._utils import check_async, generate_uuid
 
 if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
@@ -107,22 +107,6 @@ F = TypeVar("F", bound=Callable[..., Any])
 _ENQUEUE_STEP = "DBOSClient.enqueue"
 
 
-def _refuse_on_event_loop(method: str, has_async_variant: bool) -> None:
-    """Raise if called on a running event loop, which a blocking call would stall."""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    alternative = (
-        f"Use await {method}_async(...) instead."
-        if has_async_variant
-        else f"Get the handle from an async client method and await its {method}() instead."
-    )
-    raise RuntimeError(
-        f"{method}() was called while an event loop is running. {alternative}"
-    )
-
-
 def _client_step_context(
     sync_method: Optional[str], *, has_async_variant: bool = True
 ) -> Optional[DBOSContext]:
@@ -132,7 +116,7 @@ def _client_step_context(
         return None
     if sync_method is not None:
         # An async workflow's body runs on the event loop every other coroutine shares.
-        _refuse_on_event_loop(sync_method, has_async_variant)
+        check_async(sync_method, has_async_variant=has_async_variant)
     return snapshot_step_context()
 
 
