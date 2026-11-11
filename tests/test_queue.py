@@ -2068,8 +2068,14 @@ def test_resuming_queued_workflows(dbos: DBOS) -> None:
     assert regular_handle_1.get_status().status == WorkflowStatusString.ENQUEUED.value
     assert regular_handle_2.get_status().status == WorkflowStatusString.ENQUEUED.value
 
-    # Resume a regular workflow. Verify it completes.
+    # Resuming without a queue leaves the workflow waiting on its own queue.
     dbos.resume_workflow(wfid)
+    status = regular_handle_1.get_status()
+    assert status.status == WorkflowStatusString.ENQUEUED.value
+    assert status.queue_name == "test_queue"
+
+    # Resuming onto the internal queue starts it immediately, bypassing its queue.
+    dbos.resume_workflow(wfid, queue_name=INTERNAL_QUEUE_NAME)
     assert regular_handle_1.get_result() == None
 
     # Complete the blocked workflow. Verify the second regular workflow also completes.
@@ -2111,8 +2117,14 @@ def test_resuming_queued_partitioned_workflows(
     assert regular_handle_1.get_status().status == WorkflowStatusString.ENQUEUED.value
     assert regular_handle_2.get_status().status == WorkflowStatusString.ENQUEUED.value
 
-    # Resume a regular workflow. Verify it completes.
+    # Resuming without a queue leaves the workflow waiting on its own queue.
     dbos.resume_workflow(wfid)
+    status = regular_handle_1.get_status()
+    assert status.status == WorkflowStatusString.ENQUEUED.value
+    assert status.queue_name == "test_queue"
+
+    # Resuming onto the internal queue starts it immediately, bypassing its queue.
+    dbos.resume_workflow(wfid, queue_name=INTERNAL_QUEUE_NAME)
     assert regular_handle_1.get_result() == None
 
     # Complete the blocked workflow. Verify the second regular workflow also completes.

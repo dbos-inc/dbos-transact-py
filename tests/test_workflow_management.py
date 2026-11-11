@@ -1437,7 +1437,7 @@ def test_management_keeps_queue(dbos: DBOS) -> None:
     @DBOS.workflow()
     def blocking_workflow(x: int) -> int:
         main_thread_event.set()
-        workflow_event.wait()
+        workflow_event.wait(timeout=30)
         return x
 
     DBOS.register_queue("keep_queue", partition_concurrency=1)
@@ -1456,9 +1456,11 @@ def test_management_keeps_queue(dbos: DBOS) -> None:
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid), SetEnqueueOptions(queue_partition_key="p1", priority=7):
         handle = DBOS.enqueue_workflow("keep_queue", blocking_workflow, 5)
-    main_thread_event.wait()
-    DBOS.cancel_workflow(wfid)
-    workflow_event.set()
+    try:
+        assert main_thread_event.wait(timeout=30)
+        DBOS.cancel_workflow(wfid)
+    finally:
+        workflow_event.set()
     with pytest.raises(DBOSAwaitedWorkflowCancelledError):
         handle.get_result()
 
@@ -1492,13 +1494,112 @@ def test_management_keeps_queue(dbos: DBOS) -> None:
     assert queue_entries_are_cleaned_up(dbos)
 
 
+def _cancel_delayed(queue_name: str, count: int, workflow: Any) -> List[str]:
+    """Enqueue delayed workflows on a partitioned queue and cancel them before they run."""
+    ids = [str(uuid.uuid4()) for _ in range(count)]
+    for i, wfid in enumerate(ids):
+        with (
+            SetWorkflowID(wfid),
+            SetEnqueueOptions(queue_partition_key="p0", priority=3, delay_seconds=3600),
+        ):
+            DBOS.enqueue_workflow(queue_name, workflow, i)
+    DBOS.cancel_workflows(ids)
+    return ids
+
+
+def _queue_columns(workflow_id: str) -> tuple[Any, Any, Any]:
+    status = DBOS.get_workflow_status(workflow_id)
+    assert status is not None
+    return (status.queue_name, status.queue_partition_key, status.priority)
+
+
+def test_resume_partition_key_variants(dbos: DBOS, client: DBOSClient) -> None:
+    @DBOS.workflow()
+    def echo(x: int) -> int:
+        return x
+
+    DBOS.register_queue("variants_queue", partition_concurrency=2)
+    DBOS.register_queue("variants_other")
+
+    # Each resume variant forwards the partition key and keeps the queue and priority
+    [wfid] = _cancel_delayed("variants_queue", 1, echo)
+    assert client.resume_workflow(wfid, queue_partition_key="c1").get_result() == 0
+    assert _queue_columns(wfid) == ("variants_queue", "c1", 3)
+
+    ids = _cancel_delayed("variants_queue", 2, echo)
+    handles = client.resume_workflows(ids, queue_partition_key="c2")
+    assert [h.get_result() for h in handles] == [0, 1]
+    assert [_queue_columns(i) for i in ids] == [("variants_queue", "c2", 3)] * 2
+
+    ids = _cancel_delayed("variants_queue", 2, echo)
+    handles = DBOS.resume_workflows(ids, queue_partition_key="d2")
+    assert [h.get_result() for h in handles] == [0, 1]
+    assert [_queue_columns(i) for i in ids] == [("variants_queue", "d2", 3)] * 2
+
+    # An explicit queue takes the given key and the default priority
+    [wfid] = _cancel_delayed("variants_queue", 1, echo)
+    assert DBOS.resume_workflow(wfid, queue_name="variants_other").get_result() == 0
+    assert _queue_columns(wfid) == ("variants_other", None, 0)
+
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+@pytest.mark.asyncio
+async def test_resume_partition_key_variants_async(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    @DBOS.workflow()
+    async def echo(x: int) -> int:
+        return x
+
+    await DBOS.register_queue_async("variants_async", partition_concurrency=2)
+
+    async def cancel_delayed(count: int) -> List[str]:
+        ids = [str(uuid.uuid4()) for _ in range(count)]
+        for i, wfid in enumerate(ids):
+            with (
+                SetWorkflowID(wfid),
+                SetEnqueueOptions(
+                    queue_partition_key="p0", priority=3, delay_seconds=3600
+                ),
+            ):
+                await DBOS.enqueue_workflow_async("variants_async", echo, i)
+        await DBOS.cancel_workflows_async(ids)
+        return ids
+
+    async def queue_columns(workflow_id: str) -> tuple[Any, Any, Any]:
+        status = await DBOS.get_workflow_status_async(workflow_id)
+        assert status is not None
+        return (status.queue_name, status.queue_partition_key, status.priority)
+
+    [wfid] = await cancel_delayed(1)
+    handle = await DBOS.resume_workflow_async(wfid, queue_partition_key="a1")
+    assert await handle.get_result() == 0
+    assert await queue_columns(wfid) == ("variants_async", "a1", 3)
+
+    ids = await cancel_delayed(2)
+    handles = await DBOS.resume_workflows_async(ids, queue_partition_key="a2")
+    assert [await h.get_result() for h in handles] == [0, 1]
+    assert [await queue_columns(i) for i in ids] == [("variants_async", "a2", 3)] * 2
+
+    [wfid] = await cancel_delayed(1)
+    client_handle = await client.resume_workflow_async(wfid, queue_partition_key="c1")
+    assert await client_handle.get_result() == 0
+    assert await queue_columns(wfid) == ("variants_async", "c1", 3)
+
+    ids = await cancel_delayed(2)
+    client_handles = await client.resume_workflows_async(ids, queue_partition_key="c2")
+    assert [await h.get_result() for h in client_handles] == [0, 1]
+    assert [await queue_columns(i) for i in ids] == [("variants_async", "c2", 3)] * 2
+
+
 def test_timeout_and_dead_letter_keep_queue(dbos: DBOS) -> None:
     timeout_event = threading.Event()
     dead_letter_event = threading.Event()
 
     @DBOS.workflow()
     def blocking_workflow(event_name: str) -> str:
-        (timeout_event if event_name == "timeout" else dead_letter_event).wait()
+        (timeout_event if event_name == "timeout" else dead_letter_event).wait(30)
         return event_name
 
     DBOS.register_queue("kept_queue")
@@ -1508,36 +1609,47 @@ def test_timeout_and_dead_letter_keep_queue(dbos: DBOS) -> None:
 
     # A timed-out workflow keeps its queue and resumes back onto it
     timed_out_id = str(uuid.uuid4())
-    with SetWorkflowID(timed_out_id), SetWorkflowTimeout(0.1):
-        handle = DBOS.enqueue_workflow("kept_queue", blocking_workflow, "timeout")
-    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
-        handle.get_result()
-    status = DBOS.get_workflow_status(timed_out_id)
-    assert status is not None
-    assert status.status == "CANCELLED"
-    assert status.queue_name == "kept_queue"
-    timeout_event.set()
+    try:
+        with SetWorkflowID(timed_out_id), SetWorkflowTimeout(0.1):
+            handle = DBOS.enqueue_workflow("kept_queue", blocking_workflow, "timeout")
+        with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+            handle.get_result()
+        status = DBOS.get_workflow_status(timed_out_id)
+        assert status is not None
+        assert status.status == "CANCELLED"
+        assert status.queue_name == "kept_queue"
+    finally:
+        timeout_event.set()
     retry_until_success(lambda: execution_left(timed_out_id))
+    # Lengthen the timeout, or the resumed run's fresh 100 ms deadline could cancel it again.
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .where(SystemSchema.workflow_status.c.workflow_uuid == timed_out_id)
+            .values(workflow_timeout_ms=60000)
+        )
     resumed = DBOS.resume_workflow(timed_out_id)
     assert resumed.get_result() == "timeout"
     assert resumed.get_status().queue_name == "kept_queue"
 
     # So does a dead-lettered one
     dead_id = str(uuid.uuid4())
-    with SetWorkflowID(dead_id):
-        handle = DBOS.enqueue_workflow("kept_queue", blocking_workflow, "dead")
+    try:
+        with SetWorkflowID(dead_id):
+            handle = DBOS.enqueue_workflow("kept_queue", blocking_workflow, "dead")
 
-    def is_pending() -> None:
+        def is_pending() -> None:
+            status = DBOS.get_workflow_status(dead_id)
+            assert status is not None and status.status == "PENDING"
+
+        retry_until_success(is_pending)
+        dbos._sys_db.dead_letter_workflows([dead_id], min_recovery_attempts=0)
         status = DBOS.get_workflow_status(dead_id)
-        assert status is not None and status.status == "PENDING"
-
-    retry_until_success(is_pending)
-    dbos._sys_db.dead_letter_workflows([dead_id], min_recovery_attempts=0)
-    status = DBOS.get_workflow_status(dead_id)
-    assert status is not None
-    assert status.status == "MAX_RECOVERY_ATTEMPTS_EXCEEDED"
-    assert status.queue_name == "kept_queue"
-    dead_letter_event.set()
+        assert status is not None
+        assert status.status == "MAX_RECOVERY_ATTEMPTS_EXCEEDED"
+        assert status.queue_name == "kept_queue"
+    finally:
+        dead_letter_event.set()
     retry_until_success(lambda: execution_left(dead_id))
     resumed = DBOS.resume_workflow(dead_id)
     assert resumed.get_result() == "dead"
