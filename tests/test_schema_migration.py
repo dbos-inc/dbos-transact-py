@@ -2154,3 +2154,75 @@ def test_migrate_with_connection_dies_with_the_connections_session(
             sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
         ).scalar()
     assert version == rewind_to
+
+
+def test_migrate_with_connection_dies_during_an_online_migration(
+    dbos_dropped_databases: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
+    """Same disconnect-mid-migration scenario as above, but for an online
+    (CREATE/DROP INDEX CONCURRENTLY, autocommit) migration instead of a
+    transactional one. The _autocommit cleanup path must surface the real
+    database error (e.g. a connection_invalidated DBAPIError) to the caller,
+    not a PendingRollbackError raised by the cleanup itself trying to act on
+    a dead connection."""
+    from unittest.mock import patch
+
+    sys_db_url = postgres_urls()[1]
+    engine = dbos_dropped_databases._sys_db.engine
+    schema = "dbos"
+    rewind_to = 21  # one before migration 22, an online (CONCURRENTLY) migration
+
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(f'UPDATE "{schema}".dbos_migrations SET version = :v'),
+            {"v": rewind_to},
+        )
+
+    conn = engine.connect()
+    backend_pid = conn.execute(sa.text("SELECT pg_backend_pid()")).scalar()
+    # Reading backend_pid autobegan a transaction on conn (SQLAlchemy
+    # autobegin); the online migration below requires conn to have none open.
+    conn.commit()
+
+    errors: list[BaseException] = []
+
+    def run_migration() -> None:
+        try:
+            with patch(
+                "dbos._migration.get_dbos_migration_twentytwo",
+                return_value="SELECT pg_sleep(5)",
+            ):
+                DBOS.migrate(sys_db_url, schema=schema, connection=conn)
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+
+    thread = threading.Thread(target=run_migration)
+    thread.start()
+    try:
+        time.sleep(1)  # let the migration reach the pg_sleep(5)
+        killer = sa.create_engine(
+            sa.make_url(sys_db_url).set(drivername="postgresql+psycopg")
+        )
+        try:
+            with killer.connect().execution_options(
+                isolation_level="AUTOCOMMIT"
+            ) as kconn:
+                kconn.execute(
+                    sa.text("SELECT pg_terminate_backend(:pid)"), {"pid": backend_pid}
+                )
+        finally:
+            killer.dispose()
+    finally:
+        thread.join(timeout=15)
+
+    assert not thread.is_alive()
+    assert len(errors) == 1
+    error = errors[0]
+    assert isinstance(error, DBAPIError)
+    assert error.connection_invalidated
+
+    with engine.connect() as check_conn:
+        version = check_conn.execute(
+            sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+        ).scalar()
+    assert version == rewind_to
