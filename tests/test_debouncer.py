@@ -174,7 +174,7 @@ def test_debouncer_queue_from_workflow_is_replay_safe(dbos: DBOS) -> None:
         "DBOS.getResult",
     ]
 
-    # The queue check is recorded with the bounce, so a replay after the queue
+    # The queue check is recorded with the bounce, so replay after the queue
     # is deleted returns the recorded outcome instead of raising.
     DBOS.delete_queue(queue_name)
     forked = DBOS.fork_workflow(handle.workflow_id, len(steps) + 1)
