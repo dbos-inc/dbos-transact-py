@@ -7,7 +7,14 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.exc import OperationalError
 
-from dbos import DBOS, DBOSClient, SetWorkflowID, WorkflowHandle
+from dbos import (
+    DBOS,
+    DBOSClient,
+    SetEnqueueOptions,
+    SetWorkflowID,
+    SetWorkflowTimeout,
+    WorkflowHandle,
+)
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
@@ -860,10 +867,14 @@ def test_cancel_resume_queue(dbos: DBOS) -> None:
 
     retry_until_success(execution_left, interval=0.1, max_attempts=100)
     assert steps_completed == 1
-    assert DBOS.get_workflow_status(wfid).status == "CANCELLED"  # type: ignore[union-attr]
+    cancelled = DBOS.get_workflow_status(wfid)
+    assert cancelled is not None
+    assert cancelled.status == "CANCELLED"
+    assert cancelled.queue_name == "test_queue"
 
-    # Resume the workflow. Verify it completes successfully.
+    # Resume the workflow back onto its queue. Verify it completes successfully.
     handle = DBOS.resume_workflow(wfid)
+    assert handle.get_status().queue_name == "test_queue"
     assert handle.get_result() == input
     assert steps_completed == 2
 
@@ -1415,6 +1426,122 @@ def test_resume_and_fork_to_queue(dbos: DBOS) -> None:
     assert forked_handle.get_result() == output
     assert step_one_count == 1  # Step 1 replayed from checkpoint
     assert step_two_count == 2  # Step 2 was re-executed
+
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_management_keeps_queue(dbos: DBOS) -> None:
+    workflow_event = threading.Event()
+    main_thread_event = threading.Event()
+
+    @DBOS.workflow()
+    def blocking_workflow(x: int) -> int:
+        main_thread_event.set()
+        workflow_event.wait()
+        return x
+
+    DBOS.register_queue("keep_queue", partition_concurrency=1)
+    DBOS.register_queue("other_queue")
+
+    def queue_of(workflow_id: str) -> tuple[str, Any, Any, Any]:
+        status = DBOS.get_workflow_status(workflow_id)
+        assert status is not None
+        return (
+            status.status,
+            status.queue_name,
+            status.queue_partition_key,
+            status.priority,
+        )
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid), SetEnqueueOptions(queue_partition_key="p1", priority=7):
+        handle = DBOS.enqueue_workflow("keep_queue", blocking_workflow, 5)
+    main_thread_event.wait()
+    DBOS.cancel_workflow(wfid)
+    workflow_event.set()
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        handle.get_result()
+
+    def execution_left() -> None:
+        assert wfid not in dbos._active_workflows_set.activeList()
+
+    retry_until_success(execution_left, interval=0.1, max_attempts=100)
+    assert queue_of(wfid) == ("CANCELLED", "keep_queue", "p1", 7)
+
+    # Resume with only a partition key keeps the queue and priority
+    assert DBOS.resume_workflow(wfid, queue_partition_key="p2").get_result() == 5
+    assert queue_of(wfid) == ("SUCCESS", "keep_queue", "p2", 7)
+
+    # Rewind and fork inherit the queue, partition key, and priority
+    assert DBOS.rewind_workflow(wfid).get_result() == 5
+    assert queue_of(wfid) == ("SUCCESS", "keep_queue", "p2", 7)
+    forked = DBOS.fork_workflow(wfid, 1)
+    assert forked.get_result() == 5
+    assert queue_of(forked.get_workflow_id()) == ("SUCCESS", "keep_queue", "p2", 7)
+    forked = DBOS.fork_workflow(wfid, 1, queue_partition_key="p3")
+    assert forked.get_result() == 5
+    assert queue_of(forked.get_workflow_id()) == ("SUCCESS", "keep_queue", "p3", 7)
+
+    # An explicit queue takes the given partition key and the default priority
+    forked = DBOS.fork_workflow(wfid, 1, queue_name="other_queue")
+    assert forked.get_result() == 5
+    assert queue_of(forked.get_workflow_id()) == ("SUCCESS", "other_queue", None, 0)
+    assert DBOS.rewind_workflow(wfid, queue_name="other_queue").get_result() == 5
+    assert queue_of(wfid) == ("SUCCESS", "other_queue", None, 0)
+
+    assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_timeout_and_dead_letter_keep_queue(dbos: DBOS) -> None:
+    timeout_event = threading.Event()
+    dead_letter_event = threading.Event()
+
+    @DBOS.workflow()
+    def blocking_workflow(event_name: str) -> str:
+        (timeout_event if event_name == "timeout" else dead_letter_event).wait()
+        return event_name
+
+    DBOS.register_queue("kept_queue")
+
+    def execution_left(workflow_id: str) -> None:
+        assert workflow_id not in dbos._active_workflows_set.activeList()
+
+    # A timed-out workflow keeps its queue and resumes back onto it
+    timed_out_id = str(uuid.uuid4())
+    with SetWorkflowID(timed_out_id), SetWorkflowTimeout(0.1):
+        handle = DBOS.enqueue_workflow("kept_queue", blocking_workflow, "timeout")
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        handle.get_result()
+    status = DBOS.get_workflow_status(timed_out_id)
+    assert status is not None
+    assert status.status == "CANCELLED"
+    assert status.queue_name == "kept_queue"
+    timeout_event.set()
+    retry_until_success(lambda: execution_left(timed_out_id))
+    resumed = DBOS.resume_workflow(timed_out_id)
+    assert resumed.get_result() == "timeout"
+    assert resumed.get_status().queue_name == "kept_queue"
+
+    # So does a dead-lettered one
+    dead_id = str(uuid.uuid4())
+    with SetWorkflowID(dead_id):
+        handle = DBOS.enqueue_workflow("kept_queue", blocking_workflow, "dead")
+
+    def is_pending() -> None:
+        status = DBOS.get_workflow_status(dead_id)
+        assert status is not None and status.status == "PENDING"
+
+    retry_until_success(is_pending)
+    dbos._sys_db.dead_letter_workflows([dead_id], min_recovery_attempts=0)
+    status = DBOS.get_workflow_status(dead_id)
+    assert status is not None
+    assert status.status == "MAX_RECOVERY_ATTEMPTS_EXCEEDED"
+    assert status.queue_name == "kept_queue"
+    dead_letter_event.set()
+    retry_until_success(lambda: execution_left(dead_id))
+    resumed = DBOS.resume_workflow(dead_id)
+    assert resumed.get_result() == "dead"
+    assert resumed.get_status().queue_name == "kept_queue"
 
     assert queue_entries_are_cleaned_up(dbos)
 

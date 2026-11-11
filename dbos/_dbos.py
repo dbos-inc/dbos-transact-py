@@ -2908,6 +2908,7 @@ class DBOS:
         workflow_id: str,
         *,
         queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
         shard_key: Optional[str] = None,
     ) -> WorkflowHandle[Any]:
         """Resume a workflow by ID."""
@@ -2919,6 +2920,7 @@ class DBOS:
                 _get_dbos_instance()._sys_db.resume_workflows(
                     [workflow_id],
                     queue_name=queue_name,
+                    queue_partition_key=queue_partition_key,
                 )
 
             _get_dbos_instance()._sys_db.call_function_as_step(
@@ -2937,6 +2939,7 @@ class DBOS:
         workflow_id: str,
         *,
         queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
         shard_key: Optional[str] = None,
     ) -> WorkflowHandleAsync[Any]:
         """Resume a workflow by ID."""
@@ -2949,6 +2952,7 @@ class DBOS:
                 _get_dbos_instance()._sys_db.resume_workflows(
                     [workflow_id],
                     queue_name=queue_name,
+                    queue_partition_key=queue_partition_key,
                 )
 
             await asyncio.to_thread(
@@ -2970,6 +2974,7 @@ class DBOS:
         workflow_ids: List[str],
         *,
         queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
         shard_key: Optional[str] = None,
     ) -> List[WorkflowHandle[Any]]:
         """Resume multiple workflows by ID."""
@@ -2981,6 +2986,7 @@ class DBOS:
                 _get_dbos_instance()._sys_db.resume_workflows(
                     workflow_ids,
                     queue_name=queue_name,
+                    queue_partition_key=queue_partition_key,
                 )
 
             _get_dbos_instance()._sys_db.call_function_as_step(
@@ -2997,6 +3003,7 @@ class DBOS:
         workflow_ids: List[str],
         *,
         queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
         shard_key: Optional[str] = None,
     ) -> List[WorkflowHandleAsync[Any]]:
         """Resume multiple workflows by ID."""
@@ -3009,6 +3016,7 @@ class DBOS:
                 _get_dbos_instance()._sys_db.resume_workflows(
                     workflow_ids,
                     queue_name=queue_name,
+                    queue_partition_key=queue_partition_key,
                 )
 
             await asyncio.to_thread(
