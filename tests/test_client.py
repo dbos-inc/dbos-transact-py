@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 
 from dbos import (
     DBOS,
+    ClientScheduleInput,
     DBOSClient,
     DBOSConfig,
     EnqueueOptions,
@@ -49,6 +50,7 @@ from dbos._error import (
     DBOSWorkflowIDInUseError,
 )
 from dbos._outcome import NoResult
+from dbos._queue import Queue, QueueRateLimit
 from dbos._schemas.system_database import SystemSchema
 from dbos._shard_keys import bound_shard_key
 from dbos._sys_db import db_retry
@@ -1743,9 +1745,9 @@ async def test_client_list_workflows_async_is_a_step_in_a_workflow(
             return client.retrieve_workflow(target)
 
         sync_handle = await asyncio.to_thread(retrieve)
-        with pytest.raises(RuntimeError, match="async client method"):
+        with pytest.raises(RuntimeError, match=r"get_result\(\) was called"):
             sync_handle.get_result()
-        with pytest.raises(RuntimeError, match="async client method"):
+        with pytest.raises(RuntimeError, match=r"get_status\(\) was called"):
             sync_handle.get_status()
         found = await client.list_workflows_async(workflow_ids=[target])
         await a_step()
@@ -1774,6 +1776,11 @@ class _StepTargets:
     workflow_id: str
     workflow_name: str
     queue: str
+    schedule: str
+
+
+# Fires once a year, so no test sees it fire.
+_YEARLY = "0 0 0 1 1 *"
 
 
 class _ClientStepCase(NamedTuple):
@@ -1794,6 +1801,14 @@ async def _get_status_async(c: DBOSClient, t: _StepTargets) -> Any:
 
 async def _wait_first_async(c: DBOSClient, t: _StepTargets) -> Any:
     return await c.wait_first_async([await c.retrieve_workflow_async(t.workflow_id)])
+
+
+def _schedule_input(t: _StepTargets) -> ClientScheduleInput:
+    return {
+        "schedule_name": f"{t.schedule}-applied",
+        "workflow_name": t.workflow_name,
+        "schedule": _YEARLY,
+    }
 
 
 # One row per wrapped client method: the steps a workflow records when it makes the call.
@@ -1916,6 +1931,82 @@ _CLIENT_STEP_CASES: Dict[str, _ClientStepCase] = {
         lambda c, t: c.read_stream_offset(t.workflow_id, "stream", 0),
         lambda c, t: c.read_stream_offset_async(t.workflow_id, "stream", 0),
     ),
+    "register_queue": _ClientStepCase(
+        ["DBOSClient.registerQueue"],
+        lambda c, t: c.register_queue(f"{t.queue}-registered"),
+        lambda c, t: c.register_queue_async(f"{t.queue}-registered"),
+    ),
+    "delete_queue": _ClientStepCase(
+        ["DBOSClient.deleteQueue"],
+        lambda c, t: c.delete_queue(t.queue),
+        lambda c, t: c.delete_queue_async(t.queue),
+    ),
+    "list_queues": _ClientStepCase(
+        ["DBOSClient.listQueues"],
+        lambda c, t: c.list_queues(),
+        lambda c, t: c.list_queues_async(),
+    ),
+    "create_schedule": _ClientStepCase(
+        ["DBOSClient.createSchedule"],
+        lambda c, t: c.create_schedule(
+            schedule_name=f"{t.schedule}-created",
+            workflow_name=t.workflow_name,
+            schedule=_YEARLY,
+        ),
+        lambda c, t: c.create_schedule_async(
+            schedule_name=f"{t.schedule}-created",
+            workflow_name=t.workflow_name,
+            schedule=_YEARLY,
+        ),
+    ),
+    "list_schedules": _ClientStepCase(
+        ["DBOSClient.listSchedules"],
+        lambda c, t: c.list_schedules(),
+        lambda c, t: c.list_schedules_async(),
+    ),
+    "get_schedule": _ClientStepCase(
+        ["DBOSClient.getSchedule"],
+        lambda c, t: c.get_schedule(t.schedule),
+        lambda c, t: c.get_schedule_async(t.schedule),
+    ),
+    "delete_schedule": _ClientStepCase(
+        ["DBOSClient.deleteSchedule"],
+        lambda c, t: c.delete_schedule(t.schedule),
+        lambda c, t: c.delete_schedule_async(t.schedule),
+    ),
+    # Without an async variant, an async workflow calls it in a thread.
+    "pause_schedule": _ClientStepCase(
+        ["DBOSClient.pauseSchedule"],
+        lambda c, t: c.pause_schedule(t.schedule),
+        lambda c, t: asyncio.to_thread(c.pause_schedule, t.schedule),
+    ),
+    "resume_schedule": _ClientStepCase(
+        ["DBOSClient.resumeSchedule"],
+        lambda c, t: c.resume_schedule(t.schedule),
+        lambda c, t: asyncio.to_thread(c.resume_schedule, t.schedule),
+    ),
+    "apply_schedules": _ClientStepCase(
+        ["DBOSClient.applySchedules"],
+        lambda c, t: c.apply_schedules([_schedule_input(t)]),
+        lambda c, t: c.apply_schedules_async([_schedule_input(t)]),
+    ),
+    "list_application_versions": _ClientStepCase(
+        ["DBOSClient.listApplicationVersions"],
+        lambda c, t: c.list_application_versions(),
+        lambda c, t: c.list_application_versions_async(),
+    ),
+    "get_latest_application_version": _ClientStepCase(
+        ["DBOSClient.getLatestApplicationVersion"],
+        lambda c, t: c.get_latest_application_version(),
+        lambda c, t: c.get_latest_application_version_async(),
+    ),
+    "rename_application": _ClientStepCase(
+        ["DBOSClient.renameApplication"],
+        lambda c, t: c.rename_application("client-steps-old-app", "client-steps-app"),
+        lambda c, t: c.rename_application_async(
+            "client-steps-old-app", "client-steps-app"
+        ),
+    ),
 }
 
 
@@ -1943,10 +2034,16 @@ def test_client_calls_are_steps_in_a_workflow(
     target = DBOS.start_workflow(target_workflow)
     assert target.get_result() == "done"
     client.register_queue("client-steps-queue")
+    client.create_schedule(
+        schedule_name="client-steps-schedule",
+        workflow_name=target_workflow.__qualname__,
+        schedule=_YEARLY,
+    )
     targets = _StepTargets(
         workflow_id=target.workflow_id,
         workflow_name=target_workflow.__qualname__,
         queue="client-steps-queue",
+        schedule="client-steps-schedule",
     )
 
     caller = calling_workflow if mode == "sync" else calling_workflow_async
@@ -1966,6 +2063,87 @@ def test_client_calls_are_steps_in_a_workflow(
         assert children[0].parent_workflow_id == handle.workflow_id
         assert steps[0]["child_workflow_id"] == f"{handle.workflow_id}-1"
         assert steps[0]["output"] is None
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_client_queue_in_a_workflow_is_rebuilt_from_its_step(
+    dbos: DBOS, client: DBOSClient, mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upserts = 0
+    upsert_queue = client._sys_db.upsert_queue
+
+    def counting_upsert_queue(*args: Any, **kwargs: Any) -> Any:
+        nonlocal upserts
+        upserts += 1
+        return upsert_queue(*args, **kwargs)
+
+    monkeypatch.setattr(client._sys_db, "upsert_queue", counting_upsert_queue)
+    name = "client-recorded-queue"
+    limiter: QueueRateLimit = {"limit": 5, "period": 2}
+
+    @DBOS.step()
+    def a_step() -> None:
+        return None
+
+    def described(queue: Queue) -> List[Any]:
+        # The cached fields, as the public getters read the database again.
+        return [
+            queue.name,
+            queue._worker_concurrency,
+            queue._limiter,
+            queue._client_system_database is client._sys_db,
+        ]
+
+    @DBOS.workflow()
+    def registering_workflow() -> List[Any]:
+        queue = client.register_queue(name, worker_concurrency=3, limiter=limiter)
+        # A plain read that takes no step.
+        assert client.retrieve_queue(name) is not None
+        a_step()
+        return described(queue)
+
+    @DBOS.workflow()
+    async def registering_workflow_async() -> List[Any]:
+        queue = await client.register_queue_async(
+            name, worker_concurrency=3, limiter=limiter
+        )
+        assert await client.retrieve_queue_async(name) is not None
+        a_step()
+        return described(queue)
+
+    registering = registering_workflow if mode == "sync" else registering_workflow_async
+    handle = DBOS.start_workflow(registering)
+    recorded = [name, 3, {"limit": 5, "period": 2}, True]
+    assert handle.get_result() == recorded
+    assert upserts == 1
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert [s["function_name"] for s in steps] == [
+        "DBOSClient.registerQueue",
+        a_step.__qualname__,
+    ]
+
+    # A replay rebuilds the recorded queue on the client instead of registering it again.
+    client.register_queue(name, worker_concurrency=4)
+    upserts = 0
+    replay = DBOS.fork_workflow(handle.workflow_id, 2)
+    assert replay.get_result() == recorded
+    assert upserts == 0
+
+
+@pytest.mark.asyncio
+async def test_client_method_without_async_variant_is_refused_on_an_event_loop(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    @DBOS.workflow()
+    async def pausing_workflow() -> str:
+        with pytest.raises(RuntimeError, match=r"pause_schedule\(\) was called"):
+            client.pause_schedule("client-steps-schedule")
+        return "refused"
+
+    handle = await DBOS.start_workflow_async(pausing_workflow)
+    assert await handle.get_result() == "refused"
+    # A refused call reserves no step.
+    assert await DBOS.list_workflow_steps_async(handle.workflow_id) == []
 
 
 @pytest.mark.parametrize("mode", ["sync", "async"])

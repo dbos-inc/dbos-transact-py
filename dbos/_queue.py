@@ -291,8 +291,13 @@ class Queue:
         }
 
     @staticmethod
-    def _from_checkpoint(data: dict[str, Any]) -> "Queue":
-        """Rebuild a database-backed queue from _to_checkpoint's output."""
+    def _from_checkpoint(
+        data: dict[str, Any],
+        *,
+        client_system_database: Optional["SystemDatabase"] = None,
+    ) -> "Queue":
+        """Rebuild a database-backed queue from _to_checkpoint's output, bound to
+        client_system_database when a client rebuilds it."""
         return Queue(
             data["name"],
             data["concurrency"],
@@ -304,6 +309,7 @@ class Queue:
             polling_interval_sec=data["polling_interval_sec"],
             application_name=data["application_name"],
             database_backed_queue=True,
+            client_system_database=client_system_database,
             token=_INTERNAL_QUEUE_CONSTRUCTION,
         )
 

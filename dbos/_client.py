@@ -212,27 +212,63 @@ def _client_step(
     return decorator
 
 
-def _client_handle_step(step_name: str, *, many: bool = False) -> Callable[[F], F]:
-    """A _client_step for a method returning workflow handles: the step records the
-    workflow IDs, and the handles are rebuilt on the client's system database."""
+def _client_bound_step(
+    step_name: str,
+    to_record: Callable[[Any], Any],
+    from_record: Callable[["DBOSClient", Any, bool], Any],
+    *,
+    many: bool = False,
+) -> Callable[[F], F]:
+    """A _client_step for a method returning objects bound to the client's system
+    database, a list of them when many, or None: the step records each object's
+    to_record, and from_record(client, recorded, is_async) rebuilds it on the client."""
 
     def encode(result: Any) -> Any:
-        handles = result if many else [result]
-        return [[h.workflow_id, h.shard_key] for h in handles]
+        if result is None:
+            return None
+        return [to_record(o) for o in result] if many else to_record(result)
 
     def decode(client: "DBOSClient", recorded: Any, is_async: bool) -> Any:
-        handle_class = (
-            WorkflowHandleClientAsyncPolling
-            if is_async
-            else WorkflowHandleClientPolling
-        )
-        handles: List[Any] = [
-            handle_class(workflow_id, client._sys_db, shard_key=shard_key)
-            for workflow_id, shard_key in recorded
-        ]
-        return handles if many else handles[0]
+        if recorded is None:
+            return None
+        if many:
+            return [from_record(client, r, is_async) for r in recorded]
+        return from_record(client, recorded, is_async)
 
     return _client_step(step_name, encode=encode, decode=decode)
+
+
+def _handle_from_record(client: "DBOSClient", recorded: Any, is_async: bool) -> Any:
+    workflow_id, shard_key = recorded
+    handle_class = (
+        WorkflowHandleClientAsyncPolling if is_async else WorkflowHandleClientPolling
+    )
+    return handle_class(workflow_id, client._sys_db, shard_key=shard_key)
+
+
+def _client_handle_step(step_name: str, *, many: bool = False) -> Callable[[F], F]:
+    """A _client_step for a method returning workflow handles: the step records the
+    workflow IDs and shard keys."""
+    return _client_bound_step(
+        step_name,
+        lambda h: [h.workflow_id, h.shard_key],
+        _handle_from_record,
+        many=many,
+    )
+
+
+def _client_queue_step(step_name: str, *, many: bool = False) -> Callable[[F], F]:
+    """A _client_step for a method returning queues: the step records each queue's
+    configuration. Like any database-backed queue, a rebuilt one reads its configuration
+    from the database on access."""
+    return _client_bound_step(
+        step_name,
+        lambda q: q._to_checkpoint(),
+        lambda client, recorded, is_async: Queue._from_checkpoint(
+            recorded, client_system_database=client._sys_db
+        ),
+        many=many,
+    )
 
 
 class WorkflowHandleClientPolling(Generic[R]):
@@ -639,6 +675,7 @@ class DBOSClient:
             workflow_id, self._sys_db, shard_key=options.get("shard_key")
         )
 
+    @_client_queue_step("DBOSClient.registerQueue")
     def register_queue(
         self,
         name: str,
@@ -750,6 +787,7 @@ class DBOSClient:
             log_queue(queue)
         return queue
 
+    @_client_queue_step("DBOSClient.registerQueue")
     async def register_queue_async(
         self,
         name: str,
@@ -794,6 +832,7 @@ class DBOSClient:
         """Async version of :meth:`retrieve_queue`."""
         return await asyncio.to_thread(self.retrieve_queue, name)
 
+    @_client_step("DBOSClient.deleteQueue")
     def delete_queue(self, name: str) -> None:
         """Delete a queue. Pending workflows on it are unrecoverable."""
         _warn_sync_db_call_in_async_context(
@@ -801,10 +840,12 @@ class DBOSClient:
         )
         self._sys_db.delete_queue(name)
 
+    @_client_step("DBOSClient.deleteQueue")
     async def delete_queue_async(self, name: str) -> None:
         """Async version of :meth:`delete_queue`."""
         await asyncio.to_thread(self.delete_queue, name)
 
+    @_client_queue_step("DBOSClient.listQueues", many=True)
     def list_queues(
         self, *, application_name: Optional[Union[str, List[str]]] = None
     ) -> List[Queue]:
@@ -820,6 +861,7 @@ class DBOSClient:
             application_name=application_name, client_system_database=self._sys_db
         )
 
+    @_client_queue_step("DBOSClient.listQueues", many=True)
     async def list_queues_async(
         self, *, application_name: Optional[Union[str, List[str]]] = None
     ) -> List[Queue]:
@@ -1970,6 +2012,7 @@ class DBOSClient:
 
     # ── Schedule API ──────────────────────────────────────────────
 
+    @_client_step("DBOSClient.createSchedule")
     def create_schedule(
         self,
         *,
@@ -2030,6 +2073,7 @@ class DBOSClient:
             )
         )
 
+    @_client_step("DBOSClient.listSchedules")
     def list_schedules(
         self,
         *,
@@ -2062,6 +2106,7 @@ class DBOSClient:
             )
         return schedules
 
+    @_client_step("DBOSClient.getSchedule")
     def get_schedule(self, name: str) -> Optional[WorkflowSchedule]:
         """Return the schedule with the given name, or ``None`` if it does not exist."""
         schedule = self._sys_db.get_schedule(name)
@@ -2073,10 +2118,12 @@ class DBOSClient:
             )
         return schedule
 
+    @_client_step("DBOSClient.deleteSchedule")
     def delete_schedule(self, name: str) -> None:
         """Delete the schedule with the given name. No-op if it does not exist."""
         self._sys_db.delete_schedule(name)
 
+    @_client_step("DBOSClient.createSchedule")
     async def create_schedule_async(
         self,
         *,
@@ -2106,6 +2153,7 @@ class DBOSClient:
             shard_key=shard_key,
         )
 
+    @_client_step("DBOSClient.listSchedules")
     async def list_schedules_async(
         self,
         *,
@@ -2123,22 +2171,27 @@ class DBOSClient:
             application_name=application_name,
         )
 
+    @_client_step("DBOSClient.getSchedule")
     async def get_schedule_async(self, name: str) -> Optional[WorkflowSchedule]:
         """Async version of :meth:`get_schedule`."""
         return await asyncio.to_thread(self.get_schedule, name)
 
+    @_client_step("DBOSClient.deleteSchedule")
     async def delete_schedule_async(self, name: str) -> None:
         """Async version of :meth:`delete_schedule`."""
         await asyncio.to_thread(self.delete_schedule, name)
 
+    @_client_step("DBOSClient.pauseSchedule")
     def pause_schedule(self, name: str) -> None:
         """Pause the schedule with the given name. A paused schedule does not fire."""
         self._sys_db.pause_schedule(name)
 
+    @_client_step("DBOSClient.resumeSchedule")
     def resume_schedule(self, name: str) -> None:
         """Resume a paused schedule so it begins firing again."""
         self._sys_db.resume_schedule(name)
 
+    @_client_step("DBOSClient.applySchedules")
     def apply_schedules(
         self,
         schedules: List[ClientScheduleInput],
@@ -2199,6 +2252,7 @@ class DBOSClient:
             for sched in sorted(to_apply, key=lambda s: s["schedule_name"]):
                 self._sys_db.upsert_schedule(sched, conn=c)
 
+    @_client_step("DBOSClient.applySchedules")
     async def apply_schedules_async(
         self,
         schedules: List[ClientScheduleInput],
@@ -2255,10 +2309,12 @@ class DBOSClient:
 
     # ── Application Version API ─────────────────────────────────
 
+    @_client_step("DBOSClient.listApplicationVersions")
     def list_application_versions(self) -> List[VersionInfo]:
         """Return all application versions ordered by timestamp descending."""
         return self._sys_db.list_application_versions()
 
+    @_client_step("DBOSClient.getLatestApplicationVersion")
     def get_latest_application_version(self) -> VersionInfo:
         """Return the latest application version."""
         return self._sys_db.get_latest_application_version()
@@ -2277,10 +2333,12 @@ class DBOSClient:
             version_name, new_timestamp, application_name=application_name
         )
 
+    @_client_step("DBOSClient.listApplicationVersions")
     async def list_application_versions_async(self) -> List[VersionInfo]:
         """Async version of :meth:`list_application_versions`."""
         return await asyncio.to_thread(self.list_application_versions)
 
+    @_client_step("DBOSClient.getLatestApplicationVersion")
     async def get_latest_application_version_async(self) -> VersionInfo:
         """Async version of :meth:`get_latest_application_version`."""
         return await asyncio.to_thread(self.get_latest_application_version)
@@ -2297,6 +2355,7 @@ class DBOSClient:
 
     # ── Application Rename API ──────────────────────────────────
 
+    @_client_step("DBOSClient.renameApplication")
     def rename_application(
         self,
         old_name: Optional[str],
@@ -2328,6 +2387,7 @@ class DBOSClient:
             adopt_unclaimed_rows=adopt_unclaimed_rows,
         )
 
+    @_client_step("DBOSClient.renameApplication")
     async def rename_application_async(
         self,
         old_name: Optional[str],
