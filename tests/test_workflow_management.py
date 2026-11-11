@@ -1471,7 +1471,7 @@ def test_management_keeps_queue(dbos: DBOS, client: DBOSClient) -> None:
     assert DBOS.get_workflow_status(child_id).status == "CANCELLED"  # type: ignore[union-attr]
     assert _queue_columns(child_id) == ("keep_queue", "p0", 3)
 
-    # A plain resume puts it back exactly where it was
+    # A plain resume puts it back where it was
     handle = DBOS.resume_workflow(child_id)
     assert _queue_columns(child_id) == ("keep_queue", "p0", 3)
     assert handle.get_result() == 0
