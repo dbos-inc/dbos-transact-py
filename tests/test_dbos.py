@@ -26,6 +26,7 @@ from dbos import (
     DBOSContextEnsure,
     DBOSContextSetAuth,
     EnqueueOptions,
+    Queue,
     SendMessage,
     SetWorkflowID,
     SetWorkflowTimeout,
@@ -2273,13 +2274,20 @@ def test_recovery_appversion(config: DBOSConfig) -> None:
     assert len(workflow_handles) == 1
     assert workflow_handles[0].get_result() == input
 
-    # Change the workflow status to pending
+    # Mark it pending on the dead executor again
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.update(SystemSchema.workflow_status)
-            .values({"status": "PENDING", "name": test_workflow.__qualname__})
+            .values(
+                {
+                    "status": "PENDING",
+                    "name": test_workflow.__qualname__,
+                    "executor_id": "testexecutor",
+                }
+            )
             .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
         )
+    old_version = GlobalParams.app_version
 
     # Now reconstruct a "modified application" with a different application version
     DBOS.destroy(destroy_registry=True)
@@ -2291,9 +2299,13 @@ def test_recovery_appversion(config: DBOSConfig) -> None:
 
     DBOS.launch()
 
-    # The workflow should not recover
+    # It is re-enqueued on its own version, which this process does not run
+    assert GlobalParams.app_version != old_version
     workflow_handles = DBOS._recover_pending_workflows(["testexecutor"])
-    assert len(workflow_handles) == 0
+    assert [h.get_workflow_id() for h in workflow_handles] == [wfuuid]
+    stat = workflow_handles[0].get_status()
+    assert stat.status == "ENQUEUED"
+    assert stat.app_version == old_version
 
     # Clean up the environment variable
     del os.environ["DBOS__VMID"]
@@ -2395,39 +2407,50 @@ def test_recover_workflows_skips_stale_rows(
     assert stat.status == "SUCCESS"
 
 
-def test_recover_workflows_version_override(
+def test_recover_workflows_any_version(
     config: DBOSConfig, cleanup_test_databases: None
 ) -> None:
-    def launch(version: str) -> Tuple[DBOS, Callable[[int], int]]:
+    queue_name = "recover-any-version"
+
+    def launch(version: str) -> Tuple[DBOS, Queue, Callable[[str], str]]:
         config["application_version"] = version
         DBOS.destroy(destroy_registry=True)
         dbos = DBOS(config=config)
 
         @DBOS.workflow()
-        def target_workflow(x: int) -> int:
+        def target_workflow(x: str) -> str:
             return x
 
         DBOS.launch()
-        return dbos, target_workflow
+        queue = DBOS.register_queue(queue_name, global_concurrency=1)
+        return dbos, queue, target_workflow
 
-    dbos, target_workflow = launch("v1")
+    dbos, queue, target_workflow = launch("v1")
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
-        assert target_workflow(5) == 5
+        assert queue.enqueue(target_workflow, "v1").get_result() == "v1"
     with dbos._sys_db.engine.begin() as c:
         c.execute(
             sa.update(SystemSchema.workflow_status)
-            .values({"status": "PENDING", "executor_id": "dead-executor"})
+            .values(
+                {
+                    "status": "PENDING",
+                    "executor_id": "dead-executor",
+                    "queue_name": queue_name,
+                }
+            )
             .where(SystemSchema.workflow_status.c.workflow_uuid == wfid)
         )
 
-    # A v2 process recovers only v2 workflows unless told otherwise
-    launch("v2")
-    assert DBOS.recover_workflows(["dead-executor"]) == []
-    handles = DBOS.recover_workflows(["dead-executor"], application_version="v1")
+    # A v2 process recovers the dead executor's v1 workflow, freeing the queue's only slot
+    dbos, queue, target_workflow = launch("v2")
+    assert dbos._sys_db.count_pending_queue_workflows(queue_name) == 1
+    handles = DBOS.recover_workflows(["dead-executor"])
     assert [h.get_workflow_id() for h in handles] == [wfid]
+    assert dbos._sys_db.count_pending_queue_workflows(queue_name) == 0
 
-    # Re-enqueued on its own version, so the v2 process leaves it alone
+    # v2 runs its own work but skips the older v1 workflow ahead of it
+    assert queue.enqueue(target_workflow, "v2").get_result() == "v2"
     stat = DBOS.get_workflow_status(wfid)
     assert stat is not None
     assert stat.status == "ENQUEUED"
@@ -2435,7 +2458,7 @@ def test_recover_workflows_version_override(
 
     # A v1 process runs it
     launch("v1")
-    assert DBOS.retrieve_workflow(wfid).get_result() == 5
+    assert DBOS.retrieve_workflow(wfid).get_result() == "v1"
 
 
 def test_conductor_key_keeps_cloud_executor_id(

@@ -2620,11 +2620,9 @@ class DBOS:
         ]
 
     @classmethod
-    def recover_workflows(
-        cls, executor_ids: List[str], *, application_version: Optional[str] = None
-    ) -> List[WorkflowHandle[Any]]:
-        """Re-enqueue the given executors' PENDING workflows from application_version (default: this one).
-        Returns their handles; cannot be called from within a workflow or step."""
+    def recover_workflows(cls, executor_ids: List[str]) -> List[WorkflowHandle[Any]]:
+        """Re-enqueue the given executors' PENDING workflows and return their handles.
+        Cannot be called from within a workflow or step."""
         check_async("recover_workflows")
         # Recovery can re-enqueue the calling workflow, fencing it out of its own execution.
         ctx = get_local_dbos_context()
@@ -2635,15 +2633,15 @@ class DBOS:
         dbos = _get_dbos_instance()
         return [
             WorkflowHandlePolling(w.workflow_id, dbos, shard_key=w.shard_key)
-            for w in recover_executor_workflows(dbos, executor_ids, application_version)
+            for w in recover_executor_workflows(dbos, executor_ids)
         ]
 
     @classmethod
     async def recover_workflows_async(
-        cls, executor_ids: List[str], *, application_version: Optional[str] = None
+        cls, executor_ids: List[str]
     ) -> List[WorkflowHandleAsync[Any]]:
-        """Re-enqueue the given executors' PENDING workflows from application_version (default: this one).
-        Returns their handles; cannot be called from within a workflow or step."""
+        """Re-enqueue the given executors' PENDING workflows and return their handles.
+        Cannot be called from within a workflow or step."""
         # Recovery can re-enqueue the calling workflow, fencing it out of its own execution.
         ctx = get_local_dbos_context()
         if ctx is not None and ctx.is_within_workflow():
@@ -2653,7 +2651,7 @@ class DBOS:
         await cls._configure_asyncio_thread_pool()
         dbos = _get_dbos_instance()
         recovered = await asyncio.to_thread(
-            recover_executor_workflows, dbos, executor_ids, application_version
+            recover_executor_workflows, dbos, executor_ids
         )
         return [
             WorkflowHandleAsyncPolling(w.workflow_id, dbos, shard_key=w.shard_key)
