@@ -49,7 +49,11 @@ from dbos._serialization import (
 )
 from dbos._sys_db import SystemDatabase, WorkflowStatus
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, generate_uuid
-from dbos._workflow_commands import fork_workflow, rewind_workflow
+from dbos._workflow_commands import (
+    fork_workflow,
+    rewind_workflow,
+    take_fork_workflow_id,
+)
 
 from ._classproperty import classproperty
 from ._core import (
@@ -3285,6 +3289,7 @@ class DBOS:
         """Restart a workflow with a new workflow ID from a specific step"""
         with bind_shard_keys({workflow_id: shard_key}):
             check_async("fork_workflow")
+            forked_workflow_id = take_fork_workflow_id()
 
             def fn() -> str:
                 dbos_logger.info(
@@ -3299,6 +3304,7 @@ class DBOS:
                     queue_partition_key=queue_partition_key,
                     replacement_children=replacement_children,
                     timeout_seconds=timeout_seconds,
+                    forked_workflow_id=forked_workflow_id,
                 )
 
             new_id = _get_dbos_instance()._sys_db.call_function_as_step(
@@ -3325,6 +3331,7 @@ class DBOS:
         with bind_shard_keys({workflow_id: shard_key}):
             step_ctx_res = snapshot_step_context(reserve_sleep_id=False)
             step_ctx_ret = snapshot_step_context(reserve_sleep_id=False)
+            forked_workflow_id = take_fork_workflow_id()
             await cls._configure_asyncio_thread_pool()
 
             def fn() -> str:
@@ -3340,6 +3347,7 @@ class DBOS:
                     queue_partition_key=queue_partition_key,
                     replacement_children=replacement_children,
                     timeout_seconds=timeout_seconds,
+                    forked_workflow_id=forked_workflow_id,
                 )
 
             new_id = await asyncio.to_thread(

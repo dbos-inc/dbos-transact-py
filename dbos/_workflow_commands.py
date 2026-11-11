@@ -42,6 +42,13 @@ def get_workflow(
     return infos[0]
 
 
+def take_fork_workflow_id() -> Optional[str]:
+    """Consume the enclosing SetWorkflowID block's ID for a fork. Callers take it before
+    the fork's step, so a replay consumes it as the first run did."""
+    assigned = take_assigned_workflow_id()
+    return assigned.workflow_id if assigned is not None else None
+
+
 def fork_workflow(
     sys_db: SystemDatabase,
     workflow_id: str,
@@ -52,6 +59,7 @@ def fork_workflow(
     queue_partition_key: Optional[str] = None,
     replacement_children: Optional[dict[str, str]] = None,
     timeout_seconds: Optional[float] = None,
+    forked_workflow_id: Optional[str] = None,
 ) -> str:
     if timeout_seconds is not None and not timeout_seconds > 0:
         raise Exception(
@@ -61,10 +69,8 @@ def fork_workflow(
         int(timeout_seconds * 1000) if timeout_seconds is not None else None
     )
 
-    assigned = take_assigned_workflow_id()
-    forked_workflow_id = (
-        assigned.workflow_id if assigned is not None else generate_uuid()
-    )
+    if forked_workflow_id is None:
+        forked_workflow_id = generate_uuid()
     sys_db.fork_workflow(
         [workflow_id],
         [forked_workflow_id],

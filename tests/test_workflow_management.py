@@ -1723,3 +1723,37 @@ def test_fork_in_step_keeps_workflow_id_for_child(dbos: DBOS) -> None:
     assert started_id == child_id
     assert forked_id != child_id
     assert DBOS.retrieve_workflow(forked_id).get_result() == "source"
+
+
+def test_fork_replay_leaves_the_assigned_id_consumed(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def source() -> str:
+        return "source"
+
+    @DBOS.workflow()
+    def child() -> str:
+        return "child"
+
+    @DBOS.workflow()
+    def parent(source_id: str, fork_id: str) -> List[str]:
+        with SetWorkflowID(fork_id):
+            forked_id = DBOS.fork_workflow(source_id, 1).workflow_id
+            # The block's ID went to the fork, so the child takes a derived ID.
+            return [forked_id, DBOS.start_workflow(child).workflow_id]
+
+    source_handle = DBOS.start_workflow(source)
+    source_handle.get_result()
+    fork_id = str(uuid.uuid4())
+    handle = DBOS.start_workflow(parent, source_handle.workflow_id, fork_id)
+    forked_id, child_id = handle.get_result()
+    assert forked_id == fork_id
+    child_step = next(
+        s["function_id"]
+        for s in DBOS.list_workflow_steps(handle.workflow_id)
+        if s["child_workflow_id"] == child_id
+    )
+    assert child_id == f"{handle.workflow_id}-{child_step}"
+
+    # Replay the fork and start the child live, as recovery from a crash between them would.
+    replay = DBOS.fork_workflow(handle.workflow_id, child_step)
+    assert replay.get_result() == [fork_id, f"{replay.workflow_id}-{child_step}"]
