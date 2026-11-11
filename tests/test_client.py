@@ -57,7 +57,7 @@ from dbos._sys_db import db_retry
 from dbos._utils import retriable_sqlite_exception
 from tests import client_collateral
 from tests.client_collateral import event_test, retrieve_test, send_test
-from tests.conftest import TestOtelType, wait_for_client_listener
+from tests.conftest import TestOtelType, using_sharding, wait_for_client_listener
 
 
 class Person(TypedDict):
@@ -2015,6 +2015,10 @@ _CLIENT_STEP_CASES: Dict[str, _ClientStepCase] = {
 def test_client_calls_are_steps_in_a_workflow(
     dbos: DBOS, client: DBOSClient, mode: str, case_name: str
 ) -> None:
+    if case_name == "rename_application" and using_sharding():
+        pytest.skip(
+            "A sharded system database does not support renaming an application"
+        )
     case = _CLIENT_STEP_CASES[case_name]
 
     @DBOS.workflow()
