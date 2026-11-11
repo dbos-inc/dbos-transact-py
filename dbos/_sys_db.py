@@ -46,6 +46,7 @@ from dbos._utils import (
 
 from ._context import (
     DBOSContext,
+    EnterDBOSStepCtx,
     WorkflowIDReusePolicy,
     current_owner_xid,
     get_local_dbos_context,
@@ -5676,7 +5677,9 @@ class SystemDatabase(ABC):
         if res is not None:
             return cast(SystemDatabase.T, self._replay_recorded(res, function_name))
         try:
-            result = fn()
+            # In the step's context, so DBOS calls the operation makes belong to the step.
+            with EnterDBOSStepCtx({"name": function_name}, ctx, traced=False):
+                result = fn()
         except Exception as e:
             # Recorded so a replay re-raises it rather than re-running the operation; an operation
             # that should survive transient database errors must retry them itself.
@@ -5717,7 +5720,9 @@ class SystemDatabase(ABC):
         if res is not None:
             return cast(SystemDatabase.T, self._replay_recorded(res, function_name))
         try:
-            result = await fn()
+            # In the step's context, so DBOS calls the operation makes belong to the step.
+            with EnterDBOSStepCtx({"name": function_name}, ctx, traced=False):
+                result = await fn()
         except Exception as e:
             # Recorded so a replay re-raises it rather than re-running the operation; an operation
             # that should survive transient database errors must retry them itself.
