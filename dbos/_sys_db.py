@@ -3241,9 +3241,14 @@ class SystemDatabase(ABC):
 
     @db_retry()
     def get_pending_workflows(
-        self, executor_id: str, app_version: str
+        self, executor_id: str, app_version: Optional[str] = None
     ) -> list[GetPendingWorkflowsOutput]:
         key_column = self._key_column(self.tables.workflow_status)
+        version_filter = (
+            [self.tables.workflow_status.c.application_version == app_version]
+            if app_version is not None
+            else []
+        )
         with self.engine.begin() as c:
             rows = c.execute(
                 sa.select(
@@ -3257,7 +3262,7 @@ class SystemDatabase(ABC):
                     self.tables.workflow_status.c.status
                     == WorkflowStatusString.PENDING.value,
                     self.tables.workflow_status.c.executor_id == executor_id,
-                    self.tables.workflow_status.c.application_version == app_version,
+                    *version_filter,
                     # executor_id defaults to "local", so it collides across applications.
                     self._name_filter(
                         self.tables.workflow_status.c.application_name, self.app_name

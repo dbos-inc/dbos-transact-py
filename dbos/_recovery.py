@@ -1,21 +1,20 @@
 import threading
-from typing import TYPE_CHECKING, Any, List
+from typing import TYPE_CHECKING, List
 
 from dbos._context import UseLogAttributes
 from dbos._shard_keys import bind_shard_keys
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
 
-from ._core import WorkflowHandlePolling
 from ._sys_db import GetPendingWorkflowsOutput
 
 if TYPE_CHECKING:
-    from ._dbos import DBOS, WorkflowHandle
+    from ._dbos import DBOS
 
 
 def _recover_workflow(
     dbos: "DBOS", workflow: GetPendingWorkflowsOutput, executor_ids: List[str]
-) -> "WorkflowHandle[Any]":
-    """Make a pending workflow eligible for execution again, and return a handle to it.
+) -> bool:
+    """Make a pending workflow eligible for execution again; return whether this call re-enqueued it.
 
     Recovery re-enqueues rather than executing directly, so that every recovered
     workflow starts through the queue's atomic ENQUEUED->PENDING dequeue. That
@@ -23,12 +22,9 @@ def _recover_workflow(
     idempotent.
     """
     with bind_shard_keys({workflow.workflow_id: workflow.shard_key}):
-        dbos._sys_db.reenqueue_for_recovery(
+        return dbos._sys_db.reenqueue_for_recovery(
             workflow.workflow_id, executor_ids, INTERNAL_QUEUE_NAME
         )
-    return WorkflowHandlePolling(
-        workflow.workflow_id, dbos, shard_key=workflow.shard_key
-    )
 
 
 def startup_recovery_thread(
@@ -51,19 +47,19 @@ def startup_recovery_thread(
                 )
 
 
-def recover_pending_workflows(
-    dbos: "DBOS", executor_ids: List[str] = ["local"]
-) -> List["WorkflowHandle[Any]"]:
-    """Attempt to recover pending workflows for a list of specific executors and return workflow handles for them."""
-    workflow_handles: List["WorkflowHandle[Any]"] = []
+def recover_executor_workflows(
+    dbos: "DBOS", executor_ids: List[str]
+) -> List[GetPendingWorkflowsOutput]:
+    """Re-enqueue the executors' PENDING workflows and return those re-enqueued."""
+    recovered: List[GetPendingWorkflowsOutput] = []
     for executor_id in executor_ids:
-        pending_workflows = dbos._sys_db.get_pending_workflows(
-            executor_id, GlobalParams.app_version
-        )
+        pending_workflows = dbos._sys_db.get_pending_workflows(executor_id)
+        executor_recovered = 0
         for pending_workflow in pending_workflows:
             try:
-                handle = _recover_workflow(dbos, pending_workflow, executor_ids)
-                workflow_handles.append(handle)
+                if _recover_workflow(dbos, pending_workflow, executor_ids):
+                    recovered.append(pending_workflow)
+                    executor_recovered += 1
             except Exception as e:
                 with UseLogAttributes(workflow_id=pending_workflow.workflow_id):
                     dbos.logger.error(
@@ -71,6 +67,6 @@ def recover_pending_workflows(
                         exc_info=e,
                     )
         dbos.logger.info(
-            f"Recovering {len(pending_workflows)} workflows for executor {executor_id} from version {GlobalParams.app_version}"
+            f"Recovering {executor_recovered} workflows for executor {executor_id}"
         )
-    return workflow_handles
+    return recovered
