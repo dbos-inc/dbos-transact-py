@@ -168,8 +168,11 @@ def test_debouncer_queue_from_workflow_is_replay_safe(dbos: DBOS) -> None:
     assert handle.get_result() == 7
     steps = [s["function_name"] for s in DBOS.list_workflow_steps(handle.workflow_id)]
     # The queue lookup adds no step of its own.
-    assert "DBOS.retrieveQueue" not in steps
-    assert steps[0] == "DBOS.debounce_delayed_workflow"
+    assert steps == [
+        "DBOS.debounce_delayed_workflow",
+        get_dbos_func_name(target),
+        "DBOS.getResult",
+    ]
 
     # The queue check is recorded with the bounce, so a replay after the queue
     # is deleted returns the recorded outcome instead of raising.
@@ -182,8 +185,14 @@ def test_debouncer_queue_from_workflow_is_replay_safe(dbos: DBOS) -> None:
     def bad_debounce_workflow() -> None:
         bad_debouncer.debounce("key", 0.1, 1)
 
+    bad_workflow_id = str(uuid.uuid4())
     with pytest.raises(Exception, match="Invalid queue name provided to debouncer"):
-        bad_debounce_workflow()
+        with SetWorkflowID(bad_workflow_id):
+            bad_debounce_workflow()
+    # In a workflow, the failed check is recorded as the bounce step's error.
+    bad_steps = DBOS.list_workflow_steps(bad_workflow_id)
+    assert [s["function_name"] for s in bad_steps] == ["DBOS.debounce_delayed_workflow"]
+    assert bad_steps[0]["error"] is not None
     with pytest.raises(Exception, match="Invalid queue name provided to debouncer"):
         bad_debouncer.debounce("key", 0.1, 1)
 
