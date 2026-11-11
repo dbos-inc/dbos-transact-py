@@ -143,7 +143,6 @@ def _run_client_step(
         return fn()
     from dbos._dbos import _get_dbos_instance
 
-    # The step belongs to the calling workflow, so it is recorded in that workflow's system database.
     options: StepOptions = {"name": step_name}
     return run_step(_get_dbos_instance(), ctx, fn, options, (), {})
 
@@ -464,7 +463,6 @@ class DBOSClient:
         kwargs: dict[str, Any],
     ) -> str:
         if parent is not None and options.get("workflow_id") is None:
-            # A child's ID derives from its parent's step, so re-running the step finds the same workflow.
             options = {
                 **options,
                 "workflow_id": child_workflow_id(
@@ -526,7 +524,6 @@ class DBOSClient:
             return self._enqueue_from(None, options, args, kwargs)
         from dbos._dbos import _get_dbos_instance
 
-        # The step belongs to the calling workflow, so it is recorded in that workflow's system database.
         sys_db = _get_dbos_instance()._sys_db
         recorded = sys_db.check_operation_execution(
             parent.workflow_id, parent.function_id, _ENQUEUE_STEP

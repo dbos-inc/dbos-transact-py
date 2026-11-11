@@ -1735,10 +1735,12 @@ async def test_client_list_workflows_async_is_a_step_in_a_workflow(
     async def listing_workflow(target: str) -> list[str]:
         with pytest.raises(RuntimeError, match="list_workflows_async"):
             client.list_workflows(workflow_ids=[target])
+
         # A sync handle has no async variant of its own; its blocking calls are refused too.
-        sync_handle: WorkflowHandle[str] = await asyncio.to_thread(
-            client.retrieve_workflow, target
-        )
+        def retrieve() -> WorkflowHandle[str]:
+            return client.retrieve_workflow(target)
+
+        sync_handle = await asyncio.to_thread(retrieve)
         with pytest.raises(RuntimeError, match="async client method"):
             sync_handle.get_result()
         with pytest.raises(RuntimeError, match="async client method"):
