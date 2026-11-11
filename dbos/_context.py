@@ -455,6 +455,16 @@ def get_local_dbos_context() -> Optional[DBOSContext]:
     return _dbos_context_var.get()
 
 
+def refuse_in_workflow_body(method: str) -> None:
+    """Raise if called from a workflow body, for an operation whose side effect on
+    shared state belongs in a step."""
+    ctx = get_local_dbos_context()
+    if ctx is not None and ctx.is_workflow():
+        raise DBOSException(
+            f"{method} cannot be called from a workflow; call it from a step"
+        )
+
+
 _workflow_start_options_var: ContextVar[WorkflowStartOptions] = ContextVar(
     "dbos_workflow_start_options", default=_NO_START_OPTIONS
 )

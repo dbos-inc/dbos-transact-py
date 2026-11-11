@@ -2130,6 +2130,49 @@ def test_client_queue_in_a_workflow_is_rebuilt_from_its_step(
     assert upserts == 0
 
 
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_client_set_latest_application_version_is_refused_in_a_workflow(
+    dbos: DBOS, client: DBOSClient, mode: str
+) -> None:
+    current = DBOS.application_version
+
+    @DBOS.step()
+    def promote() -> None:
+        client.set_latest_application_version(current)
+
+    @DBOS.step()
+    async def promote_async() -> None:
+        await client.set_latest_application_version_async(current)
+
+    @DBOS.workflow()
+    def promoting_workflow() -> None:
+        # Refused in a workflow body, before it takes a step ID, but allowed in a step.
+        with pytest.raises(DBOSException, match="cannot be called from a workflow"):
+            client.set_latest_application_version(current)
+        promote()
+
+    @DBOS.workflow()
+    async def promoting_workflow_async() -> None:
+        with pytest.raises(
+            DBOSException, match="set_latest_application_version_async cannot"
+        ):
+            await client.set_latest_application_version_async(current)
+        await promote_async()
+
+    promoted_before = client.get_latest_application_version()["version_timestamp"]
+    promoting = promoting_workflow if mode == "sync" else promoting_workflow_async
+    handle = DBOS.start_workflow(promoting)
+    handle.get_result()
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    step = promote if mode == "sync" else promote_async
+    assert [(s["function_id"], s["function_name"]) for s in steps] == [
+        (1, step.__qualname__)
+    ]
+    latest = client.get_latest_application_version()
+    assert latest["version_name"] == current
+    assert latest["version_timestamp"] >= promoted_before
+
+
 @pytest.mark.asyncio
 async def test_client_method_without_async_variant_is_refused_on_an_event_loop(
     dbos: DBOS, client: DBOSClient

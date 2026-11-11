@@ -30,6 +30,7 @@ from dbos._context import (
     DBOSContext,
     child_workflow_id,
     get_local_dbos_context,
+    refuse_in_workflow_body,
     snapshot_step_context,
 )
 from dbos._core import (
@@ -2327,7 +2328,10 @@ class DBOSClient:
         :param application_name: The application to act as. Defaults to this
             caller's. Version names are global, so promoting one registered by
             a different application raises.
+
+        Cannot be called from a workflow body; call it from a step instead.
         """
+        refuse_in_workflow_body("DBOSClient.set_latest_application_version")
         new_timestamp = int(time.time() * 1000)
         self._sys_db.update_application_version_timestamp(
             version_name, new_timestamp, application_name=application_name
@@ -2347,6 +2351,7 @@ class DBOSClient:
         self, version_name: str, *, application_name: Optional[str] = None
     ) -> None:
         """Async version of :meth:`set_latest_application_version`."""
+        refuse_in_workflow_body("DBOSClient.set_latest_application_version_async")
         await asyncio.to_thread(
             lambda: self.set_latest_application_version(
                 version_name, application_name=application_name

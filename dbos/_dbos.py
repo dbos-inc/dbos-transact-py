@@ -148,6 +148,7 @@ from ._context import (
     get_authentication,
     get_local_dbos_context,
     get_workflow_start_options,
+    refuse_in_workflow_body,
     set_current_authentication,
     snapshot_step_context,
 )
@@ -826,11 +827,7 @@ class DBOS:
 
         Cannot be called from a workflow body; call it from a step instead."""
         # Migration is a database side effect, so it belongs in a step, not a workflow body.
-        ctx = get_local_dbos_context()
-        if ctx is not None and ctx.is_workflow():
-            raise DBOSException(
-                "DBOS.migrate cannot be called from a workflow; call it from a step"
-            )
+        refuse_in_workflow_body("DBOS.migrate")
         is_sqlite = system_database_url.startswith("sqlite")
         if is_sqlite and application_role:
             raise DBOSException(
@@ -4267,11 +4264,7 @@ class DBOS:
             a different application raises.
         """
         # Promotion is a side effect on shared state, so it belongs in a step, not a workflow body.
-        ctx = get_local_dbos_context()
-        if ctx is not None and ctx.is_workflow():
-            raise DBOSException(
-                "DBOS.set_latest_application_version cannot be called from a workflow; call it from a step"
-            )
+        refuse_in_workflow_body("DBOS.set_latest_application_version")
         dbos = _get_dbos_instance()
         new_timestamp = int(time.time() * 1000)
         dbos._sys_db.update_application_version_timestamp(
@@ -4297,11 +4290,7 @@ class DBOS:
         cls, version_name: str, *, application_name: Optional[str] = None
     ) -> None:
         """Async version of :meth:`set_latest_application_version`."""
-        ctx = get_local_dbos_context()
-        if ctx is not None and ctx.is_workflow():
-            raise DBOSException(
-                "DBOS.set_latest_application_version_async cannot be called from a workflow; call it from a step"
-            )
+        refuse_in_workflow_body("DBOS.set_latest_application_version_async")
         await cls._configure_asyncio_thread_pool()
         await asyncio.to_thread(
             lambda: cls.set_latest_application_version(
