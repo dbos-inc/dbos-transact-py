@@ -1797,15 +1797,19 @@ async def _wait_first_async(c: DBOSClient, t: _StepTargets) -> Any:
 
 
 # One row per wrapped client method: the steps a workflow records when it makes the call.
+def _child_enqueue_options_for(t: _StepTargets) -> EnqueueOptions:
+    options: EnqueueOptions = {"queue_name": t.queue, "workflow_name": t.workflow_name}
+    # A child takes no key from its parent, so it is enqueued under the parent's explicitly.
+    if DBOS.shard_key is not None:
+        options["shard_key"] = DBOS.shard_key
+    return options
+
+
 _CLIENT_STEP_CASES: Dict[str, _ClientStepCase] = {
     "enqueue": _ClientStepCase(
         ["DBOSClient.enqueue"],
-        lambda c, t: c.enqueue(
-            {"queue_name": t.queue, "workflow_name": t.workflow_name}
-        ),
-        lambda c, t: c.enqueue_async(
-            {"queue_name": t.queue, "workflow_name": t.workflow_name}
-        ),
+        lambda c, t: c.enqueue(_child_enqueue_options_for(t)),
+        lambda c, t: c.enqueue_async(_child_enqueue_options_for(t)),
     ),
     "retrieve_workflow": _ClientStepCase(
         ["DBOSClient.retrieveWorkflow"],
@@ -2150,10 +2154,10 @@ def test_client_enqueue_binds_its_parents_shard_key(
     parent.shard_key = "parent-key"
     options: EnqueueOptions = {"queue_name": "q", "workflow_name": "w"}
 
-    # With no key of its own the child takes its parent's, which is bound while its row
-    # is written, and only then.
+    # A child does not take its parent's key. The parent's key is bound while the child's
+    # row is written, and only then.
     resolved = _child_enqueue_options(parent, options)
-    assert resolved.get("shard_key") == "parent-key"
+    assert resolved.get("shard_key") is None
     assert client._enqueue_from(parent, resolved, (), {}) == "parent-3"
     assert seen == [("parent-3", "parent", "parent-key")]
     assert bound_shard_key("parent") is None

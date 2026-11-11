@@ -139,14 +139,12 @@ def _client_step_context(
 def _child_enqueue_options(
     parent: Optional[DBOSContext], options: EnqueueOptions
 ) -> EnqueueOptions:
-    """The options of an enqueue made from a workflow body. Like any child, the workflow
-    takes its parent's shard key, and an ID derived from its parent's step, unless the
-    options name their own."""
+    """The options of an enqueue made from a workflow body. Unless the options name an ID,
+    the workflow takes one derived from its parent's step. Like any child, it takes only
+    the shard key the options name, never its parent's."""
     if parent is None:
         return options
     resolved: EnqueueOptions = {**options}
-    if resolved.get("shard_key") is None and parent.shard_key is not None:
-        resolved["shard_key"] = parent.shard_key
     if resolved.get("workflow_id") is None:
         # Derived from the parent's step, so re-running the step finds the same workflow.
         resolved["workflow_id"] = child_workflow_id(
