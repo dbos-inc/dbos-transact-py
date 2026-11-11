@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import pytest
-import sqlalchemy as sa
+from sqlalchemy.exc import DBAPIError
 
 import dbos._dbos as dbos_module
 from dbos import DBOS, DBOSConfig, Queue
@@ -34,8 +34,8 @@ async def steps_of_async(workflow_id: str) -> List[Tuple[int, str]]:
     return [(s["function_id"], s["function_name"]) for s in steps]
 
 
-def dropped_connection() -> sa.exc.DBAPIError:
-    return sa.exc.DBAPIError(
+def dropped_connection() -> DBAPIError:
+    return DBAPIError(
         "SELECT 1", None, Exception("connection dropped"), connection_invalidated=True
     )
 
@@ -248,7 +248,7 @@ async def test_queue_api_async_is_checkpointed(
 
     real_list_queues = dbos._sys_db.list_queues
     monkeypatch.setattr(dbos._sys_db, "list_queues", always_drops)
-    with pytest.raises(sa.exc.DBAPIError):
+    with pytest.raises(DBAPIError):
         await asyncio.wait_for(DBOS.list_queues_async(), timeout=5)
     monkeypatch.setattr(dbos._sys_db, "list_queues", real_list_queues)
 
