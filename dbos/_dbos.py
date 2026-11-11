@@ -3825,8 +3825,8 @@ class DBOS:
         queue_name = sched["queue_name"]
 
         def create(c: sa.Connection) -> None:
-            # The queue check reads the database, so it runs inside the step: a replay
-            # returns the recorded outcome even if the queue was since deleted.
+            # The queue check reads the database, so in a workflow it runs inside the step:
+            # a replay returns the recorded outcome even if the queue was since deleted.
             if (
                 queue_name is not None
                 and queue_name not in dbos._registry.internal_queue_map

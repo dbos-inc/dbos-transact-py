@@ -5678,7 +5678,8 @@ class SystemDatabase(ABC):
         try:
             result = fn()
         except Exception as e:
-            # The operation retries its own transient database errors, so what escapes is its answer.
+            # Recorded so a replay re-raises it rather than re-running the operation; an operation
+            # that should survive transient database errors must retry them itself.
             self._record_operation_error(
                 ctx.workflow_id, ctx.function_id, function_name, start_time, e
             )
@@ -5718,7 +5719,8 @@ class SystemDatabase(ABC):
         try:
             result = await fn()
         except Exception as e:
-            # The operation retries its own transient database errors, so what escapes is its answer.
+            # Recorded so a replay re-raises it rather than re-running the operation; an operation
+            # that should survive transient database errors must retry them itself.
             await asyncio.to_thread(
                 self._record_operation_error,
                 ctx.workflow_id,

@@ -230,8 +230,9 @@ class Debouncer(Generic[P, R]):
         application_name: Optional[str],
         conn: Optional[sa.Connection] = None,
     ) -> DebounceResult:
-        # The queue check reads the database, so it runs here, inside the bounce's step:
-        # a replay returns the recorded outcome even if the queue was since deleted.
+        # The queue check reads the database, so it runs here: in a workflow this is inside
+        # the bounce's step, and a replay returns the recorded outcome even if the queue was
+        # since deleted.
         if (
             queue_name not in dbos._registry.internal_queue_map
             and dbos._sys_db.get_queue(queue_name, conn=conn) is None

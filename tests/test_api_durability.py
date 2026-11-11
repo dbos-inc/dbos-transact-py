@@ -3,12 +3,11 @@ refused, or deterministic. These tests cover the methods that used to be none
 of the three."""
 
 import asyncio
-import itertools
 import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import pytest
 
@@ -49,19 +48,6 @@ def queue_fields(queue: Queue) -> Dict[str, Any]:
         "polling_interval_sec": queue._polling_interval_sec,
         "database_backed_queue": queue.database_backed_queue,
     }
-
-
-def register_other_app_queue(dbos: DBOS, name: str) -> None:
-    dbos._sys_db.upsert_queue(
-        name=name,
-        concurrency=None,
-        worker_concurrency=None,
-        rate_limit_max=None,
-        rate_limit_period_sec=None,
-        polling_interval_sec=1.0,
-        update_existing=True,
-        application_name=OTHER_APP,
-    )
 
 
 @pytest.mark.parametrize(
@@ -152,27 +138,61 @@ def test_queue_api_is_checkpointed(
 async def test_queue_api_async_is_checkpointed(dbos: DBOS) -> None:
     queue_name = f"durable-q-{uuid.uuid4()}"
     other_queue = f"durable-q-{uuid.uuid4()}"
-    register_other_app_queue(dbos, other_queue)
+    dbos._sys_db.upsert_queue(
+        name=other_queue,
+        concurrency=None,
+        worker_concurrency=None,
+        rate_limit_max=None,
+        rate_limit_period_sec=None,
+        polling_interval_sec=1.0,
+        update_existing=True,
+        application_name=OTHER_APP,
+    )
+    # A partitioned queue, so the partition fields go through the checkpoint too.
+    fields = {
+        "name": queue_name,
+        "application_name": dbos._sys_db.app_name,
+        "concurrency": 3,
+        "worker_concurrency": 2,
+        "limiter": None,
+        "partition_concurrency": 2,
+        "partition_worker_concurrency": 1,
+        "partition_limiter": {"limit": 4, "period": 2.5},
+        "polling_interval_sec": 0.5,
+        "database_backed_queue": True,
+    }
 
     @DBOS.workflow()
-    async def queue_workflow() -> Tuple[str, Optional[int], bool, str]:
+    async def queue_workflow() -> Tuple[Dict[str, Any], List[Dict[str, Any]], str]:
         # Another application's queue makes this fail, and the error is recorded.
         try:
             await DBOS.register_queue_async(other_queue)
             collision = ""
         except DBOSException as e:
             collision = str(e)
-        registered = await DBOS.register_queue_async(queue_name, global_concurrency=3)
+        registered = await DBOS.register_queue_async(
+            queue_name,
+            global_concurrency=3,
+            worker_concurrency=2,
+            partition_concurrency=2,
+            partition_worker_concurrency=1,
+            partition_limiter={"limit": 4, "period": 2.5},
+            polling_interval_sec=0.5,
+        )
         # A plain read that takes no step.
         await DBOS.retrieve_queue_async(queue_name)
-        listed = any(q.name == queue_name for q in await DBOS.list_queues_async())
+        listed = [
+            queue_fields(q)
+            for q in await DBOS.list_queues_async()
+            if q.name == queue_name
+        ]
         await DBOS.delete_queue_async(queue_name)
-        return registered.name, registered._concurrency, listed, collision
+        return queue_fields(registered), listed, collision
 
     handle = await DBOS.start_workflow_async(queue_workflow)
     result = await handle.get_result()
-    assert result[:3] == (queue_name, 3, True)
-    assert "already registered by application" in result[3]
+    assert result[:2] == (fields, [fields])
+    assert "already registered by application" in result[2]
     expected_steps = [
         (1, "DBOS.registerQueue"),
         (2, "DBOS.registerQueue"),
@@ -198,24 +218,27 @@ def test_application_version_api_is_checkpointed(dbos: DBOS) -> None:
     dbos._sys_db.create_application_version(other_version, application_name=OTHER_APP)
 
     @DBOS.workflow()
-    def version_workflow() -> Tuple[bool, str, str]:
+    def version_workflow() -> Tuple[int, str, int, str]:
         DBOS.set_latest_application_version(current)
-        listed = any(
-            v["version_name"] == current for v in DBOS.list_application_versions()
+        listed_at = next(
+            v["version_timestamp"]
+            for v in DBOS.list_application_versions()
+            if v["version_name"] == current
         )
-        latest = DBOS.get_latest_application_version()["version_name"]
+        latest = DBOS.get_latest_application_version()
         # Another application's version makes this fail, and the error is recorded.
         try:
             DBOS.set_latest_application_version(other_version)
             collision = ""
         except DBOSException as e:
             collision = str(e)
-        return listed, latest, collision
+        return listed_at, latest["version_name"], latest["version_timestamp"], collision
 
     handle = DBOS.start_workflow(version_workflow)
     result = handle.get_result()
-    assert result[:2] == (True, current)
-    assert "already registered by application" in result[2]
+    promoted_at = result[2]
+    assert result[:3] == (promoted_at, current, promoted_at)
+    assert "already registered by application" in result[3]
     expected_steps = [
         (1, "DBOS.setLatestApplicationVersion"),
         (2, "DBOS.listApplicationVersions"),
@@ -224,36 +247,38 @@ def test_application_version_api_is_checkpointed(dbos: DBOS) -> None:
     ]
     assert steps_of(handle.workflow_id) == expected_steps
     assert DBOS.list_workflow_steps(handle.workflow_id)[3]["error"] is not None
-    promoted_at = DBOS.get_latest_application_version()["version_timestamp"]
 
-    # Replaying the workflow does not promote its version again: the timestamp
-    # it wrote stands, rather than moving to the replay's clock.
+    # Replaying every step does not promote the version again: the timestamp it
+    # wrote stands, rather than moving to the replay's clock.
     time.sleep(0.01)
-    forked = DBOS.fork_workflow(handle.workflow_id, 4)
+    forked = DBOS.fork_workflow(handle.workflow_id, 5)
     assert forked.get_result() == result
     assert steps_of(forked.workflow_id) == expected_steps
     assert DBOS.get_latest_application_version()["version_timestamp"] == promoted_at
 
     # Replaying from the start does run the promotion again, at a later time.
     refork = DBOS.fork_workflow(handle.workflow_id, 1)
-    assert refork.get_result() == result
-    assert DBOS.get_latest_application_version()["version_timestamp"] > promoted_at
+    assert refork.get_result()[2] > promoted_at
+
+    # Now the live timestamp differs, so a full replay can only return the old
+    # one from the recorded reads.
+    forked = DBOS.fork_workflow(handle.workflow_id, 5)
+    assert forked.get_result() == result
 
 
 @pytest.mark.asyncio
 async def test_concurrent_async_calls_number_steps_in_call_order(
     dbos: DBOS, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Every async variant must claim its step ID on the event loop. To make a
-    # claim from a worker thread fail every time rather than now and then, such
-    # claims are delayed, earlier calls longest, so they would land in reverse.
-    off_loop_claims = itertools.count()
-
+    # Every async variant must claim its step ID on the event loop. A claim from a
+    # worker thread is delayed, so it lands after every claim made on the loop in
+    # the meantime; the gather ends with an extra on-loop claim so even its last
+    # variant has a later claim to land behind.
     def snapshot_delayed_off_loop(*args: Any, **kwargs: Any) -> Any:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            time.sleep(max(0.0, 0.4 - 0.05 * next(off_loop_claims)))
+            time.sleep(0.2)
         return snapshot_step_context(*args, **kwargs)
 
     monkeypatch.setattr(dbos_module, "snapshot_step_context", snapshot_delayed_off_loop)
@@ -267,7 +292,7 @@ async def test_concurrent_async_calls_number_steps_in_call_order(
     await DBOS.register_queue_async(queue_name)
 
     @DBOS.workflow()
-    async def concurrent_workflow() -> None:
+    async def concurrent_workflow() -> str:
         # Validation errors raise before the calls take a step ID.
         with pytest.raises(ValueError):
             await DBOS.register_queue_async("_dbos_reserved")
@@ -284,87 +309,55 @@ async def test_concurrent_async_calls_number_steps_in_call_order(
             ),
             DBOS.get_schedule_async(schedule_name),
             DBOS.list_schedules_async(),
+            DBOS.delete_schedule_async(f"no-such-schedule-{uuid.uuid4()}"),
+            DBOS.register_queue_async(f"durable-q-{uuid.uuid4()}"),
             DBOS.list_queues_async(),
+            DBOS.delete_queue_async(f"no-such-queue-{uuid.uuid4()}"),
             DBOS.set_latest_application_version_async(DBOS.application_version),
             DBOS.get_latest_application_version_async(),
             DBOS.list_application_versions_async(),
+            DBOS.list_queues_async(),
         )
         await DBOS.delete_schedule_async(schedule_name)
-
-    expected_steps = [
-        (1, "DBOS.createSchedule"),
-        (2, "DBOS.getSchedule"),
-        (3, "DBOS.listSchedules"),
-        (4, "DBOS.listQueues"),
-        (5, "DBOS.setLatestApplicationVersion"),
-        (6, "DBOS.getLatestApplicationVersion"),
-        (7, "DBOS.listApplicationVersions"),
-        (8, "DBOS.deleteSchedule"),
-    ]
-    handle = await DBOS.start_workflow_async(concurrent_workflow)
-    await handle.get_result()
-    assert await steps_of_async(handle.workflow_id) == expected_steps
-
-    # The async queue check is recorded too: with the queue deleted, the replayed
-    # createSchedule returns its recorded result instead of failing the check.
-    await DBOS.delete_queue_async(queue_name)
-    forked = await DBOS.fork_workflow_async(handle.workflow_id, 2)
-    await forked.get_result()
-    assert await steps_of_async(forked.workflow_id) == expected_steps
-
-
-def test_create_schedule_queue_check_is_inside_step(dbos: DBOS) -> None:
-    @DBOS.workflow()
-    def target_workflow(scheduled_at: datetime, ctx: Any) -> None:
-        pass
-
-    queue_name = f"sched-q-{uuid.uuid4()}"
-    schedule_name = f"durable-sched-{uuid.uuid4()}"
-    DBOS.register_queue(queue_name)
-
-    @DBOS.workflow()
-    def schedule_workflow() -> Optional[str]:
-        DBOS.create_schedule(
-            schedule_name=schedule_name,
-            workflow_fn=target_workflow,
-            schedule="0 0 1 1 *",
-            queue_name=queue_name,
-        )
-        sched = DBOS.get_schedule(schedule_name)
-        return sched["queue_name"] if sched else None
-
-    handle = DBOS.start_workflow(schedule_workflow)
-    assert handle.get_result() == queue_name
-
-    # Deleting the queue does not make a replay fail its (already recorded) check.
-    DBOS.delete_schedule(schedule_name)
-    DBOS.delete_queue(queue_name)
-    forked = DBOS.fork_workflow(handle.workflow_id, 2)
-    assert forked.get_result() is None
-    assert steps_of(forked.workflow_id) == [
-        (1, "DBOS.createSchedule"),
-        (2, "DBOS.getSchedule"),
-    ]
-
-    # A failed check is recorded as the step's error.
-    @DBOS.workflow()
-    def undeclared_queue_workflow() -> str:
+        # A failed queue check is recorded as the step's error.
         try:
-            DBOS.create_schedule(
+            await DBOS.create_schedule_async(
                 schedule_name=f"durable-sched-{uuid.uuid4()}",
                 workflow_fn=target_workflow,
                 schedule="0 0 1 1 *",
-                queue_name=queue_name,
+                queue_name=f"no-such-queue-{uuid.uuid4()}",
             )
         except DBOSException as e:
             return str(e)
         return "created"
 
-    err_handle = DBOS.start_workflow(undeclared_queue_workflow)
-    assert "is not declared" in err_handle.get_result()
-    steps = DBOS.list_workflow_steps(err_handle.workflow_id)
-    assert [s["function_name"] for s in steps] == ["DBOS.createSchedule"]
-    assert steps[0]["error"] is not None
+    expected_steps = [
+        (1, "DBOS.createSchedule"),
+        (2, "DBOS.getSchedule"),
+        (3, "DBOS.listSchedules"),
+        (4, "DBOS.deleteSchedule"),
+        (5, "DBOS.registerQueue"),
+        (6, "DBOS.listQueues"),
+        (7, "DBOS.deleteQueue"),
+        (8, "DBOS.setLatestApplicationVersion"),
+        (9, "DBOS.getLatestApplicationVersion"),
+        (10, "DBOS.listApplicationVersions"),
+        (11, "DBOS.listQueues"),
+        (12, "DBOS.deleteSchedule"),
+        (13, "DBOS.createSchedule"),
+    ]
+    handle = await DBOS.start_workflow_async(concurrent_workflow)
+    assert "is not declared" in await handle.get_result()
+    assert await steps_of_async(handle.workflow_id) == expected_steps
+    steps = await DBOS.list_workflow_steps_async(handle.workflow_id)
+    assert steps[12]["error"] is not None
+
+    # The queue check is recorded with createSchedule: with the queue deleted, the
+    # replay returns the recorded result instead of failing the check.
+    await DBOS.delete_queue_async(queue_name)
+    forked = await DBOS.fork_workflow_async(handle.workflow_id, 2)
+    assert "is not declared" in await forked.get_result()
+    assert await steps_of_async(forked.workflow_id) == expected_steps
 
 
 def test_migrate_refused_in_workflow_body(dbos: DBOS, tmp_path: Path) -> None:
