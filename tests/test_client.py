@@ -1731,6 +1731,14 @@ async def test_client_list_workflows_async_is_a_step_in_a_workflow(
     async def listing_workflow(target: str) -> list[str]:
         with pytest.raises(RuntimeError, match="list_workflows_async"):
             client.list_workflows(workflow_ids=[target])
+        # A sync handle has no async variant of its own; its blocking calls are refused too.
+        sync_handle: WorkflowHandle[str] = await asyncio.to_thread(
+            client.retrieve_workflow, target
+        )
+        with pytest.raises(RuntimeError, match="async client method"):
+            sync_handle.get_result()
+        with pytest.raises(RuntimeError, match="async client method"):
+            sync_handle.get_status()
         found = await client.list_workflows_async(workflow_ids=[target])
         await a_step()
         return [w.workflow_id for w in found]
@@ -1742,11 +1750,13 @@ async def test_client_list_workflows_async_is_a_step_in_a_workflow(
     assert await handle.get_result() == [target.workflow_id]
 
     steps = await DBOS.list_workflow_steps_async(handle.workflow_id)
+    # A refused call reserves no step.
     assert [(s["function_id"], s["function_name"]) for s in steps] == [
-        (1, "DBOSClient.listWorkflows"),
-        (2, a_step.__qualname__),
+        (1, "DBOSClient.retrieveWorkflow"),
+        (2, "DBOSClient.listWorkflows"),
+        (3, a_step.__qualname__),
     ]
-    recorded = steps[0]["output"]
+    recorded = steps[1]["output"]
     assert recorded is not None
     assert [w.workflow_id for w in recorded] == [target.workflow_id]
 

@@ -105,15 +105,32 @@ F = TypeVar("F", bound=Callable[..., Any])
 _ENQUEUE_STEP = "DBOSClient.enqueue"
 
 
-def _client_step_context(sync_method: Optional[str]) -> Optional[DBOSContext]:
+def _refuse_on_event_loop(method: str, has_async_variant: bool) -> None:
+    """Raise if called on a running event loop, which a blocking call would stall."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    alternative = (
+        f"Use await {method}_async(...) instead."
+        if has_async_variant
+        else f"Get the handle from an async client method and await its {method}() instead."
+    )
+    raise RuntimeError(
+        f"{method}() was called while an event loop is running. {alternative}"
+    )
+
+
+def _client_step_context(
+    sync_method: Optional[str], *, has_async_variant: bool = True
+) -> Optional[DBOSContext]:
     """Reserve a step of the calling workflow, or return None outside a workflow body."""
     ctx = get_local_dbos_context()
     if ctx is None or not ctx.is_workflow():
         return None
     if sync_method is not None:
-        from dbos._dbos import check_async
-
-        check_async(sync_method)
+        # An async workflow's body runs on the event loop every other coroutine shares.
+        _refuse_on_event_loop(sync_method, has_async_variant)
     return snapshot_step_context()
 
 
@@ -161,9 +178,10 @@ def _client_step(step_name: str) -> Callable[[F], F]:
 
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            # Only a method with an async variant is refused on an event loop.
-            guarded = hasattr(args[0], f"{func.__name__}_async")
-            ctx = _client_step_context(func.__name__ if guarded else None)
+            ctx = _client_step_context(
+                func.__name__,
+                has_async_variant=hasattr(args[0], f"{func.__name__}_async"),
+            )
             return _run_client_step(ctx, step_name, partial(func, *args, **kwargs))
 
         return cast(F, wrapper)
