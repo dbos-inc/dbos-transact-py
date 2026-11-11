@@ -83,7 +83,20 @@ def _autocommit(bind: ConnectionOrEngine) -> Generator[sa.Connection, None, None
     bind.execution_options(isolation_level="AUTOCOMMIT")
     try:
         yield bind
-    finally:
+    except BaseException:
+        # Best-effort cleanup only. If the connection died mid-DDL, the
+        # cleanup itself can raise (e.g. PendingRollbackError), which would
+        # bury the original database error that callers actually check for
+        # (e.g. DBAPIError.connection_invalidated) -- so the original error
+        # always wins.
+        try:
+            if bind.in_transaction():
+                bind.rollback()
+            bind.execution_options(isolation_level=previous_isolation_level)
+        except Exception:
+            pass
+        raise
+    else:
         # Executing anything -- even under AUTOCOMMIT -- makes SQLAlchemy
         # autobegin a logical Transaction() wrapper around it (a Core/Python
         # bookkeeping object, independent of the DBAPI connection's actual
