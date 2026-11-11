@@ -9,8 +9,18 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, TypedDict
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    NamedTuple,
+    Optional,
+    TypedDict,
+)
 
 import psycopg
 import pytest
@@ -1627,3 +1637,305 @@ def test_client_auth(dbos: DBOS, client: DBOSClient) -> None:
     assert list_results[0].authenticated_user == user
     assert list_results[0].authenticated_roles == roles
     assert list_results[0].assumed_role is None
+
+
+def test_client_list_workflows_is_a_step_in_a_workflow(
+    dbos: DBOS, client: DBOSClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    listings = 0
+    failing = False
+    list_workflows = client._sys_db.list_workflows
+
+    def counting_list_workflows(**filters: Any) -> Any:
+        nonlocal listings
+        listings += 1
+        if failing:
+            raise RuntimeError("listing failed")
+        return list_workflows(**filters)
+
+    monkeypatch.setattr(client._sys_db, "list_workflows", counting_list_workflows)
+
+    @DBOS.step()
+    def listing_step(target: str) -> int:
+        return len(client.list_workflows(workflow_ids=[target]))
+
+    @DBOS.workflow()
+    def listed_workflow() -> str:
+        return "listed"
+
+    @DBOS.workflow()
+    def listing_workflow(target: str) -> list[str]:
+        found = client.list_workflows(workflow_ids=[target])
+        assert listing_step(target) == 1
+        return [w.workflow_id for w in found]
+
+    @DBOS.workflow()
+    def failing_workflow() -> str:
+        try:
+            client.list_workflows()
+        except RuntimeError as e:
+            return str(e)
+        return "listed"
+
+    target = DBOS.start_workflow(listed_workflow)
+    assert target.get_result() == "listed"
+
+    handle = DBOS.start_workflow(listing_workflow, target.workflow_id)
+    assert handle.get_result() == [target.workflow_id]
+    assert listings == 2
+
+    # The call from the workflow body is a step; the call from inside a step is not.
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert [(s["function_id"], s["function_name"]) for s in steps] == [
+        (1, "DBOSClient.listWorkflows"),
+        (2, listing_step.__qualname__),
+    ]
+    recorded = steps[0]["output"]
+    assert recorded is not None
+    assert [w.workflow_id for w in recorded] == [target.workflow_id]
+    assert recorded[0].status == "SUCCESS"
+    assert steps[0]["error"] is None
+
+    # A replay returns the recorded listing instead of asking the client again.
+    forked = DBOS.fork_workflow(handle.workflow_id, 3)
+    assert forked.get_result() == [target.workflow_id]
+    assert listings == 2
+
+    # A listing that fails is recorded as the step's error and raised unchanged.
+    failing = True
+    failed = DBOS.start_workflow(failing_workflow)
+    assert failed.get_result() == "listing failed"
+    assert listings == 3
+    steps = DBOS.list_workflow_steps(failed.workflow_id)
+    assert [(s["function_id"], s["function_name"]) for s in steps] == [
+        (1, "DBOSClient.listWorkflows")
+    ]
+    assert isinstance(steps[0]["error"], RuntimeError)
+
+
+@pytest.mark.asyncio
+async def test_client_list_workflows_async_is_a_step_in_a_workflow(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    @DBOS.step()
+    async def a_step() -> str:
+        return "stepped"
+
+    @DBOS.workflow()
+    async def listed_workflow() -> str:
+        return "listed"
+
+    @DBOS.workflow()
+    async def listing_workflow(target: str) -> list[str]:
+        with pytest.raises(RuntimeError, match="list_workflows_async"):
+            client.list_workflows(workflow_ids=[target])
+        found = await client.list_workflows_async(workflow_ids=[target])
+        await a_step()
+        return [w.workflow_id for w in found]
+
+    target = await DBOS.start_workflow_async(listed_workflow)
+    assert await target.get_result() == "listed"
+
+    handle = await DBOS.start_workflow_async(listing_workflow, target.workflow_id)
+    assert await handle.get_result() == [target.workflow_id]
+
+    steps = await DBOS.list_workflow_steps_async(handle.workflow_id)
+    assert [(s["function_id"], s["function_name"]) for s in steps] == [
+        (1, "DBOSClient.listWorkflows"),
+        (2, a_step.__qualname__),
+    ]
+    recorded = steps[0]["output"]
+    assert recorded is not None
+    assert [w.workflow_id for w in recorded] == [target.workflow_id]
+
+
+@dataclass
+class _StepTargets:
+    workflow_id: str
+    workflow_name: str
+    queue: str
+
+
+class _ClientStepCase(NamedTuple):
+    steps: List[str]
+    call: Callable[[DBOSClient, _StepTargets], Any]
+    call_async: Callable[[DBOSClient, _StepTargets], Awaitable[Any]]
+
+
+async def _get_result_async(c: DBOSClient, t: _StepTargets) -> Any:
+    handle: WorkflowHandleAsync[str] = await c.retrieve_workflow_async(t.workflow_id)
+    return await handle.get_result()
+
+
+async def _get_status_async(c: DBOSClient, t: _StepTargets) -> Any:
+    handle: WorkflowHandleAsync[str] = await c.retrieve_workflow_async(t.workflow_id)
+    return await handle.get_status()
+
+
+async def _wait_first_async(c: DBOSClient, t: _StepTargets) -> Any:
+    return await c.wait_first_async([await c.retrieve_workflow_async(t.workflow_id)])
+
+
+# One row per wrapped client method: the steps a workflow records when it makes the call.
+_CLIENT_STEP_CASES: Dict[str, _ClientStepCase] = {
+    "enqueue": _ClientStepCase(
+        ["DBOSClient.enqueue"],
+        lambda c, t: c.enqueue(
+            {"queue_name": t.queue, "workflow_name": t.workflow_name}
+        ),
+        lambda c, t: c.enqueue_async(
+            {"queue_name": t.queue, "workflow_name": t.workflow_name}
+        ),
+    ),
+    "retrieve_workflow": _ClientStepCase(
+        ["DBOSClient.retrieveWorkflow"],
+        lambda c, t: c.retrieve_workflow(t.workflow_id),
+        lambda c, t: c.retrieve_workflow_async(t.workflow_id),
+    ),
+    "get_result": _ClientStepCase(
+        ["DBOSClient.retrieveWorkflow", "DBOSClient.getResult"],
+        lambda c, t: c.retrieve_workflow(t.workflow_id).get_result(),
+        _get_result_async,
+    ),
+    "get_status": _ClientStepCase(
+        ["DBOSClient.retrieveWorkflow", "DBOSClient.getStatus"],
+        lambda c, t: c.retrieve_workflow(t.workflow_id).get_status(),
+        _get_status_async,
+    ),
+    "wait_first": _ClientStepCase(
+        ["DBOSClient.retrieveWorkflow", "DBOSClient.waitFirst"],
+        lambda c, t: c.wait_first([c.retrieve_workflow(t.workflow_id)]),
+        _wait_first_async,
+    ),
+    "send": _ClientStepCase(
+        ["DBOSClient.send"],
+        lambda c, t: c.send(t.workflow_id, "message"),
+        lambda c, t: c.send_async(t.workflow_id, "message"),
+    ),
+    "send_bulk": _ClientStepCase(
+        ["DBOSClient.sendBulk"],
+        lambda c, t: c.send_bulk([SendMessage(t.workflow_id, "message")]),
+        lambda c, t: c.send_bulk_async([SendMessage(t.workflow_id, "message")]),
+    ),
+    "get_event": _ClientStepCase(
+        ["DBOSClient.getEvent"],
+        lambda c, t: c.get_event(t.workflow_id, "key"),
+        lambda c, t: c.get_event_async(t.workflow_id, "key"),
+    ),
+    "cancel_workflow": _ClientStepCase(
+        ["DBOSClient.cancelWorkflow"],
+        lambda c, t: c.cancel_workflow(t.workflow_id),
+        lambda c, t: c.cancel_workflow_async(t.workflow_id),
+    ),
+    "cancel_workflows": _ClientStepCase(
+        ["DBOSClient.cancelWorkflows"],
+        lambda c, t: c.cancel_workflows([t.workflow_id]),
+        lambda c, t: c.cancel_workflows_async([t.workflow_id]),
+    ),
+    "update_workflow_attributes": _ClientStepCase(
+        ["DBOSClient.updateWorkflowAttributes"],
+        lambda c, t: c.update_workflow_attributes(t.workflow_id, {"a": 1}),
+        lambda c, t: c.update_workflow_attributes_async(t.workflow_id, {"a": 1}),
+    ),
+    "delete_workflow": _ClientStepCase(
+        ["DBOSClient.deleteWorkflow"],
+        lambda c, t: c.delete_workflow(t.workflow_id),
+        lambda c, t: c.delete_workflow_async(t.workflow_id),
+    ),
+    "delete_workflows": _ClientStepCase(
+        ["DBOSClient.deleteWorkflows"],
+        lambda c, t: c.delete_workflows([t.workflow_id]),
+        lambda c, t: c.delete_workflows_async([t.workflow_id]),
+    ),
+    "resume_workflow": _ClientStepCase(
+        ["DBOSClient.resumeWorkflow"],
+        lambda c, t: c.resume_workflow(t.workflow_id),
+        lambda c, t: c.resume_workflow_async(t.workflow_id),
+    ),
+    "resume_workflows": _ClientStepCase(
+        ["DBOSClient.resumeWorkflows"],
+        lambda c, t: c.resume_workflows([t.workflow_id]),
+        lambda c, t: c.resume_workflows_async([t.workflow_id]),
+    ),
+    "rewind_workflow": _ClientStepCase(
+        ["DBOSClient.rewindWorkflow"],
+        lambda c, t: c.rewind_workflow(t.workflow_id),
+        lambda c, t: c.rewind_workflow_async(t.workflow_id),
+    ),
+    "set_workflow_delay": _ClientStepCase(
+        ["DBOSClient.setWorkflowDelay"],
+        lambda c, t: c.set_workflow_delay(t.workflow_id, delay_seconds=1),
+        lambda c, t: c.set_workflow_delay_async(t.workflow_id, delay_seconds=1),
+    ),
+    "list_workflows": _ClientStepCase(
+        ["DBOSClient.listWorkflows"],
+        lambda c, t: c.list_workflows(),
+        lambda c, t: c.list_workflows_async(),
+    ),
+    "list_queued_workflows": _ClientStepCase(
+        ["DBOSClient.listQueuedWorkflows"],
+        lambda c, t: c.list_queued_workflows(),
+        lambda c, t: c.list_queued_workflows_async(),
+    ),
+    "list_workflow_steps": _ClientStepCase(
+        ["DBOSClient.listWorkflowSteps"],
+        lambda c, t: c.list_workflow_steps(t.workflow_id),
+        lambda c, t: c.list_workflow_steps_async(t.workflow_id),
+    ),
+    "fork_workflow": _ClientStepCase(
+        ["DBOSClient.forkWorkflow"],
+        lambda c, t: c.fork_workflow(t.workflow_id, 1),
+        lambda c, t: c.fork_workflow_async(t.workflow_id, 1),
+    ),
+    "read_stream_offset": _ClientStepCase(
+        ["DBOSClient.readStreamOffset"],
+        lambda c, t: c.read_stream_offset(t.workflow_id, "stream", 0),
+        lambda c, t: c.read_stream_offset_async(t.workflow_id, "stream", 0),
+    ),
+}
+
+
+@pytest.mark.parametrize("case_name", list(_CLIENT_STEP_CASES))
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_client_calls_are_steps_in_a_workflow(
+    dbos: DBOS, client: DBOSClient, mode: str, case_name: str
+) -> None:
+    case = _CLIENT_STEP_CASES[case_name]
+
+    @DBOS.workflow()
+    def target_workflow() -> str:
+        DBOS.set_event("key", "value")
+        DBOS.write_stream("stream", "value")
+        return "done"
+
+    @DBOS.workflow()
+    def calling_workflow(targets: _StepTargets) -> None:
+        case.call(client, targets)
+
+    @DBOS.workflow()
+    async def calling_workflow_async(targets: _StepTargets) -> None:
+        await case.call_async(client, targets)
+
+    target = DBOS.start_workflow(target_workflow)
+    assert target.get_result() == "done"
+    client.register_queue("client-steps-queue")
+    targets = _StepTargets(
+        workflow_id=target.workflow_id,
+        workflow_name=target_workflow.__qualname__,
+        queue="client-steps-queue",
+    )
+
+    caller = calling_workflow if mode == "sync" else calling_workflow_async
+    handle = DBOS.start_workflow(caller, targets)
+    handle.get_result()
+
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert [s["function_name"] for s in steps] == case.steps
+    assert [s["function_id"] for s in steps] == list(range(1, len(case.steps) + 1))
+    assert [s["error"] for s in steps] == [None] * len(case.steps)
+
+    if case_name == "enqueue":
+        # The enqueued workflow is a child of the calling workflow, with a child's ID.
+        children = client.list_workflows(parent_workflow_id=handle.workflow_id)
+        assert [w.workflow_id for w in children] == [f"{handle.workflow_id}-1"]
+        assert children[0].parent_workflow_id == handle.workflow_id
