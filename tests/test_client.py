@@ -41,7 +41,11 @@ from dbos import (
 )
 from dbos._context import DBOSContext
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
-from dbos._error import DBOSException, DBOSNonExistentWorkflowError
+from dbos._error import (
+    DBOSException,
+    DBOSNonExistentWorkflowError,
+    DBOSWorkflowIDInUseError,
+)
 from dbos._outcome import NoResult
 from dbos._schemas.system_database import SystemSchema
 from dbos._shard_keys import bound_shard_key
@@ -2058,3 +2062,33 @@ def test_client_enqueue_binds_its_parents_shard_key(
     other: EnqueueOptions = {**options, "shard_key": "child-key"}
     assert client._enqueue_from(parent, other, (), {}) == "10:parent-key:parent-3"
     assert seen[-1] == ("10:parent-key:parent-3", "parent", "parent-key")
+
+
+def test_client_enqueue_step_recognizes_its_own_child_when_run_again(
+    dbos: DBOS, client: DBOSClient, skip_with_sharding: None
+) -> None:
+    client.register_queue("client-rerun-queue")
+    workflow_id = f"rerun-{uuid.uuid4()}"
+    options: EnqueueOptions = {
+        "queue_name": "client-rerun-queue",
+        "workflow_name": "w",
+        "workflow_id": workflow_id,
+        "workflow_id_reuse_policy": "reject",
+    }
+
+    def step(function_id: int) -> DBOSContext:
+        ctx = DBOSContext()
+        ctx.workflow_id = "parent"
+        ctx.function_id = function_id
+        return ctx
+
+    # The step enqueued its child, then crashed before it was recorded: running it again is no reuse.
+    assert client._enqueue_from(step(1), options, (), {}) == workflow_id
+    assert client._enqueue_from(step(1), options, (), {}) == workflow_id
+    assert len(client.list_workflows(workflow_ids=[workflow_id])) == 1
+
+    # Another step, or a caller outside a workflow, did not create the row.
+    with pytest.raises(DBOSWorkflowIDInUseError):
+        client._enqueue_from(step(2), options, (), {})
+    with pytest.raises(DBOSWorkflowIDInUseError):
+        client.enqueue(options)

@@ -482,6 +482,12 @@ class DBOSClient:
         return_existing = options.get("duplication_policy") == "return-existing"
         # Generated once, so a retried insert recognizes a row it already committed.
         creator_xid = generate_uuid()
+        if parent is not None:
+            # Named after the parent's step, so the step recognizes its own row when it runs again:
+            # the child and the step's record are separate writes, and a crash can fall between them.
+            creator_xid = (
+                f"{parent.shard_key or ''}:{parent.workflow_id}:{parent.function_id}"
+            )
         with bind_shard_keys(parent_keys):
             while True:
                 try:
