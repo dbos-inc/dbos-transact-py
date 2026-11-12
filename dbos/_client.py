@@ -121,26 +121,6 @@ def _client_step_context(
     return snapshot_step_context()
 
 
-def _child_enqueue_options(
-    parent: Optional[DBOSContext], options: EnqueueOptions
-) -> EnqueueOptions:
-    """The options of an enqueue made from a workflow body. Unless the options name an ID,
-    the workflow takes one derived from its parent's step. Like any child, it takes only
-    the shard key the options name, never its parent's."""
-    if parent is None:
-        return options
-    resolved: EnqueueOptions = {**options}
-    if resolved.get("workflow_id") is None:
-        # Derived from the parent's step, so re-running the step finds the same workflow.
-        resolved["workflow_id"] = child_workflow_id(
-            parent.workflow_id,
-            parent.function_id,
-            parent.shard_key,
-            resolved.get("shard_key"),
-        )
-    return resolved
-
-
 def _run_client_step(
     ctx: Optional[DBOSContext],
     step_name: str,
@@ -220,9 +200,8 @@ def _client_bound_step(
     *,
     many: bool = False,
 ) -> Callable[[F], F]:
-    """A _client_step for a method returning objects bound to the client's system
-    database, a list of them when many, or None: the step records each object's
-    to_record, and from_record(client, recorded, is_async) rebuilds it on the client."""
+    """Wrap _client_step into encode/decode logic for methods that
+    can't serialize natively in a durable step outcome."""
 
     def encode(result: Any) -> Any:
         if result is None:
@@ -634,7 +613,16 @@ class DBOSClient:
         self, options: EnqueueOptions, *args: Any, **kwargs: Any
     ) -> "WorkflowHandle[R]":
         ctx = _client_step_context("enqueue")
-        options = _child_enqueue_options(ctx, options)
+        if ctx is not None and options.get("workflow_id") is None:
+            options = {
+                **options,
+                "workflow_id": child_workflow_id(
+                    ctx.workflow_id,
+                    ctx.function_id,
+                    ctx.shard_key,
+                    options.get("shard_key"),
+                ),
+            }
         workflow_id = self._enqueue_step(ctx, options, args, kwargs)
         return WorkflowHandleClientPolling[R](
             workflow_id, self._sys_db, shard_key=options.get("shard_key")
@@ -644,7 +632,16 @@ class DBOSClient:
         self, options: EnqueueOptions, *args: Any, **kwargs: Any
     ) -> "WorkflowHandleAsync[R]":
         ctx = _client_step_context(None)
-        options = _child_enqueue_options(ctx, options)
+        if ctx is not None and options.get("workflow_id") is None:
+            options = {
+                **options,
+                "workflow_id": child_workflow_id(
+                    ctx.workflow_id,
+                    ctx.function_id,
+                    ctx.shard_key,
+                    options.get("shard_key"),
+                ),
+            }
         workflow_id = await asyncio.to_thread(
             self._enqueue_step, ctx, options, args, kwargs
         )

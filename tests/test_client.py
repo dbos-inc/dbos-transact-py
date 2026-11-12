@@ -41,8 +41,7 @@ from dbos import (
     SendMessage,
     SetWorkflowID,
 )
-from dbos._client import _child_enqueue_options
-from dbos._context import DBOSContext
+from dbos._context import DBOSContext, child_workflow_id
 from dbos._dbos import WorkflowHandle, WorkflowHandleAsync
 from dbos._error import (
     DBOSException,
@@ -2381,20 +2380,22 @@ def test_client_enqueue_binds_its_parents_shard_key(
 
     # A child does not take its parent's key. The parent's key is bound while the child's
     # row is written, and only then.
-    resolved = _child_enqueue_options(parent, options)
-    assert resolved.get("shard_key") is None
+    resolved: EnqueueOptions = {
+        **options,
+        "workflow_id": child_workflow_id("parent", 3, "parent-key", None),
+    }
     assert client._enqueue_from(parent, resolved, (), {}) == "parent-3"
     assert seen == [("parent-3", "parent", "parent-key")]
     assert bound_shard_key("parent") is None
 
     # A child under another key keeps it, and carries its parent's key in its ID.
-    other = _child_enqueue_options(parent, {**options, "shard_key": "child-key"})
-    assert other.get("shard_key") == "child-key"
+    other: EnqueueOptions = {
+        **options,
+        "shard_key": "child-key",
+        "workflow_id": child_workflow_id("parent", 3, "parent-key", "child-key"),
+    }
     assert client._enqueue_from(parent, other, (), {}) == "10:parent-key:parent-3"
     assert seen[-1] == ("10:parent-key:parent-3", "parent", "parent-key")
-
-    # Outside a workflow the options are left alone.
-    assert _child_enqueue_options(None, options) is options
 
 
 def test_client_enqueue_step_recognizes_its_own_child_when_run_again(
