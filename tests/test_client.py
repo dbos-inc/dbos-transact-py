@@ -148,7 +148,9 @@ def test_client_no_migrate(
         assert config["system_database_url"]
         client = DBOSClient(system_database_url=config["system_database_url"])
         client.list_workflows()
-    database = sa.make_url(config["system_database_url"]).database
+    system_database_url = config["system_database_url"]
+    assert system_database_url is not None
+    database = sa.make_url(system_database_url).database
     assert f'database "{database}" does not exist' in str(exc_info.value)
 
 
