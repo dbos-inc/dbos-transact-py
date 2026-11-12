@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import tempfile
 import time
@@ -21,6 +22,22 @@ pytestmark = pytest.mark.skipif(
     using_sharding(),
     reason="Runs the CLI against unsharded databases it creates and resets itself",
 )
+
+
+def serve_on_free_port(app_dir: str) -> int:
+    """Move a generated app off the templates' fixed port 8000, so concurrent xdist workers' apps do not collide."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = int(s.getsockname()[1])
+    root = Path(app_dir)
+    mains = [
+        path
+        for path in (*root.glob("main.py"), *root.glob("*/main.py"))
+        if "port=8000" in path.read_text()
+    ]
+    assert len(mains) == 1, f"expected one main.py serving on port 8000, got {mains}"
+    mains[0].write_text(mains[0].read_text().replace("port=8000", f"port={port}"))
+    return port
 
 
 @pytest.mark.timeout(600)
@@ -80,6 +97,7 @@ def test_package(
                 ["dbos", "init", template_name, "--template", template_name],
                 cwd=temp_path,
             )
+            port = serve_on_free_port(temp_path)
 
             # Run schema migration
             subprocess.check_call(["dbos", "migrate"], cwd=temp_path, env=venv)
@@ -88,7 +106,7 @@ def test_package(
             process = subprocess.Popen(["dbos", "start"], cwd=temp_path, env=venv)
 
             try:
-                url = "http://localhost:8000"
+                url = f"http://localhost:{port}"
                 if db_starter:
                     url += "/greeting/dbos"
                 max_retries = 10
@@ -273,6 +291,7 @@ def test_workflow_commands(config: DBOSConfig) -> None:
             cwd=temp_path,
             env=env,
         )
+        port = serve_on_free_port(temp_path)
         subprocess.check_call(
             ["dbos", "reset", "-y", "--sys-db-url", db_url], cwd=temp_path
         )
@@ -289,7 +308,7 @@ def test_workflow_commands(config: DBOSConfig) -> None:
             # Wait for the server to come up by hitting the fast static
             # homepage endpoint.
             def ping_root() -> None:
-                session.get("http://localhost:8000/", timeout=2).raise_for_status()
+                session.get(f"http://localhost:{port}/", timeout=2).raise_for_status()
 
             retry_until_success(ping_root, interval=1, max_attempts=30)
 
@@ -298,7 +317,7 @@ def test_workflow_commands(config: DBOSConfig) -> None:
             # 5s, so we use a short read timeout so we kill the server
             # while the enqueued workflows are still PENDING.
             try:
-                session.get("http://localhost:8000/queue", timeout=1)
+                session.get(f"http://localhost:{port}/queue", timeout=1)
             except requests.exceptions.Timeout:
                 pass
             time.sleep(1)  # So the queued workflows can start

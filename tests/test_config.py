@@ -717,7 +717,9 @@ def _server_default() -> str:
         engine.dispose()
 
 
-def test_default_timeout_survives_pool_reuse(skip_with_sqlite: None) -> None:
+def test_default_timeout_survives_pool_reuse(
+    skip_with_sqlite: None, migrated_system_database: None
+) -> None:
     # A bare SET in the connect hook is undone by the pool's rollback on return.
     sys_db = _make_sysdb()
     try:
@@ -726,7 +728,9 @@ def test_default_timeout_survives_pool_reuse(skip_with_sqlite: None) -> None:
         sys_db.destroy()
 
 
-def test_custom_and_disabled_timeout(skip_with_sqlite: None) -> None:
+def test_custom_and_disabled_timeout(
+    skip_with_sqlite: None, migrated_system_database: None
+) -> None:
     sys_db = _make_sysdb(idle_transaction_timeout_sec=5)
     try:
         assert _settings(sys_db.engine) == ["5s", "5s"]
@@ -745,7 +749,9 @@ def test_custom_and_disabled_timeout(skip_with_sqlite: None) -> None:
         sys_db.destroy()
 
 
-def test_user_setting_takes_precedence(skip_with_sqlite: None) -> None:
+def test_user_setting_takes_precedence(
+    skip_with_sqlite: None, migrated_system_database: None
+) -> None:
     sys_db = _make_sysdb(
         engine_kwargs={
             "pool_size": 1,
@@ -787,7 +793,9 @@ def test_query_canceled_is_not_retriable(dbos: DBOS, skip_with_sqlite: None) -> 
     assert retriable_postgres_exception(OperationalError("SELECT 1", {}, orig))
 
 
-def test_client_configures_idle_transaction_timeout(skip_with_sqlite: None) -> None:
+def test_client_configures_idle_transaction_timeout(
+    skip_with_sqlite: None, migrated_system_database: None
+) -> None:
     client = DBOSClient(
         system_database_url=postgres_urls()[1],
         system_database_pool_size=1,
@@ -799,7 +807,9 @@ def test_client_configures_idle_transaction_timeout(skip_with_sqlite: None) -> N
         client.destroy()
 
 
-def test_custom_engine_is_untouched(skip_with_sqlite: None) -> None:
+def test_custom_engine_is_untouched(
+    skip_with_sqlite: None, migrated_system_database: None
+) -> None:
     engine = sa.create_engine(postgres_urls()[1], pool_size=1, max_overflow=0)
     sys_db = _make_sysdb(engine=engine, engine_kwargs={})
     try:

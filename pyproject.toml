@@ -87,6 +87,9 @@ log_cli_format = "%(asctime)s [%(levelname)8s] (%(name)s:%(filename)s:%(lineno)s
 log_cli_level = "INFO"
 log_cli = true
 timeout = 120 # Terminate any test that takes longer than 120 seconds
+markers = [
+    "serial: must run with no other test running; excluded from the parallel pass and run on its own",
+]
 
 [dependency-groups]
 dev = [
@@ -105,6 +108,7 @@ dev = [
     "pytest-asyncio>=0.25.0",
     "pyright>=1.1.398",
     "pytest-timeout>=2.3.1",
+    "pytest-xdist>=3.8.0",
     "inline-snapshot>=0.28.0",
     "psycopg2-binary>=2.9.11",
     "pydantic>=2.0",

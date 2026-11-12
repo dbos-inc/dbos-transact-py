@@ -801,9 +801,10 @@ def test_migrate(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
 def test_programmatic_migration(
     entrypoint: str, db_engine: sa.Engine, skip_with_sqlite: None
 ) -> None:
-    database_name = "migrate_test"
-    migrate_role = "migrate-test-role"
-    app_role = "app-test-role"
+    # Names of its own, as roles are cluster-wide and xdist may run the cases concurrently.
+    database_name = f"programmatic_migrate_test_{entrypoint}"
+    migrate_role = f"programmatic-migrate-role-{entrypoint}"
+    app_role = f"programmatic-app-role-{entrypoint}"
     role_password = "migrate_test_password"
 
     # Verify migration is agnostic to driver name (under the hood it uses postgresql+psycopg)
