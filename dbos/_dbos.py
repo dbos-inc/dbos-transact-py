@@ -120,6 +120,7 @@ from ._sys_db import (
     VersionInfo,
     WorkflowSchedule,
     WorkflowStatus,
+    db_retry,
 )
 from ._tracer import DBOSTracer, dbos_tracer
 
@@ -264,6 +265,16 @@ def _refuse_load_in_workflow(fn: str) -> None:
             f"{fn}() may not be called from a workflow. Call it from a step and use the "
             "value there: a step's return value is checkpointed, so return only a small result."
         )
+
+
+def _retried_as_step(
+    sys_db: SystemDatabase, step_ctx: Optional[DBOSContext], fn: Callable[[], T]
+) -> Callable[[], T]:
+    """Retry fn's transient database errors when it runs as a workflow step, whose
+    recorded error a replay would re-raise forever. Other callers fail fast."""
+    if step_ctx is not None and step_ctx.is_workflow():
+        return db_retry(sys_db=sys_db)(fn)
+    return fn
 
 
 def check_async(fn: str) -> None:
@@ -830,7 +841,15 @@ class DBOS:
         sharding: bool = False,
     ) -> None:
         """Create or migrate the system database with a privileged role, optionally
-        granting application_role access to the system schema."""
+        granting application_role access to the system schema.
+
+        Cannot be called from a workflow body; call it from a step instead."""
+        # Migration is a database side effect, so it belongs in a step, not a workflow body.
+        ctx = get_local_dbos_context()
+        if ctx is not None and ctx.is_workflow():
+            raise DBOSException(
+                "DBOS.migrate cannot be called from a workflow; call it from a step"
+            )
         is_sqlite = system_database_url.startswith("sqlite")
         if is_sqlite and application_role:
             raise DBOSException(
@@ -1341,45 +1360,19 @@ class DBOS:
             polling_interval_sec=polling_interval_sec,
             limiter=limiter,
         )
-        dbos = _get_dbos_instance()
-
-        if on_conflict == "always_update":
-            update_existing = True
-        elif on_conflict == "never_update":
-            update_existing = False
-        else:
-            latest = dbos._sys_db.get_latest_application_version()
-            update_existing = latest["version_name"] == GlobalParams.app_version
-
-        inserted = dbos._sys_db.upsert_queue(
-            name=name,
-            concurrency=(
-                concurrency if global_concurrency is None else global_concurrency
-            ),
+        return cls._register_queue(
+            snapshot_step_context(reserve_sleep_id=False),
+            name,
             worker_concurrency=worker_concurrency,
-            rate_limit_max=limiter["limit"] if limiter else None,
-            rate_limit_period_sec=limiter["period"] if limiter else None,
+            global_concurrency=global_concurrency,
             partition_concurrency=partition_concurrency,
             partition_worker_concurrency=partition_worker_concurrency,
-            partition_rate_limit_max=(
-                partition_limiter["limit"] if partition_limiter else None
-            ),
-            partition_rate_limit_period_sec=(
-                partition_limiter["period"] if partition_limiter else None
-            ),
+            partition_limiter=partition_limiter,
+            limiter=limiter,
             polling_interval_sec=polling_interval_sec,
-            update_existing=update_existing,
+            on_conflict=on_conflict,
+            concurrency=concurrency,
         )
-        queue = dbos.retrieve_queue(name)
-        assert queue is not None, f"Queue {name} missing from database after upsert"
-        if inserted:
-            listening = dbos._listening_queues is None or name in dbos._listening_queues
-            if listening:
-                dbos.logger.info("Registered and listening to new queue:")
-            else:
-                dbos.logger.info("Registered new queue (not listening):")
-            log_queue(queue)
-        return queue
 
     @classmethod
     async def register_queue_async(
@@ -1398,9 +1391,22 @@ class DBOS:
         concurrency: Optional[int] = None,
     ) -> Queue:
         """Async version of :meth:`register_queue`."""
+        Queue._validate_queue(
+            name=name,
+            concurrency=concurrency,
+            worker_concurrency=worker_concurrency,
+            global_concurrency=global_concurrency,
+            partition_concurrency=partition_concurrency,
+            partition_worker_concurrency=partition_worker_concurrency,
+            partition_limiter=partition_limiter,
+            polling_interval_sec=polling_interval_sec,
+            limiter=limiter,
+        )
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
         return await asyncio.to_thread(
-            lambda: cls.register_queue(
+            lambda: cls._register_queue(
+                step_ctx,
                 name,
                 worker_concurrency=worker_concurrency,
                 global_concurrency=global_concurrency,
@@ -1411,6 +1417,75 @@ class DBOS:
                 polling_interval_sec=polling_interval_sec,
                 on_conflict=on_conflict,
                 concurrency=concurrency,
+            )
+        )
+
+    @classmethod
+    def _register_queue(
+        cls,
+        step_ctx: Optional[DBOSContext],
+        name: str,
+        *,
+        worker_concurrency: Optional[int],
+        global_concurrency: Optional[int],
+        partition_concurrency: Optional[int],
+        partition_worker_concurrency: Optional[int],
+        partition_limiter: Optional[QueueRateLimit],
+        limiter: Optional[QueueRateLimit],
+        polling_interval_sec: float,
+        on_conflict: QueueConflictResolution,
+        concurrency: Optional[int],
+    ) -> Queue:
+        """Upsert a validated queue, as a step when called from a workflow."""
+        dbos = _get_dbos_instance()
+
+        def fn() -> Dict[str, Any]:
+            if on_conflict == "always_update":
+                update_existing = True
+            elif on_conflict == "never_update":
+                update_existing = False
+            else:
+                latest = dbos._sys_db.get_latest_application_version()
+                update_existing = latest["version_name"] == GlobalParams.app_version
+
+            inserted = dbos._sys_db.upsert_queue(
+                name=name,
+                concurrency=(
+                    concurrency if global_concurrency is None else global_concurrency
+                ),
+                worker_concurrency=worker_concurrency,
+                rate_limit_max=limiter["limit"] if limiter else None,
+                rate_limit_period_sec=limiter["period"] if limiter else None,
+                partition_concurrency=partition_concurrency,
+                partition_worker_concurrency=partition_worker_concurrency,
+                partition_rate_limit_max=(
+                    partition_limiter["limit"] if partition_limiter else None
+                ),
+                partition_rate_limit_period_sec=(
+                    partition_limiter["period"] if partition_limiter else None
+                ),
+                polling_interval_sec=polling_interval_sec,
+                update_existing=update_existing,
+            )
+            queue = dbos._sys_db.get_queue(name)
+            assert queue is not None, f"Queue {name} missing from database after upsert"
+            if inserted:
+                listening = (
+                    dbos._listening_queues is None or name in dbos._listening_queues
+                )
+                if listening:
+                    dbos.logger.info("Registered and listening to new queue:")
+                else:
+                    dbos.logger.info("Registered new queue (not listening):")
+                log_queue(queue)
+            # Checkpoint plain data, which any serializer can store, and rebuild the Queue.
+            return queue._to_checkpoint()
+
+        return Queue._from_checkpoint(
+            dbos._sys_db.call_function_as_step(
+                _retried_as_step(dbos._sys_db, step_ctx, fn),
+                "DBOS.registerQueue",
+                step_ctx,
             )
         )
 
@@ -1435,13 +1510,23 @@ class DBOS:
     def delete_queue(cls, name: str) -> None:
         """Delete a queue. Pending workflows on it are unrecoverable."""
         check_async("delete_queue")
-        _get_dbos_instance()._sys_db.delete_queue(name)
+        cls._delete_queue(snapshot_step_context(reserve_sleep_id=False), name)
 
     @classmethod
     async def delete_queue_async(cls, name: str) -> None:
         """Async version of :meth:`delete_queue`."""
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
-        await asyncio.to_thread(cls.delete_queue, name)
+        await asyncio.to_thread(cls._delete_queue, step_ctx, name)
+
+    @classmethod
+    def _delete_queue(cls, step_ctx: Optional[DBOSContext], name: str) -> None:
+        sys_db = _get_dbos_instance()._sys_db
+        sys_db.call_function_as_step(
+            _retried_as_step(sys_db, step_ctx, lambda: sys_db.delete_queue(name)),
+            "DBOS.deleteQueue",
+            step_ctx,
+        )
 
     @classmethod
     def list_queues(
@@ -1454,8 +1539,8 @@ class DBOS:
             By default, only list this application's queues.
         """
         check_async("list_queues")
-        return _get_dbos_instance()._sys_db.list_queues(
-            application_name=application_name
+        return cls._list_queues(
+            snapshot_step_context(reserve_sleep_id=False), application_name
         )
 
     @classmethod
@@ -1463,10 +1548,28 @@ class DBOS:
         cls, *, application_name: Optional[Union[str, List[str]]] = None
     ) -> List[Queue]:
         """Async version of :meth:`list_queues`."""
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
-        return await asyncio.to_thread(
-            lambda: cls.list_queues(application_name=application_name)
+        return await asyncio.to_thread(cls._list_queues, step_ctx, application_name)
+
+    @classmethod
+    def _list_queues(
+        cls,
+        step_ctx: Optional[DBOSContext],
+        application_name: Optional[Union[str, List[str]]],
+    ) -> List[Queue]:
+        sys_db = _get_dbos_instance()._sys_db
+
+        def fn() -> List[Dict[str, Any]]:
+            return [
+                q._to_checkpoint()
+                for q in sys_db.list_queues(application_name=application_name)
+            ]
+
+        data = sys_db.call_function_as_step(
+            _retried_as_step(sys_db, step_ctx, fn), "DBOS.listQueues", step_ctx
         )
+        return [Queue._from_checkpoint(d) for d in data]
 
     # Decorators for DBOS functionality
     @classmethod
@@ -3675,17 +3778,36 @@ class DBOS:
         Raises:
             DBOSException: If the cron expression is invalid, the workflow is not registered, the queue is not declared, or a schedule with the same name already exists
         """
+        sched = cls._build_schedule(
+            schedule_name=schedule_name,
+            workflow_fn=workflow_fn,
+            schedule=schedule,
+            context=context,
+            automatic_backfill=automatic_backfill,
+            cron_timezone=cron_timezone,
+            queue_name=queue_name,
+            shard_key=shard_key,
+        )
+        cls._create_schedule(snapshot_step_context(reserve_sleep_id=False), sched)
+
+    @classmethod
+    def _build_schedule(
+        cls,
+        *,
+        schedule_name: str,
+        workflow_fn: ScheduledWorkflow,
+        schedule: str,
+        context: Any,
+        automatic_backfill: bool,
+        cron_timezone: Optional[str],
+        queue_name: Optional[str],
+        shard_key: Optional[str],
+    ) -> WorkflowSchedule:
+        """Validate a schedule against the code and build its row. Reads no database
+        state, so the checks give the same answer when a workflow replays."""
         if not croniter.is_valid(schedule, second_at_beginning=True):
             raise DBOSException(f"Invalid cron schedule: '{schedule}'")
         dbos = _get_dbos_instance()
-        if (
-            queue_name is not None
-            and queue_name not in dbos._registry.internal_queue_map
-            and dbos._sys_db.get_queue(queue_name) is None
-        ):
-            raise DBOSException(
-                f"Queue '{queue_name}' is not declared. Please create the queue before using it in a schedule."
-            )
         workflow_name = get_dbos_func_name(workflow_fn)
         if workflow_name not in dbos._registry.workflow_info_map:
             raise DBOSException(
@@ -3706,7 +3828,7 @@ class DBOS:
                 ZoneInfo(cron_timezone)
             except (KeyError, Exception):
                 raise DBOSException(f"Invalid timezone: '{cron_timezone}'")
-        sched = WorkflowSchedule(
+        return WorkflowSchedule(
             schedule_id=generate_uuid(),
             schedule_name=schedule_name,
             workflow_name=workflow_name,
@@ -3721,17 +3843,38 @@ class DBOS:
             application_name=GlobalParams.app_name,
             shard_key=shard_key,
         )
-        ctx = snapshot_step_context(reserve_sleep_id=False)
-        if ctx and ctx.is_workflow():
-            with EnterDBOSStepCtx({"name": "createSchedule"}, ctx) as step:
+
+    @classmethod
+    def _create_schedule(
+        cls, step_ctx: Optional[DBOSContext], sched: WorkflowSchedule
+    ) -> None:
+        dbos = _get_dbos_instance()
+        queue_name = sched["queue_name"]
+
+        def create(c: sa.Connection) -> None:
+            # The queue check reads the database, so in a workflow it runs inside the step:
+            # a replay returns the recorded outcome even if the queue was since deleted.
+            if (
+                queue_name is not None
+                and queue_name not in dbos._registry.internal_queue_map
+                and dbos._sys_db.get_queue(queue_name, conn=c) is None
+            ):
+                raise DBOSException(
+                    f"Queue '{queue_name}' is not declared. Please create the queue before using it in a schedule."
+                )
+            dbos._sys_db.create_schedule(sched, conn=c)
+
+        if step_ctx and step_ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "createSchedule"}, step_ctx) as step:
                 dbos._sys_db.call_txn_as_step(
                     step.workflow_id,
                     step.curr_step_function_id,
                     "DBOS.createSchedule",
-                    lambda c: dbos._sys_db.create_schedule(sched, conn=c),
+                    create,
                 )
         else:
-            dbos._sys_db.create_schedule(sched)
+            with dbos._sys_db.engine.begin() as c:
+                create(c)
 
     @classmethod
     def list_schedules(
@@ -3752,10 +3895,27 @@ class DBOS:
             application_name: List only schedules owned by these applications.
                 By default, only list this application's schedules.
         """
+        return cls._list_schedules(
+            snapshot_step_context(reserve_sleep_id=False),
+            status=status,
+            workflow_name=workflow_name,
+            schedule_name_prefix=schedule_name_prefix,
+            application_name=application_name,
+        )
+
+    @classmethod
+    def _list_schedules(
+        cls,
+        step_ctx: Optional[DBOSContext],
+        *,
+        status: Optional[Union[str, List[str]]],
+        workflow_name: Optional[Union[str, List[str]]],
+        schedule_name_prefix: Optional[Union[str, List[str]]],
+        application_name: Optional[Union[str, List[str]]],
+    ) -> List["WorkflowSchedule"]:
         dbos = _get_dbos_instance()
-        ctx = snapshot_step_context(reserve_sleep_id=False)
-        if ctx and ctx.is_workflow():
-            with EnterDBOSStepCtx({"name": "listSchedules"}, ctx) as step:
+        if step_ctx and step_ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "listSchedules"}, step_ctx) as step:
                 schedules = dbos._sys_db.call_txn_as_step(
                     step.workflow_id,
                     step.curr_step_function_id,
@@ -3786,10 +3946,15 @@ class DBOS:
     @classmethod
     def get_schedule(cls, name: str) -> Optional["WorkflowSchedule"]:
         """Return the schedule with the given name, or ``None`` if it does not exist."""
+        return cls._get_schedule(snapshot_step_context(reserve_sleep_id=False), name)
+
+    @classmethod
+    def _get_schedule(
+        cls, step_ctx: Optional[DBOSContext], name: str
+    ) -> Optional["WorkflowSchedule"]:
         dbos = _get_dbos_instance()
-        ctx = snapshot_step_context(reserve_sleep_id=False)
-        if ctx and ctx.is_workflow():
-            with EnterDBOSStepCtx({"name": "getSchedule"}, ctx) as step:
+        if step_ctx and step_ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "getSchedule"}, step_ctx) as step:
                 schedule = dbos._sys_db.call_txn_as_step(
                     step.workflow_id,
                     step.curr_step_function_id,
@@ -3809,10 +3974,13 @@ class DBOS:
     @classmethod
     def delete_schedule(cls, name: str) -> None:
         """Delete the schedule with the given name. No-op if it does not exist."""
+        cls._delete_schedule(snapshot_step_context(reserve_sleep_id=False), name)
+
+    @classmethod
+    def _delete_schedule(cls, step_ctx: Optional[DBOSContext], name: str) -> None:
         dbos = _get_dbos_instance()
-        ctx = snapshot_step_context(reserve_sleep_id=False)
-        if ctx and ctx.is_workflow():
-            with EnterDBOSStepCtx({"name": "deleteSchedule"}, ctx) as step:
+        if step_ctx and step_ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "deleteSchedule"}, step_ctx) as step:
                 dbos._sys_db.call_txn_as_step(
                     step.workflow_id,
                     step.curr_step_function_id,
@@ -3836,9 +4004,7 @@ class DBOS:
         shard_key: Optional[str] = None,
     ) -> None:
         """Async version of :meth:`create_schedule`."""
-        await cls._configure_asyncio_thread_pool()
-        await asyncio.to_thread(
-            cls.create_schedule,
+        sched = cls._build_schedule(
             schedule_name=schedule_name,
             workflow_fn=workflow_fn,
             schedule=schedule,
@@ -3848,6 +4014,10 @@ class DBOS:
             queue_name=queue_name,
             shard_key=shard_key,
         )
+        # Take the step ID on the event loop, so concurrent tasks number their steps in call order.
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(cls._create_schedule, step_ctx, sched)
 
     @classmethod
     async def list_schedules_async(
@@ -3859,26 +4029,31 @@ class DBOS:
         application_name: Optional[Union[str, List[str]]] = None,
     ) -> List["WorkflowSchedule"]:
         """Async version of :meth:`list_schedules`."""
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
         return await asyncio.to_thread(
-            cls.list_schedules,
-            status=status,
-            workflow_name=workflow_name,
-            schedule_name_prefix=schedule_name_prefix,
-            application_name=application_name,
+            lambda: cls._list_schedules(
+                step_ctx,
+                status=status,
+                workflow_name=workflow_name,
+                schedule_name_prefix=schedule_name_prefix,
+                application_name=application_name,
+            )
         )
 
     @classmethod
     async def get_schedule_async(cls, name: str) -> Optional["WorkflowSchedule"]:
         """Async version of :meth:`get_schedule`."""
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
-        return await asyncio.to_thread(cls.get_schedule, name)
+        return await asyncio.to_thread(cls._get_schedule, step_ctx, name)
 
     @classmethod
     async def delete_schedule_async(cls, name: str) -> None:
         """Async version of :meth:`delete_schedule`."""
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
-        await asyncio.to_thread(cls.delete_schedule, name)
+        await asyncio.to_thread(cls._delete_schedule, step_ctx, name)
 
     @classmethod
     def pause_schedule(cls, name: str) -> None:
@@ -4079,14 +4254,38 @@ class DBOS:
     @classmethod
     def list_application_versions(cls) -> List[VersionInfo]:
         """Return all application versions ordered by timestamp descending."""
-        dbos = _get_dbos_instance()
-        return dbos._sys_db.list_application_versions()
+        return cls._list_application_versions(
+            snapshot_step_context(reserve_sleep_id=False)
+        )
+
+    @classmethod
+    def _list_application_versions(
+        cls, step_ctx: Optional[DBOSContext]
+    ) -> List[VersionInfo]:
+        sys_db = _get_dbos_instance()._sys_db
+        return sys_db.call_function_as_step(
+            _retried_as_step(sys_db, step_ctx, sys_db.list_application_versions),
+            "DBOS.listApplicationVersions",
+            step_ctx,
+        )
 
     @classmethod
     def get_latest_application_version(cls) -> VersionInfo:
         """Return the latest application version."""
-        dbos = _get_dbos_instance()
-        return dbos._sys_db.get_latest_application_version()
+        return cls._get_latest_application_version(
+            snapshot_step_context(reserve_sleep_id=False)
+        )
+
+    @classmethod
+    def _get_latest_application_version(
+        cls, step_ctx: Optional[DBOSContext]
+    ) -> VersionInfo:
+        sys_db = _get_dbos_instance()._sys_db
+        return sys_db.call_function_as_step(
+            sys_db.get_latest_application_version,
+            "DBOS.getLatestApplicationVersion",
+            step_ctx,
+        )
 
     @classmethod
     def set_latest_application_version(
@@ -4098,6 +4297,12 @@ class DBOS:
             caller's. Version names are global, so promoting one registered by
             a different application raises.
         """
+        # Promotion is a side effect on shared state, so it belongs in a step, not a workflow body.
+        ctx = get_local_dbos_context()
+        if ctx is not None and ctx.is_workflow():
+            raise DBOSException(
+                "DBOS.set_latest_application_version cannot be called from a workflow; call it from a step"
+            )
         dbos = _get_dbos_instance()
         new_timestamp = int(time.time() * 1000)
         dbos._sys_db.update_application_version_timestamp(
@@ -4107,20 +4312,27 @@ class DBOS:
     @classmethod
     async def list_application_versions_async(cls) -> List[VersionInfo]:
         """Async version of :meth:`list_application_versions`."""
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
-        return await asyncio.to_thread(cls.list_application_versions)
+        return await asyncio.to_thread(cls._list_application_versions, step_ctx)
 
     @classmethod
     async def get_latest_application_version_async(cls) -> VersionInfo:
         """Async version of :meth:`get_latest_application_version`."""
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
-        return await asyncio.to_thread(cls.get_latest_application_version)
+        return await asyncio.to_thread(cls._get_latest_application_version, step_ctx)
 
     @classmethod
     async def set_latest_application_version_async(
         cls, version_name: str, *, application_name: Optional[str] = None
     ) -> None:
         """Async version of :meth:`set_latest_application_version`."""
+        ctx = get_local_dbos_context()
+        if ctx is not None and ctx.is_workflow():
+            raise DBOSException(
+                "DBOS.set_latest_application_version_async cannot be called from a workflow; call it from a step"
+            )
         await cls._configure_asyncio_thread_pool()
         await asyncio.to_thread(
             lambda: cls.set_latest_application_version(

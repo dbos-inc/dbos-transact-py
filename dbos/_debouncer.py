@@ -37,7 +37,7 @@ from dbos._context import (
 )
 from dbos._core import WorkflowHandleAsyncPolling, WorkflowHandlePolling
 from dbos._error import DBOSException, DBOSQueueDeduplicatedError
-from dbos._queue import Queue
+from dbos._queue import _INTERNAL_QUEUE_CONSTRUCTION, Queue
 from dbos._registrations import get_dbos_func_name, get_func_info
 from dbos._serialization import PortableWorkflowError, serialize_args
 from dbos._sys_db import DebounceResult
@@ -230,6 +230,14 @@ class Debouncer(Generic[P, R]):
         application_name: Optional[str],
         conn: Optional[sa.Connection] = None,
     ) -> DebounceResult:
+        # The queue check reads the database, so it runs here: in a workflow this is inside
+        # the bounce's step, and a replay returns the recorded outcome even if the queue was
+        # since deleted.
+        if (
+            queue_name not in dbos._registry.internal_queue_map
+            and dbos._sys_db.get_queue(queue_name, conn=conn) is None
+        ):
+            raise Exception(f"Invalid queue name provided to debouncer: {queue_name}")
         # Serialize new inputs with the workflow's format so a bounce stays consistent with the initial enqueue.
         fi = get_func_info(func)
         serialization_type = fi.serialization_type if fi is not None else None
@@ -256,7 +264,7 @@ class Debouncer(Generic[P, R]):
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> "WorkflowHandle[R]":
-        from dbos._dbos import DBOS, _get_dbos_instance
+        from dbos._dbos import _get_dbos_instance
 
         dbos = _get_dbos_instance()
 
@@ -280,16 +288,15 @@ class Debouncer(Generic[P, R]):
         # Resolve the queue the debounced workflow will run on.
         queue_name = self.options["queue_name"]
         if queue_name:
-            queue: Optional[Queue] = dbos._registry.internal_queue_map.get(queue_name)
-            if queue is None:
-                queue = DBOS.retrieve_queue(queue_name)
-            if queue is None:
-                raise Exception(
-                    f"Invalid queue name provided to debouncer: {queue_name}"
-                )
+            # A handle by name reads no database state, so this adds no step; _bounce
+            # checks the queue exists inside its step.
+            queue: Queue = dbos._registry.internal_queue_map.get(queue_name) or Queue(
+                queue_name,
+                database_backed_queue=True,
+                token=_INTERNAL_QUEUE_CONSTRUCTION,
+            )
         else:
             queue = dbos._registry.get_internal_queue()
-        assert queue is not None
 
         # Resolve the workflow function so bounced inputs serialize identically.
         func = dbos._registry.workflow_info_map.get(self.options["workflow_name"])
