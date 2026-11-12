@@ -2006,19 +2006,54 @@ _CLIENT_STEP_CASES: Dict[str, _ClientStepCase] = {
             "client-steps-old-app", "client-steps-app"
         ),
     ),
+    "store_external_object": _ClientStepCase(
+        ["DBOSClient.storeExternalObject"],
+        lambda c, t: c.store_external_object("value", owner_workflow_id=t.workflow_id),
+        lambda c, t: c.store_external_object_async(
+            "value", owner_workflow_id=t.workflow_id
+        ),
+    ),
 }
+
+
+class _FakeExternalStorage:
+    """Stands in for the Transact Enterprise external storage, returning a ref per store."""
+
+    def __init__(self) -> None:
+        self.stored = 0
+
+    def store(self, value: Any, **kwargs: Any) -> Dict[str, Any]:
+        self.stored += 1
+        return {
+            "version": 1,
+            "store": "fake://bucket",
+            "key": f"{kwargs['owner_workflow_id']}/{self.stored}",
+            "size": len(value),
+            "sha256": "",
+            "serialization": "py_pickle",
+            "encoding": "raw",
+        }
+
+    async def store_async(self, value: Any, **kwargs: Any) -> Dict[str, Any]:
+        return self.store(value, **kwargs)
 
 
 @pytest.mark.parametrize("case_name", list(_CLIENT_STEP_CASES))
 @pytest.mark.parametrize("mode", ["sync", "async"])
 def test_client_calls_are_steps_in_a_workflow(
-    dbos: DBOS, client: DBOSClient, mode: str, case_name: str
+    dbos: DBOS,
+    client: DBOSClient,
+    mode: str,
+    case_name: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     if case_name == "rename_application" and using_sharding():
         pytest.skip(
             "A sharded system database does not support renaming an application"
         )
     case = _CLIENT_STEP_CASES[case_name]
+    storage = _FakeExternalStorage()
+    monkeypatch.setattr(client, "_external_storage_field", storage)
 
     @DBOS.workflow()
     def target_workflow() -> str:
@@ -2066,6 +2101,14 @@ def test_client_calls_are_steps_in_a_workflow(
         assert children[0].parent_workflow_id == handle.workflow_id
         assert steps[0]["child_workflow_id"] == f"{handle.workflow_id}-1"
         assert steps[0]["output"] is None
+
+    if case_name == "store_external_object":
+        # The step records the ref, not the value, and a replay returns it without
+        # storing the value again.
+        assert storage.stored == 1
+        assert steps[0]["output"]["key"] == f"{target.workflow_id}/1"
+        DBOS.fork_workflow(handle.workflow_id, 2).get_result()
+        assert storage.stored == 1
 
 
 @pytest.mark.parametrize("mode", ["sync", "async"])
@@ -2174,6 +2217,54 @@ def test_client_set_latest_application_version_is_refused_in_a_workflow(
     latest = client.get_latest_application_version()
     assert latest["version_name"] == current
     assert latest["version_timestamp"] >= promoted_before
+
+
+def test_client_trigger_and_backfill_are_refused_in_a_workflow(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    @DBOS.workflow()
+    def scheduled_workflow(scheduled_at: datetime, context: Any) -> None:
+        pass
+
+    client.create_schedule(
+        schedule_name="client-refused-schedule",
+        workflow_name=scheduled_workflow.__qualname__,
+        schedule=_YEARLY,
+    )
+    start = datetime(2024, 12, 31, 12, tzinfo=timezone.utc)
+    end = start + timedelta(days=1)
+
+    @DBOS.step()
+    def trigger() -> str:
+        return client.trigger_schedule("client-refused-schedule").workflow_id
+
+    @DBOS.step()
+    def backfill() -> List[str]:
+        handles = client.backfill_schedule("client-refused-schedule", start, end)
+        return [h.workflow_id for h in handles]
+
+    @DBOS.workflow()
+    def calling_workflow() -> List[str]:
+        # Refused in a workflow body, before it takes a step ID, but allowed in a step.
+        with pytest.raises(DBOSException, match="trigger_schedule cannot be called"):
+            client.trigger_schedule("client-refused-schedule")
+        with pytest.raises(DBOSException, match="backfill_schedule cannot be called"):
+            client.backfill_schedule("client-refused-schedule", start, end)
+        return [trigger(), *backfill()]
+
+    handle = DBOS.start_workflow(calling_workflow)
+    enqueued = handle.get_result()
+    assert len(enqueued) == 2
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert [(s["function_id"], s["function_name"]) for s in steps] == [
+        (1, trigger.__qualname__),
+        (2, backfill.__qualname__),
+    ]
+    for workflow_id in enqueued:
+        client.retrieve_workflow(workflow_id).get_result()
+    # The refused calls enqueued nothing.
+    executions = client.list_workflows(name=scheduled_workflow.__qualname__)
+    assert sorted(w.workflow_id for w in executions) == sorted(enqueued)
 
 
 @pytest.mark.asyncio
