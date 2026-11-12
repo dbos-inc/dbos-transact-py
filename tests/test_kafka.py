@@ -511,6 +511,8 @@ def test_kafka_listen_queues_excludes_custom_consumer_queue(
     assert seen == set()
 
 
+# Asserts a throughput floor, which other workers competing for the CPU push it under.
+@pytest.mark.serial
 def test_kafka_throughput(
     dbos: DBOS,
     monkeypatch: pytest.MonkeyPatch,

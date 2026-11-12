@@ -214,11 +214,13 @@ def test_leaving_suspended_clears_suspend_key(
 
 
 def test_send_wake_update_query_plan(
-    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+    dbos_dropped_databases: DBOS, skip_with_sqlite: None, skip_with_sharding: None
 ) -> None:
     """Every send runs the wake update, so it must probe the primary key: planned with
     statistics that predate the parked rows, it must not scan idx_workflow_status_suspended.
     """
+    # Freshly created tables: the plan depends on what earlier tests left in them.
+    dbos = dbos_dropped_databases
     sys_db = dbos._sys_db
     ws = sys_db.tables.workflow_status
 
