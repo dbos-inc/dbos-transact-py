@@ -5678,7 +5678,8 @@ class SystemDatabase(ABC):
         try:
             result = fn()
         except Exception as e:
-            # The operation retries its own transient database errors, so what escapes is its answer.
+            # Recorded so a replay re-raises it rather than re-running the operation; an operation
+            # that should survive transient database errors must retry them itself.
             self._record_operation_error(
                 ctx.workflow_id, ctx.function_id, function_name, start_time, e
             )
@@ -5718,7 +5719,8 @@ class SystemDatabase(ABC):
         try:
             result = await fn()
         except Exception as e:
-            # The operation retries its own transient database errors, so what escapes is its answer.
+            # Recorded so a replay re-raises it rather than re-running the operation; an operation
+            # that should survive transient database errors must retry them itself.
             await asyncio.to_thread(
                 self._record_operation_error,
                 ctx.workflow_id,
@@ -6883,8 +6885,9 @@ class SystemDatabase(ABC):
         name: str,
         *,
         client_system_database: Optional["SystemDatabase"] = None,
+        conn: Optional[sa.Connection] = None,
     ) -> Optional["Queue"]:
-        with self.engine.begin() as c:
+        def _do(c: sa.Connection) -> Optional["Queue"]:
             row = c.execute(
                 sa.select(self.tables.queues).where(
                     *self._global(self.tables.queues), self.tables.queues.c.name == name
@@ -6893,6 +6896,11 @@ class SystemDatabase(ABC):
             if row is None:
                 return None
             return queue_from_db_row(row, client_system_database=client_system_database)
+
+        if conn is not None:
+            return _do(conn)
+        with self.engine.begin() as c:
+            return _do(c)
 
     def list_queues(
         self,
