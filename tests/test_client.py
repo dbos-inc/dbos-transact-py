@@ -2106,7 +2106,8 @@ def test_client_calls_are_steps_in_a_workflow(
         # The step records the ref, not the value, and a replay returns it without
         # storing the value again.
         assert storage.stored == 1
-        assert steps[0]["output"]["key"] == f"{target.workflow_id}/1"
+        ref = cast(Dict[str, Any], steps[0]["output"])
+        assert ref["key"] == f"{target.workflow_id}/1"
         DBOS.fork_workflow(handle.workflow_id, 2).get_result()
         assert storage.stored == 1
 
@@ -2490,7 +2491,10 @@ def test_client_enqueue_binds_its_parents_shard_key(
 
 
 def test_client_enqueue_step_recognizes_its_own_child_when_run_again(
-    dbos: DBOS, client: DBOSClient, skip_with_sharding: None
+    dbos: DBOS,
+    client: DBOSClient,
+    skip_with_sharding: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client.register_queue("client-rerun-queue")
     workflow_id = f"rerun-{uuid.uuid4()}"
@@ -2517,3 +2521,9 @@ def test_client_enqueue_step_recognizes_its_own_child_when_run_again(
         client._enqueue_from(step(2), options, (), {})
     with pytest.raises(DBOSWorkflowIDInUseError):
         client.enqueue(options)
+
+    # Nor did the same step of a workflow with the same ID in another application, whose
+    # own database is free to hold that ID.
+    monkeypatch.setattr(dbos._sys_db, "app_name", "another-app")
+    with pytest.raises(DBOSWorkflowIDInUseError):
+        client._enqueue_from(step(1), options, (), {})
