@@ -103,9 +103,20 @@ jobs:
       working-directory: ./
 
     - name: Run Unit Tests
-      run: pdm run pytest tests
+      run: pdm run pytest tests -n 8 -m "not serial"
       working-directory: ./
       timeout-minutes: 50
+      env:
+        PGPASSWORD: a!b@c$d()e*_,/:;=?@ff[]22
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        DBOS_DATABASE: ${{ matrix.dbos-database }}
+        DBOS_COCKROACHDB_URL: cockroachdb://root@localhost:26257/postgres
+
+      # Tests marked serial need the machine to themselves, so they run after the parallel pass.
+    - name: Run Serial Unit Tests
+      run: pdm run pytest tests -m serial
+      working-directory: ./
+      timeout-minutes: 10
       env:
         PGPASSWORD: a!b@c$d()e*_,/:;=?@ff[]22
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

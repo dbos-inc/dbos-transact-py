@@ -108,16 +108,24 @@ def skip_with_sqlite_imprecise_time() -> None:
         )
 
 
+def worker_suffix() -> str:
+    """A per-worker suffix for shared resource names under pytest-xdist, so
+    workers do not reset each other's databases. Empty in a serial run."""
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
+    return f"_{worker}" if worker else ""
+
+
 def postgres_urls() -> Tuple[str, str]:
-    """The (user, system) PostgreSQL URLs shared by every test. The first is a
-    plain user database, for tests that attach a datasource to one."""
+    """The (user, system) PostgreSQL URLs shared by every test on this worker.
+    The first is a plain user database, for tests that attach a datasource to one."""
     password = quote(os.environ.get("PGPASSWORD", "dbos"), safe="")
+    name = f"dbostestpy{worker_suffix()}"
     return (
-        f"postgresql://postgres:{password}@localhost:5432/dbostestpy",
+        f"postgresql://postgres:{password}@localhost:5432/{name}",
         (
             sharded_system_url()
             if using_sharding()
-            else f"postgresql+psycopg://postgres:{password}@localhost:5432/dbostestpy_dbos_sys"
+            else f"postgresql+psycopg://postgres:{password}@localhost:5432/{name}_dbos_sys"
         ),
     )
 
