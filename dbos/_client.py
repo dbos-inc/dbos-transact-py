@@ -956,6 +956,7 @@ class DBOSClient:
             raise DBOSExternalStoreNotConfiguredError(None, [])
         return self._external_storage_field
 
+    @_client_step("DBOSClient.storeExternalObject")
     def store_external_object(
         self,
         value: T,
@@ -978,6 +979,7 @@ class DBOSClient:
                 store_id=store_id,
             )
 
+    @_client_step("DBOSClient.storeExternalObject")
     async def store_external_object_async(
         self,
         value: T,
