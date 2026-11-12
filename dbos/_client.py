@@ -2283,7 +2283,8 @@ class DBOSClient:
         Enqueue all executions of a schedule that would have run between ``start`` and ``end``.
 
         Each execution uses the same deterministic workflow ID as the live scheduler,
-        so already-executed times are skipped.
+        so already-executed times are skipped. Must not be called from a workflow body;
+        call it from a step.
 
         Args:
             schedule_name: Name of an existing schedule
@@ -2294,8 +2295,9 @@ class DBOSClient:
             A list of workflow handles for each enqueued execution.
 
         Raises:
-            DBOSException: If the schedule does not exist
+            DBOSException: If called from a workflow body or the schedule does not exist
         """
+        refuse_in_workflow_body("DBOSClient.backfill_schedule")
         workflow_ids = backfill_schedule(self._sys_db, schedule_name, start, end)
         shard_key = schedule_shard_key(self._sys_db, schedule_name)
         return [
@@ -2307,6 +2309,8 @@ class DBOSClient:
         """
         Immediately enqueue the scheduled workflow at the current time.
 
+        Must not be called from a workflow body; call it from a step.
+
         Args:
             schedule_name: Name of an existing schedule
 
@@ -2314,8 +2318,9 @@ class DBOSClient:
             A workflow handle for the enqueued execution.
 
         Raises:
-            DBOSException: If the schedule does not exist
+            DBOSException: If called from a workflow body or the schedule does not exist
         """
+        refuse_in_workflow_body("DBOSClient.trigger_schedule")
         workflow_id = trigger_schedule(self._sys_db, schedule_name)
         return WorkflowHandleClientPolling[None](
             workflow_id,
