@@ -103,7 +103,7 @@ jobs:
       working-directory: ./
 
     - name: Run Unit Tests
-      run: pdm run pytest tests
+      run: pdm run pytest tests -n 8
       working-directory: ./
       timeout-minutes: 50
       env:

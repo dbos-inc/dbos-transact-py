@@ -148,7 +148,8 @@ def test_client_no_migrate(
         assert config["system_database_url"]
         client = DBOSClient(system_database_url=config["system_database_url"])
         client.list_workflows()
-    assert f'database "dbostestpy_dbos_sys" does not exist' in str(exc_info.value)
+    database = sa.make_url(config["system_database_url"]).database
+    assert f'database "{database}" does not exist' in str(exc_info.value)
 
 
 def test_client_enqueue_and_get_result(dbos: DBOS, client: DBOSClient) -> None:
