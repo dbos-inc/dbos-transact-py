@@ -1,6 +1,7 @@
 import asyncio
 import functools
 import gc
+import logging
 import threading
 import time
 import uuid
@@ -1575,3 +1576,36 @@ def test_asyncio_run_keeps_dbos_executor(dbos: DBOS) -> None:
     assert DBOS.start_workflow(workflow, 1).get_result() == 2
     assert asyncio.run(async_workflow(2)) == 3
     assert DBOS.start_workflow(workflow, 3).get_result() == 4
+
+
+@pytest.mark.asyncio
+async def test_check_async_raises_or_warns_on_an_event_loop(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from dbos._utils import check_async
+
+    with pytest.raises(RuntimeError, match=r"fn\(\) was called .* Use await fn_async"):
+        check_async("fn")
+    with pytest.raises(RuntimeError, match=r"fn\(\) was called .* Use other instead"):
+        check_async("fn", alternative="other")
+    with pytest.raises(RuntimeError, match=r"fn\(\) was called .* running\.$"):
+        check_async("fn", has_async_variant=False)
+
+    # With warn, the call goes ahead and the blocked loop is only logged.
+    original_propagate = logging.getLogger("dbos").propagate
+    logging.getLogger("dbos").propagate = True
+    try:
+        with caplog.at_level(logging.WARNING, "dbos"):
+            check_async(
+                "Queue.limiter", alternative="Queue.get_limiter_async", warn=True
+            )
+            check_async("Queue.set_limiter", warn=True)
+    finally:
+        logging.getLogger("dbos").propagate = original_propagate
+    assert [r.getMessage().split(". ")[-1] for r in caplog.records] == [
+        "Use 'Queue.get_limiter_async' instead.",
+        "Use 'Queue.set_limiter_async' instead.",
+    ]
+
+    # Off an event loop, neither mode does anything.
+    await asyncio.to_thread(check_async, "fn")

@@ -281,6 +281,7 @@ def _retried_as_step(
         return db_retry(sys_db=sys_db)(fn)
     return fn
 
+
 RegisteredJob = Tuple[
     threading.Event, Callable[..., Any], Tuple[Any, ...], dict[str, Any]
 ]

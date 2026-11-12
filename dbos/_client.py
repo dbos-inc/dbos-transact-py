@@ -47,7 +47,6 @@ from dbos._queue import (
     Queue,
     QueueConflictResolution,
     QueueRateLimit,
-    _warn_sync_db_call_in_async_context,
     log_queue,
 )
 from dbos._shard_keys import bind_shard_keys
@@ -444,9 +443,7 @@ class DBOSClient:
 
     def check_connection(self) -> None:
         """Verify the client can reach the system database, raising if it cannot."""
-        _warn_sync_db_call_in_async_context(
-            "DBOSClient.check_connection", "DBOSClient.check_connection_async"
-        )
+        check_async("DBOSClient.check_connection", warn=True)
         self._sys_db.check_connection()
 
     async def check_connection_async(self) -> None:
@@ -741,9 +738,7 @@ class DBOSClient:
 
         :returns: A :class:`Queue` bound to this client's system database.
         """
-        _warn_sync_db_call_in_async_context(
-            "DBOSClient.register_queue", "DBOSClient.register_queue_async"
-        )
+        check_async("DBOSClient.register_queue", warn=True)
         Queue._validate_queue(
             name=name,
             concurrency=concurrency,
@@ -829,9 +824,7 @@ class DBOSClient:
 
     def retrieve_queue(self, name: str) -> Optional[Queue]:
         """Retrieve a queue by name from the client."""
-        _warn_sync_db_call_in_async_context(
-            "DBOSClient.retrieve_queue", "DBOSClient.retrieve_queue_async"
-        )
+        check_async("DBOSClient.retrieve_queue", warn=True)
         return self._sys_db.get_queue(name, client_system_database=self._sys_db)
 
     async def retrieve_queue_async(self, name: str) -> Optional[Queue]:
@@ -841,9 +834,7 @@ class DBOSClient:
     @_client_step("DBOSClient.deleteQueue")
     def delete_queue(self, name: str) -> None:
         """Delete a queue. Pending workflows on it are unrecoverable."""
-        _warn_sync_db_call_in_async_context(
-            "DBOSClient.delete_queue", "DBOSClient.delete_queue_async"
-        )
+        check_async("DBOSClient.delete_queue", warn=True)
         self._sys_db.delete_queue(name)
 
     @_client_step("DBOSClient.deleteQueue")
@@ -860,9 +851,7 @@ class DBOSClient:
         :param application_name: List only queues owned by these applications.
             By default, only list this application's queues.
         """
-        _warn_sync_db_call_in_async_context(
-            "DBOSClient.list_queues", "DBOSClient.list_queues_async"
-        )
+        check_async("DBOSClient.list_queues", warn=True)
         return self._sys_db.list_queues(
             application_name=application_name, client_system_database=self._sys_db
         )
@@ -2402,9 +2391,7 @@ class DBOSClient:
 
         :returns: The number of rows moved, by table.
         """
-        _warn_sync_db_call_in_async_context(
-            "DBOSClient.rename_application", "DBOSClient.rename_application_async"
-        )
+        check_async("DBOSClient.rename_application", warn=True)
         return self._sys_db.rename_application(
             old_name,
             new_name,
