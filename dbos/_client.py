@@ -91,6 +91,7 @@ from dbos._sys_db import (
     WorkflowSchedule,
     WorkflowStatus,
     WorkflowStatusInternal,
+    db_retry,
 )
 from dbos._workflow_commands import (
     fork_workflow,
@@ -106,6 +107,13 @@ T = TypeVar("T")
 F = TypeVar("F", bound=Callable[..., Any])
 
 _ENQUEUE_STEP = "DBOSClient.enqueue"
+
+
+def _retried_in_workflow(sys_db: SystemDatabase, fn: Callable[[], T]) -> T:
+    ctx = get_local_dbos_context()
+    if ctx is not None and ctx.is_within_workflow():
+        return db_retry(sys_db=sys_db)(fn)()
+    return fn()
 
 
 def _client_step_context(
@@ -2049,27 +2057,26 @@ class DBOSClient:
                 ZoneInfo(cron_timezone)
             except (KeyError, Exception):
                 raise DBOSException(f"Invalid timezone: '{cron_timezone}'")
-        self._sys_db.create_schedule(
-            WorkflowSchedule(
-                schedule_id=generate_uuid(),
-                schedule_name=schedule_name,
-                workflow_name=workflow_name,
-                workflow_class_name=workflow_class_name,
-                schedule=schedule,
-                status="ACTIVE",
-                context=self._sys_db.serializer.serialize(context),
-                last_fired_at=None,
-                automatic_backfill=automatic_backfill,
-                cron_timezone=cron_timezone,
-                queue_name=queue_name,
-                application_name=(
-                    application_name
-                    if application_name is not None
-                    else self._sys_db.app_name
-                ),
-                shard_key=shard_key,
-            )
+        sched = WorkflowSchedule(
+            schedule_id=generate_uuid(),
+            schedule_name=schedule_name,
+            workflow_name=workflow_name,
+            workflow_class_name=workflow_class_name,
+            schedule=schedule,
+            status="ACTIVE",
+            context=self._sys_db.serializer.serialize(context),
+            last_fired_at=None,
+            automatic_backfill=automatic_backfill,
+            cron_timezone=cron_timezone,
+            queue_name=queue_name,
+            application_name=(
+                application_name
+                if application_name is not None
+                else self._sys_db.app_name
+            ),
+            shard_key=shard_key,
         )
+        _retried_in_workflow(self._sys_db, lambda: self._sys_db.create_schedule(sched))
 
     @_client_step("DBOSClient.listSchedules")
     def list_schedules(
@@ -2090,11 +2097,14 @@ class DBOSClient:
             application_name: List only schedules owned by these applications.
                 By default, only list this application's schedules.
         """
-        schedules = self._sys_db.list_schedules(
-            status=status,
-            workflow_name=workflow_name,
-            schedule_name_prefix=schedule_name_prefix,
-            application_name=application_name,
+        schedules = _retried_in_workflow(
+            self._sys_db,
+            lambda: self._sys_db.list_schedules(
+                status=status,
+                workflow_name=workflow_name,
+                schedule_name_prefix=schedule_name_prefix,
+                application_name=application_name,
+            ),
         )
         for s in schedules:
             s["context"] = safe_deserialize_schedule_context(
@@ -2107,7 +2117,9 @@ class DBOSClient:
     @_client_step("DBOSClient.getSchedule")
     def get_schedule(self, name: str) -> Optional[WorkflowSchedule]:
         """Return the schedule with the given name, or ``None`` if it does not exist."""
-        schedule = self._sys_db.get_schedule(name)
+        schedule = _retried_in_workflow(
+            self._sys_db, lambda: self._sys_db.get_schedule(name)
+        )
         if schedule is not None:
             schedule["context"] = safe_deserialize_schedule_context(
                 self._sys_db.serializer,
@@ -2119,7 +2131,7 @@ class DBOSClient:
     @_client_step("DBOSClient.deleteSchedule")
     def delete_schedule(self, name: str) -> None:
         """Delete the schedule with the given name. No-op if it does not exist."""
-        self._sys_db.delete_schedule(name)
+        _retried_in_workflow(self._sys_db, lambda: self._sys_db.delete_schedule(name))
 
     @_client_step("DBOSClient.createSchedule")
     async def create_schedule_async(
@@ -2182,12 +2194,12 @@ class DBOSClient:
     @_client_step("DBOSClient.pauseSchedule")
     def pause_schedule(self, name: str) -> None:
         """Pause the schedule with the given name. A paused schedule does not fire."""
-        self._sys_db.pause_schedule(name)
+        _retried_in_workflow(self._sys_db, lambda: self._sys_db.pause_schedule(name))
 
     @_client_step("DBOSClient.resumeSchedule")
     def resume_schedule(self, name: str) -> None:
         """Resume a paused schedule so it begins firing again."""
-        self._sys_db.resume_schedule(name)
+        _retried_in_workflow(self._sys_db, lambda: self._sys_db.resume_schedule(name))
 
     @_client_step("DBOSClient.applySchedules")
     def apply_schedules(
@@ -2245,10 +2257,14 @@ class DBOSClient:
                     shard_key=entry.get("shard_key"),
                 )
             )
-        with self._sys_db.engine.begin() as c:
-            # Sorted, so concurrent writers lock schedule rows in one order.
-            for sched in sorted(to_apply, key=lambda s: s["schedule_name"]):
-                self._sys_db.upsert_schedule(sched, conn=c)
+
+        def apply() -> None:
+            with self._sys_db.engine.begin() as c:
+                # Sorted, so concurrent writers lock schedule rows in one order.
+                for sched in sorted(to_apply, key=lambda s: s["schedule_name"]):
+                    self._sys_db.upsert_schedule(sched, conn=c)
+
+        _retried_in_workflow(self._sys_db, apply)
 
     @_client_step("DBOSClient.applySchedules")
     async def apply_schedules_async(

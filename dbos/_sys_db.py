@@ -6852,6 +6852,7 @@ class SystemDatabase(ABC):
                 .values(version_timestamp=new_timestamp, application_name=resolved)
             )
 
+    @db_retry()
     def list_application_versions(self) -> List[VersionInfo]:
         with self._observability_query() as c:
             rows = c.execute(
@@ -6904,9 +6905,15 @@ class SystemDatabase(ABC):
 
         if conn is not None:
             return _do(conn)
-        with self.engine.begin() as c:
-            return _do(c)
 
+        @db_retry(sys_db=self)
+        def read() -> Optional["Queue"]:
+            with self.engine.begin() as c:
+                return _do(c)
+
+        return read()
+
+    @db_retry()
     def list_queues(
         self,
         *,
@@ -6929,6 +6936,7 @@ class SystemDatabase(ABC):
                 for row in rows
             ]
 
+    @db_retry()
     def delete_queue(self, name: str) -> None:
         """Delete a queue's row, if it exists."""
         with self.engine.begin() as c:
@@ -6938,6 +6946,7 @@ class SystemDatabase(ABC):
                 )
             )
 
+    @db_retry()
     def update_queue(self, name: str, fields: Dict[str, Any]) -> None:
         """Apply a partial update to a queue's row."""
         if not fields:
@@ -6952,6 +6961,7 @@ class SystemDatabase(ABC):
                 .values(**values)
             )
 
+    @db_retry()
     def upsert_queue(
         self,
         *,
@@ -7135,6 +7145,7 @@ class SystemDatabase(ABC):
                 return total
             watermark = upper
 
+    @db_retry()
     def rename_application(
         self,
         old_name: Optional[str],
