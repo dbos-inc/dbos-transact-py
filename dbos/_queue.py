@@ -273,6 +273,40 @@ class Queue:
     def _write_to_db(self, fields: dict[str, Any]) -> None:
         self._sys_db().update_queue(self.name, fields)
 
+    def _to_checkpoint(self) -> dict[str, Any]:
+        """This queue's configuration as plain data, so a workflow step can checkpoint
+        it under any serializer and rebuild it on replay with _from_checkpoint."""
+        return {
+            "name": self.name,
+            "application_name": self.application_name,
+            "concurrency": self._concurrency,
+            "worker_concurrency": self._worker_concurrency,
+            "limiter": dict(self._limiter) if self._limiter else None,
+            "partition_concurrency": self._partition_concurrency,
+            "partition_worker_concurrency": self._partition_worker_concurrency,
+            "partition_limiter": (
+                dict(self._partition_limiter) if self._partition_limiter else None
+            ),
+            "polling_interval_sec": self._polling_interval_sec,
+        }
+
+    @staticmethod
+    def _from_checkpoint(data: dict[str, Any]) -> "Queue":
+        """Rebuild a database-backed queue from _to_checkpoint's output."""
+        return Queue(
+            data["name"],
+            data["concurrency"],
+            data["limiter"],
+            worker_concurrency=data["worker_concurrency"],
+            partition_concurrency=data["partition_concurrency"],
+            partition_worker_concurrency=data["partition_worker_concurrency"],
+            partition_limiter=data["partition_limiter"],
+            polling_interval_sec=data["polling_interval_sec"],
+            application_name=data["application_name"],
+            database_backed_queue=True,
+            token=_INTERNAL_QUEUE_CONSTRUCTION,
+        )
+
     def _refresh_fields(self, latest: "Queue") -> None:
         """Copy every cached configuration field from ``latest`` into ``self``."""
         self._concurrency = latest._concurrency

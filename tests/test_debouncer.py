@@ -150,6 +150,53 @@ def test_multiple_debouncers(dbos: DBOS) -> None:
     assert fourth_handle.get_result() == fourth_value
 
 
+def test_debouncer_queue_from_workflow_is_replay_safe(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def target(x: int) -> int:
+        return x
+
+    queue_name = f"debounce-q-{uuid.uuid4()}"
+    DBOS.register_queue(queue_name)
+    debouncer = Debouncer.create(target, queue=queue_name)
+    bad_debouncer = Debouncer.create(target, queue=f"no-such-queue-{uuid.uuid4()}")
+
+    @DBOS.workflow()
+    def debounce_workflow(x: int) -> int:
+        return debouncer.debounce(str(uuid.uuid4()), 0.1, x).get_result()
+
+    handle = DBOS.start_workflow(debounce_workflow, 7)
+    assert handle.get_result() == 7
+    steps = [s["function_name"] for s in DBOS.list_workflow_steps(handle.workflow_id)]
+    # The queue lookup adds no step of its own.
+    assert steps == [
+        "DBOS.debounce_delayed_workflow",
+        get_dbos_func_name(target),
+        "DBOS.getResult",
+    ]
+
+    # The queue check is recorded with the bounce, so replay after the queue
+    # is deleted returns the recorded outcome instead of raising.
+    DBOS.delete_queue(queue_name)
+    forked = DBOS.fork_workflow(handle.workflow_id, len(steps) + 1)
+    assert forked.get_result() == 7
+
+    # An undeclared queue still raises, from a workflow and outside one.
+    @DBOS.workflow()
+    def bad_debounce_workflow() -> None:
+        bad_debouncer.debounce("key", 0.1, 1)
+
+    bad_workflow_id = str(uuid.uuid4())
+    with pytest.raises(Exception, match="Invalid queue name provided to debouncer"):
+        with SetWorkflowID(bad_workflow_id):
+            bad_debounce_workflow()
+    # In a workflow, the failed check is recorded as the bounce step's error.
+    bad_steps = DBOS.list_workflow_steps(bad_workflow_id)
+    assert [s["function_name"] for s in bad_steps] == ["DBOS.debounce_delayed_workflow"]
+    assert bad_steps[0]["error"] is not None
+    with pytest.raises(Exception, match="Invalid queue name provided to debouncer"):
+        bad_debouncer.debounce("key", 0.1, 1)
+
+
 def test_debouncer_queue(dbos: DBOS) -> None:
 
     @DBOS.workflow()
