@@ -4,10 +4,11 @@ import base64
 import inspect
 import json
 import pickle
+import types
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import (
     Any,
@@ -19,7 +20,10 @@ from typing import (
     Tuple,
     TypeAlias,
     TypedDict,
+    Union,
     cast,
+    get_args,
+    get_origin,
     get_type_hints,
 )
 
@@ -285,26 +289,48 @@ def deserialize_args(
     return cast(WorkflowInputs, serializer.deserialize(serialized_value))
 
 
+_PORTABLE_COERCIBLE_TYPES = (datetime, date, Decimal)
+
+
+def _portable_coercion_targets(hint: Any) -> List[Any]:
+    """Types a portable JSON string argument should be restored to for this hint.
+
+    ``Optional[X]`` and ``X | None`` are unwrapped. A union that also accepts
+    ``str`` is left alone, since the string may be the intended value.
+    """
+    if get_origin(hint) in (Union, types.UnionType):
+        members = [arg for arg in get_args(hint) if arg is not type(None)]
+    else:
+        members = [hint]
+    if str in members:
+        return []
+    return [t for t in _PORTABLE_COERCIBLE_TYPES if t in members]
+
+
 def coerce_portable_args_to_hints(
     wf_func: Callable[..., Any],
     inputs: WorkflowInputs,
 ) -> WorkflowInputs:
     """Type-coerce arguments whose type is lost to portable JSON serialization.
 
-    Currently only supports datetime/date.
+    Supports datetime, date and Decimal, also when the hint is Optional or a
+    union with None (``Optional[datetime]``, ``datetime | None``).
     """
     from ._registrations import DBOSFuncType, get_func_info
 
     def coerce(value: Any, hint: Any) -> Any:
         if not isinstance(value, str):
             return value
-        try:
-            if hint is datetime:
-                return isoparse(value)
-            if hint is date:
-                return isoparse(value).date()
-        except (ValueError, OverflowError, TypeError):
-            return value
+        for target in _portable_coercion_targets(hint):
+            try:
+                if target is datetime:
+                    return isoparse(value)
+                if target is date:
+                    return isoparse(value).date()
+                if target is Decimal:
+                    return Decimal(value)
+            except (ValueError, OverflowError, TypeError, InvalidOperation):
+                continue
         return value
 
     try:

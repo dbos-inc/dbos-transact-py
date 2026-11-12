@@ -3,6 +3,7 @@ import threading
 import time
 import uuid
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, List, Optional, cast
 
 import pytest
@@ -1121,6 +1122,60 @@ def test_portable_datetime_variadic_args(dbos: DBOS) -> None:
         "portable_dates", variadic, timestamp, timestamp, timestamp, label=day, due=day
     )
     assert handle.get_result() == [timestamp.isoformat()] * 3 + [day.isoformat()] * 2
+
+
+def test_portable_optional_datetime_args(dbos: DBOS) -> None:
+    """Optional and union-with-None hints are restored like their plain types."""
+
+    @DBOS.workflow(serialization_type=WorkflowSerializationFormat.PORTABLE)
+    def optional_dates(
+        start: Optional[datetime],
+        end: datetime | None,
+        day: Optional[date] = None,
+        missing: Optional[datetime] = None,
+    ) -> list[str]:
+        assert isinstance(start, datetime)
+        assert isinstance(end, datetime)
+        assert isinstance(day, date) and not isinstance(day, datetime)
+        assert missing is None
+        return [start.isoformat(), end.isoformat(), day.isoformat()]
+
+    DBOS.register_queue("portable_optional_dates")
+    timestamp = datetime(2026, 1, 20, 14, 0, tzinfo=timezone.utc)
+    day = date(2026, 1, 21)
+    handle = DBOS.enqueue_workflow(
+        "portable_optional_dates", optional_dates, timestamp, timestamp, day=day
+    )
+    assert handle.get_result() == [timestamp.isoformat()] * 2 + [day.isoformat()]
+
+
+def test_portable_decimal_args(dbos: DBOS) -> None:
+    """Decimal arguments, stored as strings in portable JSON, come back as Decimal."""
+
+    @DBOS.workflow(serialization_type=WorkflowSerializationFormat.PORTABLE)
+    def add_amounts(amount: Decimal, fee: Optional[Decimal] = None) -> str:
+        assert isinstance(amount, Decimal)
+        assert isinstance(fee, Decimal)
+        return str(amount + fee)
+
+    DBOS.register_queue("portable_decimals")
+    handle = DBOS.enqueue_workflow(
+        "portable_decimals", add_amounts, Decimal("10.10"), fee=Decimal("0.20")
+    )
+    assert handle.get_result() == "10.30"
+
+
+def test_portable_union_with_str_is_not_coerced(dbos: DBOS) -> None:
+    """A string is a valid value for a union that includes str, so it stays a string."""
+
+    @DBOS.workflow(serialization_type=WorkflowSerializationFormat.PORTABLE)
+    def maybe_date(value: datetime | str) -> str:
+        assert isinstance(value, str)
+        return value
+
+    DBOS.register_queue("portable_union_str")
+    handle = DBOS.enqueue_workflow("portable_union_str", maybe_date, "2026-01-20")
+    assert handle.get_result() == "2026-01-20"
 
 
 def test_pydantic_validation_variadic_params(dbos: DBOS) -> None:
