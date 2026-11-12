@@ -2000,6 +2000,11 @@ _CLIENT_STEP_CASES: Dict[str, _ClientStepCase] = {
         lambda c, t: c.get_latest_application_version(),
         lambda c, t: c.get_latest_application_version_async(),
     ),
+    "set_latest_application_version": _ClientStepCase(
+        ["DBOSClient.setLatestApplicationVersion"],
+        lambda c, t: c.set_latest_application_version(DBOS.application_version),
+        lambda c, t: c.set_latest_application_version_async(DBOS.application_version),
+    ),
     "rename_application": _ClientStepCase(
         ["DBOSClient.renameApplication"],
         lambda c, t: c.rename_application("client-steps-old-app", "client-steps-app"),
@@ -2103,6 +2108,15 @@ def test_client_calls_are_steps_in_a_workflow(
         assert steps[0]["child_workflow_id"] == f"{handle.workflow_id}-1"
         assert steps[0]["output"] is None
 
+    if case_name == "set_latest_application_version":
+        # A replay returns the recorded step without promoting the version again.
+        promoted_at = client.get_latest_application_version()["version_timestamp"]
+        time.sleep(0.01)
+        DBOS.fork_workflow(handle.workflow_id, 2).get_result()
+        latest = client.get_latest_application_version()
+        assert latest["version_name"] == DBOS.application_version
+        assert latest["version_timestamp"] == promoted_at
+
     if case_name == "store_external_object":
         # The step records the ref, not the value, and a replay returns it without
         # storing the value again.
@@ -2176,49 +2190,6 @@ def test_client_queue_in_a_workflow_is_rebuilt_from_its_step(
     replay = DBOS.fork_workflow(handle.workflow_id, 2)
     assert replay.get_result() == recorded
     assert upserts == 0
-
-
-@pytest.mark.parametrize("mode", ["sync", "async"])
-def test_client_set_latest_application_version_is_refused_in_a_workflow(
-    dbos: DBOS, client: DBOSClient, mode: str
-) -> None:
-    current = DBOS.application_version
-
-    @DBOS.step()
-    def promote() -> None:
-        client.set_latest_application_version(current)
-
-    @DBOS.step()
-    async def promote_async() -> None:
-        await client.set_latest_application_version_async(current)
-
-    @DBOS.workflow()
-    def promoting_workflow() -> None:
-        # Refused in a workflow body, before it takes a step ID, but allowed in a step.
-        with pytest.raises(DBOSException, match="cannot be called from a workflow"):
-            client.set_latest_application_version(current)
-        promote()
-
-    @DBOS.workflow()
-    async def promoting_workflow_async() -> None:
-        with pytest.raises(
-            DBOSException, match="set_latest_application_version_async cannot"
-        ):
-            await client.set_latest_application_version_async(current)
-        await promote_async()
-
-    promoted_before = client.get_latest_application_version()["version_timestamp"]
-    promoting = promoting_workflow if mode == "sync" else promoting_workflow_async
-    handle = DBOS.start_workflow(promoting)
-    handle.get_result()
-    steps = DBOS.list_workflow_steps(handle.workflow_id)
-    step = promote if mode == "sync" else promote_async
-    assert [(s["function_id"], s["function_name"]) for s in steps] == [
-        (1, step.__qualname__)
-    ]
-    latest = client.get_latest_application_version()
-    assert latest["version_name"] == current
-    assert latest["version_timestamp"] >= promoted_before
 
 
 def test_client_trigger_and_backfill_are_refused_in_a_workflow(

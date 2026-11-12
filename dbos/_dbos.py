@@ -4282,13 +4282,42 @@ class DBOS:
             caller's. Version names are global, so promoting one registered by
             a different application raises.
         """
-        # Promotion is a side effect on shared state, so it belongs in a step, not a workflow body.
-        refuse_in_workflow_body("DBOS.set_latest_application_version")
-        dbos = _get_dbos_instance()
-        new_timestamp = int(time.time() * 1000)
-        dbos._sys_db.update_application_version_timestamp(
-            version_name, new_timestamp, application_name=application_name
+        cls._set_latest_application_version(
+            snapshot_step_context(reserve_sleep_id=False),
+            version_name,
+            application_name,
         )
+
+    @classmethod
+    def _set_latest_application_version(
+        cls,
+        step_ctx: Optional[DBOSContext],
+        version_name: str,
+        application_name: Optional[str],
+    ) -> None:
+        dbos = _get_dbos_instance()
+
+        def promote(c: Optional[sa.Connection] = None) -> None:
+            dbos._sys_db.update_application_version_timestamp(
+                version_name,
+                int(time.time() * 1000),
+                application_name=application_name,
+                conn=c,
+            )
+
+        if step_ctx and step_ctx.is_workflow():
+            # The promotion commits atomically with its checkpoint, so a replay does not promote again.
+            with EnterDBOSStepCtx(
+                {"name": "setLatestApplicationVersion"}, step_ctx
+            ) as step:
+                dbos._sys_db.call_txn_as_step(
+                    step.workflow_id,
+                    step.curr_step_function_id,
+                    "DBOS.setLatestApplicationVersion",
+                    promote,
+                )
+        else:
+            promote()
 
     @classmethod
     async def list_application_versions_async(cls) -> List[VersionInfo]:
@@ -4309,12 +4338,13 @@ class DBOS:
         cls, version_name: str, *, application_name: Optional[str] = None
     ) -> None:
         """Async version of :meth:`set_latest_application_version`."""
-        refuse_in_workflow_body("DBOS.set_latest_application_version_async")
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
         await asyncio.to_thread(
-            lambda: cls.set_latest_application_version(
-                version_name, application_name=application_name
-            )
+            cls._set_latest_application_version,
+            step_ctx,
+            version_name,
+            application_name,
         )
 
     @classproperty

@@ -6825,13 +6825,17 @@ class SystemDatabase(ABC):
         version_name: str,
         new_timestamp: int,
         application_name: Optional[str] = None,
+        conn: Optional[sa.Connection] = None,
     ) -> None:
         """Promote a version to latest. Promoting a peer's is a collision, not a retiming;
         promotion claims an unclaimed row, which would otherwise be every peer's latest.
+
+        Runs on ``conn`` if given, joining its transaction.
         """
         owner = application_name if application_name is not None else self.app_name
         av = self.tables.application_versions
-        with self.engine.begin() as c:
+
+        def _do(c: sa.Connection) -> None:
             resolved = self._resolve_row_owner(
                 c,
                 av,
@@ -6851,6 +6855,12 @@ class SystemDatabase(ABC):
                 .where(scope)
                 .values(version_timestamp=new_timestamp, application_name=resolved)
             )
+
+        if conn is not None:
+            _do(conn)
+        else:
+            with self.engine.begin() as c:
+                _do(c)
 
     @db_retry()
     def list_application_versions(self) -> List[VersionInfo]:

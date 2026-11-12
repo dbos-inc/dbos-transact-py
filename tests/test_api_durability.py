@@ -268,19 +268,9 @@ def test_application_version_api_is_checkpointed(
     # The read step retries a dropped connection rather than record it.
     remaining = fail_once_in_workflows(monkeypatch, dbos, "list_application_versions")
 
-    @DBOS.step()
-    def promote() -> None:
-        DBOS.set_latest_application_version(current)
-
     @DBOS.workflow()
     def version_workflow() -> Tuple[int, str, int]:
-        # Promoting a version is refused in a workflow body, before it takes a step
-        # ID, but allowed in a step.
-        with pytest.raises(
-            DBOSException, match="DBOS.set_latest_application_version cannot be called"
-        ):
-            DBOS.set_latest_application_version(current)
-        promote()
+        DBOS.set_latest_application_version(current)
         listed_at = next(
             v["version_timestamp"]
             for v in DBOS.list_application_versions()
@@ -294,7 +284,7 @@ def test_application_version_api_is_checkpointed(
     promoted_at = result[2]
     assert result == (promoted_at, current, promoted_at)
     expected_steps = [
-        (1, get_dbos_func_name(promote)),
+        (1, "DBOS.setLatestApplicationVersion"),
         (2, "DBOS.listApplicationVersions"),
         (3, "DBOS.getLatestApplicationVersion"),
     ]
@@ -343,11 +333,9 @@ async def test_concurrent_async_calls_number_steps_in_call_order(
 
     @DBOS.workflow()
     async def concurrent_workflow() -> str:
-        # Validation errors and refusals raise before the calls take a step ID.
+        # Validation errors raise before the calls take a step ID.
         with pytest.raises(ValueError):
             await DBOS.register_queue_async("_dbos_reserved")
-        with pytest.raises(DBOSException, match="cannot be called from a workflow"):
-            await DBOS.set_latest_application_version_async(DBOS.application_version)
         with pytest.raises(DBOSException, match="Invalid cron schedule"):
             await DBOS.create_schedule_async(
                 schedule_name="bad", workflow_fn=target_workflow, schedule="nope"
@@ -367,6 +355,7 @@ async def test_concurrent_async_calls_number_steps_in_call_order(
             DBOS.delete_queue_async(f"no-such-queue-{uuid.uuid4()}"),
             DBOS.get_latest_application_version_async(),
             DBOS.list_application_versions_async(),
+            DBOS.set_latest_application_version_async(DBOS.application_version),
             DBOS.list_queues_async(),
         )
         await DBOS.delete_schedule_async(schedule_name)
@@ -392,15 +381,16 @@ async def test_concurrent_async_calls_number_steps_in_call_order(
         (7, "DBOS.deleteQueue"),
         (8, "DBOS.getLatestApplicationVersion"),
         (9, "DBOS.listApplicationVersions"),
-        (10, "DBOS.listQueues"),
-        (11, "DBOS.deleteSchedule"),
-        (12, "DBOS.createSchedule"),
+        (10, "DBOS.setLatestApplicationVersion"),
+        (11, "DBOS.listQueues"),
+        (12, "DBOS.deleteSchedule"),
+        (13, "DBOS.createSchedule"),
     ]
     handle = await DBOS.start_workflow_async(concurrent_workflow)
     assert "is not declared" in await handle.get_result()
     assert await steps_of_async(handle.workflow_id) == expected_steps
     steps = await DBOS.list_workflow_steps_async(handle.workflow_id)
-    assert steps[11]["error"] is not None
+    assert steps[12]["error"] is not None
 
     # The queue check is recorded with createSchedule: with the queue deleted, the
     # replay returns the recorded result instead of failing the check.

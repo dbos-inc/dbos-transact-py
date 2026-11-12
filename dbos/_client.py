@@ -2329,6 +2329,7 @@ class DBOSClient:
         """Return the latest application version."""
         return self._sys_db.get_latest_application_version()
 
+    @_client_step("DBOSClient.setLatestApplicationVersion")
     def set_latest_application_version(
         self, version_name: str, *, application_name: Optional[str] = None
     ) -> None:
@@ -2337,13 +2338,14 @@ class DBOSClient:
         :param application_name: The application to act as. Defaults to this
             caller's. Version names are global, so promoting one registered by
             a different application raises.
-
-        Cannot be called from a workflow body; call it from a step instead.
         """
-        refuse_in_workflow_body("DBOSClient.set_latest_application_version")
-        new_timestamp = int(time.time() * 1000)
-        self._sys_db.update_application_version_timestamp(
-            version_name, new_timestamp, application_name=application_name
+        _retried_in_workflow(
+            self._sys_db,
+            lambda: self._sys_db.update_application_version_timestamp(
+                version_name,
+                int(time.time() * 1000),
+                application_name=application_name,
+            ),
         )
 
     @_client_step("DBOSClient.listApplicationVersions")
@@ -2356,11 +2358,11 @@ class DBOSClient:
         """Async version of :meth:`get_latest_application_version`."""
         return await asyncio.to_thread(self.get_latest_application_version)
 
+    @_client_step("DBOSClient.setLatestApplicationVersion")
     async def set_latest_application_version_async(
         self, version_name: str, *, application_name: Optional[str] = None
     ) -> None:
         """Async version of :meth:`set_latest_application_version`."""
-        refuse_in_workflow_body("DBOSClient.set_latest_application_version_async")
         await asyncio.to_thread(
             lambda: self.set_latest_application_version(
                 version_name, application_name=application_name
