@@ -2026,7 +2026,8 @@ _CLIENT_STEP_CASES: Dict[str, _ClientStepCase] = {
 
 
 class _FakeExternalStorage:
-    """Stands in for the Transact Enterprise external storage, returning a ref per store."""
+    """Stands in for the Transact Enterprise external storage, returning a ref per store
+    and a fixed value per load."""
 
     def __init__(self) -> None:
         self.stored = 0
@@ -2045,6 +2046,12 @@ class _FakeExternalStorage:
 
     async def store_async(self, value: Any, **kwargs: Any) -> Dict[str, Any]:
         return self.store(value, **kwargs)
+
+    def get(self, ref: Any) -> str:
+        return "loaded"
+
+    async def get_async(self, ref: Any) -> str:
+        return self.get(ref)
 
 
 @pytest.mark.parametrize("case_name", list(_CLIENT_STEP_CASES))
@@ -2195,120 +2202,102 @@ def test_client_queue_in_a_workflow_is_rebuilt_from_its_step(
     assert upserts == 0
 
 
-def test_client_trigger_and_backfill_are_refused_in_a_workflow(
-    dbos: DBOS, client: DBOSClient
+def _in_transaction(c: DBOSClient, write: Callable[[sa.Connection], Any]) -> None:
+    with c._sys_db.engine.begin() as conn:
+        write(conn)
+
+
+_BACKFILL_START = datetime(2024, 12, 31, 12, tzinfo=timezone.utc)
+
+# One row per refused client method: the call a workflow body may not make.
+_CLIENT_REFUSED_CASES: Dict[str, Callable[[DBOSClient, _StepTargets], Any]] = {
+    "check_connection": lambda c, t: c.check_connection(),
+    "check_connection_async": lambda c, t: c.check_connection_async(),
+    "load_external_object": lambda c, t: c.load_external_object(cast(Any, {})),
+    "load_external_object_async": lambda c, t: c.load_external_object_async(
+        cast(Any, {})
+    ),
+    "enqueue_in_transaction": lambda c, t: _in_transaction(
+        c,
+        lambda conn: c.enqueue_in_transaction(conn, _child_enqueue_options_for(t)),
+    ),
+    "send_in_transaction": lambda c, t: _in_transaction(
+        c, lambda conn: c.send_in_transaction(conn, t.workflow_id, "message")
+    ),
+    "send_bulk_in_transaction": lambda c, t: _in_transaction(
+        c,
+        lambda conn: c.send_bulk_in_transaction(
+            conn, [SendMessage(t.workflow_id, "message")]
+        ),
+    ),
+    "backfill_schedule": lambda c, t: c.backfill_schedule(
+        t.schedule, _BACKFILL_START, _BACKFILL_START + timedelta(days=1)
+    ),
+    "trigger_schedule": lambda c, t: c.trigger_schedule(t.schedule),
+}
+
+
+@pytest.mark.parametrize("method", list(_CLIENT_REFUSED_CASES))
+def test_client_calls_are_refused_in_a_workflow(
+    dbos: DBOS, client: DBOSClient, method: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    call = _CLIENT_REFUSED_CASES[method]
+    refused = pytest.raises(
+        DBOSException, match=f"DBOSClient.{method} cannot be called from a workflow"
+    )
+    monkeypatch.setattr(client, "_external_storage_field", _FakeExternalStorage())
+
     @DBOS.workflow()
-    def scheduled_workflow(scheduled_at: datetime, context: Any) -> None:
+    def target_workflow(
+        scheduled_at: Optional[datetime] = None, context: Any = None
+    ) -> None:
         pass
 
+    @DBOS.step()
+    def calling_step(targets: _StepTargets) -> None:
+        call(client, targets)
+
+    @DBOS.step()
+    async def calling_step_async(targets: _StepTargets) -> None:
+        await call(client, targets)
+
+    @DBOS.workflow()
+    def calling_workflow(targets: _StepTargets) -> None:
+        with refused:
+            call(client, targets)
+        calling_step(targets)
+
+    @DBOS.workflow()
+    async def calling_workflow_async(targets: _StepTargets) -> None:
+        with refused:
+            await call(client, targets)
+        await calling_step_async(targets)
+
+    target = DBOS.start_workflow(target_workflow)
+    target.get_result()
     client.create_schedule(
         schedule_name="client-refused-schedule",
-        workflow_name=scheduled_workflow.__qualname__,
+        workflow_name=target_workflow.__qualname__,
         schedule=_YEARLY,
     )
-    start = datetime(2024, 12, 31, 12, tzinfo=timezone.utc)
-    end = start + timedelta(days=1)
+    targets = _StepTargets(
+        workflow_id=target.workflow_id,
+        workflow_name=target_workflow.__qualname__,
+        queue="client-refused-queue",
+        schedule="client-refused-schedule",
+    )
 
-    @DBOS.step()
-    def trigger() -> str:
-        return client.trigger_schedule("client-refused-schedule").workflow_id
+    is_async = method.endswith("_async")
+    caller = calling_workflow_async if is_async else calling_workflow
+    step = calling_step_async if is_async else calling_step
+    handle = DBOS.start_workflow(caller, targets)
+    handle.get_result()
 
-    @DBOS.step()
-    def backfill() -> List[str]:
-        handles = client.backfill_schedule("client-refused-schedule", start, end)
-        return [h.workflow_id for h in handles]
-
-    @DBOS.workflow()
-    def calling_workflow() -> List[str]:
-        # Refused in a workflow body, before it takes a step ID, but allowed in a step.
-        with pytest.raises(DBOSException, match="trigger_schedule cannot be called"):
-            client.trigger_schedule("client-refused-schedule")
-        with pytest.raises(DBOSException, match="backfill_schedule cannot be called"):
-            client.backfill_schedule("client-refused-schedule", start, end)
-        return [trigger(), *backfill()]
-
-    handle = DBOS.start_workflow(calling_workflow)
-    enqueued = handle.get_result()
-    assert len(enqueued) == 2
+    # Refused in the workflow body, before it takes a step ID, but allowed in a step.
     steps = DBOS.list_workflow_steps(handle.workflow_id)
-    assert [(s["function_id"], s["function_name"]) for s in steps] == [
-        (1, trigger.__qualname__),
-        (2, backfill.__qualname__),
+    assert [(s["function_id"], s["function_name"], s["error"]) for s in steps] == [
+        (1, step.__qualname__, None)
     ]
-    for workflow_id in enqueued:
-        client.retrieve_workflow(workflow_id).get_result()
-    # The refused calls enqueued nothing.
-    executions = client.list_workflows(name=scheduled_workflow.__qualname__)
-    assert sorted(w.workflow_id for w in executions) == sorted(enqueued)
-
-
-class _LoadableExternalStorage:
-    """Stands in for the Transact Enterprise external storage, counting loads."""
-
-    def __init__(self) -> None:
-        self.loaded = 0
-
-    def get(self, ref: Any) -> str:
-        self.loaded += 1
-        return "loaded"
-
-    async def get_async(self, ref: Any) -> str:
-        return self.get(ref)
-
-
-def test_client_check_connection_and_load_are_refused_in_a_workflow(
-    dbos: DBOS, client: DBOSClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    storage = _LoadableExternalStorage()
-    monkeypatch.setattr(client, "_external_storage_field", storage)
-    ref: Any = {"key": "ref"}
-
-    @DBOS.step()
-    def check_and_load() -> str:
-        client.check_connection()
-        return client.load_external_object(ref)
-
-    @DBOS.step()
-    async def check_and_load_async() -> str:
-        await client.check_connection_async()
-        return await client.load_external_object_async(ref)
-
-    @DBOS.workflow()
-    def calling_workflow() -> str:
-        # Refused in a workflow body, before it takes a step ID, but allowed in a step.
-        with pytest.raises(DBOSException, match="check_connection cannot be called"):
-            client.check_connection()
-        with pytest.raises(
-            DBOSException, match="load_external_object cannot be called"
-        ):
-            client.load_external_object(ref)
-        return check_and_load()
-
-    @DBOS.workflow()
-    async def calling_workflow_async() -> str:
-        with pytest.raises(
-            DBOSException, match="check_connection_async cannot be called"
-        ):
-            await client.check_connection_async()
-        with pytest.raises(
-            DBOSException, match="load_external_object_async cannot be called"
-        ):
-            await client.load_external_object_async(ref)
-        return await check_and_load_async()
-
-    for workflow, step in (
-        (calling_workflow, check_and_load),
-        (calling_workflow_async, check_and_load_async),
-    ):
-        handle = DBOS.start_workflow(workflow)
-        assert handle.get_result() == "loaded"
-        steps = DBOS.list_workflow_steps(handle.workflow_id)
-        assert [(s["function_id"], s["function_name"]) for s in steps] == [
-            (1, step.__qualname__)
-        ]
-    # The refused calls loaded nothing.
-    assert storage.loaded == 2
 
 
 @pytest.mark.parametrize("mode", ["sync", "async"])

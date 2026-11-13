@@ -673,7 +673,10 @@ class DBOSClient:
 
         From an async context, bridge to this synchronous method with
         ``await async_conn.run_sync(lambda sync_conn: client.enqueue_in_transaction(sync_conn, options, *args))``.
+
+        Must not be called from a workflow body; call it from a step.
         """
+        refuse_in_workflow_body("DBOSClient.enqueue_in_transaction")
         workflow_id = self._enqueue_with_connection(
             conn_or_session, options, *args, **kwargs
         )
@@ -1075,7 +1078,10 @@ class DBOSClient:
 
         From an async context, bridge to this synchronous method with
         ``await async_conn.run_sync(lambda sync_conn: client.send_in_transaction(sync_conn, destination_id, message))``.
+
+        Must not be called from a workflow body; call it from a step.
         """
+        refuse_in_workflow_body("DBOSClient.send_in_transaction")
         self._sys_db.send_bulk_with_connection(
             [SendMessage(destination_id, message, topic, idempotency_key, shard_key)],
             conn_or_session,
@@ -1149,7 +1155,10 @@ class DBOSClient:
 
         If `send_to_forks` is set, every message is also delivered to all
         workflows recursively forked from its destination.
+
+        Must not be called from a workflow body; call it from a step.
         """
+        refuse_in_workflow_body("DBOSClient.send_bulk_in_transaction")
         self._sys_db.send_bulk_with_connection(
             messages,
             conn_or_session,
