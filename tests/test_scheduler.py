@@ -1398,6 +1398,13 @@ async def test_schedule_crud_async(dbos: DBOS) -> None:
 
     assert await DBOS.get_schedule_async("nonexistent") is None
 
+    await DBOS.pause_schedule_async("async-schedule")
+    sched = await DBOS.get_schedule_async("async-schedule")
+    assert sched is not None and sched["status"] == "PAUSED"
+    await DBOS.resume_schedule_async("async-schedule")
+    sched = await DBOS.get_schedule_async("async-schedule")
+    assert sched is not None and sched["status"] == "ACTIVE"
+
     # Filters work through async path
     assert len(await DBOS.list_schedules_async(status="ACTIVE")) == 1
     assert len(await DBOS.list_schedules_async(schedule_name_prefix="async-")) == 1
@@ -1497,6 +1504,13 @@ async def test_client_schedule_crud_async(client: DBOSClient) -> None:
     assert sched["context"] == 42
 
     assert await client.get_schedule_async("nonexistent") is None
+
+    await client.pause_schedule_async("async-client")
+    sched = await client.get_schedule_async("async-client")
+    assert sched is not None and sched["status"] == "PAUSED"
+    await client.resume_schedule_async("async-client")
+    sched = await client.get_schedule_async("async-client")
+    assert sched is not None and sched["status"] == "ACTIVE"
 
     # Filters work through async path
     assert len(await client.list_schedules_async(status="ACTIVE")) == 1

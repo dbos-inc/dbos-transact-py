@@ -4,11 +4,11 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Dict, Iterator
 
 import pytest
 from sqlalchemy import event
-from sqlalchemy.exc import InvalidRequestError
+from sqlalchemy.exc import DBAPIError, InvalidRequestError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from dbos._logger import dbos_logger
@@ -208,3 +208,68 @@ def test_db_retry_does_not_retry_other_errors(error: Exception) -> None:
         fail()
     assert raised.value is error
     assert calls == 1
+
+
+def _upsert_queue(database: SystemDatabase, name: str) -> bool:
+    return database.upsert_queue(
+        name=name,
+        concurrency=None,
+        worker_concurrency=None,
+        rate_limit_max=None,
+        rate_limit_period_sec=None,
+        polling_interval_sec=1.0,
+        update_existing=True,
+    )
+
+
+_QUEUE_AND_VERSION_OPERATIONS: Dict[str, Callable[[SystemDatabase], Any]] = {
+    "upsert_queue": lambda db: _upsert_queue(db, "other-queue"),
+    "get_queue": lambda db: db.get_queue("queue"),
+    "list_queues": lambda db: db.list_queues(),
+    "update_queue": lambda db: db.update_queue("queue", {"concurrency": 2}),
+    "delete_queue": lambda db: db.delete_queue("queue"),
+    "list_application_versions": lambda db: db.list_application_versions(),
+    "rename_application": lambda db: db.rename_application("old-app", "new-app"),
+}
+
+
+@pytest.mark.parametrize("operation", list(_QUEUE_AND_VERSION_OPERATIONS))
+def test_queue_version_and_rename_operations_retry_a_dropped_connection(
+    tmp_path: Path, operation: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("dbos._sys_db.time.sleep", lambda seconds: None)
+    with _system_database(tmp_path / "dropped.sqlite") as database:
+        _upsert_queue(database, "queue")
+        drops = [1]
+
+        @event.listens_for(database.engine, "before_cursor_execute")
+        def drop_once(*args: Any) -> None:
+            if drops[0] > 0:
+                drops[0] -= 1
+                raise DBAPIError(
+                    "SELECT 1",
+                    None,
+                    Exception("connection dropped"),
+                    connection_invalidated=True,
+                )
+
+        _QUEUE_AND_VERSION_OPERATIONS[operation](database)
+        assert drops == [0]
+
+
+def test_get_queue_does_not_retry_in_a_callers_transaction(tmp_path: Path) -> None:
+    with _system_database(tmp_path / "caller.sqlite") as database:
+        with database.engine.begin() as c:
+
+            @event.listens_for(database.engine, "before_cursor_execute")
+            def drop(*args: Any) -> None:
+                raise DBAPIError(
+                    "SELECT 1",
+                    None,
+                    Exception("connection dropped"),
+                    connection_invalidated=True,
+                )
+
+            with pytest.raises(DBAPIError):
+                database.get_queue("queue", conn=c)
+            event.remove(database.engine, "before_cursor_execute", drop)

@@ -46,6 +46,7 @@ from dbos._utils import (
 
 from ._context import (
     DBOSContext,
+    EnterDBOSStepCtx,
     WorkflowIDReusePolicy,
     current_owner_xid,
     get_local_dbos_context,
@@ -5702,7 +5703,9 @@ class SystemDatabase(ABC):
         if res is not None:
             return cast(SystemDatabase.T, self._replay_recorded(res, function_name))
         try:
-            result = fn()
+            # In the step's context, so DBOS calls the operation makes belong to the step.
+            with EnterDBOSStepCtx({"name": function_name}, ctx, traced=False):
+                result = fn()
         except Exception as e:
             # Recorded so a replay re-raises it rather than re-running the operation; an operation
             # that should survive transient database errors must retry them itself.
@@ -5743,7 +5746,9 @@ class SystemDatabase(ABC):
         if res is not None:
             return cast(SystemDatabase.T, self._replay_recorded(res, function_name))
         try:
-            result = await fn()
+            # In the step's context, so DBOS calls the operation makes belong to the step.
+            with EnterDBOSStepCtx({"name": function_name}, ctx, traced=False):
+                result = await fn()
         except Exception as e:
             # Recorded so a replay re-raises it rather than re-running the operation; an operation
             # that should survive transient database errors must retry them itself.
@@ -6846,13 +6851,17 @@ class SystemDatabase(ABC):
         version_name: str,
         new_timestamp: int,
         application_name: Optional[str] = None,
+        conn: Optional[sa.Connection] = None,
     ) -> None:
         """Promote a version to latest. Promoting a peer's is a collision, not a retiming;
         promotion claims an unclaimed row, which would otherwise be every peer's latest.
+
+        Runs on ``conn`` if given, joining its transaction.
         """
         owner = application_name if application_name is not None else self.app_name
         av = self.tables.application_versions
-        with self.engine.begin() as c:
+
+        def _do(c: sa.Connection) -> None:
             resolved = self._resolve_row_owner(
                 c,
                 av,
@@ -6873,6 +6882,13 @@ class SystemDatabase(ABC):
                 .values(version_timestamp=new_timestamp, application_name=resolved)
             )
 
+        if conn is not None:
+            _do(conn)
+        else:
+            with self.engine.begin() as c:
+                _do(c)
+
+    @db_retry()
     def list_application_versions(self) -> List[VersionInfo]:
         with self._observability_query() as c:
             rows = c.execute(
@@ -6925,9 +6941,15 @@ class SystemDatabase(ABC):
 
         if conn is not None:
             return _do(conn)
-        with self.engine.begin() as c:
-            return _do(c)
 
+        @db_retry(sys_db=self)
+        def read() -> Optional["Queue"]:
+            with self.engine.begin() as c:
+                return _do(c)
+
+        return read()
+
+    @db_retry()
     def list_queues(
         self,
         *,
@@ -6950,6 +6972,7 @@ class SystemDatabase(ABC):
                 for row in rows
             ]
 
+    @db_retry()
     def delete_queue(self, name: str) -> None:
         """Delete a queue's row, if it exists."""
         with self.engine.begin() as c:
@@ -6959,6 +6982,7 @@ class SystemDatabase(ABC):
                 )
             )
 
+    @db_retry()
     def update_queue(self, name: str, fields: Dict[str, Any]) -> None:
         """Apply a partial update to a queue's row."""
         if not fields:
@@ -6973,6 +6997,7 @@ class SystemDatabase(ABC):
                 .values(**values)
             )
 
+    @db_retry()
     def upsert_queue(
         self,
         *,
@@ -7156,6 +7181,7 @@ class SystemDatabase(ABC):
                 return total
             watermark = upper
 
+    @db_retry()
     def rename_application(
         self,
         old_name: Optional[str],

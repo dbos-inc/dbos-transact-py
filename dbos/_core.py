@@ -3030,20 +3030,15 @@ class _StreamReadCheckpoint:
 
     A replayed reader re-yields its recorded values instead of re-reading a stream
     that may have advanced since, so it observes the sequence it originally did.
-    Reads from a step, from a client, or from outside a workflow are not recorded.
+    Reads from a step or from outside a workflow are not recorded.
     """
 
-    def __init__(
-        self,
-        sys_db: "SystemDatabase",
-        key: str,
-        function_name: str,
-        enabled: bool,
-    ) -> None:
-        self._sys_db = sys_db
+    def __init__(self, key: str, function_name: str, enabled: bool) -> None:
+        # The reading workflow's system database, set once bound to it. A client reads the
+        # stream from its own, which need not be the one the workflow's steps are recorded in.
+        self._sys_db: "SystemDatabase"
         self._key = key
         self._function_name = function_name
-        # A client reads its own system database, so it must never bind to the ambient workflow.
         self._enabled = enabled
         self._ctx: Optional[DBOSContext] = None
         self._bound = False
@@ -3063,7 +3058,10 @@ class _StreamReadCheckpoint:
             ctx = get_local_dbos_context()
             # Bind once and hold the context: a nested step call swaps the contextvar out from under us.
             if ctx is not None and ctx.is_workflow():
+                from dbos._dbos import _get_dbos_instance
+
                 self._ctx = ctx
+                self._sys_db = _get_dbos_instance()._sys_db
         if self._ctx is None:
             return None
         # Sequential reads record before they yield and so never overlap; an overlap means the reads are concurrent and their step ids depend on scheduling. Every read shares one function name, so the step-name guard would not catch the resulting swap on replay.
@@ -3265,7 +3263,7 @@ def read_stream(
         )
     if polling_interval is None:
         polling_interval = sys_db._notification_listener_polling_interval_sec
-    recorder = _StreamReadCheckpoint(sys_db, key, function_name, checkpoint)
+    recorder = _StreamReadCheckpoint(key, function_name, checkpoint)
     # Bound per call, never across a yield, which would leak into the consumer's context.
     target_key = {workflow_id: shard_key}
     with bind_shard_keys(target_key):
@@ -3381,7 +3379,7 @@ async def read_stream_async(
         )
     if polling_interval is None:
         polling_interval = sys_db._notification_listener_polling_interval_sec
-    recorder = _StreamReadCheckpoint(sys_db, key, function_name, checkpoint)
+    recorder = _StreamReadCheckpoint(key, function_name, checkpoint)
     # Bound per call, never across a yield, which would leak into the consumer's context.
     target_key = {workflow_id: shard_key}
     with bind_shard_keys(target_key):
