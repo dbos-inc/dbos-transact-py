@@ -836,7 +836,8 @@ class DBOS:
         """Create or migrate the system database with a privileged role, optionally
         granting application_role access to the system schema.
 
-        Cannot be called from a workflow body; call it from a step instead."""
+        Cannot be called from a workflow body; call it from a step instead.
+        Raises if the migration lock can't be acquired within the timeout."""
         # Migration is a database side effect, so it belongs in a step, not a workflow body.
         refuse_in_workflow_body("DBOS.migrate")
         is_sqlite = system_database_url.startswith("sqlite")
@@ -854,7 +855,7 @@ class DBOS:
             sharding=sharding,
         )
         try:
-            sys_db.run_migrations()
+            sys_db.run_migrations(fail_on_lock_timeout=True)
         finally:
             sys_db.destroy()
         if not application_role:

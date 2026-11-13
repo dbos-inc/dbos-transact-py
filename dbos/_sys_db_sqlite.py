@@ -51,7 +51,7 @@ class SQLiteSystemDatabase(SystemDatabase):
 
         return engine
 
-    def run_migrations(self) -> None:
+    def run_migrations(self, fail_on_lock_timeout: bool = False) -> None:
         """Run SQLite-specific migrations."""
         with self.engine.begin() as conn:
             # Enable foreign keys for SQLite

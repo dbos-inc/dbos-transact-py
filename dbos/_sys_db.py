@@ -932,7 +932,7 @@ class SystemDatabase(ABC):
         pass
 
     @abstractmethod
-    def run_migrations(self) -> None:
+    def run_migrations(self, fail_on_lock_timeout: bool = False) -> None:
         """Run database migrations specific to the database type."""
         pass
 
