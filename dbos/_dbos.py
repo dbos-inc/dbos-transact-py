@@ -160,7 +160,7 @@ from ._dbos_config import (
     process_config,
     translate_dbos_config_to_config_file,
 )
-from ._enterprise import AlertHandler, ConductorThread, ExternalStorage
+from ._enterprise import AlertHandler, Archiver, ConductorThread, ExternalStorage
 from ._error import (
     DBOSException,
     DBOSExternalStoreNotConfiguredError,
@@ -183,6 +183,7 @@ from ._logger import (
     teardown_logger,
 )
 from ._shard_keys import bind_shard_keys
+from ._workflow_archive import WorkflowArchive
 from ._workflow_commands import (
     BACKGROUND_JOBS_THREAD_NAME,
     BackgroundLease,
@@ -745,6 +746,10 @@ class DBOS:
             config.get("external_stores")
         )
         self._external_storage_field: Optional[ExternalStorage] = None
+        self._workflow_archive: Optional[WorkflowArchive] = config.get(
+            "workflow_archive"
+        )
+        self._archiver: Optional[Archiver] = None
         self._conductor_executor_metadata: Optional[Dict[str, Any]] = config.get(
             "conductor_executor_metadata"
         )
@@ -951,6 +956,12 @@ class DBOS:
                 self._sys_db.suspend = _enterprise.load(
                     _enterprise.SUSPEND.description
                 ).Suspend(self._sys_db)
+            if self._workflow_archive is not None:
+                # Before any workflow runs, so every terminal transition is queued for archiving.
+                self._sys_db.archive_completions = True
+                self._archiver = _enterprise.load(
+                    _enterprise.WORKFLOW_ARCHIVE.description
+                ).Archiver(self, self._workflow_archive)
 
             # Run migrations for the system database
             if self._config.get("run_migrations", True):
@@ -1045,6 +1056,10 @@ class DBOS:
             )
             jobs_thread.start()
             self._background_threads.append(jobs_thread)
+
+            if self._archiver is not None:
+                dbos_logger.debug("Starting workflow archiver")
+                self._archiver.start()
 
             # Start the conductor thread if requested
             if GlobalParams.dbos_cloud:
@@ -1251,6 +1266,10 @@ class DBOS:
                 else:
                     break
         self._background_jobs_stop_event.set()
+        # Flushes what it has buffered while the system database is still connected.
+        if self._archiver is not None:
+            self._archiver.stop()
+            self._archiver = None
         # The upgrader unlocks its per-application advisory lock before the system database engine is disposed.
         if self.auto_upgrader is not None:
             self.auto_upgrader.stop()

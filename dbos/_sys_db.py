@@ -676,6 +676,8 @@ class SystemDatabase(ABC):
     # Suspend mode (Transact Enterprise), installed by DBOS when it is on: recv and sleep
     # may park their workflow. Waking a parked recv is core: every send does it.
     suspend: Optional["Suspend"] = None
+    # Set when workflow archiving is configured: every terminal transition queues its row.
+    archive_completions: bool = False
 
     @staticmethod
     def create(
@@ -982,6 +984,10 @@ class SystemDatabase(ABC):
     def _cleanup_connections(self) -> None:
         """Clean up database-specific connections."""
         pass
+
+    def _archive_values(self) -> Dict[str, Any]:
+        """Columns a statement setting completed_at also sets, to queue the row for archiving."""
+        return {"archive_pending": True} if self.archive_completions else {}
 
     def _now_ms_sql(self) -> Any:
         # Cast to BIGINT: EXTRACT yields numeric, which casts any bigint column compared against it, costing that column its index.
@@ -1514,6 +1520,7 @@ class SystemDatabase(ABC):
                     started_at_epoch_ms=None,
                     updated_at=now_ms,
                     completed_at=now_ms,
+                    **self._archive_values(),
                 )
             )
 
@@ -1579,6 +1586,7 @@ class SystemDatabase(ABC):
                     owner_xid=None,
                     updated_at=now_ms,
                     completed_at=now_ms,
+                    **self._archive_values(),
                 )
                 .where(
                     *[
@@ -1660,6 +1668,7 @@ class SystemDatabase(ABC):
                     owner_xid=None,
                     updated_at=now_ms,
                     completed_at=now_ms,
+                    **self._archive_values(),
                 )
                 .where(*self._wf(self.tables.workflow_status, workflow_id))
                 .where(
@@ -1728,6 +1737,7 @@ class SystemDatabase(ABC):
                         started_at_epoch_ms=None,
                         updated_at=now_ms,
                         completed_at=now_ms,
+                        **self._archive_values(),
                     )
                 )
 
@@ -1788,6 +1798,7 @@ class SystemDatabase(ABC):
                     started_at_epoch_ms=None,
                     updated_at=self._now_ms_sql(),
                     completed_at=None,
+                    archive_pending=None,
                 )
             )
 
@@ -2230,6 +2241,7 @@ class SystemDatabase(ABC):
                     started_at_epoch_ms=None,
                     updated_at=self._now_ms_sql(),
                     completed_at=None,
+                    archive_pending=None,
                     output=None,
                     error=None,
                 )
@@ -5043,6 +5055,7 @@ class SystemDatabase(ABC):
                     started_at_epoch_ms=None,
                     updated_at=cancelled_at,
                     completed_at=cancelled_at,
+                    **self._archive_values(),
                 )
                 .returning(ws.c.workflow_uuid)
             ).fetchall()

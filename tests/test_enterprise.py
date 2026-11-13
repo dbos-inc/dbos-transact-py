@@ -590,6 +590,10 @@ def test_config_turns_on_enterprise_features() -> None:
     ]
     # An empty list configures no store, so it needs no entitlement.
     assert enterprise_module.enabled_features({"external_stores": []}) == []
+    assert enterprise_module.enabled_features({"workflow_archive": object()}) == [
+        enterprise_module.WORKFLOW_ARCHIVE
+    ]
+    assert enterprise_module.enabled_features({"workflow_archive": None}) == []
     # Every registered feature has a distinct entitlement name.
     names = [f.entitlement for f in enterprise_module.FEATURES]
     assert len(names) == len(set(names))

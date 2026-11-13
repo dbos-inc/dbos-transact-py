@@ -92,6 +92,7 @@ from dbos._sys_db import (
     WorkflowStatusInternal,
     db_retry,
 )
+from dbos._workflow_archive import WorkflowArchive
 from dbos._workflow_commands import (
     fork_workflow,
     get_workflow,
@@ -341,6 +342,7 @@ class DBOSClient:
         sys_db_idle_transaction_timeout_sec: Optional[float] = None,
         sharding: bool = False,
         external_stores: Optional[Sequence[ExternalStore]] = None,
+        workflow_archive: Optional[WorkflowArchive] = None,
     ):
         """Create a client for interacting with a DBOS application from outside it.
 
@@ -367,6 +369,7 @@ class DBOSClient:
             observability_query_timeout_sec (float): Statement timeout, in seconds, for read-only observability queries against the system database. Defaults to 30.0.
             sys_db_idle_transaction_timeout_sec (float): Postgres idle_in_transaction_session_timeout, in seconds, for the system database connections this client creates. Defaults to 60.0. Set to a non-positive value to leave the server's setting in place. Not applied to a custom system_database_engine.
             external_stores (List[ExternalStore]): The object stores for store_external_object and load_external_object, matching the application's. If there are multiple, store_external_object must specify one with store_id. Requires Transact Enterprise.
+            workflow_archive (WorkflowArchive): The application's workflow archive, if it has one, so workflows this client cancels are archived too. The application's own processes do the archiving.
 
         Raises:
             Exception: If the system database cannot be reached, unless lazy is True.
@@ -421,6 +424,8 @@ class DBOSClient:
             idle_transaction_timeout_sec=sys_db_idle_transaction_timeout_sec,
             sharding=sharding,
         )
+        # Cancels through the client queue their workflows for the application's archiver.
+        self._sys_db.archive_completions = workflow_archive is not None
         self._external_storage_field: Optional[ExternalStorage] = None
         if external_storage_factory is not None:
             self._external_storage_field = external_storage_factory(

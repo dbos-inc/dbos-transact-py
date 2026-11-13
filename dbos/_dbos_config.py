@@ -11,6 +11,7 @@ from dbos._serialization import Serializer
 
 from ._error import DBOSInitializationError
 from ._external_storage import ExternalStore
+from ._workflow_archive import WorkflowArchive
 
 DBOS_CONFIG_PATH = "dbos-config.yaml"
 
@@ -48,6 +49,7 @@ class DBOSConfig(TypedDict, total=False):
         enable_patching (bool): Deprecated. Pins the application version to "PATCHING_ENABLED" so every deployment shares one version.
         serializer (Serializer): A custom serializer and deserializer DBOS uses when storing program data in the system database
         external_stores (List[ExternalStore]): The object stores for values passed to DBOS.store_external_object. If there are multiple, store_external_object must specify one with store_id, and each needs a unique store_id. Requires Transact Enterprise.
+        workflow_archive (WorkflowArchive): Where workflows are archived once they reach a terminal status, such as dbos_enterprise.ParquetArchive. Retention then only deletes workflows already archived. Not supported on a sharded system database. Requires Transact Enterprise.
         use_listen_notify (bool): Whether to use LISTEN/NOTIFY or polling to listen for notifications and events.  Defaults to True. As this affects migrations, may not be changed after the system database is first created.
         run_migrations (bool): Whether to create and migrate the system database on launch. Defaults to True. Set to False for a process that must not alter the schema, such as one whose database role cannot run DDL, or a deployment that migrates out of band with `dbos migrate`. Launch then verifies the schema instead: a system database that is missing, or behind the version this build requires, fails launch rather than being created or migrated.
         notification_listener_polling_interval_sec (float): Polling interval in seconds for the notification listener background process. Defaults to 1.0. Minimum value is 0.001. Lower values can speed up test execution.
@@ -89,6 +91,7 @@ class DBOSConfig(TypedDict, total=False):
     auto_upgrade_grace_sec: Optional[float]
     serializer: Optional[Serializer]
     external_stores: Optional[List[ExternalStore]]
+    workflow_archive: Optional[WorkflowArchive]
     enable_patching: Optional[bool]
     use_listen_notify: Optional[bool]
     # Use a sharded system database from dbos-enterprise; every workflow then lives under an explicit shard key.
