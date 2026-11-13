@@ -456,8 +456,8 @@ def get_local_dbos_context() -> Optional[DBOSContext]:
 
 
 def refuse_in_workflow_body(method: str) -> None:
-    """Raise if called from a workflow body, for an operation whose side effect on
-    shared state belongs in a step."""
+    """Raise if called from a workflow body, for an operation that belongs in a step:
+    a side effect on shared state, or I/O a replay would repeat."""
     ctx = get_local_dbos_context()
     if ctx is not None and ctx.is_workflow():
         raise DBOSException(

@@ -442,12 +442,14 @@ class DBOSClient:
                 self._notification_listener_thread.start()
 
     def check_connection(self) -> None:
-        """Verify the client can reach the system database, raising if it cannot."""
+        """Verify the client can reach the system database, raising if it cannot. Call it from a step, not a workflow."""
+        refuse_in_workflow_body("DBOSClient.check_connection")
         check_async("DBOSClient.check_connection", warn=True)
         self._sys_db.check_connection()
 
     async def check_connection_async(self) -> None:
-        """Verify the client can reach the system database, raising if it cannot."""
+        """Verify the client can reach the system database, raising if it cannot. Call it from a step, not a workflow."""
+        refuse_in_workflow_body("DBOSClient.check_connection_async")
         await asyncio.to_thread(self._sys_db.check_connection)
 
     def destroy(self) -> None:
@@ -992,11 +994,13 @@ class DBOSClient:
             )
 
     def load_external_object(self, ref: ExternalObjectRef[T]) -> T:
-        """Load the value an external object ref points to."""
+        """Load the value an external object ref points to. Call it from a step, not a workflow, and use the value in that step: a step's return value is checkpointed, so return only a small result."""
+        refuse_in_workflow_body("DBOSClient.load_external_object")
         return cast(T, self._external_storage().get(ref))
 
     async def load_external_object_async(self, ref: ExternalObjectRef[T]) -> T:
-        """Load the value an external object ref points to."""
+        """Load the value an external object ref points to. Call it from a step, not a workflow, and use the value in that step: a step's return value is checkpointed, so return only a small result."""
+        refuse_in_workflow_body("DBOSClient.load_external_object_async")
         return cast(T, await self._external_storage().get_async(ref))
 
     @_client_step("DBOSClient.send")

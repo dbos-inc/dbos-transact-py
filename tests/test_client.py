@@ -2243,6 +2243,74 @@ def test_client_trigger_and_backfill_are_refused_in_a_workflow(
     assert sorted(w.workflow_id for w in executions) == sorted(enqueued)
 
 
+class _LoadableExternalStorage:
+    """Stands in for the Transact Enterprise external storage, counting loads."""
+
+    def __init__(self) -> None:
+        self.loaded = 0
+
+    def get(self, ref: Any) -> str:
+        self.loaded += 1
+        return "loaded"
+
+    async def get_async(self, ref: Any) -> str:
+        return self.get(ref)
+
+
+def test_client_check_connection_and_load_are_refused_in_a_workflow(
+    dbos: DBOS, client: DBOSClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = _LoadableExternalStorage()
+    monkeypatch.setattr(client, "_external_storage_field", storage)
+    ref: Any = {"key": "ref"}
+
+    @DBOS.step()
+    def check_and_load() -> str:
+        client.check_connection()
+        return client.load_external_object(ref)
+
+    @DBOS.step()
+    async def check_and_load_async() -> str:
+        await client.check_connection_async()
+        return await client.load_external_object_async(ref)
+
+    @DBOS.workflow()
+    def calling_workflow() -> str:
+        # Refused in a workflow body, before it takes a step ID, but allowed in a step.
+        with pytest.raises(DBOSException, match="check_connection cannot be called"):
+            client.check_connection()
+        with pytest.raises(
+            DBOSException, match="load_external_object cannot be called"
+        ):
+            client.load_external_object(ref)
+        return check_and_load()
+
+    @DBOS.workflow()
+    async def calling_workflow_async() -> str:
+        with pytest.raises(
+            DBOSException, match="check_connection_async cannot be called"
+        ):
+            await client.check_connection_async()
+        with pytest.raises(
+            DBOSException, match="load_external_object_async cannot be called"
+        ):
+            await client.load_external_object_async(ref)
+        return await check_and_load_async()
+
+    for workflow, step in (
+        (calling_workflow, check_and_load),
+        (calling_workflow_async, check_and_load_async),
+    ):
+        handle = DBOS.start_workflow(workflow)
+        assert handle.get_result() == "loaded"
+        steps = DBOS.list_workflow_steps(handle.workflow_id)
+        assert [(s["function_id"], s["function_name"]) for s in steps] == [
+            (1, step.__qualname__)
+        ]
+    # The refused calls loaded nothing.
+    assert storage.loaded == 2
+
+
 @pytest.mark.asyncio
 async def test_client_method_without_async_variant_is_refused_on_an_event_loop(
     dbos: DBOS, client: DBOSClient
