@@ -116,16 +116,14 @@ def _retried_in_workflow(sys_db: SystemDatabase, fn: Callable[[], T]) -> T:
     return fn()
 
 
-def _client_step_context(
-    sync_method: Optional[str], *, has_async_variant: bool = True
-) -> Optional[DBOSContext]:
+def _client_step_context(sync_method: Optional[str]) -> Optional[DBOSContext]:
     """Reserve a step of the calling workflow, or return None outside a workflow body."""
     ctx = get_local_dbos_context()
     if ctx is None or not ctx.is_workflow():
         return None
     if sync_method is not None:
         # An async workflow's body runs on the event loop every other coroutine shares.
-        check_async(sync_method, has_async_variant=has_async_variant)
+        check_async(sync_method)
     return snapshot_step_context()
 
 
@@ -182,10 +180,7 @@ def _client_step(
 
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            ctx = _client_step_context(
-                func.__name__,
-                has_async_variant=hasattr(args[0], f"{func.__name__}_async"),
-            )
+            ctx = _client_step_context(func.__name__)
             if ctx is None:
                 return func(*args, **kwargs)
 
@@ -2213,10 +2208,20 @@ class DBOSClient:
         """Pause the schedule with the given name. A paused schedule does not fire."""
         _retried_in_workflow(self._sys_db, lambda: self._sys_db.pause_schedule(name))
 
+    @_client_step("DBOSClient.pauseSchedule")
+    async def pause_schedule_async(self, name: str) -> None:
+        """Async version of :meth:`pause_schedule`."""
+        await asyncio.to_thread(self.pause_schedule, name)
+
     @_client_step("DBOSClient.resumeSchedule")
     def resume_schedule(self, name: str) -> None:
         """Resume a paused schedule so it begins firing again."""
         _retried_in_workflow(self._sys_db, lambda: self._sys_db.resume_schedule(name))
+
+    @_client_step("DBOSClient.resumeSchedule")
+    async def resume_schedule_async(self, name: str) -> None:
+        """Async version of :meth:`resume_schedule`."""
+        await asyncio.to_thread(self.resume_schedule, name)
 
     @_client_step("DBOSClient.applySchedules")
     def apply_schedules(

@@ -4051,10 +4051,20 @@ class DBOS:
     @classmethod
     def pause_schedule(cls, name: str) -> None:
         """Pause the schedule with the given name. A paused schedule does not fire."""
+        cls._pause_schedule(snapshot_step_context(reserve_sleep_id=False), name)
+
+    @classmethod
+    async def pause_schedule_async(cls, name: str) -> None:
+        """Async version of :meth:`pause_schedule`."""
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(cls._pause_schedule, step_ctx, name)
+
+    @classmethod
+    def _pause_schedule(cls, step_ctx: Optional[DBOSContext], name: str) -> None:
         dbos = _get_dbos_instance()
-        ctx = snapshot_step_context(reserve_sleep_id=False)
-        if ctx and ctx.is_workflow():
-            with EnterDBOSStepCtx({"name": "pauseSchedule"}, ctx) as step:
+        if step_ctx and step_ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "pauseSchedule"}, step_ctx) as step:
                 dbos._sys_db.call_txn_as_step(
                     step.workflow_id,
                     step.curr_step_function_id,
@@ -4067,10 +4077,20 @@ class DBOS:
     @classmethod
     def resume_schedule(cls, name: str) -> None:
         """Resume a paused schedule so it begins firing again."""
+        cls._resume_schedule(snapshot_step_context(reserve_sleep_id=False), name)
+
+    @classmethod
+    async def resume_schedule_async(cls, name: str) -> None:
+        """Async version of :meth:`resume_schedule`."""
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(cls._resume_schedule, step_ctx, name)
+
+    @classmethod
+    def _resume_schedule(cls, step_ctx: Optional[DBOSContext], name: str) -> None:
         dbos = _get_dbos_instance()
-        ctx = snapshot_step_context(reserve_sleep_id=False)
-        if ctx and ctx.is_workflow():
-            with EnterDBOSStepCtx({"name": "resumeSchedule"}, ctx) as step:
+        if step_ctx and step_ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "resumeSchedule"}, step_ctx) as step:
                 dbos._sys_db.call_txn_as_step(
                     step.workflow_id,
                     step.curr_step_function_id,

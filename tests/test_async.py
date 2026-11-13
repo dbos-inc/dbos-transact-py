@@ -1588,8 +1588,6 @@ async def test_check_async_raises_or_warns_on_an_event_loop(
         check_async("fn")
     with pytest.raises(RuntimeError, match=r"fn\(\) was called .* Use other instead"):
         check_async("fn", alternative="other")
-    with pytest.raises(RuntimeError, match=r"fn\(\) was called .* running\.$"):
-        check_async("fn", has_async_variant=False)
 
     # With warn, the call goes ahead and the blocked loop is only logged.
     original_propagate = logging.getLogger("dbos").propagate

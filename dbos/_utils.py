@@ -17,13 +17,12 @@ INTERNAL_QUEUE_NAME = "_dbos_internal_queue"
 def check_async(
     fn: str,
     *,
-    has_async_variant: bool = True,
     alternative: Optional[str] = None,
     warn: bool = False,
 ) -> None:
     """Raise if fn, a blocking call, was called on a running event loop, which it would
-    stall. The message points to fn's async variant when it has one, or to alternative
-    when that is named differently. With warn, log a warning instead of raising."""
+    stall. The message points to fn's async variant, or to alternative when that is
+    named differently. With warn, log a warning instead of raising."""
     try:
         asyncio.get_running_loop()
     except RuntimeError:
@@ -40,7 +39,7 @@ def check_async(
     message = f"{fn}() was called while an event loop is running."
     if alternative is not None:
         message += f" Use {alternative} instead."
-    elif has_async_variant:
+    else:
         message += f" Use await {fn}_async(...) instead."
     raise RuntimeError(message)
 

@@ -358,6 +358,8 @@ async def test_concurrent_async_calls_number_steps_in_call_order(
             DBOS.set_latest_application_version_async(DBOS.application_version),
             DBOS.list_queues_async(),
         )
+        await DBOS.pause_schedule_async(schedule_name)
+        await DBOS.resume_schedule_async(schedule_name)
         await DBOS.delete_schedule_async(schedule_name)
         # A failed queue check is recorded as the step's error.
         try:
@@ -383,14 +385,16 @@ async def test_concurrent_async_calls_number_steps_in_call_order(
         (9, "DBOS.listApplicationVersions"),
         (10, "DBOS.setLatestApplicationVersion"),
         (11, "DBOS.listQueues"),
-        (12, "DBOS.deleteSchedule"),
-        (13, "DBOS.createSchedule"),
+        (12, "DBOS.pauseSchedule"),
+        (13, "DBOS.resumeSchedule"),
+        (14, "DBOS.deleteSchedule"),
+        (15, "DBOS.createSchedule"),
     ]
     handle = await DBOS.start_workflow_async(concurrent_workflow)
     assert "is not declared" in await handle.get_result()
     assert await steps_of_async(handle.workflow_id) == expected_steps
     steps = await DBOS.list_workflow_steps_async(handle.workflow_id)
-    assert steps[12]["error"] is not None
+    assert steps[14]["error"] is not None
 
     # The queue check is recorded with createSchedule: with the queue deleted, the
     # replay returns the recorded result instead of failing the check.

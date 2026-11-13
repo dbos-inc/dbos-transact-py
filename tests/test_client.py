@@ -1981,12 +1981,12 @@ _CLIENT_STEP_CASES: Dict[str, _ClientStepCase] = {
     "pause_schedule": _ClientStepCase(
         ["DBOSClient.pauseSchedule"],
         lambda c, t: c.pause_schedule(t.schedule),
-        lambda c, t: asyncio.to_thread(c.pause_schedule, t.schedule),
+        lambda c, t: c.pause_schedule_async(t.schedule),
     ),
     "resume_schedule": _ClientStepCase(
         ["DBOSClient.resumeSchedule"],
         lambda c, t: c.resume_schedule(t.schedule),
-        lambda c, t: asyncio.to_thread(c.resume_schedule, t.schedule),
+        lambda c, t: c.resume_schedule_async(t.schedule),
     ),
     "apply_schedules": _ClientStepCase(
         ["DBOSClient.applySchedules"],
@@ -2374,12 +2374,12 @@ def test_client_read_stream_is_checkpointed_in_a_workflow(
 
 
 @pytest.mark.asyncio
-async def test_client_method_without_async_variant_is_refused_on_an_event_loop(
+async def test_client_sync_method_is_refused_on_an_event_loop(
     dbos: DBOS, client: DBOSClient
 ) -> None:
     @DBOS.workflow()
     async def pausing_workflow() -> str:
-        with pytest.raises(RuntimeError, match=r"pause_schedule\(\) was called"):
+        with pytest.raises(RuntimeError, match="Use await pause_schedule_async"):
             client.pause_schedule("client-steps-schedule")
         return "refused"
 
