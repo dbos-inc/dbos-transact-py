@@ -369,7 +369,7 @@ class DBOSClient:
             observability_query_timeout_sec (float): Statement timeout, in seconds, for read-only observability queries against the system database. Defaults to 30.0.
             sys_db_idle_transaction_timeout_sec (float): Postgres idle_in_transaction_session_timeout, in seconds, for the system database connections this client creates. Defaults to 60.0. Set to a non-positive value to leave the server's setting in place. Not applied to a custom system_database_engine.
             external_stores (List[ExternalStore]): The object stores for store_external_object and load_external_object, matching the application's. If there are multiple, store_external_object must specify one with store_id. Requires Transact Enterprise.
-            workflow_archive (WorkflowArchive): The application's workflow archive, if it has one, so workflows this client cancels are archived too. The application's own processes do the archiving.
+            workflow_archive (WorkflowArchive): The application's workflow archive, if it has one.
 
         Raises:
             Exception: If the system database cannot be reached, unless lazy is True.
