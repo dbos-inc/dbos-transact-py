@@ -28,7 +28,7 @@ from dbos._serialization import DefaultSerializer
 from dbos._sys_db import SystemDatabase
 from dbos.cli.migration import print_dbos_migrations, print_dbos_user_role_sql
 
-from .conftest import using_sharding
+from .conftest import postgres_urls, using_sharding
 
 pytestmark = pytest.mark.skipif(
     using_sharding(),
@@ -66,6 +66,55 @@ def test_systemdb_migration(
         migrations_rows = migrations_result.fetchall()
         assert len(migrations_rows) == 1
         assert migrations_rows[0][0] == len(get_dbos_migrations("dbos", True))
+
+
+def test_migrate_fails_on_lock_timeout(
+    dbos_dropped_databases: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
+    """DBOS.migrate() raises instead of migrating without the lock."""
+    from unittest.mock import patch
+
+    from dbos._sys_db_postgres import MIGRATION_LOCK_ID
+
+    sys_db_url = postgres_urls()[1]
+    schema = "dbos"
+
+    # Rewind one version so should_migrate() is True and the lock path runs.
+    engine = dbos_dropped_databases._sys_db.engine
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(f'UPDATE "{schema}".dbos_migrations SET version = version - 1')
+        )
+        rewound_version = conn.execute(
+            sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+        ).scalar()
+
+    holder = engine.connect().execution_options(isolation_level="AUTOCOMMIT")
+    try:
+        got = holder.execute(
+            sa.text("SELECT pg_try_advisory_lock(:lock_id)"),
+            {"lock_id": MIGRATION_LOCK_ID},
+        ).scalar()
+        assert got, "test setup: expected to acquire the lock before migrate() tries"
+
+        with patch("dbos._sys_db_postgres.MIGRATION_LOCK_TIMEOUT_SEC", 2):
+            with pytest.raises(
+                DBOSInitializationError,
+                match="Could not acquire migration advisory lock",
+            ):
+                DBOS.migrate(sys_db_url, schema=schema)
+    finally:
+        holder.execute(
+            sa.text("SELECT pg_advisory_unlock(:lock_id)"),
+            {"lock_id": MIGRATION_LOCK_ID},
+        )
+        holder.close()
+
+    with engine.connect() as check_conn:
+        version = check_conn.execute(
+            sa.text(f'SELECT version FROM "{schema}".dbos_migrations')
+        ).scalar()
+    assert version == rewound_version
 
 
 def test_systemdb_migration_custom_schema(
