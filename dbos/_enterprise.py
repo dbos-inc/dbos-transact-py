@@ -184,6 +184,18 @@ class ArchiverFactory(Protocol):
     def __call__(self, dbos: DBOS, archive: "WorkflowArchive") -> Archiver: ...
 
 
+class ArchivedWorkflowImporter(Protocol):
+    """Copies one archived snapshot back into the system database, completed as of now."""
+
+    def __call__(
+        self,
+        sys_db: "SystemDatabase",
+        archive: "WorkflowArchive",
+        workflow_id: str,
+        completed_at: int,
+    ) -> None: ...
+
+
 class Enterprise(Protocol):
     """What the top-level dbos_enterprise module must provide."""
 
@@ -205,6 +217,9 @@ class Enterprise(Protocol):
 
     @property
     def Archiver(self) -> ArchiverFactory: ...
+
+    @property
+    def import_archived_workflow(self) -> ArchivedWorkflowImporter: ...
 
 
 # What needs the package without being an entitlement, for load()'s messages.

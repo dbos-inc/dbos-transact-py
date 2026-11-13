@@ -74,6 +74,7 @@ class DBOSErrorCode(Enum):
     ExternalObjectMissing = 31
     ExternalObjectIntegrity = 32
     ExternalStoreFailed = 33
+    WorkflowArchiveNotConfigured = 34
 
 
 #######################################
@@ -433,6 +434,19 @@ class DBOSExternalStoreNotConfiguredError(DBOSException):
 
     def __reduce__(self) -> Any:
         return (self.__class__, (self.store_id, self.configured_store_ids))
+
+
+class DBOSWorkflowArchiveNotConfiguredError(DBOSException):
+    """Exception raised when reading from the workflow archive with none configured."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Importing an archived workflow requires workflow_archive in the DBOS configuration or DBOSClient",
+            dbos_error_code=DBOSErrorCode.WorkflowArchiveNotConfigured.value,
+        )
+
+    def __reduce__(self) -> Any:
+        return (self.__class__, ())
 
 
 class DBOSExternalObjectMissingError(DBOSException):

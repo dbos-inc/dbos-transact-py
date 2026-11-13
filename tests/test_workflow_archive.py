@@ -1,13 +1,17 @@
 """The system database's half of workflow archiving: which writes queue a workflow."""
 
+import asyncio
 import threading
-from typing import Optional
+from typing import Any, List, Optional, Tuple
 
 import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS, DBOSClient, DBOSConfig, SetWorkflowTimeout
-from dbos._error import DBOSAwaitedWorkflowCancelledError
+from dbos import DBOS, DBOSClient, DBOSConfig, SetWorkflowTimeout, _enterprise
+from dbos._error import (
+    DBOSAwaitedWorkflowCancelledError,
+    DBOSWorkflowArchiveNotConfiguredError,
+)
 from dbos._schemas.system_database import SystemSchema
 
 from .conftest import retry_until_success, using_sharding
@@ -191,3 +195,38 @@ def test_migration_adds_column_and_index(dbos: DBOS) -> None:
     assert "archive_pending" in columns
     indexes = {i["name"] for i in inspector.get_indexes("workflow_status", schema)}
     assert "idx_workflow_status_archive_pending" in indexes
+
+
+def test_import_archived_needs_an_archive(dbos: DBOS, client: DBOSClient) -> None:
+    with pytest.raises(DBOSWorkflowArchiveNotConfiguredError):
+        DBOS.import_archived_workflow("wf", 1)
+    with pytest.raises(DBOSWorkflowArchiveNotConfiguredError):
+        asyncio.run(DBOS.import_archived_workflow_async("wf", 1))
+    with pytest.raises(DBOSWorkflowArchiveNotConfiguredError):
+        client.import_archived_workflow("wf", 1)
+    with pytest.raises(DBOSWorkflowArchiveNotConfiguredError):
+        asyncio.run(client.import_archived_workflow_async("wf", 1))
+
+
+def test_import_archived_calls_enterprise(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, skip_with_sharding_here: None
+) -> None:
+    @DBOS.workflow()
+    def work() -> int:
+        return 5
+
+    work()
+    workflow_id = DBOS.list_workflows()[0].workflow_id
+    calls: List[Tuple[Any, ...]] = []
+
+    class FakeEnterprise:
+        @staticmethod
+        def import_archived_workflow(*args: Any) -> None:
+            calls.append(args)
+
+    monkeypatch.setattr(_enterprise, "load", lambda *a, **k: FakeEnterprise)
+    archive = _FakeArchive()
+    monkeypatch.setattr(dbos, "_workflow_archive", archive)
+    handle = DBOS.import_archived_workflow(workflow_id, 123)
+    assert calls == [(dbos._sys_db, archive, workflow_id, 123)]
+    assert handle.workflow_id == workflow_id and handle.get_result() == 5

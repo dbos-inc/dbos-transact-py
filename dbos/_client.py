@@ -92,7 +92,7 @@ from dbos._sys_db import (
     WorkflowStatusInternal,
     db_retry,
 )
-from dbos._workflow_archive import WorkflowArchive
+from dbos._workflow_archive import WorkflowArchive, import_archived_workflow
 from dbos._workflow_commands import (
     fork_workflow,
     get_workflow,
@@ -426,6 +426,7 @@ class DBOSClient:
         )
         # Cancels through the client queue their workflows for the application's archiver.
         self._sys_db.archive_completions = workflow_archive is not None
+        self._workflow_archive = workflow_archive
         self._external_storage_field: Optional[ExternalStorage] = None
         if external_storage_factory is not None:
             self._external_storage_field = external_storage_factory(
@@ -1868,6 +1869,64 @@ class DBOSClient:
                 self._sys_db,
                 shard_key=self._sys_db._key_hint(workflow_id),
             )
+
+    def import_archived_workflow(
+        self, workflow_id: str, completed_at: int
+    ) -> "WorkflowHandle[Any]":
+        """Copy one archived snapshot of a workflow back into the system database.
+
+        Args:
+            workflow_id: The workflow's ID. It must not already be in the system database.
+            completed_at: The snapshot to import, as its WorkflowStatus.completed_at (Unix epoch ms). The imported workflow's completed_at is the import time, so retention keeps it for its usual period from now.
+
+        Returns:
+            A handle to the imported workflow.
+
+        Raises:
+            DBOSWorkflowArchiveNotConfiguredError: If this client has no workflow_archive.
+            DBOSNonExistentWorkflowError: If the archive has no such snapshot.
+            DBOSWorkflowIDInUseError: If the workflow ID is already in the system database.
+        """
+        ctx = _client_step_context("import_archived_workflow")
+
+        def restore() -> None:
+            import_archived_workflow(
+                self._sys_db, self._workflow_archive, workflow_id, completed_at
+            )
+
+        _run_client_step(ctx, "DBOSClient.importArchivedWorkflow", restore)
+        return WorkflowHandleClientPolling[Any](workflow_id, self._sys_db)
+
+    async def import_archived_workflow_async(
+        self, workflow_id: str, completed_at: int
+    ) -> "WorkflowHandleAsync[Any]":
+        """Copy one archived snapshot of a workflow back into the system database.
+
+        Args:
+            workflow_id: The workflow's ID. It must not already be in the system database.
+            completed_at: The snapshot to import, as its WorkflowStatus.completed_at (Unix epoch ms). The imported workflow's completed_at is the import time, so retention keeps it for its usual period from now.
+
+        Returns:
+            A handle to the imported workflow.
+
+        Raises:
+            DBOSWorkflowArchiveNotConfiguredError: If this client has no workflow_archive.
+            DBOSNonExistentWorkflowError: If the archive has no such snapshot.
+            DBOSWorkflowIDInUseError: If the workflow ID is already in the system database.
+        """
+        ctx = _client_step_context(None)
+
+        async def restore() -> None:
+            await asyncio.to_thread(
+                import_archived_workflow,
+                self._sys_db,
+                self._workflow_archive,
+                workflow_id,
+                completed_at,
+            )
+
+        await _run_client_step_async(ctx, "DBOSClient.importArchivedWorkflow", restore)
+        return WorkflowHandleClientAsyncPolling[Any](workflow_id, self._sys_db)
 
     def read_stream(
         self,
