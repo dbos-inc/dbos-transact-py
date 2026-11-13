@@ -932,10 +932,7 @@ class SystemDatabase(ABC):
 
     @abstractmethod
     def run_migrations(self, fail_on_lock_timeout: bool = False) -> None:
-        """Run database migrations specific to the database type.
-
-        `fail_on_lock_timeout` only applies to backends that serialize
-        concurrent migrations with a timed lock (Postgres); others ignore it."""
+        """Run database migrations specific to the database type."""
         pass
 
     @abstractmethod

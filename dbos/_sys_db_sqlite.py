@@ -52,10 +52,7 @@ class SQLiteSystemDatabase(SystemDatabase):
         return engine
 
     def run_migrations(self, fail_on_lock_timeout: bool = False) -> None:
-        """Run SQLite-specific migrations.
-
-        fail_on_lock_timeout is unused: SQLite has no advisory-lock timeout
-        to fail on, it serializes migrators with BEGIN IMMEDIATE instead."""
+        """Run SQLite-specific migrations."""
         with self.engine.begin() as conn:
             # Enable foreign keys for SQLite
             conn.execute(sa.text("PRAGMA foreign_keys = ON"))

@@ -93,13 +93,7 @@ class PostgresSystemDatabase(SystemDatabase):
         return engine
 
     def run_migrations(self, fail_on_lock_timeout: bool = False) -> None:
-        """Run PostgreSQL-specific migrations.
-
-        If `fail_on_lock_timeout` is True, failing to acquire the migration
-        advisory lock within MIGRATION_LOCK_TIMEOUT_SEC raises instead of
-        proceeding without it -- see DBOS.migrate, which sets this so an
-        explicit migration call fails loudly rather than silently racing
-        another migration in progress elsewhere."""
+        """Run PostgreSQL-specific migrations."""
         system_db_url = self.engine.url
         sysdb_name = str(system_db_url.database)
         # Unless we were provided an engine, if the system database does not already exist, create it
@@ -136,10 +130,8 @@ class PostgresSystemDatabase(SystemDatabase):
         if not should_migrate(self.engine, self.schema, self.use_listen_notify):
             return
 
-        # Use an advisory lock to serialize concurrent migrations.
-        # Try to acquire the lock for up to MIGRATION_LOCK_TIMEOUT_SEC. If we
-        # can't, log a warning and proceed to run migrations without it,
-        # rather than hanging startup indefinitely -- unless fail_on_lock_timeout.
+        # Serialize concurrent migrations with an advisory lock. On timeout, raise
+        # if fail_on_lock_timeout, otherwise warn and proceed without the lock.
         locked = False
         # Use AUTOCOMMIT so the lock connection does not sit idle-in-transaction
         # while migrations run. Session-level advisory locks are independent of

@@ -71,11 +71,7 @@ def test_systemdb_migration(
 def test_migrate_fails_on_lock_timeout(
     dbos_dropped_databases: DBOS, skip_with_sqlite: None, skip_with_sharding: None
 ) -> None:
-    """DBOS.migrate() is an explicit, on-demand call (e.g. from an Alembic
-    env.py), unlike DBOS.launch()'s own startup migration -- so it should
-    fail loudly if another process holds the migration advisory lock,
-    rather than silently proceeding without it and risking two migrations
-    running at once."""
+    """DBOS.migrate() raises instead of migrating without the lock."""
     from unittest.mock import patch
 
     from dbos._sys_db_postgres import MIGRATION_LOCK_ID
