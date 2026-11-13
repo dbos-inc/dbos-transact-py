@@ -453,12 +453,26 @@ def test_rewind_onto_a_queue_with_a_partition_key(dbos: DBOS) -> None:
     assert status.queue_name == "rewind_partitioned"
     assert status.queue_partition_key == "repaired"
 
-    # Omitting the key clears it, omitting the queue falls back to the internal queue
+    # Omitting the queue keeps the queue and partition key
     dbos._sys_db.rewind_workflow(workflow_id, 1)
     assert DBOS.retrieve_workflow(workflow_id).get_result() == 3
     status = DBOS.retrieve_workflow(workflow_id).get_status()
+    assert status.queue_name == "rewind_partitioned"
+    assert status.queue_partition_key == "repaired"
+
+    # A key alone moves the workflow to that partition of the same queue
+    dbos._sys_db.rewind_workflow(workflow_id, 1, queue_partition_key="moved")
+    assert DBOS.retrieve_workflow(workflow_id).get_result() == 4
+    status = DBOS.retrieve_workflow(workflow_id).get_status()
+    assert status.queue_name == "rewind_partitioned"
+    assert status.queue_partition_key == "moved"
+
+    # Naming a queue without a key changes only the queue
+    dbos._sys_db.rewind_workflow(workflow_id, 1, queue_name=INTERNAL_QUEUE_NAME)
+    assert DBOS.retrieve_workflow(workflow_id).get_result() == 5
+    status = DBOS.retrieve_workflow(workflow_id).get_status()
     assert status.queue_name == INTERNAL_QUEUE_NAME
-    assert status.queue_partition_key is None
+    assert status.queue_partition_key == "moved"
 
 
 def test_rewind_onto_a_different_application_version(dbos: DBOS) -> None:
