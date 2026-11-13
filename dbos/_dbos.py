@@ -843,7 +843,15 @@ class DBOS:
         """Create or migrate the system database with a privileged role, optionally
         granting application_role access to the system schema.
 
-        Cannot be called from a workflow body; call it from a step instead."""
+        Cannot be called from a workflow body; call it from a step instead.
+
+        Raises if the migration advisory lock can't be acquired within the
+        timeout, rather than proceeding without it -- unlike DBOS.launch()'s
+        own startup migration, which still falls back to running without the
+        lock so a slow lock-holder doesn't fail an app's startup outright.
+        An explicit migrate() call (e.g. from an Alembic env.py or a CI job)
+        has no such constraint, so failing loudly is the safer default: it
+        surfaces lock contention instead of risking two migrations racing."""
         # Migration is a database side effect, so it belongs in a step, not a workflow body.
         ctx = get_local_dbos_context()
         if ctx is not None and ctx.is_workflow():
@@ -865,7 +873,7 @@ class DBOS:
             sharding=sharding,
         )
         try:
-            sys_db.run_migrations()
+            sys_db.run_migrations(fail_on_lock_timeout=True)
         finally:
             sys_db.destroy()
         if not application_role:

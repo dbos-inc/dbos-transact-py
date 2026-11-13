@@ -17,7 +17,7 @@ from dbos._migration import (
 )
 
 from ._datasource_migration import DATASOURCE_MIGRATIONS_TABLE
-from ._error import DBOSException
+from ._error import DBOSException, DBOSInitializationError
 from ._logger import dbos_logger
 from ._sys_db import (
     SystemDatabase,
@@ -31,6 +31,10 @@ from ._utils import quote_identifier
 
 # How long a background job's lock may sit idle before Postgres ends its holder's session.
 BACKGROUND_JOB_LOCK_IDLE_TIMEOUT_MS = 5000
+
+# Serializes concurrent system database migrations.
+MIGRATION_LOCK_ID = 1234567890
+MIGRATION_LOCK_TIMEOUT_SEC = 30
 
 
 def unprepared_scalar(c: sa.Connection, statement: str) -> Any:
@@ -88,8 +92,14 @@ class PostgresSystemDatabase(SystemDatabase):
             )
         return engine
 
-    def run_migrations(self) -> None:
-        """Run PostgreSQL-specific migrations."""
+    def run_migrations(self, fail_on_lock_timeout: bool = False) -> None:
+        """Run PostgreSQL-specific migrations.
+
+        If `fail_on_lock_timeout` is True, failing to acquire the migration
+        advisory lock within MIGRATION_LOCK_TIMEOUT_SEC raises instead of
+        proceeding without it -- see DBOS.migrate, which sets this so an
+        explicit migration call fails loudly rather than silently racing
+        another migration in progress elsewhere."""
         system_db_url = self.engine.url
         sysdb_name = str(system_db_url.database)
         # Unless we were provided an engine, if the system database does not already exist, create it
@@ -127,11 +137,9 @@ class PostgresSystemDatabase(SystemDatabase):
             return
 
         # Use an advisory lock to serialize concurrent migrations.
-        # Try to acquire the lock for up to 30 seconds. If we can't, log a
-        # warning and proceed to run migrations without it, rather than
-        # hanging startup indefinitely.
-        MIGRATION_LOCK_ID = 1234567890
-        MIGRATION_LOCK_TIMEOUT_SEC = 30
+        # Try to acquire the lock for up to MIGRATION_LOCK_TIMEOUT_SEC. If we
+        # can't, log a warning and proceed to run migrations without it,
+        # rather than hanging startup indefinitely -- unless fail_on_lock_timeout.
         locked = False
         # Use AUTOCOMMIT so the lock connection does not sit idle-in-transaction
         # while migrations run. Session-level advisory locks are independent of
@@ -150,6 +158,12 @@ class PostgresSystemDatabase(SystemDatabase):
                         locked = True
                         break
                     if time.monotonic() >= deadline:
+                        if fail_on_lock_timeout:
+                            raise DBOSInitializationError(
+                                f"Could not acquire migration advisory lock within "
+                                f"{MIGRATION_LOCK_TIMEOUT_SEC}s. Another process may be "
+                                f"migrating the system database; retry once it finishes."
+                            )
                         dbos_logger.warning(
                             f"Could not acquire migration advisory lock within {MIGRATION_LOCK_TIMEOUT_SEC}s. "
                             f"Attempting migrations without lock."
