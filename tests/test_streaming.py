@@ -2203,11 +2203,11 @@ def test_read_stream_notices_cancellation(dbos: DBOS) -> None:
         writer_handle.get_result()
 
 
-def test_client_read_stream_from_workflow_is_not_checkpointed(
+def test_client_read_stream_from_workflow_is_checkpointed(
     dbos: DBOS, client: DBOSClient
 ) -> None:
-    """A client reads through its own system database, which knows nothing of the workflow that
-    happens to be calling, so a client read from inside a workflow records no steps."""
+    """A client reads through its own system database, but a read from inside a workflow is
+    recorded as that workflow's steps, like any other read from a workflow."""
     stream_key = "client_in_workflow_stream"
 
     @DBOS.workflow()
@@ -2226,7 +2226,9 @@ def test_client_read_stream_from_workflow_is_not_checkpointed(
     reader_id = str(uuid.uuid4())
     with SetWorkflowID(reader_id):
         assert reader_workflow(wfid) == ["v0"]
-    assert DBOS.list_workflow_steps(reader_id) == []
+    # One step for the value and one for the end of the stream.
+    steps = DBOS.list_workflow_steps(reader_id)
+    assert [s["function_name"] for s in steps] == ["DBOSClient.readStream"] * 2
 
 
 def test_stream_write_to_deleted_workflow_raises(dbos: DBOS) -> None:

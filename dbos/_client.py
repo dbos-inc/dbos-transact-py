@@ -106,6 +106,7 @@ T = TypeVar("T")
 F = TypeVar("F", bound=Callable[..., Any])
 
 _ENQUEUE_STEP = "DBOSClient.enqueue"
+_READ_STREAM_STEP = "DBOSClient.readStream"
 
 
 def _retried_in_workflow(sys_db: SystemDatabase, fn: Callable[[], T]) -> T:
@@ -1885,6 +1886,10 @@ class DBOSClient:
         Yields:
             The values written to the stream in order
         """
+        ctx = get_local_dbos_context()
+        if ctx is not None and ctx.is_workflow():
+            # An async workflow's body runs on the event loop every other coroutine shares.
+            check_async("read_stream")
         yield from read_stream(
             self._sys_db,
             workflow_id,
@@ -1893,7 +1898,7 @@ class DBOSClient:
             polling_interval=polling_interval_sec,
             timeout_seconds=timeout_seconds,
             shard_key=shard_key,
-            checkpoint=False,
+            function_name=_READ_STREAM_STEP,
         )
 
     async def read_stream_async(
@@ -1930,7 +1935,7 @@ class DBOSClient:
             polling_interval=polling_interval_sec,
             timeout_seconds=timeout_seconds,
             shard_key=shard_key,
-            checkpoint=False,
+            function_name=_READ_STREAM_STEP,
         )
         try:
             async for value in values:

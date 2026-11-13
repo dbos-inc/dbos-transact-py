@@ -2311,6 +2311,79 @@ def test_client_check_connection_and_load_are_refused_in_a_workflow(
     assert storage.loaded == 2
 
 
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_client_read_stream_is_checkpointed_in_a_workflow(
+    dbos: DBOS, client: DBOSClient, mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reads = 0
+    read_stream_values = client._sys_db.read_stream_values
+
+    def counting_read_stream_values(*args: Any) -> Any:
+        nonlocal reads
+        reads += 1
+        return read_stream_values(*args)
+
+    def record_on_the_client(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("a stream read is recorded to the workflow's database")
+
+    monkeypatch.setattr(
+        client._sys_db, "read_stream_values", counting_read_stream_values
+    )
+    monkeypatch.setattr(client._sys_db, "record_operation_result", record_on_the_client)
+    monkeypatch.setattr(
+        client._sys_db, "check_operation_execution", record_on_the_client
+    )
+
+    @DBOS.workflow()
+    def writing_workflow() -> None:
+        DBOS.write_stream("stream", "first")
+        DBOS.write_stream("stream", "second")
+        DBOS.close_stream("stream")
+
+    @DBOS.step()
+    def reading_step(target: str) -> List[str]:
+        return list(client.read_stream(target, "stream"))
+
+    @DBOS.workflow()
+    def reading_workflow(target: str) -> List[str]:
+        values = list(client.read_stream(target, "stream"))
+        assert reading_step(target) == values
+        return values
+
+    @DBOS.workflow()
+    async def reading_workflow_async(target: str) -> List[str]:
+        # The blocking read is refused on the event loop, before it takes a step ID.
+        with pytest.raises(RuntimeError, match=r"read_stream\(\) was called"):
+            next(client.read_stream(target, "stream"))
+        values = [v async for v in client.read_stream_async(target, "stream")]
+        assert await asyncio.to_thread(reading_step, target) == values
+        return values
+
+    target = DBOS.start_workflow(writing_workflow)
+    target.get_result()
+
+    workflow = reading_workflow if mode == "sync" else reading_workflow_async
+    handle = DBOS.start_workflow(workflow, target.workflow_id)
+    assert handle.get_result() == ["first", "second"]
+
+    # One step per value read from the workflow body, and one for the end of the
+    # stream; the read from inside a step records nothing of its own.
+    steps = DBOS.list_workflow_steps(handle.workflow_id)
+    assert [(s["function_id"], s["function_name"]) for s in steps] == [
+        (1, "DBOSClient.readStream"),
+        (2, "DBOSClient.readStream"),
+        (3, "DBOSClient.readStream"),
+        (4, reading_step.__qualname__),
+    ]
+    assert [s["output"] for s in steps[:2]] == ["first", "second"]
+
+    # A replay yields the recorded values instead of reading the stream again.
+    reads_before_replay = reads
+    forked = DBOS.fork_workflow(handle.workflow_id, 5)
+    assert forked.get_result() == ["first", "second"]
+    assert reads == reads_before_replay
+
+
 @pytest.mark.asyncio
 async def test_client_method_without_async_variant_is_refused_on_an_event_loop(
     dbos: DBOS, client: DBOSClient
