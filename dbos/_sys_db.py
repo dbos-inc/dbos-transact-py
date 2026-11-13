@@ -1486,7 +1486,7 @@ class SystemDatabase(ABC):
     def dead_letter_workflows(
         self, workflow_ids: List[str], *, min_recovery_attempts: int
     ) -> None:
-        """Move claimed workflows that exhausted their attempts off the queue.
+        """Dead-letter claimed workflows that exhausted their attempts, keeping their queue.
 
         Guarded on PENDING like every other claim-owning write, and on the attempt
         count the decision was read from: a row someone else has already moved on,
@@ -1512,7 +1512,6 @@ class SystemDatabase(ABC):
                     owner_xid=None,
                     deduplication_id=None,
                     started_at_epoch_ms=None,
-                    queue_name=None,
                     updated_at=now_ms,
                     completed_at=now_ms,
                 )
@@ -1708,8 +1707,8 @@ class SystemDatabase(ABC):
         def _cancel_workflows(ids: list[str]) -> None:
             with self.engine.begin() as c:
                 now_ms = self._now_ms_sql()
-                # Set the workflows' status to CANCELLED and remove them from any
-                # queue, but only if the workflow is not already complete.
+                # Set the workflows' status to CANCELLED, keeping their queue for a
+                # later resume, but only if the workflow is not already complete.
                 c.execute(
                     sa.update(self.tables.workflow_status)
                     .where(*self._wf_in(self.tables.workflow_status, ids))
@@ -1724,7 +1723,6 @@ class SystemDatabase(ABC):
                     .values(
                         status=WorkflowStatusString.CANCELLED.value,
                         owner_xid=None,
-                        queue_name=None,
                         deduplication_id=None,
                         suspend_key=None,
                         started_at_epoch_ms=None,
@@ -1752,6 +1750,7 @@ class SystemDatabase(ABC):
         workflow_ids: list[str],
         *,
         queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
     ) -> None:
         with self.engine.begin() as c:
             # Check existence separately: a zero-row update also means "already complete", a legal no-op.
@@ -1781,9 +1780,7 @@ class SystemDatabase(ABC):
                 .values(
                     status=WorkflowStatusString.ENQUEUED.value,
                     owner_xid=None,
-                    queue_name=(
-                        queue_name if queue_name is not None else INTERNAL_QUEUE_NAME
-                    ),
+                    **self._requeue_values(queue_name, queue_partition_key),
                     recovery_attempts=0,
                     workflow_deadline_epoch_ms=None,
                     deduplication_id=None,
@@ -1793,6 +1790,24 @@ class SystemDatabase(ABC):
                     completed_at=None,
                 )
             )
+
+    def _requeue_values(
+        self, queue_name: Optional[str], queue_partition_key: Optional[str]
+    ) -> Dict[str, Any]:
+        """Queue columns for a re-enqueue: only what is passed changes; otherwise the row
+        keeps its queue (the internal one if it has none), partition key, and priority.
+        """
+        ws = self.tables.workflow_status
+        values: Dict[str, Any] = dict(
+            queue_name=(
+                queue_name
+                if queue_name is not None
+                else sa.func.coalesce(ws.c.queue_name, INTERNAL_QUEUE_NAME)
+            )
+        )
+        if queue_partition_key is not None:
+            values["queue_partition_key"] = queue_partition_key
+        return values
 
     @db_retry()
     def set_workflow_delay(
@@ -2207,10 +2222,7 @@ class SystemDatabase(ABC):
                     status=WorkflowStatusString.ENQUEUED.value,
                     owner_xid=None,
                     **version_update,
-                    queue_name=(
-                        queue_name if queue_name is not None else INTERNAL_QUEUE_NAME
-                    ),
-                    queue_partition_key=queue_partition_key,
+                    **self._requeue_values(queue_name, queue_partition_key),
                     recovery_attempts=0,
                     workflow_deadline_epoch_ms=None,
                     deduplication_id=None,
@@ -2227,6 +2239,21 @@ class SystemDatabase(ABC):
                     f"Workflow {workflow_id} changed status while being rewound; "
                     "retry the rewind"
                 )
+
+    @staticmethod
+    def _fork_queue_values(
+        status: Any, queue_name: Optional[str], queue_partition_key: Optional[str]
+    ) -> Dict[str, Any]:
+        """A fork's queue columns: inherited from its original, except what is passed."""
+        if queue_name is None:
+            queue_name = status[12] if status[12] is not None else INTERNAL_QUEUE_NAME
+        return dict(
+            queue_name=queue_name,
+            queue_partition_key=(
+                queue_partition_key if queue_partition_key is not None else status[13]
+            ),
+            priority=status[14],
+        )
 
     def fork_workflow(
         self,
@@ -2268,6 +2295,9 @@ class SystemDatabase(ABC):
                     self.tables.workflow_status.c.serialization,
                     self.tables.workflow_status.c.attributes,
                     self.tables.workflow_status.c.application_name,
+                    self.tables.workflow_status.c.queue_name,
+                    self.tables.workflow_status.c.queue_partition_key,
+                    self.tables.workflow_status.c.priority,
                 )
                 .select_from(
                     self.tables.workflow_status.outerjoin(
@@ -2307,12 +2337,9 @@ class SystemDatabase(ABC):
                         authenticated_user=status[5],
                         authenticated_roles=status[6],
                         serialization=status[9],
-                        queue_name=(
-                            queue_name
-                            if queue_name is not None
-                            else INTERNAL_QUEUE_NAME
+                        **self._fork_queue_values(
+                            status, queue_name, queue_partition_key
                         ),
-                        queue_partition_key=queue_partition_key,
                         assumed_role=status[7],
                         forked_from=original_workflow_id,
                         attributes=status[10],
@@ -5011,7 +5038,6 @@ class SystemDatabase(ABC):
                 .values(
                     status=WorkflowStatusString.CANCELLED.value,
                     owner_xid=None,
-                    queue_name=None,
                     deduplication_id=None,
                     suspend_key=None,
                     started_at_epoch_ms=None,

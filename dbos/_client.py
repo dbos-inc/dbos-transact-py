@@ -1313,12 +1313,14 @@ class DBOSClient:
         workflow_id: str,
         *,
         queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
         shard_key: Optional[str] = None,
     ) -> "WorkflowHandle[Any]":
         with bind_shard_keys({workflow_id: shard_key}):
             self._sys_db.resume_workflows(
                 [workflow_id],
                 queue_name=queue_name,
+                queue_partition_key=queue_partition_key,
             )
             return WorkflowHandleClientPolling[Any](
                 workflow_id, self._sys_db, shard_key=shard_key
@@ -1330,6 +1332,7 @@ class DBOSClient:
         workflow_id: str,
         *,
         queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
         shard_key: Optional[str] = None,
     ) -> "WorkflowHandleAsync[Any]":
         with bind_shard_keys({workflow_id: shard_key}):
@@ -1337,6 +1340,7 @@ class DBOSClient:
                 self.resume_workflow,
                 workflow_id,
                 queue_name=queue_name,
+                queue_partition_key=queue_partition_key,
             )
             return WorkflowHandleClientAsyncPolling[Any](
                 workflow_id, self._sys_db, shard_key=shard_key
@@ -1348,12 +1352,14 @@ class DBOSClient:
         workflow_ids: List[str],
         *,
         queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
         shard_key: Optional[str] = None,
     ) -> "List[WorkflowHandle[Any]]":
         with bind_shard_keys({wid: shard_key for wid in workflow_ids}):
             self._sys_db.resume_workflows(
                 workflow_ids,
                 queue_name=queue_name,
+                queue_partition_key=queue_partition_key,
             )
             return [
                 WorkflowHandleClientPolling[Any](
@@ -1368,6 +1374,7 @@ class DBOSClient:
         workflow_ids: List[str],
         *,
         queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
         shard_key: Optional[str] = None,
     ) -> "List[WorkflowHandleAsync[Any]]":
         with bind_shard_keys({wid: shard_key for wid in workflow_ids}):
@@ -1375,6 +1382,7 @@ class DBOSClient:
                 self._sys_db.resume_workflows,
                 workflow_ids,
                 queue_name=queue_name,
+                queue_partition_key=queue_partition_key,
             )
             return [
                 WorkflowHandleClientAsyncPolling[Any](

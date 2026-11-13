@@ -2703,8 +2703,9 @@ def test_timeout_sweep_cancels_unowned_workflows(dbos: DBOS) -> None:
     current = rows()
     assert current[other_app_id][1] == "PENDING"
     assert current[unexpired_id][1] == "PENDING"
-    # Cancelling takes a workflow off its queue.
-    assert current[enqueued_id][2] is None and current[delayed_id][2] is None
+    # Cancelling keeps a workflow's queue for a later resume.
+    assert current[enqueued_id][2] == "unpolled-queue"
+    assert current[delayed_id][2] == "unpolled-queue"
     dbos._sys_db.cancel_timed_out_workflows = real_sweep  # type: ignore[method-assign]
 
 
