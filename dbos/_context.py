@@ -345,15 +345,21 @@ class DBOSContext:
         self,
         fid: int,
         attributes: TracedAttributes,
+        *,
+        traced: bool = True,
     ) -> None:
         self.curr_step_function_id = fid
         self.step_status = StepStatus(fid, None, None)
-        self._start_span(attributes)
+        if traced:
+            self._start_span(attributes)
 
-    def end_step(self, exc_value: Optional[BaseException]) -> None:
+    def end_step(
+        self, exc_value: Optional[BaseException], *, traced: bool = True
+    ) -> None:
         self.curr_step_function_id = -1
         self.step_status = None
-        self._end_span(exc_value)
+        if traced:
+            self._end_span(exc_value)
 
     def start_sync_ds_transaction(self, ses: Session) -> None:
         self.sync_ds_session = ses
@@ -447,6 +453,16 @@ def _clear_local_dbos_context() -> None:
 
 def get_local_dbos_context() -> Optional[DBOSContext]:
     return _dbos_context_var.get()
+
+
+def refuse_in_workflow_body(method: str) -> None:
+    """Raise if called from a workflow body, for an operation that belongs in a step:
+    a side effect on shared state, or I/O a replay would repeat."""
+    ctx = get_local_dbos_context()
+    if ctx is not None and ctx.is_workflow():
+        raise DBOSException(
+            f"{method} cannot be called from a workflow; call it from a step"
+        )
 
 
 _workflow_start_options_var: ContextVar[WorkflowStartOptions] = ContextVar(
@@ -1024,8 +1040,12 @@ class EnterDBOSWorkflow(AbstractContextManager[DBOSContext, Literal[False]]):
 
 
 class EnterDBOSStepCtx:
-    def __init__(self, attributes: TracedAttributes, ctx: DBOSContext) -> None:
+    def __init__(
+        self, attributes: TracedAttributes, ctx: DBOSContext, *, traced: bool = True
+    ) -> None:
         self.attributes = attributes
+        # False for DBOS's own operations run as steps, which open no span of their own.
+        self.traced = traced
         self.prev_ctx: Optional[DBOSContext] = None
         self.use_ctx = ctx
         self.auth_token: Optional[Token[Optional[_AuthScope]]] = None
@@ -1044,7 +1064,9 @@ class EnterDBOSStepCtx:
         # The workflow's Set* options apply to the workflows it starts, not to its steps.
         self.saved_start_options = _workflow_start_options_var.get()
         self.start_options_token = _workflow_start_options_var.set(_NO_START_OPTIONS)
-        self.use_ctx.start_step(self.use_ctx.function_id, attributes=self.attributes)
+        self.use_ctx.start_step(
+            self.use_ctx.function_id, attributes=self.attributes, traced=self.traced
+        )
         return self.use_ctx
 
     def __exit__(
@@ -1055,7 +1077,7 @@ class EnterDBOSStepCtx:
     ) -> Literal[False]:
         ctx = assert_current_dbos_context()
         assert ctx.is_step()
-        ctx.end_step(exc_value)
+        ctx.end_step(exc_value, traced=self.traced)
         _set_local_dbos_context(self.prev_ctx)
         _reset_context_var(_auth_scope_var, self.auth_token, self.saved_auth)
         _reset_context_var(

@@ -48,8 +48,12 @@ from dbos._serialization import (
     serialize_value,
 )
 from dbos._sys_db import SystemDatabase, WorkflowStatus
-from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, generate_uuid
-from dbos._workflow_commands import fork_workflow, rewind_workflow
+from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, check_async, generate_uuid
+from dbos._workflow_commands import (
+    fork_workflow,
+    rewind_workflow,
+    take_fork_workflow_id,
+)
 
 from ._classproperty import classproperty
 from ._core import (
@@ -145,6 +149,7 @@ from ._context import (
     get_authentication,
     get_local_dbos_context,
     get_workflow_start_options,
+    refuse_in_workflow_body,
     set_current_authentication,
     snapshot_step_context,
 )
@@ -275,18 +280,6 @@ def _retried_as_step(
     if step_ctx is not None and step_ctx.is_workflow():
         return db_retry(sys_db=sys_db)(fn)
     return fn
-
-
-def check_async(fn: str) -> None:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        pass
-    else:
-        raise RuntimeError(
-            f"{fn}() was called while an event loop is running. "
-            f"Use await {fn}_async(...) instead."
-        )
 
 
 RegisteredJob = Tuple[
@@ -846,11 +839,7 @@ class DBOS:
         Cannot be called from a workflow body; call it from a step instead.
         Raises if the migration lock can't be acquired within the timeout."""
         # Migration is a database side effect, so it belongs in a step, not a workflow body.
-        ctx = get_local_dbos_context()
-        if ctx is not None and ctx.is_workflow():
-            raise DBOSException(
-                "DBOS.migrate cannot be called from a workflow; call it from a step"
-            )
+        refuse_in_workflow_body("DBOS.migrate")
         is_sqlite = system_database_url.startswith("sqlite")
         if is_sqlite and application_role:
             raise DBOSException(
@@ -3313,6 +3302,7 @@ class DBOS:
         """Restart a workflow with a new workflow ID from a specific step"""
         with bind_shard_keys({workflow_id: shard_key}):
             check_async("fork_workflow")
+            forked_workflow_id = take_fork_workflow_id()
 
             def fn() -> str:
                 dbos_logger.info(
@@ -3327,6 +3317,7 @@ class DBOS:
                     queue_partition_key=queue_partition_key,
                     replacement_children=replacement_children,
                     timeout_seconds=timeout_seconds,
+                    forked_workflow_id=forked_workflow_id,
                 )
 
             new_id = _get_dbos_instance()._sys_db.call_function_as_step(
@@ -3353,6 +3344,7 @@ class DBOS:
         with bind_shard_keys({workflow_id: shard_key}):
             step_ctx_res = snapshot_step_context(reserve_sleep_id=False)
             step_ctx_ret = snapshot_step_context(reserve_sleep_id=False)
+            forked_workflow_id = take_fork_workflow_id()
             await cls._configure_asyncio_thread_pool()
 
             def fn() -> str:
@@ -3368,6 +3360,7 @@ class DBOS:
                     queue_partition_key=queue_partition_key,
                     replacement_children=replacement_children,
                     timeout_seconds=timeout_seconds,
+                    forked_workflow_id=forked_workflow_id,
                 )
 
             new_id = await asyncio.to_thread(
@@ -4059,10 +4052,20 @@ class DBOS:
     @classmethod
     def pause_schedule(cls, name: str) -> None:
         """Pause the schedule with the given name. A paused schedule does not fire."""
+        cls._pause_schedule(snapshot_step_context(reserve_sleep_id=False), name)
+
+    @classmethod
+    async def pause_schedule_async(cls, name: str) -> None:
+        """Async version of :meth:`pause_schedule`."""
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(cls._pause_schedule, step_ctx, name)
+
+    @classmethod
+    def _pause_schedule(cls, step_ctx: Optional[DBOSContext], name: str) -> None:
         dbos = _get_dbos_instance()
-        ctx = snapshot_step_context(reserve_sleep_id=False)
-        if ctx and ctx.is_workflow():
-            with EnterDBOSStepCtx({"name": "pauseSchedule"}, ctx) as step:
+        if step_ctx and step_ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "pauseSchedule"}, step_ctx) as step:
                 dbos._sys_db.call_txn_as_step(
                     step.workflow_id,
                     step.curr_step_function_id,
@@ -4075,10 +4078,20 @@ class DBOS:
     @classmethod
     def resume_schedule(cls, name: str) -> None:
         """Resume a paused schedule so it begins firing again."""
+        cls._resume_schedule(snapshot_step_context(reserve_sleep_id=False), name)
+
+    @classmethod
+    async def resume_schedule_async(cls, name: str) -> None:
+        """Async version of :meth:`resume_schedule`."""
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
+        await cls._configure_asyncio_thread_pool()
+        await asyncio.to_thread(cls._resume_schedule, step_ctx, name)
+
+    @classmethod
+    def _resume_schedule(cls, step_ctx: Optional[DBOSContext], name: str) -> None:
         dbos = _get_dbos_instance()
-        ctx = snapshot_step_context(reserve_sleep_id=False)
-        if ctx and ctx.is_workflow():
-            with EnterDBOSStepCtx({"name": "resumeSchedule"}, ctx) as step:
+        if step_ctx and step_ctx.is_workflow():
+            with EnterDBOSStepCtx({"name": "resumeSchedule"}, step_ctx) as step:
                 dbos._sys_db.call_txn_as_step(
                     step.workflow_id,
                     step.curr_step_function_id,
@@ -4298,17 +4311,42 @@ class DBOS:
             caller's. Version names are global, so promoting one registered by
             a different application raises.
         """
-        # Promotion is a side effect on shared state, so it belongs in a step, not a workflow body.
-        ctx = get_local_dbos_context()
-        if ctx is not None and ctx.is_workflow():
-            raise DBOSException(
-                "DBOS.set_latest_application_version cannot be called from a workflow; call it from a step"
-            )
-        dbos = _get_dbos_instance()
-        new_timestamp = int(time.time() * 1000)
-        dbos._sys_db.update_application_version_timestamp(
-            version_name, new_timestamp, application_name=application_name
+        cls._set_latest_application_version(
+            snapshot_step_context(reserve_sleep_id=False),
+            version_name,
+            application_name,
         )
+
+    @classmethod
+    def _set_latest_application_version(
+        cls,
+        step_ctx: Optional[DBOSContext],
+        version_name: str,
+        application_name: Optional[str],
+    ) -> None:
+        dbos = _get_dbos_instance()
+
+        def promote(c: Optional[sa.Connection] = None) -> None:
+            dbos._sys_db.update_application_version_timestamp(
+                version_name,
+                int(time.time() * 1000),
+                application_name=application_name,
+                conn=c,
+            )
+
+        if step_ctx and step_ctx.is_workflow():
+            # The promotion commits atomically with its checkpoint, so a replay does not promote again.
+            with EnterDBOSStepCtx(
+                {"name": "setLatestApplicationVersion"}, step_ctx
+            ) as step:
+                dbos._sys_db.call_txn_as_step(
+                    step.workflow_id,
+                    step.curr_step_function_id,
+                    "DBOS.setLatestApplicationVersion",
+                    promote,
+                )
+        else:
+            promote()
 
     @classmethod
     async def list_application_versions_async(cls) -> List[VersionInfo]:
@@ -4329,16 +4367,13 @@ class DBOS:
         cls, version_name: str, *, application_name: Optional[str] = None
     ) -> None:
         """Async version of :meth:`set_latest_application_version`."""
-        ctx = get_local_dbos_context()
-        if ctx is not None and ctx.is_workflow():
-            raise DBOSException(
-                "DBOS.set_latest_application_version_async cannot be called from a workflow; call it from a step"
-            )
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
         await asyncio.to_thread(
-            lambda: cls.set_latest_application_version(
-                version_name, application_name=application_name
-            )
+            cls._set_latest_application_version,
+            step_ctx,
+            version_name,
+            application_name,
         )
 
     @classproperty
