@@ -339,6 +339,53 @@ class ShouldRetryRetryableError(Exception):
     pass
 
 
+def test_step_backoff_past_float_range_keeps_retrying(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The delay reaches the one-hour cap after about a dozen attempts, but
+    # backoff_rate**attempt still grows: at attempt 1024 with a rate of 2.0
+    # it passes the largest float. The step must keep retrying at the cap
+    # and end with DBOSMaxStepRetriesExceeded, not OverflowError.
+    max_attempts = 1030
+    sleeps: list[float] = []
+    monkeypatch.setattr("dbos._outcome.time.sleep", sleeps.append)
+
+    async def no_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("dbos._outcome.asyncio.sleep", no_sleep)
+    calls = 0
+
+    @DBOS.step(retries_allowed=True, max_attempts=max_attempts, backoff_rate=2.0)
+    def flaky() -> None:
+        nonlocal calls
+        calls += 1
+        raise ValueError("still down")
+
+    @DBOS.step(retries_allowed=True, max_attempts=max_attempts, backoff_rate=2.0)
+    async def flaky_async() -> None:
+        nonlocal calls
+        calls += 1
+        raise ValueError("still down")
+
+    @DBOS.workflow()
+    def wf() -> None:
+        flaky()
+
+    @DBOS.workflow()
+    async def wf_async() -> None:
+        await flaky_async()
+
+    with pytest.raises(DBOSMaxStepRetriesExceeded):
+        wf()
+    assert calls == max_attempts and max(sleeps) == 3600
+
+    calls, sleeps[:] = 0, []
+    with pytest.raises(DBOSMaxStepRetriesExceeded):
+        asyncio.run(wf_async())
+    assert calls == max_attempts and max(sleeps) == 3600
+
+
 def test_step_should_retry(dbos: DBOS) -> None:
     # A step that fails with a non-retryable exception should bail out on the
     # first failure instead of exhausting retries.
