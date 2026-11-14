@@ -160,7 +160,7 @@ from ._dbos_config import (
     process_config,
     translate_dbos_config_to_config_file,
 )
-from ._enterprise import AlertHandler, ConductorThread, ExternalStorage
+from ._enterprise import AlertHandler, Archiver, ConductorThread, ExternalStorage
 from ._error import (
     DBOSException,
     DBOSExternalStoreNotConfiguredError,
@@ -183,6 +183,7 @@ from ._logger import (
     teardown_logger,
 )
 from ._shard_keys import bind_shard_keys
+from ._workflow_archive import WorkflowArchive, import_archived_workflow
 from ._workflow_commands import (
     BACKGROUND_JOBS_THREAD_NAME,
     BackgroundLease,
@@ -745,6 +746,10 @@ class DBOS:
             config.get("external_stores")
         )
         self._external_storage_field: Optional[ExternalStorage] = None
+        self._workflow_archive: Optional[WorkflowArchive] = config.get(
+            "workflow_archive"
+        )
+        self._archiver: Optional[Archiver] = None
         self._conductor_executor_metadata: Optional[Dict[str, Any]] = config.get(
             "conductor_executor_metadata"
         )
@@ -952,6 +957,12 @@ class DBOS:
                 self._sys_db.suspend = _enterprise.load(
                     _enterprise.SUSPEND.description
                 ).Suspend(self._sys_db)
+            if self._workflow_archive is not None:
+                # Before any workflow runs, so every terminal transition is queued for archiving.
+                self._sys_db.archive_completions = True
+                self._archiver = _enterprise.load(
+                    _enterprise.WORKFLOW_ARCHIVE.description
+                ).Archiver(self, self._workflow_archive)
 
             # Run migrations for the system database
             if self._config.get("run_migrations", True):
@@ -1046,6 +1057,10 @@ class DBOS:
             )
             jobs_thread.start()
             self._background_threads.append(jobs_thread)
+
+            if self._archiver is not None:
+                dbos_logger.debug("Starting workflow archiver")
+                self._archiver.start()
 
             # Start the conductor thread if requested
             if GlobalParams.dbos_cloud:
@@ -1252,6 +1267,10 @@ class DBOS:
                 else:
                     break
         self._background_jobs_stop_event.set()
+        # Flushes what it has buffered while the system database is still connected.
+        if self._archiver is not None:
+            self._archiver.stop()
+            self._archiver = None
         # The upgrader unlocks its per-application advisory lock before the system database engine is disposed.
         if self.auto_upgrader is not None:
             self.auto_upgrader.stop()
@@ -3387,6 +3406,76 @@ class DBOS:
             return WorkflowHandleAsyncPolling(
                 new_id, _get_dbos_instance(), shard_key=fork_key
             )
+
+    @classmethod
+    def import_archived_workflow(
+        cls, workflow_id: str, completed_at: int
+    ) -> WorkflowHandle[Any]:
+        """Copy one archived snapshot of a workflow back into the system database.
+
+        Args:
+            workflow_id: The workflow's ID. It must not already be in the system database.
+            completed_at: The snapshot to import, as its WorkflowStatus.completed_at (Unix epoch ms). The imported workflow's completed_at is the import time, so retention keeps it for its usual period from now.
+
+        Returns:
+            A handle to the imported workflow.
+
+        Raises:
+            DBOSWorkflowArchiveNotConfiguredError: If no workflow_archive is configured.
+            DBOSNonExistentWorkflowError: If the archive has no such snapshot.
+            DBOSWorkflowIDInUseError: If the workflow ID is already in the system database.
+        """
+        check_async("import_archived_workflow")
+
+        def fn() -> None:
+            dbos = _get_dbos_instance()
+            dbos_logger.info(f"Importing archived workflow: {workflow_id}")
+            import_archived_workflow(
+                dbos._sys_db, dbos._workflow_archive, workflow_id, completed_at
+            )
+
+        _get_dbos_instance()._sys_db.call_function_as_step(
+            fn,
+            "DBOS.importArchivedWorkflow",
+            snapshot_step_context(reserve_sleep_id=False),
+        )
+        return cls.retrieve_workflow(workflow_id)
+
+    @classmethod
+    async def import_archived_workflow_async(
+        cls, workflow_id: str, completed_at: int
+    ) -> WorkflowHandleAsync[Any]:
+        """Copy one archived snapshot of a workflow back into the system database.
+
+        Args:
+            workflow_id: The workflow's ID. It must not already be in the system database.
+            completed_at: The snapshot to import, as its WorkflowStatus.completed_at (Unix epoch ms). The imported workflow's completed_at is the import time, so retention keeps it for its usual period from now.
+
+        Returns:
+            A handle to the imported workflow.
+
+        Raises:
+            DBOSWorkflowArchiveNotConfiguredError: If no workflow_archive is configured.
+            DBOSNonExistentWorkflowError: If the archive has no such snapshot.
+            DBOSWorkflowIDInUseError: If the workflow ID is already in the system database.
+        """
+        step_ctx = snapshot_step_context(reserve_sleep_id=False)
+        await cls._configure_asyncio_thread_pool()
+
+        def fn() -> None:
+            dbos = _get_dbos_instance()
+            dbos_logger.info(f"Importing archived workflow: {workflow_id}")
+            import_archived_workflow(
+                dbos._sys_db, dbos._workflow_archive, workflow_id, completed_at
+            )
+
+        await asyncio.to_thread(
+            _get_dbos_instance()._sys_db.call_function_as_step,
+            fn,
+            "DBOS.importArchivedWorkflow",
+            step_ctx,
+        )
+        return await cls.retrieve_workflow_async(workflow_id)
 
     @classmethod
     def list_workflows(

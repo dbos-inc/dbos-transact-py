@@ -42,6 +42,7 @@ _ONLINE_MIGRATIONS = {
     127,
     128,
     129,
+    134,
 }
 
 # From this index on, every SDK defines the same migration at the same index.
@@ -1597,6 +1598,17 @@ ALTER TABLE {quoted_schema}."workflow_status"
     return migration
 
 
+def get_dbos_migration_hundredthirtythree(quoted_schema: str) -> str:
+    # Set with completed_at while workflow archiving is configured; cleared once archived.
+    return f"""ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN IF NOT EXISTS "archive_pending" BOOLEAN DEFAULT NULL;"""
+
+
+def get_dbos_migration_hundredthirtyfour(quoted_schema: str, is_cockroach: bool) -> str:
+    # Empty unless archiving is configured; the archiver scans it in completion order.
+    c = _concurrently(is_cockroach)
+    return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_archive_pending" ON {quoted_schema}."workflow_status" ("completed_at", "workflow_uuid") WHERE "archive_pending" IS TRUE'
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -1686,6 +1698,8 @@ def get_dbos_migrations(
         get_dbos_migration_hundredthirty(quoted_schema, is_cockroach),
         get_dbos_migration_hundredthirtyone(quoted_schema),
         get_dbos_migration_hundredthirtytwo(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredthirtythree(quoted_schema),
+        get_dbos_migration_hundredthirtyfour(quoted_schema, is_cockroach),
     ]
 
 
@@ -2163,6 +2177,12 @@ CREATE TABLE IF NOT EXISTS "external_objects" (
 CREATE INDEX IF NOT EXISTS "idx_external_objects_store_created_at" ON "external_objects" ("store_id", "created_at");
 """
 
+sqlite_migration_hundredthirtythree = (
+    """ALTER TABLE workflow_status ADD COLUMN "archive_pending" BOOLEAN DEFAULT NULL;"""
+)
+
+sqlite_migration_hundredthirtyfour = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_archive_pending" ON "workflow_status" ("completed_at", "workflow_uuid") WHERE "archive_pending" IS TRUE'
+
 sqlite_migrations = [
     *_pad_to_shared_base(_sqlite_history),
     sqlite_migration_hundred,
@@ -2200,4 +2220,8 @@ sqlite_migrations = [
     # Postgres migration 130 rewrites a stored function; SQLite has none.
     "",
     sqlite_migration_hundredthirtyone,
+    # Postgres migration 132 rewrites a stored function; SQLite has none.
+    "",
+    sqlite_migration_hundredthirtythree,
+    sqlite_migration_hundredthirtyfour,
 ]

@@ -92,6 +92,7 @@ from dbos._sys_db import (
     WorkflowStatusInternal,
     db_retry,
 )
+from dbos._workflow_archive import WorkflowArchive, import_archived_workflow
 from dbos._workflow_commands import (
     fork_workflow,
     get_workflow,
@@ -341,6 +342,7 @@ class DBOSClient:
         sys_db_idle_transaction_timeout_sec: Optional[float] = None,
         sharding: bool = False,
         external_stores: Optional[Sequence[ExternalStore]] = None,
+        workflow_archive: Optional[WorkflowArchive] = None,
     ):
         """Create a client for interacting with a DBOS application from outside it.
 
@@ -367,6 +369,7 @@ class DBOSClient:
             observability_query_timeout_sec (float): Statement timeout, in seconds, for read-only observability queries against the system database. Defaults to 30.0.
             sys_db_idle_transaction_timeout_sec (float): Postgres idle_in_transaction_session_timeout, in seconds, for the system database connections this client creates. Defaults to 60.0. Set to a non-positive value to leave the server's setting in place. Not applied to a custom system_database_engine.
             external_stores (List[ExternalStore]): The object stores for store_external_object and load_external_object, matching the application's. If there are multiple, store_external_object must specify one with store_id. Requires Transact Enterprise.
+            workflow_archive (WorkflowArchive): The application's workflow archive, if it has one.
 
         Raises:
             Exception: If the system database cannot be reached, unless lazy is True.
@@ -389,6 +392,11 @@ class DBOSClient:
                 )
             assert is_valid_database_url(system_database_url)
         stores = check_external_stores(external_stores)
+        # Refused before connecting, as DBOS refuses it at launch.
+        if sharding and workflow_archive is not None:
+            raise DBOSException(
+                "Workflow archiving is not supported on a sharded system database"
+            )
         # Loaded before any connection exists, so a missing package leaves nothing to clean up.
         external_storage_factory: Optional[ExternalStorageFactory] = None
         if stores:
@@ -421,6 +429,9 @@ class DBOSClient:
             idle_transaction_timeout_sec=sys_db_idle_transaction_timeout_sec,
             sharding=sharding,
         )
+        # Cancels through the client queue their workflows for the application's archiver.
+        self._sys_db.archive_completions = workflow_archive is not None
+        self._workflow_archive = workflow_archive
         self._external_storage_field: Optional[ExternalStorage] = None
         if external_storage_factory is not None:
             self._external_storage_field = external_storage_factory(
@@ -1863,6 +1874,64 @@ class DBOSClient:
                 self._sys_db,
                 shard_key=self._sys_db._key_hint(workflow_id),
             )
+
+    def import_archived_workflow(
+        self, workflow_id: str, completed_at: int
+    ) -> "WorkflowHandle[Any]":
+        """Copy one archived snapshot of a workflow back into the system database.
+
+        Args:
+            workflow_id: The workflow's ID. It must not already be in the system database.
+            completed_at: The snapshot to import, as its WorkflowStatus.completed_at (Unix epoch ms). The imported workflow's completed_at is the import time, so retention keeps it for its usual period from now.
+
+        Returns:
+            A handle to the imported workflow.
+
+        Raises:
+            DBOSWorkflowArchiveNotConfiguredError: If this client has no workflow_archive.
+            DBOSNonExistentWorkflowError: If the archive has no such snapshot.
+            DBOSWorkflowIDInUseError: If the workflow ID is already in the system database.
+        """
+        ctx = _client_step_context("import_archived_workflow")
+
+        def restore() -> None:
+            import_archived_workflow(
+                self._sys_db, self._workflow_archive, workflow_id, completed_at
+            )
+
+        _run_client_step(ctx, "DBOSClient.importArchivedWorkflow", restore)
+        return WorkflowHandleClientPolling[Any](workflow_id, self._sys_db)
+
+    async def import_archived_workflow_async(
+        self, workflow_id: str, completed_at: int
+    ) -> "WorkflowHandleAsync[Any]":
+        """Copy one archived snapshot of a workflow back into the system database.
+
+        Args:
+            workflow_id: The workflow's ID. It must not already be in the system database.
+            completed_at: The snapshot to import, as its WorkflowStatus.completed_at (Unix epoch ms). The imported workflow's completed_at is the import time, so retention keeps it for its usual period from now.
+
+        Returns:
+            A handle to the imported workflow.
+
+        Raises:
+            DBOSWorkflowArchiveNotConfiguredError: If this client has no workflow_archive.
+            DBOSNonExistentWorkflowError: If the archive has no such snapshot.
+            DBOSWorkflowIDInUseError: If the workflow ID is already in the system database.
+        """
+        ctx = _client_step_context(None)
+
+        async def restore() -> None:
+            await asyncio.to_thread(
+                import_archived_workflow,
+                self._sys_db,
+                self._workflow_archive,
+                workflow_id,
+                completed_at,
+            )
+
+        await _run_client_step_async(ctx, "DBOSClient.importArchivedWorkflow", restore)
+        return WorkflowHandleClientAsyncPolling[Any](workflow_id, self._sys_db)
 
     def read_stream(
         self,

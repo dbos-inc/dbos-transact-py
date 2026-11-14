@@ -228,6 +228,14 @@ def retriable_postgres_exception(e: Exception) -> bool:
         return False
 
 
+def serialization_failure(e: Exception) -> bool:
+    """SQLSTATE 40001, as psycopg (sqlstate) and psycopg2 (pgcode) report it."""
+    if not isinstance(e, DBAPIError):
+        return False
+    orig = e.orig
+    return "40001" in (getattr(orig, "sqlstate", None), getattr(orig, "pgcode", None))
+
+
 def retriable_sqlite_exception(e: Exception) -> bool:
     orig = getattr(e, "orig", None)
     if "database is locked" in str(e if orig is None else orig):
