@@ -392,6 +392,11 @@ class DBOSClient:
                 )
             assert is_valid_database_url(system_database_url)
         stores = check_external_stores(external_stores)
+        # Refused before connecting, as DBOS refuses it at launch.
+        if sharding and workflow_archive is not None:
+            raise DBOSException(
+                "Workflow archiving is not supported on a sharded system database"
+            )
         # Loaded before any connection exists, so a missing package leaves nothing to clean up.
         external_storage_factory: Optional[ExternalStorageFactory] = None
         if stores:

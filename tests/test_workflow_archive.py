@@ -10,6 +10,7 @@ import sqlalchemy as sa
 from dbos import DBOS, DBOSClient, DBOSConfig, SetWorkflowTimeout, _enterprise
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
+    DBOSException,
     DBOSWorkflowArchiveNotConfiguredError,
 )
 from dbos._schemas.system_database import SystemSchema
@@ -230,3 +231,12 @@ def test_import_archived_calls_enterprise(
     handle = DBOS.import_archived_workflow(workflow_id, 123)
     assert calls == [(dbos._sys_db, archive, workflow_id, 123)]
     assert handle.workflow_id == workflow_id and handle.get_result() == 5
+
+
+def test_sharded_client_refuses_archive() -> None:
+    with pytest.raises(DBOSException, match="not supported on a sharded"):
+        DBOSClient(
+            system_database_url="postgresql://postgres:dbos@localhost:5432/unused",
+            sharding=True,
+            workflow_archive=_FakeArchive(),
+        )
