@@ -42,6 +42,7 @@ from dbos._utils import (
     generate_uuid,
     retriable_postgres_exception,
     retriable_sqlite_exception,
+    serialization_failure,
 )
 
 from ._context import (
@@ -612,15 +613,20 @@ def db_retry(
                     sqlite_retriable = getattr(
                         db, "_is_sqlite", True
                     ) and retriable_sqlite_exception(e)
+                    # CockroachDB rolls back a transaction that loses a serialization race and expects the client to rerun it.
+                    cockroach_retriable = getattr(
+                        db, "_is_cockroach", False
+                    ) and serialization_failure(e)
                     if (
                         not postgres_retriable
                         and not pool_retriable
                         and not sqlite_retriable
+                        and not cockroach_retriable
                     ):
                         raise
 
                     # Connection-error and pool retries are optional; SQLite lock
-                    # contention is not a connection error and always retries.
+                    # contention and CockroachDB conflicts are not connection errors and always retry.
                     if (postgres_retriable or pool_retriable) and not getattr(
                         db, "_retry_connection_errors", True
                     ):
@@ -634,6 +640,11 @@ def db_retry(
                         dbos_logger.warning(
                             f"Database connection pool exhausted: {str(e)}. "
                             "If this persists, look for stalled or leaked connections or increase sys_db_pool_size. "
+                            f"Retrying in {actual_backoff:.2f}s (attempt {retries})"
+                        )
+                    elif cockroach_retriable:
+                        dbos_logger.warning(
+                            f"Transaction lost a serialization conflict: {str(e)}. "
                             f"Retrying in {actual_backoff:.2f}s (attempt {retries})"
                         )
                     else:

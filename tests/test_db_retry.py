@@ -1,6 +1,7 @@
 import logging
 import sqlite3
 import threading
+import types
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, contextmanager
 from pathlib import Path
@@ -208,6 +209,43 @@ def test_db_retry_does_not_retry_other_errors(error: Exception) -> None:
         fail()
     assert raised.value is error
     assert calls == 1
+
+
+class _DriverError(Exception):
+    """A driver error carrying a SQLSTATE, as psycopg (sqlstate) or psycopg2 (pgcode) do."""
+
+    def __init__(self, attr: str, code: str) -> None:
+        super().__init__(f"{attr}={code}")
+        setattr(self, attr, code)
+
+
+@pytest.mark.parametrize("attr", ["sqlstate", "pgcode"])
+@pytest.mark.parametrize("cockroach", [True, False])
+def test_db_retry_reruns_cockroach_serialization_failures(
+    attr: str, cockroach: bool
+) -> None:
+    # Retried even with connection retries off: a lost serialization race isn't a connection error.
+    db = types.SimpleNamespace(
+        _is_cockroach=cockroach, _is_sqlite=False, _retry_connection_errors=False
+    )
+    calls = 0
+
+    @db_retry(initial_backoff=0, max_backoff=0, sys_db=db)  # type: ignore[arg-type]
+    def conflicted() -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise DBAPIError("COMMIT", {}, _DriverError(attr, "40001"))
+        return "done"
+
+    if cockroach:
+        assert conflicted() == "done"
+        assert calls == 2
+    else:
+        # On Postgres a 40001 is the caller's to handle, as before.
+        with pytest.raises(DBAPIError):
+            conflicted()
+        assert calls == 1
 
 
 def _upsert_queue(database: SystemDatabase, name: str) -> bool:
