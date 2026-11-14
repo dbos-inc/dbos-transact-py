@@ -213,6 +213,8 @@ def backfill_schedule(
         start = start.replace(tzinfo=timezone.utc)
     if end.tzinfo is None:
         end = end.replace(tzinfo=timezone.utc)
+    # Compare instants: datetimes sharing a ZoneInfo compare wall time, ignoring fold.
+    end = end.astimezone(timezone.utc)
     start_in_tz = start.astimezone(tz)
     it = croniter(schedule["schedule"], start_in_tz, second_at_beginning=True)
     times: List[datetime] = []
