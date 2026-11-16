@@ -2,6 +2,7 @@ import asyncio
 import threading
 import time
 import uuid
+from types import SimpleNamespace
 from typing import Any, Generator, cast
 
 import pytest
@@ -10,6 +11,7 @@ from psycopg.errors import SerializationFailure
 from sqlalchemy.exc import DBAPIError, InvalidRequestError, OperationalError
 
 from dbos import DBOS, SetWorkflowID
+from dbos import _outcome as dbos_outcome
 from dbos._client import DBOSClient
 from dbos._context import DBOSContext, _set_local_dbos_context, get_local_dbos_context
 from dbos._dbos import WorkflowHandle
@@ -348,26 +350,21 @@ def test_step_backoff_past_float_range_keeps_retrying(
     # and end with DBOSMaxStepRetriesExceeded, not OverflowError.
     max_attempts = 1030
     sleeps: list[float] = []
-    # time.sleep and asyncio.sleep are patched process-wide, so only skip the
-    # sleeps on this thread (asyncio.run below runs here too) and leave DBOS
-    # background threads sleeping normally.
-    test_thread = threading.get_ident()
-    real_sleep, real_async_sleep = time.sleep, asyncio.sleep
 
-    def fake_sleep(seconds: float) -> None:
-        if threading.get_ident() == test_thread:
-            sleeps.append(seconds)
-        else:
-            real_sleep(seconds)
+    async def no_async_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
 
-    async def fake_async_sleep(seconds: float, *args: Any, **kwargs: Any) -> Any:
-        if threading.get_ident() == test_thread:
-            sleeps.append(seconds)
-        else:
-            return await real_async_sleep(seconds, *args, **kwargs)
-
-    monkeypatch.setattr("dbos._outcome.time.sleep", fake_sleep)
-    monkeypatch.setattr("dbos._outcome.asyncio.sleep", fake_async_sleep)
+    # Swap only _outcome's module references (copies with sleep overridden) so
+    # just the step retry loop skips its sleeps. Patching time.sleep itself
+    # would also hit DBOS background threads and DB retries.
+    monkeypatch.setattr(
+        dbos_outcome, "time", SimpleNamespace(**{**vars(time), "sleep": sleeps.append})
+    )
+    monkeypatch.setattr(
+        dbos_outcome,
+        "asyncio",
+        SimpleNamespace(**{**vars(asyncio), "sleep": no_async_sleep}),
+    )
     calls = 0
 
     @DBOS.step(retries_allowed=True, max_attempts=max_attempts, backoff_rate=2.0)
