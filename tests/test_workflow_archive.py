@@ -2,12 +2,21 @@
 
 import asyncio
 import threading
+import time
+import uuid
 from typing import Any, List, Optional, Tuple
 
 import pytest
 import sqlalchemy as sa
 
-from dbos import DBOS, DBOSClient, DBOSConfig, SetWorkflowTimeout, _enterprise
+from dbos import (
+    DBOS,
+    DBOSClient,
+    DBOSConfig,
+    SetWorkflowID,
+    SetWorkflowTimeout,
+    _enterprise,
+)
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSException,
@@ -240,3 +249,44 @@ def test_sharded_client_refuses_archive() -> None:
             sharding=True,
             workflow_archive=_FakeArchive(),
         )
+
+
+def test_import_archived_async_reserves_both_steps_first(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch, skip_with_sharding_here: None
+) -> None:
+    @DBOS.workflow()
+    def archived() -> int:
+        return 5
+
+    archived()
+    archived_id = DBOS.list_workflows()[0].workflow_id
+
+    class SlowEnterprise:
+        @staticmethod
+        def import_archived_workflow(*args: Any) -> None:
+            time.sleep(0.3)
+
+    monkeypatch.setattr(_enterprise, "load", lambda *a, **k: SlowEnterprise)
+    monkeypatch.setattr(dbos, "_workflow_archive", _FakeArchive())
+
+    @DBOS.step()
+    async def other_step() -> int:
+        return 1
+
+    @DBOS.workflow()
+    async def importer() -> int:
+        async def other() -> int:
+            await asyncio.sleep(0)
+            return await other_step()
+
+        _, x = await asyncio.gather(
+            DBOS.import_archived_workflow_async(archived_id, 1), other()
+        )
+        return int(x)
+
+    importer_id = str(uuid.uuid4())
+    with SetWorkflowID(importer_id):
+        assert asyncio.run(importer()) == 1
+    # The import's status read keeps the ID reserved next to it, however long it takes.
+    names = [s["function_name"] for s in DBOS.list_workflow_steps(importer_id)]
+    assert names[:2] == ["DBOS.importArchivedWorkflow", "DBOS.getStatus"]

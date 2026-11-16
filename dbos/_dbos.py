@@ -3459,7 +3459,9 @@ class DBOS:
             DBOSNonExistentWorkflowError: If the archive has no such snapshot.
             DBOSWorkflowIDInUseError: If the workflow ID is already in the system database.
         """
-        step_ctx = snapshot_step_context(reserve_sleep_id=False)
+        # Both steps reserved before any await, so concurrent tasks can't shift their IDs.
+        step_ctx_import = snapshot_step_context(reserve_sleep_id=False)
+        step_ctx_status = snapshot_step_context(reserve_sleep_id=False)
         await cls._configure_asyncio_thread_pool()
 
         def fn() -> None:
@@ -3473,9 +3475,21 @@ class DBOS:
             _get_dbos_instance()._sys_db.call_function_as_step,
             fn,
             "DBOS.importArchivedWorkflow",
-            step_ctx,
+            step_ctx_import,
         )
-        return await cls.retrieve_workflow_async(workflow_id)
+
+        def fnret() -> Optional[WorkflowStatus]:
+            return get_workflow(_get_dbos_instance()._sys_db, workflow_id)
+
+        stat = await asyncio.to_thread(
+            _get_dbos_instance()._sys_db.call_function_as_step,
+            fnret,
+            "DBOS.getStatus",
+            step_ctx_status,
+        )
+        if stat is None:
+            raise DBOSNonExistentWorkflowError("target", workflow_id)
+        return WorkflowHandleAsyncPolling(workflow_id, _get_dbos_instance())
 
     @classmethod
     def list_workflows(
