@@ -348,12 +348,26 @@ def test_step_backoff_past_float_range_keeps_retrying(
     # and end with DBOSMaxStepRetriesExceeded, not OverflowError.
     max_attempts = 1030
     sleeps: list[float] = []
-    monkeypatch.setattr("dbos._outcome.time.sleep", sleeps.append)
+    # time.sleep and asyncio.sleep are patched process-wide, so only skip the
+    # sleeps on this thread (asyncio.run below runs here too) and leave DBOS
+    # background threads sleeping normally.
+    test_thread = threading.get_ident()
+    real_sleep, real_async_sleep = time.sleep, asyncio.sleep
 
-    async def no_sleep(seconds: float) -> None:
-        sleeps.append(seconds)
+    def fake_sleep(seconds: float) -> None:
+        if threading.get_ident() == test_thread:
+            sleeps.append(seconds)
+        else:
+            real_sleep(seconds)
 
-    monkeypatch.setattr("dbos._outcome.asyncio.sleep", no_sleep)
+    async def fake_async_sleep(seconds: float, *args: Any, **kwargs: Any) -> Any:
+        if threading.get_ident() == test_thread:
+            sleeps.append(seconds)
+        else:
+            return await real_async_sleep(seconds, *args, **kwargs)
+
+    monkeypatch.setattr("dbos._outcome.time.sleep", fake_sleep)
+    monkeypatch.setattr("dbos._outcome.asyncio.sleep", fake_async_sleep)
     calls = 0
 
     @DBOS.step(retries_allowed=True, max_attempts=max_attempts, backoff_rate=2.0)
@@ -376,14 +390,18 @@ def test_step_backoff_past_float_range_keeps_retrying(
     async def wf_async() -> None:
         await flaky_async()
 
+    # One sleep between each pair of attempts: 1s, 2s, 4s, ... then the cap.
+    # Python ints don't overflow, so 2**i is safe to compute here.
+    expected_sleeps = [min(2**i, 3600) for i in range(max_attempts - 1)]
+
     with pytest.raises(DBOSMaxStepRetriesExceeded):
         wf()
-    assert calls == max_attempts and max(sleeps) == 3600
+    assert calls == max_attempts and sleeps == expected_sleeps
 
     calls, sleeps[:] = 0, []
     with pytest.raises(DBOSMaxStepRetriesExceeded):
         asyncio.run(wf_async())
-    assert calls == max_attempts and max(sleeps) == 3600
+    assert calls == max_attempts and sleeps == expected_sleeps
 
 
 def test_step_should_retry(dbos: DBOS) -> None:
