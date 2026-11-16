@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 
 class WorkflowArchive(Protocol):
-    """Where completed workflows are archived, such as dbos_enterprise.ParquetArchive.
+    """Where completed workflows are archived, such as dbos_enterprise.archive.ParquetArchive.
     Its archive_id names the location, so it must not change once workflows are in it.
     """
 

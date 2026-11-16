@@ -290,3 +290,44 @@ def test_import_archived_async_reserves_both_steps_first(
     # The import's status read keeps the ID reserved next to it, however long it takes.
     names = [s["function_name"] for s in DBOS.list_workflow_steps(importer_id)]
     assert names[:2] == ["DBOS.importArchivedWorkflow", "DBOS.getStatus"]
+
+
+def test_cancelling_again_leaves_the_completion(
+    dbos: DBOS, skip_with_sharding_here: None
+) -> None:
+    dbos._sys_db.archive_completions = True
+    started = threading.Event()
+    release = threading.Event()
+
+    @DBOS.workflow()
+    def blocks() -> None:
+        started.set()
+        release.wait()
+
+    handle = DBOS.start_workflow(blocks)
+    try:
+        _cancel_twice_and_check(dbos, handle.workflow_id, started)
+    finally:
+        release.set()
+
+
+def _cancel_twice_and_check(
+    dbos: DBOS, workflow_id: str, started: threading.Event
+) -> None:
+    started.wait()
+    DBOS.cancel_workflow(workflow_id)
+    first = DBOS.get_workflow_status(workflow_id)
+    assert first is not None and first.completed_at is not None
+    # As the archiver leaves it once the cancellation is archived.
+    with dbos._sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(SystemSchema.workflow_status)
+            .where(SystemSchema.workflow_status.c.workflow_uuid == workflow_id)
+            .values(archive_pending=None)
+        )
+    DBOS.cancel_workflow(workflow_id)
+    again = DBOS.get_workflow_status(workflow_id)
+    assert again is not None and again.status == "CANCELLED"
+    # Not a new completion, so nothing is queued to archive twice.
+    assert again.completed_at == first.completed_at
+    assert archive_pending(dbos, workflow_id) is None

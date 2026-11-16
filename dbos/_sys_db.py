@@ -1727,8 +1727,8 @@ class SystemDatabase(ABC):
         def _cancel_workflows(ids: list[str]) -> None:
             with self.engine.begin() as c:
                 now_ms = self._now_ms_sql()
-                # Set the workflows' status to CANCELLED, keeping their queue for a
-                # later resume, but only if the workflow is not already complete.
+                # Set the workflows' status to CANCELLED, keeping their queue for a later
+                # resume, unless already complete or cancelled (a repeat restamps completion).
                 c.execute(
                     sa.update(self.tables.workflow_status)
                     .where(*self._wf_in(self.tables.workflow_status, ids))
@@ -1737,6 +1737,7 @@ class SystemDatabase(ABC):
                             [
                                 WorkflowStatusString.SUCCESS.value,
                                 WorkflowStatusString.ERROR.value,
+                                WorkflowStatusString.CANCELLED.value,
                             ]
                         )
                     )
