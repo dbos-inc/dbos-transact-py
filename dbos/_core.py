@@ -2489,10 +2489,13 @@ def invoke_step(
                     "retryIntervalSeconds": interval_seconds,
                 },
             )
-        return min(
-            interval_seconds * (backoff_rate**attempt),
-            max_retry_interval_seconds,
-        )
+        try:
+            delay = interval_seconds * (backoff_rate**attempt)
+        except OverflowError:
+            # backoff_rate**attempt passed the largest float, long after the
+            # delay reached the cap.
+            delay = max_retry_interval_seconds if interval_seconds > 0 else 0.0
+        return min(delay, max_retry_interval_seconds)
 
     def record_step_result(func: Callable[[], R]) -> R:
         ctx = assert_current_dbos_context()
