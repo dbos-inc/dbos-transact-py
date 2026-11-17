@@ -73,6 +73,22 @@ def check_db_connectivity(config: Dict[str, Any]) -> Optional[Exception]:
             conn.close()
 
 
+def _wait_removed(container_name: str, timeout: float = 30) -> None:
+    """Wait out Docker removing a container started with --rm, which finishes after stop."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = subprocess.run(
+            f"docker inspect {container_name}",
+            shell=True,
+            text=True,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            return
+        time.sleep(0.1)
+    raise Exception(f"Container {container_name} was not removed in time.")
+
+
 def start_docker_postgres(pool_config: Dict[str, Any]) -> bool:
     logging.info("Starting a Postgres Docker container...")
     container_name = "dbos-db"
@@ -97,6 +113,9 @@ def start_docker_postgres(pool_config: Dict[str, Any]) -> bool:
                 if status == "running":
                     logging.info(f"Container '{container_name}' is already running.")
                     return True
+                elif container_info[0]["HostConfig"].get("AutoRemove"):
+                    # Stopped and being removed: create it afresh once it is gone.
+                    _wait_removed(container_name)
                 elif status == "exited":
                     subprocess.run(
                         f"docker start {container_name}", shell=True, check=True
@@ -212,6 +231,8 @@ def stop_docker_pg() -> None:
                     subprocess.run(
                         f"docker stop {container_name}", shell=True, check=True
                     )
+                    if container_info[0]["HostConfig"].get("AutoRemove"):
+                        _wait_removed(container_name)
                     logger.info(
                         f"Successfully stopped Docker Postgres container {container_name}."
                     )

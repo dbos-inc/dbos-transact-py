@@ -20,19 +20,23 @@ def _run_under_limiter(limit: int, tasks: int) -> int:
     """Run `tasks` workers under a limiter of size `limit`, returning the peak
     number of workers observed running concurrently."""
     limiter = PollingLimiter(limit)
-    lock = threading.Lock()
+    # Workers hold their permits until this many overlap, however slowly threads start.
+    expected = min(limit, tasks) if limit > 0 else tasks
+    cond = threading.Condition()
     in_flight = 0
     peak = 0
 
     def worker() -> None:
         nonlocal in_flight, peak
         with limiter:
-            with lock:
+            with cond:
                 in_flight += 1
                 peak = max(peak, in_flight)
+                cond.notify_all()
+                cond.wait_for(lambda: peak >= expected, timeout=2)
             # Hold the permit briefly so overlapping runners would be observed.
             time.sleep(0.02)
-            with lock:
+            with cond:
                 in_flight -= 1
 
     threads = [threading.Thread(target=worker) for _ in range(tasks)]
