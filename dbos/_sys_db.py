@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import datetime
 import functools
 import hashlib
@@ -7,6 +8,7 @@ import random
 import sys
 import threading
 import time
+import weakref
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -667,6 +669,124 @@ DEFAULT_IDLE_TRANSACTION_TIMEOUT_SEC = 60.0
 SQLITE_JSON_SET_MAX_PAIRS = 50
 
 
+# Statuses at which a workflow is not yet complete; any other status has a result.
+_NOT_COMPLETE_STATUSES = frozenset(
+    {
+        WorkflowStatusString.PENDING.value,
+        WorkflowStatusString.ENQUEUED.value,
+        WorkflowStatusString.DELAYED.value,
+        WorkflowStatusString.SUSPENDED.value,
+    }
+)
+
+# A workflow as the status watcher reads it: its ID and the shard key it lives under.
+_WatchedWorkflow = Tuple[str, Optional[str]]
+
+
+@dataclass(eq=False)
+class _StatusWaiter:
+    workflows: Tuple[_WatchedWorkflow, ...]
+    future: "asyncio.Future[None]"
+
+    def should_wake(self, statuses: Dict[_WatchedWorkflow, str]) -> bool:
+        # Wake when any workflow is complete, or has no row: deleted, or under a shard
+        # key the read didn't capture, which the waiter then checks in its own context.
+        return any(
+            (status := statuses.get(wf)) is None or status not in _NOT_COMPLETE_STATUSES
+            for wf in self.workflows
+        )
+
+
+class _StatusWatcher:
+    """Watches, for one event loop and polling interval, the workflows that async
+    result waits are waiting on, with one status read per shard key per interval
+    instead of one per waiter. A woken waiter re-checks the workflow itself, so the
+    watcher only decides when to look, never what the result is."""
+
+    def __init__(
+        self,
+        sys_db: "SystemDatabase",
+        loop: asyncio.AbstractEventLoop,
+        interval: float,
+    ) -> None:
+        self._sys_db = sys_db
+        # Weak, so the watchers keyed by this loop don't keep it alive.
+        self._loop = weakref.ref(loop)
+        self._interval = interval
+        self._waiters: Set[_StatusWaiter] = set()
+        self._poller: Optional["asyncio.Task[None]"] = None
+
+    def register(self, workflows: Tuple[_WatchedWorkflow, ...]) -> _StatusWaiter:
+        waiter = _StatusWaiter(workflows, asyncio.get_running_loop().create_future())
+        self._waiters.add(waiter)
+        if self._poller is None or self._poller.done():
+            # An empty context, so the poller doesn't run as part of the registering step.
+            self._poller = contextvars.Context().run(asyncio.create_task, self._poll())
+            self._poller.add_done_callback(self._poller_done)
+        return waiter
+
+    def unregister(self, waiter: _StatusWaiter) -> None:
+        waiter.future.cancel()
+        self._waiters.discard(waiter)
+        if not self._waiters:
+            # Stop now, not after one more sleep, so an idle poller can't outlive a loop
+            # that is closed without cancelling its tasks, and drop this watcher so
+            # watchers don't pile up per interval.
+            if self._poller is not None:
+                self._poller.cancel()
+                self._poller = None
+            self._sys_db._drop_status_watcher(self._loop, self._interval, self)
+
+    def _wake(self, waiter: _StatusWaiter) -> None:
+        if not waiter.future.done():
+            waiter.future.set_result(None)
+
+    def _poller_done(self, task: "asyncio.Task[None]") -> None:
+        # A finished task references its loop, so keeping it would pin closed loops.
+        if self._poller is task:
+            self._poller = None
+        # A poller that died would leave its waiters waiting forever: wake them, so each
+        # checks for itself and re-registers, which starts a new poller.
+        error = None if task.cancelled() else task.exception()
+        if error is not None:
+            dbos_logger.warning(f"Error in the workflow result poller: {error}")
+        if task.cancelled() or error is not None:
+            for waiter in list(self._waiters):
+                self._wake(waiter)
+
+    async def _poll(self) -> None:
+        while self._waiters:
+            await asyncio.sleep(self._interval)
+            snapshot = list(self._waiters)
+            if not snapshot:
+                return
+            workflows = {wf for waiter in snapshot for wf in waiter.workflows}
+            statuses = await asyncio.to_thread(self._read, workflows)
+            for waiter in snapshot:
+                if waiter.should_wake(statuses):
+                    self._wake(waiter)
+
+    def _read(self, workflows: Set[_WatchedWorkflow]) -> Dict[_WatchedWorkflow, str]:
+        """One read per shard key, each under its key's binding. A key whose read fails
+        returns no statuses, so its waiters wake and check for themselves, raising or
+        waiting exactly as an unbatched wait would."""
+        by_key: Dict[Optional[str], List[str]] = {}
+        for workflow_id, shard_key in workflows:
+            by_key.setdefault(shard_key, []).append(workflow_id)
+        statuses: Dict[_WatchedWorkflow, str] = {}
+        for shard_key, workflow_ids in by_key.items():
+            try:
+                with bind_shard_keys({wfid: shard_key for wfid in workflow_ids}):
+                    found = self._sys_db.get_workflow_status_values(workflow_ids)
+            except Exception as e:
+                dbos_logger.warning(f"Error polling status for workflow results: {e}")
+                continue
+            statuses.update(
+                ((wfid, shard_key), status) for wfid, status in found.items()
+            )
+        return statuses
+
+
 class SystemDatabase(ABC):
 
     # Tables this handle queries; a sharded subclass supplies copies that also declare shard_key.
@@ -875,6 +995,11 @@ class SystemDatabase(ABC):
             else max(1, effective_pool_size // 2)
         )
         self.poll_limiter = PollingLimiter(polling_limit)
+        # Async result waits on one event loop and interval share one status watcher.
+        self._status_watchers: weakref.WeakKeyDictionary[
+            asyncio.AbstractEventLoop, Dict[float, _StatusWatcher]
+        ] = weakref.WeakKeyDictionary()
+        self._status_watchers_lock = threading.Lock()
 
         self.notifications_map = ThreadSafeEventDict()
         self.workflow_events_map = ThreadSafeEventDict()
@@ -2757,6 +2882,72 @@ class SystemDatabase(ABC):
                 found[status["workflow_uuid"]] = status
         return [found[id] for id in workflow_ids if id in found]
 
+    def get_workflow_status_values(self, workflow_ids: List[str]) -> Dict[str, str]:
+        """The status of each of these workflows that has a row, for the status watcher."""
+        ws = self.tables.workflow_status
+
+        # Not retried: a failed read wakes its waiters, whose own checks retry, so a
+        # shard key that keeps failing can't hold up the reads for the other keys.
+        def fetch_chunk(chunk: List[str]) -> List[Tuple[str, str]]:
+            with self.poll_limiter, self.engine.begin() as c:
+                return [
+                    (row[0], row[1])
+                    for row in c.execute(
+                        sa.select(ws.c.workflow_uuid, ws.c.status).where(
+                            *self._wf_in(ws, chunk)
+                        )
+                    ).fetchall()
+                ]
+
+        statuses: Dict[str, str] = {}
+        # Chunk the IN list to stay under bind-parameter limits, like get_workflow_statuses.
+        chunk_size = 4096
+        for start in range(0, len(workflow_ids), chunk_size):
+            statuses.update(fetch_chunk(workflow_ids[start : start + chunk_size]))
+        return statuses
+
+    async def _await_status(
+        self, workflows: Tuple[_WatchedWorkflow, ...], polling_interval: float
+    ) -> None:
+        """Wait until a batched status read wakes this waiter (or the watcher gives up on it)."""
+        loop = asyncio.get_running_loop()
+        # Watchers are reached from several loops' threads; create them under a lock.
+        with self._status_watchers_lock:
+            per_loop = self._status_watchers.get(loop)
+            if per_loop is None:
+                per_loop = {}
+                self._status_watchers[loop] = per_loop
+            watcher = per_loop.get(polling_interval)
+            if watcher is None:
+                watcher = _StatusWatcher(self, loop, polling_interval)
+                per_loop[polling_interval] = watcher
+        waiter = watcher.register(workflows)
+        try:
+            await waiter.future
+        finally:
+            watcher.unregister(waiter)
+
+    def _drop_status_watcher(
+        self,
+        loop_ref: "weakref.ref[asyncio.AbstractEventLoop]",
+        interval: float,
+        watcher: _StatusWatcher,
+    ) -> None:
+        # By the watcher's own loop: this can run in a finally with no loop running.
+        loop = loop_ref()
+        if loop is None:
+            return
+        with self._status_watchers_lock:
+            per_loop = self._status_watchers.get(loop)
+            if per_loop is not None and per_loop.get(interval) is watcher:
+                del per_loop[interval]
+                if not per_loop:
+                    del self._status_watchers[loop]
+
+    def _watched(self, workflow_ids: List[str]) -> Tuple[_WatchedWorkflow, ...]:
+        # Resolved now: the watcher reads from its own context, outside the caller's bindings.
+        return tuple((wfid, self._key_hint(wfid)) for wfid in workflow_ids)
+
     @db_retry()
     def _read_workflow_result_row(self, workflow_id: str) -> Optional[Any]:
         # Polling read under the limiter; acquired inside the db_retry body so the permit frees across backoff (like check_first_workflow_id).
@@ -2842,13 +3033,17 @@ class SystemDatabase(ABC):
         *,
         fail_if_missing: bool = False,
     ) -> Any:
+        watched: Optional[Tuple[_WatchedWorkflow, ...]] = None
         while True:
             result = await asyncio.to_thread(
                 self.check_workflow_result, workflow_id, fail_if_missing=fail_if_missing
             )
             if not isinstance(result, NoResult):
                 return result
-            await asyncio.sleep(polling_interval)
+            if watched is None:
+                watched = await asyncio.to_thread(self._watched, [workflow_id])
+            # One shared status read per interval wakes this wait, rather than a read of its own.
+            await self._await_status(watched, polling_interval)
 
     @db_retry()
     def check_first_workflow_id(self, workflow_ids: List[str]) -> Union[NoResult, str]:
@@ -2869,12 +3064,7 @@ class SystemDatabase(ABC):
                 .where(
                     *self._wf_in(self.tables.workflow_status, workflow_ids),
                     ~self.tables.workflow_status.c.status.in_(
-                        [
-                            WorkflowStatusString.PENDING.value,
-                            WorkflowStatusString.ENQUEUED.value,
-                            WorkflowStatusString.DELAYED.value,
-                            WorkflowStatusString.SUSPENDED.value,
-                        ]
+                        sorted(_NOT_COMPLETE_STATUSES)
                     ),
                 )
                 .limit(1)
@@ -2896,11 +3086,15 @@ class SystemDatabase(ABC):
     async def await_first_workflow_id_async(
         self, workflow_ids: List[str], polling_interval: float
     ) -> str:
+        watched: Optional[Tuple[_WatchedWorkflow, ...]] = None
         while True:
             result = await asyncio.to_thread(self.check_first_workflow_id, workflow_ids)
             if not isinstance(result, NoResult):
                 return result
-            await asyncio.sleep(polling_interval)
+            if watched is None:
+                watched = await asyncio.to_thread(self._watched, workflow_ids)
+            # One shared status read per interval wakes this wait, rather than a read of its own.
+            await self._await_status(watched, polling_interval)
 
     @db_retry()
     def list_workflows(
