@@ -242,6 +242,14 @@ def test_import_archived_calls_enterprise(
     assert handle.workflow_id == workflow_id and handle.get_result() == 5
 
 
+def test_cockroach_client_refuses_archive() -> None:
+    with pytest.raises(DBOSException, match="not supported on CockroachDB"):
+        DBOSClient(
+            system_database_url="cockroachdb://root@localhost:26257/unused",
+            workflow_archive=_FakeArchive(),
+        )
+
+
 def test_sharded_client_refuses_archive() -> None:
     with pytest.raises(DBOSException, match="not supported on a sharded"):
         DBOSClient(

@@ -429,6 +429,9 @@ class DBOSClient:
             idle_transaction_timeout_sec=sys_db_idle_transaction_timeout_sec,
             sharding=sharding,
         )
+        if workflow_archive is not None and self._sys_db._is_cockroach:
+            self._sys_db.destroy()
+            raise DBOSException("Workflow archiving is not supported on CockroachDB")
         # Cancels through the client queue their workflows for the application's archiver.
         self._sys_db.archive_completions = workflow_archive is not None
         self._workflow_archive = workflow_archive
