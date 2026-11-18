@@ -115,7 +115,9 @@ def test_simple_queue(dbos: DBOS) -> None:
     # Verify started_at_epoch_ms is set correctly
     status = handle.get_status()
     assert status.dequeued_at and status.created_at
-    # Both are database-stamped, so a second-resolution clock can land the enqueue and its dequeue on one tick.
+    # created_at is app-clock stamped (single-enqueue cursor, _next_enqueued_created_at);
+    # dequeued_at is database-stamped. Same-host clocks coincide, and a claim follows
+    # its insert, so a second-resolution clock can still land both on one tick.
     if imprecise_timestamps():
         assert status.dequeued_at >= status.created_at
     else:
@@ -4516,6 +4518,141 @@ def test_partitioned_queue_global_exclusivity(
     assert [tag for tag in execution_order if tag != "b1"] == ["head", "a1", "a2"]
     assert queue.name in batched_queues
     assert queue_entries_are_cleaned_up(dbos)
+
+
+def test_enqueue_same_millisecond_created_at_order(dbos: DBOS) -> None:
+    """A single enqueue stamps created_at monotonic per (queue, partition key), like the
+    batch path, so workflows enqueued in the same millisecond keep enqueue order instead
+    of falling back to the random workflow_uuid tiebreak. Deterministic form of the
+    issue's intermittent repro: a future-dated cursor must win over the DB's wall-clock
+    default."""
+    import sqlalchemy as sa
+
+    from dbos._schemas.system_database import SystemSchema
+
+    @DBOS.workflow()
+    def fifo_task(i: int) -> int:
+        return i
+
+    partitioned_queue = DBOS.register_queue(
+        f"fifo_p_{uuid.uuid4().hex[:8]}",
+        partition_concurrency=1,
+        polling_interval_sec=0.1,
+    )
+    plain_queue = DBOS.register_queue(
+        f"fifo_u_{uuid.uuid4().hex[:8]}",
+        concurrency=1,
+        polling_interval_sec=0.1,
+    )
+
+    # Force both cursors an hour into the future: an enqueue must stamp above the cursor,
+    # not at the wall clock the DB default would give.
+    future = int(time.time() * 1000) + 3_600_000
+    partition_key = f"{partitioned_queue.name}-key"
+    with dbos._sys_db._batch_created_at_lock:
+        dbos._sys_db._batch_created_at_cursors[
+            (partitioned_queue.name, partition_key)
+        ] = future
+        dbos._sys_db._batch_created_at_cursors[(plain_queue.name, None)] = future
+
+    with SetEnqueueOptions(queue_partition_key=partition_key):
+        partitioned_handle = partitioned_queue.enqueue(fifo_task, 0)
+    plain_handle = plain_queue.enqueue(fifo_task, 1)
+    assert partitioned_handle.get_result() == 0
+    assert plain_handle.get_result() == 1
+
+    with dbos._sys_db.engine.begin() as conn:
+        partitioned_created = conn.execute(
+            sa.select(SystemSchema.workflow_status.c.created_at).where(
+                SystemSchema.workflow_status.c.workflow_uuid
+                == partitioned_handle.workflow_id
+            )
+        ).scalar_one()
+        plain_created = conn.execute(
+            sa.select(SystemSchema.workflow_status.c.created_at).where(
+                SystemSchema.workflow_status.c.workflow_uuid == plain_handle.workflow_id
+            )
+        ).scalar_one()
+    assert (
+        partitioned_created >= future
+    ), f"single enqueue did not stamp from the cursor: {partitioned_created} < {future}"
+    assert (
+        plain_created >= future
+    ), f"single enqueue did not stamp from the cursor: {plain_created} < {future}"
+
+    # Cursor advance: a second enqueue on the same key stamps strictly above the first,
+    # so same-millisecond enqueues never tie.
+    with SetEnqueueOptions(queue_partition_key=partition_key):
+        second_handle = partitioned_queue.enqueue(fifo_task, 2)
+    assert second_handle.get_result() == 2
+    with dbos._sys_db.engine.begin() as conn:
+        second_created = conn.execute(
+            sa.select(SystemSchema.workflow_status.c.created_at).where(
+                SystemSchema.workflow_status.c.workflow_uuid
+                == second_handle.workflow_id
+            )
+        ).scalar_one()
+    assert (
+        second_created > partitioned_created
+    ), f"cursor did not advance past the first same-key enqueue: {second_created} <= {partitioned_created}"
+
+    # Seeding path: a fresh sight of a key must seed from the active backlog's
+    # high-water mark. This exercises the conn-based seeding read and the IS NULL
+    # arm, which the pre-seeded cursor above skips (fast path).
+    backlog_queue_name = f"fifo_seed_{uuid.uuid4().hex[:8]}"  # never registered: no worker dequeues the backlog
+    status = prepare_enqueued_workflow(
+        dbos,
+        fifo_task,
+        (2,),
+        {},
+        queue_name=backlog_queue_name,
+        workflow_id=f"{backlog_queue_name}-backlog",
+    )
+    with dbos._sys_db._batch_created_at_lock:
+        dbos._sys_db._batch_created_at_cursors[(backlog_queue_name, None)] = future
+    dbos._sys_db.init_workflow(status, creator_xid=None)
+    with dbos._sys_db._batch_created_at_lock:
+        dbos._sys_db._batch_created_at_cursors.pop((backlog_queue_name, None), None)
+    with dbos._sys_db.engine.begin() as conn:
+        seeded = dbos._sys_db._next_enqueued_created_at(conn, backlog_queue_name, None)
+    assert (
+        seeded > future
+    ), f"seeding did not pick up the active backlog: {seeded} <= {future}"
+
+
+def test_enqueue_fifo_order_same_millisecond_burst(dbos: DBOS) -> None:
+    """End-to-end FIFO under a tight enqueue loop: with concurrency 1, workflows
+    enqueued within the same wall-clock millisecond still start in enqueue order, on
+    partitioned and unpartitioned queues alike. The deterministic cursor test above
+    carries the strict pass/fail; this one exercises the realistic trigger."""
+    order_lock = threading.Lock()
+    execution_order: List[int] = []
+
+    @DBOS.workflow()
+    def fifo_task(i: int) -> int:
+        with order_lock:
+            execution_order.append(i)
+        return i
+
+    for partitioned in (True, False):
+        kwargs: Dict[str, Any] = (
+            {"partition_concurrency": 1} if partitioned else {"concurrency": 1}
+        )
+        queue = DBOS.register_queue(
+            f"fifo_burst_{uuid.uuid4().hex[:8]}", polling_interval_sec=0.1, **kwargs
+        )
+        for _ in range(5):
+            execution_order.clear()
+            if partitioned:
+                with SetEnqueueOptions(queue_partition_key="user-1"):
+                    handles = [queue.enqueue(fifo_task, i) for i in range(10)]
+            else:
+                handles = [queue.enqueue(fifo_task, i) for i in range(10)]
+            for handle in handles:
+                assert handle.get_result() is not None
+            assert execution_order == list(
+                range(10)
+            ), f"{'partitioned' if partitioned else 'unpartitioned'} queue ran out of enqueue order: {execution_order}"
 
 
 def test_polling_interval(dbos: DBOS, skip_with_sharding: None) -> None:
