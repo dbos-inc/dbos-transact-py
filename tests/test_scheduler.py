@@ -5,6 +5,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Tuple, cast
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -933,6 +934,57 @@ def test_backfill_with_timezone(dbos: DBOS) -> None:
 
     DBOS.delete_schedule("tz-utc")
     DBOS.delete_schedule("tz-ny")
+
+
+@pytest.mark.parametrize("end_in_utc", [False, True])
+@pytest.mark.parametrize(
+    "end_minute,end_second,end_fold,expected",
+    [
+        (
+            2,
+            0,
+            1,
+            [
+                datetime(2026, 11, 1, 5, 59, tzinfo=timezone.utc),
+                datetime(2026, 11, 1, 6, 0, tzinfo=timezone.utc),
+                datetime(2026, 11, 1, 6, 1, tzinfo=timezone.utc),
+            ],
+        ),
+        (59, 30, 0, [datetime(2026, 11, 1, 5, 59, tzinfo=timezone.utc)]),
+    ],
+)
+def test_backfill_across_fall_back(
+    dbos: DBOS,
+    end_in_utc: bool,
+    end_minute: int,
+    end_second: int,
+    end_fold: int,
+    expected: list[datetime],
+) -> None:
+    received: list[datetime] = []
+
+    @DBOS.workflow()
+    def backfill_workflow(scheduled_at: datetime, ctx: Any) -> None:
+        received.append(scheduled_at.astimezone(timezone.utc))
+
+    DBOS.create_schedule(
+        schedule_name="backfill-fall-back",
+        workflow_fn=backfill_workflow,
+        schedule="0 * * * * *",
+        cron_timezone="America/New_York",
+    )
+    tz = ZoneInfo("America/New_York")
+    start = datetime(2026, 11, 1, 1, 58, tzinfo=tz)
+    end = datetime(2026, 11, 1, 1, end_minute, end_second, tzinfo=tz, fold=end_fold)
+    if end_in_utc:
+        end = end.astimezone(timezone.utc)
+    handles = DBOS.backfill_schedule("backfill-fall-back", start, end)
+    assert len(handles) == len(expected)
+    for handle in handles:
+        handle.get_result()
+
+    assert sorted(t for t in received if start < t < end) == expected
+    DBOS.delete_schedule("backfill-fall-back")
 
 
 def test_trigger_schedule(dbos: DBOS) -> None:
