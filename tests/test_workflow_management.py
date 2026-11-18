@@ -31,6 +31,7 @@ from tests.conftest import (
     queue_entries_are_cleaned_up,
     reexecute_workflow_by_id,
     retry_until_success,
+    using_sqlite,
 )
 
 
@@ -495,6 +496,111 @@ def test_delete_workflow(dbos: DBOS) -> None:
 
     # Verify deleting a non-existent workflow doesn't error
     DBOS.delete_workflow(parent_wfid2, delete_children=False)
+
+
+@pytest.mark.parametrize("delete_api", ["dbos", "dbos-bulk", "client", "client-bulk"])
+@pytest.mark.parametrize("nested_parent", [False, True], ids=["child", "grandchild"])
+def test_delete_workflow_includes_child_started_during_delete(
+    dbos: DBOS, client: DBOSClient, delete_api: str, nested_parent: bool
+) -> None:
+    if nested_parent and using_sqlite():
+        pytest.skip("SQLite serializes every writer after the root is deleted")
+
+    root_id = str(uuid.uuid4())
+    parent_id = str(uuid.uuid4()) if nested_parent else root_id
+    child_id = str(uuid.uuid4())
+    parent_ready = threading.Event()
+    start_child = threading.Event()
+    parent_handles: list[WorkflowHandle[int]] = []
+
+    @DBOS.workflow()
+    def child_workflow() -> int:
+        return 42
+
+    @DBOS.workflow()
+    def parent_workflow() -> int:
+        parent_ready.set()
+        assert start_child.wait(10)
+        with SetWorkflowID(child_id):
+            handle = DBOS.start_workflow(child_workflow)
+        return handle.get_result()
+
+    @DBOS.workflow()
+    def root_workflow() -> None:
+        with SetWorkflowID(parent_id):
+            parent_handles.append(DBOS.start_workflow(parent_workflow))
+
+    if nested_parent:
+        with SetWorkflowID(root_id):
+            root_workflow()
+    else:
+        with SetWorkflowID(root_id):
+            parent_handles.append(DBOS.start_workflow(parent_workflow))
+    parent_handle = parent_handles[0]
+    assert parent_ready.wait(10)
+    unrelated = DBOS.start_workflow(child_workflow)
+    assert unrelated.get_result() == 42
+
+    deleting_thread = threading.current_thread()
+    inserted_child = False
+
+    def start_child_before_delete(
+        conn: sa.Connection,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        nonlocal inserted_child
+        compiled = context.compiled
+        if (
+            not inserted_child
+            and threading.current_thread() is deleting_thread
+            and compiled is not None
+            and isinstance(compiled.statement, sa.sql.dml.Delete)
+            and parent_id in context.compiled_parameters[0].values()
+        ):
+            inserted_child = True
+            # Commit a real child just before deletion first writes this parent.
+            start_child.set()
+            assert parent_handle.get_result() == 42
+            assert DBOS.get_workflow_status(child_id) is not None
+
+    engine = (
+        dbos._sys_db.engine if delete_api.startswith("dbos") else client._sys_db.engine
+    )
+    sa.event.listen(engine, "before_cursor_execute", start_child_before_delete)
+    try:
+        target = DBOS if delete_api.startswith("dbos") else client
+        if delete_api.endswith("bulk"):
+            target.delete_workflows([root_id, root_id], delete_children=True)
+        else:
+            target.delete_workflow(root_id, delete_children=True)
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", start_child_before_delete)
+        start_child.set()
+        assert parent_handle.get_result() == 42
+
+    assert inserted_child
+    deleted_ids = {root_id, parent_id, child_id}
+    for workflow_id in deleted_ids:
+        assert DBOS.get_workflow_status(workflow_id) is None
+    with dbos._sys_db.engine.connect() as conn:
+        for table in (
+            dbos._sys_db.tables.workflow_input,
+            dbos._sys_db.tables.workflow_output,
+            dbos._sys_db.tables.operation_outputs,
+        ):
+            assert (
+                conn.execute(
+                    sa.select(table.c.workflow_uuid).where(
+                        table.c.workflow_uuid.in_(deleted_ids)
+                    )
+                ).first()
+                is None
+            )
+    assert DBOS.get_workflow_status(unrelated.get_workflow_id()) is not None
 
 
 def test_bulk_cancel(dbos: DBOS) -> None:
