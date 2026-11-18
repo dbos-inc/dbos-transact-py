@@ -606,8 +606,12 @@ def test_delete_workflow_includes_child_started_during_delete(
     assert DBOS.get_workflow_status(unrelated.get_workflow_id()) is not None
 
 
+@pytest.mark.parametrize("delete_children", [False, True])
 def test_delete_children_refreshes_snapshot_after_waiting_for_parent_lock(
-    dbos: DBOS, skip_with_sqlite: None
+    dbos: DBOS,
+    skip_with_sqlite: None,
+    skip_with_sharding: None,
+    delete_children: bool,
 ) -> None:
     parent_id = str(uuid.uuid4())
     child_id = str(uuid.uuid4())
@@ -663,6 +667,9 @@ def test_delete_children_refreshes_snapshot_after_waiting_for_parent_lock(
             and compiled.statement.table.name == SystemSchema.workflow_status.name
             and parent_id in context.compiled_parameters[0].values()
         ):
+            assert conn.get_isolation_level() == (
+                "READ COMMITTED" if delete_children else "REPEATABLE READ"
+            )
             delete_pids.append(conn.connection.driver_connection.info.backend_pid)
             delete_started.set()
 
@@ -677,7 +684,7 @@ def test_delete_children_refreshes_snapshot_after_waiting_for_parent_lock(
         assert child_locked.wait(10)
         with ThreadPoolExecutor(max_workers=1) as executor:
             deletion = executor.submit(
-                rr_client.delete_workflow, parent_id, delete_children=True
+                rr_client.delete_workflow, parent_id, delete_children=delete_children
             )
             try:
                 assert delete_started.wait(10)
@@ -703,7 +710,7 @@ def test_delete_children_refreshes_snapshot_after_waiting_for_parent_lock(
 
         assert child_committed.wait(10)
         assert DBOS.get_workflow_status(parent_id) is None
-        assert DBOS.get_workflow_status(child_id) is None
+        assert (DBOS.get_workflow_status(child_id) is None) == delete_children
         with rr_client._sys_db.engine.connect() as conn:
             assert conn.get_isolation_level() == "REPEATABLE READ"
     finally:
@@ -721,11 +728,17 @@ def test_delete_children_refreshes_snapshot_after_waiting_for_parent_lock(
         rr_client.destroy()
 
 
+@pytest.mark.parametrize("phase", ["before-probe", "before-insert"])
 @pytest.mark.parametrize(
     "mode", ["sync", "async", "async-cancelled", "async-cancelled-error"]
 )
 def test_client_enqueue_refuses_a_deleted_parent(
-    dbos: DBOS, client: DBOSClient, monkeypatch: pytest.MonkeyPatch, mode: str
+    dbos: DBOS,
+    client: DBOSClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    phase: str,
+    skip_with_sharding: None,
 ) -> None:
     parent_id = str(uuid.uuid4())
     child_id = str(uuid.uuid4())
@@ -734,6 +747,19 @@ def test_client_enqueue_refuses_a_deleted_parent(
     attempt_finished = threading.Event()
     enqueue_from = client._enqueue_from
     enqueue_step = client._enqueue_step
+    get_owner = client._sys_db.get_workflow_owner
+    init_workflow = client._sys_db.init_workflow
+    fallback_calls: list[bool] = []
+
+    def pause_probe(*args: Any, **kwargs: Any) -> Any:
+        if phase == "before-probe":
+            ready.set()
+            assert enqueue.wait(10)
+        return get_owner(*args, **kwargs)
+
+    def observe_fallback(*args: Any, **kwargs: Any) -> Any:
+        fallback_calls.append(True)
+        return init_workflow(*args, **kwargs)
 
     def observe_step(*args: Any, **kwargs: Any) -> Any:
         try:
@@ -742,15 +768,18 @@ def test_client_enqueue_refuses_a_deleted_parent(
             attempt_finished.set()
 
     def pause_enqueue(*args: Any, **kwargs: Any) -> Any:
-        # The parent's step existence check has finished, but no child is written.
-        ready.set()
-        assert enqueue.wait(10)
+        if phase == "before-insert":
+            # Both owner probes have finished, but no child is written.
+            ready.set()
+            assert enqueue.wait(10)
         if mode == "async-cancelled-error":
             raise RuntimeError("target unavailable")
         return enqueue_from(*args, **kwargs)
 
     monkeypatch.setattr(client, "_enqueue_from", pause_enqueue)
     monkeypatch.setattr(client, "_enqueue_step", observe_step)
+    monkeypatch.setattr(client._sys_db, "get_workflow_owner", pause_probe)
+    monkeypatch.setattr(client._sys_db, "init_workflow", observe_fallback)
 
     @DBOS.workflow()
     def sync_parent() -> None:
@@ -797,6 +826,7 @@ def test_client_enqueue_refuses_a_deleted_parent(
         except DBOSException:
             pass
 
+    assert fallback_calls == []
     assert DBOS.get_workflow_status(parent_id) is None
     assert DBOS.get_workflow_status(child_id) is None
     with dbos._sys_db.engine.connect() as conn:

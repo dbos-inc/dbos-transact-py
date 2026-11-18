@@ -2171,7 +2171,8 @@ class SystemDatabase(ABC):
     ) -> None:
         with self.engine.connect() as c:
             if (
-                not self._is_sqlite
+                delete_children
+                and not self._is_sqlite
                 and not self._is_cockroach
                 and c.get_isolation_level() == "REPEATABLE READ"
             ):
