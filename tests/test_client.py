@@ -2510,6 +2510,7 @@ def test_client_enqueue_preserves_parent_and_target_metadata(
     try:
         handle = DBOS.start_workflow(parent if mode == "sync" else parent_async)
         child_id = handle.get_result()
+        assert isinstance(child_id, str)
         with target._sys_db.engine.connect() as conn:
             table = target._sys_db.tables.workflow_status
             row = (

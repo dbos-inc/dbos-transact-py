@@ -7,7 +7,9 @@ from typing import Any, Callable, List, Optional
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy import event
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.sql.dml import Delete
 
 from dbos import (
     DBOS,
@@ -561,7 +563,7 @@ def test_delete_workflow_includes_child_started_during_delete(
             not inserted_child
             and threading.current_thread() is deleting_thread
             and compiled is not None
-            and isinstance(compiled.statement, sa.sql.dml.Delete)
+            and isinstance(compiled.statement, Delete)
             and parent_id in context.compiled_parameters[0].values()
         ):
             inserted_child = True
@@ -573,7 +575,7 @@ def test_delete_workflow_includes_child_started_during_delete(
     engine = (
         dbos._sys_db.engine if delete_api.startswith("dbos") else client._sys_db.engine
     )
-    sa.event.listen(engine, "before_cursor_execute", start_child_before_delete)
+    event.listen(engine, "before_cursor_execute", start_child_before_delete)
     try:
         target = DBOS if delete_api.startswith("dbos") else client
         if delete_api.endswith("bulk"):
@@ -581,7 +583,7 @@ def test_delete_workflow_includes_child_started_during_delete(
         else:
             target.delete_workflow(root_id, delete_children=True)
     finally:
-        sa.event.remove(engine, "before_cursor_execute", start_child_before_delete)
+        event.remove(engine, "before_cursor_execute", start_child_before_delete)
         start_child.set()
         assert parent_handle.get_result() == 42
 
@@ -663,20 +665,23 @@ def test_delete_children_refreshes_snapshot_after_waiting_for_parent_lock(
         compiled = context.compiled
         if (
             compiled is not None
-            and isinstance(compiled.statement, sa.sql.dml.Delete)
-            and compiled.statement.table.name == SystemSchema.workflow_status.name
+            and isinstance(compiled.statement, Delete)
+            and getattr(compiled.statement.table, "name", None)
+            == SystemSchema.workflow_status.name
             and parent_id in context.compiled_parameters[0].values()
         ):
             assert conn.get_isolation_level() == (
                 "READ COMMITTED" if delete_children else "REPEATABLE READ"
             )
-            delete_pids.append(conn.connection.driver_connection.info.backend_pid)
+            connection = conn.connection.driver_connection
+            assert connection is not None
+            delete_pids.append(connection.info.backend_pid)
             delete_started.set()
 
     rr_engine = dbos._sys_db.engine.execution_options(isolation_level="REPEATABLE READ")
     rr_client = DBOSClient(system_database_engine=rr_engine)
-    sa.event.listen(dbos._sys_db.engine, "after_cursor_execute", hold_parent_lock)
-    sa.event.listen(rr_client._sys_db.engine, "before_cursor_execute", observe_delete)
+    event.listen(dbos._sys_db.engine, "after_cursor_execute", hold_parent_lock)
+    event.listen(rr_client._sys_db.engine, "before_cursor_execute", observe_delete)
     with SetWorkflowID(parent_id):
         parent_handle = DBOS.start_workflow(parent_workflow)
 
@@ -716,10 +721,8 @@ def test_delete_children_refreshes_snapshot_after_waiting_for_parent_lock(
     finally:
         commit_child.set()
         finish_parent.set()
-        sa.event.remove(dbos._sys_db.engine, "after_cursor_execute", hold_parent_lock)
-        sa.event.remove(
-            rr_client._sys_db.engine, "before_cursor_execute", observe_delete
-        )
+        event.remove(dbos._sys_db.engine, "after_cursor_execute", hold_parent_lock)
+        event.remove(rr_client._sys_db.engine, "before_cursor_execute", observe_delete)
         for handle in [parent_handle, *child_handles]:
             try:
                 handle.get_result()
@@ -793,7 +796,7 @@ def test_client_enqueue_refuses_a_deleted_parent(
 
     @DBOS.workflow()
     async def async_parent() -> None:
-        operation = asyncio.create_task(
+        operation: asyncio.Task[Any] = asyncio.create_task(
             client.enqueue_async(
                 {
                     "queue_name": "not-running",
