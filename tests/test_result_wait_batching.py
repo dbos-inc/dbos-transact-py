@@ -2,6 +2,7 @@ import asyncio
 import contextvars
 import gc
 import threading
+import time
 import uuid
 import weakref
 from typing import Any, Dict, List, Optional, Tuple
@@ -387,8 +388,15 @@ def test_status_watcher_releases_a_manually_closed_loop(dbos: DBOS) -> None:
     loop.close()
     loop_ref = weakref.ref(loop)
     del loop
-    gc.collect()
-    assert loop_ref() is None
+
+    # A read already in its thread holds the loop until it finishes; close doesn't wait.
+    deadline = time.monotonic() + 5
+    while True:
+        gc.collect()
+        if loop_ref() is None:
+            break
+        assert time.monotonic() < deadline, "the closed loop was never released"
+        time.sleep(0.05)
     assert len(dbos._sys_db._status_watchers) == 0
 
 
