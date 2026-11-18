@@ -2163,28 +2163,47 @@ class SystemDatabase(ABC):
     ) -> None:
         """Delete workflows and all associated data from the system database,
         and with delete_children every workflow they started, recursively."""
-        all_ids = list(workflow_ids)
-        if delete_children:
-            for wfid in workflow_ids:
-                all_ids.extend(self.get_workflow_children(wfid))
-        self._delete_workflows(all_ids)
+        if not delete_children:
+            self._delete_workflows(workflow_ids)
+            return
+
+        # Delete each level before reading its children, so a racing child start fails.
+        @db_retry(sys_db=self)
+        def delete_trees() -> None:
+            with self.engine.begin() as c:
+                visited: set[str] = set(workflow_ids)
+                level: list[str] = list(workflow_ids)
+                while level:
+                    self._delete_workflow_rows(c, level)
+                    level = [
+                        child
+                        for child in self._direct_children_txn(c, level)
+                        if child not in visited
+                    ]
+                    visited.update(level)
+
+        delete_trees()
 
     @db_retry()
     def _delete_workflows(self, workflow_ids: list[str]) -> None:
         with self.engine.begin() as c:
-            # The payload tables carry no foreign key, so the status delete does
-            # not cascade into them; without this they survive as orphans.
-            for table in (
-                self.tables.workflow_input,
-                self.tables.workflow_output,
-                self.tables.operation_outputs,
-            ):
-                c.execute(sa.delete(table).where(*self._wf_in(table, workflow_ids)))
-            c.execute(
-                sa.delete(self.tables.workflow_status).where(
-                    *self._wf_in(self.tables.workflow_status, workflow_ids)
-                )
+            self._delete_workflow_rows(c, workflow_ids)
+
+    def _delete_workflow_rows(self, c: sa.Connection, workflow_ids: list[str]) -> None:
+        # Status first: it waits out in-flight owned writes, so their payload goes too.
+        c.execute(
+            sa.delete(self.tables.workflow_status).where(
+                *self._wf_in(self.tables.workflow_status, workflow_ids)
             )
+        )
+        # The payload tables carry no foreign key, so the status delete does
+        # not cascade into them; without this they survive as orphans.
+        for table in (
+            self.tables.workflow_input,
+            self.tables.workflow_output,
+            self.tables.operation_outputs,
+        ):
+            c.execute(sa.delete(table).where(*self._wf_in(table, workflow_ids)))
 
     def rewind_workflow(
         self,
@@ -6672,11 +6691,19 @@ class SystemDatabase(ABC):
         if not workflow_ids:
             return []
         with self.engine.begin() as c:
-            child_rows = c.execute(
-                sa.select(self.tables.workflow_status.c.workflow_uuid).where(
-                    self.tables.workflow_status.c.parent_workflow_id.in_(workflow_ids)
-                )
-            ).fetchall()
+            return self._direct_children_txn(c, workflow_ids)
+
+    def _direct_children_txn(
+        self, c: sa.Connection, workflow_ids: list[str]
+    ) -> list[str]:
+        """_get_direct_children on the caller's connection, joining its transaction."""
+        if not workflow_ids:
+            return []
+        child_rows = c.execute(
+            sa.select(self.tables.workflow_status.c.workflow_uuid).where(
+                self.tables.workflow_status.c.parent_workflow_id.in_(workflow_ids)
+            )
+        ).fetchall()
         return [row[0] for row in child_rows]
 
     @db_retry()
