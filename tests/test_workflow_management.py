@@ -1,6 +1,8 @@
+import asyncio
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, List, Optional
 
 import pytest
@@ -17,6 +19,7 @@ from dbos import (
 from dbos._error import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
+    DBOSException,
     DBOSNonExistentWorkflowError,
     DBOSWorkflowCancelledError,
 )
@@ -601,6 +604,215 @@ def test_delete_workflow_includes_child_started_during_delete(
                 is None
             )
     assert DBOS.get_workflow_status(unrelated.get_workflow_id()) is not None
+
+
+def test_delete_children_refreshes_snapshot_after_waiting_for_parent_lock(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    parent_id = str(uuid.uuid4())
+    child_id = str(uuid.uuid4())
+    child_locked = threading.Event()
+    commit_child = threading.Event()
+    child_committed = threading.Event()
+    finish_parent = threading.Event()
+    delete_started = threading.Event()
+    delete_pids: list[int] = []
+    child_handles: list[WorkflowHandle[int]] = []
+
+    @DBOS.workflow()
+    def child_workflow() -> int:
+        return 42
+
+    @DBOS.workflow()
+    def parent_workflow() -> None:
+        with SetWorkflowID(child_id):
+            child_handles.append(DBOS.start_workflow(child_workflow))
+        child_committed.set()
+        assert finish_parent.wait(10)
+
+    def hold_parent_lock(
+        conn: sa.Connection,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        compiled = context.compiled
+        if (
+            not child_locked.is_set()
+            and compiled is not None
+            and "FOR NO KEY UPDATE" in statement.upper()
+            and parent_id in context.compiled_parameters[0].values()
+        ):
+            child_locked.set()
+            assert commit_child.wait(10)
+
+    def observe_delete(
+        conn: sa.Connection,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        compiled = context.compiled
+        if (
+            compiled is not None
+            and isinstance(compiled.statement, sa.sql.dml.Delete)
+            and compiled.statement.table.name == SystemSchema.workflow_status.name
+            and parent_id in context.compiled_parameters[0].values()
+        ):
+            delete_pids.append(conn.connection.driver_connection.info.backend_pid)
+            delete_started.set()
+
+    rr_engine = dbos._sys_db.engine.execution_options(isolation_level="REPEATABLE READ")
+    rr_client = DBOSClient(system_database_engine=rr_engine)
+    sa.event.listen(dbos._sys_db.engine, "after_cursor_execute", hold_parent_lock)
+    sa.event.listen(rr_client._sys_db.engine, "before_cursor_execute", observe_delete)
+    with SetWorkflowID(parent_id):
+        parent_handle = DBOS.start_workflow(parent_workflow)
+
+    try:
+        assert child_locked.wait(10)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            deletion = executor.submit(
+                rr_client.delete_workflow, parent_id, delete_children=True
+            )
+            try:
+                assert delete_started.wait(10)
+
+                def deletion_is_waiting() -> None:
+                    with dbos._sys_db.engine.connect() as conn:
+                        assert (
+                            conn.execute(
+                                sa.text(
+                                    "SELECT wait_event_type FROM pg_stat_activity WHERE pid = :pid"
+                                ),
+                                {"pid": delete_pids[0]},
+                            ).scalar()
+                            == "Lock"
+                        )
+
+                retry_until_success(
+                    deletion_is_waiting, interval=0.01, max_attempts=100
+                )
+            finally:
+                commit_child.set()
+            deletion.result(timeout=10)
+
+        assert child_committed.wait(10)
+        assert DBOS.get_workflow_status(parent_id) is None
+        assert DBOS.get_workflow_status(child_id) is None
+        with rr_client._sys_db.engine.connect() as conn:
+            assert conn.get_isolation_level() == "REPEATABLE READ"
+    finally:
+        commit_child.set()
+        finish_parent.set()
+        sa.event.remove(dbos._sys_db.engine, "after_cursor_execute", hold_parent_lock)
+        sa.event.remove(
+            rr_client._sys_db.engine, "before_cursor_execute", observe_delete
+        )
+        for handle in [parent_handle, *child_handles]:
+            try:
+                handle.get_result()
+            except DBOSException:
+                pass
+        rr_client.destroy()
+
+
+@pytest.mark.parametrize(
+    "mode", ["sync", "async", "async-cancelled", "async-cancelled-error"]
+)
+def test_client_enqueue_refuses_a_deleted_parent(
+    dbos: DBOS, client: DBOSClient, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    parent_id = str(uuid.uuid4())
+    child_id = str(uuid.uuid4())
+    ready = threading.Event()
+    enqueue = threading.Event()
+    attempt_finished = threading.Event()
+    enqueue_from = client._enqueue_from
+    enqueue_step = client._enqueue_step
+
+    def observe_step(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return enqueue_step(*args, **kwargs)
+        finally:
+            attempt_finished.set()
+
+    def pause_enqueue(*args: Any, **kwargs: Any) -> Any:
+        # The parent's step existence check has finished, but no child is written.
+        ready.set()
+        assert enqueue.wait(10)
+        if mode == "async-cancelled-error":
+            raise RuntimeError("target unavailable")
+        return enqueue_from(*args, **kwargs)
+
+    monkeypatch.setattr(client, "_enqueue_from", pause_enqueue)
+    monkeypatch.setattr(client, "_enqueue_step", observe_step)
+
+    @DBOS.workflow()
+    def sync_parent() -> None:
+        client.enqueue(
+            {
+                "queue_name": "not-running",
+                "workflow_name": "not-executed",
+                "workflow_id": child_id,
+            }
+        )
+
+    @DBOS.workflow()
+    async def async_parent() -> None:
+        operation = asyncio.create_task(
+            client.enqueue_async(
+                {
+                    "queue_name": "not-running",
+                    "workflow_name": "not-executed",
+                    "workflow_id": child_id,
+                }
+            )
+        )
+        if mode.startswith("async-cancelled"):
+            assert await asyncio.to_thread(ready.wait, 10)
+            operation.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await operation
+        else:
+            await operation
+
+    with SetWorkflowID(parent_id):
+        handle = DBOS.start_workflow(sync_parent if mode == "sync" else async_parent)
+    try:
+        assert ready.wait(10)
+        if mode.startswith("async-cancelled"):
+            # End the parent while its to_thread worker is still blocked.
+            handle.get_result()
+        client.delete_workflow(parent_id, delete_children=True)
+    finally:
+        enqueue.set()
+        assert attempt_finished.wait(10)
+        try:
+            handle.get_result()
+        except DBOSException:
+            pass
+
+    assert DBOS.get_workflow_status(parent_id) is None
+    assert DBOS.get_workflow_status(child_id) is None
+    with dbos._sys_db.engine.connect() as conn:
+        for table in (
+            dbos._sys_db.tables.workflow_input,
+            dbos._sys_db.tables.workflow_output,
+            dbos._sys_db.tables.operation_outputs,
+        ):
+            assert (
+                conn.execute(
+                    sa.select(sa.func.count())
+                    .select_from(table)
+                    .where(table.c.workflow_uuid.in_([parent_id, child_id]))
+                ).scalar_one()
+                == 0
+            )
 
 
 def test_bulk_cancel(dbos: DBOS) -> None:

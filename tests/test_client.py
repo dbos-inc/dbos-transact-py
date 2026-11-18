@@ -2398,14 +2398,14 @@ def test_client_enqueue_in_a_workflow_records_its_child(
     skip_with_sharding: None,
 ) -> None:
     inserts = 0
-    init_workflow = client._sys_db.init_workflow
+    init_workflow = client._sys_db.init_child_workflow
 
     def counting_init_workflow(status: Any, **kwargs: Any) -> Any:
         nonlocal inserts
         inserts += 1
         return init_workflow(status, **kwargs)
 
-    monkeypatch.setattr(client._sys_db, "init_workflow", counting_init_workflow)
+    monkeypatch.setattr(client._sys_db, "init_child_workflow", counting_init_workflow)
 
     @DBOS.workflow()
     def child_workflow() -> str:
@@ -2446,15 +2446,21 @@ def test_client_enqueue_in_a_workflow_records_its_child(
     ]
 
     # A replay returns the recorded child instead of enqueueing again.
-    forked = DBOS.fork_workflow(handle.workflow_id, 2)
-    assert forked.get_result() == child_id
+    with monkeypatch.context() as replay_patch:
+
+        def unavailable_target(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("target unavailable during replay")
+
+        replay_patch.setattr(client._sys_db, "get_workflow_owner", unavailable_target)
+        forked = DBOS.fork_workflow(handle.workflow_id, 2)
+        assert forked.get_result() == child_id
     assert inserts == 1
 
     # An enqueue that fails is recorded as the step's error, and names no child.
     def failing_init_workflow(status: Any, **kwargs: Any) -> Any:
         raise RuntimeError("enqueue failed")
 
-    monkeypatch.setattr(client._sys_db, "init_workflow", failing_init_workflow)
+    monkeypatch.setattr(client._sys_db, "init_child_workflow", failing_init_workflow)
     failed = DBOS.start_workflow(parent)
     with pytest.raises(RuntimeError, match="enqueue failed"):
         failed.get_result()
@@ -2463,6 +2469,75 @@ def test_client_enqueue_in_a_workflow_records_its_child(
         ("DBOSClient.enqueue", None)
     ]
     assert isinstance(steps[0]["error"], RuntimeError)
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("same_store", [True, False], ids=["same-store", "cross-store"])
+@pytest.mark.parametrize("target_app", [None, "child-app"])
+def test_client_enqueue_preserves_parent_and_target_metadata(
+    dbos: DBOS,
+    client: DBOSClient,
+    tmp_path: Path,
+    mode: str,
+    same_store: bool,
+    target_app: Optional[str],
+    skip_with_sharding: None,
+) -> None:
+    if same_store:
+        target = DBOSClient(
+            system_database_engine=dbos._sys_db.engine, application_name=target_app
+        )
+    else:
+        target = DBOSClient(
+            system_database_url=f"sqlite:///{tmp_path / 'target.sqlite'}",
+            application_name=target_app,
+            lazy=True,
+        )
+        target._sys_db.run_migrations()
+    options: EnqueueOptions = {
+        "queue_name": "not-running",
+        "workflow_name": "not-executed",
+    }
+
+    @DBOS.workflow()
+    def parent() -> str:
+        return target.enqueue(options, "input").workflow_id
+
+    @DBOS.workflow()
+    async def parent_async() -> str:
+        return (await target.enqueue_async(options, "input")).workflow_id
+
+    try:
+        handle = DBOS.start_workflow(parent if mode == "sync" else parent_async)
+        child_id = handle.get_result()
+        with target._sys_db.engine.connect() as conn:
+            table = target._sys_db.tables.workflow_status
+            row = (
+                conn.execute(sa.select(table).where(table.c.workflow_uuid == child_id))
+                .mappings()
+                .one()
+            )
+            assert row["parent_workflow_id"] == handle.workflow_id
+            assert row["application_name"] == target_app
+        with dbos._sys_db.engine.connect() as conn:
+            table = dbos._sys_db.tables.operation_outputs
+            row = (
+                conn.execute(
+                    sa.select(table).where(
+                        table.c.workflow_uuid == handle.workflow_id,
+                        table.c.function_name == "DBOSClient.enqueue",
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            assert row["child_workflow_id"] == child_id
+            assert row["application_name"] == dbos._sys_db.app_name
+        assert len(DBOS.list_workflow_steps(handle.workflow_id)) == 1
+        if not same_store:
+            assert DBOS.get_workflow_status(child_id) is None
+    finally:
+        target.destroy()
 
 
 @pytest.mark.parametrize("mode", ["sync", "async"])
@@ -2581,7 +2656,7 @@ def test_client_enqueue_binds_its_parents_shard_key(
         **options,
         "workflow_id": child_workflow_id("parent", 3, "parent-key", None),
     }
-    assert client._enqueue_from(parent, resolved, (), {}) == "parent-3"
+    assert client._enqueue_from(parent, resolved, (), {}) == ("parent-3", False)
     assert seen == [("parent-3", "parent", "parent-key")]
     assert bound_shard_key("parent") is None
 
@@ -2591,7 +2666,10 @@ def test_client_enqueue_binds_its_parents_shard_key(
         "shard_key": "child-key",
         "workflow_id": child_workflow_id("parent", 3, "parent-key", "child-key"),
     }
-    assert client._enqueue_from(parent, other, (), {}) == "10:parent-key:parent-3"
+    assert client._enqueue_from(parent, other, (), {}) == (
+        "10:parent-key:parent-3",
+        False,
+    )
     assert seen[-1] == ("10:parent-key:parent-3", "parent", "parent-key")
 
 
@@ -2617,8 +2695,8 @@ def test_client_enqueue_step_recognizes_its_own_child_when_run_again(
         return ctx
 
     # The step enqueued its child, then crashed before it was recorded: running it again is no reuse.
-    assert client._enqueue_from(step(1), options, (), {}) == workflow_id
-    assert client._enqueue_from(step(1), options, (), {}) == workflow_id
+    assert client._enqueue_from(step(1), options, (), {}) == (workflow_id, False)
+    assert client._enqueue_from(step(1), options, (), {}) == (workflow_id, False)
     assert len(client.list_workflows(workflow_ids=[workflow_id])) == 1
 
     # Another step, or a caller outside a workflow, did not create the row.

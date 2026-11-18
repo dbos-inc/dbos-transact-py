@@ -2169,33 +2169,44 @@ class SystemDatabase(ABC):
     def _delete_workflows(
         self, workflow_ids: list[str], *, delete_children: bool = False
     ) -> None:
-        with self.engine.begin() as c:
-            visited = set(workflow_ids)
-            frontier = list(workflow_ids)
-            while frontier:
-                # Lock and remove parents before finding their children. A child
-                # start holds the parent's owner lock until its insert commits.
-                c.execute(
-                    sa.delete(self.tables.workflow_status).where(
-                        *self._wf_in(self.tables.workflow_status, frontier)
+        with self.engine.connect() as c:
+            if (
+                not self._is_sqlite
+                and not self._is_cockroach
+                and c.get_isolation_level() == "REPEATABLE READ"
+            ):
+                # Refresh the child-query snapshot after waiting for a parent
+                # lock. The connection restores its configured level on return.
+                c.execution_options(isolation_level="READ COMMITTED")
+            with c.begin():
+                visited = set(workflow_ids)
+                frontier = list(workflow_ids)
+                while frontier:
+                    # Lock and remove parents before finding their children. A child
+                    # start holds the parent's owner lock until its insert commits.
+                    c.execute(
+                        sa.delete(self.tables.workflow_status).where(
+                            *self._wf_in(self.tables.workflow_status, frontier)
+                        )
                     )
-                )
-                # Payload tables have no foreign key, so delete their rows too.
-                for table in (
-                    self.tables.workflow_input,
-                    self.tables.workflow_output,
-                    self.tables.operation_outputs,
-                ):
-                    c.execute(sa.delete(table).where(*self._wf_in(table, frontier)))
-                if not delete_children:
-                    break
-                children = c.execute(
-                    sa.select(self.tables.workflow_status.c.workflow_uuid).where(
-                        self.tables.workflow_status.c.parent_workflow_id.in_(frontier)
-                    )
-                ).scalars()
-                frontier = [child for child in children if child not in visited]
-                visited.update(frontier)
+                    # Payload tables have no foreign key, so delete their rows too.
+                    for table in (
+                        self.tables.workflow_input,
+                        self.tables.workflow_output,
+                        self.tables.operation_outputs,
+                    ):
+                        c.execute(sa.delete(table).where(*self._wf_in(table, frontier)))
+                    if not delete_children:
+                        break
+                    children = c.execute(
+                        sa.select(self.tables.workflow_status.c.workflow_uuid).where(
+                            self.tables.workflow_status.c.parent_workflow_id.in_(
+                                frontier
+                            )
+                        )
+                    ).scalars()
+                    frontier = [child for child in children if child not in visited]
+                    visited.update(frontier)
 
     def rewind_workflow(
         self,
@@ -3729,6 +3740,9 @@ class SystemDatabase(ABC):
         function_name: str,
         started_at_epoch_ms: int,
         error: Exception,
+        *,
+        owner_xid: Optional[str] = None,
+        owner_key: Optional[str] = None,
     ) -> None:
         """Checkpoint an internal operation's failure so a replay re-raises it instead of re-running."""
         try:
@@ -3752,7 +3766,9 @@ class SystemDatabase(ABC):
                 "error": serialized_e,
                 "serialization": serialization,
                 "child_workflow_id": None,
-            }
+            },
+            owner_xid=owner_xid,
+            owner_key=owner_key,
         )
 
     def _raise_recorded_error(self, recorded: RecordedResult) -> None:
@@ -6015,6 +6031,7 @@ class SystemDatabase(ABC):
         started_at_epoch_ms: int,
         reuse_policy: Optional[WorkflowIDReusePolicy] = None,
         parent_owner_xid: Optional[str] = None,
+        parent_system_database: Optional["SystemDatabase"] = None,
     ) -> tuple[WorkflowStatuses, bool]:
         """Insert a child's status row and record it as the parent's step in one transaction, so a crash leaves both or neither.
 
@@ -6044,7 +6061,7 @@ class SystemDatabase(ABC):
                     started_at_epoch_ms=started_at_epoch_ms,
                     completed_at_epoch_ms=int(time.time() * 1000),
                     retention_timestamp=self._now_ms_sql(),
-                    application_name=self.app_name,
+                    application_name=(parent_system_database or self).app_name,
                 )
                 .on_conflict_do_nothing()
                 .returning(self.tables.operation_outputs.c.function_id)

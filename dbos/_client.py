@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 from dbos._context import (
     DBOSContext,
     child_workflow_id,
+    current_owner_xid,
     get_local_dbos_context,
     refuse_in_workflow_body,
     snapshot_step_context,
@@ -66,6 +67,7 @@ from dbos._error import (
     DBOSExternalStoreNotConfiguredError,
     DBOSNonExistentWorkflowError,
     DBOSQueueDeduplicatedError,
+    DBOSWorkflowConflictIDError,
 )
 from dbos._external_storage import (
     ExternalObjectRef,
@@ -478,7 +480,8 @@ class DBOSClient:
         options: EnqueueOptions,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
-    ) -> str:
+        parent_system_database: Optional[SystemDatabase] = None,
+    ) -> tuple[str, bool]:
         workflow_id, status = self._build_enqueue_status(options, *args, **kwargs)
         parent_keys: Dict[str, Optional[str]] = {}
         if parent is not None:
@@ -496,12 +499,28 @@ class DBOSClient:
         with bind_shard_keys(parent_keys):
             while True:
                 try:
+                    if parent_system_database is not None:
+                        assert parent is not None
+                        self._sys_db.init_child_workflow(
+                            status,
+                            creator_xid=creator_xid,
+                            parent_workflow_id=parent.workflow_id,
+                            parent_function_id=parent.function_id,
+                            parent_owner_xid=current_owner_xid(
+                                parent.workflow_id, parent
+                            ),
+                            function_name=_ENQUEUE_STEP,
+                            started_at_epoch_ms=int(time.time() * 1000),
+                            reuse_policy=options.get("workflow_id_reuse_policy"),
+                            parent_system_database=parent_system_database,
+                        )
+                        return workflow_id, True
                     self._sys_db.init_workflow(
                         status,
                         creator_xid=creator_xid,
                         reuse_policy=options.get("workflow_id_reuse_policy"),
                     )
-                    return workflow_id
+                    return workflow_id, False
                 except DBOSQueueDeduplicatedError:
                     if not return_existing:
                         raise
@@ -514,7 +533,7 @@ class DBOSClient:
                         queue_name, dedup_id
                     )
                     if existing_id is not None:
-                        return existing_id
+                        return existing_id, False
                     # The holder released the deduplication ID between our insert and this
                     # lookup (it completed or was cancelled), so retry to claim the slot.
 
@@ -528,7 +547,7 @@ class DBOSClient:
         """Enqueue a workflow. From a workflow body, the enqueue is a step of the calling
         workflow that records the enqueued workflow as its child."""
         if parent is None:
-            return self._enqueue_from(None, options, args, kwargs)
+            return self._enqueue_from(None, options, args, kwargs)[0]
         from dbos._dbos import _get_dbos_instance
 
         sys_db = _get_dbos_instance()._sys_db
@@ -539,10 +558,33 @@ class DBOSClient:
             sys_db._raise_recorded_error(recorded)
             assert recorded["child_workflow_id"] is not None
             return recorded["child_workflow_id"]
+        parent_owner = current_owner_xid(parent.workflow_id, parent)
+        assert parent_owner is not None
         started_at_epoch_ms = int(time.time() * 1000)
         try:
+            # Probe the target before confirming the source owner. If they are
+            # the same store, a deleted/replaced parent cannot fall through to
+            # the cross-database path between the probe and the confirmation.
+            target_has_parent = False
+            if self._sys_db.sharded == sys_db.sharded:
+                with self._sys_db._own_key(parent.workflow_id, parent):
+                    target_has_parent = (
+                        self._sys_db.get_workflow_owner(parent.workflow_id)
+                        == parent_owner
+                    )
+            with sys_db._own_key(parent.workflow_id, parent):
+                if sys_db.get_workflow_owner(parent.workflow_id) != parent_owner:
+                    raise DBOSWorkflowConflictIDError(parent.workflow_id)
             # Enqueue on the remote
-            workflow_id = self._enqueue_from(parent, options, args, kwargs)
+            workflow_id, recorded_atomically = self._enqueue_from(
+                parent,
+                options,
+                args,
+                kwargs,
+                parent_system_database=sys_db if target_has_parent else None,
+            )
+        except DBOSWorkflowConflictIDError:
+            raise
         except Exception as e:
             sys_db._record_operation_error(
                 parent.workflow_id,
@@ -550,8 +592,12 @@ class DBOSClient:
                 _ENQUEUE_STEP,
                 started_at_epoch_ms,
                 e,
+                owner_xid=parent_owner,
+                owner_key=parent.shard_key,
             )
             raise
+        if recorded_atomically:
+            return workflow_id
         # Record child workflow ID in the "local" (parent DBOS context)
         with bind_shard_keys({workflow_id: options.get("shard_key")}):
             sys_db.record_operation_result(
@@ -564,7 +610,9 @@ class DBOSClient:
                     "error": None,
                     "serialization": None,
                     "child_workflow_id": workflow_id,
-                }
+                },
+                owner_xid=parent_owner,
+                owner_key=parent.shard_key,
             )
         return workflow_id
 
