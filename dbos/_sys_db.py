@@ -1134,6 +1134,14 @@ class SystemDatabase(ABC):
             return sa.cast(sa.func.strftime("%s", "now") * 1000, sa.BigInteger)
         return sa.cast(sa.func.extract("epoch", sa.func.now()) * 1000, sa.BigInteger)
 
+    def _statement_ms_sql(self) -> Any:
+        # Statement time, as workflow_status.created_at defaults to: now() is the transaction's start.
+        if self.engine.dialect.name == "sqlite":
+            return self._now_ms_sql()
+        return sa.cast(
+            sa.func.extract("epoch", sa.func.clock_timestamp()) * 1000, sa.BigInteger
+        )
+
     # Key helpers: every statement locates a workflow's rows through these, so a sharded
     # subclass can add the shard key without rewriting the statement.
 
@@ -2651,7 +2659,8 @@ class SystemDatabase(ABC):
                             oo.c.started_at_epoch_ms,
                             oo.c.completed_at_epoch_ms,
                             mapping_subquery.c.owner,
-                            self._now_ms_sql(),
+                            # Never before the fork's created_at, which retention's payload sweep relies on.
+                            self._statement_ms_sql(),
                             *child_key_columns,
                         ).select_from(
                             mapping_subquery.join(
