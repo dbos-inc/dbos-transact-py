@@ -353,6 +353,8 @@ class DBOSClient:
         sharding: bool = False,
         external_stores: Optional[Sequence[ExternalStore]] = None,
         workflow_archive: Optional[WorkflowArchive] = None,
+        conductor_url: Optional[str] = None,
+        conductor_key: Optional[str] = None,
     ):
         """Create a client for interacting with a DBOS application from outside it.
 
@@ -380,6 +382,8 @@ class DBOSClient:
             sys_db_idle_transaction_timeout_sec (float): Postgres idle_in_transaction_session_timeout, in seconds, for the system database connections this client creates. Defaults to 60.0. Set to a non-positive value to leave the server's setting in place. Not applied to a custom system_database_engine.
             external_stores (List[ExternalStore]): The object stores for store_external_object and load_external_object, matching the application's. If there are multiple, store_external_object must specify one with store_id. Requires Transact Enterprise.
             workflow_archive (WorkflowArchive): The application's workflow archive, if it has one.
+            conductor_key (str): An API key for DBOS Conductor. Pass this in to reach the application through Conductor instead of its system database. Mutually exclusive with system_database_url and system_database_engine. Requires application_name and Transact Enterprise.
+            conductor_url (str): The websockets URL for your DBOS Conductor service. Only set if you're self-hosting Conductor. Requires conductor_key.
 
         Raises:
             Exception: If the system database cannot be reached, unless lazy is True.
@@ -390,6 +394,52 @@ class DBOSClient:
                 "A DBOSClient cannot be both lazy and use_listen_notify: the notification listener connects immediately."
             )
         self._serializer = serializer
+        self._sys_db_field: Optional[SystemDatabase] = None
+        self._conductor: Optional[_enterprise.ConductorThread] = None
+        self._external_storage_field: Optional[ExternalStorage] = None
+        self._workflow_archive: Optional[WorkflowArchive] = None
+        self._notification_listener_thread: Optional[threading.Thread] = None
+        if conductor_key is not None or conductor_url is not None:
+            if system_database_url is not None or system_database_engine is not None:
+                raise DBOSException(
+                    "A DBOSClient takes either a conductor_key or a system database, not both."
+                )
+            if conductor_key is None or application_name is None:
+                raise DBOSException(
+                    "A DBOSClient connecting through Conductor requires a conductor_key and an application_name."
+                )
+            if (
+                use_listen_notify
+                or sharding
+                or external_stores
+                or workflow_archive is not None
+            ):
+                raise DBOSException(
+                    "use_listen_notify, sharding, external_stores and workflow_archive are not supported with a conductor_key."
+                )
+            if conductor_url is None:
+                conductor_url = _enterprise.default_conductor_url()
+            self._conductor = _enterprise.load(
+                _enterprise.CONDUCTOR_CLIENT
+            ).ConductorWebsocket(
+                None,
+                app_name=application_name,
+                conductor_url=conductor_url,
+                conductor_key=conductor_key,
+                executor_metadata=None,
+                metadata_only_mode=False,
+                alert_handler=None,
+                connection_type=_enterprise.CONNECTION_TYPE_CLIENT,
+                serializer=self._serializer,
+            )
+            self._conductor.start()
+            if not lazy:
+                try:
+                    self._conductor.check_connection()
+                except BaseException:
+                    self._conductor.stop()
+                    raise
+            return
         if system_database_engine:
             if "sqlite" in system_database_engine.dialect.name:
                 system_database_url = "sqlite:///custom_system_database_engine.sqlite"
@@ -414,7 +464,7 @@ class DBOSClient:
                 _enterprise.EXTERNAL_STORAGE.description
             ).ExternalStorage
         # We only create database connections but do not run migrations
-        self._sys_db = SystemDatabase.create(
+        self._sys_db_field = SystemDatabase.create(
             system_database_url=system_database_url,
             engine_kwargs={
                 "connect_args": {"application_name": "dbos_transact_client"},
@@ -445,12 +495,10 @@ class DBOSClient:
         # Cancels through the client queue their workflows for the application's archiver.
         self._sys_db.archive_completions = workflow_archive is not None
         self._workflow_archive = workflow_archive
-        self._external_storage_field: Optional[ExternalStorage] = None
         if external_storage_factory is not None:
             self._external_storage_field = external_storage_factory(
                 self._sys_db, stores=stores, serializer=serializer
             )
-        self._notification_listener_thread: Optional[threading.Thread] = None
         if not lazy:
             self._sys_db.check_connection()
             if use_listen_notify:
@@ -460,6 +508,14 @@ class DBOSClient:
                     daemon=True,
                 )
                 self._notification_listener_thread.start()
+
+    @property
+    def _sys_db(self) -> SystemDatabase:
+        if self._sys_db_field is None:
+            raise DBOSException(
+                "This operation is not supported by a DBOSClient created with a conductor_key."
+            )
+        return self._sys_db_field
 
     def check_connection(self) -> None:
         """Verify the client can reach the system database, raising if it cannot. Call it from a step, not a workflow."""
