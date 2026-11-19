@@ -1615,6 +1615,11 @@ def get_dbos_migration_hundredthirtyfive(quoted_schema: str, is_cockroach: bool)
     return f'CREATE INDEX {c} IF NOT EXISTS "idx_workflow_status_archive_pending" ON {quoted_schema}."workflow_status" ("application_name", "completed_at", "workflow_uuid") WHERE "archive_pending" IS TRUE'
 
 
+def get_dbos_migration_hundredthirtysix(quoted_schema: str) -> str:
+    # Workflows SUSPENDED awaiting this one's result.
+    return f"""ALTER TABLE {quoted_schema}."workflow_status" ADD COLUMN IF NOT EXISTS "result_waiter_ids" TEXT[] DEFAULT NULL;"""
+
+
 def get_dbos_migrations(
     schema: str, use_listen_notify: bool, is_cockroach: bool = False
 ) -> list[str]:
@@ -1707,6 +1712,7 @@ def get_dbos_migrations(
         get_dbos_migration_hundredthirtythree(quoted_schema),
         get_dbos_migration_hundredthirtyfour(quoted_schema),
         get_dbos_migration_hundredthirtyfive(quoted_schema, is_cockroach),
+        get_dbos_migration_hundredthirtysix(quoted_schema),
     ]
 
 
@@ -2190,6 +2196,10 @@ sqlite_migration_hundredthirtyfour = (
 
 sqlite_migration_hundredthirtyfive = 'CREATE INDEX IF NOT EXISTS "idx_workflow_status_archive_pending" ON "workflow_status" ("application_name", "completed_at", "workflow_uuid") WHERE "archive_pending" IS TRUE'
 
+sqlite_migration_hundredthirtysix = (
+    """ALTER TABLE workflow_status ADD COLUMN "result_waiter_ids" TEXT DEFAULT NULL;"""
+)
+
 sqlite_migrations = [
     *_pad_to_shared_base(_sqlite_history),
     sqlite_migration_hundred,
@@ -2233,4 +2243,5 @@ sqlite_migrations = [
     "",
     sqlite_migration_hundredthirtyfour,
     sqlite_migration_hundredthirtyfive,
+    sqlite_migration_hundredthirtysix,
 ]

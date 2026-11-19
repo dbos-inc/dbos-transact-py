@@ -3,17 +3,20 @@ suspend mode the calls are refused. Waking a suspended recv is core: every send 
 so a sender without suspend mode still wakes a workflow another process parked. The
 operations themselves are tested in dbos-enterprise."""
 
+import threading
 import uuid
-from typing import Any, List, Tuple
+from types import SimpleNamespace
+from typing import Any, List, Tuple, cast
 
 import pytest
 import sqlalchemy as sa
 from sqlalchemy import event
 
 from dbos import DBOS, DBOSClient, SetWorkflowID
+from dbos._core import result_suspend_hooks
 from dbos._error import DBOSException, DBOSWorkflowSuspendedError
 from dbos._outcome import NoResult
-from dbos._sys_db import WorkflowStatusString
+from dbos._sys_db import WorkflowStatusString, result_suspend_key
 from tests.conftest import retry_until_success
 
 
@@ -276,3 +279,185 @@ def test_send_wake_update_query_plan(
         ]
     assert not any("idx_workflow_status_suspended" in d for d in plan), plan
     assert any("workflow_status_pkey" in d for d in plan), plan
+
+
+def test_suspended_error_names_the_awaited_workflow() -> None:
+    assert (
+        DBOSWorkflowSuspendedError("w", None, awaited_workflow_id="a").message
+        == "Workflow w suspended awaiting the result of workflow a"
+    )
+
+
+def test_get_result_suspend_is_refused_without_suspend_mode(dbos: DBOS) -> None:
+    """Refused outside a workflow, and inside one without suspend mode, through handles and DBOS.get_result."""
+    assert dbos._sys_db.suspend is None
+
+    @DBOS.workflow()
+    def target() -> str:
+        return "x"
+
+    @DBOS.workflow()
+    def by_handle(wfid: str) -> str:
+        return str(DBOS.retrieve_workflow(wfid).get_result(suspend=True))
+
+    @DBOS.workflow()
+    def by_id(wfid: str) -> str:
+        return str(DBOS.get_result(wfid, suspend=True))
+
+    target_id = str(uuid.uuid4())
+    with SetWorkflowID(target_id):
+        target()
+    for wf in (by_handle, by_id):
+        handle = DBOS.start_workflow(wf, target_id)
+        with pytest.raises(DBOSException, match="requires suspend mode"):
+            handle.get_result()
+    with pytest.raises(DBOSException, match="must be called from within a workflow"):
+        DBOS.retrieve_workflow(target_id).get_result(suspend=True)
+    with pytest.raises(DBOSException, match="must be called from within a workflow"):
+        DBOS.get_result(target_id, suspend=True)
+
+
+def test_completion_wakes_result_waiters_without_suspend_mode(
+    dbos: DBOS, skip_with_sharding: None
+) -> None:
+    """Parks waiters by hand, as dbos-enterprise's get_result would: success, error, cancel,
+    dead-letter and the timeout sweep each make the awaited workflow's waiters due and clear
+    its list, and a listed waiter parked on another workflow stays parked."""
+    assert dbos._sys_db.suspend is None
+    sys_db = dbos._sys_db
+    ws = sys_db.tables.workflow_status
+    release = threading.Event()
+
+    @DBOS.workflow()
+    def target(fail: bool) -> str:
+        assert release.wait(10)
+        if fail:
+            raise RuntimeError("failed")
+        return "done"
+
+    @DBOS.workflow()
+    def parked() -> None:
+        pass
+
+    def park(awaited_id: str) -> str:
+        wfid = str(uuid.uuid4())
+        with SetWorkflowID(wfid):
+            parked()
+        with sys_db.engine.begin() as c:
+            c.execute(
+                sa.update(ws)
+                .where(ws.c.workflow_uuid == wfid)
+                .values(
+                    status=WorkflowStatusString.SUSPENDED.value,
+                    suspend_key=result_suspend_key(awaited_id),
+                    delay_until_epoch_ms=None,
+                )
+            )
+        return wfid
+
+    def row(wfid: str) -> Any:
+        with sys_db.engine.connect() as c:
+            return c.execute(
+                sa.select(ws.c.delay_until_epoch_ms, ws.c.result_waiter_ids).where(
+                    ws.c.workflow_uuid == wfid
+                )
+            ).one()
+
+    def start(fail: bool = False) -> Tuple[str, List[str], str]:
+        """A running target with two waiters parked on it and one parked elsewhere."""
+        handle = DBOS.start_workflow(target, fail)
+        waiters = [park(handle.workflow_id), park(handle.workflow_id)]
+        other = park(str(uuid.uuid4()))
+        with sys_db.engine.begin() as c:
+            c.execute(
+                sa.update(ws)
+                .where(ws.c.workflow_uuid == handle.workflow_id)
+                .values(result_waiter_ids=[*waiters, other])
+            )
+        return handle.workflow_id, waiters, other
+
+    def check(target_id: str, waiters: List[str], other: str) -> None:
+        assert [row(w)[0] for w in waiters] == [0, 0]
+        assert row(other)[0] is None
+
+        def cleared() -> None:
+            assert row(target_id)[1] is None
+
+        retry_until_success(cleared, interval=0.1, max_attempts=50)
+
+    # Each completes while the target still runs, except success and error, released at the end.
+    succeeded, failed = start(), start(fail=True)
+    cancelled = start()
+    DBOS.cancel_workflow(cancelled[0])
+    check(*cancelled)
+    dead = start()
+    sys_db.dead_letter_workflows([dead[0]], min_recovery_attempts=0)
+    check(*dead)
+    timed_out = start()
+    with sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(ws)
+            .where(ws.c.workflow_uuid == timed_out[0])
+            .values(workflow_deadline_epoch_ms=1)
+        )
+    assert timed_out[0] in sys_db.cancel_timed_out_workflows(100)
+    check(*timed_out)
+    release.set()
+    assert DBOS.retrieve_workflow(succeeded[0]).get_result() == "done"
+    check(*succeeded)
+    with pytest.raises(RuntimeError):
+        DBOS.retrieve_workflow(failed[0]).get_result()
+    check(*failed)
+
+
+def test_clear_result_waiters_keeps_changed_rows(
+    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
+    """The clear after a one-statement completion removes only the waiters it woke, and only
+    while the row is still complete with the completion time that write gave it."""
+    sys_db = dbos._sys_db
+    ws = sys_db.tables.workflow_status
+
+    @DBOS.workflow()
+    def target() -> None:
+        pass
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        target()
+
+    def set_row(**values: Any) -> int:
+        with sys_db.engine.begin() as c:
+            c.execute(sa.update(ws).where(ws.c.workflow_uuid == wfid).values(**values))
+            return int(
+                c.execute(
+                    sa.select(ws.c.completed_at).where(ws.c.workflow_uuid == wfid)
+                ).scalar_one()
+            )
+
+    def waiters() -> Any:
+        with sys_db.engine.connect() as c:
+            return c.execute(
+                sa.select(ws.c.result_waiter_ids).where(ws.c.workflow_uuid == wfid)
+            ).scalar_one()
+
+    completed_at = set_row(result_waiter_ids=["a", "b", "c"])
+    sys_db._clear_result_waiters(wfid, ["a", "b"], completed_at + 1)
+    assert waiters() == ["a", "b", "c"]
+    set_row(status=WorkflowStatusString.ENQUEUED.value)
+    sys_db._clear_result_waiters(wfid, ["a", "b"], completed_at)
+    assert waiters() == ["a", "b", "c"]
+    set_row(status=WorkflowStatusString.SUCCESS.value)
+    sys_db._clear_result_waiters(wfid, ["a", "b"], completed_at)
+    assert waiters() == ["c"]
+    sys_db._clear_result_waiters(wfid, ["c"], completed_at)
+    assert waiters() is None
+
+
+def test_get_result_suspend_is_refused_when_sharded() -> None:
+    ctx = cast(Any, SimpleNamespace(is_workflow=lambda: True, workflow_id="w"))
+    dbos = cast(
+        Any, SimpleNamespace(_sys_db=SimpleNamespace(suspend=object(), sharded=True))
+    )
+    with pytest.raises(DBOSException, match="not supported on a sharded"):
+        result_suspend_hooks(dbos, ctx)

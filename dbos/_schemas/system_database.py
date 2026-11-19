@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from sqlalchemy import (
+    ARRAY,
     JSON,
     BigInteger,
     Boolean,
@@ -83,6 +84,12 @@ class SystemSchema:
         Column("application_name", Text, nullable=True),
         # Topic a SUSPENDED recv waits on; delay_until_epoch_ms holds its wake time.
         Column("suspend_key", Text, nullable=True),
+        # Workflows SUSPENDED awaiting this one's result; woken and cleared when it completes.
+        Column(
+            "result_waiter_ids",
+            ARRAY(Text).with_variant(JSON(), "sqlite"),
+            nullable=True,
+        ),
         # TRUE from a terminal transition until the archiver has written it; else NULL.
         Column("archive_pending", Boolean, nullable=True),
     )

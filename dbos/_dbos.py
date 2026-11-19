@@ -75,6 +75,7 @@ from ._core import (
     read_stream_offset_async,
     record_sleep,
     record_sleep_suspend,
+    result_suspend_hooks,
     run_step,
     run_step_async,
     send_bulk,
@@ -1972,32 +1973,53 @@ class DBOS:
 
     @classmethod
     def get_result(
-        cls, workflow_id: str, *, shard_key: Optional[str] = None
+        cls,
+        workflow_id: str,
+        *,
+        shard_key: Optional[str] = None,
+        suspend: bool = False,
     ) -> Optional[Any]:
-        """Await and return the result of a workflow execution."""
+        """Await and return the result of a workflow execution.
+
+        With `suspend=True` (Transact Enterprise), a wait parks the calling workflow in the database
+        instead of holding a thread; the awaited workflow's completion re-enqueues it.
+        """
         with bind_shard_keys({workflow_id: shard_key}):
             check_async("get_result")
+            step_ctx = snapshot_step_context(reserve_sleep_id=False)
+            dbos = _get_dbos_instance()
+            hooks = result_suspend_hooks(dbos, step_ctx) if suspend else None
 
             def fn() -> Optional[Any]:
-                return _get_dbos_instance()._sys_db.await_workflow_result(
+                if hooks is not None:
+                    hooks[0].get_result_suspend(hooks[1], workflow_id)
+                return dbos._sys_db.await_workflow_result(
                     workflow_id, DEFAULT_POLLING_INTERVAL
                 )
 
-            return _get_dbos_instance()._sys_db.call_function_as_step(
-                fn, "DBOS.getResult", snapshot_step_context(reserve_sleep_id=False)
-            )
+            return dbos._sys_db.call_function_as_step(fn, "DBOS.getResult", step_ctx)
 
     @classmethod
     async def get_result_async(
-        cls, workflow_id: str, *, shard_key: Optional[str] = None
+        cls,
+        workflow_id: str,
+        *,
+        shard_key: Optional[str] = None,
+        suspend: bool = False,
     ) -> Optional[Any]:
         """Await and return the result of a workflow execution."""
         with bind_shard_keys({workflow_id: shard_key}):
             step_ctx = snapshot_step_context(reserve_sleep_id=False)
             await cls._configure_asyncio_thread_pool()
             dbos = _get_dbos_instance()
+            hooks = result_suspend_hooks(dbos, step_ctx) if suspend else None
 
             async def fn() -> Optional[Any]:
+                if hooks is not None:
+                    # to_thread copies the context, so the hook sees this execution's owner token.
+                    await asyncio.to_thread(
+                        hooks[0].get_result_suspend, hooks[1], workflow_id
+                    )
                 return await dbos._sys_db.await_workflow_result_async(
                     workflow_id, DEFAULT_POLLING_INTERVAL
                 )
@@ -4995,9 +5017,16 @@ class WorkflowHandle(Generic[R], Protocol):
         ...
 
     def get_result(
-        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+        self,
+        *,
+        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
+        suspend: bool = False,
     ) -> R:
-        """Return the result of the workflow function invocation, waiting if necessary."""
+        """Return the result of the workflow function invocation, waiting if necessary.
+
+        With `suspend=True` (Transact Enterprise), a wait parks the calling workflow in the database
+        instead of holding a thread; the awaited workflow's completion re-enqueues it.
+        """
         ...
 
     def get_status(self) -> WorkflowStatus:
@@ -5027,9 +5056,16 @@ class WorkflowHandleAsync(Generic[R], Protocol):
         ...
 
     async def get_result(
-        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+        self,
+        *,
+        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
+        suspend: bool = False,
     ) -> R:
-        """Return the result of the workflow function invocation, waiting if necessary."""
+        """Return the result of the workflow function invocation, waiting if necessary.
+
+        With `suspend=True` (Transact Enterprise), a wait parks the calling workflow in the database
+        instead of holding a thread; the awaited workflow's completion re-enqueues it.
+        """
         ...
 
     async def get_status(self) -> WorkflowStatus:

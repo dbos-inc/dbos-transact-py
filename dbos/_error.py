@@ -521,8 +521,16 @@ class DBOSWorkflowSuspendedError(DBOSBaseException):
     of the sleep re-enqueues the workflow.
     """
 
-    def __init__(self, workflow_id: str, topic: Optional[str]) -> None:
-        if topic is None:
+    def __init__(
+        self,
+        workflow_id: str,
+        topic: Optional[str],
+        *,
+        awaited_workflow_id: Optional[str] = None,
+    ) -> None:
+        if awaited_workflow_id is not None:
+            waiting = f"awaiting the result of workflow {awaited_workflow_id}"
+        elif topic is None:
             waiting = "sleeping"
         elif topic == "__null__topic__":
             # A recv with no topic waits on the system database's null topic.
