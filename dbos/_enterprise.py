@@ -39,9 +39,10 @@ from ._utils import GlobalParams
 
 if TYPE_CHECKING:
     from ._dbos import DBOS
+    from ._enqueue_options import EnqueueOptions
     from ._external_storage import ExternalObjectRef, ExternalStore
     from ._serialization import Serializer, WorkflowSerializationFormat
-    from ._sys_db import SystemDatabase
+    from ._sys_db import SendMessage, StepInfo, SystemDatabase, WorkflowStatus
     from ._workflow_archive import WorkflowArchive
 
 # Receives a Conductor alert as (name, message, metadata).
@@ -56,6 +57,150 @@ class ConductorThread(Protocol):
     def stop(self) -> None: ...
 
 
+class ConductorClient(Protocol):
+    """The Conductor connection of a DBOSClient created with a conductor_key, run as a background thread for the
+    life of the client. Each request is relayed by Conductor to an executor of the application.
+    """
+
+    def start(self) -> None: ...
+
+    def stop(self) -> None: ...
+
+    def check_connection(self) -> None: ...
+
+    def list_workflows(self, filters: Dict[str, Any]) -> List["WorkflowStatus"]: ...
+
+    def workflow_handle(
+        self, workflow_id: str, *, shard_key: Optional[str], is_async: bool
+    ) -> Any: ...
+
+    def retrieve_workflow(
+        self, workflow_id: str, *, shard_key: Optional[str], is_async: bool
+    ) -> Any: ...
+
+    def await_first_workflow_id(
+        self, workflow_ids: List[str], polling_interval: float
+    ) -> str: ...
+
+    def list_workflow_steps(
+        self,
+        workflow_id: str,
+        *,
+        load_output: bool,
+        limit: Optional[int],
+        offset: Optional[int],
+        shard_key: Optional[str],
+    ) -> List["StepInfo"]: ...
+
+    def cancel_workflows(
+        self,
+        workflow_ids: List[str],
+        *,
+        cancel_children: bool,
+        shard_key: Optional[str],
+    ) -> None: ...
+
+    def delete_workflows(
+        self,
+        workflow_ids: List[str],
+        *,
+        delete_children: bool,
+        shard_key: Optional[str],
+    ) -> None: ...
+
+    def resume_workflows(
+        self,
+        workflow_ids: List[str],
+        *,
+        queue_name: Optional[str],
+        queue_partition_key: Optional[str],
+        shard_key: Optional[str],
+    ) -> None: ...
+
+    def fork_workflow(
+        self,
+        workflow_id: str,
+        start_step: int,
+        *,
+        application_version: Optional[str],
+        queue_name: Optional[str],
+        queue_partition_key: Optional[str],
+        replacement_children: Optional[Dict[str, str]],
+        timeout_seconds: Optional[float],
+        forked_workflow_id: Optional[str],
+        shard_key: Optional[str],
+    ) -> str: ...
+
+    def enqueue(
+        self,
+        options: "EnqueueOptions",
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+        *,
+        parent_workflow_id: Optional[str],
+        creator_xid: Optional[str],
+    ) -> str: ...
+
+    def send_bulk(
+        self,
+        messages: List["SendMessage"],
+        *,
+        serialization_type: Optional["WorkflowSerializationFormat"],
+        send_to_forks: bool,
+    ) -> None: ...
+
+    def get_event(
+        self,
+        workflow_id: str,
+        key: str,
+        timeout_seconds: float,
+        *,
+        shard_key: Optional[str],
+    ) -> Any: ...
+
+    async def get_event_async(
+        self,
+        workflow_id: str,
+        key: str,
+        timeout_seconds: float,
+        *,
+        shard_key: Optional[str],
+    ) -> Any: ...
+
+    def update_workflow_attributes(
+        self,
+        workflow_id: str,
+        attributes: Optional[Dict[str, Any]],
+        *,
+        merge: bool,
+        shard_key: Optional[str],
+    ) -> None: ...
+
+    def set_workflow_delay(
+        self,
+        workflow_id: str,
+        *,
+        delay_seconds: Optional[float],
+        delay_until_epoch_ms: Optional[int],
+        shard_key: Optional[str],
+    ) -> None: ...
+
+    def rewind_workflow(
+        self,
+        workflow_id: str,
+        start_step: Optional[int],
+        *,
+        application_version: Optional[str],
+        queue_name: Optional[str],
+        queue_partition_key: Optional[str],
+        shard_key: Optional[str],
+    ) -> None: ...
+
+    async def await_first_workflow_id_async(
+        self, workflow_ids: List[str], polling_interval: float
+    ) -> str: ...
+
+
 class ConductorFactory(Protocol):
     def __call__(
         self,
@@ -68,6 +213,17 @@ class ConductorFactory(Protocol):
         metadata_only_mode: bool,
         alert_handler: Optional[AlertHandler],
     ) -> ConductorThread: ...
+
+
+class ConductorClientFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        app_name: str,
+        conductor_url: str,
+        conductor_key: str,
+        serializer: "Serializer",
+    ) -> ConductorClient: ...
 
 
 class AutoUpgradePass(Protocol):
@@ -209,6 +365,9 @@ class Enterprise(Protocol):
     def ConductorWebsocket(self) -> ConductorFactory: ...
 
     @property
+    def ConductorClient(self) -> ConductorClientFactory: ...
+
+    @property
     def AutoUpgradePass(self) -> AutoUpgradePassFactory: ...
 
     @property
@@ -229,6 +388,7 @@ class Enterprise(Protocol):
 
 # What needs the package without being an entitlement, for load()'s messages.
 CONDUCTOR = "Connecting to DBOS Conductor"
+CONDUCTOR_CLIENT = "Creating a DBOSClient with a conductor_key"
 
 
 @dataclass(frozen=True)

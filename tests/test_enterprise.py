@@ -251,6 +251,42 @@ def test_the_default_conductor_follows_the_dbos_domain(
     )
 
 
+def test_a_client_with_only_a_conductor_key_uses_the_default_conductor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    urls: List[str] = []
+
+    def conductor_client(**kwargs: Any) -> Any:
+        urls.append(kwargs["conductor_url"])
+        return types.SimpleNamespace(start=lambda: None, stop=lambda: None)
+
+    monkeypatch.setattr(
+        enterprise_module,
+        "load",
+        lambda *args: types.SimpleNamespace(ConductorClient=conductor_client),
+    )
+    monkeypatch.setenv("DBOS_DOMAIN", "staging.dbos.dev")
+    DBOSClient(conductor_key="k", application_name="a", lazy=True).destroy()
+    # A conductor_url, when passed, wins.
+    DBOSClient(
+        conductor_key="k",
+        conductor_url="ws://localhost:8090",
+        application_name="a",
+        lazy=True,
+    ).destroy()
+    assert urls == ["wss://staging.dbos.dev/conductor/v1alpha1", "ws://localhost:8090"]
+
+    # The key alone selects Conductor, so it cannot come with a system database.
+    with pytest.raises(Exception, match="not both"):
+        DBOSClient(
+            conductor_key="k",
+            application_name="a",
+            system_database_url="sqlite:///x.sqlite",
+        )
+    with pytest.raises(Exception, match="requires a conductor_key"):
+        DBOSClient(conductor_url="ws://localhost:8090", application_name="a")
+
+
 def test_an_entitled_key_unlocks_enterprise_features(
     conductor: FakeConductor,
 ) -> None:
