@@ -693,19 +693,10 @@ _NOT_COMPLETE_STATUSES = frozenset(
 # A workflow as the status watcher reads it: its ID and the shard key it lives under.
 _WatchedWorkflow = Tuple[str, Optional[str]]
 
-# Statuses at which a workflow is complete.
-_COMPLETE_STATUSES = frozenset(
-    s.value for s in WorkflowStatusString if s.value not in _NOT_COMPLETE_STATUSES
-)
-
-
-# Prefix of the suspend_key of a workflow SUSPENDED awaiting another's result.
-_RESULT_SUSPEND_KEY_PREFIX = "__dbos_result__:"
-
 
 def result_suspend_key(workflow_id: str) -> str:
     """The suspend_key of a workflow SUSPENDED awaiting workflow_id's result."""
-    return _RESULT_SUSPEND_KEY_PREFIX + workflow_id
+    return f"__dbos_result__:{workflow_id}"
 
 
 @dataclass(eq=False)
@@ -1734,6 +1725,8 @@ class SystemDatabase(ABC):
         }
         if owner_xid is not None:
             values["owner"] = owner_xid
+        if not self.sharded:
+            values["wake_key"] = result_suspend_key(workflow_id)
 
         def build() -> Any:
             ws, wo = self.tables.workflow_status, self.tables.workflow_output
@@ -1811,7 +1804,11 @@ class SystemDatabase(ABC):
                         sa.select(sa.func.unnest(updated.c.result_waiter_ids))
                     )
                 )
-                .values(**self._wake_values(param["wf_id"]))
+                .values(
+                    **self._wake_values(
+                        sa.bindparam("wake_key", type_=ws.c.suspend_key.type)
+                    )
+                )
                 .returning(sa.literal_column("1"))
                 .cte("woken")
             )
@@ -1835,8 +1832,40 @@ class SystemDatabase(ABC):
             row = result.first()
         if row is None:
             return False
-        if row[0]:
-            self._clear_result_waiters(workflow_id, list(row[0]), row[1])
+        woken, completed_at = row
+        if not woken:
+            return True
+        # Remove only the waiters this write woke, and only while the row is still its completion.
+        ws = self.tables.workflow_status
+        waiter = (
+            sa.func.unnest(ws.c.result_waiter_ids)
+            .table_valued("waiter_id")
+            .render_derived(name="waiter")
+        )
+        remaining = (
+            sa.select(sa.func.array_agg(waiter.c.waiter_id))
+            .where(
+                waiter.c.waiter_id
+                != sa.all_(sa.literal(list(woken), type_=sa.ARRAY(sa.Text)))
+            )
+            .scalar_subquery()
+        )
+        # Best effort and not retried: a waiter left behind is never woken again.
+        try:
+            with self.engine.begin() as c:
+                c.execute(
+                    sa.update(ws)
+                    .where(
+                        *self._wf(ws, workflow_id),
+                        ws.c.status.notin_(sorted(_NOT_COMPLETE_STATUSES)),
+                        ws.c.completed_at == completed_at,
+                    )
+                    .values(result_waiter_ids=remaining)
+                )
+        except Exception as e:
+            dbos_logger.warning(
+                f"Error clearing the result waiters of workflow {workflow_id}: {e}"
+            )
         return True
 
     def _waiter_returning(self) -> List[Any]:
@@ -1844,10 +1873,9 @@ class SystemDatabase(ABC):
         ws = self.tables.workflow_status
         return [] if self.sharded else [ws.c.workflow_uuid, ws.c.result_waiter_ids]
 
-    def _wake_values(self, workflow_id: Any) -> Dict[str, Any]:
-        """Values making a workflow SUSPENDED awaiting workflow_id's result due for the background pass."""
+    def _wake_values(self, key: Any) -> Dict[str, Any]:
+        """Values making a workflow SUSPENDED under key (a result_suspend_key) due for the background pass."""
         ws = self.tables.workflow_status
-        key = sa.literal(_RESULT_SUSPEND_KEY_PREFIX, type_=sa.Text) + workflow_id
         # Status is tested here, not in WHERE, so the planner cannot scan idx_workflow_status_suspended.
         return {
             "delay_until_epoch_ms": sa.case(
@@ -1875,7 +1903,7 @@ class SystemDatabase(ABC):
             conn.execute(
                 sa.update(ws)
                 .where(*self._wf_in(ws, list(waiters)))
-                .values(**self._wake_values(workflow_id))
+                .values(**self._wake_values(result_suspend_key(workflow_id)))
             )
             completed.append(workflow_id)
         if completed:
@@ -1883,41 +1911,6 @@ class SystemDatabase(ABC):
                 sa.update(ws)
                 .where(*self._wf_in(ws, completed))
                 .values(result_waiter_ids=None)
-            )
-
-    def _clear_result_waiters(
-        self, workflow_id: str, woken: List[str], completed_at: int
-    ) -> None:
-        """Remove the waiters a completion woke from its row, unless the row has changed since.
-        Best effort and not retried: a waiter left behind is never woken again."""
-        ws = self.tables.workflow_status
-        waiter = (
-            sa.func.unnest(ws.c.result_waiter_ids)
-            .table_valued("waiter_id")
-            .render_derived(name="waiter")
-        )
-        remaining = (
-            sa.select(sa.func.array_agg(waiter.c.waiter_id))
-            .where(
-                waiter.c.waiter_id
-                != sa.all_(sa.literal(woken, type_=sa.ARRAY(sa.Text)))
-            )
-            .scalar_subquery()
-        )
-        try:
-            with self.engine.begin() as c:
-                c.execute(
-                    sa.update(ws)
-                    .where(
-                        *self._wf(ws, workflow_id),
-                        ws.c.status.in_(_COMPLETE_STATUSES),
-                        ws.c.completed_at == completed_at,
-                    )
-                    .values(result_waiter_ids=remaining)
-                )
-        except Exception as e:
-            dbos_logger.warning(
-                f"Error clearing the result waiters of workflow {workflow_id}: {e}"
             )
 
     def _outcome_in_one_statement(self) -> bool:

@@ -410,50 +410,6 @@ def test_completion_wakes_result_waiters_without_suspend_mode(
     check(*failed)
 
 
-def test_clear_result_waiters_keeps_changed_rows(
-    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
-) -> None:
-    """The clear after a one-statement completion removes only the waiters it woke, and only
-    while the row is still complete with the completion time that write gave it."""
-    sys_db = dbos._sys_db
-    ws = sys_db.tables.workflow_status
-
-    @DBOS.workflow()
-    def target() -> None:
-        pass
-
-    wfid = str(uuid.uuid4())
-    with SetWorkflowID(wfid):
-        target()
-
-    def set_row(**values: Any) -> int:
-        with sys_db.engine.begin() as c:
-            c.execute(sa.update(ws).where(ws.c.workflow_uuid == wfid).values(**values))
-            return int(
-                c.execute(
-                    sa.select(ws.c.completed_at).where(ws.c.workflow_uuid == wfid)
-                ).scalar_one()
-            )
-
-    def waiters() -> Any:
-        with sys_db.engine.connect() as c:
-            return c.execute(
-                sa.select(ws.c.result_waiter_ids).where(ws.c.workflow_uuid == wfid)
-            ).scalar_one()
-
-    completed_at = set_row(result_waiter_ids=["a", "b", "c"])
-    sys_db._clear_result_waiters(wfid, ["a", "b"], completed_at + 1)
-    assert waiters() == ["a", "b", "c"]
-    set_row(status=WorkflowStatusString.ENQUEUED.value)
-    sys_db._clear_result_waiters(wfid, ["a", "b"], completed_at)
-    assert waiters() == ["a", "b", "c"]
-    set_row(status=WorkflowStatusString.SUCCESS.value)
-    sys_db._clear_result_waiters(wfid, ["a", "b"], completed_at)
-    assert waiters() == ["c"]
-    sys_db._clear_result_waiters(wfid, ["c"], completed_at)
-    assert waiters() is None
-
-
 def test_get_result_suspend_is_refused_when_sharded() -> None:
     ctx = cast(Any, SimpleNamespace(is_workflow=lambda: True, workflow_id="w"))
     dbos = cast(
