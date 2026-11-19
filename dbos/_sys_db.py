@@ -296,6 +296,8 @@ class WorkflowStatus:
     app_id: Optional[str]
     # The number of times this workflow's execution has been attempted
     recovery_attempts: Optional[int]
+    # The format of input, output and error, set only when they were listed serialized
+    serialization: Optional[str]
 
 
 class WorkflowStatusInternal(TypedDict):
@@ -475,6 +477,11 @@ class StepInfo(TypedDict):
     started_at_epoch_ms: Optional[int]
     # The Unix epoch timestamp at which this step completed
     completed_at_epoch_ms: Optional[int]
+
+
+class SerializedStepInfo(StepInfo):
+    # The format of output and error, which are the stored strings
+    serialization: Optional[str]
 
 
 _dbos_null_topic = "__null__topic__"
@@ -3378,10 +3385,14 @@ class SystemDatabase(ABC):
         application_name: Optional[str | list[str]] = None,
         shard_key: Optional[str | list[str]] = None,
         parent_shard_key: Optional[str | list[str]] = None,
+        skip_serialization: bool = False,
     ) -> List[WorkflowStatus]:
         """
         Retrieve a list of workflows based on the search criteria.
         Returns a list of WorkflowStatus objects.
+
+        With skip_serialization, input, output and error are left as stored, and each workflow
+        carries their format in serialization, for a caller that passes them on.
         """
 
         # Normalize string-or-list parameters to lists
@@ -3694,6 +3705,13 @@ class SystemDatabase(ABC):
             if key_column is not None:
                 idx += 1
             info.parent_shard_key = row[idx] if parent_key_column is not None else None
+            if skip_serialization:
+                info.input = raw_input
+                info.output = raw_output
+                info.error = raw_error
+                info.serialization = serialization
+                infos.append(info)
+                continue
             inputs, output, exception = safe_deserialize(
                 self.serializer,
                 serialization,
@@ -3756,6 +3774,7 @@ class SystemDatabase(ABC):
         load_output: bool = True,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        skip_serialization: bool = False,
     ) -> List[StepInfo]:
         child_key = self._key_column(self.tables.operation_outputs, "child_shard_key")
         with self._observability_query() as c:
@@ -3780,8 +3799,23 @@ class SystemDatabase(ABC):
                 query = query.offset(offset)
             rows = c.execute(query).fetchall()
 
-        steps = []
+        steps: List[StepInfo] = []
         for row in rows:
+            if skip_serialization:
+                steps.append(
+                    SerializedStepInfo(
+                        function_id=row[0],
+                        function_name=row[1],
+                        output=row[2] if load_output else None,
+                        error=row[3] if load_output else None,
+                        child_workflow_id=row[4],
+                        child_shard_key=row[8] if child_key is not None else None,
+                        started_at_epoch_ms=row[5],
+                        completed_at_epoch_ms=row[6],
+                        serialization=row[7],
+                    )
+                )
+                continue
             if load_output:
                 _, output, exception = safe_deserialize(
                     self.serializer,
@@ -4236,8 +4270,13 @@ class SystemDatabase(ABC):
         function_name: str,
         send_to_forks: bool,
         step_workflow_id: Optional[str] = None,
+        skip_serialization: bool = False,
+        serialization: Optional[str] = None,
     ) -> None:
         """Send one or more messages in a single transaction.
+
+        With skip_serialization, each message is already serialized, in the format
+        serialization names, and is stored as it is.
 
         This is the single implementation underlying both `DBOS.send`/`send_bulk`
         (inside and outside a workflow) and `DBOSClient.send`/`send_bulk`. When
@@ -4267,6 +4306,8 @@ class SystemDatabase(ABC):
                     function_name=function_name,
                     send_to_forks=send_to_forks,
                     step_workflow_id=step_workflow_id,
+                    skip_serialization=skip_serialization,
+                    serialization=serialization,
                 )
         except DBOSNonExistentWorkflowError as e:
             # A missing destination is the send's answer; the transaction has rolled back, so record it separately.
@@ -4347,6 +4388,8 @@ class SystemDatabase(ABC):
         function_name: str,
         send_to_forks: bool,
         step_workflow_id: Optional[str] = None,
+        skip_serialization: bool = False,
+        serialization: Optional[str] = None,
     ) -> Optional[RecordedResult]:
         """Returns the recorded result when replaying a previously recorded send."""
         start_time = int(time.time() * 1000)
@@ -4364,7 +4407,14 @@ class SystemDatabase(ABC):
         # Serialize each message once (independent of how many destinations it
         # fans out to once forks are resolved).
         prepared = [
-            (m, *serialize_value(m.message, serialization_type, self.serializer))
+            (
+                (m, m.message, serialization)
+                if skip_serialization
+                else (
+                    m,
+                    *serialize_value(m.message, serialization_type, self.serializer),
+                )
+            )
             for m in messages
         ]
 
@@ -5195,9 +5245,13 @@ class SystemDatabase(ABC):
         key: str,
         start_time: int,
         caller_ctx: Optional[GetEventWorkflowContext] = None,
+        skip_serialization: bool = False,
     ) -> Any:
         """Consume phase of get_event. Reads the value from the database
-        and records the operation result if in a workflow."""
+        and records the operation result if in a workflow.
+
+        With skip_serialization, returns the stored value and its format, or None for
+        an event that is not set."""
         function_name = "DBOS.getEvent"
 
         with self.engine.begin() as c:
@@ -5211,6 +5265,8 @@ class SystemDatabase(ABC):
                 )
             ).fetchall()
 
+        if skip_serialization:
+            return (rows[0][0], rows[0][1]) if len(rows) > 0 else None
         value: Any = None
         serialization: Optional[str] = None
         if len(rows) > 0:

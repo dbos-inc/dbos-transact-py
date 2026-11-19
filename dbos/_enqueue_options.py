@@ -20,13 +20,14 @@ from dbos._context import (
     validate_workflow_id,
     validate_workflow_id_reuse_policy,
 )
-from dbos._error import DBOSException
+from dbos._error import DBOSException, DBOSQueueDeduplicatedError
 from dbos._serialization import Serializer, WorkflowSerializationFormat, serialize_args
 from dbos._shard_keys import validate_shard_key
 from dbos._sys_db import WorkflowStatusInternal, WorkflowStatusString
 from dbos._utils import generate_uuid
 
 if TYPE_CHECKING:
+    from dbos._sys_db import SystemDatabase
     from opentelemetry.context import Context as OtelContext
 else:
     # EnqueueOptions is public, so its annotations must stay resolvable at runtime for
@@ -219,3 +220,35 @@ def build_enqueue_status(
         "shard_key": options.get("shard_key"),
     }
     return workflow_id, status
+
+
+def insert_enqueue_status(
+    sys_db: "SystemDatabase",
+    status: WorkflowStatusInternal,
+    options: EnqueueOptions,
+    creator_xid: Optional[str],
+) -> str:
+    """Persist the row and return the ID of the enqueued workflow, which is the one
+    holding the deduplication ID when the options ask to attach to it."""
+    return_existing = options.get("duplication_policy") == "return-existing"
+    while True:
+        try:
+            sys_db.init_workflow(
+                status,
+                creator_xid=creator_xid,
+                reuse_policy=options.get("workflow_id_reuse_policy"),
+            )
+            return status["workflow_uuid"]
+        except DBOSQueueDeduplicatedError:
+            if not return_existing:
+                raise
+            queue_name, dedup_id = (
+                status["queue_name"],
+                status["deduplication_id"],
+            )
+            assert queue_name is not None and dedup_id is not None
+            existing_id = sys_db.get_deduplicated_workflow(queue_name, dedup_id)
+            if existing_id is not None:
+                return existing_id
+            # The holder released the deduplication ID between our insert and this
+            # lookup (it completed or was cancelled), so retry to claim the slot.
