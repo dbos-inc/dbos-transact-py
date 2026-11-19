@@ -441,7 +441,7 @@ class DBOSWorkflowArchiveNotConfiguredError(DBOSException):
 
     def __init__(self) -> None:
         super().__init__(
-            "Importing an archived workflow requires workflow_archive in the DBOS configuration or DBOSClient",
+            "No workflow archive is configured: set workflow_archive in the DBOS configuration or DBOSClient",
             dbos_error_code=DBOSErrorCode.WorkflowArchiveNotConfigured.value,
         )
 
