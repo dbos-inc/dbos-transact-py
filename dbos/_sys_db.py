@@ -1122,8 +1122,13 @@ class SystemDatabase(ABC):
         pass
 
     def _archive_values(self) -> Dict[str, Any]:
-        """Columns a statement setting completed_at also sets, to queue the row for archiving."""
-        return {"archive_pending": True} if self.archive_completions else {}
+        """Columns a statement setting completed_at also sets, to queue the row for its
+        application's archiver. Unclaimed rows have none, so retention collects them unmarked.
+        """
+        if not self.archive_completions:
+            return {}
+        claimed = self.tables.workflow_status.c.application_name.isnot(None)
+        return {"archive_pending": sa.case((claimed, sa.true()), else_=sa.null())}
 
     def _now_ms_sql(self) -> Any:
         # Cast to BIGINT: EXTRACT yields numeric, which casts any bigint column compared against it, costing that column its index.

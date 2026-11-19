@@ -13,8 +13,10 @@ from dbos import (
     DBOS,
     DBOSClient,
     DBOSConfig,
+    EnqueueOptions,
     SetWorkflowID,
     SetWorkflowTimeout,
+    WorkflowHandle,
     _enterprise,
 )
 from dbos._error import (
@@ -188,6 +190,34 @@ def test_client_cancel_marks(
         release.set()
 
 
+def test_unclaimed_completions_unmarked(
+    config: DBOSConfig, dbos: DBOS, skip_with_sharding_here: None
+) -> None:
+    """No application owns an unclaimed workflow, so none archives it: its completion
+    isn't marked, and retention collects it like any other."""
+    archiving = DBOSClient(
+        system_database_url=config["system_database_url"],
+        workflow_archive=_FakeArchive(),
+    )
+    try:
+        options: EnqueueOptions = {
+            "workflow_name": "never_run",
+            "queue_name": "unserved",
+        }
+        unclaimed: WorkflowHandle[Any] = archiving.enqueue(options)
+        claimed: WorkflowHandle[Any] = archiving.enqueue(
+            {**options, "application_name": "some-app"}
+        )
+        for handle in (unclaimed, claimed):
+            archiving.cancel_workflow(handle.workflow_id)
+            status = DBOS.get_workflow_status(handle.workflow_id)
+            assert status is not None and status.status == "CANCELLED"
+        assert archive_pending(dbos, unclaimed.workflow_id) is None
+        assert archive_pending(dbos, claimed.workflow_id) is True
+    finally:
+        archiving.destroy()
+
+
 class _FakeArchive:
     @property
     def archive_id(self) -> str:
@@ -203,8 +233,15 @@ def test_migration_adds_column_and_index(dbos: DBOS) -> None:
     schema = None if dbos._sys_db.engine.dialect.name == "sqlite" else "dbos"
     columns = {c["name"] for c in inspector.get_columns("workflow_status", schema)}
     assert "archive_pending" in columns
-    indexes = {i["name"] for i in inspector.get_indexes("workflow_status", schema)}
-    assert "idx_workflow_status_archive_pending" in indexes
+    indexes = {
+        i["name"]: i["column_names"]
+        for i in inspector.get_indexes("workflow_status", schema)
+    }
+    assert indexes["idx_workflow_status_archive_pending"] == [
+        "application_name",
+        "completed_at",
+        "workflow_uuid",
+    ]
 
 
 def test_import_archived_needs_an_archive(dbos: DBOS, client: DBOSClient) -> None:
