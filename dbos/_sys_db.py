@@ -1032,9 +1032,11 @@ class SystemDatabase(ABC):
         self._listener_thread_lock = threading.Lock()
         self._listener_running = False
 
-        # Per-(queue, partition key) created_at cursors: keep per-key queue order monotonic across batches
+        # Per-(queue, partition key) created_at cursors: keep per-key queue order monotonic across batches and single enqueues
         self._batch_created_at_lock = threading.Lock()
-        self._batch_created_at_cursors: Dict[Tuple[Optional[str], str], int] = {}
+        self._batch_created_at_cursors: Dict[
+            Tuple[Optional[str], Optional[str]], int
+        ] = {}
 
         # Now we can run background processes
         self._run_background_processes = True
@@ -1556,6 +1558,17 @@ class SystemDatabase(ABC):
             is_debounced=status["is_debounced"],
             application_name=status["application_name"],
         )
+        # Enqueued workflows start in queue order (docs: "first-in, first-out"), so a single
+        # enqueue stamps created_at monotonic per (queue, partition key) like the batch path;
+        # the DB default is wall-clock ms, which ties and loses enqueue order.
+        # The seeding read runs on this transaction: see _next_enqueued_created_at.
+        if (
+            wf_status == WorkflowStatusString.ENQUEUED.value
+            and status["queue_name"] is not None
+        ):
+            values["created_at"] = self._next_enqueued_created_at(
+                conn, status["queue_name"], status["queue_partition_key"]
+            )
         ws = self.tables.workflow_status
         build_status_insert = lambda: (
             self.dialect.insert(ws)
@@ -6113,13 +6126,40 @@ class SystemDatabase(ABC):
         return result
 
     def _max_partition_key_created_at(
-        self, keys: List[Tuple[Optional[str], str]]
-    ) -> Dict[Tuple[Optional[str], str], int]:
-        """Highest created_at among still-active (ENQUEUED/PENDING) rows per (queue, partition key), to seed the in-memory cursor so per-key order survives a restart/rebalance."""
+        self, keys: List[Tuple[Optional[str], Optional[str]]]
+    ) -> Dict[Tuple[Optional[str], Optional[str]], int]:
+        """Highest created_at among still-active (ENQUEUED/PENDING) rows per (queue, partition key), to seed the in-memory cursor so per-key order survives a restart/rebalance.
+
+        The batch path calls this before opening its transaction. A single enqueue is
+        already inside one, so it must use _max_partition_key_created_at_on with its own
+        connection instead: on SQLite a second connection would block on the caller's
+        write lock."""
+        if not keys:
+            return {}
+        with self.engine.begin() as c:
+            return self._max_partition_key_created_at_on(c, keys)
+
+    def _max_partition_key_created_at_on(
+        self,
+        c: Union[sa.Connection, Session],
+        keys: List[Tuple[Optional[str], Optional[str]]],
+    ) -> Dict[Tuple[Optional[str], Optional[str]], int]:
+        """_max_partition_key_created_at on the caller's connection, so the read shares its locks and sees its writes."""
         if not keys:
             return {}
         queue_names = {queue_name for queue_name, _ in keys}
-        partition_keys = {partition_key for _, partition_key in keys}
+        partition_keys = {
+            partition_key for _, partition_key in keys if partition_key is not None
+        }
+        # An IN predicate never matches NULL, so an unpartitioned key gets an explicit IS NULL arm.
+        partition_pred = (
+            sa.or_(
+                self.tables.workflow_status.c.queue_partition_key.in_(partition_keys),
+                self.tables.workflow_status.c.queue_partition_key.is_(None),
+            )
+            if any(partition_key is None for _, partition_key in keys)
+            else self.tables.workflow_status.c.queue_partition_key.in_(partition_keys)
+        )
         # One arm per status so idx_workflow_status_partition_dequeue_v3 can seek: a status IN (...) matching that index's own predicate is dropped as redundant, leaving its status column unbound and blocking the seek on queue_partition_key.
         arms = [
             sa.select(
@@ -6129,9 +6169,7 @@ class SystemDatabase(ABC):
             )
             .where(*self._scoped(self.tables.workflow_status))
             .where(self.tables.workflow_status.c.queue_name.in_(queue_names))
-            .where(
-                self.tables.workflow_status.c.queue_partition_key.in_(partition_keys)
-            )
+            .where(partition_pred)
             .where(self.tables.workflow_status.c.status == status)
             .group_by(
                 self.tables.workflow_status.c.queue_name,
@@ -6142,11 +6180,10 @@ class SystemDatabase(ABC):
                 WorkflowStatusString.PENDING.value,
             )
         ]
-        with self.engine.begin() as c:
-            rows = c.execute(sa.union_all(*arms)).fetchall()
+        rows = c.execute(sa.union_all(*arms)).fetchall()
         # The IN lists cross-product, so discard groups for pairs this batch never asked about.
         requested = set(keys)
-        seeds: Dict[Tuple[Optional[str], str], int] = {}
+        seeds: Dict[Tuple[Optional[str], Optional[str]], int] = {}
         for queue_name, partition_key, max_created_at in rows:
             key = (queue_name, partition_key)
             if max_created_at is None or key not in requested:
@@ -6154,6 +6191,37 @@ class SystemDatabase(ABC):
             # Fold the per-status arms back into one high-water mark per key.
             seeds[key] = max(seeds.get(key, 0), max_created_at)
         return seeds
+
+    def _next_enqueued_created_at(
+        self,
+        conn: Union[sa.Connection, Session],
+        queue_name: str,
+        partition_key: Optional[str],
+    ) -> int:
+        """created_at for a single ENQUEUED insert: monotonic per (queue, partition key), like the batch path, so workflows enqueued in the same millisecond keep enqueue order.
+
+        Monotonic within one process; cross-process same-instant ties fall back to
+        workflow_uuid (partitioned) or database order (unpartitioned), as with batches.
+        The seeding read uses the caller's connection, before the cursor lock (see
+        _max_partition_key_created_at_on)."""
+        key = (queue_name, partition_key)
+        # Seed outside the lock, as the batch path does: a slow or contended seeding
+        # read must not stall other keys' enqueue stamping while it holds the process-
+        # wide lock. The read shares the caller's transaction; the re-check and the
+        # max() guard under the lock fold concurrent seeds monotonically.
+        if key not in self._batch_created_at_cursors:
+            seeds = self._max_partition_key_created_at_on(conn, [key])
+            with self._batch_created_at_lock:
+                if key not in self._batch_created_at_cursors:
+                    # Advance past the DB high-water mark, as the batch path does, so the first enqueue in this process orders after the active rows.
+                    self._batch_created_at_cursors[key] = max(
+                        self._batch_created_at_cursors.get(key, 0),
+                        seeds.get(key, 0) + 1,
+                    )
+        with self._batch_created_at_lock:
+            value = max(int(time.time() * 1000), self._batch_created_at_cursors[key])
+            self._batch_created_at_cursors[key] = value + 1
+            return value
 
     def init_workflows(self, statuses: List[WorkflowStatusInternal]) -> Set[str]:
         """
@@ -6226,7 +6294,7 @@ class SystemDatabase(ABC):
             if s["queue_partition_key"] is not None
         }
         with self._batch_created_at_lock:
-            unseen_keys = [
+            unseen_keys: List[Tuple[Optional[str], Optional[str]]] = [
                 k for k in batch_keys if k not in self._batch_created_at_cursors
             ]
         seeds = self._max_partition_key_created_at(unseen_keys)
@@ -6237,7 +6305,7 @@ class SystemDatabase(ABC):
                 self._batch_created_at_cursors[seeded_key] = max(
                     self._batch_created_at_cursors.get(seeded_key, 0), seeded_max + 1
                 )
-            next_for_key: Dict[Tuple[Optional[str], str], int] = {}
+            next_for_key: Dict[Tuple[Optional[str], Optional[str]], int] = {}
             for status in statuses:
                 partition_key = status["queue_partition_key"]
                 if partition_key is None:
