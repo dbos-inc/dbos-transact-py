@@ -597,6 +597,44 @@ def test_pgsql_enqueue_created_at_follows_commit_order(
     assert 0 <= early_status["updated_at"] - early_status["created_at"] <= 1
 
 
+def test_pgsql_enqueue_stamps_inputs_no_earlier_than_their_workflow(
+    dbos: DBOS, config: DBOSConfig, skip_with_sqlite: None
+) -> None:
+    """Inputs take statement time like their status row, so retention never sees inputs
+    older than the workflow that owns them."""
+    engine = _get_db_connection(config)
+    schema = _get_schema_name(config)
+    sql = f"""
+    SELECT "{schema}".enqueue_workflow(
+        workflow_name => 'retrieve_test',
+        queue_name => 'unserved_queue',
+        workflow_id => :wfid
+    )
+    """
+    clock_sql = "SELECT (EXTRACT(epoch FROM clock_timestamp()) * 1000)::bigint"
+    wfid = str(uuid.uuid4())
+    with engine.connect() as c:
+        with c.begin():
+            start = c.execute(
+                sa.text("SELECT (EXTRACT(epoch FROM now()) * 1000)::bigint")
+            ).scalar_one()
+
+            def check() -> None:
+                assert c.execute(sa.text(clock_sql)).scalar_one() > start
+
+            retry_until_success(check, interval=0.01, max_attempts=500)
+            c.execute(sa.text(sql), {"wfid": wfid})
+    status = _get_workflow_status(engine, schema, wfid)
+    assert status is not None and status["created_at"] > start
+    (inputs_at,) = _execute_sql(
+        engine,
+        f"""SELECT retention_timestamp FROM "{schema}".workflow_input
+        WHERE workflow_uuid = :wfid""",
+        {"wfid": wfid},
+    )
+    assert inputs_at >= status["created_at"]
+
+
 def test_pgsql_enqueue_with_deduplication(
     dbos: DBOS, config: DBOSConfig, skip_with_sqlite: None
 ) -> None:
