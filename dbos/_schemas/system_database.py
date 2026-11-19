@@ -83,6 +83,8 @@ class SystemSchema:
         Column("application_name", Text, nullable=True),
         # Topic a SUSPENDED recv waits on; delay_until_epoch_ms holds its wake time.
         Column("suspend_key", Text, nullable=True),
+        # TRUE from a terminal transition until the archiver has written it; else NULL.
+        Column("archive_pending", Boolean, nullable=True),
     )
 
     workflow_input = Table(

@@ -43,6 +43,7 @@ from ._sys_db import (
     WorkflowStatusString,
 )
 from ._validation import make_pydantic_args_validator, pydantic_args_validator
+from ._workflow_archive import WorkflowArchive
 from .cli.migration import run_dbos_database_migrations
 
 __all__ = [
@@ -79,6 +80,7 @@ __all__ = [
     "VersionInfo",
     "WorkflowStatus",
     "WorkflowStatusString",
+    "WorkflowArchive",
     "error",
     "Queue",
     "Debouncer",

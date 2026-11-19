@@ -44,6 +44,7 @@ from dbos._utils import (
     generate_uuid,
     retriable_postgres_exception,
     retriable_sqlite_exception,
+    serialization_failure,
 )
 
 from ._context import (
@@ -614,15 +615,20 @@ def db_retry(
                     sqlite_retriable = getattr(
                         db, "_is_sqlite", True
                     ) and retriable_sqlite_exception(e)
+                    # CockroachDB rolls back a transaction that loses a serialization race and expects the client to rerun it.
+                    cockroach_retriable = getattr(
+                        db, "_is_cockroach", False
+                    ) and serialization_failure(e)
                     if (
                         not postgres_retriable
                         and not pool_retriable
                         and not sqlite_retriable
+                        and not cockroach_retriable
                     ):
                         raise
 
                     # Connection-error and pool retries are optional; SQLite lock
-                    # contention is not a connection error and always retries.
+                    # contention and CockroachDB conflicts are not connection errors and always retry.
                     if (postgres_retriable or pool_retriable) and not getattr(
                         db, "_retry_connection_errors", True
                     ):
@@ -636,6 +642,11 @@ def db_retry(
                         dbos_logger.warning(
                             f"Database connection pool exhausted: {str(e)}. "
                             "If this persists, look for stalled or leaked connections or increase sys_db_pool_size. "
+                            f"Retrying in {actual_backoff:.2f}s (attempt {retries})"
+                        )
+                    elif cockroach_retriable:
+                        dbos_logger.warning(
+                            f"Transaction lost a serialization conflict: {str(e)}. "
                             f"Retrying in {actual_backoff:.2f}s (attempt {retries})"
                         )
                     else:
@@ -796,6 +807,8 @@ class SystemDatabase(ABC):
     # Suspend mode (Transact Enterprise), installed by DBOS when it is on: recv and sleep
     # may park their workflow. Waking a parked recv is core: every send does it.
     suspend: Optional["Suspend"] = None
+    # Set when workflow archiving is configured: every terminal transition queues its row.
+    archive_completions: bool = False
 
     @staticmethod
     def create(
@@ -1108,6 +1121,15 @@ class SystemDatabase(ABC):
         """Clean up database-specific connections."""
         pass
 
+    def _archive_values(self) -> Dict[str, Any]:
+        """Columns a statement setting completed_at also sets, to queue the row for its
+        application's archiver. Unclaimed rows have none, so retention collects them unmarked.
+        """
+        if not self.archive_completions:
+            return {}
+        claimed = self.tables.workflow_status.c.application_name.isnot(None)
+        return {"archive_pending": sa.case((claimed, sa.true()), else_=sa.null())}
+
     def _now_ms_sql(self) -> Any:
         # Cast to BIGINT: EXTRACT yields numeric, which casts any bigint column compared against it, costing that column its index.
         # SQLite's CURRENT_TIMESTAMP is second-precision; use unixepoch('subsec') for ms.
@@ -1116,6 +1138,14 @@ class SystemDatabase(ABC):
                 return sa.cast(sa.func.unixepoch("subsec") * 1000, sa.BigInteger)
             return sa.cast(sa.func.strftime("%s", "now") * 1000, sa.BigInteger)
         return sa.cast(sa.func.extract("epoch", sa.func.now()) * 1000, sa.BigInteger)
+
+    def _statement_ms_sql(self) -> Any:
+        # Statement time, as workflow_status.created_at defaults to: now() is the transaction's start.
+        if self.engine.dialect.name == "sqlite":
+            return self._now_ms_sql()
+        return sa.cast(
+            sa.func.extract("epoch", sa.func.clock_timestamp()) * 1000, sa.BigInteger
+        )
 
     # Key helpers: every statement locates a workflow's rows through these, so a sharded
     # subclass can add the shard key without rewriting the statement.
@@ -1639,6 +1669,7 @@ class SystemDatabase(ABC):
                     started_at_epoch_ms=None,
                     updated_at=now_ms,
                     completed_at=now_ms,
+                    **self._archive_values(),
                 )
             )
 
@@ -1704,6 +1735,7 @@ class SystemDatabase(ABC):
                     owner_xid=None,
                     updated_at=now_ms,
                     completed_at=now_ms,
+                    **self._archive_values(),
                 )
                 .where(
                     *[
@@ -1785,6 +1817,7 @@ class SystemDatabase(ABC):
                     owner_xid=None,
                     updated_at=now_ms,
                     completed_at=now_ms,
+                    **self._archive_values(),
                 )
                 .where(*self._wf(self.tables.workflow_status, workflow_id))
                 .where(
@@ -1832,8 +1865,8 @@ class SystemDatabase(ABC):
         def _cancel_workflows(ids: list[str]) -> None:
             with self.engine.begin() as c:
                 now_ms = self._now_ms_sql()
-                # Set the workflows' status to CANCELLED, keeping their queue for a
-                # later resume, but only if the workflow is not already complete.
+                # Set the workflows' status to CANCELLED, keeping their queue for a later
+                # resume, unless already complete or cancelled (a repeat restamps completion).
                 c.execute(
                     sa.update(self.tables.workflow_status)
                     .where(*self._wf_in(self.tables.workflow_status, ids))
@@ -1842,6 +1875,7 @@ class SystemDatabase(ABC):
                             [
                                 WorkflowStatusString.SUCCESS.value,
                                 WorkflowStatusString.ERROR.value,
+                                WorkflowStatusString.CANCELLED.value,
                             ]
                         )
                     )
@@ -1853,6 +1887,7 @@ class SystemDatabase(ABC):
                         started_at_epoch_ms=None,
                         updated_at=now_ms,
                         completed_at=now_ms,
+                        **self._archive_values(),
                     )
                 )
 
@@ -1913,6 +1948,7 @@ class SystemDatabase(ABC):
                     started_at_epoch_ms=None,
                     updated_at=self._now_ms_sql(),
                     completed_at=None,
+                    archive_pending=None,
                 )
             )
 
@@ -2374,6 +2410,7 @@ class SystemDatabase(ABC):
                     started_at_epoch_ms=None,
                     updated_at=self._now_ms_sql(),
                     completed_at=None,
+                    archive_pending=None,
                     output=None,
                     error=None,
                 )
@@ -2627,7 +2664,8 @@ class SystemDatabase(ABC):
                             oo.c.started_at_epoch_ms,
                             oo.c.completed_at_epoch_ms,
                             mapping_subquery.c.owner,
-                            self._now_ms_sql(),
+                            # Never before the fork's created_at, which retention's payload sweep relies on.
+                            self._statement_ms_sql(),
                             *child_key_columns,
                         ).select_from(
                             mapping_subquery.join(
@@ -5256,6 +5294,7 @@ class SystemDatabase(ABC):
                     started_at_epoch_ms=None,
                     updated_at=cancelled_at,
                     completed_at=cancelled_at,
+                    **self._archive_values(),
                 )
                 .returning(ws.c.workflow_uuid)
             ).fetchall()

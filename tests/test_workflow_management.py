@@ -5,6 +5,7 @@ from typing import Any, Callable, List, Optional
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy import event
 from sqlalchemy.exc import OperationalError
 
 from dbos import (
@@ -1408,6 +1409,55 @@ def test_restart_fromsteps_childwf(
     assert stepOneCount == 2
     assert childwfCount == 3
     assert stepThreeCount == 4
+
+
+def test_fork_stamps_copied_steps_no_earlier_than_the_fork(
+    dbos: DBOS, skip_with_sqlite: None
+) -> None:
+    """Copied steps take statement time like the fork's status row, so retention never
+    sees a fork's checkpoints as older than the fork."""
+
+    @DBOS.step()
+    def step() -> int:
+        return 1
+
+    @DBOS.workflow()
+    def work() -> int:
+        return step() + step()
+
+    handle = DBOS.start_workflow(work)
+    assert handle.get_result() == 2
+
+    def lag(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
+        # Let the fork transaction's start fall behind the statement clock.
+        if statement.lstrip().upper().startswith("INSERT INTO") and (
+            "workflow_status" in statement
+        ):
+            cursor.execute("SELECT pg_sleep(0.02)")
+
+    engine = dbos._sys_db.engine
+    event.listen(engine, "before_cursor_execute", lag)
+    try:
+        fork = DBOS.fork_workflow(handle.workflow_id, 3)
+    finally:
+        event.remove(engine, "before_cursor_execute", lag)
+    assert fork.get_result() == 2
+    ws, oo = SystemSchema.workflow_status, SystemSchema.operation_outputs
+    with engine.begin() as c:
+        created_at = c.execute(
+            sa.select(ws.c.created_at).where(ws.c.workflow_uuid == fork.workflow_id)
+        ).scalar_one()
+        copied = (
+            c.execute(
+                sa.select(oo.c.retention_timestamp).where(
+                    oo.c.workflow_uuid == fork.workflow_id, oo.c.function_id < 3
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(copied) == 2
+    assert min(copied) >= created_at
 
 
 def test_fork_version(
