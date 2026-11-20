@@ -411,13 +411,17 @@ def test_completion_wakes_result_waiters_without_suspend_mode(
     check(*failed)
 
 
-def test_get_result_suspend_is_refused_when_sharded() -> None:
+def test_get_result_suspend_is_refused_when_sharded_or_cockroach() -> None:
     ctx = cast(Any, SimpleNamespace(is_workflow=lambda: True, workflow_id="w"))
-    dbos = cast(
-        Any, SimpleNamespace(_sys_db=SimpleNamespace(suspend=object(), sharded=True))
-    )
-    with pytest.raises(DBOSException, match="not supported on a sharded"):
-        result_suspend_hooks(dbos, ctx)
+    for sharded, cockroach, refusal in [
+        (True, False, "not supported on a sharded"),
+        (False, True, "not supported on CockroachDB"),
+    ]:
+        sys_db = SimpleNamespace(
+            suspend=object(), sharded=sharded, _is_cockroach=cockroach
+        )
+        with pytest.raises(DBOSException, match=refusal):
+            result_suspend_hooks(cast(Any, SimpleNamespace(_sys_db=sys_db)), ctx)
 
 
 def test_outcome_wake_query_plans(

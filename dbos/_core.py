@@ -2970,7 +2970,7 @@ def result_suspend_hooks(
     dbos: "DBOS", ctx: Optional["DBOSContext"]
 ) -> Tuple["Suspend", str]:
     """The suspend hooks and calling workflow's ID for get_result(suspend=True), which only a
-    workflow on an unsharded system database may call."""
+    workflow on an unsharded Postgres or SQLite system database may call."""
     if ctx is None or not ctx.is_workflow():
         raise DBOSException(
             "get_result(suspend=True) must be called from within a workflow"
@@ -2980,6 +2980,8 @@ def result_suspend_hooks(
         raise DBOSException(
             "get_result(suspend=True) is not supported on a sharded system database"
         )
+    if dbos._sys_db._is_cockroach:
+        raise DBOSException("get_result(suspend=True) is not supported on CockroachDB")
     return hooks, ctx.workflow_id
 
 

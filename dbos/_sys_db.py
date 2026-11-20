@@ -1725,7 +1725,8 @@ class SystemDatabase(ABC):
         }
         if owner_xid is not None:
             values["owner"] = owner_xid
-        if not self.sharded:
+        wakes = self._wakes_result_waiters()
+        if wakes:
             values["wake_key"] = result_suspend_key(workflow_id)
 
         def build() -> Any:
@@ -1764,7 +1765,6 @@ class SystemDatabase(ABC):
                 update = update.where(
                     ws.c.owner_xid == sa.bindparam("owner", type_=ws.c.owner_xid.type)
                 )
-            wakes = not self.sharded
             updated = (
                 update.returning(ws.c.result_waiter_ids, ws.c.completed_at)
                 if wakes
@@ -1827,7 +1827,7 @@ class SystemDatabase(ABC):
                 build,
                 insert_columns=False,
             )
-            if self.sharded:
+            if not wakes:
                 return bool(result.scalar())
             row = result.first()
         if row is None:
@@ -1872,10 +1872,16 @@ class SystemDatabase(ABC):
             )
         return True
 
+    def _wakes_result_waiters(self) -> bool:
+        """Whether completions wake result waiters: get_result(suspend=True) is refused when sharded or on CockroachDB."""
+        return not self.sharded and not self._is_cockroach
+
     def _waiter_returning(self) -> List[Any]:
-        """Columns a completing UPDATE returns for _wake_result_waiters_txn; none when sharded."""
+        """Columns a completing UPDATE returns for _wake_result_waiters_txn; none without waiters to wake."""
         ws = self.tables.workflow_status
-        return [] if self.sharded else [ws.c.workflow_uuid, ws.c.result_waiter_ids]
+        if not self._wakes_result_waiters():
+            return []
+        return [ws.c.workflow_uuid, ws.c.result_waiter_ids]
 
     def _wake_values(self, key: Any) -> Dict[str, Any]:
         """Values making a workflow SUSPENDED under key (a result_suspend_key) due for the background pass."""
@@ -1897,7 +1903,7 @@ class SystemDatabase(ABC):
     ) -> None:
         """Wake the waiters of the workflows a completing UPDATE returned (_waiter_returning) and
         clear their lists; the caller's transaction still holds those rows' locks."""
-        if self.sharded:
+        if not self._wakes_result_waiters():
             return
         ws = self.tables.workflow_status
         completed = []
@@ -1919,9 +1925,8 @@ class SystemDatabase(ABC):
 
     def _outcome_in_one_statement(self) -> bool:
         """Whether update_workflow_outcome writes in one statement; SQLite cannot put an
-        UPDATE in a WITH clause, nor CockroachDB two of the same table (the waiter wake-up).
-        """
-        return not self._is_sqlite and not self._is_cockroach
+        UPDATE in a WITH clause."""
+        return not self._is_sqlite
 
     def _update_workflow_outcome_in_transaction(
         self,
