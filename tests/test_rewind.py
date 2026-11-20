@@ -1440,3 +1440,232 @@ def test_recovery_clears_an_earlier_executions_checkpoints(
         assert handles[0].get_result() == "done"
         assert table_rows(ds.engine) == ["a"]
         assert datasource_checkpoints(ds, workflow_id) == []
+
+
+#######################################
+## Batch rewind
+#######################################
+
+
+def three_step_workflow() -> Any:
+    @DBOS.step()
+    def counted(name: str) -> int:
+        return run_count(name)
+
+    @DBOS.workflow()
+    def three_steps(name: str) -> List[int]:
+        return [counted(f"{name}.a"), counted(f"{name}.b"), counted(f"{name}.c")]
+
+    return three_steps
+
+
+def test_batch_rewind_reruns_each_workflow_from_its_own_start_step(
+    dbos: DBOS,
+) -> None:
+    three_steps = three_step_workflow()
+    DBOS.register_queue("batch_partitioned", partition_concurrency=1)
+    DBOS.register_queue("batch_plain")
+
+    partitioned_id, plain_id = str(uuid.uuid4()), str(uuid.uuid4())
+    with SetEnqueueOptions(queue_partition_key="pk"), SetWorkflowID(partitioned_id):
+        DBOS.enqueue_workflow("batch_partitioned", three_steps, "p").get_result()
+    with SetWorkflowID(plain_id):
+        DBOS.enqueue_workflow("batch_plain", three_steps, "q").get_result()
+
+    dbos._rewind_workflows([partitioned_id, plain_id], [2, 3])
+
+    # Same IDs, and only the steps from each workflow's own Start Step ran again.
+    assert DBOS.retrieve_workflow(partitioned_id).get_result() == [1, 2, 2]
+    assert DBOS.retrieve_workflow(plain_id).get_result() == [1, 1, 2]
+    assert [s["function_id"] for s in DBOS.list_workflow_steps(partitioned_id)] == [
+        1,
+        2,
+        3,
+    ]
+
+    # With no queue given, each kept its own queue and partition key.
+    partitioned = DBOS.retrieve_workflow(partitioned_id).get_status()
+    assert partitioned.queue_name == "batch_partitioned"
+    assert partitioned.queue_partition_key == "pk"
+    plain = DBOS.retrieve_workflow(plain_id).get_status()
+    assert plain.queue_name == "batch_plain"
+    assert plain.queue_partition_key is None
+
+
+@pytest.mark.parametrize("unfinished", ["PENDING", "ENQUEUED", "DELAYED", "SUSPENDED"])
+def test_batch_rewind_refuses_an_unfinished_workflow(
+    dbos: DBOS, unfinished: str
+) -> None:
+    three_steps = three_step_workflow()
+    finished_id = start(three_steps, f"finished-{unfinished}")
+    unfinished_id = start(three_steps, f"unfinished-{unfinished}")
+    set_workflow_status(dbos._sys_db, unfinished_id, unfinished)
+
+    with pytest.raises(DBOSException, match=f"Cannot rewind {unfinished_id}"):
+        dbos._rewind_workflows([finished_id, unfinished_id], [1, 1])
+
+    # Nothing changed, not even for the finished workflow.
+    assert DBOS.retrieve_workflow(finished_id).get_status().status == "SUCCESS"
+    assert len(DBOS.list_workflow_steps(finished_id)) == 3
+    assert runs[f"finished-{unfinished}.a"] == 1
+    assert DBOS.retrieve_workflow(unfinished_id).get_status().status == unfinished
+    assert len(DBOS.list_workflow_steps(unfinished_id)) == 3
+
+
+def test_batch_rewind_refuses_a_missing_workflow(dbos: DBOS) -> None:
+    three_steps = three_step_workflow()
+    finished_id = start(three_steps, "finished-missing")
+    missing_id = str(uuid.uuid4())
+
+    with pytest.raises(DBOSNonExistentWorkflowError, match=missing_id):
+        dbos._rewind_workflows([finished_id, missing_id], [2, 2])
+
+    assert DBOS.retrieve_workflow(finished_id).get_status().status == "SUCCESS"
+    assert len(DBOS.list_workflow_steps(finished_id)) == 3
+    assert runs["finished-missing.b"] == 1
+
+
+def test_batch_rewind_checks_every_workflow_before_dropping_datasource_checkpoints(
+    config: DBOSConfig, cleanup_test_databases: None, tmp_path: Any
+) -> None:
+    """Checkpoints are deleted outside the system database transaction, so a batch
+    that will be refused must not delete any, even those of a workflow it reaches
+    before the one that refuses it."""
+    with launched_with_datasources(config, tmp_path, 1, keep_checkpoints=True) as (
+        dbos,
+        (ds,),
+    ):
+        insert = inserter(ds)
+
+        @DBOS.workflow()
+        def writer(name: str) -> int:
+            ds.run_tx_step(None, insert, name)
+            return run_count(name)
+
+        # The batch goes in ID order, so the finished workflow comes first.
+        finished_id, unfinished_id = f"a-{uuid.uuid4()}", f"z-{uuid.uuid4()}"
+        with SetWorkflowID(finished_id):
+            writer("finished")
+        with SetWorkflowID(unfinished_id):
+            writer("unfinished")
+        set_workflow_status(dbos._sys_db, unfinished_id, "PENDING")
+
+        with pytest.raises(DBOSException, match=f"Cannot rewind {unfinished_id}"):
+            dbos._rewind_workflows([finished_id, unfinished_id], [1, 1])
+        assert datasource_checkpoints(ds, finished_id) == [1]
+        assert datasource_checkpoints(ds, unfinished_id) == [1]
+
+        missing_id = f"z-{uuid.uuid4()}"
+        with pytest.raises(DBOSNonExistentWorkflowError, match=missing_id):
+            dbos._rewind_workflows([finished_id, missing_id], [1, 1])
+        assert datasource_checkpoints(ds, finished_id) == [1]
+
+        # Once both are finished, the batch drops their checkpoints, so each
+        # transaction runs again rather than replaying its checkpoint.
+        set_workflow_status(dbos._sys_db, unfinished_id, "ERROR")
+        dbos._rewind_workflows([finished_id, unfinished_id], [1, 1])
+        assert DBOS.retrieve_workflow(finished_id).get_result() == 2
+        assert DBOS.retrieve_workflow(unfinished_id).get_result() == 2
+        assert table_rows(ds.engine) == [
+            "finished",
+            "finished",
+            "unfinished",
+            "unfinished",
+        ]
+
+
+def test_batch_rewind_is_one_transaction(
+    dbos: DBOS, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workflow whose status changes after the batch read it refuses the batch, as
+    it refuses a single rewind, and undoes the rewinds the batch already made."""
+    three_steps = three_step_workflow()
+    first_id, second_id = f"a-{uuid.uuid4()}", f"z-{uuid.uuid4()}"
+    with SetWorkflowID(first_id):
+        three_steps("txn-first")
+    with SetWorkflowID(second_id):
+        three_steps("txn-second")
+
+    sys_db = dbos._sys_db
+    rewind_one = sys_db._rewind_workflow_txn
+
+    def status_changes_first(c: Any, workflow_id: str, *args: Any, **kw: Any) -> None:
+        if workflow_id == second_id:
+            # As if the workflow were resumed between the read and its rewind.
+            c.execute(
+                sa.update(SystemSchema.workflow_status)
+                .where(SystemSchema.workflow_status.c.workflow_uuid == second_id)
+                .values(status="ENQUEUED")
+            )
+        rewind_one(c, workflow_id, *args, **kw)
+
+    monkeypatch.setattr(sys_db, "_rewind_workflow_txn", status_changes_first)
+    with pytest.raises(DBOSException, match="changed status while being rewound"):
+        dbos._rewind_workflows([first_id, second_id], [2, 2])
+    monkeypatch.undo()
+
+    # The first workflow's rewind was rolled back with the rest.
+    for workflow_id in (first_id, second_id):
+        assert DBOS.retrieve_workflow(workflow_id).get_status().status == "SUCCESS"
+        assert len(DBOS.list_workflow_steps(workflow_id)) == 3
+    assert DBOS.retrieve_workflow(first_id).get_result() == [1, 1, 1]
+    assert runs["txn-first.b"] == 1
+
+
+def test_batch_rewind_keeps_or_overrides_version_and_queue(dbos: DBOS) -> None:
+    three_steps = three_step_workflow()
+    DBOS.register_queue("batch_override", partition_concurrency=1)
+    elsewhere_id = start(three_steps, "elsewhere")
+    here_id = start(three_steps, "here")
+    running_version = DBOS.retrieve_workflow(here_id).get_status().app_version
+
+    # Stamp one workflow with a version nothing runs, so it stays ENQUEUED.
+    DBOS.rewind_workflow(
+        elsewhere_id, start_step=3, application_version="not-this-deployment"
+    )
+    DBOS.cancel_workflow(elsewhere_id)
+
+    # Given no version, each keeps its own: only the other one runs again.
+    dbos._rewind_workflows([elsewhere_id, here_id], [3, 3])
+    assert DBOS.retrieve_workflow(here_id).get_result() == [1, 1, 2]
+    elsewhere = DBOS.retrieve_workflow(elsewhere_id).get_status()
+    assert elsewhere.app_version == "not-this-deployment"
+    assert elsewhere.status == "ENQUEUED"
+    DBOS.cancel_workflow(elsewhere_id)
+
+    # A version and queue given apply to every workflow in the batch.
+    dbos._rewind_workflows(
+        [elsewhere_id, here_id],
+        [3, 3],
+        application_version=running_version,
+        queue_name="batch_override",
+        queue_partition_key="repair",
+    )
+    assert DBOS.retrieve_workflow(elsewhere_id).get_result() == [1, 1, 2]
+    assert DBOS.retrieve_workflow(here_id).get_result() == [1, 1, 3]
+    for workflow_id in (elsewhere_id, here_id):
+        status = DBOS.retrieve_workflow(workflow_id).get_status()
+        assert status.app_version == running_version
+        assert status.queue_name == "batch_override"
+        assert status.queue_partition_key == "repair"
+
+
+def test_batch_rewind_validates_and_dedupes_its_inputs(dbos: DBOS) -> None:
+    three_steps = three_step_workflow()
+    workflow_id = start(three_steps, "inputs")
+
+    # An empty batch changes nothing.
+    dbos._rewind_workflows([], [])
+
+    # A start step below 1, or lists of different lengths, refuse the batch
+    # before anything changes.
+    with pytest.raises(ValueError, match="must be >= 1"):
+        dbos._rewind_workflows([workflow_id], [0])
+    with pytest.raises(ValueError, match="same length"):
+        dbos._rewind_workflows([workflow_id], [1, 2])
+    assert DBOS.retrieve_workflow(workflow_id).get_status().status == "SUCCESS"
+    assert runs["inputs.a"] == 1
+
+    # A workflow listed twice is rewound once, from its first listing's step.
+    dbos._rewind_workflows([workflow_id, workflow_id], [2, 3])
+    assert DBOS.retrieve_workflow(workflow_id).get_result() == [1, 2, 2]
