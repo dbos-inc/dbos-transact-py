@@ -1770,7 +1770,7 @@ class SystemDatabase(ABC):
                     ws.c.owner_xid == sa.bindparam("owner", type_=ws.c.owner_xid.type)
                 )
             updated = (
-                update.returning(ws.c.result_waiter_ids, ws.c.completed_at)
+                update.returning(ws.c.result_waiter_ids)
                 if wakes
                 else update.returning(sa.literal_column("1"))
             ).cte("updated")
@@ -1796,10 +1796,11 @@ class SystemDatabase(ABC):
                 # CockroachDB refuses a data-modifying CTE without RETURNING.
                 .returning(sa.literal_column("1")).cte("stored")
             )
+            # Selecting from the CTEs rather than inserting at the top level lets a
+            # router see the shard key: PgDog sends an INSERT ... SELECT to every shard.
+            completed = sa.select(sa.func.count()).select_from(updated).add_cte(stored)
             if not wakes:
-                # Selecting from the CTEs rather than inserting at the top level lets a
-                # router see the shard key: PgDog sends an INSERT ... SELECT to every shard.
-                return sa.select(sa.func.count()).select_from(updated).add_cte(stored)
+                return completed
             # The waiters come from RETURNING, which sees an append that committed while this waited on the row lock.
             woken = (
                 sa.update(ws)
@@ -1816,11 +1817,7 @@ class SystemDatabase(ABC):
                 .returning(sa.literal_column("1"))
                 .cte("woken")
             )
-            return (
-                sa.select(updated.c.result_waiter_ids, updated.c.completed_at)
-                .add_cte(stored)
-                .add_cte(woken)
-            )
+            return completed.add_cte(woken)
 
         with self.engine.connect() as c:
             c.execution_options(isolation_level="AUTOCOMMIT")
@@ -1831,50 +1828,7 @@ class SystemDatabase(ABC):
                 build,
                 insert_columns=False,
             )
-            if not wakes:
-                return bool(result.scalar())
-            row = result.first()
-        if row is None:
-            return False
-        woken, completed_at = row
-        if not woken:
-            return True
-        # Remove only the waiters this write woke, and only while the row is still its completion.
-        ws = self.tables.workflow_status
-        waiter = (
-            sa.func.unnest(ws.c.result_waiter_ids)
-            .table_valued("waiter_id")
-            .render_derived(name="waiter")
-        )
-        remaining = (
-            sa.select(sa.func.array_agg(waiter.c.waiter_id))
-            .where(
-                waiter.c.waiter_id
-                != sa.all_(sa.literal(list(woken), type_=sa.ARRAY(sa.Text)))
-            )
-            .scalar_subquery()
-        )
-        unchanged = ws.c.status.notin_(sorted(_NOT_COMPLETE_STATUSES)) & (
-            ws.c.completed_at == completed_at
-        )
-        # Best effort and not retried: a waiter left behind is never woken again.
-        try:
-            with self.engine.begin() as c:
-                # The guard is in SET, not WHERE, so the planner probes only the primary key.
-                c.execute(
-                    sa.update(ws)
-                    .where(*self._wf(ws, workflow_id))
-                    .values(
-                        result_waiter_ids=sa.case(
-                            (unchanged, remaining), else_=ws.c.result_waiter_ids
-                        )
-                    )
-                )
-        except Exception as e:
-            dbos_logger.warning(
-                f"Error clearing the result waiters of workflow {workflow_id}: {e}"
-            )
-        return True
+            return bool(result.scalar())
 
     def _wakes_result_waiters(self) -> bool:
         """Whether completions wake result waiters: get_result(suspend=True) is refused when sharded or on CockroachDB."""
@@ -1908,27 +1862,18 @@ class SystemDatabase(ABC):
     def _wake_result_waiters_txn(
         self, conn: Union[sa.Connection, Session], rows: List[Any]
     ) -> None:
-        """Wake the waiters of the workflows a completing UPDATE returned (_waiter_returning) and
-        clear their lists; the caller's transaction still holds those rows' locks."""
+        """Wake the waiters of the workflows a completing UPDATE returned (_waiter_returning);
+        the caller's transaction still holds those rows' locks."""
         if not self._wakes_result_waiters():
             return
         ws = self.tables.workflow_status
-        completed = []
         for workflow_id, waiters in rows:
-            if not waiters:
-                continue
-            conn.execute(
-                sa.update(ws)
-                .where(*self._wf_in(ws, list(waiters)))
-                .values(**self._wake_values(result_suspend_key(workflow_id)))
-            )
-            completed.append(workflow_id)
-        if completed:
-            conn.execute(
-                sa.update(ws)
-                .where(*self._wf_in(ws, completed))
-                .values(result_waiter_ids=None)
-            )
+            if waiters:
+                conn.execute(
+                    sa.update(ws)
+                    .where(*self._wf_in(ws, list(waiters)))
+                    .values(**self._wake_values(result_suspend_key(workflow_id)))
+                )
 
     def _outcome_in_one_statement(self) -> bool:
         """Whether update_workflow_outcome writes in one statement; SQLite cannot put an

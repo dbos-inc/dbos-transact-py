@@ -336,7 +336,7 @@ def test_completion_wakes_result_waiters_without_suspend_mode(
     dbos: DBOS, skip_with_sharding: None
 ) -> None:
     """Parks waiters by hand, as dbos-enterprise's get_result and wait_first would: success, error,
-    cancel, dead-letter and the timeout sweep each make the awaited workflow's waiters due and clear
+    cancel, dead-letter and the timeout sweep each make the awaited workflow's waiters due and keep
     its list, and a listed waiter parked on another workflow stays parked."""
     assert dbos._sys_db.suspend is None
     sys_db = dbos._sys_db
@@ -395,21 +395,7 @@ def test_completion_wakes_result_waiters_without_suspend_mode(
     def check(target_id: str, waiters: List[str], other: str) -> None:
         assert [row(w)[0] for w in waiters] == [0, 0, 0]
         assert row(other)[0] is None
-
-        def cleared() -> None:
-            # IS NULL in SQL, so a JSON 'null' stored on SQLite does not pass.
-            with sys_db.engine.connect() as c:
-                assert (
-                    c.execute(
-                        sa.select(sa.func.count()).where(
-                            ws.c.workflow_uuid == target_id,
-                            ws.c.result_waiter_ids.is_(None),
-                        )
-                    ).scalar_one()
-                    == 1
-                )
-
-        retry_until_success(cleared, interval=0.1, max_attempts=50)
+        assert row(target_id)[1] == [*waiters, other]
 
     # Each completes while the target still runs, except success and error, released at the end.
     succeeded, failed = start(), start(fail=True)
@@ -465,9 +451,8 @@ def test_get_result_suspend_is_refused_when_sharded_or_cockroach() -> None:
 def test_outcome_wake_query_plans(
     dbos_dropped_databases: DBOS, skip_with_sqlite: None, skip_with_sharding: None
 ) -> None:
-    """Every one-statement completion runs the waiter wake, and one with waiters the clear: planned custom
-    or generic, with stale stats and many rows sharing its completed_at, each probes the primary key.
-    """
+    """Every one-statement completion runs the waiter wake: planned custom or generic, with stale
+    stats and many parked rows, it probes the primary key."""
     dbos = dbos_dropped_databases
     sys_db = dbos._sys_db
     ws = sys_db.tables.workflow_status
@@ -513,34 +498,25 @@ def test_outcome_wake_query_plans(
     ) -> None:
         if statement.startswith("WITH updated AS"):
             captured.setdefault("outcome", (statement, dict(parameters)))
-        elif statement.startswith("UPDATE") and "array_agg" in statement:
-            captured.setdefault("clear", (statement, dict(parameters)))
 
     event.listen(sys_db.engine, "before_cursor_execute", before_cursor_execute)
     try:
         release.set()
         handle.get_result()
-
-        def both() -> None:
-            assert set(captured) == {"outcome", "clear"}
-
-        retry_until_success(both, interval=0.1, max_attempts=50)
+        assert set(captured) == {"outcome"}
     finally:
         event.remove(sys_db.engine, "before_cursor_execute", before_cursor_execute)
 
-    # As a bulk cancel leaves them: many rows completed in the same millisecond as the target.
-    completed_at = next(
-        v for k, v in captured["clear"][1].items() if k.startswith("completed_at")
-    )
     rows = [
         {
             "workflow_uuid": f"wake-plan-{i}-{uuid.uuid4()}",
-            "completed_at": completed_at,
             "name": "wake_plan_probe",
             "status": WorkflowStatusString.SUSPENDED.value,
             "created_at": 1,
             "updated_at": 1,
-            "suspend_key": result_suspend_key("other"),
+            "suspend_key": (
+                result_suspend_key("other") if i % 2 else WAIT_FIRST_SUSPEND_KEY
+            ),
             "result_waiter_ids": ["other"],
             "application_name": sys_db.app_name,
         }
@@ -603,13 +579,12 @@ def test_outcome_wake_query_plans(
         # Analyzed before the rows arrive, the planner takes the table for near-empty.
         conn.exec_driver_sql(f'ANALYZE "{sys_db.schema}".workflow_status')
         conn.execute(sa.insert(ws), rows)
-        for name, (statement, parameters) in captured.items():
-            for plan in plans(conn, statement, parameters):
-                if name == "outcome":
-                    plan = subplan(plan, "CTE woken")
-                    assert plan is not None
-                scans = workflow_status_scans(plan)
-                assert scans, (name, plan)
-                for node_type, index in scans:
-                    assert node_type != "Seq Scan", (name, scans)
-                    assert index in ("", "workflow_status_pkey"), (name, scans)
+        statement, parameters = captured["outcome"]
+        for plan in plans(conn, statement, parameters):
+            woken = subplan(plan, "CTE woken")
+            assert woken is not None
+            scans = workflow_status_scans(woken)
+            assert scans, woken
+            for node_type, index in scans:
+                assert node_type != "Seq Scan", scans
+                assert index in ("", "workflow_status_pkey"), scans
