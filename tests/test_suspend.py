@@ -3,6 +3,7 @@ suspend mode the calls are refused. Waking a suspended recv is core: every send 
 so a sender without suspend mode still wakes a workflow another process parked. The
 operations themselves are tested in dbos-enterprise."""
 
+import re
 import threading
 import uuid
 from types import SimpleNamespace
@@ -417,3 +418,156 @@ def test_get_result_suspend_is_refused_when_sharded() -> None:
     )
     with pytest.raises(DBOSException, match="not supported on a sharded"):
         result_suspend_hooks(dbos, ctx)
+
+
+def test_outcome_wake_query_plans(
+    dbos_dropped_databases: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
+    """Every one-statement completion runs the waiter wake, and one with waiters the clear: planned custom
+    or generic, with stale stats and many rows sharing its completed_at, each probes the primary key.
+    """
+    dbos = dbos_dropped_databases
+    sys_db = dbos._sys_db
+    ws = sys_db.tables.workflow_status
+    release = threading.Event()
+
+    @DBOS.workflow()
+    def target() -> None:
+        assert release.wait(10)
+
+    @DBOS.workflow()
+    def parked() -> None:
+        pass
+
+    handle = DBOS.start_workflow(target)
+    waiter_id = str(uuid.uuid4())
+    with SetWorkflowID(waiter_id):
+        parked()
+    with sys_db.engine.begin() as c:
+        c.execute(
+            sa.update(ws)
+            .where(ws.c.workflow_uuid == waiter_id)
+            .values(
+                status=WorkflowStatusString.SUSPENDED.value,
+                suspend_key=result_suspend_key(handle.workflow_id),
+                delay_until_epoch_ms=None,
+            )
+        )
+        c.execute(
+            sa.update(ws)
+            .where(ws.c.workflow_uuid == handle.workflow_id)
+            .values(result_waiter_ids=[waiter_id])
+        )
+
+    captured: dict[str, Tuple[str, Any]] = {}
+
+    def before_cursor_execute(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        if statement.startswith("WITH updated AS"):
+            captured.setdefault("outcome", (statement, dict(parameters)))
+        elif statement.startswith("UPDATE") and "array_agg" in statement:
+            captured.setdefault("clear", (statement, dict(parameters)))
+
+    event.listen(sys_db.engine, "before_cursor_execute", before_cursor_execute)
+    try:
+        release.set()
+        handle.get_result()
+
+        def both() -> None:
+            assert set(captured) == {"outcome", "clear"}
+
+        retry_until_success(both, interval=0.1, max_attempts=50)
+    finally:
+        event.remove(sys_db.engine, "before_cursor_execute", before_cursor_execute)
+
+    # As a bulk cancel leaves them: many rows completed in the same millisecond as the target.
+    completed_at = next(
+        v for k, v in captured["clear"][1].items() if k.startswith("completed_at")
+    )
+    rows = [
+        {
+            "workflow_uuid": f"wake-plan-{i}-{uuid.uuid4()}",
+            "completed_at": completed_at,
+            "name": "wake_plan_probe",
+            "status": WorkflowStatusString.SUSPENDED.value,
+            "created_at": 1,
+            "updated_at": 1,
+            "suspend_key": result_suspend_key("other"),
+            "result_waiter_ids": ["other"],
+            "application_name": sys_db.app_name,
+        }
+        for i in range(5000)
+    ]
+
+    def literal(v: Any) -> str:
+        if v is None:
+            return "NULL"
+        if isinstance(v, list):
+            return "ARRAY[" + ",".join(literal(x) for x in v) + "]::text[]"
+        if isinstance(v, (int, float)):
+            return str(v)
+        return "'" + str(v).replace("'", "''") + "'"
+
+    def plans(conn: Any, statement: str, parameters: Any) -> List[Any]:
+        """The custom plan, and the generic plan a prepared statement can switch to."""
+        custom = conn.exec_driver_sql(
+            f"EXPLAIN (FORMAT JSON) {statement}", parameters
+        ).scalar()
+        names: List[str] = []
+
+        def number(m: Any) -> str:
+            if m.group(1) not in names:
+                names.append(m.group(1))
+            return f"${names.index(m.group(1)) + 1}"
+
+        conn.exec_driver_sql("SET plan_cache_mode = force_generic_plan")
+        conn.exec_driver_sql(
+            "PREPARE wake_plan AS " + re.sub(r"%\((\w+)\)s", number, statement)
+        )
+        args = ", ".join(literal(parameters[n]) for n in names)
+        generic = conn.exec_driver_sql(
+            f"EXPLAIN (FORMAT JSON) EXECUTE wake_plan({args})"
+        ).scalar()
+        conn.exec_driver_sql("DEALLOCATE wake_plan")
+        conn.exec_driver_sql("RESET plan_cache_mode")
+        return [custom[0]["Plan"], generic[0]["Plan"]]
+
+    def subplan(plan: Any, name: str) -> Any:
+        if plan.get("Subplan Name") == name:
+            return plan
+        for child in plan.get("Plans", []):
+            if (found := subplan(child, name)) is not None:
+                return found
+        return None
+
+    def workflow_status_scans(plan: Any) -> List[Tuple[str, str]]:
+        found = []
+        if plan["Node Type"] != "ModifyTable" and (
+            plan.get("Relation Name") == "workflow_status"
+            or str(plan.get("Index Name", "")).startswith("workflow_status")
+        ):
+            found.append((plan["Node Type"], plan.get("Index Name", "")))
+        for child in plan.get("Plans", []):
+            found.extend(workflow_status_scans(child))
+        return found
+
+    with sys_db.engine.begin() as conn:
+        # Analyzed before the rows arrive, the planner takes the table for near-empty.
+        conn.exec_driver_sql(f'ANALYZE "{sys_db.schema}".workflow_status')
+        conn.execute(sa.insert(ws), rows)
+        for name, (statement, parameters) in captured.items():
+            for plan in plans(conn, statement, parameters):
+                if name == "outcome":
+                    plan = subplan(plan, "CTE woken")
+                    assert plan is not None
+                scans = workflow_status_scans(plan)
+                assert scans, (name, plan)
+                for node_type, index in scans:
+                    assert node_type != "Seq Scan", (name, scans)
+                    assert index in ("", "workflow_status_pkey"), (name, scans)

@@ -1850,17 +1850,21 @@ class SystemDatabase(ABC):
             )
             .scalar_subquery()
         )
+        unchanged = ws.c.status.notin_(sorted(_NOT_COMPLETE_STATUSES)) & (
+            ws.c.completed_at == completed_at
+        )
         # Best effort and not retried: a waiter left behind is never woken again.
         try:
             with self.engine.begin() as c:
+                # The guard is in SET, not WHERE, so the planner probes only the primary key.
                 c.execute(
                     sa.update(ws)
-                    .where(
-                        *self._wf(ws, workflow_id),
-                        ws.c.status.notin_(sorted(_NOT_COMPLETE_STATUSES)),
-                        ws.c.completed_at == completed_at,
+                    .where(*self._wf(ws, workflow_id))
+                    .values(
+                        result_waiter_ids=sa.case(
+                            (unchanged, remaining), else_=ws.c.result_waiter_ids
+                        )
                     )
-                    .values(result_waiter_ids=remaining)
                 )
         except Exception as e:
             dbos_logger.warning(
