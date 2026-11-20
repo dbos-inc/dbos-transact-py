@@ -2327,10 +2327,8 @@ class SystemDatabase(ABC):
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
     ) -> None:
-        """Rewind each workflow from its own start step, all in one transaction: every
-        workflow gets exactly rewind_workflow's effects, or none does. A workflow listed
-        twice counts once. Without a queue or application version, each workflow keeps
-        its own."""
+        """Rewind each workflow from its own start step, all or nothing in one
+        transaction."""
         targets = rewind_targets(workflow_ids, start_steps)
         if not targets:
             return
@@ -2355,9 +2353,8 @@ class SystemDatabase(ABC):
     def _rewindable_statuses(
         self, c: sa.Connection, workflow_ids: Sequence[str]
     ) -> Dict[str, str]:
-        """Each workflow's status, refusing if any is missing or still running. Like
-        bulk fork's read, it takes no locks: each rewind's guarded update catches a
-        status that changed since."""
+        """Each workflow's status, refusing if any is missing or still running. Takes
+        no locks: the guarded update in _rewind_workflow_txn catches a later change."""
         ws = self.tables.workflow_status
         rows = c.execute(
             sa.select(ws.c.workflow_uuid, ws.c.status).where(

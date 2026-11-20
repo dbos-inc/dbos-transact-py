@@ -3237,8 +3237,7 @@ class DBOS:
         queue_name: Optional[str] = None,
         queue_partition_key: Optional[str] = None,
     ) -> None:
-        """Rewind each workflow from its own start step, all or nothing. Internal: only
-        Enterprise's bulk rewind calls it."""
+        """Rewind each workflow from its own start step, all or nothing."""
         rewind_workflows(
             self._sys_db,
             self._registry.datasources,

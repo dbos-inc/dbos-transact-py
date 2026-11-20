@@ -327,11 +327,9 @@ def rewind_workflows(
     queue_partition_key: Optional[str] = None,
     run_coroutine: Optional[CoroutineRunner] = None,
 ) -> None:
-    """rewind_workflow for many workflows, each from its own start step, all or nothing
-    in the system database. Every workflow is checked before any datasource checkpoint
-    is deleted, so one already missing or running refuses the batch with them all
-    intact. One resumed after that check still refuses it, but only once checkpoints
-    are gone, as with rewind_workflow."""
+    """rewind_workflow for many workflows, all or nothing in the system database.
+    Every workflow is checked before any datasource checkpoint is deleted, because
+    those deletions can't be rolled back."""
     targets = rewind_targets(workflow_ids, start_steps)
     if not targets:
         return

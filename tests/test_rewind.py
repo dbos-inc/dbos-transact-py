@@ -1443,7 +1443,7 @@ def test_recovery_clears_an_earlier_executions_checkpoints(
 
 
 #######################################
-## Batch rewind (behind Enterprise's bulk rewind)
+## Batch rewind
 #######################################
 
 
