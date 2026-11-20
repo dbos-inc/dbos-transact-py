@@ -23,6 +23,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Sequence,
     Set,
     Tuple,
     TypedDict,
@@ -167,6 +168,34 @@ def workflow_is_active(status: str) -> bool:
         or status == WorkflowStatusString.DELAYED.value
         or status == WorkflowStatusString.SUSPENDED.value
     )
+
+
+def rewindable_status(workflow_id: str, status: Optional[str]) -> str:
+    """The status of a workflow that can be rewound. Refuses one that is missing
+    (status None) or still running."""
+    if status is None:
+        raise DBOSNonExistentWorkflowError("target", workflow_id)
+    if workflow_is_active(status):
+        raise DBOSException(
+            f"Cannot rewind {workflow_id} ({status}): only a workflow in a "
+            "terminal state can be rewound, so cancel it first"
+        )
+    return status
+
+
+def rewind_targets(
+    workflow_ids: Sequence[str], start_steps: Sequence[int]
+) -> Dict[str, int]:
+    """Each workflow's start step for a batch rewind: once per workflow, its first
+    listing winning, in ID order."""
+    if len(workflow_ids) != len(start_steps):
+        raise ValueError("workflow_ids and start_steps must have the same length")
+    targets: Dict[str, int] = {}
+    for workflow_id, start_step in zip(workflow_ids, start_steps):
+        if start_step < 1:
+            raise ValueError(f"start_step must be >= 1, got {start_step}")
+        targets.setdefault(workflow_id, start_step)
+    return dict(sorted(targets.items()))
 
 
 WorkflowStatuses = Literal[
@@ -2369,156 +2398,219 @@ class SystemDatabase(ABC):
         if start_step < 1:
             raise ValueError(f"start_step must be >= 1, got {start_step}")
 
+        with self.engine.begin() as c:
+            status = rewindable_status(
+                workflow_id,
+                c.execute(
+                    sa.select(self.tables.workflow_status.c.status).where(
+                        *self._wf(self.tables.workflow_status, workflow_id)
+                    )
+                ).scalar(),
+            )
+            self._rewind_workflow_txn(
+                c,
+                workflow_id,
+                start_step,
+                status,
+                application_version=application_version,
+                queue_name=queue_name,
+                queue_partition_key=queue_partition_key,
+            )
+
+    def rewind_workflows(
+        self,
+        workflow_ids: Sequence[str],
+        start_steps: Sequence[int],
+        *,
+        application_version: Optional[str] = None,
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
+    ) -> None:
+        """Rewind each workflow from its own start step, all or nothing in one
+        transaction."""
+        targets = rewind_targets(workflow_ids, start_steps)
+        if not targets:
+            return
+        with self.engine.begin() as c:
+            statuses = self._rewindable_statuses(c, list(targets))
+            for workflow_id, start_step in targets.items():
+                self._rewind_workflow_txn(
+                    c,
+                    workflow_id,
+                    start_step,
+                    statuses[workflow_id],
+                    application_version=application_version,
+                    queue_name=queue_name,
+                    queue_partition_key=queue_partition_key,
+                )
+
+    def check_rewindable(self, workflow_ids: Sequence[str]) -> None:
+        """Refuse, naming the workflow, if any of them is missing or still running."""
+        with self.engine.begin() as c:
+            self._rewindable_statuses(c, workflow_ids)
+
+    def _rewindable_statuses(
+        self, c: sa.Connection, workflow_ids: Sequence[str]
+    ) -> Dict[str, str]:
+        """Each workflow's status, refusing if any is missing or still running. Takes
+        no locks: the guarded update in _rewind_workflow_txn catches a later change."""
+        ws = self.tables.workflow_status
+        rows = c.execute(
+            sa.select(ws.c.workflow_uuid, ws.c.status).where(
+                *self._wf_in(ws, workflow_ids)
+            )
+        ).fetchall()
+        found: Dict[str, str] = {row[0]: row[1] for row in rows}
+        return {
+            workflow_id: rewindable_status(workflow_id, found.get(workflow_id))
+            for workflow_id in workflow_ids
+        }
+
+    def _rewind_workflow_txn(
+        self,
+        c: sa.Connection,
+        workflow_id: str,
+        start_step: int,
+        status: str,
+        *,
+        application_version: Optional[str],
+        queue_name: Optional[str],
+        queue_partition_key: Optional[str],
+    ) -> None:
+        """A rewind's statements, for a workflow already checked to be in status."""
         weh = self.tables.workflow_events_history
         events = self.tables.workflow_events
 
-        with self.engine.begin() as c:
-            # Check the workflow exists and is in a terminal state
-            status = c.execute(
-                sa.select(self.tables.workflow_status.c.status).where(
-                    *self._wf(self.tables.workflow_status, workflow_id)
-                )
-            ).scalar()
-            if status is None:
-                raise DBOSNonExistentWorkflowError("target", workflow_id)
-            if workflow_is_active(status):
-                raise DBOSException(
-                    f"Cannot rewind {workflow_id} ({status}): only a workflow in a "
-                    "terminal state can be rewound, so cancel it first"
-                )
+        # Rollback workflows events to the latest published value
+        # before the rewind, using the workflow_events_history as an undo log.
+        # Then rewind the workflow events history as well.
+        discarded = weh.alias("discarded")
 
-            # Rollback workflows events to the latest published value
-            # before the rewind, using the workflow_events_history as an undo log.
-            # Then rewind the workflow events history as well.
-            discarded = weh.alias("discarded")
-
-            def published_past_cut(key: Any) -> Any:
-                """Whether this key was published at or past the cut."""
-                return (
-                    sa.select(sa.literal(1))
-                    .where(
-                        *self._wf(discarded, workflow_id),
-                        discarded.c.key == key,
-                        discarded.c.function_id >= start_step,
-                    )
-                    .exists()
-                )
-
-            # First delete all events published after the rewind point.
-            c.execute(
-                sa.delete(events).where(
-                    *self._wf(events, workflow_id), published_past_cut(events.c.key)
-                )
-            )
-
-            # Then restore events, if any, as published before the rewind point.
-            surviving = (
-                sa.select(
-                    weh.c.workflow_uuid,
-                    weh.c.key,
-                    weh.c.value,
-                    weh.c.serialization,
-                    sa.func.row_number()
-                    .over(
-                        partition_by=weh.c.key,
-                        order_by=weh.c.function_id.desc(),
-                    )
-                    .label("rn"),
-                )
+        def published_past_cut(key: Any) -> Any:
+            """Whether this key was published at or past the cut."""
+            return (
+                sa.select(sa.literal(1))
                 .where(
-                    *self._wf(weh, workflow_id),
-                    weh.c.function_id < start_step,
-                    published_past_cut(weh.c.key),
+                    *self._wf(discarded, workflow_id),
+                    discarded.c.key == key,
+                    discarded.c.function_id >= start_step,
                 )
-                .subquery("surviving")
+                .exists()
             )
-            key_columns = self._wf_columns(workflow_id)
+
+        # First delete all events published after the rewind point.
+        c.execute(
+            sa.delete(events).where(
+                *self._wf(events, workflow_id), published_past_cut(events.c.key)
+            )
+        )
+
+        # Then restore events, if any, as published before the rewind point.
+        surviving = (
+            sa.select(
+                weh.c.workflow_uuid,
+                weh.c.key,
+                weh.c.value,
+                weh.c.serialization,
+                sa.func.row_number()
+                .over(
+                    partition_by=weh.c.key,
+                    order_by=weh.c.function_id.desc(),
+                )
+                .label("rn"),
+            )
+            .where(
+                *self._wf(weh, workflow_id),
+                weh.c.function_id < start_step,
+                published_past_cut(weh.c.key),
+            )
+            .subquery("surviving")
+        )
+        key_columns = self._wf_columns(workflow_id)
+        c.execute(
+            sa.insert(events).from_select(
+                [
+                    *[name for name, _ in key_columns],
+                    "workflow_uuid",
+                    "key",
+                    "value",
+                    "serialization",
+                ],
+                sa.select(
+                    *[expr for _, expr in key_columns],
+                    surviving.c.workflow_uuid,
+                    surviving.c.key,
+                    surviving.c.value,
+                    surviving.c.serialization,
+                ).where(surviving.c.rn == 1),
+            )
+        )
+
+        # Clear streams' close sentinels: the rows a reader never reads ahead.
+        c.execute(
+            sa.delete(self.tables.streams).where(
+                *self._wf(self.tables.streams, workflow_id),
+                self.tables.streams.c.function_id >= start_step,
+                self.tables.streams.c.value == _serialized_stream_closed_sentinel,
+                self.tables.streams.c.serialization == DBOSPortableJSON.name(),
+            )
+        )
+
+        # Discard steps and workflow events history
+        for table in (self.tables.operation_outputs, weh):
             c.execute(
-                sa.insert(events).from_select(
-                    [
-                        *[name for name, _ in key_columns],
-                        "workflow_uuid",
-                        "key",
-                        "value",
-                        "serialization",
-                    ],
-                    sa.select(
-                        *[expr for _, expr in key_columns],
-                        surviving.c.workflow_uuid,
-                        surviving.c.key,
-                        surviving.c.value,
-                        surviving.c.serialization,
-                    ).where(surviving.c.rn == 1),
+                sa.delete(table).where(
+                    *self._wf(table, workflow_id), table.c.function_id >= start_step
                 )
             )
 
-            # Clear streams' close sentinels: the rows a reader never reads ahead.
-            c.execute(
-                sa.delete(self.tables.streams).where(
-                    *self._wf(self.tables.streams, workflow_id),
-                    self.tables.streams.c.function_id >= start_step,
-                    self.tables.streams.c.value == _serialized_stream_closed_sentinel,
-                    self.tables.streams.c.serialization == DBOSPortableJSON.name(),
-                )
+        # Delete messages consumed or received after the rewind point
+        c.execute(
+            sa.delete(self.tables.notifications).where(
+                *self._wf(self.tables.notifications, workflow_id, "destination_uuid"),
+                (self.tables.notifications.c.consumed_by_function_id >= start_step)
+                | (self.tables.notifications.c.consumed == False),
             )
+        )
 
-            # Discard steps and workflow events history
-            for table in (self.tables.operation_outputs, weh):
-                c.execute(
-                    sa.delete(table).where(
-                        *self._wf(table, workflow_id), table.c.function_id >= start_step
-                    )
-                )
+        c.execute(
+            sa.delete(self.tables.workflow_output).where(
+                *self._wf(self.tables.workflow_output, workflow_id)
+            )
+        )
 
-            # Delete messages consumed or received after the rewind point
-            c.execute(
-                sa.delete(self.tables.notifications).where(
-                    *self._wf(
-                        self.tables.notifications, workflow_id, "destination_uuid"
-                    ),
-                    (self.tables.notifications.c.consumed_by_function_id >= start_step)
-                    | (self.tables.notifications.c.consumed == False),
-                )
+        # Re-enqueue the workflow
+        version_update = (
+            {"application_version": application_version}
+            if application_version is not None
+            else {}
+        )
+        result = c.execute(
+            sa.update(self.tables.workflow_status)
+            .where(*self._wf(self.tables.workflow_status, workflow_id))
+            .where(self.tables.workflow_status.c.status == status)
+            .values(
+                status=WorkflowStatusString.ENQUEUED.value,
+                owner_xid=None,
+                **version_update,
+                **self._requeue_values(queue_name, queue_partition_key),
+                recovery_attempts=0,
+                workflow_deadline_epoch_ms=None,
+                deduplication_id=None,
+                suspend_key=None,
+                started_at_epoch_ms=None,
+                updated_at=self._now_ms_sql(),
+                completed_at=None,
+                archive_pending=None,
+                output=None,
+                error=None,
             )
-
-            c.execute(
-                sa.delete(self.tables.workflow_output).where(
-                    *self._wf(self.tables.workflow_output, workflow_id)
-                )
+        )
+        if result.rowcount != 1:
+            raise DBOSException(
+                f"Workflow {workflow_id} changed status while being rewound; "
+                "retry the rewind"
             )
-
-            # Re-enqueue the workflow
-            version_update = (
-                {"application_version": application_version}
-                if application_version is not None
-                else {}
-            )
-            result = c.execute(
-                sa.update(self.tables.workflow_status)
-                .where(*self._wf(self.tables.workflow_status, workflow_id))
-                .where(self.tables.workflow_status.c.status == status)
-                .values(
-                    status=WorkflowStatusString.ENQUEUED.value,
-                    owner_xid=None,
-                    **version_update,
-                    **self._requeue_values(queue_name, queue_partition_key),
-                    recovery_attempts=0,
-                    workflow_deadline_epoch_ms=None,
-                    deduplication_id=None,
-                    suspend_key=None,
-                    started_at_epoch_ms=None,
-                    updated_at=self._now_ms_sql(),
-                    completed_at=None,
-                    archive_pending=None,
-                    output=None,
-                    error=None,
-                )
-            )
-            if result.rowcount != 1:
-                raise DBOSException(
-                    f"Workflow {workflow_id} changed status while being rewound; "
-                    "retry the rewind"
-                )
 
     @staticmethod
     def _fork_queue_values(
