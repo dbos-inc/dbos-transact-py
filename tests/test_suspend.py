@@ -566,9 +566,9 @@ def test_outcome_wake_query_plans(
 
     def workflow_status_scans(plan: Any) -> List[Tuple[str, str]]:
         found = []
+        # Any node naming an index, so a Bitmap Index Scan, which has no relation, is checked too.
         if plan["Node Type"] != "ModifyTable" and (
-            plan.get("Relation Name") == "workflow_status"
-            or str(plan.get("Index Name", "")).startswith("workflow_status")
+            plan.get("Relation Name") == "workflow_status" or "Index Name" in plan
         ):
             found.append((plan["Node Type"], plan.get("Index Name", "")))
         for child in plan.get("Plans", []):

@@ -1844,7 +1844,7 @@ class SystemDatabase(ABC):
     def _wake_values(self, key: Any) -> Dict[str, Any]:
         """Values making a workflow SUSPENDED under key (a result_suspend_key) or in wait_first due for the background pass."""
         ws = self.tables.workflow_status
-        # Status is tested here, not in WHERE, so the planner cannot scan idx_workflow_status_suspended.
+        # Tested in SET, not WHERE: a park committed after the snapshot is re-read only for rows WHERE matched, and the planner can't scan idx_workflow_status_suspended.
         return {
             "delay_until_epoch_ms": sa.case(
                 (
