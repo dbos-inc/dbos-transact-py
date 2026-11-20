@@ -87,7 +87,7 @@ class SystemSchema:
         # Workflows SUSPENDED awaiting this one's result; woken and cleared when it completes.
         Column(
             "result_waiter_ids",
-            ARRAY(Text).with_variant(JSON(), "sqlite"),
+            ARRAY(Text).with_variant(JSON(none_as_null=True), "sqlite"),
             nullable=True,
         ),
         # TRUE from a terminal transition until the archiver has written it; else NULL.

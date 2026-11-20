@@ -382,7 +382,17 @@ def test_completion_wakes_result_waiters_without_suspend_mode(
         assert row(other)[0] is None
 
         def cleared() -> None:
-            assert row(target_id)[1] is None
+            # IS NULL in SQL, so a JSON 'null' stored on SQLite does not pass.
+            with sys_db.engine.connect() as c:
+                assert (
+                    c.execute(
+                        sa.select(sa.func.count()).where(
+                            ws.c.workflow_uuid == target_id,
+                            ws.c.result_waiter_ids.is_(None),
+                        )
+                    ).scalar_one()
+                    == 1
+                )
 
         retry_until_success(cleared, interval=0.1, max_attempts=50)
 
@@ -401,7 +411,15 @@ def test_completion_wakes_result_waiters_without_suspend_mode(
             .where(ws.c.workflow_uuid == timed_out[0])
             .values(workflow_deadline_epoch_ms=1)
         )
-    assert timed_out[0] in sys_db.cancel_timed_out_workflows(100)
+
+    # The background timeout sweep may cancel it first; either sweep wakes its waiters.
+    def swept() -> None:
+        sys_db.cancel_timed_out_workflows(100)
+        status = sys_db.get_workflow_status(timed_out[0])
+        assert status is not None
+        assert status["status"] == WorkflowStatusString.CANCELLED.value
+
+    retry_until_success(swept, interval=0.1, max_attempts=50)
     check(*timed_out)
     release.set()
     assert DBOS.retrieve_workflow(succeeded[0]).get_result() == "done"
