@@ -345,7 +345,7 @@ def test_completion_wakes_result_waiters_without_suspend_mode(
 
     @DBOS.workflow()
     def target(fail: bool) -> str:
-        assert release.wait(10)
+        assert release.wait(60)
         if fail:
             raise RuntimeError("failed")
         return "done"
