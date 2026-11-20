@@ -269,8 +269,13 @@ class WorkflowHandleClientPolling(Generic[R]):
 
     @_client_step("DBOSClient.getResult")
     def get_result(
-        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+        self,
+        *,
+        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
+        suspend: bool = False,
     ) -> R:
+        if suspend:
+            raise DBOSException("A DBOSClient handle cannot suspend")
         with bind_shard_keys({self.workflow_id: self.shard_key}):
             res: R = self._sys_db.await_workflow_result(
                 self.workflow_id, polling_interval_sec
@@ -300,8 +305,13 @@ class WorkflowHandleClientAsyncPolling(Generic[R]):
 
     @_client_step("DBOSClient.getResult")
     async def get_result(
-        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+        self,
+        *,
+        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
+        suspend: bool = False,
     ) -> R:
+        if suspend:
+            raise DBOSException("A DBOSClient handle cannot suspend")
         with bind_shard_keys({self.workflow_id: self.shard_key}):
             res: R = await self._sys_db.await_workflow_result_async(
                 self.workflow_id, polling_interval_sec

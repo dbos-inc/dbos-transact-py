@@ -1,7 +1,7 @@
 """Errors thrown by DBOS."""
 
 from enum import Enum
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Sequence
 
 
 class DBOSException(Exception):
@@ -521,8 +521,18 @@ class DBOSWorkflowSuspendedError(DBOSBaseException):
     of the sleep re-enqueues the workflow.
     """
 
-    def __init__(self, workflow_id: str, topic: Optional[str]) -> None:
-        if topic is None:
+    def __init__(
+        self,
+        workflow_id: str,
+        topic: Optional[str],
+        *,
+        awaited_workflow_ids: Sequence[str] = (),
+    ) -> None:
+        if len(awaited_workflow_ids) == 1:
+            waiting = f"awaiting the result of workflow {awaited_workflow_ids[0]}"
+        elif awaited_workflow_ids:
+            waiting = f"awaiting the first of {len(awaited_workflow_ids)} workflows"
+        elif topic is None:
             waiting = "sleeping"
         elif topic == "__null__topic__":
             # A recv with no topic waits on the system database's null topic.

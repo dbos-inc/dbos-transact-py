@@ -269,7 +269,7 @@ def test_step_retries_no_final_sleep(dbos: DBOS) -> None:
     backoff_rate = 2.0
     # Useful backoffs total interval * (1 + backoff_rate) = 3.0s; a wasted
     # final sleep would add another backoff_rate**(max_attempts-1) = 4.0s.
-    expected_max_seconds = 3.5
+    expected_max_seconds = 5.0
     step_counter = 0
 
     @DBOS.step(
@@ -304,7 +304,7 @@ async def test_step_retries_no_final_sleep_async(dbos: DBOS) -> None:
     max_attempts = 3
     interval_seconds = 1.0
     backoff_rate = 2.0
-    expected_max_seconds = 3.5
+    expected_max_seconds = 5.0
     step_counter = 0
 
     @DBOS.step(

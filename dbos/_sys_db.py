@@ -723,6 +723,15 @@ _NOT_COMPLETE_STATUSES = frozenset(
 _WatchedWorkflow = Tuple[str, Optional[str]]
 
 
+def result_suspend_key(workflow_id: str) -> str:
+    """The suspend_key of a workflow SUSPENDED awaiting workflow_id's result."""
+    return f"__dbos_result__:{workflow_id}"
+
+
+# The suspend_key of a workflow SUSPENDED in wait_first on several workflows; any one's completion wakes it.
+WAIT_FIRST_SUSPEND_KEY = "__dbos_wait_first__"
+
+
 @dataclass(eq=False)
 class _StatusWaiter:
     workflows: Tuple[_WatchedWorkflow, ...]
@@ -1680,7 +1689,7 @@ class SystemDatabase(ABC):
             return
         with self.engine.begin() as c:
             now_ms = self._now_ms_sql()
-            c.execute(
+            update = (
                 sa.update(self.tables.workflow_status)
                 .where(*self._wf_in(self.tables.workflow_status, workflow_ids))
                 .where(
@@ -1701,6 +1710,12 @@ class SystemDatabase(ABC):
                     **self._archive_values(),
                 )
             )
+            returning = self._waiter_returning()
+            if not returning:
+                c.execute(update)
+                return
+            rows = c.execute(update.returning(*returning)).fetchall()
+            self._wake_result_waiters_txn(c, list(rows))
 
     @db_retry()
     def update_workflow_outcome(
@@ -1743,6 +1758,9 @@ class SystemDatabase(ABC):
         }
         if owner_xid is not None:
             values["owner"] = owner_xid
+        wakes = self._wakes_result_waiters()
+        if wakes:
+            values["wake_key"] = result_suspend_key(workflow_id)
 
         def build() -> Any:
             ws, wo = self.tables.workflow_status, self.tables.workflow_output
@@ -1780,7 +1798,11 @@ class SystemDatabase(ABC):
                 update = update.where(
                     ws.c.owner_xid == sa.bindparam("owner", type_=ws.c.owner_xid.type)
                 )
-            updated = update.returning(sa.literal_column("1")).cte("updated")
+            updated = (
+                update.returning(ws.c.result_waiter_ids)
+                if wakes
+                else update.returning(sa.literal_column("1"))
+            ).cte("updated")
             insert = self.dialect.insert(wo)
             stored = (
                 insert.from_select(
@@ -1805,18 +1827,82 @@ class SystemDatabase(ABC):
             )
             # Selecting from the CTEs rather than inserting at the top level lets a
             # router see the shard key: PgDog sends an INSERT ... SELECT to every shard.
-            return sa.select(sa.func.count()).select_from(updated).add_cte(stored)
+            completed = sa.select(sa.func.count()).select_from(updated).add_cte(stored)
+            if not wakes:
+                return completed
+            # The waiters come from RETURNING, which sees an append that committed while this waited on the row lock.
+            woken = (
+                sa.update(ws)
+                .where(
+                    ws.c.workflow_uuid.in_(
+                        sa.select(sa.func.unnest(updated.c.result_waiter_ids))
+                    )
+                )
+                .values(
+                    **self._wake_values(
+                        sa.bindparam("wake_key", type_=ws.c.suspend_key.type)
+                    )
+                )
+                .returning(sa.literal_column("1"))
+                .cte("woken")
+            )
+            return completed.add_cte(woken)
 
         with self.engine.connect() as c:
             c.execution_options(isolation_level="AUTOCOMMIT")
-            written = self._execute_prepared(
+            result = self._execute_prepared(
                 c,
                 "update_workflow_outcome" + ("" if owner_xid is None else "_owned"),
                 values,
                 build,
                 insert_columns=False,
-            ).scalar()
-        return bool(written)
+            )
+            return bool(result.scalar())
+
+    def _wakes_result_waiters(self) -> bool:
+        """Whether completions wake result waiters: get_result(suspend=True) is refused when sharded or on CockroachDB."""
+        return not self.sharded and not self._is_cockroach
+
+    def _waiter_returning(self) -> List[Any]:
+        """Columns a completing UPDATE returns for _wake_result_waiters_txn; none without waiters to wake."""
+        ws = self.tables.workflow_status
+        if not self._wakes_result_waiters():
+            return []
+        return [ws.c.workflow_uuid, ws.c.result_waiter_ids]
+
+    def _wake_values(self, key: Any) -> Dict[str, Any]:
+        """Values making a workflow SUSPENDED under key (a result_suspend_key) or in wait_first due for the background pass."""
+        ws = self.tables.workflow_status
+        # Tested in SET, not WHERE: a park committed after the snapshot is re-read only for rows WHERE matched, and the planner can't scan idx_workflow_status_suspended.
+        return {
+            "delay_until_epoch_ms": sa.case(
+                (
+                    (ws.c.status == WorkflowStatusString.SUSPENDED.value)
+                    & (
+                        (ws.c.suspend_key == key)
+                        | (ws.c.suspend_key == WAIT_FIRST_SUSPEND_KEY)
+                    ),
+                    0,
+                ),
+                else_=ws.c.delay_until_epoch_ms,
+            )
+        }
+
+    def _wake_result_waiters_txn(
+        self, conn: Union[sa.Connection, Session], rows: List[Any]
+    ) -> None:
+        """Wake the waiters of the workflows a completing UPDATE returned (_waiter_returning);
+        the caller's transaction still holds those rows' locks."""
+        if not self._wakes_result_waiters():
+            return
+        ws = self.tables.workflow_status
+        for workflow_id, waiters in rows:
+            if waiters:
+                conn.execute(
+                    sa.update(ws)
+                    .where(*self._wf_in(ws, list(waiters)))
+                    .values(**self._wake_values(result_suspend_key(workflow_id)))
+                )
 
     def _outcome_in_one_statement(self) -> bool:
         """Whether update_workflow_outcome writes in one statement; SQLite cannot put an
@@ -1858,10 +1944,17 @@ class SystemDatabase(ABC):
                 update = update.where(
                     self.tables.workflow_status.c.owner_xid == owner_xid
                 )
-            result = c.execute(update)
-            if result.rowcount == 0:
+            returning = self._waiter_returning()
+            if returning:
+                rows = c.execute(update.returning(*returning)).fetchall()
+                written = len(rows)
+            else:
+                written = c.execute(update).rowcount
+            if written == 0:
                 # The outcome was not ours to write, so leave no orphan payload.
                 return False
+            if returning:
+                self._wake_result_waiters_txn(c, list(rows))
             output_values = dict(
                 **self._wf_values(workflow_id),
                 workflow_uuid=workflow_id,
@@ -1896,7 +1989,7 @@ class SystemDatabase(ABC):
                 now_ms = self._now_ms_sql()
                 # Set the workflows' status to CANCELLED, keeping their queue for a later
                 # resume, unless already complete or cancelled (a repeat restamps completion).
-                c.execute(
+                update = (
                     sa.update(self.tables.workflow_status)
                     .where(*self._wf_in(self.tables.workflow_status, ids))
                     .where(
@@ -1919,6 +2012,12 @@ class SystemDatabase(ABC):
                         **self._archive_values(),
                     )
                 )
+                returning = self._waiter_returning()
+                if not returning:
+                    c.execute(update)
+                    return
+                rows = c.execute(update.returning(*returning)).fetchall()
+                self._wake_result_waiters_txn(c, list(rows))
 
         if not cancel_children:
             _cancel_workflows(workflow_ids)
@@ -5388,8 +5487,9 @@ class SystemDatabase(ABC):
                     completed_at=cancelled_at,
                     **self._archive_values(),
                 )
-                .returning(ws.c.workflow_uuid)
+                .returning(*(self._waiter_returning() or [ws.c.workflow_uuid]))
             ).fetchall()
+            self._wake_result_waiters_txn(c, list(rows))
         return [row[0] for row in rows]
 
     def dequeue_scopes(self, queue_name: str) -> List[Optional[str]]:

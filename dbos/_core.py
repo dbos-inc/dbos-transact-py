@@ -204,9 +204,17 @@ class WorkflowHandleFuture(Generic[R]):
         return self.workflow_id
 
     def get_result(
-        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+        self,
+        *,
+        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
+        suspend: bool = False,
     ) -> R:
         with bind_shard_keys({self.workflow_id: self.shard_key}):
+            if suspend:
+                hooks, waiter_id = result_suspend_hooks(
+                    self.dbos, get_local_dbos_context()
+                )
+                hooks.result_suspend(waiter_id, [self.workflow_id])
             return self._get_result(polling_interval_sec)
 
     def _get_result(self, polling_interval_sec: float) -> R:
@@ -263,9 +271,17 @@ class WorkflowHandlePolling(Generic[R]):
         return self.workflow_id
 
     def get_result(
-        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+        self,
+        *,
+        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
+        suspend: bool = False,
     ) -> R:
         with bind_shard_keys({self.workflow_id: self.shard_key}):
+            if suspend:
+                hooks, waiter_id = result_suspend_hooks(
+                    self.dbos, get_local_dbos_context()
+                )
+                hooks.result_suspend(waiter_id, [self.workflow_id])
             return self._get_result(polling_interval_sec)
 
     def _get_result(self, polling_interval_sec: float) -> R:
@@ -321,9 +337,20 @@ class WorkflowHandleAsyncTask(Generic[R]):
         return self.workflow_id
 
     async def get_result(
-        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+        self,
+        *,
+        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
+        suspend: bool = False,
     ) -> R:
         with bind_shard_keys({self.workflow_id: self.shard_key}):
+            if suspend:
+                hooks, waiter_id = result_suspend_hooks(
+                    self.dbos, get_local_dbos_context()
+                )
+                # to_thread copies the context, so the hook sees this execution's owner token.
+                await asyncio.to_thread(
+                    hooks.result_suspend, waiter_id, [self.workflow_id]
+                )
             return await self._get_result(polling_interval_sec)
 
     async def _get_result(self, polling_interval_sec: float) -> R:
@@ -389,9 +416,20 @@ class WorkflowHandleAsyncPolling(Generic[R]):
         return self.workflow_id
 
     async def get_result(
-        self, *, polling_interval_sec: float = DEFAULT_POLLING_INTERVAL
+        self,
+        *,
+        polling_interval_sec: float = DEFAULT_POLLING_INTERVAL,
+        suspend: bool = False,
     ) -> R:
         with bind_shard_keys({self.workflow_id: self.shard_key}):
+            if suspend:
+                hooks, waiter_id = result_suspend_hooks(
+                    self.dbos, get_local_dbos_context()
+                )
+                # to_thread copies the context, so the hook sees this execution's owner token.
+                await asyncio.to_thread(
+                    hooks.result_suspend, waiter_id, [self.workflow_id]
+                )
             return await self._get_result(polling_interval_sec)
 
     async def _get_result(self, polling_interval_sec: float) -> R:
@@ -2926,6 +2964,23 @@ def suspend_hooks(dbos: "DBOS", op: str) -> "Suspend":
             "feature: set suspend_mode to True in the DBOS configuration."
         )
     return hooks
+
+
+def result_suspend_hooks(
+    dbos: "DBOS", ctx: Optional["DBOSContext"], fn: str = "get_result"
+) -> Tuple["Suspend", str]:
+    """The suspend hooks and calling workflow's ID for fn(suspend=True), which only a
+    workflow on an unsharded Postgres or SQLite system database may call."""
+    if ctx is None or not ctx.is_workflow():
+        raise DBOSException(f"{fn}(suspend=True) must be called from within a workflow")
+    hooks = suspend_hooks(dbos, fn)
+    if dbos._sys_db.sharded:
+        raise DBOSException(
+            f"{fn}(suspend=True) is not supported on a sharded system database"
+        )
+    if dbos._sys_db._is_cockroach:
+        raise DBOSException(f"{fn}(suspend=True) is not supported on CockroachDB")
+    return hooks, ctx.workflow_id
 
 
 def record_sleep_suspend(
