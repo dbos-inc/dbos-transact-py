@@ -52,6 +52,7 @@ from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams, check_async, generate
 from dbos._workflow_commands import (
     fork_workflow,
     rewind_workflow,
+    rewind_workflows,
     take_fork_workflow_id,
 )
 
@@ -3221,6 +3222,28 @@ class DBOS:
             self._registry.datasources,
             workflow_id,
             start_step,
+            application_version=application_version,
+            queue_name=queue_name,
+            queue_partition_key=queue_partition_key,
+            run_coroutine=self._background_event_loop.submit_coroutine,
+        )
+
+    def _rewind_workflows(
+        self,
+        workflow_ids: Sequence[str],
+        start_steps: Sequence[int],
+        *,
+        application_version: Optional[str] = None,
+        queue_name: Optional[str] = None,
+        queue_partition_key: Optional[str] = None,
+    ) -> None:
+        """Rewind each workflow from its own start step, all or nothing. Internal: only
+        Enterprise's bulk rewind calls it."""
+        rewind_workflows(
+            self._sys_db,
+            self._registry.datasources,
+            workflow_ids,
+            start_steps,
             application_version=application_version,
             queue_name=queue_name,
             queue_partition_key=queue_partition_key,
