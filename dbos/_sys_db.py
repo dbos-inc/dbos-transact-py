@@ -699,6 +699,10 @@ def result_suspend_key(workflow_id: str) -> str:
     return f"__dbos_result__:{workflow_id}"
 
 
+# The suspend_key of a workflow SUSPENDED in wait_first on several workflows; any one's completion wakes it.
+WAIT_FIRST_SUSPEND_KEY = "__dbos_wait_first__"
+
+
 @dataclass(eq=False)
 class _StatusWaiter:
     workflows: Tuple[_WatchedWorkflow, ...]
@@ -1884,14 +1888,17 @@ class SystemDatabase(ABC):
         return [ws.c.workflow_uuid, ws.c.result_waiter_ids]
 
     def _wake_values(self, key: Any) -> Dict[str, Any]:
-        """Values making a workflow SUSPENDED under key (a result_suspend_key) due for the background pass."""
+        """Values making a workflow SUSPENDED under key (a result_suspend_key) or in wait_first due for the background pass."""
         ws = self.tables.workflow_status
         # Status is tested here, not in WHERE, so the planner cannot scan idx_workflow_status_suspended.
         return {
             "delay_until_epoch_ms": sa.case(
                 (
                     (ws.c.status == WorkflowStatusString.SUSPENDED.value)
-                    & (ws.c.suspend_key == key),
+                    & (
+                        (ws.c.suspend_key == key)
+                        | (ws.c.suspend_key == WAIT_FIRST_SUSPEND_KEY)
+                    ),
                     0,
                 ),
                 else_=ws.c.delay_until_epoch_ms,

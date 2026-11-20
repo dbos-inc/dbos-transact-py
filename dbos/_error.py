@@ -1,7 +1,7 @@
 """Errors thrown by DBOS."""
 
 from enum import Enum
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Sequence
 
 
 class DBOSException(Exception):
@@ -526,10 +526,12 @@ class DBOSWorkflowSuspendedError(DBOSBaseException):
         workflow_id: str,
         topic: Optional[str],
         *,
-        awaited_workflow_id: Optional[str] = None,
+        awaited_workflow_ids: Sequence[str] = (),
     ) -> None:
-        if awaited_workflow_id is not None:
-            waiting = f"awaiting the result of workflow {awaited_workflow_id}"
+        if len(awaited_workflow_ids) == 1:
+            waiting = f"awaiting the result of workflow {awaited_workflow_ids[0]}"
+        elif awaited_workflow_ids:
+            waiting = f"awaiting the first of {len(awaited_workflow_ids)} workflows"
         elif topic is None:
             waiting = "sleeping"
         elif topic == "__null__topic__":

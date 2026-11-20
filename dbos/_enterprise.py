@@ -104,9 +104,9 @@ class Suspend(Protocol):
         the seconds to sleep in the thread when that end time is near or past."""
         ...
 
-    def get_result_suspend(self, workflow_uuid: str, awaited_id: str) -> None:
-        """Parks the workflow until awaited_id completes, raising DBOSWorkflowSuspendedError;
-        returns when that workflow is already complete or has no row."""
+    def result_suspend(self, workflow_uuid: str, awaited_ids: List[str]) -> None:
+        """Parks the workflow until any of awaited_ids completes, raising DBOSWorkflowSuspendedError;
+        returns when one is already complete or has no row."""
         ...
 
     def transition_suspended_workflows(self) -> None: ...

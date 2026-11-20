@@ -17,7 +17,11 @@ from dbos import DBOS, DBOSClient, SetWorkflowID
 from dbos._core import result_suspend_hooks
 from dbos._error import DBOSException, DBOSWorkflowSuspendedError
 from dbos._outcome import NoResult
-from dbos._sys_db import WorkflowStatusString, result_suspend_key
+from dbos._sys_db import (
+    WAIT_FIRST_SUSPEND_KEY,
+    WorkflowStatusString,
+    result_suspend_key,
+)
 from tests.conftest import retry_until_success
 
 
@@ -284,13 +288,17 @@ def test_send_wake_update_query_plan(
 
 def test_suspended_error_names_the_awaited_workflow() -> None:
     assert (
-        DBOSWorkflowSuspendedError("w", None, awaited_workflow_id="a").message
+        DBOSWorkflowSuspendedError("w", None, awaited_workflow_ids=["a"]).message
         == "Workflow w suspended awaiting the result of workflow a"
+    )
+    assert (
+        DBOSWorkflowSuspendedError("w", None, awaited_workflow_ids=["a", "b"]).message
+        == "Workflow w suspended awaiting the first of 2 workflows"
     )
 
 
 def test_get_result_suspend_is_refused_without_suspend_mode(dbos: DBOS) -> None:
-    """Refused outside a workflow, and inside one without suspend mode, through handles and DBOS.get_result."""
+    """Refused outside a workflow, and inside one without suspend mode, through handles, DBOS.get_result and DBOS.wait_first."""
     assert dbos._sys_db.suspend is None
 
     @DBOS.workflow()
@@ -305,10 +313,14 @@ def test_get_result_suspend_is_refused_without_suspend_mode(dbos: DBOS) -> None:
     def by_id(wfid: str) -> str:
         return str(DBOS.get_result(wfid, suspend=True))
 
+    @DBOS.workflow()
+    def by_wait_first(wfid: str) -> str:
+        return DBOS.wait_first([DBOS.retrieve_workflow(wfid)], suspend=True).workflow_id
+
     target_id = str(uuid.uuid4())
     with SetWorkflowID(target_id):
         target()
-    for wf in (by_handle, by_id):
+    for wf in (by_handle, by_id, by_wait_first):
         handle = DBOS.start_workflow(wf, target_id)
         with pytest.raises(DBOSException, match="requires suspend mode"):
             handle.get_result()
@@ -316,13 +328,15 @@ def test_get_result_suspend_is_refused_without_suspend_mode(dbos: DBOS) -> None:
         DBOS.retrieve_workflow(target_id).get_result(suspend=True)
     with pytest.raises(DBOSException, match="must be called from within a workflow"):
         DBOS.get_result(target_id, suspend=True)
+    with pytest.raises(DBOSException, match="wait_first.*must be called from within"):
+        DBOS.wait_first([DBOS.retrieve_workflow(target_id)], suspend=True)
 
 
 def test_completion_wakes_result_waiters_without_suspend_mode(
     dbos: DBOS, skip_with_sharding: None
 ) -> None:
-    """Parks waiters by hand, as dbos-enterprise's get_result would: success, error, cancel,
-    dead-letter and the timeout sweep each make the awaited workflow's waiters due and clear
+    """Parks waiters by hand, as dbos-enterprise's get_result and wait_first would: success, error,
+    cancel, dead-letter and the timeout sweep each make the awaited workflow's waiters due and clear
     its list, and a listed waiter parked on another workflow stays parked."""
     assert dbos._sys_db.suspend is None
     sys_db = dbos._sys_db
@@ -340,7 +354,7 @@ def test_completion_wakes_result_waiters_without_suspend_mode(
     def parked() -> None:
         pass
 
-    def park(awaited_id: str) -> str:
+    def park(suspend_key: str) -> str:
         wfid = str(uuid.uuid4())
         with SetWorkflowID(wfid):
             parked()
@@ -350,7 +364,7 @@ def test_completion_wakes_result_waiters_without_suspend_mode(
                 .where(ws.c.workflow_uuid == wfid)
                 .values(
                     status=WorkflowStatusString.SUSPENDED.value,
-                    suspend_key=result_suspend_key(awaited_id),
+                    suspend_key=suspend_key,
                     delay_until_epoch_ms=None,
                 )
             )
@@ -365,10 +379,11 @@ def test_completion_wakes_result_waiters_without_suspend_mode(
             ).one()
 
     def start(fail: bool = False) -> Tuple[str, List[str], str]:
-        """A running target with two waiters parked on it and one parked elsewhere."""
+        """A running target with two waiters parked on it, one in wait_first, and one parked elsewhere."""
         handle = DBOS.start_workflow(target, fail)
-        waiters = [park(handle.workflow_id), park(handle.workflow_id)]
-        other = park(str(uuid.uuid4()))
+        key = result_suspend_key(handle.workflow_id)
+        waiters = [park(key), park(key), park(WAIT_FIRST_SUSPEND_KEY)]
+        other = park(result_suspend_key(str(uuid.uuid4())))
         with sys_db.engine.begin() as c:
             c.execute(
                 sa.update(ws)
@@ -378,7 +393,7 @@ def test_completion_wakes_result_waiters_without_suspend_mode(
         return handle.workflow_id, waiters, other
 
     def check(target_id: str, waiters: List[str], other: str) -> None:
-        assert [row(w)[0] for w in waiters] == [0, 0]
+        assert [row(w)[0] for w in waiters] == [0, 0, 0]
         assert row(other)[0] is None
 
         def cleared() -> None:
@@ -438,8 +453,13 @@ def test_get_result_suspend_is_refused_when_sharded_or_cockroach() -> None:
         sys_db = SimpleNamespace(
             suspend=object(), sharded=sharded, _is_cockroach=cockroach
         )
-        with pytest.raises(DBOSException, match=refusal):
-            result_suspend_hooks(cast(Any, SimpleNamespace(_sys_db=sys_db)), ctx)
+        for fn in ("get_result", "wait_first"):
+            with pytest.raises(
+                DBOSException, match=rf"{fn}\(suspend=True\) is {refusal}"
+            ):
+                result_suspend_hooks(
+                    cast(Any, SimpleNamespace(_sys_db=sys_db)), ctx, fn
+                )
 
 
 def test_outcome_wake_query_plans(
