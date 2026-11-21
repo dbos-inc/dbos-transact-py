@@ -441,7 +441,6 @@ class DBOSClient:
                 serializer=self._serializer,
                 retry_connection_errors=retry_connection_errors,
             )
-            self._conductor.start()
             if not lazy:
                 try:
                     self._conductor.check_connection()

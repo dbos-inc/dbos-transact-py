@@ -258,7 +258,7 @@ def test_a_client_with_only_a_conductor_key_uses_the_default_conductor(
 
     def conductor_client(**kwargs: Any) -> Any:
         urls.append(kwargs["conductor_url"])
-        return types.SimpleNamespace(start=lambda: None, stop=lambda: None)
+        return types.SimpleNamespace(stop=lambda: None)
 
     monkeypatch.setattr(
         enterprise_module,
