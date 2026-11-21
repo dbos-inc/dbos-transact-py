@@ -297,7 +297,7 @@ class WorkflowStatus:
     # The number of times this workflow's execution has been attempted
     recovery_attempts: Optional[int]
     # The format of input, output and error, set only when they were listed serialized
-    serialization: Optional[str]
+    serialization: Optional[str] = None
 
 
 class WorkflowStatusInternal(TypedDict):
