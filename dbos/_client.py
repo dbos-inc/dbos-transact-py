@@ -1059,6 +1059,10 @@ class DBOSClient:
         return handle_map[completed_id]
 
     def _external_storage(self) -> ExternalStorage:
+        if self._conductor is not None:
+            raise DBOSException(
+                "This operation is not supported by a DBOSClient created with a conductor_key."
+            )
         if self._external_storage_field is None:
             raise DBOSExternalStoreNotConfiguredError(None, [])
         return self._external_storage_field
