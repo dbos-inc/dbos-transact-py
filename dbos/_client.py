@@ -590,6 +590,7 @@ class DBOSClient:
                 args,
                 kwargs,
                 parent_workflow_id=parent.workflow_id if parent is not None else None,
+                parent_shard_key=parent.shard_key if parent is not None else None,
                 creator_xid=creator_xid,
             )
         workflow_id, status = self._build_enqueue_status(options, *args, **kwargs)
@@ -1016,7 +1017,9 @@ class DBOSClient:
         def wait() -> str:
             if self._conductor is not None:
                 return self._conductor.await_first_workflow_id(
-                    workflow_ids, polling_interval_sec
+                    workflow_ids,
+                    polling_interval_sec,
+                    shard_keys={h.workflow_id: h.shard_key for h in handles},
                 )
             with bind_shard_keys({h.workflow_id: h.shard_key for h in handles}):
                 return self._sys_db.await_first_workflow_id(
@@ -1046,7 +1049,9 @@ class DBOSClient:
         async def wait() -> str:
             if self._conductor is not None:
                 return await self._conductor.await_first_workflow_id_async(
-                    workflow_ids, polling_interval_sec
+                    workflow_ids,
+                    polling_interval_sec,
+                    shard_keys={h.workflow_id: h.shard_key for h in handles},
                 )
             with bind_shard_keys({h.workflow_id: h.shard_key for h in handles}):
                 return await self._sys_db.await_first_workflow_id_async(

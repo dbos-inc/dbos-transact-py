@@ -77,7 +77,11 @@ class ConductorClient(Protocol):
     ) -> Any: ...
 
     def await_first_workflow_id(
-        self, workflow_ids: List[str], polling_interval: float
+        self,
+        workflow_ids: List[str],
+        polling_interval: float,
+        *,
+        shard_keys: Dict[str, Optional[str]],
     ) -> str: ...
 
     def list_workflow_steps(
@@ -136,6 +140,7 @@ class ConductorClient(Protocol):
         kwargs: Dict[str, Any],
         *,
         parent_workflow_id: Optional[str],
+        parent_shard_key: Optional[str],
         creator_xid: Optional[str],
     ) -> str: ...
 
@@ -195,7 +200,11 @@ class ConductorClient(Protocol):
     ) -> None: ...
 
     async def await_first_workflow_id_async(
-        self, workflow_ids: List[str], polling_interval: float
+        self,
+        workflow_ids: List[str],
+        polling_interval: float,
+        *,
+        shard_keys: Dict[str, Optional[str]],
     ) -> str: ...
 
 
