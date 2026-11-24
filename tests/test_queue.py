@@ -4529,7 +4529,10 @@ def test_idle_queue_poll_skips_dequeue(dbos: DBOS, skip_with_sharding: None) -> 
 
 
 def test_idle_queue_probe_query_plan(
-    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+    dbos: DBOS,
+    request: pytest.FixtureRequest,
+    skip_with_sqlite: None,
+    skip_with_sharding: None,
 ) -> None:
     """The idle-queue probe runs on every poll of every queue, so it must read
     idx_workflow_status_in_flight_v2 under the default planner settings. With ENQUEUED rows
@@ -4544,6 +4547,19 @@ def test_idle_queue_probe_query_plan(
     busy = f"probe-busy-{uuid.uuid4().hex[:8]}"
     table = f'"{dbos._sys_db.schema}".workflow_status'
     app = dbos._sys_db.app_name
+
+    def drop_probe_rows() -> None:
+        # The reset's DELETE leaves these rows' index bloat, which flips later plan tests on this worker to other indexes.
+        with dbos._sys_db.engine.begin() as conn:
+            conn.exec_driver_sql(
+                f"DELETE FROM {table} WHERE queue_name IN ('{idle.name}', '{busy}')"
+            )
+        with dbos._sys_db.engine.connect().execution_options(
+            isolation_level="AUTOCOMMIT"
+        ) as conn:
+            conn.exec_driver_sql(f"VACUUM FULL {table}")
+
+    request.addfinalizer(drop_probe_rows)
     with dbos._sys_db.engine.begin() as conn:
         for queue_name, status, count in [
             (idle.name, "SUCCESS", 100_000),
