@@ -4513,13 +4513,15 @@ class SystemDatabase(ABC):
         self.notifications_map.add(payload, event, components)
 
         try:
-            # Check if an unconsumed message is already in the database.
-            self.recv_check(workflow_uuid, topic, event)
-
-            # Record the durable sleep timeout
-            actual_timeout = self.record_sleep(
-                workflow_uuid, timeout_function_id, timeout_seconds
-            )
+            # A recv that does not wait skips both: its consume reads the message itself and there is no deadline to resume. Its sleep ID stays reserved, so later steps keep theirs.
+            actual_timeout = 0.0
+            if timeout_seconds > 0:
+                # Check if an unconsumed message is already in the database.
+                self.recv_check(workflow_uuid, topic, event)
+                # Record the durable sleep timeout
+                actual_timeout = self.record_sleep(
+                    workflow_uuid, timeout_function_id, timeout_seconds
+                )
         except:
             self.notifications_map.pop(payload, event)
             raise
@@ -5168,17 +5170,18 @@ class SystemDatabase(ABC):
         self.workflow_events_map.add(payload, event, components)
 
         try:
-            # Check if the key is already in the database
-            self.get_event_check(target_uuid, key, event)
-
-            # Record the durable sleep timeout
+            # As in recv, a get_event that does not wait skips both steps.
             actual_timeout = timeout_seconds
-            if caller_ctx is not None:
-                actual_timeout = self.record_sleep(
-                    caller_ctx["workflow_uuid"],
-                    caller_ctx["timeout_function_id"],
-                    timeout_seconds,
-                )
+            if timeout_seconds > 0:
+                # Check if the key is already in the database
+                self.get_event_check(target_uuid, key, event)
+                # Record the durable sleep timeout
+                if caller_ctx is not None:
+                    actual_timeout = self.record_sleep(
+                        caller_ctx["workflow_uuid"],
+                        caller_ctx["timeout_function_id"],
+                        timeout_seconds,
+                    )
         except:
             self.workflow_events_map.pop(payload, event)
             raise
