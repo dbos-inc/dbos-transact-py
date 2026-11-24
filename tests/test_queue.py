@@ -4299,6 +4299,77 @@ def test_get_queue_partitions_query_plan(
     ), details
 
 
+def test_partitioned_dequeue_pending_probe_query_plan(
+    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
+    """The partitioned sweep's "no PENDING workflow in this partition" check must stay one
+    index probe per partition. Planned as an anti join, Postgres may instead hash every
+    PENDING row of the queue (plus every dead index entry since the last vacuum) on each
+    sweep that sees a waiting head, and which plan it picks flips with each ANALYZE."""
+    queue = unpolled_queue(
+        f"pending-probe-plan-{uuid.uuid4().hex[:8]}", partition_concurrency=1
+    )
+    ws = SystemSchema.workflow_status
+    now = int(time.time() * 1000)
+    app = dbos._sys_db.app_name
+
+    def row(id: str, status: str, partition: str) -> dict[str, Any]:
+        return {
+            "workflow_uuid": f"{queue.name}-{id}",
+            "name": "plan_probe",
+            "status": status,
+            "created_at": now,
+            "updated_at": now,
+            "queue_name": queue.name,
+            "queue_partition_key": partition,
+            "application_name": app,
+            "application_version": GlobalParams.app_version,
+        }
+
+    # Many running partitions, and three waiting heads behind three of them.
+    rows = [row(f"running-{i}", "PENDING", f"p{i:04d}") for i in range(1000)]
+    rows += [row(f"waiting-{i}", "ENQUEUED", f"p{i:04d}") for i in range(3)]
+    with dbos._sys_db.engine.begin() as conn:
+        conn.execute(sa.insert(ws), rows)
+
+    captured: List[Any] = []
+
+    def before_cursor_execute(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        if "recursive" in statement.lower():
+            captured.append((statement, parameters))
+
+    from sqlalchemy import event
+
+    event.listen(dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute)
+    try:
+        assert (
+            dbos._sys_db.start_queued_partitioned_workflows(
+                queue, GlobalParams.executor_id, GlobalParams.app_version, 8
+            )
+            == []
+        )
+    finally:
+        event.remove(
+            dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute
+        )
+    assert captured
+    statement, parameters = captured[0]
+    with dbos._sys_db.engine.begin() as conn:
+        conn.exec_driver_sql(f'ANALYZE "{dbos._sys_db.schema}".workflow_status')
+        plan = conn.exec_driver_sql(f"EXPLAIN {statement}", parameters).fetchall()
+    details = [str(r[0]) for r in plan]
+    assert not [d for d in details if "Anti Join" in d], details
+    # Postgres 17 prints the probe as "NOT EXISTS(SubPlan n)", earlier versions as "NOT (SubPlan n)".
+    assert any("NOT" in d and "SubPlan" in d for d in details), details
+
+
 def test_rate_limiter_query_plan(dbos: DBOS, skip_with_sharding: None) -> None:
     """The limiter's remaining-slots count must seek idx_workflow_status_rate_limited on
     both of its columns, else it rescans every workflow the queue ever rate-limited."""

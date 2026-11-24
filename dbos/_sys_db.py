@@ -5878,7 +5878,7 @@ class SystemDatabase(ABC):
 
             def no_pending(pk: sa.ColumnElement[Any]) -> sa.ColumnElement[bool]:
                 # No application filter by design: a mutual-exclusion probe must block on any owner's row.
-                return ~(
+                probe = (
                     sa.select(sa.literal(1))
                     .where(*self._scoped(ws))
                     .where(ws.c.queue_name == queue.name)
@@ -5886,8 +5886,11 @@ class SystemDatabase(ABC):
                     .where(status_prover)
                     .where(ws.c.queue_partition_key.isnot(None))
                     .where(ws.c.queue_partition_key == pk)
-                    .exists()
                 )
+                if is_postgres:
+                    # OFFSET 0 keeps this one index probe per partition: pulled up into an anti join, Postgres may hash every PENDING row of the queue instead.
+                    probe = probe.offset(sa.literal_column("0"))
+                return ~probe.exists()
 
             def heads(
                 keys: sa.FromClause,
