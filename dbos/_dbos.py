@@ -1257,6 +1257,9 @@ class DBOS:
         self._initialized = False
         for event in self.background_thread_stop_events:
             event.set()
+        # The upgrader stops before the wait below, so an executor that is shutting down starts no new pass. Its pass closes while the system database is still connected.
+        if self.auto_upgrader is not None:
+            self.auto_upgrader.stop()
         if workflow_completion_timeout_sec > 0:
             deadline = time.time() + workflow_completion_timeout_sec
             while time.time() < deadline:
@@ -1273,9 +1276,6 @@ class DBOS:
         if self._archiver is not None:
             self._archiver.stop()
             self._archiver = None
-        # The upgrader unlocks its per-application advisory lock before the system database engine is disposed.
-        if self.auto_upgrader is not None:
-            self.auto_upgrader.stop()
         # Disconnect from Conductor only once the wait above is over, so the executor stays visibly alive to Conductor for its whole duration.
         if self.conductor_websocket is not None:
             self.conductor_websocket.stop()
