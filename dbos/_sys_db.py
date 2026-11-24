@@ -5496,6 +5496,42 @@ class SystemDatabase(ABC):
         """Scopes a queue's workers dequeue from in turn; one unkeyed scope unless sharded."""
         return [None]
 
+    @db_retry()
+    def poll_queue(
+        self, queue: "Queue"
+    ) -> Tuple[Optional["Queue"], List[Optional[str]]]:
+        """An unsharded queue worker's reads before each dequeue, in one transaction: the
+        queue's current config (None once its row is deleted; a queue the database does not
+        back is returned as is) and its dequeue scopes, none while nothing is enqueued.
+        """
+        with self.engine.begin() as c:
+            latest: Optional["Queue"] = queue
+            if queue.database_backed_queue:
+                latest = self.get_queue(queue.name, conn=c)
+            if latest is None or not self._has_enqueued(c, queue.name):
+                return latest, []
+            return latest, [None]
+
+    def _has_enqueued(self, c: sa.Connection, queue_name: str) -> bool:
+        """Whether any workflow this application could dequeue waits in the queue. Every
+        dequeue claims only rows that match this, so a no means a dequeue would claim nothing.
+        """
+        ws = self.tables.workflow_status
+        return (
+            c.execute(
+                sa.select(sa.literal(1))
+                .where(*self._scoped(ws))
+                .where(ws.c.queue_name == queue_name)
+                .where(ws.c.status == WorkflowStatusString.ENQUEUED.value)
+                .where(self._in_flight_status_prover())
+                .where(self._name_filter(ws.c.application_name, self.app_name))
+                # Index order keeps Postgres on the in-flight index; a bare LIMIT 1 can bet on a sequential scan when other queues hold ENQUEUED rows.
+                .order_by(ws.c.priority.asc(), ws.c.created_at.asc())
+                .limit(1)
+            ).first()
+            is not None
+        )
+
     def is_lock_conflict(self, error: DBAPIError) -> bool:
         """Whether a dequeue failed because another worker holds the rows it needs."""
         return isinstance(error.orig, pg_errors.LockNotAvailable)

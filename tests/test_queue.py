@@ -4384,6 +4384,149 @@ def test_rate_limiter_query_plan(dbos: DBOS, skip_with_sharding: None) -> None:
     assert not [d for d in details if d.startswith("SCAN") or "Seq Scan" in d]
 
 
+def test_idle_queue_poll_skips_dequeue(dbos: DBOS, skip_with_sharding: None) -> None:
+    """A poll of a queue with nothing enqueued is one probe: it runs no dequeue (no version
+    read, partition walk, or claim). A workflow enqueued later still starts on a later poll.
+    """
+
+    @DBOS.workflow()
+    def workflow(x: int) -> int:
+        return x
+
+    queues = {
+        "partitioned": DBOS.register_queue(
+            f"idle-partitioned-{uuid.uuid4().hex[:8]}",
+            partition_concurrency=1,
+            polling_interval_sec=0.01,
+        ),
+        "limited": DBOS.register_queue(
+            f"idle-limited-{uuid.uuid4().hex[:8]}",
+            global_concurrency=2,
+            polling_interval_sec=0.01,
+        ),
+    }
+    threads = {f"queue-worker-{q.name}" for q in queues.values()}
+    statements: List[str] = []
+    polls: Dict[str, int] = {}
+    lock = threading.Lock()
+    poll_queue = dbos._sys_db.poll_queue
+
+    def counting_poll_queue(queue: Queue) -> Any:
+        result = poll_queue(queue)
+        name = threading.current_thread().name
+        with lock:
+            polls[name] = polls.get(name, 0) + 1
+        return result
+
+    def before_cursor_execute(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        if threading.current_thread().name in threads:
+            with lock:
+                statements.append(statement)
+
+    def each_worker_polled_idle() -> None:
+        with lock:
+            assert all(polls.get(t, 0) >= 3 for t in threads), polls
+
+    from sqlalchemy import event
+
+    event.listen(dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute)
+    setattr(dbos._sys_db, "poll_queue", counting_poll_queue)
+    try:
+        retry_until_success(each_worker_polled_idle, interval=0.1, max_attempts=100)
+    finally:
+        delattr(dbos._sys_db, "poll_queue")
+        event.remove(
+            dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute
+        )
+    with lock:
+        polled = list(statements)
+    dequeue_reads = ("recursive", "count(", "for update", "application_versions")
+    assert not [s for s in polled if any(r in s.lower() for r in dequeue_reads)]
+
+    with SetEnqueueOptions(queue_partition_key="p"):
+        partitioned = queues["partitioned"].enqueue(workflow, 1)
+    limited = queues["limited"].enqueue(workflow, 2)
+    assert partitioned.get_result() == 1
+    assert limited.get_result() == 2
+
+
+def test_idle_queue_probe_query_plan(
+    dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
+) -> None:
+    """The idle-queue probe runs on every poll of every queue, so it must read
+    idx_workflow_status_in_flight_v2 under the default planner settings. With ENQUEUED rows
+    on other queues, a LIMIT 1 in no index order can plan a sequential scan betting on an
+    early match, which reads the whole table when this queue has none."""
+    # Held in memory only: no row to reload and no worker thread, so a poll is the probe alone.
+    idle = Queue(
+        f"probe-idle-{uuid.uuid4().hex[:8]}",
+        database_backed_queue=False,
+        token=_INTERNAL_QUEUE_CONSTRUCTION,
+    )
+    busy = f"probe-busy-{uuid.uuid4().hex[:8]}"
+    table = f'"{dbos._sys_db.schema}".workflow_status'
+    app = dbos._sys_db.app_name
+    with dbos._sys_db.engine.begin() as conn:
+        for queue_name, status, count in [
+            (idle.name, "SUCCESS", 100_000),
+            (busy, "ENQUEUED", 30_000),
+        ]:
+            conn.exec_driver_sql(
+                f"""INSERT INTO {table} (workflow_uuid, status, name, queue_name,
+                    application_name, inputs, serialization, created_at, updated_at)
+                SELECT '{queue_name}-' || g, '{status}', 'plan_probe', '{queue_name}',
+                    '{app}', '[]', 'json', g, g
+                FROM generate_series(1, {count}) g"""
+            )
+
+    captured: List[Any] = []
+    caller = threading.current_thread()
+
+    def before_cursor_execute(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        if threading.current_thread() is caller:
+            captured.append((statement, parameters))
+
+    from sqlalchemy import event
+
+    event.listen(dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute)
+    try:
+        assert dbos._sys_db.poll_queue(idle) == (idle, [])
+    finally:
+        event.remove(
+            dbos._sys_db.engine, "before_cursor_execute", before_cursor_execute
+        )
+    assert len(captured) == 1
+    statement, parameters = captured[0]
+    with dbos._sys_db.engine.begin() as conn:
+        conn.exec_driver_sql(f"ANALYZE {table}")
+        plan = conn.exec_driver_sql(f"EXPLAIN {statement}", parameters).fetchall()
+    details = [str(r[0]) for r in plan]
+    assert any(
+        "Index Only Scan using idx_workflow_status_in_flight_v2" in d for d in details
+    ), details
+    assert not [d for d in details if "Seq Scan" in d], details
+
+    with dbos._sys_db.engine.begin() as conn:
+        conn.exec_driver_sql(
+            f"UPDATE {table} SET status = 'ENQUEUED' WHERE workflow_uuid = '{idle.name}-1'"
+        )
+    assert dbos._sys_db.poll_queue(idle) == (idle, [None])
+
+
 def test_pending_count_query_plan(
     dbos: DBOS, skip_with_sqlite: None, skip_with_sharding: None
 ) -> None:
