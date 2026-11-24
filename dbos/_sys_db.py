@@ -5507,24 +5507,18 @@ class SystemDatabase(ABC):
         queue's current config (None once its row is deleted; a queue the database does not
         back is returned as is) and its dequeue scopes, none while nothing is enqueued.
         """
+        ws = self.tables.workflow_status
         with self.engine.begin() as c:
             latest: Optional["Queue"] = queue
             if queue.database_backed_queue:
                 latest = self.get_queue(queue.name, conn=c)
-            if latest is None or not self._has_enqueued(c, queue.name):
-                return latest, []
-            return latest, [None]
-
-    def _has_enqueued(self, c: sa.Connection, queue_name: str) -> bool:
-        """Whether any workflow this application could dequeue waits in the queue. Every
-        dequeue claims only rows that match this, so a no means a dequeue would claim nothing.
-        """
-        ws = self.tables.workflow_status
-        return (
-            c.execute(
+            if latest is None:
+                return None, []
+            # Every dequeue claims only rows matching this, so no row means nothing to claim.
+            enqueued = c.execute(
                 sa.select(sa.literal(1))
                 .where(*self._scoped(ws))
-                .where(ws.c.queue_name == queue_name)
+                .where(ws.c.queue_name == queue.name)
                 .where(ws.c.status == WorkflowStatusString.ENQUEUED.value)
                 .where(self._in_flight_status_prover())
                 .where(self._name_filter(ws.c.application_name, self.app_name))
@@ -5532,8 +5526,7 @@ class SystemDatabase(ABC):
                 .order_by(ws.c.priority.asc(), ws.c.created_at.asc())
                 .limit(1)
             ).first()
-            is not None
-        )
+            return latest, [None] if enqueued is not None else []
 
     def is_lock_conflict(self, error: DBAPIError) -> bool:
         """Whether a dequeue failed because another worker holds the rows it needs."""
