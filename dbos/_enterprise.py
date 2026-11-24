@@ -230,7 +230,6 @@ class ConductorClientFactory(Protocol):
         conductor_url: str,
         conductor_key: str,
         serializer: "Serializer",
-        retry_connection_errors: bool,
     ) -> ConductorClient: ...
 
 

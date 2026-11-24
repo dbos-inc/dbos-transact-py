@@ -390,7 +390,7 @@ class DBOSClient:
             use_listen_notify (bool): Whether to run a listener thread so get_event and read_stream are woken by notifications rather than polling the database. Defaults to False. Only enable this if the system database was created with use_listen_notify=True (the DBOS default).
             application_name (str): The application this client acts on behalf of. Always set this when several applications share this system database, so workflows, schedules, and queues created by this client are owned by that application.
             lazy (bool): Whether to defer connecting until the client is first used. Defaults to False, meaning the connection is checked on construction. Call check_connection() or check_connection_async() to check it explicitly. Cannot be combined with use_listen_notify, whose listener connects immediately.
-            retry_connection_errors (bool): Whether an operation that loses its database connection blocks and retries until the connection recovers. Defaults to True. Set to False to raise instead, so an unreachable database surfaces as an error rather than a wait. With a conductor_key, this covers a request that cannot get through to the application now: no connection to Conductor, no reply, no healthy executor, or executors that are all busy.
+            retry_connection_errors (bool): Whether an operation that loses its database connection blocks and retries until the connection recovers. Defaults to True. Set to False to raise instead, so an unreachable database surfaces as an error rather than a wait. It has no effect with a conductor_key: a request that cannot get through to the application raises, and is never made again.
             observability_query_timeout_sec (float): Statement timeout, in seconds, for read-only observability queries against the system database. Defaults to 30.0.
             sys_db_idle_transaction_timeout_sec (float): Postgres idle_in_transaction_session_timeout, in seconds, for the system database connections this client creates. Defaults to 60.0. Set to a non-positive value to leave the server's setting in place. Not applied to a custom system_database_engine.
             external_stores (List[ExternalStore]): The object stores for store_external_object and load_external_object, matching the application's. If there are multiple, store_external_object must specify one with store_id. Requires Transact Enterprise.
@@ -439,7 +439,6 @@ class DBOSClient:
                 conductor_url=conductor_url,
                 conductor_key=conductor_key,
                 serializer=self._serializer,
-                retry_connection_errors=retry_connection_errors,
             )
             if not lazy:
                 try:
