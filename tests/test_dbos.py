@@ -59,7 +59,7 @@ from dbos._error import (
     DBOSStepTimeoutError,
 )
 from dbos._schemas.system_database import SystemSchema
-from dbos._serialization import DefaultSerializer
+from dbos._serialization import DBOSPortableJSON, DefaultSerializer
 from dbos._shard_keys import bind_shard_keys, shard_key_scope
 from dbos._sys_db import SystemDatabase, _dbos_null_topic, advisory_lock_key
 from dbos._utils import INTERNAL_QUEUE_NAME, GlobalParams
@@ -4107,6 +4107,97 @@ def test_recv_timeout(dbos: DBOS) -> None:
     assert handle.get_result() is None
     forked_handle = DBOS.fork_workflow(handle.workflow_id, 5)
     assert forked_handle.get_result() is None
+
+
+def test_zero_timeout_waits_record_no_sleep(dbos: DBOS) -> None:
+    """recv and get_event with no timeout poll once: they checkpoint no DBOS.sleep, but
+    still reserve its ID, so the steps after them keep the IDs they had before."""
+
+    @DBOS.step()
+    def after() -> str:
+        return "after"
+
+    @DBOS.workflow()
+    def workflow() -> Tuple[Any, Any, Any, str]:
+        DBOS.recv("go", timeout_seconds=60)
+        return (
+            DBOS.recv("data", timeout_seconds=0),
+            DBOS.recv("data", timeout_seconds=0),
+            DBOS.get_event(cast(str, DBOS.workflow_id), "key", timeout_seconds=0),
+            after(),
+        )
+
+    handle = DBOS.start_workflow(workflow)
+    DBOS.send(handle.workflow_id, "hello", "data")
+    DBOS.send(handle.workflow_id, None, "go")
+    assert handle.get_result() == ("hello", None, None, "after")
+
+    steps = [
+        (s["function_id"], s["function_name"])
+        for s in DBOS.list_workflow_steps(handle.workflow_id)
+    ]
+    first = steps[0][0]
+    assert steps == [
+        (first, "DBOS.recv"),
+        (first + 1, "DBOS.sleep"),
+        (first + 2, "DBOS.recv"),
+        (first + 4, "DBOS.recv"),
+        (first + 6, "DBOS.getEvent"),
+        (first + 8, after.__qualname__),
+    ]
+
+    # Replay returns the recorded results.
+    forked = DBOS.fork_workflow(handle.workflow_id, first + 8)
+    assert forked.get_result() == ("hello", None, None, "after")
+
+
+def test_zero_timeout_recv_replays_earlier_layout(dbos: DBOS) -> None:
+    """Earlier versions checkpointed a DBOS.sleep for a zero-timeout recv before consuming
+    its message. With such a sleep row already at the reserved ID, the recv ignores it,
+    consumes the message, and the next step keeps its ID."""
+
+    @DBOS.step()
+    def after() -> str:
+        return "after"
+
+    @DBOS.workflow()
+    def workflow() -> Tuple[Any, str]:
+        DBOS.recv("go", timeout_seconds=60)
+        return DBOS.recv("data", timeout_seconds=0), after()
+
+    handle = DBOS.start_workflow(workflow)
+    wfid = handle.workflow_id
+
+    def waiting_sleep_id() -> int:
+        steps = DBOS.list_workflow_steps(wfid)
+        assert [s["function_name"] for s in steps] == ["DBOS.sleep"]
+        return steps[0]["function_id"]
+
+    first_sleep = retry_until_success(waiting_sleep_id, interval=0.05, max_attempts=100)
+    recv_id = first_sleep + 1
+    dbos._sys_db.record_operation_result(
+        {
+            "workflow_uuid": wfid,
+            "function_id": recv_id + 1,
+            "function_name": "DBOS.sleep",
+            "started_at_epoch_ms": int(time.time() * 1000),
+            "output": DBOSPortableJSON.serialize(time.time()),
+            "error": None,
+            "serialization": DBOSPortableJSON.name(),
+            "child_workflow_id": None,
+        }
+    )
+    DBOS.send(wfid, "hello", "data")
+    DBOS.send(wfid, None, "go")
+    assert handle.get_result() == ("hello", "after")
+    steps = [
+        (s["function_id"], s["function_name"]) for s in DBOS.list_workflow_steps(wfid)
+    ]
+    assert steps[-3:] == [
+        (recv_id, "DBOS.recv"),
+        (recv_id + 1, "DBOS.sleep"),
+        (recv_id + 2, after.__qualname__),
+    ]
 
 
 def test_notification_fallback_polling(dbos: DBOS) -> None:
