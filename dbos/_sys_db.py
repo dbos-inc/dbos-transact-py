@@ -6470,8 +6470,9 @@ class SystemDatabase(ABC):
         self, statuses: List[WorkflowStatusInternal]
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """The status and input rows a batch insert writes for these ENQUEUED workflows."""
-        # Stamp created_at monotonic within each partition key so per-key order holds across batches; unordered rows (no key) get wall-clock time.
+        # Stamp created_at monotonic within each partition key so per-key order holds across batches; unordered rows (no key) get the database's statement time, as a single insert does.
         now_ms = int(time.time() * 1000)
+        db_now_ms = self._statement_ms_sql()
         # On first sight of a key, seed its cursor from the DB high-water mark so per-key order survives a restart/rebalance instead of resetting to wall-clock.
         # Cursors are scoped per (queue, partition key), matching how the dequeue query orders rows.
         batch_keys = {
@@ -6484,7 +6485,7 @@ class SystemDatabase(ABC):
                 k for k in batch_keys if k not in self._batch_created_at_cursors
             ]
         seeds = self._max_partition_key_created_at(unseen_keys)
-        created_ats: List[int] = []
+        created_ats: List[Any] = []
         with self._batch_created_at_lock:
             for seeded_key, seeded_max in seeds.items():
                 # Advance past the DB high-water mark; max() guards a concurrent batch that already advanced this key.
@@ -6495,7 +6496,7 @@ class SystemDatabase(ABC):
             for status in statuses:
                 partition_key = status["queue_partition_key"]
                 if partition_key is None:
-                    created_ats.append(now_ms)
+                    created_ats.append(db_now_ms)
                     continue
                 key = (status["queue_name"], partition_key)
                 value = next_for_key.get(key)
