@@ -51,7 +51,7 @@ from dbos._core import execute_dequeued_workflow
 from dbos._schemas.system_database import SystemSchema
 from dbos._sys_db import SystemDatabase
 from dbos._sys_db_postgres import PostgresSystemDatabase
-from dbos._utils import GlobalParams, quote_identifier
+from dbos._utils import GlobalParams, quote_identifier, sqlite_has_subsec
 
 if TYPE_CHECKING:
     from dbos._dbos import WorkflowHandle
@@ -97,7 +97,7 @@ def skip_with_sharding() -> None:
 
 def imprecise_timestamps() -> bool:
     """Whether database-stamped timestamps have second, not millisecond, resolution."""
-    return using_sqlite() and sys.version_info < (3, 12)
+    return using_sqlite() and not sqlite_has_subsec()
 
 
 @pytest.fixture()

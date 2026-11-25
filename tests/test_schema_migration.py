@@ -1,10 +1,12 @@
 import os
 import pathlib
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Tuple
 
 import click
 import pytest
@@ -21,7 +23,12 @@ from dbos._datasource_migration import (
     get_sqlite_datasource_migrations,
 )
 from dbos._error import DBOSInitializationError
-from dbos._migration import get_dbos_migrations, should_migrate, sqlite_migrations
+from dbos._migration import (
+    get_dbos_migrations,
+    get_sqlite_timestamp_expr,
+    should_migrate,
+    sqlite_migrations,
+)
 from dbos._schemas.datasource_database import datasource_outputs_table
 from dbos._schemas.system_database import SystemSchema
 from dbos._serialization import DefaultSerializer
@@ -759,6 +766,65 @@ def test_sqlite_systemdb_migration() -> None:
     DBOS.reset_system_database()
     assert not os.path.exists(temp_db_path)
     DBOS.destroy()
+
+
+def _sqlite_sys_db(path: pathlib.Path) -> SystemDatabase:
+    return SystemDatabase.create(
+        system_database_url=f"sqlite:///{path}",
+        engine_kwargs={},
+        engine=None,
+        schema=None,
+        executor_id=None,
+        serializer=DefaultSerializer(),
+    )
+
+
+@pytest.mark.parametrize(
+    "sqlite_version, expected",
+    [((3, 41, 2), "strftime"), ((3, 42, 0), "unixepoch")],
+)
+def test_sqlite_timestamps_follow_the_sqlite_library(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    sqlite_version: Tuple[int, int, int],
+    expected: str,
+) -> None:
+    """Millisecond timestamps use SQLite 3.42's 'subsec' modifier, so the choice follows the
+    linked SQLite library. Python 3.12 on Debian 12 links SQLite 3.40, where
+    unixepoch('subsec') is NULL and the NOT NULL timestamp columns refused every insert.
+    """
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", sqlite_version)
+    assert expected in get_sqlite_timestamp_expr()
+    sys_db = _sqlite_sys_db(tmp_path / "sys.sqlite")
+    try:
+        assert expected in str(sys_db._now_ms_sql().compile(sys_db.engine))
+    finally:
+        sys_db.destroy()
+
+
+def test_sqlite_timestamps_are_stamped(tmp_path: pathlib.Path) -> None:
+    """On the SQLite this runs on, the default and update timestamps are numbers."""
+    sys_db = _sqlite_sys_db(tmp_path / "sys.sqlite")
+    try:
+        sys_db.run_migrations()
+        with sys_db.engine.begin() as c:
+            assert c.execute(sa.text(f"SELECT {get_sqlite_timestamp_expr()}")).scalar()
+            assert c.execute(sa.select(sys_db._now_ms_sql())).scalar()
+            # A row that leaves its timestamps to the column defaults.
+            c.execute(
+                sa.text(
+                    "INSERT INTO application_versions (version_id, version_name) "
+                    "VALUES ('v1', 'v1')"
+                )
+            )
+            version_timestamp, created_at = c.execute(
+                sa.text(
+                    "SELECT version_timestamp, created_at FROM application_versions"
+                )
+            ).one()
+            assert version_timestamp > 0 and created_at > 0
+    finally:
+        sys_db.destroy()
 
 
 def test_migrate(db_engine: sa.Engine, skip_with_sqlite: None) -> None:
