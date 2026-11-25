@@ -705,10 +705,6 @@ DEFAULT_OBSERVABILITY_QUERY_TIMEOUT_SEC = 30.0
 # Bounds how long a frozen or unreachable client can hold system database locks.
 DEFAULT_IDLE_TRANSACTION_TIMEOUT_SEC = 60.0
 
-# Key/value pairs per SQLite json_set call; SQLite caps function arguments at 127 by default.
-SQLITE_JSON_SET_MAX_PAIRS = 50
-
-
 # Statuses at which a workflow is not yet complete; any other status has a result.
 _NOT_COMPLETE_STATUSES = frozenset(
     {
@@ -2290,17 +2286,8 @@ class SystemDatabase(ABC):
         if merge:
             assert attributes is not None
             if self._is_sqlite:
-                value = sa.case(
-                    (sa.func.json_type(ws.c.attributes) == "object", ws.c.attributes),
-                    else_=sa.literal("{}"),
-                )
-                # Nesting one json_set per key overflows the SQLAlchemy compiler's recursion limit.
-                pairs = list(json.loads(json.dumps(attributes)).items())
-                for i in range(0, len(pairs), SQLITE_JSON_SET_MAX_PAIRS):
-                    args: list[Any] = []
-                    for key, item in pairs[i : i + SQLITE_JSON_SET_MAX_PAIRS]:
-                        args += [f"$.{json.dumps(key)}", sa.func.json(json.dumps(item))]
-                    value = sa.func.json_set(value, *args)
+                self._merge_workflow_attributes_sqlite(workflow_id, attributes)
+                return
             else:
                 existing = sa.case(
                     (
@@ -2321,6 +2308,36 @@ class SystemDatabase(ABC):
                     updated_at=self._now_ms_sql(),
                 )
             )
+
+    def _merge_workflow_attributes_sqlite(
+        self, workflow_id: str, attributes: Dict[str, Any]
+    ) -> None:
+        """Merge top-level keys into a workflow's attributes on SQLite: read them, merge
+        in Python, and write the result only if they are unchanged since the read,
+        retrying otherwise, so concurrent merges keep each other's keys. json_set can't
+        name every key: no SQLite version accepts a double quote in a JSON path label,
+        and before SQLite 3.45 escapes in a quoted label are taken literally."""
+        ws = self.tables.workflow_status
+        # The stored JSON text, compared as written.
+        stored = sa.type_coerce(ws.c.attributes, sa.Text)
+        while True:
+            with self.engine.begin() as c:
+                row = c.execute(
+                    sa.select(stored).where(*self._wf(ws, workflow_id))
+                ).first()
+            if row is None:
+                return
+            current = json.loads(row[0]) if row[0] is not None else None
+            merged = {**(current if isinstance(current, dict) else {}), **attributes}
+            unchanged = stored.is_(None) if row[0] is None else stored == row[0]
+            with self.engine.begin() as c:
+                updated = c.execute(
+                    sa.update(ws)
+                    .where(*self._wf(ws, workflow_id), unchanged)
+                    .values(attributes=merged, updated_at=self._now_ms_sql())
+                ).rowcount
+            if updated:
+                return
 
     def delete_workflows(
         self, workflow_ids: list[str], *, delete_children: bool = False
