@@ -5499,6 +5499,35 @@ class SystemDatabase(ABC):
         """Scopes a queue's workers dequeue from in turn; one unkeyed scope unless sharded."""
         return [None]
 
+    @db_retry()
+    def poll_queue(
+        self, queue: "Queue"
+    ) -> Tuple[Optional["Queue"], List[Optional[str]]]:
+        """An unsharded queue worker's reads before each dequeue, in one transaction: the
+        queue's current config (None once its row is deleted; a queue the database does not
+        back is returned as is) and its dequeue scopes, none while nothing is enqueued.
+        """
+        ws = self.tables.workflow_status
+        with self.engine.begin() as c:
+            latest: Optional["Queue"] = queue
+            if queue.database_backed_queue:
+                latest = self.get_queue(queue.name, conn=c)
+            if latest is None:
+                return None, []
+            # Every dequeue claims only rows matching this, so no row means nothing to claim.
+            enqueued = c.execute(
+                sa.select(sa.literal(1))
+                .where(*self._scoped(ws))
+                .where(ws.c.queue_name == queue.name)
+                .where(ws.c.status == WorkflowStatusString.ENQUEUED.value)
+                .where(self._in_flight_status_prover())
+                .where(self._name_filter(ws.c.application_name, self.app_name))
+                # Index order keeps Postgres on the in-flight index; a bare LIMIT 1 can bet on a sequential scan when other queues hold ENQUEUED rows.
+                .order_by(ws.c.priority.asc(), ws.c.created_at.asc())
+                .limit(1)
+            ).first()
+            return latest, [None] if enqueued is not None else []
+
     def is_lock_conflict(self, error: DBAPIError) -> bool:
         """Whether a dequeue failed because another worker holds the rows it needs."""
         return isinstance(error.orig, pg_errors.LockNotAvailable)

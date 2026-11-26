@@ -726,8 +726,9 @@ def queue_worker_thread(
     while not stop_event.is_set():
         # Reload database-backed queue config once per iteration so dynamic
         # changes (concurrency, polling interval, etc.) take effect without
-        # a restart. If the row was deleted, exit the worker.
-        if queue.database_backed_queue:
+        # a restart. If the row was deleted, exit the worker. An unsharded
+        # worker reloads it in its poll below instead.
+        if queue.database_backed_queue and dbos._sys_db.sharded:
             try:
                 latest = dbos._sys_db.get_queue(queue.name)
             except Exception as e:
@@ -881,19 +882,34 @@ def queue_worker_thread(
 
         # Each scope dequeues independently; a sharded system database has one per shard key with work.
         is_latest_version: Optional[bool] = None
-        try:
-            scopes = dbos._sys_db.dequeue_scopes(queue.name)
-            # A sharded database keeps the version row under another key, so read it once per poll outside the claims.
-            if scopes and dbos._sys_db.sharded:
-                is_latest_version = dbos._sys_db._is_latest_version(
-                    GlobalParams.app_version
+        if not dbos._sys_db.sharded:
+            # One transaction reloads the config and checks for enqueued work, so an idle poll costs one commit and skips the dequeue.
+            try:
+                latest, scopes = dbos._sys_db.poll_queue(queue)
+            except Exception as e:
+                if not stop_event.is_set():
+                    dbos.logger.warning(f"Exception polling queue {queue.name}: {e}")
+                latest, scopes = queue, []
+            if latest is None:
+                dbos.logger.info(
+                    f"Queue {queue.name} no longer exists in database, stopping worker"
                 )
-        except Exception as e:
-            if not stop_event.is_set():
-                dbos.logger.warning(
-                    f"Exception finding work for queue {queue.name}: {e}"
-                )
-            scopes = []
+                return
+            queue = latest
+        else:
+            try:
+                scopes = dbos._sys_db.dequeue_scopes(queue.name)
+                # A sharded database keeps the version row under another key, so read it once per poll outside the claims.
+                if scopes:
+                    is_latest_version = dbos._sys_db._is_latest_version(
+                        GlobalParams.app_version
+                    )
+            except Exception as e:
+                if not stop_event.is_set():
+                    dbos.logger.warning(
+                        f"Exception finding work for queue {queue.name}: {e}"
+                    )
+                scopes = []
         random.shuffle(scopes)
         contended = False
         for scope in scopes:
