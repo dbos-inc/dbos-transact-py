@@ -46,6 +46,7 @@ from dbos._utils import (
     retriable_postgres_exception,
     retriable_sqlite_exception,
     serialization_failure,
+    sqlite_has_subsec,
 )
 
 from ._context import (
@@ -1170,9 +1171,9 @@ class SystemDatabase(ABC):
 
     def _now_ms_sql(self) -> Any:
         # Cast to BIGINT: EXTRACT yields numeric, which casts any bigint column compared against it, costing that column its index.
-        # SQLite's CURRENT_TIMESTAMP is second-precision; use unixepoch('subsec') for ms.
+        # SQLite's CURRENT_TIMESTAMP is second-precision; use unixepoch('subsec') for ms where SQLite has it.
         if self.engine.dialect.name == "sqlite":
-            if sys.version_info >= (3, 12):
+            if sqlite_has_subsec():
                 return sa.cast(sa.func.unixepoch("subsec") * 1000, sa.BigInteger)
             return sa.cast(sa.func.strftime("%s", "now") * 1000, sa.BigInteger)
         return sa.cast(sa.func.extract("epoch", sa.func.now()) * 1000, sa.BigInteger)

@@ -1,6 +1,7 @@
 import asyncio
 import importlib.metadata
 import os
+import sqlite3
 import sys
 import threading
 import uuid
@@ -12,6 +13,14 @@ from sqlalchemy.dialects.postgresql.base import PGDialect
 from sqlalchemy.exc import DBAPIError
 
 INTERNAL_QUEUE_NAME = "_dbos_internal_queue"
+
+
+def sqlite_has_subsec() -> bool:
+    """Whether the linked SQLite library has the 'subsec' date modifier (SQLite 3.42+),
+    which millisecond timestamps need. This depends on the SQLite library, not on the
+    Python version: Python 3.12 on Debian 12 links SQLite 3.40, where
+    unixepoch('subsec') returns NULL."""
+    return sqlite3.sqlite_version_info >= (3, 42, 0)
 
 
 def check_async(

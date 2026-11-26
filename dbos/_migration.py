@@ -1,10 +1,9 @@
-import sys
 from typing import List
 
 import sqlalchemy as sa
 
 from ._logger import dbos_logger
-from ._utils import quote_identifier
+from ._utils import quote_identifier, sqlite_has_subsec
 
 # Migration versions that contain CONCURRENTLY index DDL and must run with
 # autocommit (CREATE/DROP INDEX CONCURRENTLY cannot run inside a transaction
@@ -1717,8 +1716,8 @@ def get_dbos_migrations(
 
 
 def get_sqlite_timestamp_expr() -> str:
-    """Get SQLite timestamp expression with millisecond precision for Python >= 3.12."""
-    if sys.version_info >= (3, 12):
+    """Get SQLite timestamp expression, with millisecond precision where SQLite supports it."""
+    if sqlite_has_subsec():
         return "(unixepoch('subsec') * 1000)"
     else:
         return "(strftime('%s','now') * 1000)"
