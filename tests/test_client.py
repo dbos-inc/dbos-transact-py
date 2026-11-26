@@ -1,5 +1,7 @@
 import asyncio
 import importlib
+import inspect
+import logging
 import math
 import os
 import runpy
@@ -2632,3 +2634,47 @@ def test_client_enqueue_step_recognizes_its_own_child_when_run_again(
     monkeypatch.setattr(dbos._sys_db, "app_name", "another-app")
     with pytest.raises(DBOSWorkflowIDInUseError):
         client._enqueue_from(step(1), options, (), {})
+
+
+def test_client_sync_methods_check_for_an_event_loop() -> None:
+    """Every blocking client method that has an async variant checks whether it is
+    stalling an event loop."""
+    sync_methods = [
+        name
+        for name, member in vars(DBOSClient).items()
+        if not name.startswith("_")
+        and inspect.isfunction(member)
+        and not inspect.iscoroutinefunction(member)
+        and hasattr(DBOSClient, f"{name}_async")
+    ]
+    assert len(sync_methods) > 30
+    unchecked = [
+        name
+        for name in sync_methods
+        # delete_workflow leaves the check to delete_workflows, which it calls.
+        if name != "delete_workflow"
+        and "check_async(" not in inspect.getsource(getattr(DBOSClient, name))
+    ]
+    assert unchecked == []
+
+
+@pytest.mark.asyncio
+async def test_client_sync_methods_warn_on_an_event_loop(
+    dbos: DBOS, client: DBOSClient
+) -> None:
+    warnings: List[str] = []
+    handler = logging.Handler(level=logging.WARNING)
+    handler.emit = lambda record: warnings.append(record.getMessage())  # type: ignore[method-assign]
+    logging.getLogger("dbos").addHandler(handler)
+    try:
+        client.list_workflows()
+        client.delete_workflow("no-such-workflow")
+        # The async variants block a worker thread, not the loop.
+        await client.list_workflows_async()
+        await client.delete_workflow_async("no-such-workflow")
+    finally:
+        logging.getLogger("dbos").removeHandler(handler)
+    assert [w.split(". ")[-1] for w in warnings if "event loop" in w] == [
+        "Use 'DBOSClient.list_workflows_async' instead.",
+        "Use 'DBOSClient.delete_workflows_async' instead.",
+    ]
