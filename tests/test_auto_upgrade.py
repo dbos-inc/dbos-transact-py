@@ -5,7 +5,7 @@ the entitlement call are stood in for, so this runs without either; the pass its
 
 import threading
 import types
-from typing import Any, Generator, List, Optional, cast
+from typing import Any, Generator, List, Optional, Tuple, cast
 
 import pytest
 
@@ -41,6 +41,7 @@ class _RecordingPass:
         self.grace_sec = grace_sec
         self.runs: List[threading.Event] = []
         self.closes = 0
+        self.closed = threading.Event()
         self.events: List[str] = []
         self.run_error: Optional[Exception] = None
         self.close_error: Optional[Exception] = None
@@ -60,6 +61,7 @@ class _RecordingPass:
     def close(self) -> None:
         self.events.append("close")
         self.closes += 1
+        self.closed.set()
         if self.close_error is not None:
             raise self.close_error
 
@@ -362,6 +364,57 @@ def test_thread_runs_the_pass_until_destroy(
     runs = len(upgrade_pass.runs)
     threading.Event().wait(0.2)
     assert len(upgrade_pass.runs) == runs
+
+
+def test_destroy_runs_the_pass_through_the_workflow_drain(
+    config: DBOSConfig, cleanup_test_databases: None, enterprise_stand_in: None
+) -> None:
+    dbos = DBOS(config=_conductor_config(config, auto_upgrade=True))
+    started = threading.Event()
+    # What the workflow saw while the drain waited on it:
+    # (passes kept running, thread alive, pass closed).
+    seen: List[Tuple[bool, bool, bool]] = []
+
+    @DBOS.workflow()
+    def still_running() -> None:
+        upgrader = dbos.auto_upgrader
+        assert upgrader is not None
+        started.set()
+        # Destroy has begun once the instance is no longer initialized.
+        while dbos._initialized:
+            threading.Event().wait(0.01)
+        runs = len(upgrade_pass.runs)
+        # Gives up well before the drain does, so a thread stopped before the drain is caught.
+        deadline = threading.Event()
+        timer = threading.Timer(5, deadline.set)
+        timer.start()
+        # More than the one pass a stop could have left in flight.
+        while len(upgrade_pass.runs) < runs + 3 and not deadline.is_set():
+            threading.Event().wait(0.01)
+        timer.cancel()
+        seen.append(
+            (
+                len(upgrade_pass.runs) >= runs + 3,
+                upgrader.is_alive(),
+                upgrade_pass.closed.is_set(),
+            )
+        )
+
+    DBOS.launch()
+    [upgrade_pass] = _RecordingPass.instances
+    upgrader = dbos.auto_upgrader
+    assert upgrader is not None
+    _wait_for_runs(upgrade_pass, 1)
+
+    DBOS.start_workflow(still_running)
+    assert started.wait(timeout=10)
+
+    # The drain waits on the workflow, which waits on passes run during the drain.
+    DBOS.destroy(destroy_registry=True, workflow_completion_timeout_sec=30)
+    assert seen == [(True, True, False)]
+    # Once the drain is over, the thread stops and the pass closes.
+    assert not upgrader.is_alive()
+    assert upgrade_pass.closes == 1
 
 
 def test_default_interval(

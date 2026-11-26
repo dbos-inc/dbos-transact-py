@@ -1268,14 +1268,14 @@ class DBOS:
                     )
                 else:
                     break
+        # The upgrader runs through the wait above: a draining executor can hold the lock that keeps every other from upgrading. Its pass closes while the system database is still connected.
+        if self.auto_upgrader is not None:
+            self.auto_upgrader.stop()
         self._background_jobs_stop_event.set()
         # Flushes what it has buffered while the system database is still connected.
         if self._archiver is not None:
             self._archiver.stop()
             self._archiver = None
-        # The upgrader unlocks its per-application advisory lock before the system database engine is disposed.
-        if self.auto_upgrader is not None:
-            self.auto_upgrader.stop()
         # Disconnect from Conductor only once the wait above is over, so the executor stays visibly alive to Conductor for its whole duration.
         if self.conductor_websocket is not None:
             self.conductor_websocket.stop()
