@@ -14,6 +14,7 @@ from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry._logs import get_logger_provider
 from opentelemetry.instrumentation.logging.handler import LoggingHandler
+from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace.span import format_trace_id
 
 import dbos._logger
@@ -634,14 +635,22 @@ def test_propagate_otel_context_survives_recovery(
     assert len(recovery_handles) == 1
     assert recovery_handles[0].get_result() == "done"
 
-    recovered = [
-        s for s in exporter.get_finished_spans() if s.name == a_workflow.__qualname__
-    ]
-    assert len(recovered) == 1
-    assert recovered[0].context is not None
-    assert recovered[0].context.trace_id == caller_ctx.trace_id
-    assert recovered[0].parent is not None
-    assert recovered[0].parent.span_id == caller_ctx.span_id
+    # The recovery handle polls for the stored result, which the workflow writes just
+    # before its span ends on the executor thread, so wait for the span.
+    def recovered_span() -> ReadableSpan:
+        spans = [
+            s
+            for s in exporter.get_finished_spans()
+            if s.name == a_workflow.__qualname__
+        ]
+        assert len(spans) == 1
+        return spans[0]
+
+    recovered = retry_until_success(recovered_span, interval=0.1, max_attempts=50)
+    assert recovered.context is not None
+    assert recovered.context.trace_id == caller_ctx.trace_id
+    assert recovered.parent is not None
+    assert recovered.parent.span_id == caller_ctx.span_id
 
 
 @pytest.mark.parametrize("otel_outermost", [True, False])
