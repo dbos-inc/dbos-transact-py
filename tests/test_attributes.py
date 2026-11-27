@@ -297,6 +297,8 @@ def test_update_workflow_attributes(dbos: DBOS) -> None:
         "float": 1.5,
         "bool": False,
         "text": 'it\'s "quoted"',
+        # No SQLite JSON path can name this key.
+        'a"b': 9,
     }
     DBOS.update_workflow_attributes(wfid, special, merge=True)
     DBOS.update_workflow_attributes(wfid, {"é": "again", "a[0]": None}, merge=True)
@@ -380,7 +382,7 @@ def test_update_workflow_attributes_merge_many_keys(dbos: DBOS) -> None:
         handle = DBOS.start_workflow(noop_workflow)
     handle.get_result()
 
-    # Enough keys to span several SQLite json_set chunks
+    # Many keys in one merge
     many = {f"k{i}": i for i in range(300)}
     DBOS.update_workflow_attributes(handle.workflow_id, many, merge=True)
     assert handle.get_status().attributes == {**many, "keep": True}
